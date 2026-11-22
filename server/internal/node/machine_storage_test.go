@@ -320,6 +320,20 @@ func TestMachineStorageCleanupFailsClosedWhenProcessListUnavailable(t *testing.T
 	}
 }
 
+type errAfterFirstLineReader struct {
+	first string
+	sent  bool
+	err   error
+}
+
+func (r *errAfterFirstLineReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		return copy(p, r.first), nil
+	}
+	return 0, r.err
+}
+
 func TestReadRunningProcsCrossPlatformAndUnsupportedFailClosed(t *testing.T) {
 	// Darwin ps -axo args= parsing (full paths, login shell dash, mixed case Python, node + npm-cli.js vs unrelated node)
 	darwinRun := func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -359,6 +373,68 @@ func TestReadRunningProcsCrossPlatformAndUnsupportedFailClosed(t *testing.T) {
 	}
 	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: darwinNpmList.procs, known: true, cmdlinesKnown: darwinNpmList.cmdlinesKnown}); !inUse {
 		t.Errorf("expected node running npm-cli.js to mark npm in use on darwin")
+	}
+
+	// Darwin ps with spaces in node executable and npm-cli.js / npx-cli.js paths (unquoted & quoted)
+	// MUST still detect npm/npx in use, while an unrelated node server with spaces in its path does NOT.
+	darwinSpaceNpmRun := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte(strings.Join([]string{
+			"/Users/alice/My Tools/bin/node --max-old-space-size=4096 /Users/alice/My Tools/lib/node_modules/npm/bin/npm-cli.js install",
+		}, "\n") + "\n"), nil
+	}
+	darwinSpaceNpmList, err := readRunningProcsForOS(context.Background(), "darwin", darwinSpaceNpmRun)
+	if err != nil {
+		t.Fatalf("darwin space-path npm enum failed: %v", err)
+	}
+	if inUse, unknown := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: darwinSpaceNpmList.procs, known: true, cmdlinesKnown: darwinSpaceNpmList.cmdlinesKnown}); !inUse || unknown {
+		t.Errorf("expected darwin space-path node+npm-cli.js to mark npm in use, got inUse=%v unknown=%v", inUse, unknown)
+	}
+
+	darwinQuotedSpaceNpxRun := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("\"/Users/alice/My Tools/bin/node\" \"/Users/alice/My Tools/lib/node_modules/npm/bin/npx-cli.js\" vitest\n"), nil
+	}
+	darwinQuotedNpxList, err := readRunningProcsForOS(context.Background(), "darwin", darwinQuotedSpaceNpxRun)
+	if err != nil {
+		t.Fatalf("darwin quoted space-path npx enum failed: %v", err)
+	}
+	if inUse, unknown := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: darwinQuotedNpxList.procs, known: true, cmdlinesKnown: darwinQuotedNpxList.cmdlinesKnown}); !inUse || unknown {
+		t.Errorf("expected darwin quoted space-path node+npx-cli.js to mark npx in use, got inUse=%v unknown=%v", inUse, unknown)
+	}
+
+	darwinSpaceServerRun := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte(strings.Join([]string{
+			"/Applications/My Node App/Contents/MacOS/node /Applications/My Node App/Contents/Resources/server.js --port 3000",
+			"/usr/bin/vim /Users/alice/My Tools/lib/node_modules/npm/bin/npm-cli.js",
+		}, "\n") + "\n"), nil
+	}
+	darwinSpaceServerList, err := readRunningProcsForOS(context.Background(), "darwin", darwinSpaceServerRun)
+	if err != nil {
+		t.Fatalf("darwin space-path server enum failed: %v", err)
+	}
+	if inUse, unknown := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: darwinSpaceServerList.procs, known: true, cmdlinesKnown: darwinSpaceServerList.cmdlinesKnown}); inUse || unknown {
+		t.Errorf("unrelated darwin node server / vim with space paths should not mark npm/npx in use, got inUse=%v unknown=%v", inUse, unknown)
+	}
+
+	// Darwin ps output containing a >64 KiB command line BEFORE an active npm process
+	// MUST parse completely without truncating or omitting the trailing npm process.
+	hugeLine := "/usr/bin/python3 " + strings.Repeat("a", 80*1024)
+	darwinHugeRun := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte(hugeLine + "\n/usr/local/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js ci\n"), nil
+	}
+	darwinHugeList, err := readRunningProcsForOS(context.Background(), "darwin", darwinHugeRun)
+	if err != nil {
+		t.Fatalf("darwin >64KiB ps output parse failed: %v", err)
+	}
+	if len(darwinHugeList.procs) != 2 {
+		t.Fatalf("expected 2 processes after >64KiB line, got %d", len(darwinHugeList.procs))
+	}
+	if inUse, unknown := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: darwinHugeList.procs, known: true, cmdlinesKnown: darwinHugeList.cmdlinesKnown}); !inUse || unknown {
+		t.Errorf("expected npm after >64KiB line to be detected, got inUse=%v unknown=%v", inUse, unknown)
+	}
+
+	// parsePSArgsLines must propagate reader errors rather than returning partial output.
+	if _, err := parsePSArgsLines(&errAfterFirstLineReader{first: "/opt/homebrew/bin/go version\n", err: errors.New("read failed")}); err == nil {
+		t.Fatal("expected parsePSArgsLines to propagate reader error")
 	}
 
 	// Darwin ps failure must fail closed

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -50,6 +51,7 @@ var errStorageOutsideRoot = errors.New("path is outside allowed root")
 type storageProcEntry struct {
 	comm         string
 	args         []string
+	rawCmdline   string // unsplit raw command line for OSes whose ps joins argv with spaces (macOS)
 	cmdlineKnown bool
 }
 
@@ -1447,10 +1449,134 @@ func storageProcMatchesAnyUser(proc storageProcEntry, users []string) bool {
 			}
 		}
 	}
+	if proc.rawCmdline != "" {
+		if storageRawCmdlineMatchesAnyUser(proc.rawCmdline, users) {
+			return true
+		}
+	}
 	if proc.comm != "" {
 		commExe := storageCmdTokenExe(proc.comm)
 		for _, u := range users {
 			if storageExeMatchesTool(commExe, u) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// storageRawCmdlineMatchesAnyUser handles space-joined command lines (macOS `ps -axo args=`)
+// where executable or script paths may contain unquoted spaces (e.g. `/Users/a/My Tools/bin/node`).
+func storageRawCmdlineMatchesAnyUser(raw string, users []string) bool {
+	pieces := strings.Fields(raw)
+	if len(pieces) == 0 {
+		return false
+	}
+	if storageCmdTokenExe(pieces[0]) == "env" {
+		i := 1
+		for i < len(pieces) {
+			tok := strings.Trim(pieces[i], `"'`)
+			if tok == "--" {
+				i++
+				break
+			}
+			if tok == "-u" || tok == "--unset" || tok == "-C" || tok == "--chdir" {
+				i += 2
+				continue
+			}
+			if strings.HasPrefix(tok, "-") {
+				i++
+				continue
+			}
+			if strings.Contains(tok, "=") && !strings.ContainsAny(tok, `/\`) {
+				i++
+				continue
+			}
+			break
+		}
+		if i >= len(pieces) {
+			return false
+		}
+		pieces = pieces[i:]
+	}
+
+	type exeCandidate struct {
+		exe  string
+		rest []string
+	}
+	var cands []exeCandidate
+	firstClean := strings.Trim(pieces[0], `"'`)
+	if exe := storageCmdTokenExe(firstClean); exe != "" {
+		cands = append(cands, exeCandidate{exe: exe, rest: pieces[1:]})
+	}
+	// If the command starts with a path (e.g. `/Users/a/My Tools/bin/node ...`), also consider
+	// space-separated continuations of that first path up to the next `-` flag or `/`-rooted arg.
+	if strings.HasPrefix(firstClean, "/") || strings.HasPrefix(firstClean, "~") {
+		for k := 1; k < len(pieces); k++ {
+			tok := strings.Trim(pieces[k], `"'`)
+			if tok == "" || strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "-") || strings.HasPrefix(tok, "~") {
+				break
+			}
+			if strings.Contains(tok, "/") {
+				if exe := storageCmdTokenExe(tok); exe != "" {
+					cands = append(cands, exeCandidate{exe: exe, rest: pieces[k+1:]})
+				}
+			}
+		}
+	}
+
+	for _, c := range cands {
+		for _, u := range users {
+			if storageExeMatchesTool(c.exe, u) {
+				return true
+			}
+			lu := strings.ToLower(u)
+			if (lu == "npm" || lu == "npx") && (storageExeMatchesTool(c.exe, "node") || storageExeMatchesTool(c.exe, "nodejs")) {
+				if storageRawNodeRestInvokesNpmTool(c.rest, lu) {
+					return true
+				}
+			}
+			if lu == "pip" && storageExeMatchesTool(c.exe, "python") {
+				if storagePythonArgsInvokePip(c.rest) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func storageRawNodeRestInvokesNpmTool(rest []string, tool string) bool {
+	for i := 0; i < len(rest); i++ {
+		tok := strings.Trim(rest[i], `"'`)
+		if tok == "" {
+			continue
+		}
+		if tok == "-e" || tok == "--eval" || tok == "-p" || tok == "--print" {
+			return false
+		}
+		if tok == "--" {
+			continue
+		}
+		if strings.HasPrefix(tok, "-") {
+			if !strings.Contains(tok, "=") && storageNodeFlagTakesArg(tok) {
+				i++
+			}
+			continue
+		}
+		norm := strings.ToLower(strings.ReplaceAll(tok, "\\", "/"))
+		base := path.Base(norm)
+		switch tool {
+		case "npm":
+			if base == "npm.js" || base == "npm-cli.js" || base == "npm-cli.cjs" || base == "npm-cli.mjs" ||
+				strings.Contains(norm, "/node_modules/npm/bin/npm") ||
+				(strings.Contains(norm, "/") && base == "npm") {
+				return true
+			}
+		case "npx":
+			if base == "npx.js" || base == "npx-cli.js" || base == "npx-cli.cjs" || base == "npx-cli.mjs" ||
+				strings.Contains(norm, "/node_modules/npm/bin/npx") ||
+				(strings.Contains(norm, "/") && base == "npx") {
 				return true
 			}
 		}
@@ -1501,7 +1627,7 @@ func unwrapStorageProcCmd(args []string) (string, []string) {
 }
 
 func storageCmdTokenExe(tok string) string {
-	tok = strings.TrimSpace(tok)
+	tok = strings.Trim(strings.TrimSpace(tok), `"'`)
 	if tok == "" {
 		return ""
 	}
@@ -1628,7 +1754,10 @@ func readRunningProcsForOS(ctx context.Context, goos string, runCmd func(context
 		if err != nil {
 			return storageProcList{}, fmt.Errorf("ps: %w", err)
 		}
-		procs := parsePSArgsLines(out)
+		procs, parseErr := parsePSArgsLines(bytes.NewReader(out))
+		if parseErr != nil {
+			return storageProcList{}, fmt.Errorf("parse ps output: %w", parseErr)
+		}
 		if len(procs) == 0 {
 			return storageProcList{}, errors.New("ps returned no processes")
 		}
@@ -1716,25 +1845,71 @@ func parseLinuxCmdline(raw []byte) []string {
 }
 
 // parsePSArgsLines parses `ps -axo args=` output (macOS/BSD) into full command-line entries.
-func parsePSArgsLines(raw []byte) []storageProcEntry {
+// It uses an unbounded bufio.Reader (no 64 KiB Scanner cap) and propagates read errors
+// so callers never accept a truncated process list.
+func parsePSArgsLines(r io.Reader) ([]storageProcEntry, error) {
+	br := bufio.NewReader(r)
 	var out []storageProcEntry
-	sc := bufio.NewScanner(bytes.NewReader(raw))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
 		}
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			args := splitPOSIXLikeCmdline(trimmed)
+			if len(args) > 0 {
+				out = append(out, storageProcEntry{
+					comm:         storageCmdTokenExe(args[0]),
+					args:         args,
+					rawCmdline:   trimmed,
+					cmdlineKnown: true,
+				})
+			}
 		}
-		out = append(out, storageProcEntry{
-			comm:         storageCmdTokenExe(fields[0]),
-			args:         fields,
-			cmdlineKnown: true,
-		})
+		if errors.Is(err, io.EOF) {
+			break
+		}
 	}
-	return out
+	return out, nil
+}
+
+// splitPOSIXLikeCmdline splits a command line on whitespace outside single/double quotes.
+func splitPOSIXLikeCmdline(s string) []string {
+	var args []string
+	var cur strings.Builder
+	var quote byte
+	hasToken := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+				continue
+			}
+			cur.WriteByte(c)
+			hasToken = true
+			continue
+		}
+		if c == '"' || c == '\'' {
+			quote = c
+			hasToken = true
+			continue
+		}
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			if hasToken {
+				args = append(args, cur.String())
+				cur.Reset()
+				hasToken = false
+			}
+			continue
+		}
+		cur.WriteByte(c)
+		hasToken = true
+	}
+	if hasToken {
+		args = append(args, cur.String())
+	}
+	return args
 }
 
 // parseWindowsCIMCSV parses PowerShell `Get-CimInstance Win32_Process | Select-Object Name,CommandLine | ConvertTo-Csv -NoTypeInformation`.
