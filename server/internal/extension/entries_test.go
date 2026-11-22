@@ -3,8 +3,35 @@ package extension
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
+
+func TestEntriesUpgradeRequiresExplicitPersonalReadConsent(t *testing.T) {
+	legacy := &Manifest{ID: "example-reader", Version: "1.0.0", Permissions: Permissions{HubAPI: true}}
+	installed := &Extension{Record: Record{Granted: legacy.Permissions}, Manifest: legacy, Full: legacy}
+	upgrade := &Manifest{ID: legacy.ID, Version: "1.1.0", Permissions: Permissions{Hub: []string{ScopeAssistantEntriesRead}}}
+	if legacy.Permissions.Covers(upgrade.Permissions) || !MorePermissions(installed, upgrade) {
+		t.Fatal("legacy full-hub permission silently became remote personal read consent")
+	}
+	title, _ := ScopeTitleIn(i18n.Default, ScopeAssistantEntriesRead)
+	if !slices.ContainsFunc(Added(legacy, upgrade), func(line PermissionLine) bool {
+		return line.Key == "hub" && strings.Contains(line.Detail, title)
+	}) {
+		t.Fatal("upgrade does not show the personal read permission")
+	}
+	installed.Record.Granted = upgrade.Permissions
+	installed.Full = upgrade
+	if MorePermissions(installed, upgrade) {
+		t.Fatal("keeping an explicitly approved read scope asks again")
+	}
+	if !legacy.Permissions.Covers(Permissions{Hub: []string{ScopeKBRead}}) {
+		t.Fatal("unrelated legacy read consent changed")
+	}
+}
 
 func TestEntriesPersonalReadUsesInstalledManifestAndLiveGrant(t *testing.T) {
 	r := NewRegistry(t.TempDir(), nil, nil, 1)

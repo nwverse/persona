@@ -811,7 +811,7 @@ current per-extension grant includes it may read all personal entries over HTTP 
 or content category. The manager checks the live registry by authenticated extension ID on every request and again
 when delivering events: disabling the extension or revoking the scope takes effect without renewing its credential.
 An allowed reader may alternatively prove co-location through the same-user Node socket. Legacy full-hub permission
-alone does not opt into remote personal reads. No space or privacy-tier exclusion applies; `origin_space` and `category` are
+alone does not opt into remote personal reads; an upgrade that first declares the scope requires fresh consent. No space or privacy-tier exclusion applies; `origin_space` and `category` are
 metadata reserved for later labeling and use-time policy. Secret input fields and automated answers are not owner
 question answers.
 
