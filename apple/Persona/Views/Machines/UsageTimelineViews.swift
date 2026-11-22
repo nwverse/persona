@@ -31,7 +31,8 @@ struct UsageResetTimelineChart: View {
 
     private var axis: some View {
         GeometryReader { geo in
-            ForEach(UsageWindows.timelineTickHours, id: \.self) { h in
+            // The 6h tick keeps its line but not its label: on a phone's width it would sit on top of "Now".
+            ForEach(UsageWindows.timelineTickHours.filter { $0 != 6 }, id: \.self) { h in
                 let x = geo.size.width * UsageWindows.timelinePosition(hours: h)
                 Text(Self.tickLabel(h)).font(Theme.Font.label).lineLimit(1).fixedSize()
                     .foregroundStyle(h == 0 ? Color.primary : Color.secondary)
@@ -75,8 +76,8 @@ struct UsageResetTimelineChart: View {
     static func tickLabel(_ hours: Double) -> String {
         switch hours {
         case 0: String(localized: "Now", comment: "Usage timeline axis: the left edge")
-        case ..<24: String(localized: "\(Int(hours))h")
-        default: String(localized: "\(Int(hours / 24))d")
+        case ..<24: String(localized: "usage.axis.hours", defaultValue: "\(Int(hours))h", comment: "Usage timeline axis tick: hours, kept short in every language")
+        default: String(localized: "usage.axis.days", defaultValue: "\(Int(hours / 24))d", comment: "Usage timeline axis tick: days, kept short in every language")
         }
     }
 }

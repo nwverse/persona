@@ -68,7 +68,7 @@ struct UsageCardsTests {
         #expect(rows.map(\.id) == ["a", "b"])
         let five = try #require(rows[0].fiveHour)
         #expect(five.seconds == 1.5 * 3600 && abs(five.position - UsageWindows.timelinePosition(hours: 1.5)) < 1e-12)
-        #expect(rows[0].week?.seconds == 2 * 3600)
+        #expect(rows[0].week?.seconds == 7200.0)
         #expect(rows[1].fiveHour == nil)
         // The per-model 7d is not the plan's: the row's bar is the plan's own, 150 hours out.
         #expect(abs((rows[1].week?.position ?? 0) - UsageWindows.timelinePosition(hours: 150)) < 1e-12)
@@ -82,11 +82,11 @@ struct UsageCardsTests {
     }
 
     @Test func shortDurations() {
-        #expect(UsageWindows.shortDuration(45 * 60) == "45m")
-        #expect(UsageWindows.shortDuration(1.5 * 3600) == "1.5h")
-        #expect(UsageWindows.shortDuration(4 * 3600) == "4h")
-        #expect(UsageWindows.shortDuration(50 * 3600) == "2d 2h")
-        #expect(UsageWindows.shortDuration(3 * 86400) == "3d")
+        #expect(UsageWindows.shortDuration(45 * 60) == "45分") // the tests run in zh-Hans
+        #expect(UsageWindows.shortDuration(1.5 * 3600) == "1.5小时")
+        #expect(UsageWindows.shortDuration(4 * 3600) == "4小时")
+        #expect(UsageWindows.shortDuration(50 * 3600) == "2天2时")
+        #expect(UsageWindows.shortDuration(3 * 86400) == "3天")
     }
 
     @Test func protectPercentIsReadWhenPresentAndTolerated() throws {
