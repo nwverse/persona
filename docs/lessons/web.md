@@ -1526,3 +1526,5 @@ old sidebar highlight. Snapshot a router revision that advances on every actual 
 and test the visible row as well as the cleared `handoff` state. A component that copied that origin into `useState` still
 keeps the old way-back strip, so read the current entry when the revision changes. Keep an explicit sidebar reselection as
 a replace, not a push, so it cannot add a duplicate history entry.
+
+- A standalone Vite component screenshot fixture still needs the production language-catalog and page-token plugins, plus the text-scale PostCSS transform. Loading the raw locale metadata as a catalog fails before React renders. Initialize localization before importing the component and capture browser page errors so a missing table reports its initialization error instead of only a selector timeout.
