@@ -297,6 +297,31 @@ describe("syncWebPush", () => {
     expect(subscribed).toEqual([KEY]);
   });
 
+  it("runs a credential change after the registration under way, with no second browser subscription", async () => {
+    stubSyncSupport();
+    localStorage.setItem("persona.webPush", "1");
+    const finishes: ((status: { subscribed: boolean }) => void)[] = [];
+    api.mockImplementation((path: string, init?: { method?: string }) => {
+      if (path === "/push/web") return Promise.resolve({ key: KEY });
+      if (init?.method === "PUT") return new Promise<{ subscribed: boolean }>((resolve) => { finishes.push(resolve); });
+      return Promise.reject(new Error(`unexpected ${path}`));
+    });
+    const puts = () => api.mock.calls.filter((c) => c[1]?.method === "PUT").length;
+    const first = syncWebPush("credential-under-way");
+    await vi.waitFor(() => expect(puts()).toBe(1));
+    const second = syncWebPush("credential-next");
+    // One macrotask lets every microtask chain settle: a parallel registration would have sent its PUT by now.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(puts()).toBe(1);
+    finishes[0]!({ subscribed: true });
+    await vi.waitFor(() => expect(puts()).toBe(2));
+    finishes[1]!({ subscribed: true });
+    await Promise.all([first, second]);
+    await syncWebPush("credential-next");
+    expect(puts()).toBe(2);
+    expect(subscribed).toEqual([KEY]);
+  });
+
   it("marks a credential complete only after its registration PUT succeeds", async () => {
     stubSyncSupport();
     localStorage.setItem("persona.webPush", "1");
