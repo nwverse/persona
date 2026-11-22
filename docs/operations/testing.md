@@ -575,6 +575,15 @@ sample paths and message bodies. The comparison marks kinds and versions as adde
 (`~`). An added kind is newly observed in the selected transcripts. Check its local sample before deciding whether
 the parser needs a new fixture or handling. Pass transcript directories to either command to limit the scan.
 
+To compare scans saved on different machines or review them later, create both snapshots with `--json`. Compare the
+saved counts without copying the transcripts or passing transcript directories:
+
+```sh
+python3 scripts/diag/transcript_stats.py --compare before-upgrade.json --against after-upgrade.json
+```
+
+The offline command validates both snapshots, leaves them unchanged and reads no transcript directories.
+
 API smoke tests: `curl -H "Authorization: Bearer $TOKEN" …/api/v1/machines`, `…/api/v1/sessions?machine_id=<machine>`.
 
 ### What a change affects: CI lanes, check-fast and the watcher (#11026)
