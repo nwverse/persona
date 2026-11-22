@@ -241,7 +241,7 @@ func (s *Service) a2aSave(ctx context.Context, st a2aStore, t *a2aTask) error {
 	}
 	t.Body = raw
 	var next *time.Time
-	if !a2aTerminal(t.State) || slices.ContainsFunc(t.Events, a2aActiveDelivery) {
+	if t.State != a2aQueued && (!a2aTerminal(t.State) || slices.ContainsFunc(t.Events, a2aActiveDelivery)) {
 		now := time.Now().Add(time.Second)
 		next = &now
 	}
@@ -260,6 +260,9 @@ func (s *Service) a2aSave(ctx context.Context, st a2aStore, t *a2aTask) error {
 		return errA2AConflict
 	}
 	t.Revision++
+	if a2aTerminal(t.State) {
+		s.a2aSignal()
+	}
 	return nil
 }
 
@@ -439,7 +442,7 @@ func a2aCancel(t *a2aTask) (bool, error) {
 		t.append(a2aEvent{ID: randomHex(16), Kind: "status", State: a2aCanceled})
 		return true, nil
 	}
-	if t.State != a2aSubmitted {
+	if t.State != a2aSubmitted && t.State != a2aQueued {
 		return false, errA2ACancel
 	}
 	for i := len(t.Events) - 1; i >= 0; i-- {

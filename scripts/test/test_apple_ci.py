@@ -45,8 +45,9 @@ class AppleOfflineUnitSchemeTests(unittest.TestCase):
         self.assertEqual((default['test']['language'], default['test']['region']), ('zh-Hans', 'CN'))
 
     def test_offline_build_and_execution_share_the_unit_only_scheme(self):
-        common = self.script.split('  IOS_COMMON=(', 1)[1].split('\n', 2)[:2]
-        self.assertEqual(common[0], '"${XCODE[@]}" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests" \\')
+        common = self.script.split('  IOS_COMMON=(', 1)[1].split('\n', 3)[:3]
+        self.assertEqual(common[0], 'xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\')
+        self.assertEqual(common[1], '    -clonedSourcePackagesDirPath "$SPM/SourcePackages" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests" \\')
         self.assertNotIn('-scheme Persona ', ''.join(common))
         for marker in ('"${IOS_UNIT_SELECTION[@]}" build-for-testing',
                        '"${IOS_UNIT_SELECTION[@]}" \\\n    -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building',
@@ -56,6 +57,25 @@ class AppleOfflineUnitSchemeTests(unittest.TestCase):
         self.assertIn('BUILD_SECONDS=1800', self.script)
         self.assertIn('UNIT_SECONDS=1800', self.script)
         self.assertIn("result ios-unit \"$SIM\" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests", self.script)
+
+    def test_offline_project_keeps_the_real_host_without_embedded_watch_or_share(self):
+        script = self.script
+        self.assertIn('OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"', script)
+        self.assertIn('ci_run \'Generate iPhone-only offline unit-test project\' 120 bash -c', script)
+        self.assertIn('xcodegen dump --spec "$spec" --type json > "$output/Persona.whole.json"', script)
+        self.assertIn('python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json"', script)
+        self.assertIn('ci_run \'Generate offline unit-test Xcode project\' 120 xcodegen generate \\\n'
+                      '    --spec "$OUTPUT/PersonaOfflineUnitTests.json" --project-root "$SOURCE/apple" \\\n'
+                      '    --project "$SOURCE/apple"', script)
+        self.assertLess(script.index('Generate iPhone-only offline unit-test project'),
+                        script.index("ci_run 'Build iOS offline unit tests'"))
+        self.assertIn('IOS_COMMON=(xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\\n'
+                      '    -clonedSourcePackagesDirPath "$SPM/SourcePackages" -scheme PersonaOfflineUnitTests', script)
+        self.assertNotIn('PERSONA_LEAN_DEV_BUILD=YES', script)
+        self.assertIn('ci_run \'Generate Apple project\' 120 xcodegen generate --spec "$SOURCE/apple/project.yml" --project "$SOURCE/apple"', script)
+        self.assertIn('ci_run \'Unsigned iOS and embedded watch/extensions build\' 1800 "${XCODE[@]}" -scheme Persona', script)
+        self.assertIn('ci_run \'Generate offline unit-test Xcode project\'', script)
+        self.assertIn('xcodegen dump --spec "$spec"', script)
 
     def test_local_ui_test_entry_keeps_default_scheme_and_ui_target(self):
         ui_test = (ROOT / 'scripts/app/ui-test.sh').read_text()
@@ -212,6 +232,13 @@ class AppleCIPreparationTests(unittest.TestCase):
         for lane in ('ios', 'ios-focused', 'ios-regressions'):
             current = script.replace('      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \\\n      --derived-data "$output/ios-tests" &',
                                      '      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &')
+            offline_generation = script[script.index("  # The same real Persona test host and all of PersonaTests"):
+                                       script.index("  # A generic destination must retain the host's single runnable architecture.")]
+            current = current.replace(offline_generation, '')
+            current = current.replace('OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"\n', '')
+            current = current.replace('xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\\n'
+                                      '    -clonedSourcePackagesDirPath "$SPM/SourcePackages"',
+                                      '"${XCODE[@]}"')
             current = current.replace(wire, '')
             current = current.replace(' || [ "$LANE" = ios-ipad-diagnostic ]', '').replace('|ios-ipad-diagnostic', '')
             current = current.replace('      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; diagnostics="$9"; lane="${10}"; shift 10',
@@ -450,7 +477,7 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('-derivedDataPath "$OUTPUT/ios-device"', script[device_build:device_check])
         self.assertIn('python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \\\n'
                       '    "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"', script[device_check:simulator_build])
-        self.assertIn('IOS_COMMON=("${XCODE[@]}" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests"', script)
+        self.assertIn('IOS_COMMON=(xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\', script)
         self.assertIn('python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \\\n'
                       '    "$OUTPUT/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app"', script[simulator_check:create])
         guards = (ROOT / 'scripts/ci/guards.sh').read_text()

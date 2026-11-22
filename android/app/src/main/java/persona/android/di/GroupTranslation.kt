@@ -401,6 +401,7 @@ internal fun AgentOperations.inGroup(names: GroupNames): AgentOperations {
         override suspend fun attachSession(key: SessionKey) = source.attachSession(names.raw(key))
         override suspend fun interruptSession(key: SessionKey) = source.interruptSession(names.raw(key))
         override suspend fun deleteSession(key: SessionKey) = source.deleteSession(names.raw(key))
+        override suspend fun forkSession(key: SessionKey) = source.forkSession(names.raw(key))
     }
 }
 

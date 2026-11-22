@@ -46,7 +46,8 @@ Use the tools through Persona MCP, a runtime's existing `callTool` API, or
 | `a2a_cancel` | Cancel a request that has not entered a turn, or one waiting for input |
 
 For an existing session, send its exact machine and session IDs.
-Each receiving session can have one active A2A task at a time.
+Each receiving session runs one active A2A task at a time; additional sends to a
+busy session are queued and delivered in FIFO order when the active task ends.
 
 ```sh
 personad tool a2a_send '{"machine_id":"box","session_id":"runtime.session-1","message_id":"request-001","text":"Run the checks and return the failing cases."}'

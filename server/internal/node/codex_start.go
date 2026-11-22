@@ -210,6 +210,9 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if mode == "bypassPermissions" {
 		argv = n.codexBypassArgv(launcher, argv)
 	}
+	if err := n.checkCodexWritableSymlinks(ctx, launch, launcher, argv, cwd); err != nil {
+		return nil, err
+	}
 	if n.codexOnSharedDaemon(argv) {
 		if err := codexDaemonSocketGone(n.codexHome()); err != nil {
 			return nil, err // a new tab would only show Codex failing to connect after the startup wait
@@ -628,6 +631,13 @@ func CodexStart(args []string) error {
 	}
 	if f.Prompt != "" { // a resume without a message (`personad tab-start`, pi.go) runs the words alone
 		argv = append(argv, "--", f.Prompt)
+	}
+	if filepath.Base(argv[0]) == "codex" {
+		home, _ := os.UserHomeDir()
+		cwd, _ := os.Getwd()
+		if err := guardCodexWritableSymlinks(context.Background(), argv, env, cwd, home); err != nil {
+			return fmt.Errorf("%s %w", codexStartError, err)
+		}
 	}
 	path, argv, env, _ = codexStartExec(path, argv, env, explicit)
 	if err := codexStartCommandLine(argv); err != nil {

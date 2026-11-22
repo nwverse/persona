@@ -456,7 +456,9 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
             operationsFor(machineId).renameSpace(machineId, workspaceId, name)
         override suspend fun closeSession(key: SessionKey) = operationsFor(key.machineId).closeSession(key)
         override suspend fun attachSession(key: SessionKey) = operationsFor(key.machineId).attachSession(key)
+        override suspend fun interruptSession(key: SessionKey) = operationsFor(key.machineId).interruptSession(key)
         override suspend fun deleteSession(key: SessionKey) = operationsFor(key.machineId).deleteSession(key)
+        override suspend fun forkSession(key: SessionKey) = operationsFor(key.machineId).forkSession(key)
     }
     val assistant = states[chosen].operations?.assistant ?: states.firstNotNullOfOrNull { it.operations?.assistant }
     val creations = states.map { it.creation }
