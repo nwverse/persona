@@ -373,26 +373,36 @@ fi
       exit "$status"
     fi
     mkdir -p "$watch_log"
-    printf "%s\n" "observer incomplete; bounded unavailable final evidence only; no launch cause established" > "$watch_log/observer.status.pending"
+    printf "%s\n" "collection incomplete; bounded unavailable evidence retained; no launch cause established" > "$watch_log/observer.status.pending"
     mv "$watch_log/observer.status.pending" "$watch_log/observer.status.txt"
     printf "%s\n" "{\"unavailable\":\"observer did not complete; no host-process verdict\"}" > "$watch_log/host-final.pending"
     mv "$watch_log/host-final.pending" "$watch_log/host-final.json"
     for product in 0 1 2; do
       printf "%s\n" "unavailable: product collection incomplete" > "$watch_log/product-$product-architecture.pending"
       mv "$watch_log/product-$product-architecture.pending" "$watch_log/product-$product-architecture.txt"
+      printf "%s\n" "incomplete" > "$watch_log/product-$product-architecture.status.pending"
+      mv "$watch_log/product-$product-architecture.status.pending" "$watch_log/product-$product-architecture.txt.status.txt"
       printf "%s\n" "unavailable: product collection incomplete" > "$watch_log/product-$product-libraries.pending"
       mv "$watch_log/product-$product-libraries.pending" "$watch_log/product-$product-libraries.txt"
+      printf "%s\n" "incomplete" > "$watch_log/product-$product-libraries.status.pending"
+      mv "$watch_log/product-$product-libraries.status.pending" "$watch_log/product-$product-libraries.txt.status.txt"
     done
-    printf "%s\n" "unavailable: bundle signature collection incomplete" > "$watch_log/product-0-bundle-signature.pending"
-    mv "$watch_log/product-0-bundle-signature.pending" "$watch_log/product-0-bundle-signature.txt"
-    # Give the iPhone observer the same bounded lifecycle as the regular iPad:
-    # a fast probe must not terminate its product collector in the same group.
-    bash -c "exec python3 \"\$@\"" -- "$ci_root/scripts/ci/apple_readiness_watch.py" \
+    for product in 0 1; do
+      printf "%s\n" "unavailable: bundle signature collection incomplete" > "$watch_log/product-$product-bundle-signature.pending"
+      mv "$watch_log/product-$product-bundle-signature.pending" "$watch_log/product-$product-bundle-signature.txt"
+      printf "%s\n" "incomplete" > "$watch_log/product-$product-bundle-signature.status.pending"
+      mv "$watch_log/product-$product-bundle-signature.status.pending" "$watch_log/product-$product-bundle-signature.txt.status.txt"
+    done
+    # Noninteractive Bash gives the observer a separate process group only with
+    # job control enabled. The bounded runner must never signal this group.
+    set -m
+    python3 "$ci_root/scripts/ci/apple_readiness_watch.py" \
       --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \
       --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \
       --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \
       --output "$watch_log" --seconds 900 &
     watcher=$!
+    set +m
     stop_watcher() {
       local code=$?
       trap - EXIT TERM INT
@@ -401,8 +411,11 @@ fi
         kill -0 "$watcher" 2>/dev/null || break
         sleep 0.1
       done
+      # A collector child can outlive both its parent and the watcher.
+      # Close the owned group even after the watcher leader has exited.
+      kill -KILL "-$watcher" 2>/dev/null || true
       if kill -0 "$watcher" 2>/dev/null; then
-        kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
+        kill -KILL "$watcher" 2>/dev/null || true
       fi
       wait "$watcher" || true
       exit "$code"
