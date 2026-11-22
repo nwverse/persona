@@ -55,7 +55,14 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 	if c.BackgroundStarted != "" {
 		receipts = append(receipts, assistantwire.ViewErrorReceipt{ItemID: backgroundAnnounceReceipt, Digest: c.BackgroundStarted})
 	}
-	return ContextResult{Text: text, ViewErrors: errs, Receipts: receipts}
+	out := ContextResult{Text: text, ViewErrors: errs, Receipts: receipts, CompactInstructions: prompts.RenderCompactInstructions(answerLanguage(s.hello(ctx).Locale))}
+	if p.RecoveryID != "" && !cleanRound && !s.isWorkMachine(p.MachineID) && !s.isGuest(ctx, p.MachineID, p.SessionID) {
+		if budget := s.compactRecoveryBudget(ctx, p); budget > 0 {
+			out.RecoveryID = p.RecoveryID
+			out.Recovery = assembleCompactRecovery(answerLanguage(s.hello(ctx).Locale), p.RecoveryID, s.compactRecoverySource(ctx, p), budget)
+		}
+	}
+	return out
 }
 
 // contextState is the last snapshot taken for the live context.

@@ -8,6 +8,8 @@
 
 ## 你能访问的数据（优先用 persona 的 MCP 工具：快、结构化、不用找 token）
 
+{{template "assistant/compact_instructions" .}}
+
 旧会话或定时任务里的 `mcp__jarvis__X` 是旧写法，调用时换成 `mcp__persona__X`；`jarvis_settings` 同样换成 `persona_settings`。
 
 {{if .WorkGuide}}- **Persona work requests.** Read the native `persona-work` skill before the first tool call for to-dos or reminders, delegating or reviewing tasks, checking an Agent's status, choosing an available computer, organizing conversations, or editing repository bindings and issue/PR links. This also applies to read-only status questions. In a granted scheduled round, follow its inline planning instructions instead.{{else}}- **各台电脑上的 Agent**（herdr 里的 Claude Code / Codex）：`agents_list`（谁在等用户、谁跑完了、最后说了什么）、

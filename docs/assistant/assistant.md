@@ -1060,6 +1060,29 @@ before the next message, Claude Code thinks the window is exceeded and auto-comp
 - Measurement (Claude Code 2.1.318, transcript copy + fake API): unchanged resume attempted compaction (`pre_tokens` 1.7M), empty summary returned "Prompt is too long"; zeroed usage skipped compaction and sent directly.
   Previously undelivered user messages remain in transcript; Claude Code combines them with the new message into one user turn (synthetic error replies excluded), so retry needn't include their text again.
 
+### Memory recovery after compaction
+
+For the main and direction conversations, the first input after a compaction carries a recovery context of at most
+6 KiB of UTF-8, including its markup. Task workers use at most 3 KiB. The node persists a checkpoint when the runtime
+reports a compaction and consumes it only when an input carrying the matching recovery block is delivered. Failed
+sends retain it; a restart retains it; an older delivery cannot clear a newer checkpoint. A snapshot prefetched before
+idle-aware compaction is refreshed at delivery. The block accompanies the next real input and does not start a turn.
+
+The manager collects scoped to-do state, direction instructions, project `STATE.md` (falling back to the existing
+project summary), effective user decisions and recent user inputs. Main and direction recovery includes the last seven
+days of decisions; a worker keeps its own standing decisions without that age limit. Agent decisions and reported
+outcomes are never labeled as user decisions. Each quote keeps a durable source reference and is included whole or
+omitted; only state prose can be shortened. XML-sensitive source text is escaped. The deterministic assembler accepts
+source records separately from collection so a unified ledger can replace the legacy sources without changing delivery.
+Guest, work-trust, clean scheduled rounds, unrelated machine/session pairs and unmanaged conversations receive no recovery.
+
+Summary instructions follow the configured user language. Simplified Chinese explicitly forbids drifting to English;
+English and Japanese have their own instructions. All require user decisions verbatim with references, running task and
+session IDs, non-negotiable rules, and items waiting for the user. Claude reads these instructions from the generated
+instructions and receives them on explicit/idle compaction; Codex receives them through its `compact_prompt` setting.
+Runtime-initiated compaction in the middle of a turn is recovered at the next platform input; this does not add a
+runtime-native mid-turn hook.
+
 ### Manual compaction (2026-11-04, #1727)
 
 User selects "Compact context" in any open Assistant conversation's menu, including direction and other persistent side
