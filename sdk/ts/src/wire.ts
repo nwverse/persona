@@ -5638,16 +5638,28 @@ export interface TodoEventThread {
 }
 
 /**
+ * An external responsible party on a to-do that is not a Persona-started agent: a long-running session or a person,
+ * with optional machine_id and session_id hints.
+ */
+export interface TodoEventResponsible {
+  kind: string;
+  name: string;
+  machine_id?: string;
+  session_id?: string;
+}
+
+/**
  * event.todo.changed: a to-do was created or deleted, or its title, whether it is done (or failed to start), its
- * supervisor, or the thread it is bound to changed. Changes within about a second of each other are told once, as the
- * to-do is at the end of them. title, thread and done are as after the change (the last ones for a deleted to-do);
- * thread is left out when the to-do has none, done unless the to-do is done (closed, or its task failed to start).
- * supervisor is the conversation that supervises it (the main conversation or a leader, see leaders.schema.json),
- * left out when none does; a change of supervisor (the task moved to another leader) sends it too. kind is concern
- * for something the owner raised in the main conversation and wants an answer to; such a to-do is done only once its
- * outcome was reported to the owner (an event.todo.decision of source reported comes with it), never on its own; kind
- * is left out for a to-do or a task and never changes. Notes, agents and decisions changing do not send it (decisions
- * have event.todo.decision). Read the to-do again if it matters.
+ * supervisor, the thread it is bound to, or its external responsible party changed. Changes within about a second of
+ * each other are told once, as the to-do is at the end of them. title, thread, done and responsible are as after the
+ * change (the last ones for a deleted to-do); thread and responsible are left out when the to-do has none, done
+ * unless the to-do is done (closed, or its task failed to start). supervisor is the conversation that supervises it
+ * (the main conversation or a leader, see leaders.schema.json), left out when none does; a change of supervisor (the
+ * task moved to another leader) sends it too. kind is concern for something the owner raised in the main conversation
+ * and wants an answer to; such a to-do is done only once its outcome was reported to the owner (an
+ * event.todo.decision of source reported comes with it), never on its own; kind is left out for a to-do or a task and
+ * never changes. Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the
+ * to-do again if it matters.
  */
 export interface TodoChangedEvent {
   id: string;
@@ -5656,6 +5668,7 @@ export interface TodoChangedEvent {
   done?: boolean;
   supervisor?: string;
   kind?: string;
+  responsible?: TodoEventResponsible;
   what: string;
 }
 

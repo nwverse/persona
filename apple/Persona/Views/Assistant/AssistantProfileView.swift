@@ -42,6 +42,8 @@ struct AssistantProfileView: View {
 
     var body: some View {
         Group { if AppStyle.current.usesBeautifulUI { cards } else { list } }
+        // Keep both style trees out of every page modifier's opaque type (`MainPagesStackTests`, #10288).
+        .stackSegment()
         .pageTitle("Persona")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }

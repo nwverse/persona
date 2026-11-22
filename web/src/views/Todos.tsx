@@ -45,6 +45,7 @@ import {
   makeSessionLookup,
   mostUrgentAgent,
   orphanedLine,
+  responsibleOf,
   sortTodos,
   heldDelivery,
   TODO_TONE_CLASS,
@@ -302,7 +303,11 @@ export function TodosView({
   const matchesSearch = (t: Todo) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
-    return t.title.toLowerCase().includes(q) || (t.notes ?? "").toLowerCase().includes(q);
+    return (
+      t.title.toLowerCase().includes(q) ||
+      (t.notes ?? "").toLowerCase().includes(q) ||
+      (responsibleOf(t)?.name.toLowerCase().includes(q) ?? false)
+    );
   };
   // a search and the filter narrow the to-dos first; the sections (or the folders) place what is left
   const filterTodo = (t: Todo) => matchesSearch(t) && inFilter(t);
@@ -1680,6 +1685,7 @@ const TodoListItem = memo(function TodoListItem({
   // its steps as the hub counts them (#11858, lib/todo-steps.ts): in place of Not started, or after its Agent count
   const steps = stepsWords(todo, status);
   const held = heldDelivery(todo);
+  const responsible = responsibleOf(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
   // a failed start still waiting on the owner reads open, not done, with why it did not start (#3713), in every grouping
   const open = checksAsOpen(todo, section ?? view.section);
@@ -1770,12 +1776,26 @@ const TodoListItem = memo(function TodoListItem({
               <span className="shrink-0 whitespace-nowrap text-ink-3" data-testid="todo-steps">{steps.after}</span>
             </>
           )}
+          {responsible && (
+            <>
+              <span className="text-ink-3">·</span>
+              <span
+                data-testid="todo-responsible"
+                data-kind={responsible.kind}
+                title={t("todos.responsible_label", { name: responsible.name })}
+                className="inline-flex min-w-0 items-center gap-1 truncate text-ink-2"
+              >
+                <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={11} stroke={2} className="shrink-0 text-ink-3" />
+                <span className="truncate">{responsible.name}</span>
+              </span>
+            </>
+          )}
           {/* its steps were handed out: what is next once they are all closed, else nothing about handing it over */}
           {!todo.done_at && activeCount === 0 && (steps?.tail !== undefined ? (
             steps.tail && <span className="truncate text-ink-3" data-testid="todo-steps-next">· {steps.tail}</span>
-          ) : (
+          ) : !responsible ? (
             <span className="truncate text-ink-3">· {t("todos.not_handed")}</span>
-          ))}
+          ) : null)}
           {(section ?? view.section) === "just_done" && onSeen ? (
             <span className="ml-auto flex shrink-0 items-center gap-1.5">
               {!todo.done_at && <ReviewBadge todo={todo} />}
@@ -2403,6 +2423,7 @@ function TodoDetail({
   const look = todoLook(todo, status, waitOf(todo, status, lookup));
   // its steps as the hub counts them (#11858), as its row says them
   const steps = stepsWords(todo, status);
+  const responsible = responsibleOf(todo);
   // The to-do's own PR, parsed once here (the list row and the repository section's fallback share it).
   const legacyPR = prLink(todo.pr_url);
   const toneClass = {
@@ -2481,6 +2502,20 @@ function TodoDetail({
         )}
         <span className="text-ink-3">·</span>
         <span>{t("todos.agent_count", { count: activeAgents.length })}</span>
+        {responsible && (
+          <>
+            <span className="text-ink-3">·</span>
+            <span
+              data-testid="todo-detail-responsible"
+              data-kind={responsible.kind}
+              title={t("todos.responsible_label", { name: responsible.name })}
+              className="inline-flex min-w-0 items-center gap-1 text-ink-2"
+            >
+              <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={12} stroke={2} className="shrink-0 text-ink-3" />
+              <span className="truncate">{responsible.name}</span>
+            </span>
+          </>
+        )}
         {steps?.after && (
           <>
             <span className="text-ink-3">·</span>
@@ -2554,6 +2589,8 @@ function TodoDetail({
         </Suspense>
       </PageBoundary>
 
+      <ResponsibleSection todo={todo} machines={machines} />
+
       <ThreadSection todo={todo} />
 
       <DecisionsSection todo={todo} lookup={lookup} />
@@ -2605,7 +2642,7 @@ function TodoDetail({
 
         {activeAgents.length === 0 ? (
           <div className="rounded-control border border-dashed border-line p-6 text-center text-[13px] text-ink-3">
-            {open ? t("todos.no_agents") : t("todos.no_agents_done")}
+            {open ? (responsible ? t("todos.no_agents_responsible", { name: responsible.name }) : t("todos.no_agents")) : t("todos.no_agents_done")}
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -2788,6 +2825,83 @@ function TodoDetail({
         )}
         <Button tone="secondary" icon="check" onClick={() => onToggleDone(open)} className="h-8.5 px-3 text-[13px] whitespace-nowrap">
           {open ? t("todos.complete") : t("todos.reopen")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ── Responsible party (#12712) ───────────────────────────────
+
+/**
+ * The external responsible party (long-running session or person) when one is recorded on the to-do (#12712).
+ * Renders nothing when unset so to-dos without a responsible party stay unchanged.
+ */
+function ResponsibleSection({ todo, machines }: { todo: Todo; machines: Machine[] }) {
+  const responsible = responsibleOf(todo);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setBusy(false);
+  }, [todo.id]);
+
+  if (!responsible) return null;
+
+  const machineName = responsible.machine_id
+    ? machines.find((m) => m.id === responsible.machine_id)?.name || responsible.machine_id
+    : undefined;
+  const hint = [machineName, responsible.session_id].filter(Boolean).join(" · ");
+
+  const clear = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await updateTodo(todo.id, { responsible: null });
+      await refreshTodos();
+      toast(t("todos.responsible_cleared"), "ok");
+    } catch (e) {
+      toast(t("todos.responsible_clear_failed", { error: errorText(e) }), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-6" data-testid="todo-responsible-section">
+      <div className="mb-2 text-xs font-medium tracking-[0.04em] text-ink-3 uppercase">
+        {t("todos.responsible_section")}
+      </div>
+      <div className="flex items-center justify-between gap-3 rounded-control border border-line bg-canvas p-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-ink">
+            <span className="shrink-0 text-ink-3">
+              <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={14} />
+            </span>
+            <span data-testid="todo-responsible-name" className="truncate">
+              {responsible.name}
+            </span>
+            <span
+              data-testid="todo-responsible-kind"
+              className="shrink-0 whitespace-nowrap rounded bg-hover px-1.5 py-0.5 text-xs font-normal text-ink-3"
+            >
+              {t(`todos.responsible_kind_${responsible.kind}`)}
+            </span>
+          </div>
+          {hint && (
+            <div data-testid="todo-responsible-hint" className="mt-0.5 truncate pl-5.5 text-xs text-ink-3">
+              {hint}
+            </div>
+          )}
+        </div>
+        <Button
+          tone="quiet"
+          busy={busy}
+          disabled={busy}
+          title={t("todos.responsible_clear_label", { name: responsible.name })}
+          className="shrink-0 whitespace-nowrap px-2 py-1 text-xs text-ink-3 hover:bg-red-tint/50 hover:text-red"
+          onClick={() => void clear()}
+        >
+          {t("todos.responsible_clear")}
         </Button>
       </div>
     </div>

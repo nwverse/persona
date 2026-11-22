@@ -296,5 +296,14 @@
   "summary_filtered": "{filter}: {open} open · {parked} parked · {shelved} inactive · {done} done",
   "section_parked": "Parked",
   "ask_chat_route": "Answer decision: {title}",
-  "ask_chat_hint": "Your next message answers this decision and is saved on the task. Cancel this address to discuss it without deciding."
+  "ask_chat_hint": "Your next message answers this decision and is saved on the task. Cancel this address to discuss it without deciding.",
+  "responsible_section": "Responsible",
+  "responsible_kind_session": "Session",
+  "responsible_kind_person": "Person",
+  "responsible_label": "Responsible: {name}",
+  "responsible_clear": "Clear",
+  "responsible_clear_label": "Clear responsible party “{name}”",
+  "responsible_cleared": "Responsible party cleared",
+  "responsible_clear_failed": "Couldn't clear responsible party: {error}",
+  "no_agents_responsible": "Tracked by {name}. Hand to a Persona Agent below if you want Persona to run it."
 }

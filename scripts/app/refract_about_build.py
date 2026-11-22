@@ -120,12 +120,14 @@ def main() -> int:
             source_lock.tarfile.TarError, urllib.error.URLError) as error:
         if isinstance(error, subprocess.CalledProcessError):
             source_lock.report_process_failure(error)
-        if args.mode == "generate" and before is not None:
-            GENERATED.write_bytes(before)
-            if GENERATED.read_bytes() != before:
-                print("Refract About Build: FAILED to restore reviewed Kotlin", file=sys.stderr)
-                return 1
         print(f"Refract About Build: FAILED: {error}", file=sys.stderr)
+        if args.mode == "generate" and before is not None:
+            try:
+                source_lock.restore_reviewed_output(before, GENERATED)
+            except (ValueError, OSError) as restore_error:
+                print(f"Refract About Build: secondary restoration failure: {restore_error}", file=sys.stderr)
+                return 1
+            print("Refract About Build: original reviewed Kotlin restored after generation failure", file=sys.stderr)
         return 1
     return 0
 
