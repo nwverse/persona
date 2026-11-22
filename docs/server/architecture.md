@@ -178,15 +178,28 @@ flags and methods are documented in its domain's protocol doc: `docs/protocol/pr
 
 ### The node's method table
 
-The node gets a table of the same shape, its own because the node may not import the manager's packages. Not on `main`
-yet (#7891, #1267).
+The node has a table of the same shape, its own because the node may not import the manager's packages
+(`server/internal/node/node_methods.go`).
 
-- **Which methods**: the table maps exact method names, and only for methods that are not bound to a session. It is
-  consulted in `Node.handle`, where `sessions.history` is handed to its domain's handler today
-  (`server/internal/node/sessions_history.go`).
-- **What stays in the switch**: methods bound to a session (`session.*`, `terminal.*`, `assistant.send`, `codex.answer`,
-  …). The shared decode, alias resolution and refusals run before them, and a table entry would skip those. The table
-  refuses these names when the node starts.
+- **Registering**: a method that is not bound to a session registers from an `init()` in its domain's own file,
+  `func init() { nodeRPC(proto.MethodMachinePorts, (*Node).machinePorts) }`. `nodeRPC` decodes each call's params into
+  the handler's own type once: fields the type does not have are ignored, empty params leave it zero, and params that
+  do not decode are answered `bad <method> params`. A handler that takes `json.RawMessage` is handed the params
+  themselves, because `secret.run` and `model.run` clear them after reading.
+- **Where it is consulted**: in `Node.handleMethod`, after the delivery aliases and before the shared parameter
+  struct, where `sessions.history` was first handed to its domain's handler (`server/internal/node/sessions_history.go`).
+- **Validated on entry**: each `nodeRPC` call is checked where it is made, and an invalid one panics when the node
+  starts, at the `init()` that made it. The table refuses an empty name, a nil handler, a name registered twice, a
+  name under a prefix `handleMethod` hands to a dispatcher of its own (`assistant.segment.`, `git.backend.`,
+  `node.update.`, `task.workspace.`, `plugin.node.`), a delivery alias (`session.source_send`,
+  `session.owner_interrupt`, `codex.owner_answer`) and a session-bound name. No flag closes the table after start-up:
+  nothing registers later, and a call only reads it.
+- **What stays in the switch**: methods bound to a session (`session.*`, `terminal.*`, `assistant.send`,
+  `assistant.answer_again`, `assistant.permissions.reset`, `codex.answer`). The shared decode, alias resolution, the
+  Codex thread mapping and the identity-conflict refusal run before them, and a table entry would skip all of them.
+- **No new label**: `handleMethod` takes no new label for a method the table may hold (the `node_handle_method` row
+  under "Frozen central lists"). The labels it has stay, and move into the table only while no open PR edits their
+  lines.
 
 ### Prompts
 
@@ -206,6 +219,8 @@ A central list with a seam takes no new name. `server/internal/archguard/central
   freeze is on names, not lines. These files hold names, never counts (they are not count ratchets,
   `docs/operations/testing.md` "Count ratchets").
 - **Frozen today**:
+  - the labels of `Node.handleMethod` for the methods the node's method table may hold, by their source text
+    (`"node.info"`, `proto.MethodMachineToolchain`), and the prefixes it routes on as `prefix "plugin.node."`;
   - the `assistantwire.Routes` literal, by each entry's source text (`"GET /api/v1/todos"`, `"GET " + StarredImportPath`);
   - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`.
 

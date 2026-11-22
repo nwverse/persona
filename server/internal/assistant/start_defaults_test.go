@@ -938,7 +938,8 @@ func TestStartDefaultsPermissionOfThePolicysAgentNotStored(t *testing.T) {
 }
 
 // A rule that fits but fills nothing in (here: a goal for a task without criteria) leaves the start as it is without
-// the feature, and the launch the plan keeps is the one this try resolved, as without the feature.
+// the feature, and the launch the plan keeps is the same as without the feature: the task's own, which names nothing,
+// not the launcher and model Model configuration › Agents resolved for this try (#12618).
 func TestStartDefaultsARuleThatFillsNothingStoresAsWithout(t *testing.T) {
 	stored := func(rule bool) startPick {
 		t.Helper()
@@ -957,7 +958,7 @@ func TestStartDefaultsARuleThatFillsNothingStoresAsWithout(t *testing.T) {
 		return task.storedLaunch()
 	}
 	with, without := stored(true), stored(false)
-	if !reflect.DeepEqual(with, without) || with.launcher != "gateway" || with.model != "gw-model" {
+	if !reflect.DeepEqual(with, without) || with.launcher != "" || with.model != "" || with.effort != "" {
 		t.Fatalf("with a rule that fills nothing: %+v\nwithout the feature: %+v", with, without)
 	}
 }

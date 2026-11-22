@@ -866,7 +866,7 @@ type sessionStartRequest struct {
 
 func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	var p sessionStartRequest
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, proto.MessageBodyLimit)) // a first message with its pictures
 	if err == nil {
 		err = json.Unmarshal(body, &p)
 	}
@@ -885,6 +885,9 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if p.WorkSession && (p.Launcher == "" || p.AgentType == "" || strings.TrimSpace(p.Cwd) == "" ||
 		p.ResumeSessionID != "" || p.TodoID != "" || p.WorkspaceID != "" || p.Host != "") {
 		writeErrCode(w, http.StatusBadRequest, "work_target_required", errors.New("Choose a computer, project folder, harness and launcher for the new session."))
+		return
+	}
+	if apierr.ImagesOverLimit(w, proto.HubImageLimits.For(p.AgentType), len(p.Images)) {
 		return
 	}
 	if !handoff {

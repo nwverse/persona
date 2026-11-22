@@ -159,7 +159,9 @@ test_batch() {
     IOS_LAST_STATUS=0
     ci_run "$@" 2>&1 | tee "$OUTPUT/$name.log" || IOS_LAST_STATUS=$?
   else
-    ci_run "$@"
+    # pipefail keeps the bounded command's failure status. The existing failure
+    # collector retains this allowlisted console log with its xcresult.
+    ci_run "$@" 2>&1 | tee "$OUTPUT/$name.log"
   fi
 }
 

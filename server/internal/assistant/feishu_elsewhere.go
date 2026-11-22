@@ -229,7 +229,7 @@ func (s *Service) feishuElsewhere(ev feishubot.MessageEvent, st FeishuStatus) {
 	if content.Forward {
 		return
 	}
-	rest, asked := aiCommand(openingWords(ev, content))
+	rest, asked := aiCommand(openingCommandWords(ev, content))
 	if !asked {
 		s.logf("bots: a message marked as an /ai from elsewhere was not one: dropped")
 		return

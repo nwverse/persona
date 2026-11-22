@@ -114,9 +114,11 @@ struct ExtensionParts: Identifiable {
                 // Left out: a component this app doesn't know, and the assistant's HTML outside its chat (extensions never
                 // receive the assistant sandbox context).
                 if case .unknown = c { leftOut = true; continue }
-                // A scene (UI version 11, #12544) is not drawn yet: the app asks for 10, so only an assistant card
-                // brings one, and it is left out like a component the app does not know.
+                #if !os(iOS)
+                // Only iPhone and iPad draw UI version 11's 3D scene (#12544); older surfaces leave an assistant card's
+                // raw scene out rather than framing an empty section.
                 if case .scene = c { leftOut = true; continue }
+                #endif
                 if case .html = c, !includeHTML { leftOut = true; continue }
                 parts[parts.count - 1].append(Item(id: Item.id(c, section: i, index: j), component: c))
             }
@@ -399,7 +401,16 @@ struct ExtensionItemRow: View {
             #endif
         // UI version 6's picture (`ExtensionMedia.swift`).
         case .image(let i): ExtensionImageItem(item: i, model: model)
-        case .divider, .scene, .unknown: EmptyView()
+        case .scene(let scene):
+            #if os(iOS)
+            ExtensionScene(scene: scene, controller: model, link: $link)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.flush,
+                                          bottom: Theme.Space.s, trailing: Theme.Space.flush))
+            #else
+            EmptyView()
+            #endif
+        case .divider, .unknown: EmptyView()
         // UI version 4–5's code-hosting components: a whole page with them is drawn by the code page (`ExtensionCodePage`,
         // #2961); a card or a section says what they say (`ExtensionCodeSummary`).
         case .header, .breadcrumb, .fileTree, .code, .diff, .commentThread, .composer:
@@ -527,7 +538,9 @@ struct ExtensionViewStack: View {
     /// assistant's HTML outside its chat.
     nonisolated static func leftOut(_ c: ExtensionComponent, html: Bool) -> Bool {
         if case .unknown = c { return true }
+        #if !os(iOS)
         if case .scene = c { return true }
+        #endif
         if case .html = c, !html { return true }
         return false
     }
