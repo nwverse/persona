@@ -24,6 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/promptcontent"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -243,7 +244,7 @@ func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	_, ok := n.procs[id]
 	a := n.agents[id]
 	n.mu.Unlock()
-	if ok || n.externalStarts.has(id) {
+	if ok || n.externalStarts.has(id) || n.isRoundFork(id) {
 		return true
 	}
 	// A real host pane is stronger evidence than a working directory: users may resume a terminal session there.
@@ -298,6 +299,16 @@ func serviceTierRefusal(ctx context.Context, code string) error {
 	return refusal(code, i18n.T(i18n.From(ctx), "rpc-errors."+code), nil)
 }
 
+// assistantInputOrigin resolves an existing conversation's origin for both content checks and sends.
+func assistantInputOrigin(st sessionState, requested modelExecution, resume bool) (origin string, known bool) {
+	origin, known = requested.Origin, requested.OriginKnown || st.OriginKnown || !resume
+	if resume && !requested.OriginKnown && (st.OriginKnown || st.Origin != "" || origin == "") {
+		// A persisted decision, including a legacy non-empty Inbox origin, wins over an unattested caller value.
+		origin = st.Origin
+	}
+	return origin, known
+}
+
 // assistantSend delivers a user message, starting or restarting the headless claude when needed.
 // id == "" starts a new conversation and returns its id.
 func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string, images []proto.Image, mode, effort string, options ...modelExecution) (_ string, sendErr error) {
@@ -310,8 +321,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if launcher != "" && !shellcmd.NameRe.MatchString(launcher) {
 		return "", fmt.Errorf("invalid launcher %q", launcher)
 	}
-	_, _, runtimeKnown := n.runtimes.belongs(id)
-	strictRuntime := executionOption(options).Strict && runtimeKnown
+	strictRuntime := n.strictRuntimeSession(id, executionOption(options).Strict)
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) && !strictRuntime {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
@@ -446,14 +456,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			n.state.put(id, st)
 		}
 	}
-	requestedOrigin := executionOption(options)
-	origin, originKnown := requestedOrigin.Origin, requestedOrigin.OriginKnown || st.OriginKnown || !resume
-	if resume && !requestedOrigin.OriginKnown && (st.OriginKnown || st.Origin != "" || origin == "") {
-		// An unattested caller origin is not evidence. A persisted decision, including a legacy non-empty Inbox origin,
-		// wins over it; only an explicit origin_known can replace that decision with an ordinary empty origin.
-		origin = st.Origin
-	}
-	if resume && requestedOrigin.OriginDecisionRequired && !originKnown && guest == nil {
+	origin, originKnown := assistantInputOrigin(st, requested, resume)
+	if resume && requested.OriginDecisionRequired && !originKnown && guest == nil {
 		// A pre-upgrade record has no ordinary-origin decision. Neither an older manager's send nor a non-empty caller
 		// origin proves one; wait for the new manager's explicit origin_known instead of starting ordinary built-ins.
 		return "", errAssistantOriginUnknown
@@ -471,6 +475,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		// Plan rejects MCP before consulting allowedTools, which stalls investigation and inbox_suggest. Default keeps
 		// Persona's explicit MCP allowlist effective; the manager/node origin policy remains the outbound boundary.
 		mode = "default"
+	}
+	if err := checkFileReferenceAudience(ctx, text, origin, guest != nil, public); err != nil {
+		return "", err
 	}
 	if guest != nil {
 		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
@@ -506,9 +513,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
-	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id) || strictRuntime; guest != nil && (onRuntime != nil || runs) {
+	if onRuntime, runs := n.assistantRuntimeRoute(id, rl, strictRuntime); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
+		if refs, err := promptcontent.Files(text); err != nil || len(refs) > 0 {
+			return "", fileRuntimeUnsupported(ctx)
+		}
 		if origin == originInbox {
 			// External runtimes do not yet attest the origin on their first callback. Refuse rather than leave an
 			// unguarded startup window; built-in Claude and Codex carry it in their process and session state.
@@ -517,21 +527,23 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if startTier != "" {
 			return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")
 		}
-		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
-			return "", skillSelectionError(assistantskills.ErrReference)
-		}
 		if execution.ConfigDir != "" {
 			return "", errors.New(assistantwire.ConfigDirClaudeOnly)
 		}
 		if id != "" && (onRuntime == nil || !runs) && !(runs && launcher == "") { // another kind of agent than its own
 			return "", errors.New("换到另一种 Agent 需要新建对话")
 		}
+		skillCwd := n.runtimeAssistantCwd(id, cwd, st)
+		selected, err := n.selectedSkills(ctx, id, skillCwd, rl, text, execution)
+		if err != nil {
+			return "", err
+		}
 		eff := effort
 		if eff == "" {
 			eff = execution.Effort
 		}
 		superviseRoundFrom(ctx).set(roundKept, roundWhyUnsupported) // a runtime keeps its own context (assistant_round.go)
-		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Public, execution.Strict, execution.Model, eff, policy)
+		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Public, execution.Strict, selected, execution.Model, eff, policy)
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {
@@ -629,6 +641,19 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if proto.IsExternalLauncher(launcher) {
 		execution.StartupContext = ctx
 	}
+	// Validate the file scope before taking a spare or persisting a conversation.
+	fileCwd := cwd
+	if fileCwd == "" {
+		fileCwd = n.storedCwd(st.Cwd)
+	}
+	files, err := n.selectedFiles(ctx, text, fileCwd, launcher, execution.Runtime)
+	if err != nil {
+		return "", err
+	}
+	if len(files) > 0 {
+		// An empty cwd would let a new send adopt a spare in any directory. Require the directory that was checked.
+		cwd = fileCwd
+	}
 	var p *assistantProc
 	if id == "" && guest != nil {
 		// Never the warm spare: it was started with the assistant's tools. Its process reads Guest from the state.
@@ -669,7 +694,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	timing.mark("preflight_done", true)
 	if cwd == "" {
-		cwd = n.storedCwd(st.Cwd)
+		cwd = fileCwd
 	}
 	selectionSession := id
 	if !resume {
@@ -928,6 +953,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return id, nil
 	}
 	if hasInput && (launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude") {
+		// A new native conversation uses the file scope checked before startup. A resumed one can retain an
+		// existing process's launcher and runtime while a switch waits.
+		if resume && len(files) > 0 {
+			files, err = n.selectedFiles(ctx, text, cwd, launcher, execution.Runtime)
+			if err != nil {
+				return "", err
+			}
+		}
 		// An active process may retain its old environment while a switch waits. Never send selections to that
 		// different environment simply because the display names match. Claude startup can also
 		// reveal a managed-policy cache; recheck before handing exact-file instructions to it.
@@ -935,6 +968,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if err != nil {
 			return "", err
 		}
+	}
+	if len(files) > 0 {
+		text += "\n\n" + prompts.RenderAssistantSelectedFiles(files, agentPromptLanguage(ctx))
 	}
 	retryMode, retryEffort := n.modesOf(id) // retain the request before an unconfirmed control can roll it back
 	// Controls do not depend on the live context. Start their acknowledged sync
@@ -1050,8 +1086,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", externalAdapterError(ctx, ctx.Err())
 		}
 		if werr == nil {
+			sentAt := time.Now()
 			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
 			if werr == nil {
+				if !wasBusy {
+					n.ttft.arm(id, sentAt, "")
+				}
 				n.commitModelChoice(id, execution)
 			}
 			timing.mark("input_written", werr == nil)
@@ -1178,19 +1218,22 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		}
 		p.printed()
 		var ev struct {
-			Type     string                   `json:"type"`
-			Subtype  string                   `json:"subtype"`
-			Tasks    json.RawMessage          `json:"tasks"`
-			Tools    []string                 `json:"tools"`
-			Version  string                   `json:"claude_code_version"`
-			Response assistantControlResponse `json:"response"`
-			Command  string                   `json:"command_uuid"` // command_lifecycle: the user message it is about
-			State    string                   `json:"state"`        // and what became of it (assistant_queue.go)
-			Event    struct {
+			Type      string                   `json:"type"`
+			Subtype   string                   `json:"subtype"`
+			SessionID string                   `json:"session_id"`
+			Tasks     json.RawMessage          `json:"tasks"`
+			Tools     []string                 `json:"tools"`
+			Version   string                   `json:"claude_code_version"`
+			Response  assistantControlResponse `json:"response"`
+			Command   string                   `json:"command_uuid"` // command_lifecycle: the user message it is about
+			State     string                   `json:"state"`        // and what became of it (assistant_queue.go)
+			Event     struct {
 				Type  string `json:"type"`
 				Delta struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					Thinking    string `json:"thinking"`
+					PartialJSON string `json:"partial_json"`
 				} `json:"delta"`
 				Message struct {
 					ID    string `json:"id"`
@@ -1214,6 +1257,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		if json.Unmarshal(line, &ev) != nil {
 			p.invalidateUpdateTasks()
 			continue
+		}
+		if p.round && ev.SessionID != "" && ev.SessionID != p.id && validID(ev.SessionID) {
+			n.noteRoundFork(ev.SessionID, p.id)
 		}
 		switch {
 		case p.round:
@@ -1257,6 +1303,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 					n.toolsAtStart(p.id, ev.Tools)
 				}
 				if resumed {
+					n.ttft.arm(p.id, time.Now(), "")
 					n.notifySessionsSoon()
 				}
 				continue
@@ -1291,6 +1338,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		case "control_response":
 			p.controlResponse(ev.Response)
 		case "command_lifecycle":
+			if ev.State == "started" {
+				n.ttft.arm(p.id, time.Now(), ev.Command)
+			}
 			if p.commandLifecycle(ev.Command, ev.State) {
 				n.notifySessionsSoon() // the queue strip shows it, or no longer
 			}
@@ -1349,6 +1399,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 					n.emitDelta(p.id, "")
 				}
 			case "content_block_delta":
+				if ev.Event.Delta.Text != "" || ev.Event.Delta.Thinking != "" || ev.Event.Delta.PartialJSON != "" {
+					n.ttft.firstToken(p.id, time.Now(), "")
+				}
 				if ev.Event.Delta.Type != "text_delta" {
 					continue
 				}
@@ -1368,6 +1421,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.emitDelta(p.id, text)
 			}
 		case "result":
+			n.ttft.clearPending(p.id)
 			var kinds []string
 			if ev.IsError {
 				kinds = n.claudeResultKinds(p.id)

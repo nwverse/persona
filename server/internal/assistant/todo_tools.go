@@ -213,6 +213,13 @@ func (s *Service) toolTodoGet(ctx context.Context, machine, self string, args js
 			b.WriteString("\n")
 		}
 	}
+	if t.Responsible != nil {
+		fmt.Fprintf(&b, "responsible: %s %q", t.Responsible.Kind, clip(oneLine(t.Responsible.Name), 120))
+		if hints := formatResponsibleHints(t.Responsible); hints != "" {
+			fmt.Fprintf(&b, " (%s)", hints)
+		}
+		b.WriteString("\n")
+	}
 	if len(t.Agents) > 0 {
 		b.WriteString("agents:\n")
 		for _, ag := range t.Agents {
@@ -668,6 +675,9 @@ func todoLine(t Todo, now time.Time, loc *time.Location) string {
 	}
 	if active > 0 {
 		fmt.Fprintf(&b, " · %d agent(s) on it", active)
+	}
+	if t.Responsible != nil {
+		fmt.Fprintf(&b, " · responsible %s: %s", t.Responsible.Kind, clip(oneLine(t.Responsible.Name), 80))
 	}
 	return b.String()
 }

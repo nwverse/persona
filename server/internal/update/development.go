@@ -40,15 +40,28 @@ type DevelopmentBackupConfig struct {
 	Builtin bool `json:"builtin,omitempty"`
 }
 
-// ExternalQuiesce reports whether quiesce/resume hooks are configured. Both
-// are required together; a half-configured pair is refused rather than
-// silently replaced by the built-in pause.
-func (c DevelopmentBackupConfig) ExternalQuiesce() bool { return len(c.Quiesce) > 0 }
+// ExternalQuiesce reports whether both quiesce and resume hooks are configured.
+// A half-configured pair is refused rather than silently replaced by the
+// built-in pause.
+func (c DevelopmentBackupConfig) ExternalQuiesce() bool {
+	return len(c.Quiesce) > 0 && len(c.Resume) > 0
+}
 
-// Coordinated reports whether the configured hooks are usable: both, or
-// neither (the built-in pause).
+// RequiresExternalQuiesce reports whether the backup configuration includes
+// extra roots or extra databases that the hub's built-in pause cannot stop or
+// verify.
+func (c DevelopmentBackupConfig) RequiresExternalQuiesce() bool {
+	return len(c.ExtraDatabases) > 0 || len(c.ExtraRoots) > 0
+}
+
+// Coordinated reports whether the configured writer coordination is usable:
+// both hooks together, or neither (the built-in pause) when no extra databases
+// or extra roots are configured.
 func (c DevelopmentBackupConfig) Coordinated() bool {
-	return (len(c.Quiesce) > 0) == (len(c.Resume) > 0)
+	if len(c.Quiesce) > 0 || len(c.Resume) > 0 {
+		return len(c.Quiesce) > 0 && len(c.Resume) > 0
+	}
+	return !c.RequiresExternalQuiesce()
 }
 
 type DevelopmentCandidate struct {

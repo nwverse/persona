@@ -253,7 +253,8 @@ nonisolated enum ServerEvent: Sendable {
         case "hello": return .hello(HubHello(features: e.features ?? [], hubID: e.hubID, hubName: e.hubName, mesh: e.mesh?.hubs,
                                              channel: e.channel, build: e.build, protocolVersion: e.protocolVersion,
                                              minAppBuild: e.minAppBuild, publicURL: e.publicURL.flatMap { URL(string: $0) },
-                                             sendReceipts: SendReceiptTrust.decode(hello: data)))
+                                             sendReceipts: SendReceiptTrust.decode(hello: data),
+                                             imageLimits: ImageLimitsTable.decode(hello: data)))
         case SendReceipt.messageType, SendReceipt.todoType: return SendReceipt.decode(type: e.type, data).map { .sendReceipt($0) }
         case "hub_update": return e.update.map { .hubUpdate($0) }
         case "extension_operation", "plugin_operation": return e.operation.map { .extensionOperation($0, manager: e.manager?.string) }

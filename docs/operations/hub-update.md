@@ -409,14 +409,17 @@ continues to work; an interrupted queued transfer requires another explicit
 Redeploy while the policy is off. Already installed candidates still receive their
 confirmation, so disabling upgrades cannot strand them.
 
-With the policy off, a confirmed update to another version sets aside the node builds
-the Hub leaves in `bin/nodes/`: each `personad-<os>-<arch>` with no `.version` file
-beside it becomes `personad-<os>-<arch>.prev`. The manager takes an unlabelled
-personad there for a build of the Hub's own version, so left in place it would put
-the previous version back on every computer that Redeploy reaches (#1825). Set
-aside, Redeploy fetches the Hub's version from the release (`docs/operations/node-update.md`,
-"Node packages"). A build with a `.version` file says which one it is and stays; the
-directory is never created.
+A confirmed update to another version sets aside the node builds the Hub leaves in
+`bin/nodes/`: each `personad-<os>-<arch>[.exe]` with no `.version` file beside it
+becomes `<name>.prev`. The manager takes an unlabelled personad there for a build of
+the Hub's own version, so left in place it would put the previous version back on
+every computer that Redeploy reaches (#1825). Set aside, Redeploy fetches the Hub's
+version from the release (`docs/operations/node-update.md`, "Node packages"). A build
+with a `.version` file says which one it is and stays; the directory is never
+created. With the policy on, this happens too, before the release's builds go in:
+a platform the release does not carry would otherwise keep the old build. Releases
+up to v0.9.1 carry no Windows `personad` in `files`, so a Windows build stayed
+behind and every Redeploy to a Windows computer failed its self-check (#12958).
 
 The manager receives this policy in `devices.config`. An old external manager that
 does not understand it must be updated separately before relying on that gate;
@@ -831,7 +834,7 @@ The existing path of building from the default branch and deploying directly (`d
   deploying a branch that is behind would swap changes someone else just deployed (hub and web) back to old ones. For a deliberate rollback, use `PERSONA_DEPLOY_ANY_COMMIT=1`. See `docs/lessons/server.md` ("Deploying from a stale branch").
 - WeChat and Telegram are installed and upgraded from the extension marketplace; `deploy.sh` does not build their programs.
 - **Update a hub with `deploy.sh <hub machine id>`, not by copying a binary and running `personad hub switch` by hand.** `deploy.sh` first puts this build's node packages for every platform in the hub's `bin/nodes/`, then switches the hub blue-green (no restart while the socket units are unchanged, `docs/operations/hub-restart.md`).
-  A hand switch leaves `bin/nodes/` on the previous build: the hub hands out a `personad-<os>-<arch>` there as its own version (it has no version file), so **Redeploy** in the app puts the old node back on a computer.
+  A hand switch leaves `bin/nodes/` on the previous build. The manager takes an unlabelled `personad-<os>-<arch>` there for its own version only when the hub's version string is in the file (the node's self-check would refuse it otherwise, #12958), so the old builds are no longer sent as the new version; the computers fall back to the release of the hub's version, or wait until the right builds are in place (a changed file is looked at again at once). Before that check, the new hub pushed the old builds to every computer the moment they reconnected.
   To check: every `bin/nodes/persona-node-*.version` on the hub machine equals the hub's `/api/v1/health` version.
 - No staged rollout: after a release all hubs (ours included) update at the same time when idle; problems are handled by each hub's own rollback and bad-version marking.
 

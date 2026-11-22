@@ -181,7 +181,14 @@ class EngineSwitchFlowTest {
             capture(rule.onNodeWithTag("handoff-shot").captureToImage().asAndroidBitmap(), "handoff-" + if (night) "dark" else "light")
         }
         rule.onNodeWithText("View handoff context").performClick()
-        rule.waitUntil(15_000) { rule.onAllNodes(hasText(change.handoff, substring = true) and hasAnyAncestor(isDialog()), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.waitForIdle()
+        try {
+            rule.waitUntil(15_000) { rule.onAllNodes(hasText(change.handoff, substring = true) and hasAnyAncestor(isDialog()), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        } catch (error: Throwable) {
+            println("handoff-timeout-tree:\n" + rule.onAllNodes(isDialog() or hasAnyAncestor(isDialog()), useUnmergedTree = true)
+                .fetchSemanticsNodes().joinToString("\n") { node -> "${node.id} ${node.config} children=${node.children.size}" })
+            throw error
+        }
     }
 
     @Test fun theChatLoadsTheEarlierRunInPlace() {

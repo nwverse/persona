@@ -43,7 +43,7 @@
   "internal/assistant/supervise_duplicates.go": 9,
   "internal/assistant/supervise_events.go": 10,
   "internal/assistant/supervise_review.go": 4,
-  "internal/assistant/tasks_snapshot.go": 10,
+  "internal/assistant/tasks_snapshot.go": 7,
   "internal/assistant/tasks_start.go": 1,
   "internal/assistant/titles.go": 18,
   "internal/assistant/todo_titles.go": 9,

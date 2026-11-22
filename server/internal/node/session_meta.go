@@ -75,6 +75,9 @@ type quickMeta struct {
 	// (transcript.Meta; Session.ContextTokens / ContextWindow, #2430). Carried over from the last read when the tail
 	// holds no reply (one huge line can fill it).
 	contextTokens, contextWindow int
+	contextStats                 transcript.ContextStats
+	contextFullWindow            bool
+	contextRestartRecommended    bool
 	// turnClosed: the tail ends with a turn finished (transcript.Meta.TurnClosed): a Codex rollout's, a Claude
 	// transcript's (turn_duration, an interrupt)
 	turnClosed bool
@@ -408,9 +411,14 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	}
 	m.version, m.versionAt, m.ultracode, m.ultracodeAt = tm.Version, tm.VersionAt, tm.Ultracode, tm.UltracodeAt
 	m.contextTokens, m.contextWindow = tm.ContextTokens, tm.ContextWindow
+	m.contextStats = tm.ContextStats
+	m.contextFullWindow = off == 0 || tm.ContextStats.CompactedInWindow
 	if m.contextTokens == 0 && !tm.ContextCompacted && prev.size > 0 && prev.size <= st.Size() {
 		// No reply in the tail: the last read's stands, unless the tail compacted it away (unknown until a reply, #9207).
 		m.contextTokens, m.contextWindow = prev.contextTokens, prev.contextWindow
+	}
+	if m.contextTokens > 0 && m.contextStats.Empty() && !tm.ContextCompacted && prev.size > 0 && prev.size <= st.Size() {
+		m.contextStats, m.contextFullWindow = prev.contextStats, prev.contextFullWindow
 	}
 	return m
 }
@@ -433,6 +441,7 @@ func (n *Node) mergeNamingMetadata(path string, m *quickMeta) {
 		return
 	}
 	m.outputTokens = sc.meta.OutputTokens
+	m.contextRestartRecommended = sc.meta.ContextRestartRecommended()
 	if m.codex && sc.meta.ModelAt.After(m.modelAt) {
 		// A long tool result can push the latest turn_context out of the quick tail.
 		m.model, m.modelAt = sc.meta.Model, sc.meta.ModelAt
@@ -490,6 +499,7 @@ func quickLine(line []byte, tm *transcript.Meta, tail *transcript.Tail) {
 	// summary or a meta line: no prompt (Claude Code compacts on its own while idle, and its 17 KB summary read as one
 	// left the session working for hours, #5967); the parser reads them as what they are.
 	if bytes.Contains(line, []byte(`"type":"user"`)) && len(line) > 8<<10 && !notAPrompt(line) {
+		tm.ObserveSkippedUserLine(line)
 		ts := lineTime(line)
 		if ts.After(tm.LastActivity) {
 			tm.LastActivity = ts

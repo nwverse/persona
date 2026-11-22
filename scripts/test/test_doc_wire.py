@@ -10,10 +10,11 @@ and checks:
       split from protocol.md;
   (b) every case of the switch on msg.Type in onClientMessage (server/internal/hub/http.go) has a row in its
       client -> server table, or in a "Client → server:" table of a doc split from protocol.md;
-  (c) every feature in proto.Features, and every one the hub's features() appends
-      (server/internal/hub/extensions_link.go; an h.method()... spread is followed into that method's returns), is
-      named in protocol.md "Health check and feature flags", or in a section of a doc split from protocol.md whose
-      heading ends with "feature flags";
+  (c) every feature in proto.Features (the literal in server/internal/proto/proto.go, and each
+      `Features = append(Features, …)` in a non-test file of proto: a domain's flags, from its features_<domain>.go),
+      and every one the hub's features() appends (server/internal/hub/extensions_link.go; an h.method()... spread is
+      followed into that method's returns), is named in protocol.md "Health check and feature flags", or in a section
+      of a doc split from protocol.md whose heading ends with "feature flags";
   (d) every extension point in extension.Points has a row `| `x` (version N)` in extensions.md "Extension points",
       N its Version, and the manifest schema's $defs.Contributes lists the same points;
   (e) every property of the schema's $defs.Manifest has a row in the field table of extensions.md's manifest section.
@@ -50,6 +51,8 @@ NOT_ON_THE_WEBSOCKET = {
 }
 
 STRING = r'"(?:[^"\\]|\\.)*"'
+# `Features = append(`, not a field of the same name (`r.Features = append(`).
+FEATURE_APPEND = re.compile(r"(?<![\w.])Features\s*=\s*append\(")
 BACKTICKED = re.compile(r"`([^`]+)`")
 POINT_ROW = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\(version\s+(\d+)")
 
@@ -123,16 +126,37 @@ def slice_elements(code, name):
     return split_arguments(strip_comments(block(code, f"var {name} = []string{{")))
 
 
+def call_arguments(code, start):
+    """The arguments, as written, of the call whose opening parenthesis ends at start."""
+    depth, end = 1, start
+    while depth:
+        depth += {"(": 1, ")": -1}.get(code[end], 0)
+        end += 1
+    return split_arguments(code[start:end - 1])
+
+
 def appends(code, function):
     """The arguments of each append(…) call in function, as written."""
-    body, calls = strip_comments(block(code, function)), []
-    for match in re.finditer(r"\bappend\(", body):
-        depth, end = 1, match.end()
-        while depth:
-            depth += {"(": 1, ")": -1}.get(body[end], 0)
-            end += 1
-        calls.append(split_arguments(body[match.end():end - 1]))
-    return calls
+    body = strip_comments(block(code, function))
+    return [call_arguments(body, match.end()) for match in re.finditer(r"\bappend\(", body)]
+
+
+def feature_appends(sources):
+    """The flags a domain appends to proto.Features, as written: every argument after the first of each
+    `Features = append(Features, …)` in sources ({file name: Go text}, the non-test files of proto), file by file in
+    name order, as Go runs their init()s. A spread, or an append to anything but Features, cannot be read and fails
+    (server/internal/proto/features_test.go asks for the same)."""
+    found = []
+    for name, code in sorted(sources.items()):
+        code = strip_comments(code)
+        for match in FEATURE_APPEND.finditer(code):
+            arguments = call_arguments(code, match.end())
+            if not arguments or arguments[0] != "Features" or any(a.endswith("...") for a in arguments):
+                raise AssertionError(f"{name}: Features = append({', '.join(arguments)}) cannot be read: append each "
+                                     "flag to Features as a constant, func init() { Features = append(Features, "
+                                     "FeatureX) }")
+            found += arguments[1:]
+    return found
 
 
 def resolve(element, package):
@@ -314,9 +338,11 @@ def documented_features():
 
 
 def features():
-    """proto.Features and every feature the hub's features() appends to them (those the managers report at run time
-    aside)."""
-    found = {resolve(element, "proto") for element in slice_elements(read(f"{INTERNAL}/proto/proto.go"), "Features")}
+    """proto.Features (its literal, and the flags the domains' files append to it) and every feature the hub's
+    features() appends to them (those the managers report at run time aside)."""
+    proto = {p.name: p.read_text() for p in (ROOT / INTERNAL / "proto").glob("*.go") if not p.name.endswith("_test.go")}
+    written = slice_elements(proto["proto.go"], "Features") + feature_appends(proto)
+    found = {resolve(element, "proto") for element in written}
     return found | appended(read(f"{INTERNAL}/hub/extensions_link.go"), "func (h *Hub) features() []string {", "hub")
 
 
@@ -374,6 +400,44 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(['other.Name', '"a"', '"b"', '"c"'], slice_elements(code, "Features"))
         self.assertEqual([["slices.Clone(proto.Features)", "one", "two"], ["out", "h.more(1, 2)..."],
                           ["out", '"views"']], appends(code, "func (h *Hub) features() []string {"))
+
+    def test_feature_appends(self):
+        sources = {
+            "proto.go": 'package proto\n\nvar Features = []string{\n\t"a",\n}\n',
+            "features_zeta.go": 'package proto\n\nfunc init() { Features = append(Features, FeatureZ) }\n',
+            "features_inbox.go": ('package proto\n\nconst FeatureInbox = "inbox_v2" // Features = append(Features, x)\n\n'
+                                  'func init() {\n\tFeatures = append(Features,\n\t\tFeatureInbox, // the bar\n'
+                                  '\t\t"inbox_rows",\n\t)\n}\n'),
+            "other.go": ('package proto\n\nfunc f() []string {\n\tRoutes = append(Routes, "r")\n'
+                         '\tr.Features = append(r.Features, "field")\n'
+                         '\treturn append(slices.Clone(Features), "y")\n}\n'),
+        }
+        self.assertEqual(["FeatureInbox", '"inbox_rows"', "FeatureZ"], feature_appends(sources))
+        for written in ("Features = append(Features, more...)", "Features = append(Other, FeatureX)"):
+            with self.assertRaises(AssertionError, msg=written):
+                feature_appends({"features_x.go": "package proto\n\nfunc init() { %s }\n" % written})
+
+    def test_an_appended_flag_needs_its_row(self):
+        protocol = "# Protocol\n\n## Health check and feature flags\n\n`tls`\n"
+        with tempfile.TemporaryDirectory(prefix="doc-wire-appends-") as directory:
+            root = Path(directory)
+            test_doc_paths.write_tree(root, {
+                f"{INTERNAL}/proto/proto.go": 'package proto\n\nvar Features = []string{\n\t"tls",\n}\n',
+                f"{INTERNAL}/proto/features_inbox.go": ('package proto\n\nconst FeatureInbox = "inbox_v2"\n\n'
+                                                        'func init() { Features = append(Features, FeatureInbox) }\n'),
+                # Not a file the hub is built from.
+                f"{INTERNAL}/proto/features_inbox_test.go": ('package proto\n\n'
+                                                             'func init() { Features = append(Features, "test") }\n'),
+                f"{INTERNAL}/hub/extensions_link.go": ('package hub\n\nfunc (h *Hub) features() []string {\n'
+                                                       '\treturn append(slices.Clone(proto.Features))\n}\n'),
+                PROTOCOL_DOC: protocol,
+            })
+            test_doc_paths.git_repository(root)
+            with patch(__name__ + ".ROOT", root):
+                self.assertEqual({"tls", "inbox_v2"}, features())
+                self.assertEqual(["inbox_v2"], missing(features(), documented_features()))
+                (root / PROTOCOL_DOC).write_text(protocol + "`inbox_v2`\n")
+                self.assertEqual([], missing(features(), documented_features()))
 
     def test_resolve(self):
         with tempfile.TemporaryDirectory(prefix="doc-wire-") as directory:
@@ -518,7 +582,8 @@ class DocWireTests(unittest.TestCase):
         self.assertEqual([], missing(have, documented_features()),
                          f"features in the hub's hello and /health not named in {PROTOCOL_DOC} "
                          "\"Health check and feature flags\" or in a \"... feature flags\" section of a doc split "
-                         "from it (proto.Features, hub/extensions_link.go features())")
+                         "from it (proto.Features and its appends in proto/features_<domain>.go, "
+                         "hub/extensions_link.go features())")
 
     def test_extension_points_are_documented(self):
         have = points()
