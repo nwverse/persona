@@ -52,7 +52,7 @@ Sources:
 - **Registry and policy** (#13104): the health space is the built-in entry of the manager's track registry (`server/internal/assistant/track_registry.go`; the manager supplies it, the `assistant_tracks` table holds the others), with the health template, the health category as its default, and the manager's health directory.
   A track has a kind (a domain space is one kind) and its directory is data: the health space keeps `health`, a new track defaults to `tracks/<slug>` whatever its kind. Kinds, templates and the versioned list of information categories are checked in code, not in the table. Conversations still name their track in the wire field `space`.
   What hides, redacts or confirms never compares a track's name: it reads the track's `TrackPolicy` (lock screen and channels, extensions, knowledge-base writes, handing things out, the main chat's file tools).
-  The main space has every switch off; every other track, registered or not, has every switch on, which is exactly the health space's behavior. Grading uses by information category and scene replaces `trackPolicy` later.
+  The main space has every switch off and the health space every one; another registered track's follow its default categories, and a slug the registry does not know has every switch on ("Using information by scene" below).
   The hub and the nodes cannot read the registry: a node learns the other tracks' directories from the manager (`deny_dirs`) and tells sessions in them by `space`, and both treat any track as the strictest. Once noted in a track other than the main space, a conversation stays there (`assistant_conversation_spaces`).
 
 ## Information categories (#13246)
@@ -63,6 +63,22 @@ Collecting is not limited by track: every assistant conversation is tagged with 
 - **A conversation's categories** (`conversationCategories` in `server/internal/assistant/info_tag.go`): its track's default categories, a floor nobody takes away (the health space's is `health`), and what was tagged since, kept in the manager table `assistant_info_categories` by session id. They only grow: the model and agents only add, and only the user takes one away, which stays away (a `removed_by_user` row) until the user adds it back. When the categories cannot all be told (the store or the conversation's track cannot be read), uses outside the track are to take the conversation for sensitive.
 - **Tagging after each turn**: once an assistant conversation's turn ended and stayed still, what the user said and the reply (the first 1,000 characters) go to the model use `info.tag`, a read-only use under Sorting (`inbox.triage`). Its prompt is `server/internal/prompts/assistant/info_tag.md`, in English whatever the owner's language, and the answer is category names only; the track's default categories are passed as the ones to look for especially. Answers are cached by text and model. A turn that cannot be read or tagged (no model set up, paused, timed out) leaves the categories as they were.
 - The health space behaves exactly as before: what hides, redacts or confirms still reads `TrackPolicy`; the categories are what the scene decision reads next.
+
+## Using information by scene (#13246)
+
+What a piece of information may do is decided where it is used, by one function, `usage` (`server/internal/assistant/usage.go`), from what it is (its categories, whether they are all known, the track it came from) and where it goes. It never reads a track's name or kind: a track takes part only through its default categories, which everything from it carries.
+
+| # | Scene | General | Sensitive (any category, or not known) |
+| --- | --- | --- | --- |
+| 1 | Inside its own track | Used | Used |
+| 2 | The main chat or another track | By relevance | Only when on topic, never in a standing context; the main chat's Read and Edit are denied the track's directory |
+| 3 | Handed to an agent or a computer | By relevance | Confirmed on the phone each time; a task plan does not start on its own |
+| 4 | Lock screen and pushes | As usual | Only that there is news |
+| 5 | Sent to other people | As usual | Confirmed on the phone each time |
+| 6 | Read by an extension | As usual | Hidden unless the extension is the user's own or was granted every category |
+| 7 | Written to the shared knowledge base | As usual | Refused |
+
+Information whose categories are not known yet (not tagged, tagging failed or timed out) takes the sensitive side outside its own track. `TrackPolicy` sums these rules up as the switches the call sites read until each asks `usage` for its own scene (`policyOf`); a track's policy is that of its default categories, so the health space keeps every switch on, the main space none, a slug the registry does not know every one, and only tracks with a sensitive default category have their directories denied the other conversations (`deny_dirs`). `TestUsageHealthOutbound` maps every row of the table under "Outbound" to its scene.
 
 ## API
 
