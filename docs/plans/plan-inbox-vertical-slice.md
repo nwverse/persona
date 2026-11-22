@@ -9,7 +9,8 @@ design-principles self-check does not apply.
 - "14 days" is `git log --since=2026-11-06T00:00:00Z` on 287db61638, counted by exact path. History starts on
   2026-10-24, so the window covers most of it, repository-wide sweeps included. Those commit counts are not re-taken.
 - File:line references, file and line counts and open-PR facts are as of 81361c1dd1, against the 287 PRs open on
-  2026-11-22 (155 on 2026-11-20). GitHub lists at most 100 files per PR and 24 of them reach that cap, so overlaps may
+  2026-11-22 (155 on 2026-11-20). Main then moved to 6dfcd36ab0 (#12859), which shifts only the snapshot and
+  turn-settled lines in `assistant/service.go`; those two are as of 6dfcd36ab0. GitHub lists at most 100 files per PR and 24 of them reach that cap, so overlaps may
   be undercounted. Hunk positions are on each PR's own base. Line numbers drift, so each step finds its lines again by
   name and re-checks open PRs before it is pushed (section 4).
 - The conflict measures in sections 4 and 6 (merge-tree and a merged `go vet` against every open PR head) were taken on
@@ -27,8 +28,8 @@ The Inbox is the busiest single domain on every side, and most of its changes al
   `server/internal/hub/testdata/route_scopes.txt`, 12 the `mcp_tools.assistant` golden, 11 `extwire/scopes.go`, and
   8 each `assistant/tools.go` and `assistant/bus.go`.
 - **Registration is spread over central files.** `assistant/service.go` has the fields `inboxExt` (77) and `inbox`
-  (287), `s.inbox.lang` (350), `s.inboxRoutes()` (416), `inboxReport` in the snapshot (942-943) and the turn-settled
-  hook (1035); `assistant/bus.go` the needs-you tell after each handshake (292-298) and the dispatch to `inboxRequest`
+  (287), `s.inbox.lang` (350), `s.inboxRoutes()` (416), `inboxReport` in the snapshot (952-953) and the turn-settled
+  hook (1045); `assistant/bus.go` the needs-you tell after each handshake (292-298) and the dispatch to `inboxRequest`
   (696); `assistant/tools.go` five names in `toolNames` (38-39) and five `runTool` cases (221-230); `extwire/scopes.go`
   the 31 Inbox scope entries (22-52); `assistant/handler.go` four Inbox methods on `Handler` (99-105), called only from
   `assistant/inbox_bus.go`.
