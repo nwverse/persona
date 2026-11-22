@@ -222,17 +222,27 @@ def run(cli: Path, mode: str, android_out: Path, harmony_out: Path, sources=(SOU
 
 def report_process_failure(error: subprocess.CalledProcessError) -> None:
     """Preserve a failed CLI's own diagnostic instead of printing only its process status."""
-    diagnostics = error.stderr or error.stdout or ""
-    if diagnostics:
-        sys.stderr.write(diagnostics)
-        if not diagnostics.endswith("\n"):
-            sys.stderr.write("\n")
+    diagnostics = error.stderr or error.stdout
+    if not diagnostics:
+        return
+    if isinstance(diagnostics, bytes):
+        # Raw source-build diagnostics must not be decoded or replaced with U+FFFD.
+        sys.stderr.flush()
+        sys.stderr.buffer.write(diagnostics)
+        if not diagnostics.endswith(b"\n"):
+            sys.stderr.buffer.write(b"\n")
+        sys.stderr.buffer.flush()
+        return
+    sys.stderr.write(diagnostics)
+    if not diagnostics.endswith("\n"):
+        sys.stderr.write("\n")
 
 
-def restore_reviewed_output(reviewed: bytes) -> None:
+def restore_reviewed_output(reviewed: bytes, generated: Path | None = None) -> None:
+    destination = GENERATED if generated is None else generated
     try:
-        GENERATED.write_bytes(reviewed)
-        restored = GENERATED.read_bytes() == reviewed
+        destination.write_bytes(reviewed)
+        restored = destination.read_bytes() == reviewed
     except OSError as error:
         raise ValueError(f"Could not restore the reviewed Kotlin after a generation failure: {error}") from error
     if not restored:

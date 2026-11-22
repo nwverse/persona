@@ -280,6 +280,12 @@
     <string name="chat_source_unknown">来源</string>
     <string name="chat_source_expand">展开</string>
     <string name="chat_source_collapse">收起</string>
+    <string name="chat_bubble_show_more">展开</string>
+    <string name="chat_bubble_show_less">收起</string>
+    <string name="chat_card_height_label">卡片高度</string>
+    <string name="chat_card_height_toggle">在最高和默认高度之间切换</string>
+    <string name="chat_card_height_taller">调高卡片</string>
+    <string name="chat_card_height_shorter">调低卡片</string>
     <string name="chat_injected_open_task">打开任务</string>
     <string name="chat_injected_view_request">看任务的要求</string>
     <string name="chat_read_only_history">历史会话只读，请先继续这个会话</string>

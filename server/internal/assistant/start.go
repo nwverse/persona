@@ -56,9 +56,8 @@ var errRenameMain = i18n.Err("assistant-start.rename_main")
 var errWorkAssistant = i18n.Err("assistant-start.work_machine")
 
 // claudeMD is the assistant directory's CLAUDE.md (prompts/assistant/claude_md.md) for its machine here. Its machine
-// list is written from where the assistant actually runs: the ssh_host names are the hub machine's ssh aliases, which
-// work only for an assistant on the hub's own machine, and a link (or tailcat) machine has no ssh at all; from anywhere
-// else there is no command to give, only the Agents tools.
+// list identifies the local computer and the computers available for Agent work. The ssh_host aliases are only
+// meaningful from the hub machine.
 func (s *Service) claudeMD(ctx context.Context, here string, larkCLI bool) string {
 	return prompts.RenderAssistantClaudeMD(s.assistantPrompt(ctx, here, larkCLI, s.settings(ctx)))
 }
@@ -416,7 +415,12 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			return proto.Session{}, refusePick(http.StatusBadRequest, err)
 		}
 	}
-	if err := s.validateSkillSelections(ctx, machine, "", params); err != nil {
+	if p.TaskExecution {
+		err = s.validateTaskSelections(ctx, machine, "", params, p.PromptSelections)
+	} else {
+		err = s.validateSkillSelections(ctx, machine, "", params)
+	}
+	if err != nil {
 		return proto.Session{}, err
 	}
 	var res struct {
@@ -426,8 +430,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		s.putCacheKeepalive(ctx, machine, "", main, params)
 	}
 	if main && p.Space == "" && p.GuestTools == nil {
-		cfg := s.settings(ctx)
-		ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
+		ctx = context.WithValue(ctx, supervisionStartup{}, true)
 	}
 	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
 	if fromSetting && (nodeOutdated(err) || profileRefused(err)) {
@@ -531,7 +534,7 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
 	return s.startSignedIn(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
 		Origin: p.Origin, OriginRef: p.OriginRef, MachineID: p.MachineID, Cwd: p.Cwd, TaskExecution: p.TaskExecution,
-		LegacyTaskExecution: p.LegacyTaskExecution, TaskModel: p.TaskModel, NewSessionID: p.NewSessionID})
+		LegacyTaskExecution: p.LegacyTaskExecution, PromptSelections: p.PromptSelections, TaskModel: p.TaskModel, NewSessionID: p.NewSessionID})
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
@@ -959,12 +962,17 @@ func (s *Service) startRoutes() {
 			Guest *GuestSpec `json:"guest"`
 			// Via: how the user's app sent its first message when not typed in the app itself: "intent" (Siri,
 			// Shortcuts, an App Intent, which may run on a locked phone), "share" (the share sheet) or "card" (a card's
-			// button that wrote it). Such a message never counts as the user's own words (secret_handoff.go
+			// button that wrote it), or "handoff" (a generated context transfer). Such a message never counts as the
+			// user's own words (secret_handoff.go
 			// handoffUserTurn, the decision on #3962).
 			Via string `json:"via"`
 		}
-		if err := decodeLargeBody(w, r, &in, 32<<20); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+		if err := decodeLargeBody(w, r, &in, proto.MessageBodyLimit); err != nil {
+			writeBodyErr(w, err, err)
+			return
+		}
+		// A conversation not started has no agent yet: the limits every session gets unless its agent has its own.
+		if apierr.ImagesOverLimit(w, proto.HubImageLimits.For(""), len(in.Images)) {
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 110*time.Second)
@@ -1011,7 +1019,7 @@ func (s *Service) startRoutes() {
 		}
 		origin, ref := requestOrigin(r, in.Purpose)
 		own := false // only the user's words in it, as filled in (workspace_mention.go fillWorkspaces)
-		if in.Guest == nil {
+		if in.Guest == nil && in.Via != "handoff" {
 			in.Prompt, own = s.fillWorkspaces(ctx, in.Prompt) // as SendParams does for the next messages
 		}
 		// The main conversation is the assistant's, on its machine.

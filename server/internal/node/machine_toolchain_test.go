@@ -16,15 +16,17 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-type fakeDirEntry struct {
+type fakeToolchainDirEntry struct {
 	name string
 	dir  bool
 }
 
-func (f fakeDirEntry) Name() string               { return f.name }
-func (f fakeDirEntry) IsDir() bool                { return f.dir }
-func (f fakeDirEntry) Type() os.FileMode          { return os.ModeDir }
-func (f fakeDirEntry) Info() (os.FileInfo, error) { return fakeFileInfo{name: f.name, dir: f.dir}, nil }
+func (f fakeToolchainDirEntry) Name() string      { return f.name }
+func (f fakeToolchainDirEntry) IsDir() bool       { return f.dir }
+func (f fakeToolchainDirEntry) Type() os.FileMode { return os.ModeDir }
+func (f fakeToolchainDirEntry) Info() (os.FileInfo, error) {
+	return fakeFileInfo{name: f.name, dir: f.dir}, nil
+}
 
 type fakeFileInfo struct {
 	name string
@@ -114,13 +116,13 @@ func TestMachineToolchainProbeCoreAgentsDockerGHHardwareAndRedaction(t *testing.
 			switch p {
 			case filepath.Join(home, ".nvm", "versions", "node"):
 				return []os.DirEntry{
-					fakeDirEntry{name: "v20.11.0", dir: true},
-					fakeDirEntry{name: "v22.14.0", dir: true},
+					fakeToolchainDirEntry{name: "v20.11.0", dir: true},
+					fakeToolchainDirEntry{name: "v22.14.0", dir: true},
 				}, nil
 			case "/sys/class/power_supply":
 				return []os.DirEntry{
-					fakeDirEntry{name: "BAT0", dir: true},
-					fakeDirEntry{name: "AC", dir: true},
+					fakeToolchainDirEntry{name: "BAT0", dir: true},
+					fakeToolchainDirEntry{name: "AC", dir: true},
 				}, nil
 			default:
 				return nil, os.ErrNotExist
@@ -751,6 +753,336 @@ func TestMachineToolchainTimedOutLimiterSlotsArePopulated(t *testing.T) {
 		}
 		if got.Status != "error" || got.Note == "" {
 			t.Errorf("AgentCLIs[%d] (%s) = {Status:%q Note:%q}, want error with timeout note", i, spec.id, got.Status, got.Note)
+		}
+	}
+}
+
+func TestMachineToolchainDockerWindowsNonUnixHostAndContextFallback(t *testing.T) {
+	t.Run("windows_daemon_ready", func(t *testing.T) {
+		var dialedUnix atomic.Bool
+		n := &Node{home: `C:\Users\dev`}
+		n.toolchain.deps = &toolchainDeps{
+			goos:   "windows",
+			goarch: "amd64",
+			home:   `C:\Users\dev`,
+			getenv: func(k string) string {
+				if k == "PATH" {
+					return `C:\Program Files\Docker\Docker\resources\bin`
+				}
+				return ""
+			},
+			now:      func() time.Time { return time.Date(2026, 11, 21, 18, 0, 0, 0, time.UTC) },
+			stat:     func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+			readDir:  func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
+			readFile: func(string) ([]byte, error) { return nil, os.ErrNotExist },
+			lookPathIn: func(name string, _ []string) string {
+				if name == "docker" {
+					return `C:\Program Files\Docker\Docker\resources\bin\docker.exe`
+				}
+				return ""
+			},
+			dialUnix: func(context.Context, string) error {
+				dialedUnix.Store(true)
+				return os.ErrNotExist
+			},
+			run: func(_ context.Context, _ []string, name string, args ...string) ([]byte, error) {
+				if strings.HasSuffix(strings.ToLower(name), "docker.exe") {
+					if len(args) >= 1 && args[0] == "version" {
+						return []byte("27.5.1\n"), nil
+					}
+					return []byte("Docker version 27.5.1, build 9f9e405\n"), nil
+				}
+				return nil, errors.New("not found")
+			},
+		}
+
+		out, err := n.machineToolchain(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep := out.(proto.MachineToolchainReport)
+		if dialedUnix.Load() {
+			t.Error("Windows Docker probe should not dial Unix sockets")
+		}
+		if rep.Docker == nil || !rep.Docker.SocketAccessible || rep.Docker.Status != "ready" || rep.Docker.ServerVersion != "27.5.1" {
+			t.Fatalf("windows docker = %+v, want ready 27.5.1", rep.Docker)
+		}
+		e := findEntryByID(rep.Tools, "docker")
+		if e == nil || e.Status != "ready" || !slices.Contains(e.Capabilities, "daemon_accessible") {
+			t.Fatalf("windows docker tool entry = %+v, want ready with daemon_accessible", e)
+		}
+	})
+
+	t.Run("windows_daemon_unreachable", func(t *testing.T) {
+		n := &Node{home: `C:\Users\dev`}
+		n.toolchain.deps = &toolchainDeps{
+			goos:   "windows",
+			goarch: "amd64",
+			home:   `C:\Users\dev`,
+			getenv: func(k string) string {
+				if k == "PATH" {
+					return `C:\Program Files\Docker\Docker\resources\bin`
+				}
+				return ""
+			},
+			now:      func() time.Time { return time.Date(2026, 11, 21, 18, 1, 0, 0, time.UTC) },
+			stat:     func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+			readDir:  func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
+			readFile: func(string) ([]byte, error) { return nil, os.ErrNotExist },
+			lookPathIn: func(name string, _ []string) string {
+				if name == "docker" {
+					return `C:\Program Files\Docker\Docker\resources\bin\docker.exe`
+				}
+				return ""
+			},
+			run: func(_ context.Context, _ []string, name string, args ...string) ([]byte, error) {
+				if strings.HasSuffix(strings.ToLower(name), "docker.exe") {
+					if len(args) >= 1 && args[0] == "version" {
+						return []byte("error during connect: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.\n"), errors.New("exit status 1")
+					}
+					return []byte("Docker version 27.5.1, build 9f9e405\n"), nil
+				}
+				return nil, errors.New("not found")
+			},
+		}
+
+		out, err := n.machineToolchain(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep := out.(proto.MachineToolchainReport)
+		if rep.Docker == nil || rep.Docker.SocketAccessible || rep.Docker.Status != "daemon_unreachable" {
+			t.Fatalf("windows unreachable docker = %+v", rep.Docker)
+		}
+		if rep.Docker.Note != "docker daemon is not reachable" {
+			t.Errorf("windows unreachable note = %q, want %q", rep.Docker.Note, "docker daemon is not reachable")
+		}
+	})
+
+	t.Run("unix_non_unix_docker_host_uses_cli", func(t *testing.T) {
+		var dialedUnix atomic.Bool
+		var sawDockerHost atomic.Bool
+		n := &Node{home: "/home/dev"}
+		n.toolchain.deps = &toolchainDeps{
+			goos:   "linux",
+			goarch: "amd64",
+			home:   "/home/dev",
+			getenv: func(k string) string {
+				switch k {
+				case "PATH":
+					return "/usr/bin"
+				case "DOCKER_HOST":
+					return "tcp://127.0.0.1:2375"
+				default:
+					return ""
+				}
+			},
+			now: func() time.Time { return time.Date(2026, 11, 21, 18, 2, 0, 0, time.UTC) },
+			stat: func(p string) (os.FileInfo, error) {
+				if p == "/var/run/docker.sock" {
+					return fakeFileInfo{name: "docker.sock"}, nil
+				}
+				return nil, os.ErrNotExist
+			},
+			readDir:  func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
+			readFile: func(string) ([]byte, error) { return nil, os.ErrNotExist },
+			lookPathIn: func(name string, _ []string) string {
+				if name == "docker" {
+					return "/usr/bin/docker"
+				}
+				return ""
+			},
+			dialUnix: func(context.Context, string) error {
+				dialedUnix.Store(true)
+				return os.ErrPermission
+			},
+			run: func(_ context.Context, env []string, name string, args ...string) ([]byte, error) {
+				if filepath.Base(name) == "docker" {
+					if len(args) >= 1 && args[0] == "version" {
+						if slices.Contains(env, "DOCKER_HOST=tcp://127.0.0.1:2375") {
+							sawDockerHost.Store(true)
+						}
+						return []byte("27.4.0\n"), nil
+					}
+					return []byte("Docker version 27.4.0, build 123456\n"), nil
+				}
+				return nil, errors.New("not found")
+			},
+		}
+
+		out, err := n.machineToolchain(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep := out.(proto.MachineToolchainReport)
+		if dialedUnix.Load() {
+			t.Error("non-unix DOCKER_HOST must not dial local Unix sockets")
+		}
+		if !sawDockerHost.Load() {
+			t.Error("docker CLI probe did not receive DOCKER_HOST")
+		}
+		if rep.Docker == nil || !rep.Docker.SocketAccessible || rep.Docker.Status != "ready" || rep.Docker.ServerVersion != "27.4.0" {
+			t.Fatalf("tcp docker = %+v, want ready 27.4.0", rep.Docker)
+		}
+	})
+
+	t.Run("unix_non_default_docker_context_fallback", func(t *testing.T) {
+		var sawDockerContext atomic.Bool
+		n := &Node{home: "/home/dev"}
+		n.toolchain.deps = &toolchainDeps{
+			goos:   "linux",
+			goarch: "amd64",
+			home:   "/home/dev",
+			getenv: func(k string) string {
+				switch k {
+				case "PATH":
+					return "/usr/bin"
+				case "DOCKER_CONTEXT":
+					return "remote-ssh"
+				default:
+					return ""
+				}
+			},
+			now:      func() time.Time { return time.Date(2026, 11, 21, 18, 3, 0, 0, time.UTC) },
+			stat:     func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+			readDir:  func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
+			readFile: func(string) ([]byte, error) { return nil, os.ErrNotExist },
+			lookPathIn: func(name string, _ []string) string {
+				if name == "docker" {
+					return "/usr/bin/docker"
+				}
+				return ""
+			},
+			run: func(_ context.Context, env []string, name string, args ...string) ([]byte, error) {
+				if filepath.Base(name) == "docker" {
+					if len(args) >= 1 && args[0] == "version" {
+						if slices.Contains(env, "DOCKER_CONTEXT=remote-ssh") {
+							sawDockerContext.Store(true)
+						}
+						return []byte("27.3.1\n"), nil
+					}
+					return []byte("Docker version 27.3.1, build fedcba\n"), nil
+				}
+				return nil, errors.New("not found")
+			},
+		}
+
+		out, err := n.machineToolchain(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep := out.(proto.MachineToolchainReport)
+		if !sawDockerContext.Load() {
+			t.Error("docker CLI fallback did not receive DOCKER_CONTEXT")
+		}
+		if rep.Docker == nil || !rep.Docker.SocketAccessible || rep.Docker.Status != "ready" || rep.Docker.ServerVersion != "27.3.1" {
+			t.Fatalf("context docker = %+v, want ready 27.3.1", rep.Docker)
+		}
+	})
+}
+
+func TestMachineToolchainGHAuthReceivesTokenEnvWithoutLeaking(t *testing.T) {
+	envMap := map[string]string{
+		"PATH":                    "/usr/bin",
+		"GH_TOKEN":                "ghp_MainTokenValueShouldNotLeak111111",
+		"GITHUB_TOKEN":            "ghp_GitHubTokenShouldNotLeak22222222",
+		"GH_ENTERPRISE_TOKEN":     "ghp_EnterpriseTokenShouldNotLeak3333",
+		"GITHUB_ENTERPRISE_TOKEN": "ghp_GHEEnterpriseTokenNotLeak4444444",
+		"GH_HOST":                 "ghe.example.com",
+	}
+
+	var (
+		mu              sync.Mutex
+		ghAuthEnv       []string
+		otherCommandEnv map[string][]string = map[string][]string{}
+	)
+
+	n := &Node{home: "/home/dev"}
+	n.toolchain.deps = &toolchainDeps{
+		goos:     "linux",
+		goarch:   "amd64",
+		home:     "/home/dev",
+		getenv:   func(k string) string { return envMap[k] },
+		now:      func() time.Time { return time.Date(2026, 11, 21, 18, 5, 0, 0, time.UTC) },
+		stat:     func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+		readDir:  func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
+		readFile: func(string) ([]byte, error) { return nil, os.ErrNotExist },
+		lookPathIn: func(name string, _ []string) string {
+			if name == "gh" || name == "git" {
+				return "/usr/bin/" + name
+			}
+			return ""
+		},
+		run: func(_ context.Context, env []string, name string, args ...string) ([]byte, error) {
+			base := filepath.Base(name)
+			if base == "gh" && len(args) >= 2 && args[0] == "auth" && args[1] == "status" {
+				mu.Lock()
+				ghAuthEnv = slices.Clone(env)
+				mu.Unlock()
+				if slices.Contains(env, "GH_TOKEN="+envMap["GH_TOKEN"]) && slices.Contains(env, "GH_HOST=ghe.example.com") {
+					return []byte("ghe.example.com\n  ✓ Logged in to ghe.example.com account bot (GH_TOKEN)\n  - Token: " + envMap["GH_TOKEN"] + "\n"), nil
+				}
+				return []byte("You are not logged into any GitHub hosts.\n"), errors.New("exit status 1")
+			}
+			mu.Lock()
+			otherCommandEnv[base+" "+strings.Join(args, " ")] = slices.Clone(env)
+			mu.Unlock()
+			switch base {
+			case "gh":
+				return []byte("gh version 2.67.0\n"), nil
+			case "git":
+				return []byte("git version 2.47.1\n"), nil
+			default:
+				return nil, errors.New("not found")
+			}
+		},
+	}
+
+	out, err := n.machineToolchain(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := out.(proto.MachineToolchainReport)
+
+	if rep.GitHubCLI == nil || !rep.GitHubCLI.Authenticated || rep.GitHubCLI.Status != "authenticated" {
+		t.Fatalf("gh auth = %+v, want authenticated", rep.GitHubCLI)
+	}
+	if !slices.Equal(rep.GitHubCLI.Hosts, []string{"ghe.example.com"}) {
+		t.Errorf("gh hosts = %v, want [ghe.example.com]", rep.GitHubCLI.Hosts)
+	}
+	ghEntry := findEntryByID(rep.Tools, "gh")
+	if ghEntry == nil || ghEntry.Status != "ready" || !slices.Contains(ghEntry.Capabilities, "authenticated") {
+		t.Fatalf("gh entry = %+v, want ready with authenticated", ghEntry)
+	}
+
+	// Verify all 5 GH env vars were forwarded to `gh auth status`.
+	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST"} {
+		want := k + "=" + envMap[k]
+		if !slices.Contains(ghAuthEnv, want) {
+			t.Errorf("gh auth status env missing %s", k)
+		}
+	}
+
+	// Verify non-`gh auth` commands did NOT receive any GitHub token env vars.
+	for cmd, env := range otherCommandEnv {
+		for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
+			for _, kv := range env {
+				if strings.HasPrefix(kv, k+"=") {
+					t.Errorf("command %q unexpectedly received %s in env", cmd, k)
+				}
+			}
+		}
+	}
+
+	// Verify no token values leaked into the serialized JSON report.
+	blob, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(blob)
+	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
+		if strings.Contains(body, envMap[k]) {
+			t.Errorf("%s value leaked into toolchain report JSON", k)
 		}
 	}
 }

@@ -168,6 +168,7 @@ const PlanPill = lazy(() => import("./PlanCard").then((m) => ({ default: m.PlanP
 const LazyWrapUpChips = lazy(() => import("../assistant/HandoffCard").then((m) => ({ default: m.WrapUpChips })));
 // a chat that is nowhere (a stale or mistyped link): rare, so its notice and words are a chunk of their own
 const LazyNotFoundNotice = lazy(() => import("./NotFoundNotice").then((m) => ({ default: m.NotFoundNotice })));
+const ContextRestartNotice = lazyPage(() => import("./ContextRestartNotice").then((m) => m.ContextRestartNotice));
 // a start stopped on its tab's shell question, answered from here (#10365): only then
 const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 // only in a conversation that moved between Claude Code and Codex (#5054): its earlier sessions, read above the live one
@@ -1354,6 +1355,16 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const sendNow = useRef(onSend);
   sendNow.current = onSend;
   const send = useCallback((out: Outgoing) => sendNow.current(out), []);
+  // Keep one-click /compact aligned with the composer's send preconditions (no active task route, no setup gate block).
+  const hasTaskRoute = useFeed((s) => Boolean(s.routes[sid]));
+  const compactSession = useCallback(async (): Promise<boolean> => {
+    if (blockedRef.current) {
+      blockedRef.current.onClick?.();
+      return false;
+    }
+    if (getFeedState().routes[sid]) return false;
+    return send({ text: "/compact", images: [] });
+  }, [send, sid]);
   // The assistant's tasks (docs/assistant/unified-entry.md): the conversation's feed, and the main one's "Today" card.
   const taskFeed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
   useEffect(() => {
@@ -2166,6 +2177,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     : undefined, [overviewId, overviewOpen, showOverview]);
   // Its background detail takes the side panel's space, rather than squeezing the mounted overview and losing its place.
   const overviewDetail = panelDrawn && backgroundPanelOf(panel, mid, sid)?.from === "overview";
+  const isAssistant = Boolean(assistant || session?.assistant);
+  const composerDisabled = Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"));
+  const composerBlocked = gate.blocked ?? noRowBlock;
+  const agentCompactBlocked = Boolean(composerDisabled || composerBlocked || hasTaskRoute);
+  // Assistant compaction calls the hub HTTP endpoint directly, so composer send disables (e.g. offlineLine) do not gate it.
+  const compactBlocked = isAssistant ? Boolean(gate.blocked) : agentCompactBlocked;
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
@@ -2198,7 +2215,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
       {!embedded && banner}
-      {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack from={cameFrom} onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
+      {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
       {archivedHere ? <ArchivedNotice session={archivedHere} /> : notFound ? <Suspense fallback={null}><LazyNotFoundNotice assistant={Boolean(assistant)} retry={retryDetail} /></Suspense> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
 
@@ -2390,6 +2407,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {pendingCards}
         {!assistant && session?.model_fallback && <Suspense fallback={null}><ModelFallbackCard session={session} headless={false} /></Suspense>}
         {assistant && session && <CompactionStrip session={session} />}
+        {session?.context_restart_recommended && !archivedHere && (
+          <Suspense fallback={null}>
+            <ContextRestartNotice key={JSON.stringify([session.manager, mid, sid])} session={session} assistant={assistant} isMain={isMain} />
+          </Suspense>
+        )}
         {/* the failed bubble above has the one Retry; the card says what to set up first */}
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
@@ -2449,12 +2471,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           draftKey={draftKey}
           placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
+          agent={session?.agent}
           uploadDest={session?.space === "health" ? "health" : undefined}
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
           onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || (session.agent === "claude" && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
-          disabled={Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"))}
+          disabled={composerDisabled}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
           loadingDraft={editingLast}
@@ -2468,7 +2491,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           autoFocus
           carryDraft={Boolean(assistant)}
           onFocusChange={setTyping}
-          blocked={gate.blocked ?? noRowBlock}
+          blocked={composerBlocked}
           leading={leading}
           trailing={trailing}
           planMode={planMode}
@@ -2477,13 +2500,17 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         />
         )}
         {!stoppedLine && session && (
-          assistant
-            ? sourceSubtitle(session) && <div data-composer-usage className="px-2 pt-0.5"><ComposerSource session={session} assistant /></div>
-            : (
-              <Suspense fallback={null}>
-                <AgentStatusLine key={draftKey} session={session} source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined} />
-              </Suspense>
-            )
+          <Suspense fallback={null}>
+            <AgentStatusLine
+              key={draftKey}
+              session={session}
+              assistant={isAssistant}
+              items={earlier.liveItems}
+              compactBlocked={compactBlocked}
+              onCompact={isAssistant || agentCompactBlocked ? undefined : compactSession}
+              source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined}
+            />
+          </Suspense>
         )}
         </div>
       </div>

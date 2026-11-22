@@ -203,6 +203,7 @@ func TestInboxOwnerAssignedFromOtherSourceStillMatchesSenderMute(t *testing.T) {
 
 func TestInboxOwnerAssignedWireFieldAndConnectorCopy(t *testing.T) {
 	thing := ownerAssignmentThing(ownerAssignmentThread, ownerAssignmentLast, true, time.Now().UTC())
+	thing.ThreadState = "open"
 	raw, err := json.Marshal(thing)
 	if err != nil {
 		t.Fatal(err)
@@ -224,5 +225,8 @@ func TestInboxOwnerAssignedWireFieldAndConnectorCopy(t *testing.T) {
 	fillConnectorItem(item, roundTripped)
 	if item.Connector == nil || !item.Connector.OwnerAssigned {
 		t.Fatalf("connector item did not retain owner assignment: %+v", item.Connector)
+	}
+	if item.Connector.ThreadState != thing.ThreadState {
+		t.Fatalf("connector item thread state = %q, want %q", item.Connector.ThreadState, thing.ThreadState)
 	}
 }
