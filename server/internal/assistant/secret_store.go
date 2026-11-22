@@ -86,9 +86,9 @@ func (s *Service) toolSecretStore(ctx context.Context, machine, session string, 
 			return bad("could not describe the secret storage target")
 		}
 		in.Target = desc.Target
-		input := proto.SecretHandoffInput{Agent: row.Title, MachineName: machine, StoreOperation: in.Target.Operation}
+		input := proto.SecretHandoffInput{Agent: row.Title, MachineName: machine, StoreOperation: in.Target.Operation, Prompt: "Write the listed fields to 1Password. Values stay hidden; this approves one write only."}
 		for _, f := range in.Target.Fields {
-			input.Variables = append(input.Variables, proto.SecretHandoffVariable{Name: f.Name, Provider: prov.Extension, ProviderName: prov.Name, Title: desc.VaultName + " › " + in.Target.Title})
+			input.Variables = append(input.Variables, proto.SecretHandoffVariable{Name: f.Name, Provider: prov.Extension, ProviderName: prov.Name, Title: in.Target.Operation + " › " + desc.VaultName + " › " + in.Target.Title})
 		}
 		cardRaw, _ := json.Marshal(input)
 		now := time.Now().UTC()
