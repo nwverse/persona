@@ -1,8 +1,8 @@
 # Plan: the Inbox as the first vertical domain slice (#11309)
 
-**Status: decided 2026-11-22 in #10613** (section 6). It is the Stage B item "Inbox as a vertical pilot" of #10613 and
-follows #7891's package-split rules. S2, S3 and W2 have landed; each other step becomes its own issue and PR and lands
-under section 4's rules. No step changes what a user sees (no UI, setting, default or wire change), so the
+**Status: decided 2026-11-22; section 6 is the record (#12841).** It is the Stage B item "Inbox as a vertical pilot" of
+#10613 and follows #7891's package-split rules. S2, S3 and W2 have landed; each other step becomes its own issue and PR
+and lands under section 4's rules. No step changes what a user sees (no UI, setting, default or wire change), so the
 design-principles self-check does not apply.
 
 **How the numbers were taken**, as of `origin/main` at 287db61638 (2026-11-20), re-checked at 81361c1dd1 (2026-11-22):
@@ -10,9 +10,10 @@ design-principles self-check does not apply.
   2026-10-24, so the window covers most of it, repository-wide sweeps included. Those commit counts are not re-taken.
 - File:line references, file and line counts and open-PR facts are as of 81361c1dd1, against the 287 PRs open on
   2026-11-22 (155 on 2026-11-20). Main then moved to 6dfcd36ab0 (#12859), which shifts only the snapshot and
-  turn-settled lines in `assistant/service.go`; those two are as of 6dfcd36ab0. GitHub lists at most 100 files per PR and 24 of them reach that cap, so overlaps may
-  be undercounted. Hunk positions are on each PR's own base. Line numbers drift, so each step finds its lines again by
-  name and re-checks open PRs before it is pushed (section 4).
+  turn-settled lines in `assistant/service.go`; those two are as of 6dfcd36ab0. The four commits up to 4fe1bd5cea move
+  none of the cited lines or counts. GitHub lists at most 100 files per PR and 24 of them reach that cap, so overlaps
+  may be undercounted. Hunk positions are on each PR's own base. Line numbers drift, so each step finds its lines again
+  by name and re-checks open PRs before it is pushed (section 4).
 - The conflict measures in sections 4 and 6 (merge-tree and a merged `go vet` against every open PR head) were taken on
   51e333fc90 across 241 open PRs, and the timings in D3 were measured for the decisions, on the same machine. Other
   build or test speedups below are expected, not measured. Paths that do not exist yet are plain text, not code, so the
@@ -248,7 +249,7 @@ func (k Kernel) Snapshot(fn func(ctx context.Context, snap *assistantwire.Snapsh
 **Rules for every step** (#7891):
 - **Pure moves, one cluster per PR**, each with its own issue linking #10613 (and #7891 for server moves). Wire JSON,
   prompt and MCP goldens, and `route_scopes.txt` stay byte-identical.
-- **Landing beside open PRs** (X6, decided in #10613). Before each push of a pure-move or seam PR: run `git merge-tree`
+- **Landing beside open PRs** (X6, decided 2026-11-22). Before each push of a pure-move or seam PR: run `git merge-tree`
   against every open PR head that touches the files and count new conflict hunks against main; for Go, run a merged
   `go vet` of the affected package for every such head and compare it with main merged with the same head. Activity is
   judged by the head commit's age (7 days or less is active), never by updatedAt, which automation bumps. A line that
@@ -539,7 +540,9 @@ binary for every server change on purpose: the cross-package contract tests ther
 
 ## 6. Decisions
 
-Decided 2026-11-22 in #10613. Each row is what the plan now does; sections 3 and 4 carry the details.
+Decided 2026-11-22: the owner approved the recommended answers to D1 to D12, the windows and X6. This section is the
+record of those answers (#12841); the options they weighed are in the open list it held before #12841, in this file's
+history. Each row is what the plan now does; sections 3 and 4 carry the details.
 
 | # | Decision |
 | --- | --- |
@@ -579,7 +582,7 @@ less, the full item at several days.
 - **Any behaviour, wire, UI, setting or default change.** For example, the roster counts Needs you with `status()`,
   while the Lark workbench uses `wbNeedsYou` (tier or urgent); unifying them is for #5974 or a bug issue of its own.
 - **Sources** (extmgr, subscriptions), the hub's relay code, HarmonyOS, and splitting `docs/protocol/protocol.md` or
-  `docs/assistant/inbox.md` (#10613's docs decision).
+  `docs/assistant/inbox.md` (the docs split is its own item of #10613).
 - **A known test bug, for an issue of its own:** `android/app/src/test/java/persona/android/di/InboxFacadeTest.kt` looks
   for a declaration text `android/app/src/main/java/persona/android/di/InboxModule.kt` no longer has (the facade is at
   line 201), so it scans the file up to the assistant facade and checks less than it says.
