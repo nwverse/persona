@@ -90,6 +90,10 @@ struct MachinesView: View {
                 if !machines.isEmpty {
                     summary(machines, alerts: alerts.values.filter { $0 > .normal }, waiting: tallies.values.reduce(0) { $0 + $1.needsYou })
                 }
+                #if DEBUG && !os(macOS)
+                // Simulator screenshots of the usage cards (#13173): the cards first, not below every computer.
+                if ProcessInfo.processInfo.arguments.contains("-showUsageCardsDemo") { UsageWindowsCard() }
+                #endif
                 // Today's tokens across the computers, from their cards' usage (#4973).
                 let shares = machines.compactMap { m in metrics[m.ref]?.usage.map { (name: m.name, usage: $0) } }
                 if !shares.isEmpty { TodayTokensCard(shares: shares) }
@@ -106,7 +110,11 @@ struct MachinesView: View {
                     grid(machines, tallies: tallies, alerts: alerts)
                 }
                 #if !os(macOS)
+                #if DEBUG
+                if !ProcessInfo.processInfo.arguments.contains("-showUsageCardsDemo") { UsageWindowsCard() }
+                #else
                 UsageWindowsCard() // the Mac has it at the foot of its sections column
+                #endif
                 #endif
                 if machines.isEmpty, model.canAddComputer {
                     EmptyStateView(symbol: Theme.Icon.machines, title: String(localized: "No computers yet"),

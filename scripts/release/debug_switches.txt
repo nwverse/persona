@@ -445,6 +445,7 @@ showUnlockWithoutAuth
 showUpcomingSample
 showUrgentCallSample
 showUrgentCallSampleTitle
+showUsageCardsDemo
 showViewerChromeHidden
 showViewerDecodeDelay
 showViewerDecodeDuringPan

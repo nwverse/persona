@@ -182,12 +182,12 @@ func (s *Service) a2aAllowed(ctx context.Context, cfg assistantwire.A2AConfig, r
 		return false
 	}
 	_, guest, err := s.guestOf(ctx, ref.Machine, ref.Session)
-	return err == nil && !guest && !s.inHealth(ctx, ref.Session)
+	return err == nil && !guest && !s.selfPolicy(ctx, ref.Session).HideFromExtensions
 }
 
 func a2aVisible(session proto.Session) bool {
 	return !session.Archived && !session.IsDeleted() && !session.HiddenByDirectory() && !session.IsSubagent &&
-		session.Space != identity.SpaceHealth && !identity.InHealthSpace(session.Cwd)
+		runSpace(session) == "" // any space: a2aVisible has no registry, so it fails closed
 }
 
 func a2aSendable(session proto.Session) bool {
@@ -279,7 +279,7 @@ func (s *Service) a2aStart(ctx context.Context, st a2aStore, cfg assistantwire.A
 			return nil, fmt.Errorf("%w: starting a remote session requires Agent dispatch to be enabled", errA2AUnavailable)
 		}
 		dev, ok := s.machineByName(ctx, to.Machine)
-		if !ok || dev.ID != to.Machine || !a2aValidText(launch.CWD) || identity.InHealthSpace(launch.CWD) {
+		if !ok || dev.ID != to.Machine || !a2aValidText(launch.CWD) || s.trackPolicy(ctx, identity.SpaceAt(launch.CWD)).HideFromExtensions {
 			return nil, errA2AUnavailable
 		}
 		launch.CWD = proto.ExpandHome(launch.CWD, dev.Home)

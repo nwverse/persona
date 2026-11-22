@@ -214,7 +214,7 @@ func TestLarkLiteralPrefixPermissionModes(t *testing.T) {
 			n.procs[testThread] = &assistantProc{id: testThread, agent: "claude", origin: tc.origin, cwd: cwd, exited: make(chan struct{})}
 			n.persistModes(testThread, tc.mode, "")
 			if tc.health {
-				n.gates().markHealth(testThread)
+				n.gates().markSpace(testThread)
 			}
 			fh.answer = func(proto.Interaction) proto.Resolution { no := false; return proto.Resolution{Allow: &no} }
 			decision, reason, err := n.larkCheck(context.Background(), testThread, cwd, tc.command,

@@ -155,6 +155,7 @@
   "unblock_user": "あなたの承認待ち",
   "unblock_agent": "エージェントが続行できます",
   "unblock_other": "他の人 / CI / 環境待ち",
+  "unblock_supervisor": "まず監督が確認します",
   "thread_section": "トピック",
   "thread_unbind": "紐づけ解除",
   "thread_unbind_label": "トピック「{name}」の紐づけを解除",

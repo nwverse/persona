@@ -137,11 +137,15 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
-	// Health stays in the health space (docs/assistant/health.md "How directories and memory are isolated"): it writes nothing to the knowledge base,
-	// nor changes or starts what is imported into it (kb_history_status only reads).
+	// What is said in a space stays there (docs/assistant/health.md "How directories and memory are isolated"): a space
+	// whose policy says so writes nothing to the knowledge base, nor changes or starts what is imported into it
+	// (kb_history_status only reads).
 	if name == "kb_update" || strings.HasPrefix(name, "kb_history_") && name != "kb_history_status" {
-		if space, _ := s.selfSpace(ctx, self); space == SpaceHealth {
-			return "", errors.New("the health space doesn't write the knowledge base: health information stays in its conversations and memory")
+		if space, _ := s.selfSpace(ctx, self); s.trackPolicy(ctx, space).NoKBWrite {
+			if space == SpaceHealth {
+				return "", errors.New("the health space doesn't write the knowledge base: health information stays in its conversations and memory")
+			}
+			return "", errors.New("this space doesn't write the knowledge base: what is said here stays in its conversations and memory")
 		}
 	}
 	switch name {
@@ -253,8 +257,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// which the meeting page shows.
 			return justMeNotice(s.lang(ctx)), nil
 		}
-		if s.inHealth(ctx, self) { // the lock screen and the channels hear there is news, not what it is (health.go)
-			a.Title, a.Body = healthNotice(s.lang(ctx))
+		if s.selfPolicy(ctx, self).Redact { // the lock screen and the channels hear there is news, not what it is (health.go)
+			a.Title, a.Body = spaceNotice(s.lang(ctx))
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
 		res, err := s.pushResult(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
@@ -630,7 +634,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed), permission: a.PermissionMode} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
-		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
+		// the start lays it: what runs is said on the card (a hand-off from a space that confirms what leaves it asks) and in the answer.
 		tier := strings.TrimSpace(a.Tier)
 		if tier != "" {
 			t, err := s.tierModel(ctx, tier)
@@ -1469,20 +1473,12 @@ func (s *Service) machineIDs(ctx context.Context) string {
 	return strings.Join(ids, ", ")
 }
 
-// agentSpace includes health subdirectories for the tools' access boundary.
-func agentSpace(c proto.Session) string {
-	if c.Space == SpaceHealth || identity.InHealthSpace(c.Cwd) {
-		return SpaceHealth
-	}
-	return ""
-}
-
 // agentCallerSpace uses the calling conversation on its own machine. Calls without
 // a known session can reach only the ordinary space, as with knownSpace.
 func (s *Service) agentCallerSpace(ctx context.Context, machine, self string) string {
 	if self != "" && machine != "" {
 		if c, ok := s.session(ctx, machine, self); ok {
-			return agentSpace(c)
+			return runSpace(c) // a space's subdirectories count for the tools' access boundary
 		}
 	}
 	return ""
@@ -1509,7 +1505,7 @@ func (s *Service) findAgentInSpace(ctx context.Context, machine, id string, spac
 		}
 		list, _ := s.sessions(ctx, m.ID)
 		for _, c := range list {
-			if c.HiddenByDirectory() || space != nil && (c.IsDeleted() || agentSpace(c) != *space) {
+			if c.HiddenByDirectory() || space != nil && (c.IsDeleted() || runSpace(c) != *space) {
 				continue
 			}
 			if c.SessionID == id || strings.HasPrefix(c.SessionID, id) {
@@ -1547,7 +1543,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 	pending := map[[2]string][]pendingCard{}
 	folded := map[[2]string]bool{}
 	for _, ix := range res.Interactions {
-		if identity.InHealthSpace(ix.Cwd) && space != SpaceHealth {
+		if sp := identity.SpaceAt(ix.Cwd); sp != "" && sp != space {
 			continue
 		}
 		what := ix.Summary
@@ -1597,7 +1593,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		list, muted, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
-			if c.HiddenByDirectory() || c.IsDeleted() || agentSpace(c) != space {
+			if c.HiddenByDirectory() || c.IsDeleted() || runSpace(c) != space {
 				continue
 			}
 			if source := [2]string{m.ID, c.SessionID}; c.FoldedUnder() != "" {

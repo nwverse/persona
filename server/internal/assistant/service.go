@@ -62,6 +62,7 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	compactRecovery  compactRecoveryCache
 	logical          logicalDeviceState
 	a2aWake          chan struct{}
 	a2aLogicalWrites chan struct{}
@@ -212,6 +213,8 @@ type Service struct {
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	convSpaces           convSpaceBook          // conversation_space.go
+	trackReg             trackRegistry          // track_registry.go
+	infoTags             infoTagCache           // info_tag.go
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
 	conversationWrites   sync.RWMutex
@@ -551,6 +554,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 			if origin != "" {
 				p["origin"] = origin
+			}
+			if err := s.putInboxPermissionMode(ctx, device, id, p, origin, originKnown); err != nil {
+				return beforeNodeWrite(method, err)
 			}
 			if !originKnown || (origin != "" && origin != OriginTask) || p["is_main"] == true {
 				delete(p, devicewire.LegacyTaskExecution)
@@ -1046,6 +1052,8 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 		// An assistant turn that failed is logged; a conversation conversation_new opened tells its parent (spawned.go).
 		s.afterSettle(context.WithoutCancel(ctx), s.assistantTurnSettled, r.MachineID, r.SessionID)
 		s.afterSettle(context.WithoutCancel(ctx), s.inboxAgentTurnSettled, r.MachineID, r.SessionID)
+		// What the turn said is tagged with its information categories (info_tag.go).
+		s.afterSettle(context.WithoutCancel(ctx), s.infoTagTurnSettled, r.MachineID, r.SessionID)
 	}
 	if !meeting {
 		s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
