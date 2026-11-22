@@ -391,7 +391,7 @@ class OutboxMessageSender(
         val attempt = request(entry).copy(opId = opId ?: entry.operationId)
         val state = if (result == MessageTransportResult.Kept) OutboxState.Kept
             else OutboxState.entries.first { it.delivery == delivery.state }
-        val from = if (starting) setOf(OutboxState.Refused) else awaitingReceipt
+        val from = if (starting) setOf(OutboxState.Refused, OutboxState.Sending) else awaitingReceipt
         // Refused again: nothing was delivered under that id either, so a later retry takes another.
         val next = when {
             // Bind the live composer POST to its own operation id. Its completion must be distinguishable from
