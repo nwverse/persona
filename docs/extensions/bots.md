@@ -47,6 +47,18 @@ outside the bot settings lock, after startup has restored connector settings. Re
 enabled/feed switches and current options; retained old connectors refuse calls rather than reuse their Inbox caches
 for a different profile. Assistant configuration and extension host CLI requests also fail closed while identity is unread.
 
+The connector's `connectors.settings` record is independent of `bots.feishu`: a failed read quarantines the placeholder
+with its connector and Inbox feed off, and rejects preference writes until that record can be read completely. Recovery
+reads its durable options, feed and enabled choices before starting the replacement; a missing record keeps the existing
+defaults. A manager.json profile override still works when only bot settings are unavailable, with known connector choices.
+An unavailable preferences record also gates that override until its enabled/feed policy is known.
+
+A failed managed-profile synchronization remains pending after bot settings have loaded. Ordinary bot status/transport
+lookups, connector listings and tool/CLI calls can request one recovery attempt after the shared five-second failure
+cooldown. Concurrent requests coalesce into one worker; synchronization runs outside the bot lock under the manager's
+lifetime. There is no recovery timer loop. A later successful synchronization releases the identity gate, restores the
+connector preferences and resumes its normal lifecycle.
+
 ## How it differs from Lark `/agent`
 
 | | Lark bot (this page) | Lark `/agent` (`docs/extensions/lark-agent.md`) |

@@ -219,7 +219,8 @@ func (h *Manager) loadBotsLocked(ctx context.Context) error {
 		h.restartBotLocked()
 		if h.cfg.Lark.CLI != nil {
 			// CLI synchronization and registry replacement must run outside bots.mu.
-			go h.refreshLarkCLIConnector(b.base)
+			h.larkCLIRecovery.needed.Store(true)
+			h.requestLarkCLIRecovery(b.base)
 		}
 	}
 	return nil
@@ -227,8 +228,11 @@ func (h *Manager) loadBotsLocked(ctx context.Context) error {
 
 func (h *Manager) loadBotSettings(ctx context.Context) error {
 	h.bots.mu.Lock()
-	defer h.bots.mu.Unlock()
-	return h.loadBotsLocked(ctx)
+	err := h.loadBotsLocked(ctx)
+	base := h.bots.base
+	h.bots.mu.Unlock()
+	h.requestLarkCLIRecovery(base)
+	return err
 }
 
 func (h *Manager) saveBotSettingsLocked() error {
@@ -326,7 +330,11 @@ func (h *Manager) restartBotLocked() {
 func (h *Manager) botAPI() (*feishubot.Client, FeishuBotSettings) {
 	b := &h.bots
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	defer func() {
+		base := b.base
+		b.mu.Unlock()
+		h.requestLarkCLIRecovery(base)
+	}()
 	if !b.loaded {
 		h.loadBotsLocked(context.Background())
 	}

@@ -283,7 +283,7 @@ func (h *Manager) assistantLark(ctx context.Context) (proto.AssistantLark, error
 	larkRules := append(connector.LarkRules(h.cfg.ConnectorGate, h.cfg.LarkGate), connector.LarkRules(h.connectors.UserRules(), nil)...)
 	out := proto.AssistantLark{Rules: larkRules, Prefer: lc.Prefer}
 	if lc.CLI != nil {
-		profile, err := h.resolveLarkCLIProfile(ctx)
+		profile, err := h.larkCLIExecutionProfile(ctx)
 		if err != nil {
 			return proto.AssistantLark{}, err
 		}
