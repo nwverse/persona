@@ -964,8 +964,12 @@ func (s *Service) startRoutes() {
 			// handoffUserTurn, the decision on #3962).
 			Via string `json:"via"`
 		}
-		if err := decodeLargeBody(w, r, &in, 32<<20); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+		if err := decodeLargeBody(w, r, &in, proto.MessageBodyLimit); err != nil {
+			writeBodyErr(w, err, err)
+			return
+		}
+		// A conversation not started has no agent yet: the limits every session gets unless its agent has its own.
+		if apierr.ImagesOverLimit(w, proto.HubImageLimits.For(""), len(in.Images)) {
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 110*time.Second)
