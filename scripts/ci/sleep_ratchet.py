@@ -8,11 +8,17 @@ string literals are ignored. A call on a line that carries `// sleep-ok: <reason
 count; the reason must be non-empty. Whitespace and comments may sit between time, the dot,
 Sleep and the opening parenthesis, so splitting the call does not hide it.
 
-A file under its baseline fails too: run --update, which rewrites the baseline downward and
-drops files that no longer sleep. --update refuses to raise a count or to add a file that still
-sleeps, and it will not create a baseline (that would record the sleeps already in the tree).
-Once the baseline is committed, a later edit that raises a count or adds a file is rejected
-against that commit, whether or not --update was used. See docs/lessons/testing.md.
+Only a rise fails. Where a base is given (--base, else CI_BASE_SHA; scripts/ci/ratchet_base.py),
+a file the change touches is also held to its count at the merge base, so a change cannot add
+sleeps back into room a lower count left under the baseline. With neither, as on main, only the
+baseline holds; the never-raise check below still falls back to the clone's default branch.
+A file under its baseline passes with a notice: lowering the baseline is tidying anyone can do,
+with --update here or scripts/ci/lower_baselines.py for every count ratchet. --update rewrites
+the baseline downward and drops files that no longer sleep; it refuses to raise a count or to
+add a file that still sleeps, and it will not create a baseline (that would record the sleeps
+already in the tree). Once the baseline is committed, a later edit that raises a count or adds
+a file is rejected against that commit, whether or not --update was used. See
+docs/lessons/testing.md and docs/operations/testing.md ("Count ratchets").
 """
 import argparse
 import json
@@ -21,6 +27,9 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ratchet_base  # noqa: E402
 
 ROOTS = ("server", "sdk/go")
 BASELINE_REL = "scripts/ci/sleep_baseline.json"
@@ -242,22 +251,56 @@ def over_message(path, got, allowed):
 
 
 def under_message(path, got, allowed):
+    return "{0}: {1} time.Sleep call(s), baseline {2}".format(path, got, allowed)
+
+
+def rise_message(path, got, was, label, allowed):
     return (
-        "{0}: {1} time.Sleep call(s), baseline {2}; "
-        "run python3 scripts/ci/sleep_ratchet.py --update to lower the baseline"
-    ).format(path, got, allowed)
+        "{0}: {1} time.Sleep call(s), {2} at the merge base {3} (baseline {4}); fixed sleeps in Go tests can only go "
+        "down, even where the baseline still has room; use testing/synctest, a polling helper or a channel "
+        "(docs/lessons/testing.md)"
+    ).format(path, got, was, label, allowed)
 
 
 def count_violations(actual, baseline):
-    """Files over the baseline, then files under it. Missing on either side counts as zero."""
+    """Files over the baseline. Missing on either side counts as zero; a file under it passes (lowerable)."""
+    return [over_message(path, actual[path], baseline.get(path, 0))
+            for path in sorted(actual) if actual[path] > baseline.get(path, 0)]
+
+
+def lowerable(actual, baseline):
+    """Notice lines for files under the baseline, which lowering it would tidy."""
+    return [under_message(path, actual.get(path, 0), allowed)
+            for path, allowed in sorted(baseline.items()) if actual.get(path, 0) < allowed]
+
+
+def covers(path):
+    """Whether scan counts the file: a _test.go file under ROOTS, outside .git directories."""
+    parts = path.split("/")
+    return (any(path.startswith(root + "/") for root in ROOTS) and parts[-1].endswith("_test.go")
+            and ".git" not in parts[:-1])
+
+
+def base_violations(actual, baseline, merge_base):
+    """Files the change took above their merge-base count while the baseline still has room (ratchet_base.held)."""
+    if merge_base is None:
+        return []
+    paths = sorted(path for path in merge_base.changed()
+                   if covers(path) and 0 < actual.get(path, 0) <= baseline.get(path, 0))
+    if not paths:
+        return []  # nothing the change touches has room left to rise into
+    text = merge_base.texts([BASELINE_REL], errors="backslashreplace").get(BASELINE_REL)
+    if text is None:
+        return []  # the base predates the baseline: everything is the first snapshot
+    entries = parse_baseline(text, merge_base.label + ":" + BASELINE_REL)
+    # An entry the change raised or added is the never-raise check's (raised_against); it says so once.
+    paths = [path for path in paths if baseline[path] <= entries.get(path, 0)]
+    texts = merge_base.texts(paths, errors="backslashreplace")
     found = []
-    for path in sorted(set(actual) | set(baseline)):
-        got = actual.get(path, 0)
-        allowed = baseline.get(path, 0)
-        if got > allowed:
-            found.append(over_message(path, got, allowed))
-        elif got < allowed:
-            found.append(under_message(path, got, allowed))
+    for path in paths:
+        was = count_sleeps(texts[path]) if path in texts else 0
+        if actual[path] > ratchet_base.held(path, baseline[path], entries, was):
+            found.append(rise_message(path, actual[path], was, merge_base.label, baseline[path]))
     return found
 
 
@@ -446,8 +489,10 @@ def _ancestor_violations(root, candidate, base, env):
     return raised_against(candidate, previous, label)
 
 
-def check(root, baseline_path=None, base=None, env=None):
-    """Violation lines for the worktree (and a raised index) against the baseline. Empty means pass."""
+def check(root, baseline_path=None, base=None, env=None, notes=None):
+    """Violation lines for the worktree (and a raised index) against the baseline. Empty means pass.
+
+    notes, a list, also receives the lowerable lines: files under the baseline, which pass."""
     env = os.environ if env is None else env
     root = Path(root)
     baseline_path = Path(root) / BASELINE_REL if baseline_path is None else Path(baseline_path)
@@ -455,9 +500,16 @@ def check(root, baseline_path=None, base=None, env=None):
         return ["sleep ratchet: baseline missing ({0}); refusing to invent counts for existing sleeps".format(
             baseline_path)]
     baseline = parse_baseline(baseline_path.read_text(encoding="utf-8"), str(baseline_path))
-    found = count_violations(scan(root), baseline)
+    actual = scan(root)
+    found = count_violations(actual, baseline)
+    if notes is not None:
+        notes.extend(lowerable(actual, baseline))
     if not _tracks_baseline(root, baseline_path):
         return found
+    try:
+        found.extend(base_violations(actual, baseline, ratchet_base.resolve(root, base, env)))
+    except ratchet_base.BaseError as error:
+        raise SleepError("sleep ratchet: " + str(error))
     found.extend(_ancestor_violations(root, baseline, base, env))
     indexed = _staged(root, BASELINE_REL) if _inside_git(root) else None
     if indexed is not None:
@@ -500,16 +552,18 @@ def update(root, base=None, env=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--base", help="base ref (default: CI_BASE_SHA, else origin/HEAD, else origin/main)")
+    parser.add_argument("--base", help="base ref (default: CI_BASE_SHA). The merge-base limit needs one; the "
+                                       "never-raise check falls back to origin/HEAD, else origin/main")
     parser.add_argument("--root", default=".", help="repository root (default: the working directory)")
     parser.add_argument("--update", action="store_true",
                         help="lower the baseline to the current counts; refuses to raise or to add a file")
     args = parser.parse_args(argv)
+    notes = []
     try:
         if args.update:
             problems = update(args.root, args.base)
         else:
-            problems = check(args.root, base=args.base)
+            problems = check(args.root, base=args.base, notes=notes)
     except SleepError as error:
         print(error, file=sys.stderr)
         return 2
@@ -518,7 +572,8 @@ def main(argv=None):
         return 1
     if not args.update:
         tracked = len(parse_baseline((Path(args.root) / BASELINE_REL).read_text(encoding="utf-8"), BASELINE_REL))
-        print("sleep ratchet: {0} Go test file(s) are at the baseline".format(tracked))
+        ratchet_base.print_notice("sleep ratchet", notes, "python3 scripts/ci/sleep_ratchet.py --update")
+        print("sleep ratchet: {0} Go test file(s) in the baseline, none above it".format(tracked))
     return 0
 
 

@@ -187,6 +187,8 @@ const (
 	// CodeFeishuAPI: Feishu answered the bot's call with an error code (Data: {"code": n}): a refusal or a passing
 	// failure the assistant tells apart (the agent messages, feishu_cot.go).
 	CodeFeishuAPI = "feishu_api"
+	// CodeFeishuSave: the image downloaded, but saving its bytes on the selected machine failed.
+	CodeFeishuSave = "feishu_save"
 	// CodeChatDenied: the hub refused to send into a chat or to reply to a message in one, because the bot may only use
 	// the owner's private chat and the group chats the owner opted in. Nothing was sent.
 	CodeChatDenied = "chat_denied"

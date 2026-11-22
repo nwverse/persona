@@ -30,7 +30,7 @@ type channelSink interface {
 type channelProgress interface {
 	progress(ctx context.Context, r *channel.Run, took time.Duration, steps []string, live string)
 	// folded: o went into a later run; its progress message says so.
-	folded(ctx context.Context, o *channel.Run)
+	folded(ctx context.Context, o *channel.Run, owner *chanLive)
 }
 
 // channelRecall is a sink that marks a message the owner recalled: one taken out of a run that answers others too
@@ -65,6 +65,8 @@ type chanLive struct {
 	// has shown, under mu.
 	items []proto.Item
 	cot   cotProgress
+	// native belongs to one topic-turn generation; protected by chans.mu.
+	native *cotWorker
 	// from is the seq of the run's own message once found (0: not yet: queued behind another turn, or not in);
 	// upTo the last item noted; looked when locateRun last read the conversation.
 	from, upTo int
@@ -179,26 +181,10 @@ func (m chanMutex) TryLock() bool {
 	}
 }
 
-// claimChannelMessage: the first time channel id's message is seen; an error while the messages seen can't be read.
+// claimChannelMessage claims a message without a thread reservation; unreadable or unwritable state stays retryable.
 func (s *Service) claimChannelMessage(id, msg string) (bool, error) {
-	c := &s.chans
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s.loadChannelStateLocked(context.Background())
-	if !c.stLoaded {
-		return false, errChannelsUnread
-	}
-	seen := c.st.Seen[id]
-	if msg == "" || slices.Contains(seen, msg) {
-		return false, nil
-	}
-	seen = append(seen, msg)
-	if len(seen) > channelSeenKeep {
-		seen = seen[len(seen)-channelSeenKeep:]
-	}
-	c.st.Seen[id] = seen
-	s.saveChannelStateLocked()
-	return true, nil
+	admission, err := s.admitChannelMessage(id, channel.Message{ID: msg})
+	return admission != nil, err
 }
 
 var errChannelsUnread = errors.New("the channels' state could not be read")
@@ -310,7 +296,7 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 			p.mu.Unlock()
 		}
 		if fs, ok := sink.(channelProgress); ok && ended {
-			fs.folded(ctx, o)
+			fs.folded(ctx, o, gone[o.ID])
 		}
 	}
 	s.noteChannelConversation(r.Channel, r.MachineID, r.SessionID)

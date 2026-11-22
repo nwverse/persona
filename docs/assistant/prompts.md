@@ -116,8 +116,12 @@ without an actual `if` on `.Language` or `.Lang`, including language handling in
 with the same data. Comments and quoted mentions do not qualify. The baseline records both directory counts and
 filenames: a new omission fails even when another file in that directory was removed. There are no source
 exemptions. The checker also compares the baseline against `CI_BASE_SHA` (otherwise `origin/main`) when it exists
-there, so editing the JSON cannot raise the allowance. Run `--update` only to remove resolved entries; it refuses
-increases. This is a structural guard, not a check of translation quality, caller wiring or model behavior.
+there, so editing the JSON cannot raise the allowance. Only a new omission fails: a resolved prompt still in the
+baseline passes with a notice, and with a base given (`--base` or `CI_BASE_SHA`, not the `origin/main` fallback) a
+prompt the merge base already handles may not lose its language handling again while the baseline still lists it
+(`docs/operations/testing.md`, "Count ratchets"). Removing resolved entries is
+tidying anyone can do, with `--update` (which refuses increases) or `python3 scripts/ci/lower_baselines.py`. This is
+a structural guard, not a check of translation quality, caller wiring or model behavior.
 
 The initial inventory is computed from this checkout rather than the issue's earlier audit. A migration needs
 caller-level goldens, synthetic delivery and parser tests where applicable, and unchanged default/Chinese goldens.
@@ -317,7 +321,7 @@ localize Persona Link's client UI; they do not supply the language of model prom
 
 Since #1571, prompts and context for Lark `/agent` (in chats / document comments) live with `/agent` in the Lark integration plugin. This repository has no `lark/` directory (`docs/extensions/lark-agent.md`).
 
-Go side: `prompts.go` (parsing, template functions), `assistant.go`, `inbox.go`, `kb.go`, `tools.go` (one data structure and `RenderXxx` per prompt; since #1571, lark.go for Lark /agent lives with its prompts in the plugin).
+Go side: `prompts.go` (parsing, template functions), `assistant.go`, `inbox.go`, `kb.go`, `tools.go` (one data structure and `RenderXxx` per prompt; since #1571, lark.go for Lark /agent lives with its prompts in the plugin). `assistant.go` takes no new name: a new assistant prompt's data structure and `RenderXxx` go in a file of their own, `assistant_<topic>.go`, as `assistant_answer_again.go` has them (`docs/server/architecture.md` "Registering a domain's entries").
 
 ## MCP tools
 
@@ -419,7 +423,7 @@ Note that `scheduleHeader` in `assistant/schedule.go` recognizes copied-back old
 ## Add a prompt
 
 1. Add `xxx.md` in the appropriate scenario subdirectory (or create a subdirectory if none fits, and add it to `//go:embed` in `prompts.go`).
-2. Add a data structure and `RenderXxx` to that scenario's Go file; callers only fill the data.
+2. Add a data structure and `RenderXxx` to that scenario's Go file; callers only fill the data. For an assistant prompt that file is a new `assistant_<topic>.go`, never `assistant.go`, whose names are frozen (`docs/server/architecture.md` "Registering a domain's entries").
 3. Add a golden test in the caller's package (follow existing `*_golden_test.go` patterns: representative inputs, optional sections present / absent, empty / multi-item lists), and generate with `UPDATE_GOLDEN=1`.
    Use placeholder inputs only (`Example user`, `example.com`); `scripts/privacy_check.py` checks them.
 

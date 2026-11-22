@@ -24,6 +24,7 @@ newAssistant
 openAbout
 openAgent
 openAgentsFresh
+openAlarms
 openAllWork
 openAppearance
 openAssistant
