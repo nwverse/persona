@@ -188,6 +188,10 @@ func (s *Service) advanceTaskReplyAt(ctx context.Context, t Todo, machine, sessi
 	if pr == "" {
 		pr = s.prFromNumber(ctx, t, machine, session, text)
 	}
+	urls = slices.DeleteFunc(urls, func(raw string) bool { return references[raw] })
+	if references[pr] {
+		pr = ""
+	}
 	if pr != "" && !slices.Contains(urls, pr) {
 		urls = append(urls, pr)
 	}

@@ -134,9 +134,12 @@ func TestLinkRoleEditRoundTrip(t *testing.T) {
 // The real report path: an Agent reply whose prose frames a PR as related work stores it as reference at import,
 // while the same reply's own delivery PR keeps the delivery role. Without the prose classifier both land as delivery.
 func TestAdvanceTaskReplyClassifiesReferenceProse(t *testing.T) {
-	s, todo, _ := linkRoleTask(t)
-	reply := "Done.\nRelated work: " + foreignPR + " tracks the upstream dependency.\n" +
-		"Our delivery PR is " + ownDeliveryPR + ".\n"
+	st := repositorystore.New(todoTestDB(t))
+	s, f := newQuietServiceOn(t, st)
+	todo := agentTask(t, s, f)
+	artifactNodeProof(f, ownDeliveryPR, "contributor", "contributor", "fix/parser", "fix/parser", "abc", "abc")
+	reply := "Done.\nOur delivery PR is " + ownDeliveryPR + ".\n" +
+		"Related work: " + foreignPR + " tracks the upstream dependency.\n"
 	s.advanceTaskReply(context.Background(), todo, "box", todo.Agents[0].SessionID, reply)
 	got := linkRoles(t, s, todo.ID)
 	if got[foreignPR] != repository.LinkRoleReference {
@@ -144,5 +147,8 @@ func TestAdvanceTaskReplyClassifiesReferenceProse(t *testing.T) {
 	}
 	if got[ownDeliveryPR] != repository.LinkRoleDelivery {
 		t.Fatalf("delivery PR role = %q, want delivery", got[ownDeliveryPR])
+	}
+	if got := todoNow(s, todo.ID).PRURL; got != ownDeliveryPR {
+		t.Fatalf("legacy delivery PR = %q, want %q", got, ownDeliveryPR)
 	}
 }
