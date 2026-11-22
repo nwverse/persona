@@ -20,6 +20,7 @@ import (
 // (#7314) when the launcher declares a larger window. What is not declared is left to the agent, Claude Code by the
 // model's own window, Codex by its model's default.
 type assistantCompaction struct {
+	cacheProxyBase string
 	// window: the declared automatic compaction window (CLAUDE_CODE_AUTO_COMPACT_WINDOW, a managed launcher's
 	// CompactWindow); capacity: the declared context window (CLAUDE_CODE_MAX_CONTEXT_TOKENS, MaxContext, the provider
 	// model's ContextWindow, Codex's model_context_window). 0: not declared.
@@ -406,6 +407,9 @@ func (n *Node) assistantCompactionSettings(id, cwd, settings string, c assistant
 	}
 	if c.toolSearchOff { // the endpoint refused tool search: over the provider's, the launcher's and the user's (#10365)
 		env[toolSearchEnv] = "false"
+	}
+	if c.cacheProxyBase != "" {
+		env["ANTHROPIC_BASE_URL"] = c.cacheProxyBase
 	}
 	s["env"] = env
 

@@ -27,6 +27,20 @@ func TestGoldenSupervisionInstructions(t *testing.T) {
 	}
 }
 
+// A bullet must start on its own line. A dropped newline ("...rule.- `next`: ...") renders two rules as one bullet,
+// and the size ratchet/golden do not catch it because they are regenerated from the glued text (#12648 review).
+func TestSupervisionInstructionsBulletsAreSeparateLines(t *testing.T) {
+	raw, err := os.ReadFile("../prompts/assistant/supervision_instructions.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.Contains(line, ".- ") {
+			t.Fatalf("two bullets are glued on one line (missing newline): %q", line)
+		}
+	}
+}
+
 func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	ctx := context.Background()

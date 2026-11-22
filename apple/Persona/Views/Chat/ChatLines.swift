@@ -301,13 +301,19 @@ struct ChatLines {
                 // Woken and at work with nothing of it here yet: its work line.
                 if segments.isEmpty, woke != nil, t.id == liveID { segments = [(nil, [])] }
                 for (k, seg) in segments.enumerated() {
+                    let firstLine = out.count
                     let live = t.id == liveID && k == segments.count - 1
                     // The work a wake opened is known by the wake: its line keeps its id from before its first step.
                     let opening = k == 0 && seg.user == nil ? woke?.id : nil
                     // Photos sent with the message (Claude inlines a pasted image path as an image block) sit above
                     // its text, as they did while it was being sent — not in the agent's work.
                     let photos = Self.photos(seg.rows)
-                    if !photos.isEmpty { out.append(.userImages(id: "img-" + photos[0].id, items: photos)) }
+                    if !photos.isEmpty {
+                        var line = ChatLine.userImages(id: "img-" + photos[0].id, items: photos)
+                        // A photo with no text is an input of its own; photos beside text stay before its divider.
+                        line.startsExchange = seg.user == nil
+                        out.append(line)
+                    }
                     if let u = seg.user { out.append(.row(u)) }
                     let last = live && streaming ? nil : seg.rows.lastIndex { if case .assistant = $0 { true } else { false } }
                     // Only an idle compaction with no later work belongs after the answer. A running turn's
@@ -341,6 +347,10 @@ struct ChatLines {
                     out += Self.viewed("vi-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id), items)
                     if let last { out.append(.row(seg.rows[last])) }
                     out += after.sorted().map { .row(seg.rows[$0]) }
+                    if opening != nil, out.count > firstLine {
+                        // A wake opens where a message would be, whether its notice is drawn or only its work/reply is.
+                        out[firstLine].startsExchange = true
+                    }
                 }
                 out += t.trailing.map { .row($0) }
             }
@@ -446,7 +456,11 @@ struct ChatLines {
                         }
                         return child
                     }
-                    out += unfold(raw)
+                    out += unfold(raw).map { child in
+                        var child = child
+                        child.inFoldedRound = true
+                        return child
+                    }
                 }
                 continue
             }

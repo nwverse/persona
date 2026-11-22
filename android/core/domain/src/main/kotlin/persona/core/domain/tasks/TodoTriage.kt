@@ -8,6 +8,7 @@ import persona.core.contracts.Todo
 import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoPRStatus
 import persona.core.contracts.parseTime
+import persona.core.domain.lines.ApiErrorInfo
 
 // The To-dos page's sections (#3156, #3206, docs/assistant/todo-status-sop.md): each to-do's place comes from real signals
 // only — its agents' sessions (alive, running, asking), its PR / delivery state, the latest task_review verdict and when it
@@ -62,11 +63,14 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.curre
         if (st == AgentState.NeedsYou || s != null && (s.pendingInteractions > 0 || s.status == "blocked")) return TriageStatus.NeedsYou
         when {
             s?.isUsageLimited(now) == true -> limit = true
-            s?.interrupted == true -> interrupted = true
-            st == AgentState.Unread -> unread = true
+            s?.interrupted == true && (s.turnErrorKind == "unrecoverable" || s.turnErrorCode == "compaction_sealed" ||
+                ApiErrorInfo.unrecoverable(s.turnError)) -> interrupted = true
             s?.backgroundWorking == true && st == AgentState.Working -> waiting = true
             st == AgentState.Working || s?.starting == true -> working = true
+            active.size > 1 && s?.waitsWithoutBackground() == true -> waiting = true
             st != AgentState.NeedsYou && st != AgentState.Unread && s?.work?.phase == "blocked" && s?.work?.on in setOf("agent", "external", "transient") -> waiting = true
+            s?.interrupted == true -> interrupted = true
+            st == AgentState.Unread -> unread = true
         }
     }
     return when {

@@ -43,6 +43,8 @@
   "view_procs": "ポートとプロセス",
   "view_services": "サービス",
   "view_files": "ファイル",
+  "view_storage": "ストレージ",
+  "view_toolchain": "ツールチェーン",
   "battery": "バッテリー",
   "charging": "充電中",
   "temperature": "温度"

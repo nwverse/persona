@@ -114,6 +114,25 @@ class ServerShardResultsTests(unittest.TestCase):
             "testing.(*T).Run(...)"])
         self.assertEqual(results.output, {})
 
+    def test_a_package_that_does_not_compile_prints_and_repeats_its_build_errors(self):
+        # Go 1.24+ reports compile and vet errors only as build-output events; a shard that dropped them exited in
+        # seconds with no error text (internal/node's redeclared test fake, #12890).
+        build = "example/server/internal/node [example/server/internal/node.test]"
+        events = [{"Action": "build-output", "ImportPath": build, "Output": "# " + build + "\n"},
+                  {"Action": "build-output", "ImportPath": build,
+                   "Output": "internal/node/a_test.go:24:6: fakeDirEntry redeclared in this block\n"},
+                  {"Action": "build-fail", "ImportPath": build},
+                  {"Action": "start", "Package": "example/server/internal/node"},
+                  *output(None, "FAIL\texample/server/internal/node [build failed]\n"),
+                  {"Action": "fail", "Package": "example/server/internal/node", "Elapsed": 0, "FailedBuild": build}]
+        results, printed = self.take(events)
+        self.assertIn("fakeDirEntry redeclared in this block", printed)
+        self.assertEqual(results.failures(), [
+            "--- FAIL: example/server/internal/node (0.00s), outside any test; its last output:",
+            "# " + build, "internal/node/a_test.go:24:6: fakeDirEntry redeclared in this block",
+            "FAIL\texample/server/internal/node [build failed]"])
+        self.assertEqual(results.build_output, {})
+
     def test_one_partition_ending_leaves_the_tests_another_is_running(self):
         # The node shard runs internal/node in several processes: the first to fail ends only its own tests.
         results = server.Results()

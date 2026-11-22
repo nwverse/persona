@@ -103,6 +103,12 @@ nonisolated struct TodoTriageResult: Sendable {
 }
 
 nonisolated enum TodoTriageLogic {
+    /// Legacy raw sealed-compaction detection shared with the app and watch, which do not link PersonaKit.
+    private static func unrecoverableLegacy(_ text: String?) -> Bool {
+        let s = (text ?? "").lowercased()
+        return s.contains("compacted natively") && s.contains("compaction is sealed") && s.contains("to that account")
+    }
+
     /// No activity for this long, nothing of it running: shelved.
     static let shelveAfter: TimeInterval = 48 * 3600
 
@@ -132,14 +138,19 @@ nonisolated enum TodoTriageLogic {
             let stopped = st == .unread || st == .idle
             let error = !(s?.turnError ?? "").isEmpty
             if error, s?.turnErrorKind == "usage_limit", stopped { limit = true }
-            else if error, stopped { interrupted = true }
-            else if st == .unread { unread = true }
+            else if error, stopped, (s?.turnErrorKind == "unrecoverable" || s?.turnErrorCode == "compaction_sealed" ||
+                unrecoverableLegacy(s?.turnError)) {
+                interrupted = true
+            }
             else if st == .working || s?.starting == true { working = true }
+            else if active.count > 1, st != .working, s?.waitsToBeWoken == true { waiting = true }
             else if st != .needsYou, st != .unread, s?.work?.phase == "blocked", ["agent", "external", "transient"].contains(s?.work?.on ?? "") {
                 waiting = true
             }
+            else if error, stopped { interrupted = true }
+            else if st == .unread { unread = true }
         }
-        if interrupted, !waiting { return .interrupted }
+        if interrupted, !working, !waiting, todo.supervision?.state != "parked" { return .interrupted }
         if limit { return .usageLimit }
         if unread { return .unread }
         if working { return .working }
