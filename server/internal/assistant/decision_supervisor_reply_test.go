@@ -225,7 +225,8 @@ func decisionReplyTarget(t *testing.T, s *Service, id string) (to, routed string
 	if !ok {
 		t.Fatalf("no pending decision_reply for %s", id)
 	}
-	return g.To, s.digestTo(s.settings(context.Background()), g)
+	ctx := context.Background()
+	return g.To, s.digestTo(ctx, s.settings(ctx), g)
 }
 
 // A free-text reply in an independent direction conversation must hand the pending card back to
