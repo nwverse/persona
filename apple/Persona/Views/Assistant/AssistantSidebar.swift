@@ -1078,7 +1078,8 @@ enum AssistantSidebarPart {
     /// the Pages heading: its head and the main conversation start there too, so the marks of the head, the main row and
     /// the places stand on one line (#4206). nil until the list is laid out. Written only through `placeRows(at:)`.
     private(set) var rowsLeading: CGFloat?
-    @ObservationIgnored private var rowsLeadingEchoes = LayoutEchoGuard()
+    /// Lazy: made by the first row-layout measurement, not when the view creates its `@State` model (P3).
+    @ObservationIgnored private lazy var rowsLeadingEchoes = LayoutEchoGuard()
 
     /// A new measure of where the rows start. It is read back by the head and the main row, so a measure that only swings
     /// back to the one before (the list moved by the write it caused) is not written again: the iPhone Duo grown from split
@@ -1251,11 +1252,15 @@ extension AssistantSidebar {
                     AssistantSwitcherHeader(manager: current, nameFont: Theme.Font.title, compact: macTitleRow,
                                             faceGap: part == .header ? Self.headFaceGap : Theme.Space.m, openSettings: showSettings)
                 } else {
-                    #if os(macOS)
-                    Text(model.assistantShownName).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
-                    #else
-                    Text(model.assistantShownName).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
-                    #endif
+                    // A hub without a roster has no switcher: with several hubs the title keeps a hub menu under it (#12594).
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        #if os(macOS)
+                        Text(model.assistantShownName).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
+                        #else
+                        Text(model.assistantShownName).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
+                        #endif
+                        HubSwitcher(compact: true)
+                    }
                 }
                 Spacer(minLength: Theme.Space.s)
                 if part == .header {

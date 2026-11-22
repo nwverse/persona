@@ -310,6 +310,17 @@ test('the pi-web companion lists sessions on disk, opens one to send to it, and 
   assert.deepEqual(posts[1].body, { cwd: '/w/new', type: 'prompt', message: 'hello' })
 })
 
+test('an assistant start pi-web has not written yet is refused as delivered nothing, so a switch rolls back', async (t) => {
+  const { n, host, posts } = await setup(t, { web: true, disk: [], files: {}, listDisk: true })
+  const live = piSession('s-live')
+  host.register(live.pi)
+  await live.fire('session_start')
+  await n.ready
+  await assert.rejects(n.peer.call('session.start', { cwd: '/w/new', assistant: true, permission_mode: 'default' }),
+    (error) => error.code === 'assistant_supervision_runtime' && error.data?.delivered === 'none')
+  assert.deepEqual(posts.at(-1).body, { cwd: '/w/new', type: 'ensure_session' }, 'no prompt went to pi-web')
+})
+
 test('approvals of configured tools go to the phone when it drives the session; pi\'s dialog otherwise; no answer blocks', async (t) => {
   const { n, host } = await setup(t, { approve: ['bash'], answerFirst: 'phone' })
   const a = piSession('s-x')
@@ -404,6 +415,22 @@ async function askSetup(t, opts = {}) {
   const ask = (id, params) => tool.execute(id, params, a.ctx.signal, undefined, a.ctx)
   return { ...env, a, tool, status, ask }
 }
+
+test('A2A tools send and report from the active pi session', async (t) => {
+  const { Type } = await import('./typebox-stub.js')
+  const { n, host } = await setup(t)
+  const a = piSession('s-a2a')
+  host.register(a.pi, { A2AType: Type })
+  await a.fire('session_start')
+  await n.ready
+  await until('A2A session listed', () => n.last('runtime.sessions')?.sessions.some(s => s.session_id === 's-a2a'))
+  assert.ok(!a.pi.tools.some(t => t.name === 'ask_user'))
+  const report = a.pi.tools.find(t => t.name === 'a2a_report')
+  const args = { task_id: 'task', message_id: 'report', state: 'completed', text: 'Test result' }
+  const result = await report.execute('call', args, a.ctx.signal, undefined, a.ctx)
+  assert.equal(result.details.error, false)
+  assert.deepEqual(n.toolCalls.at(-1), { name: 'a2a_report', args, session_id: 's-a2a' })
+})
 
 /** A phone that has not answered yet: resolve(answer) answers the card it holds. */
 function heldPhone(n) {

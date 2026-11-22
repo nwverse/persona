@@ -185,6 +185,7 @@ func modelVersionPart(s string) (int, bool) {
 // The context fields stay zero (and so off the wire) while the transcript has no reply yet.
 func setContext(s *proto.Session, m quickMeta) {
 	s.OutputTokens = m.outputTokens
+	s.ContextRestartRecommended = m.contextRestartRecommended
 	s.TitleManual = s.TitleManual || m.titleManual
 	if m.title != "" && s.Title == m.title || m.title == "" && m.titleSource == "prompt" {
 		// A terminal's tool-only fallback still has known transcript provenance
@@ -353,9 +354,22 @@ func (n *Node) applyLauncherContextWindow(s *proto.Session) {
 		req = *s.RequestedModel
 	}
 	var w int
-	if req != "" && req != s.Model {
+	switch {
+	case s.Agent == agyAgent:
+		var candidates []string
+		if req != "" && req != s.Model {
+			candidates = agyModelCandidates(s.Model, req)
+		} else {
+			candidates = agyModelCandidates(s.Model)
+		}
+		if len(candidates) > 0 {
+			w = launcherContextWindow(l, candidates[0], candidates[1:]...)
+		} else if l.MaxContext > 0 {
+			w = l.MaxContext
+		}
+	case req != "" && req != s.Model:
 		w = launcherContextWindow(l, s.Model, req)
-	} else {
+	default:
 		w = launcherContextWindow(l, s.Model)
 	}
 	if w > 0 {

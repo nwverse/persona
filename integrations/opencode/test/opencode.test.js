@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createOpencodeHost } from '../lib/opencode.js'
+import { registerA2A } from '../lib/a2a.js'
 
 const T0 = Date.now() - 60_000
 
@@ -94,6 +95,26 @@ async function setup(t, opts = {}) {
   t.after(() => host.stop())
   return { n, d, host }
 }
+
+test('A2A tools in OpenCode use the executing session and its cancellation signal', async (t) => {
+  const { n, d, host } = await setup(t)
+  d.session('ses_a2a')
+  const ctx = fakeCtx()
+  host.register(ctx)
+  const tools = []
+  ctx.tool = { transform: async (define) => define({ add: (tool) => tools.push(tool) }) }
+  await registerA2A(ctx, host.runtime)
+  assert.deepEqual(tools.map((tool) => tool.name), ['a2a_sessions', 'a2a_get', 'a2a_send', 'a2a_report', 'a2a_cancel'])
+  await n.ready
+  await until('OpenCode A2A session listed', () => n.last('runtime.sessions')?.sessions.some(s => s.session_id === 'ses_a2a'))
+  const report = tools.find((tool) => tool.name === 'a2a_report')
+  const args = { task_id: 'task', message_id: 'report', state: 'completed', text: 'Test result' }
+  const stop = new AbortController()
+  assert.deepEqual(await report.execute(args, { sessionID: 'ses_a2a', signal: stop.signal }), { content: 'a2a_report ran' })
+  assert.deepEqual(n.toolCalls, [{ name: 'a2a_report', args, session_id: 'ses_a2a' }])
+  n.callTool = () => ({ is_error: true, content: [{ type: 'text', text: 'refused' }] })
+  await assert.rejects(report.execute(args, { sessionID: 'ses_a2a', signal: stop.signal }), /refused/)
+})
 
 test('one runtime per process lists the recent root sessions of the database', async (t) => {
   const d = fakeDb()

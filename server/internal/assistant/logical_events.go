@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
@@ -13,6 +14,14 @@ import (
 // Physical notifications remain synchronization hints. Only an authoritative pull
 // may change a source generation; a delayed notification cannot roll it back.
 func (s *Service) NodeEvent(machine, event string, raw json.RawMessage) bool {
+	if event == "session.echo" {
+		var receipt struct {
+			ClientMsgID string `json:"client_msg_id"`
+		}
+		if json.Unmarshal(raw, &receipt) == nil && strings.HasPrefix(receipt.ClientMsgID, proto.A2ADeliveryPrefix) {
+			return true // The Hub hands this receipt back to the physical node.
+		}
+	}
 	s.historySignal(machine, event, raw)
 	st, ok := s.store().(logicalConversationStore)
 	if !ok {

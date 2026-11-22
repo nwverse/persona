@@ -26,10 +26,14 @@ struct AssistantActionBarTests {
         return decode(t)
     }
 
-    private func session(_ id: String, _ state: String, todo: String? = nil) -> Session {
+    private func session(_ id: String, _ state: String, todo: String? = nil, turnError: String? = nil,
+                         turnErrorKind: String? = nil, workOn: String? = nil) -> Session {
         var s: [String: Any] = ["machine_id": "mac", "session_id": id, "title": id, "cwd": "/home/user/project", "state": state,
                                 "status": state, "updated_at": iso(5), "state_since": iso(5)]
         if let todo { s["todo"] = ["id": todo, "title": "task \(todo)"] }
+        if let turnError { s["turn_error"] = turnError }
+        if let turnErrorKind { s["turn_error_kind"] = turnErrorKind }
+        if let workOn { s["work"] = ["phase": "blocked", "on": workOn] }
         return decode(s)
     }
 
@@ -76,6 +80,24 @@ struct AssistantActionBarTests {
         #expect(ids(r.running) == ["task:run"])
         #expect(r.needsYou.isEmpty)
         #expect(r.running.first == .task(id: "run", status: .working, agents: 1))
+    }
+
+    @Test func transientReplacementWithTurnErrorOutranksOldInterruption() {
+        let staleInvalid = session("old", "idle", turnError: "Context unavailable", turnErrorKind: "unrecoverable", workOn: "transient")
+        let invalidOnly = todo("invalid", agent: "old")
+        #expect(AssistantEntries.todoStatus(invalidOnly, lookup: TodosLogic.makeSessionLookup([staleInvalid])) == .interrupted)
+
+        let old = session("old", "idle", turnError: "Context unavailable", turnErrorKind: "unrecoverable")
+        let replacement = session("replacement", "idle", turnError: "API Error: 503 Service Unavailable",
+                                  turnErrorKind: "transient", workOn: "transient")
+        let item: TodoItem = decode([
+            "id": "t", "title": "task t", "origin": "main", "created_at": iso(30), "updated_at": iso(30),
+            "agents": [
+                ["machine_id": "mac", "session_id": "old", "linked_at": iso(30)],
+                ["machine_id": "mac", "session_id": "replacement", "linked_at": iso(30)],
+            ],
+        ])
+        #expect(AssistantEntries.todoStatus(item, lookup: TodosLogic.makeSessionLookup([old, replacement])) == .waiting)
     }
 
     /// A task's agent asking puts the task (not the agent) in Needs You, and only there.

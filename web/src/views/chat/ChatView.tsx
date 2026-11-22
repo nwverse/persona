@@ -168,6 +168,7 @@ const PlanPill = lazy(() => import("./PlanCard").then((m) => ({ default: m.PlanP
 const LazyWrapUpChips = lazy(() => import("../assistant/HandoffCard").then((m) => ({ default: m.WrapUpChips })));
 // a chat that is nowhere (a stale or mistyped link): rare, so its notice and words are a chunk of their own
 const LazyNotFoundNotice = lazy(() => import("./NotFoundNotice").then((m) => ({ default: m.NotFoundNotice })));
+const ContextRestartNotice = lazyPage(() => import("./ContextRestartNotice").then((m) => m.ContextRestartNotice));
 // a start stopped on its tab's shell question, answered from here (#10365): only then
 const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 // only in a conversation that moved between Claude Code and Codex (#5054): its earlier sessions, read above the live one
@@ -817,22 +818,41 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [stopGlide]);
   // something came in since the reader left the end: the pill says "New messages"
   const [newSince, setNewSince] = useState(false);
+  const sessionKey = `${mid}/${sid}`;
+  const readingAnchor = useRef<{ session: string; line: string; offset: number } | null>(null);
+  const captureReadingAnchor = useCallback((el: HTMLDivElement | null) => {
+    if (!el || atEnd.current) {
+      readingAnchor.current = null;
+      return;
+    }
+    const v = firstLineInView(el);
+    if (v.line) readingAnchor.current = { session: sessionKey, line: v.line, offset: v.offset };
+  }, [sessionKey]);
   const follow = useCallback((on: boolean) => {
     atEnd.current = on;
     setAway(!on);
     if (on) {
       setNewSince(false);
       landing.current = null;
+      readingAnchor.current = null;
+    } else {
+      captureReadingAnchor(scroller.current);
     }
-  }, []);
+  }, [captureReadingAnchor]);
   const lastTop = useRef(0);
   const dragging = useRef(false);
   const firstLiveSeq = earlier.liveItems[0]?.seq ?? Infinity;
   const liveFront = useRef(firstLiveSeq);
   liveFront.current = firstLiveSeq;
-  const historyScope = `${mid}/${sid}/${tr.history ?? ""}`;
+  const historyScope = `${sessionKey}/${tr.history ?? ""}`;
   const historyScopeNow = useRef(historyScope);
   historyScopeNow.current = historyScope;
+  const settledHistory = useRef<{ session: string; history: string; replaceEpoch: number }>({
+    session: sessionKey,
+    history: tr.history ?? "",
+    replaceEpoch: tr.replaceEpoch ?? 0,
+  });
+  const suppressAutoEarlier = useRef(false);
   type HistoryScrollAnchor = {
     el: HTMLDivElement; scope: string; front: ReturnType<typeof visibleHistoryFront>;
     h: number; top: number; readers: number; pages: Set<symbol>;
@@ -878,6 +898,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   useEffect(() => {
     lastTop.current = 0;
     before.current = null;
+    readingAnchor.current = null;
+    suppressAutoEarlier.current = false;
     if (kept.current.back) {
       if (kept.current.place) follow(false); // still waiting for its line: not pulled to the end meanwhile
       return;
@@ -908,9 +930,43 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (!el) return;
     const { projectedLivePage, projectedOtherPage } = earlier;
     projectedPages.current = [projectedLivePage, projectedOtherPage];
+    const prevHistory = settledHistory.current;
+    const nextHistory = tr.history ?? "";
+    const nextReplaceEpoch = tr.replaceEpoch ?? 0;
+    const historyRewritten = prevHistory.session === sessionKey && (
+      (prevHistory.history !== "" && nextHistory !== "" && prevHistory.history !== nextHistory) ||
+      nextReplaceEpoch !== prevHistory.replaceEpoch
+    );
+    settledHistory.current = { session: sessionKey, history: nextHistory, replaceEpoch: nextReplaceEpoch };
     let saved = before.current;
     if (saved && (saved.el !== el || saved.scope !== historyScope)) {
       before.current = saved = null;
+    }
+    if (historyRewritten) {
+      before.current = saved = null;
+      suppressAutoEarlier.current = true;
+      if (atEnd.current || first.current) {
+        el.scrollTop = el.scrollHeight;
+        lastTop.current = el.scrollTop;
+        if (tr.items.length) first.current = false;
+      } else {
+        const savedAnchor = readingAnchor.current?.session === sessionKey ? readingAnchor.current : null;
+        const escapedLine = savedAnchor ? (typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(savedAnchor.line) : savedAnchor.line.replace(/["\\]/g, "\\$&")) : "";
+        const anchorRow = savedAnchor && el.querySelector(`[data-line="${escapedLine}"]`)?.firstElementChild;
+        if (savedAnchor && anchorRow) {
+          el.scrollTop += anchorRow.getBoundingClientRect().top - el.getBoundingClientRect().top - savedAnchor.offset;
+          lastTop.current = el.scrollTop;
+          land(anchorRow, savedAnchor.offset);
+        } else {
+          // The replacement page no longer contains the previous anchor (e.g. shortened to latest turns or rewound).
+          // Settle cleanly at the end so a browser-clamped scrollTop (< 300) cannot trigger cascading upward paging.
+          follow(true);
+          el.scrollTop = el.scrollHeight;
+          lastTop.current = el.scrollTop;
+          if (tr.items.length) first.current = false;
+        }
+      }
+      return;
     }
     if (saved) {
       const front = visibleHistoryFront(el, firstLiveSeq);
@@ -942,6 +998,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (atEnd.current || first.current) {
       el.scrollTop = el.scrollHeight;
       if (tr.items.length) first.current = false;
+    } else if (!saved && (!readingAnchor.current || readingAnchor.current.session !== sessionKey)) {
+      captureReadingAnchor(el);
     }
     // Live updates below the viewport can change the height while a history page is held.
     // Record that change without spending the anchor needed for the eventual prepend.
@@ -949,7 +1007,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       saved.h = el.scrollHeight;
       saved.top = el.scrollTop;
     }
-  }, [tr.items, earlier.stretches, earlier.projectedLivePage, earlier.projectedOtherPage, pending, outbox, tr.streaming, interactions.length, historyScope, firstLiveSeq]);
+  }, [tr.items, earlier.stretches, earlier.projectedLivePage, earlier.projectedOtherPage, pending, outbox, tr.streaming, interactions.length, historyScope, firstLiveSeq, sessionKey, tr.history, tr.replaceEpoch, follow, land, captureReadingAnchor]);
 
   // A card that unfolds (#1124): following holds off for UNFOLD_PAUSE while the clicked row stays where it was on
   // screen (anchoredScroll), then picks up again if the end is still near; a long card opened at the end stays put to
@@ -967,6 +1025,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     };
     const readerMoves = () => {
       moved = true;
+      suppressAutoEarlier.current = false;
       drop();
       stopGlide();
       landing.current = null;
@@ -978,6 +1037,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       clearTimeout(resume);
       const was = atEnd.current;
       atEnd.current = false;
+      captureReadingAnchor(sc);
       moved = false;
       // A disclosure below its contents anchors the card, not the button that moves down when it opens.
       const row = el.closest("[data-disclosure-anchor]") ?? el;
@@ -998,7 +1058,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       sc.removeEventListener("click", onClick, true);
       for (const ev of ["wheel", "touchstart", "keydown", "pointerdown"]) sc.removeEventListener(ev, readerMoves);
     };
-  }, [follow, scrollEl, stopGlide]);
+  }, [follow, scrollEl, stopGlide, captureReadingAnchor]);
 
   // content that grows by itself (images loading, a live group's steps) keeps the end in view; a held row stays put.
   // A ResizeObserver runs after layout and before paint, so the offset moves in the same frame as the height. The view
@@ -1106,7 +1166,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
 
   const loadEarlierNearTop = () => {
     const el = scroller.current;
-    if (!el || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current) return;
+    if (!el || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current || suppressAutoEarlier.current) return;
     void loadWithScrollAnchor(earlier.loadEarlier);
   };
 
@@ -1118,10 +1178,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     const delta = el.scrollTop - lastTop.current;
     lastTop.current = el.scrollTop;
+    if (delta < 0) suppressAutoEarlier.current = false;
     holdLanding(600);
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
     } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
+    captureReadingAnchor(el);
     if (!first.current && !atEnd.current && el.scrollTop < 300) revealLoadedInputs();
     loadEarlierNearTop();
   };
@@ -2137,7 +2199,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
       {!embedded && banner}
-      {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack from={cameFrom} onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
+      {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
       {archivedHere ? <ArchivedNotice session={archivedHere} /> : notFound ? <Suspense fallback={null}><LazyNotFoundNotice assistant={Boolean(assistant)} retry={retryDetail} /></Suspense> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
 
@@ -2329,6 +2391,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {pendingCards}
         {!assistant && session?.model_fallback && <Suspense fallback={null}><ModelFallbackCard session={session} headless={false} /></Suspense>}
         {assistant && session && <CompactionStrip session={session} />}
+        {session?.context_restart_recommended && !archivedHere && (
+          <Suspense fallback={null}>
+            <ContextRestartNotice key={JSON.stringify([session.manager, mid, sid])} session={session} assistant={assistant} isMain={isMain} />
+          </Suspense>
+        )}
         {/* the failed bubble above has the one Retry; the card says what to set up first */}
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
