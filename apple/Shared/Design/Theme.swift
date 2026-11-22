@@ -546,6 +546,9 @@ nonisolated enum Theme {
         /// Agents header has folded to its slim bar). The card the user has to answer gets the rest. A call keeps less for
         /// its captions (`voiceThreadRoom`).
         static let cardThreadRoom: CGFloat = 72
+        /// The shortest a question card over the composer can be made with its grabber (#12306): its title row and the
+        /// first lines of what it asks. The tallest leaves the conversation `Theme.Space.xl` (`FooterRoom.tallestRoom`).
+        static let cardLeast: CGFloat = 150
         /// How far a sideways strip fades out at an end with more to scroll to (`.edgeFade()`): a cut-off chip reads as
         /// "more", not as a broken row.
         static let fadeEdge: CGFloat = 24

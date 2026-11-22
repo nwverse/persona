@@ -72,7 +72,8 @@ import { ListError } from "../ui/ListError";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { RUNTIME_AGENTS_PATH, supportsPagedAgents, runtimeActiveAt, runtimeAgents, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval } from "../lib/runtime-list";
 import { SESSIONS_CATALOG_FEATURE, SESSIONS_JUST_FINISHED_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
-import { type ListFilters } from "../lib/session-list";
+import { type ListCounts, type ListFilters } from "../lib/session-list";
+import { heldCounts } from "../lib/seen-outbox";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, pageIconStyle, pageLabel, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
@@ -758,6 +759,10 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   }, [todos]);
   const quickFilters = useStore((s) => s.features.includes(SESSIONS_QUICK_FILTERS_FEATURE));
   const botmuxHidden = useBotmuxHidden();
+  // an agent opened here is seen at once in the chips' numbers and By state's sections too, not only on its row, while
+  // the list's last read still counts it Unread (lib/seen-outbox.ts heldCounts)
+  const seenMarks = useStore((s) => s.seen);
+  const holdCounts = useCallback((counts: ListCounts, rows: readonly Session[]) => heldCounts(counts, rows, seenMarks, Date.now()), [seenMarks]);
   const [savedFilter, setFilter] = useState(() => agentFilter(storedValue("persona.agentFilter")));
   const [larkCount, setLarkCount] = useState<number>();
   const reportCounts = useCallback((counts: FilterCounts | undefined) => setLarkCount(counts?.feishu), []);
@@ -813,7 +818,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     </Section>}
     <PagedSessionList root={runtimeAgents} path={RUNTIME_AGENTS_PATH} identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={sideFold ? undefined : runtimeParentIdentity} excludeIdentities={inFlightLaunchIds} event="sessions_list" grouping={pagedGrouping}
       activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
-      catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed}
+      catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed} holdCounts={holdCounts}
       machineOrder={machineOrder} label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
       renderRow={(s, within) => {
         const k = `s:${s.machine_id}/${s.session_id}`;

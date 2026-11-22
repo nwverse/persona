@@ -96,4 +96,10 @@ async callTool(params, { signal } = {}) {
   if (params.assistant) call.assistant = true;
   return p.call("mcp.call", call, { timeoutMs: 0, signal });
 },
+async a2aMcpToken(sessionId) {
+  const p = peer;
+  if (!p || !nodeFeatures.includes("a2a_mcp")) return undefined;
+  const res = await p.call("runtime.a2a_mcp", { session_id: sessionId }, { timeoutMs: 2000 });
+  return typeof res?.token === "string" ? res.token : undefined;
+},
 busy:()=>[...pending.values()].some(n=>n>0),async fetchPackage(name){name=wirePackageName(name);const p=peer;if(!p)throw new Error("not connected to the node");return p.call("runtime.package",{name},{timeoutMs:6e4})},pushNow:pushSessions}}function sleep(ms,signal){return new Promise((resolve,reject)=>{const t=setTimeout(resolve,ms);signal?.addEventListener("abort",()=>{clearTimeout(t),reject(signal.reason??new Error("aborted"))},{once:!0})})}export{DEFAULT_LISTEN_PATH,PROTOCOL,createRuntime,defaultSocketPath};

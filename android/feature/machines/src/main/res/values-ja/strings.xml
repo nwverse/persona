@@ -49,6 +49,8 @@
     <string name="machines_metric_rx">下り</string>
     <string name="machines_metric_tx">上り</string>
     <string name="machines_metric_load">負荷</string>
+    <string name="machines_load_per_core">コアあたり %1$s</string>
+    <string name="machines_load_definition">負荷とは、実行中または CPU を待っているスレッド数の1分間の平均です（Linux ではディスクを待っているスレッドも含みます）。割合ではありません。コアあたり1を超えると、待機中のスレッドがあります。Mac ではバックグラウンド優先度の処理が一部のコアだけで動くことがあるため、CPU 使用率が低くてもスレッドが待機する場合があります。</string>
     <string name="machines_metric_disk">ディスク</string>
     <string name="machines_metric_swap">スワップ</string>
     <string name="machines_metric_battery">バッテリー</string>
