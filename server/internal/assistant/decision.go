@@ -87,10 +87,10 @@ func terminalResumeMention(text string) bool {
 		strings.Contains(text, "ターミナル") && strings.Contains(text, "再開")
 }
 
-func soleDecisionAgent(t Todo) *SessionRef {
+func soleDecisionAgent(t Todo, asked time.Time) *SessionRef {
 	var target *SessionRef
 	for _, a := range t.Agents {
-		if !a.active() || a.MachineID == "" || a.SessionID == "" {
+		if !a.active() || a.LinkedAt.After(asked) || a.MachineID == "" || a.SessionID == "" {
 			continue
 		}
 		if target != nil {

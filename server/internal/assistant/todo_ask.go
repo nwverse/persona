@@ -97,7 +97,7 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 					// A new card keeps the manual control out of its choices. The
 					// reason can still direct the owner to the one bound Agent.
 					if a.Terminal == nil && terminalResumeMention(w.ask.Reason) {
-						a.Terminal = soleDecisionAgent(task)
+						a.Terminal = soleDecisionAgent(task, w.ask.AskedAt)
 					}
 				}
 			}

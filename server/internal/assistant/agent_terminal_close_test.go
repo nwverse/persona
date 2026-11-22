@@ -312,7 +312,7 @@ func TestTerminalResumeOptionTargetsOnlyItsBoundAgent(t *testing.T) {
 	}
 	now := time.Now()
 	task.Agents[0].ReleasedAt = &now
-	if decisionTerminal(task, label) != nil || soleDecisionAgent(task) != nil {
+	if decisionTerminal(task, label) != nil || soleDecisionAgent(task, now) != nil {
 		t.Fatal("released Agent")
 	}
 }
