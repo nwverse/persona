@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,10 +70,10 @@ func TestMarketClientCAFile(t *testing.T) {
 		if gotRoots != baseRoots {
 			t.Fatal("unset changed the default root pool")
 		}
-		if err := fetch(client); err == nil {
-			t.Fatal("a private test CA was trusted without configuration")
-		} else {
-			t.Logf("unset fetch failed as expected: %v", err)
+		err = marketClientGetError(t, client, srv.URL+"/persona-extensions.json")
+		var unknownAuthority x509.UnknownAuthorityError
+		if !errors.As(err, &unknownAuthority) {
+			t.Fatalf("unset trust failed for an unexpected reason: %T %v", err, err)
 		}
 		if _, err := extension.ParseMarket("http://market.example/persona-extensions.json"); err == nil {
 			t.Fatal("plaintext marketplace accepted")
@@ -106,57 +108,216 @@ func TestMarketClientCAFile(t *testing.T) {
 		if transport.TLSClientConfig.InsecureSkipVerify {
 			t.Fatal("certificate verification is disabled")
 		}
-		got := map[string]bool{}
-		for _, subject := range transport.TLSClientConfig.RootCAs.Subjects() {
-			got[string(subject)] = true
-		}
-		for _, subject := range before.Subjects() {
-			if !got[string(subject)] {
-				t.Fatal("a system root was replaced instead of appended to")
-			}
-		}
-		if !got[string(added.RawSubject)] {
-			t.Fatal("the private test CA was not added to the system roots")
+		wantRoots := before.Clone()
+		wantRoots.AddCert(added)
+		if !transport.TLSClientConfig.RootCAs.Equal(wantRoots) {
+			t.Fatal("the configured pool is not the system roots plus the private test CA")
 		}
 		if err := fetch(client); err != nil {
 			t.Fatalf("configured private CA fetch: %v", err)
 		}
 		t.Log("configured private CA fetch succeeded with verification enabled")
 
+		wrongHostURL := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1) + "/persona-extensions.json"
+		err = marketClientGetError(t, client, wrongHostURL)
+		var hostname x509.HostnameError
+		if !errors.As(err, &hostname) {
+			t.Fatalf("a certificate without the requested hostname passed: %T %v", err, err)
+		}
+
 		other, err := marketCAClient("")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := fetch(other); err == nil {
-			t.Fatal("the additional root escaped into another market client")
-		} else {
-			t.Logf("client without the option still rejects the private CA: %v", err)
+		err = marketClientGetError(t, other, srv.URL+"/persona-extensions.json")
+		var otherUnknownAuthority x509.UnknownAuthorityError
+		if !errors.As(err, &otherUnknownAuthority) {
+			t.Fatalf("the other client failed for an unexpected reason: %T %v", err, err)
 		}
 	})
 
 	for _, tc := range []struct {
 		name, contents, want string
+		create, directory    bool
 	}{
-		{name: "unreadable file", want: "read"},
-		{name: "malformed PEM", contents: "not a certificate", want: "no PEM certificates"},
+		{name: "missing file", want: "read"},
+		{name: "directory", directory: true, want: "not a regular file"},
+		{name: "empty file", create: true, want: "no PEM certificates"},
+		{name: "malformed PEM", create: true, contents: "not a certificate", want: "no PEM certificates"},
+		{name: "private key only", create: true, contents: "-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----\n", want: "no PEM certificates"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			caFile := filepath.Join(t.TempDir(), "market-ca.pem")
-			if tc.contents != "" {
+			switch {
+			case tc.directory:
+				if err := os.Mkdir(caFile, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			case tc.create:
 				if err := os.WriteFile(caFile, []byte(tc.contents), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			client, err := marketCAClient(caFile)
-			if client != nil || err == nil {
-				t.Fatalf("invalid CA file fell back to a client: %v, %v", client, err)
+			for attempt := 0; attempt < 2; attempt++ {
+				client, err := marketCAClient(caFile)
+				if client != nil || err == nil {
+					t.Fatalf("attempt %d: invalid CA file fell back to a client: %v, %v", attempt+1, client, err)
+				}
+				if !strings.Contains(err.Error(), "extension_market.ca_file") || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("attempt %d: unclear CA error %q; want setting and %q", attempt+1, err, tc.want)
+				}
 			}
-			if !strings.Contains(err.Error(), "extension_market.ca_file") || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("unclear CA error %q; want setting and %q", err, tc.want)
-			}
-			t.Logf("invalid CA file failed clearly: %v", err)
 		})
 	}
+
+	t.Run("oversized file", func(t *testing.T) {
+		caFile := filepath.Join(t.TempDir(), "market-ca.pem")
+		if err := os.WriteFile(caFile, make([]byte, marketCAFileMost+1), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		client, err := marketCAClient(caFile)
+		if client != nil || err == nil {
+			t.Fatalf("oversized CA file fell back to a client: %v, %v", client, err)
+		}
+		if !strings.Contains(err.Error(), "extension_market.ca_file") || !strings.Contains(err.Error(), "exceeds") || !strings.Contains(err.Error(), "limit") {
+			t.Fatalf("unclear oversized CA error: %v", err)
+		}
+	})
+
+	t.Run("device file", func(t *testing.T) {
+		const caFile = "/dev/zero"
+		if _, err := os.Stat(caFile); err != nil {
+			t.Skipf("no device fixture: %v", err)
+		}
+		client, err := marketCAClient(caFile)
+		if client != nil || err == nil {
+			t.Fatalf("device CA file fell back to a client: %v, %v", client, err)
+		}
+		if !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("device CA file did not fail clearly: %v", err)
+		}
+	})
+}
+
+func TestMarketClientCAFileWithProxy(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	caPEM := marketTestTLSCertificate(t, srv)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	caFile := filepath.Join(t.TempDir(), "market-ca.pem")
+	if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(caPEM)
+	if block == nil {
+		t.Fatal("test CA is not PEM")
+	}
+	added, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := x509.SystemCertPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoots := before.Clone()
+	wantRoots.AddCert(added)
+
+	for _, tc := range []struct {
+		name, raw string
+		invalid   bool
+	}{
+		{name: "HTTP", raw: "http://proxy.example:3128"},
+		{name: "SOCKS5", raw: "socks5://proxy.example:1080"},
+		{name: "invalid proxy", raw: "https://proxy.example:3128", invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &Manager{cfg: &Config{ExtensionMarket: ExtensionMarketConfig{CAFile: caFile, Proxy: tc.raw}}, extensions: &extensions{}}
+			client, err := h.marketClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			tr := client.Transport.(*http.Transport)
+			if tr.TLSClientConfig == nil || tr.TLSClientConfig.RootCAs == nil || !tr.TLSClientConfig.RootCAs.Equal(wantRoots) {
+				t.Fatal("configuring a proxy lost the system roots or additional CA")
+			}
+			if tr.TLSClientConfig.InsecureSkipVerify {
+				t.Fatal("certificate verification is disabled")
+			}
+			req, _ := http.NewRequest("GET", "https://market.example.com/catalog.json", nil)
+			u, proxyErr := tr.Proxy(req)
+			if tc.invalid {
+				if proxyErr == nil || u != nil {
+					t.Fatalf("invalid proxy with a valid CA fell back to a direct connection: %v, %v", u, proxyErr)
+				}
+			} else if proxyErr != nil || u == nil || u.String() != tc.raw {
+				t.Fatalf("CA configuration lost the explicit proxy: %v, %v; want %s", u, proxyErr, tc.raw)
+			}
+		})
+	}
+}
+
+func TestMarketCAFileErrorDoesNotFallBackAtCallSites(t *testing.T) {
+	catalog := marketIndex(t, "Private test")
+	for _, tc := range []struct {
+		name string
+		call func(context.Context, *Manager, string) error
+	}{
+		{name: "Market client", call: func(ctx context.Context, h *Manager, specText string) error {
+			mk, err := h.market(extension.MarketRecord{ID: "private", Spec: specText})
+			if err != nil {
+				return err
+			}
+			_, _, err = mk.Fetch(ctx)
+			return err
+		}},
+		{name: "market add", call: func(ctx context.Context, h *Manager, specText string) error {
+			_, err := h.marketAdd(ctx, specText, "")
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(catalog)
+			}))
+			t.Cleanup(srv.Close)
+			h, _, _ := marketHub(t)
+			previousDefault := http.DefaultClient
+			http.DefaultClient = srv.Client()
+			t.Cleanup(func() { http.DefaultClient = previousDefault })
+
+			h.cfg.ExtensionMarket.CAFile = filepath.Join(t.TempDir(), "missing-ca.pem")
+			ms := h.marketsState()
+			ms.loaded = true
+			ms.client = nil
+			ms.byID = map[string]*marketState{}
+			err := tc.call(context.Background(), h, srv.URL+"/persona-extensions.json")
+			if err == nil {
+				t.Fatalf("invalid CA silently used http.DefaultClient; marketplace requests = %d", requests.Load())
+			}
+			if !strings.Contains(err.Error(), "extension_market.ca_file") {
+				t.Fatalf("call site hid the CA error: %v", err)
+			}
+			if n := requests.Load(); n != 0 {
+				t.Fatalf("invalid CA reached the marketplace through a fallback client %d time(s)", n)
+			}
+		})
+	}
+}
+
+func marketClientGetError(t *testing.T, client *http.Client, url string) error {
+	t.Helper()
+	resp, err := client.Get(url)
+	if err == nil {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		t.Fatalf("request unexpectedly succeeded: %s", url)
+	}
+	return err
 }
 
 func marketCAClient(caFile string) (*http.Client, error) {

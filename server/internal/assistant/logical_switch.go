@@ -450,6 +450,18 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 				return err
 			}
 			params["cwd"] = cwd
+			// The role's policy goes with the preparation, as the manager makes it (never from the app's request): the
+			// first input carries the same policy, so the prepared process is kept. A Codex thread with no turn yet
+			// cannot be resumed, so a restart for a policy arriving only with that input started a new thread under
+			// another id and lost the segment (a direction supervisor switched to Codex, live 2026-11-22).
+			policy, err := s.supervisionInstructions(ctx, c.MachineID, c.SessionID)
+			if err != nil {
+				_ = st.ResolveConversationSwitch(ctx, c.MachineID, c.SessionID, op.OperationID, "rejected", "preparation unavailable")
+				return err
+			}
+			if policy != "" {
+				params["supervision_instructions"] = policy
+			}
 		}
 		var raw json.RawMessage
 		err = st.WithConversationEpoch(ctx, c.MachineID, c.SessionID, c.Epoch, func(current *db.LogicalConversation) error {

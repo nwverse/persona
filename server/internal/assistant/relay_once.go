@@ -180,8 +180,71 @@ func (s *Service) tryQueuedRelay(ctx context.Context, machine, to string, head *
 	if s.lookForRelay(machine, to, &msg) {
 		return msg, 0, nil
 	}
+	b.mu.Lock()
+	if b.doubted == nil {
+		b.doubted = map[string]time.Time{}
+	}
+	id := relayMsgID(to, msg)
+	triedAt, ok := b.doubted[id]
+	if !ok {
+		triedAt = msg.TriedAt
+		b.doubted[id] = triedAt
+	}
+	if msg.Tool == superviseTool {
+		// Keep the doubt with the durable queue head too. A restart loses b.doubted, and a confirmation may rewrite
+		// the head's signals while this send is in flight; neither may turn a late-visible original into a replay (#5732).
+		q := b.st.Queue[to]
+		for i := range q {
+			if relayMsgID(to, q[i]) != id || !q[i].DoubtedAt.IsZero() {
+				continue
+			}
+			q[i].DoubtedAt = triedAt
+			q[i].Looks, q[i].LookAfter = msg.Looks, msg.LookAfter
+			b.st.Queue[to] = q
+			_ = s.saveRelayLocked()
+			break
+		}
+	}
+	b.mu.Unlock()
 	if msg.Tool == superviseTool {
 		s.releasePushes(context.Background(), to)
 	}
 	return msg, relayLookGap, nil
+}
+
+// relayLanded says whether an earlier try of msg that ended in doubt has gone in since: its line may come after the
+// look (relaySettled), and a node restarted in between no longer knows the once_id. Found, it is noted as delivered.
+func (s *Service) relayLanded(machine, to string, msg relayMsg) bool {
+	b := &s.relays
+	b.mu.Lock()
+	tried, ok := b.doubted[relayMsgID(to, msg)]
+	b.mu.Unlock()
+	if !ok && !msg.DoubtedAt.IsZero() {
+		tried, ok = msg.DoubtedAt, true // the durable head survived a manager restart
+	}
+	if !ok && msg.Withdrawn && !msg.At.IsZero() {
+		// The original send may have landed just before a restart removed the process, after withdrawal but before the
+		// queue head was removed. No doubt was recorded for that acknowledged send; its original timestamp still bounds
+		// the transcript lookup, so an older identical line is not accepted as this delivery.
+		tried, ok = msg.At, true
+	}
+	if !ok {
+		return false
+	}
+	msg.TriedAt = tried
+	landed, err := s.relayArrived(machine, to, msg)
+	if err != nil || !landed {
+		return false
+	}
+	s.logf("relay to %s: an earlier try in doubt is in the conversation, taken as delivered", short(to))
+	s.relayDelivered(context.Background(), to, msg)
+	s.forgetDoubt(to, msg)
+	return true
+}
+
+func (s *Service) forgetDoubt(to string, msg relayMsg) {
+	b := &s.relays
+	b.mu.Lock()
+	delete(b.doubted, relayMsgID(to, msg))
+	b.mu.Unlock()
 }

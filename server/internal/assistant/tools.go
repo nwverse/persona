@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -117,6 +118,7 @@ func (s *Service) tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	if err != nil {
 		return proto.TextResult(outwardText(outward, err.Error()), true)
 	}
+	s.noteBackgroundToolProgress(ctx, call.SessionID, call.Name, args)
 	// A conversation that writes to other people never reads the private parts of a profile, whichever tool would
 	// give them (outward_reader.go).
 	return proto.TextResult(outwardText(outward, res), false)
@@ -832,10 +834,23 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		lctx, lcancel := context.WithTimeout(sctx, agentStartListTimeout)
 		knownIDs := s.knownSessionIDs(lctx, am.ID)
 		lcancel()
-		// A Claude start takes the session id the hub picks (node session.start's session_id, used by --session-id):
-		// if its answer never comes back, the reconciliation matches this exact id instead of guessing from launcher
-		// and directory (a hand-started session and another workspace-none task look just like it). Other agents pick
-		// their own ids, so they keep the heuristic fallback (session_adopt.go). The id is generated once, so an
+		// The to-do predates the start. If the answer is lost, the node's creation_id still links the session back to
+		// this card instead of leaving untracked work or adopting an unrelated session (#5732).
+		task, told, tracked := s.prepareAgentTask(sctx, self, am, a.Cwd, a.Prompt, params["tab_name"])
+		if !tracked {
+			return "", fmt.Errorf("the task could not be recorded; no agent was started")
+		}
+		params["creation_id"], params["incarnation"] = task.ID, "start_"+randomHex(8)
+		failBeforeStart := func(reason string) {
+			// The card already exists: every definite no-start exit must close it as a failed start, not leave an
+			// open task with no Agent and no explanation (#5732). Unknown start results are handled below instead.
+			if ferr := s.failAgentStartTodo(ctx, task.ID, clip(oneLine(reason), 200)); ferr != nil {
+				s.logf("task %s: pre-start failure: %v", task.ID, ferr)
+			}
+		}
+		// A Claude start also takes the session id the hub picks (node session.start's session_id, used by
+		// --session-id). Together with creation_id, this lets an unanswered start reconcile its own session exactly
+		// instead of guessing from launcher and directory (session_adopt.go). The id is generated once, so an
 		// ultracode refusal's retry still names the same session.
 		expectID := ""
 		if fit.agent == "claude" {
@@ -847,6 +862,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		final, _ := params["launcher"].(string)
 		release, err := s.admitAgentStart(sctx, am.ID, s.startLauncher(ctx, final))
 		if err != nil {
+			failBeforeStart(err.Error())
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		defer release()
@@ -856,11 +872,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if hand != nil {
 			var answer string
 			if values, answer = s.handoffResolve(sctx, hand, approvedBy); values == nil {
+				failBeforeStart("the secret hand-off was not completed; no agent was started")
 				return answer, nil
 			}
 			defer values.wipe()
 			if params["secret_ticket"], err = values.stage(sctx); err != nil {
-				return "", fmt.Errorf("the secrets could not be staged on %s: %v; no agent was started", am.Name, err)
+				err = fmt.Errorf("the secrets could not be staged on %s: %v; no agent was started", am.Name, err)
+				failBeforeStart(err.Error())
+				return "", err
 			}
 			if params["ultracode"] != true {
 				values.wipe() // no retry can need them again
@@ -881,7 +900,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// dropped is gone, and the values are staged once more for this start.
 			if values != nil && refusedWith(err, proto.CodeSecretEnvGone) {
 				if params["secret_ticket"], err = values.stage(sctx); err != nil {
-					return "", fmt.Errorf("the secrets could not be staged on %s again: %v; no agent was started", am.Name, err)
+					err = fmt.Errorf("the secrets could not be staged on %s again: %v; no agent was started", am.Name, err)
+					failBeforeStart(err.Error())
+					return "", err
 				}
 				err = s.call(sctx, am.ID, DeviceSessionStart, params, &res)
 			}
@@ -892,7 +913,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if startResultUnknown(err) {
 				// The node may already have the session and a running agent although the answer never came back:
 				// do not report failure (the model would start it again, duplicating the run).
-				return s.startedWithoutAnswer(ctx, self, am, picked, fit.snapshot, a.Cwd, a.Prompt, params["tab_name"], note, expectID, knownIDs), nil
+				return s.startedWithoutAnswer(ctx, am, picked, fit.snapshot, a.Cwd, note, expectID, knownIDs, task, told), nil
+			}
+			if ferr := s.failAgentStartTodo(ctx, task.ID, clip(oneLine(err.Error()), 200)); ferr != nil {
+				s.logf("task %s: fail: %v", task.ID, ferr)
 			}
 			return "", err
 		}
@@ -905,11 +929,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return s.waitAgentReply(ctx, receipt, inputID, wait, fixedWaitTarget(am.ID, res.Session.SessionID))
 		}
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
-		if told, ok := s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID, cmp.Or(res.Session.Agent, fit.snapshot)); ok {
-			return finish(fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
-				"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note)), nil
-		}
-		return finish(fmt.Sprintf("Started on %s in %s: session %s. It shows up in the app's Agents tab.%s", am.Name, a.Cwd, res.Session.SessionID, note)), nil
+		closedDuringStart, linkErr := s.linkStartedAgentTask(ctx, task, am, a.Cwd, res.Session.SessionID, cmp.Or(res.Session.Agent, fit.snapshot))
+		warning := agentStartTaskWarning(closedDuringStart, linkErr)
+		return finish(fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
+			"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note) + warning), nil
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
 }
@@ -930,6 +953,14 @@ var agentStartListTimeout = 15 * time.Second
 // agentStartAdoptRetry is the one wait before a second adoption list: the hub's held list can lag the node.
 var agentStartAdoptRetry = 200 * time.Millisecond
 
+// failAgentStartTodo records a definite no-start on its own bounded context. The caller may already be cancelled even
+// though the detached start has returned a definite refusal; only unknown outcomes take startedWithoutAnswer instead.
+func (s *Service) failAgentStartTodo(ctx context.Context, id, reason string) error {
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+	defer cancel()
+	return s.failTodo(fctx, id, reason)
+}
+
 // startResultUnknown: the answer to session.start never came back (the wait ran out or the link dropped while it
 // was out), though the node may already have built the session and launched the agent. An offline machine, a
 // missing one or a request the node refused is definite and stays an error; rpc.ErrDropped answers the same words
@@ -941,6 +972,35 @@ func startResultUnknown(err error) bool {
 	var re *rpc.Error
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
+}
+
+// linkStartedAgentTask attaches a confirmed session to its prepared task. If the user closed that card while the start
+// was in flight, retain the Agent on the done card for the close loop to retire, for answered and unknown starts alike.
+func (s *Service) linkStartedAgentTask(ctx context.Context, task Todo, m Device, cwd, sid, agent string) (bool, error) {
+	err := s.linkPreparedAgentTask(ctx, task, m, cwd, sid, agent)
+	if err == nil {
+		s.retractStartUnknown(ctx, task.ID)
+		return false, nil
+	}
+	if !errors.Is(err, db.ErrTodoCompleted) {
+		return false, err
+	}
+	if err := s.linkTodoAgentOfDoneTask(ctx, task.ID, m.ID, sid, task.Title, cwd, agent); err != nil {
+		return true, err
+	}
+	s.retractStartUnknown(ctx, task.ID)
+	return true, nil
+}
+
+func agentStartTaskWarning(closed bool, linkErr error) string {
+	if linkErr != nil {
+		return fmt.Sprintf(" Warning: the Agent started, but its task link could not be recorded: %v. "+
+			"Do NOT start it again; use the existing session.", linkErr)
+	}
+	if closed {
+		return " Warning: the task closed while the Agent started; it remains linked to that task for cleanup. Do NOT start it again."
+	}
+	return ""
 }
 
 // sendUnknown reports whether a failed node write may have taken effect. An explicit delivery result takes
@@ -1021,24 +1081,43 @@ func nodeDelivered(err error) string {
 var liveSendWait = 90 * time.Second
 
 // startedWithoutAnswer answers an agent_start whose result is unknown. A list showing the new session the node
-// built (not present before the start) adopts and links it like an answered start; otherwise the model gets neutral
-// text: check the Agents list first and never start a second copy. A failed pre-start list disables only the
-// heuristic, not an exact expectID match. expectID is the session id the hub asked this start to use
-// (session_adopt.go).
-func (s *Service) startedWithoutAnswer(ctx context.Context, conversation string, m Device, launcher, launcherKind, cwd, prompt string, tab any, note, expectID string, knownIDs map[string]bool) string {
-	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, expectID, knownIDs); ok {
-		if told, ok := s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID, cmp.Or(sess.Agent, launcherKind)); ok {
-			return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
-				"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
-				"%s).%s",
-				m.Name, cwd, sess.SessionID, told, note)
+// built links it to the task made before the request, by creation_id or the hub-issued session id when available,
+// and by the older bounded adoption heuristic otherwise. A failed pre-start list disables only the heuristic, not an
+// exact expectID match. Otherwise the pending task stays visible for a later sessions.changed to complete the link.
+// The confirmed session's Agent kind wins, with the explicitly resolved launcher kind as fallback (#11545).
+func (s *Service) startedWithoutAnswer(ctx context.Context, m Device, launcher, launcherKind, cwd, note, expectID string, knownIDs map[string]bool, task Todo, told string) string {
+	if list, err := s.sessions(ctx, m.ID); err == nil {
+		for _, sess := range list {
+			if sess.CreationID() == task.ID {
+				closed, linkErr := s.linkStartedAgentTask(ctx, task, m, cwd, sess.SessionID, cmp.Or(sess.Agent, launcherKind))
+				// The creation id proves which Agent this start made. Even when its link write fails, never turn that
+				// failure into permission to heuristically bind a different session (#5732).
+				return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
+					"confirmed by its creation id), a task of this conversation (its card is in the conversation; %s).%s",
+					m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
+			}
 		}
-		return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
-			"confirmed from the machine's own list). It shows up in the app's Agents tab.%s", m.Name, cwd, sess.SessionID, note)
 	}
-	return fmt.Sprintf("The agent may already be starting on %s in %s, but the machine did not answer within the wait, "+
-		"so the result is unknown. Do NOT start it again: check the app's Agents tab (or call agents_list) for a new "+
-		"session there, and only start again if no new session appears.%s", m.Name, cwd, note)
+	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, expectID, knownIDs); ok {
+		closed, linkErr := s.linkStartedAgentTask(ctx, task, m, cwd, sess.SessionID, cmp.Or(sess.Agent, launcherKind))
+		// Adoption has already confirmed this session. A task-link write failure is a warning about that link, never
+		// evidence that the start's identity is unknown; keep the session id and prevent a duplicate start (#5732).
+		return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
+			"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
+			"%s).%s", m.Name, cwd, sess.SessionID, told, note) + agentStartTaskWarning(closed, linkErr)
+	}
+	result := fmt.Sprintf("The agent may already be starting on %s in %s, but the machine did not answer within the wait, "+
+		"so the result is unknown. ", m.Name, cwd)
+	if current, ok := s.todoNow(task.ID); ok && current.DoneAt != nil {
+		return result + fmt.Sprintf("Task %s closed while the start was in flight; the node's creation-id confirmation can "+
+			"still link the Agent to that task for cleanup. Do NOT start it again: check the app's Agents tab (or call "+
+			"agents_list) for the new session there.%s", task.ID, note)
+	}
+	s.signal(superviseSignal{Todo: task.ID, Kind: sigUnjudged, Key: "start-unknown@" + task.ID,
+		Detail: startUnknownDetail})
+	return result + fmt.Sprintf("Task %s stays open for the node's creation-id confirmation. Do NOT start it again: "+
+		"check the app's Agents tab (or call agents_list) for a new session there, and only start again if no new session appears.%s",
+		task.ID, note)
 }
 
 // knownSessionIDs is the machine's session ids before a start; nil when the list could not be read (no heuristic
@@ -1514,7 +1593,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 					folded[source] = true
 				}
 			}
-			if c.Assistant || c.FoldedUnder() != "" {
+			if c.Assistant || c.FoldedUnder() != "" || s.isBackgroundSession(ctx, c.SessionID) {
 				continue
 			}
 			c.State = c.FoldedState()

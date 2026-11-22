@@ -228,6 +228,12 @@ class NewAgentAttachmentsShotsTest {
         runCatching { rule.waitUntil(30_000) { captures.listFiles().isNullOrEmpty() } }
         rule.waitForIdle()
         assertTrue(model.state.value.attachments.isEmpty())
+        // A busy worker can deliver the camera's cancellation after takePhoto returns. Wait for its cleanup just as the
+        // removal test above does; a capture that is never deleted still fails this assertion.
+        rule.waitUntil(30_000) {
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            captures.listFiles().isNullOrEmpty()
+        }
         val deleted = org.robolectric.Shadows.shadowOf(context.contentResolver).deleteStatements.map { it.uri.lastPathSegment }
         assertEquals("deleted through the content resolver: $deleted", emptyList<String>(), captures.list().orEmpty().toList())
     }
@@ -254,6 +260,8 @@ class NewAgentAttachmentsShotsTest {
         show(model, camera, { style }, { dark })
         takePhoto(camera)
         rule.runOnIdle { model.attach(listOf(ComposerAttachment("n", "notes.txt", "content://docs/notes.txt", image = false, size = 4096))) }
+        // As in the upload test above, drive the paused main looper while the upload runs on it; a busy CI worker
+        // otherwise leaves the condition waiting even though the upload is queued and ready.
         rule.waitUntil(30_000) {
             org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
             model.state.value.attachments.firstOrNull { it.image }?.path != null
