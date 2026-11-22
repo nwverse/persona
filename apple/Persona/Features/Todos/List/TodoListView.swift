@@ -130,6 +130,7 @@ struct TodoListView: View {
                             .themedRow()
                             .id(Self.barRow)
                     }
+                    TodosOfflineLine(model: model)
                     if model.hiddenNeeds > 0 {
                         TodoPlaceNotice(count: model.hiddenNeeds, place: title) { places.show(.all) }
                             .listRowInsets(EdgeInsets(top: Theme.Space.xs, leading: Theme.Space.page, bottom: Theme.Space.xs,
@@ -138,7 +139,6 @@ struct TodoListView: View {
                             .listRowBackground(Color.clear)
                             .id(Self.noticeRow)
                     }
-                    TodosOfflineLine(model: model)
                     content
                 }
             }
@@ -202,11 +202,14 @@ struct TodoListView: View {
     private var title: String { placeTitle ?? String(localized: "All To-dos [To-dos List]") }
 
     private static let barRow = "todos.bar.row"
+    static let offlineRow = "todos.offline.row"
     private static let noticeRow = "todos.places.notice"
 
-    /// The list's first row: the bar where it is a row (iOS 18), the place's notice, or the first to-do.
+    /// The list's first row: the bar where it is a row (iOS 18), the line that says the hub is out of reach, the place's
+    /// notice, or the first to-do.
     private var topRow: String? {
         if drawsBar && !Self.pinsBar { return Self.barRow }
+        if TodosOfflineLine.shows(app.connection.shown, model) { return Self.offlineRow }
         if model.hiddenNeeds > 0 { return Self.noticeRow }
         return model.groups.first.flatMap { $0.keys.first }
     }
@@ -461,20 +464,23 @@ private struct TodosOfflineLine: View {
     @Environment(AppModel.self) private var app
     var model: TodosListModel
 
-    private var offline: Bool {
-        switch app.connection.shown {
-        case .waitingForNetwork, .connecting, .rejected: true
+    /// Whether the line is drawn: the list has rows and the hub is out of reach as the titles say it. The page asks too,
+    /// for its first row.
+    static func shows(_ shown: ConnectionStatus.Phase, _ model: TodosListModel) -> Bool {
+        switch shown {
+        case .waitingForNetwork, .connecting, .rejected: model.hasRows
         case .online, .updating: false
         }
     }
 
     var body: some View {
-        if offline && model.hasRows {
+        if Self.shows(app.connection.shown, model) {
             NoticeBanner(text: model.offlineLine, tone: .caution, symbol: Theme.Icon.offline)
                 .titleSaysLink()
                 .accessibilityIdentifier("todos.offline")
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
+                .id(TodoListView.offlineRow)
         }
     }
 }

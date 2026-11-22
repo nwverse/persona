@@ -269,8 +269,9 @@ struct TodosPlacesModelTests {
     }
 
     private func listModel(_ store: TodoStore, hub: FakeHub) -> TodosListModel {
-        TodosListModel(deps: TodosListDeps(store: store, api: { hub.client }, now: { Self.now }, calendar: { Self.calendar },
-                                           projects: { [] }))
+        TodosListModel(deps: TodosListDeps(store: store, outbox: TodosListModelTests.outbox(store, hub: hub), api: { hub.client },
+                                           now: { Self.now }, calendar: { Self.calendar }, projects: { [] },
+                                           toast: { _ in }, show: { _ in }))
     }
 
     @Test func aHubWithPlacesListsThem() async throws {

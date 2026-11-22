@@ -122,6 +122,16 @@ struct TodoUpcomingHeader: View {
                 .accessibilityIdentifier("todos.upcoming.add." + group.id)
             }
         }
+        // Pinned over the day's rows as the list's other headings are (`TodosSectionHeader`): on iOS 26, whose plain list
+        // gives a header no backing, the page's own color behind it across the list's width, so a row scrolling under
+        // it never reads as run into its words. iOS 18 draws its own strip.
+        .background {
+            if Self.backed { Theme.pageBackground.padding(.horizontal, -Theme.Space.xl).padding(.vertical, -Theme.Space.xs) }
+        }
+    }
+
+    private static var backed: Bool {
+        if #available(iOS 26.0, *) { true } else { false }
     }
 }
 
