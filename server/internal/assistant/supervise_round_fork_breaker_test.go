@@ -13,19 +13,24 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Forked background supervisor round sessions (tracked via deliverRelay's returned session_id or via node
-// ParentSessionID/RootSessionID linkage after a restart) inherit full assistant authorization and supervision tools
-// (task_review, agent_send, supervision_finish, notify_user), even when their listed cwd drifted or when the
-// background supervisor runs on BackgroundSupervisorMachineID. Host-pane sessions and work machines remain denied.
+// Forked background supervisor round sessions attested by the manager (via deliverRelay's returned session_id, persisted
+// across restarts) inherit full assistant authorization and supervision tools (task_review, agent_send,
+// supervision_finish, notify_user), even when their listed cwd drifted or when the background supervisor runs on a
+// separate BackgroundSupervisorMachineID. Unrelated sessions on BackgroundSupervisorMachineID, headless sessions with
+// spoofed ParentSessionID/RootSessionID linkage, host-pane sessions, and work machines remain strictly denied.
 func TestBackgroundForkedRoundInheritsAuthAndSupervisionTools(t *testing.T) {
 	s, d, f, _ := privacyService(t)
+	st := &memStore{}
+	s.store = func() Store { return st }
 	ctx := context.Background()
 	at := time.Now().Add(-time.Hour).UTC()
+	// Use "other" (neither MachineID nor InboxAgentMachine) as BackgroundSupervisorMachineID to verify that moving the
+	// background supervisor there does not grant blanket machine authority to unrelated sessions on "other".
 	setSettings(t, s, func(v *Settings) {
 		v.MachineID = "server"
 		v.Main = "conv1"
 		v.BackgroundSupervisor = "bg1"
-		v.BackgroundSupervisorMachineID = "twin"
+		v.BackgroundSupervisorMachineID = "other"
 		v.BackgroundSupervisorAt = &at
 	})
 	// Seed a supervised task owned by conv1 so task_review can be called by the background supervisor's forked round.
@@ -33,7 +38,7 @@ func TestBackgroundForkedRoundInheritsAuthAndSupervisionTools(t *testing.T) {
 		ID:     "todo-fork-1",
 		Title:  "Investigate flaky check",
 		Origin: "conv1",
-		Agents: []TodoAgent{{MachineID: "other", SessionID: "agent1"}},
+		Agents: []TodoAgent{{MachineID: "twin", SessionID: "agent1"}},
 		Supervision: &Supervision{
 			Supervisor: "conv1",
 			State:      "running",
@@ -51,16 +56,16 @@ func TestBackgroundForkedRoundInheritsAuthAndSupervisionTools(t *testing.T) {
 	s.supervise.hold["bg1"] = time.Now()
 	s.supervise.mu.Unlock()
 
-	// Case 1: forked round id returned by the node on deliverRelay (claude --fork-session / round branch).
+	// Manager-attested forked round id returned by the node on deliverRelay (claude --fork-session / round branch).
 	const forkFromRelay = "bg1-round-fork-1"
-	f.setSessions("twin")
+	f.setSessions("other")
 	f.mu.Lock()
 	f.known["bg1"] = true
 	f.assistantAnswer = func(a map[string]any) map[string]any {
 		return map[string]any{"session_id": forkFromRelay, "context": "fresh"}
 	}
 	f.mu.Unlock()
-	if err := s.deliverRelay(ctx, "twin", "bg1", relayMsg{
+	if err := s.deliverRelay(ctx, "other", "bg1", relayMsg{
 		From: superviseTool,
 		Tool: superviseTool,
 		Text: prompts.SuperviseRoundMarker + "\n📋 督办：检查任务",
@@ -69,29 +74,44 @@ func TestBackgroundForkedRoundInheritsAuthAndSupervisionTools(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Case 2: forked round discovered only from node session ParentSessionID (e.g. after manager restart) with drifted cwd.
-	const forkFromParent = "bg1-round-fork-2"
-	const paneSession = "bg1-pane-spoof"
-	d.setSessions("twin", []proto.Session{
-		{SessionID: "bg1", MachineID: "twin", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle},
-		{SessionID: forkFromRelay, MachineID: "twin", Cwd: "/code/example", Status: proto.StatusWorking},
-		{SessionID: forkFromParent, MachineID: "twin", ParentSessionID: "bg1", Cwd: "/code/example", Status: proto.StatusWorking},
-		{SessionID: paneSession, MachineID: "twin", ParentSessionID: "bg1", Cwd: "/home/u/.persona/assistant", PaneID: "pane-1", Status: proto.StatusWorking},
+	const (
+		spoofedParentOnOther  = "spoofed-parent-other"
+		spoofedRootOnOther    = "spoofed-root-other"
+		unrelatedOnOther      = "unrelated-agent-other"
+		unrelatedAsstDirOther = "unrelated-asst-dir-other"
+		paneOnOther           = "bg1-pane-spoof"
+		spoofedParentOnServer = "spoofed-parent-server"
+		spoofedRootOnServer   = "spoofed-root-server"
+	)
+	d.setSessions("other", []proto.Session{
+		{SessionID: "bg1", MachineID: "other", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle},
+		{SessionID: forkFromRelay, MachineID: "other", Cwd: "/code/example", Status: proto.StatusWorking},
+		{SessionID: spoofedParentOnOther, MachineID: "other", ParentSessionID: "bg1", Cwd: "/code/example", Status: proto.StatusWorking},
+		{SessionID: spoofedRootOnOther, MachineID: "other", RootSessionID: "bg1", Cwd: "/code/example", Status: proto.StatusWorking},
+		{SessionID: unrelatedOnOther, MachineID: "other", Cwd: "/code/example", Status: proto.StatusWorking},
+		{SessionID: unrelatedAsstDirOther, MachineID: "other", Cwd: "/home/u/.persona/assistant", Status: proto.StatusWorking},
+		{SessionID: paneOnOther, MachineID: "other", ParentSessionID: "bg1", Cwd: "/home/u/.persona/assistant", PaneID: "pane-1", Status: proto.StatusWorking},
+	})
+	d.setSessions("server", []proto.Session{
+		{SessionID: spoofedParentOnServer, MachineID: "server", ParentSessionID: "bg1", Cwd: "/code/example", Status: proto.StatusWorking},
+		{SessionID: spoofedRootOnServer, MachineID: "server", RootSessionID: "bg1", Cwd: "/code/example", Status: proto.StatusWorking},
 	})
 	d.setSessions("work", []proto.Session{
 		{SessionID: forkFromRelay, MachineID: "work", ParentSessionID: "bg1", Cwd: "/code/example", Status: proto.StatusWorking},
 	})
-	s.setSessions("twin", d.machines["twin"].sessions)
+	s.setSessions("other", d.machines["other"].sessions)
+	s.setSessions("server", d.machines["server"].sessions)
 
-	for _, sid := range []string{forkFromRelay, forkFromParent} {
+	// Verify both the exact background supervisor and the manager-attested forked round are authorized on "other".
+	for _, sid := range []string{"bg1", forkFromRelay} {
 		t.Run("authorized/"+sid, func(t *testing.T) {
-			if !s.assistantCaller(ctx, "twin", sid) {
-				t.Fatalf("assistantCaller(twin, %s) = false, want true", sid)
+			if !s.assistantCaller(ctx, "other", sid) {
+				t.Fatalf("assistantCaller(other, %s) = false, want true", sid)
 			}
-			if !s.assistantDiscovery(ctx, "twin", sid) {
-				t.Fatalf("assistantDiscovery(twin, %s) = false, want true", sid)
+			if !s.assistantDiscovery(ctx, "other", sid) {
+				t.Fatalf("assistantDiscovery(other, %s) = false, want true", sid)
 			}
-			out := privacyRequest(t, s, "twin", "mcp.tools", map[string]any{
+			out := privacyRequest(t, s, "other", "mcp.tools", map[string]any{
 				"session_id": sid,
 				"assistant":  true,
 				"tool_set":   toolSetSupervise,
@@ -113,18 +133,59 @@ func TestBackgroundForkedRoundInheritsAuthAndSupervisionTools(t *testing.T) {
 		})
 	}
 
-	// Host-pane sessions and work machines remain strictly denied even if they claim ParentSessionID == bg1.
-	if s.assistantCaller(ctx, "twin", paneSession) {
-		t.Fatal("host-pane session was authorized as background supervisor")
+	// Restart recovery: wiping in-memory fork state reloads the persisted manager-attested record from store.
+	r := &s.background.rounds
+	r.mu.Lock()
+	r.forks = nil
+	r.forksLoaded = false
+	r.mu.Unlock()
+	if base, ok := s.backgroundForkBase(ctx, "other", forkFromRelay); !ok || base != "bg1" {
+		t.Fatalf("after simulated restart, backgroundForkBase(other, %s) = (%q, %v), want (bg1, true)", forkFromRelay, base, ok)
 	}
-	if s.assistantCaller(ctx, "work", forkFromRelay) {
-		t.Fatal("work machine session was authorized as background supervisor")
+	if !s.assistantCaller(ctx, "other", forkFromRelay) {
+		t.Fatalf("after simulated restart, assistantCaller(other, %s) = false, want true", forkFromRelay)
 	}
 
-	// Calling supervision_finish (silent before promotion) and task_review through mcp.call from forked rounds succeeds
-	// (no assistant_denied) and resolves the base supervisor's supervision hold.
-	resFinish := privacyRequest(t, s, "twin", "mcp.call", map[string]any{
-		"session_id": forkFromParent,
+	// Regression (P1): BackgroundSupervisorMachineID does NOT grant blanket machine authority to unrelated or unknown
+	// sessions, and unverified ParentSessionID/RootSessionID linkage NEVER grants assistant authorization (headless or
+	// pane, on BackgroundSupervisorMachineID or MachineID).
+	deniedCases := []struct {
+		machine string
+		session string
+		desc    string
+	}{
+		{"other", unrelatedOnOther, "unrelated headless agent on BackgroundSupervisorMachineID"},
+		{"other", unrelatedAsstDirOther, "unrelated session in assistant dir on BackgroundSupervisorMachineID"},
+		{"other", "unknown-session-on-other", "unknown session on BackgroundSupervisorMachineID"},
+		{"other", "", "empty session on BackgroundSupervisorMachineID"},
+		{"other", paneOnOther, "host-pane session on BackgroundSupervisorMachineID"},
+		{"other", spoofedParentOnOther, "headless session with spoofed ParentSessionID on BackgroundSupervisorMachineID"},
+		{"other", spoofedRootOnOther, "headless session with spoofed RootSessionID on BackgroundSupervisorMachineID"},
+		{"server", spoofedParentOnServer, "headless session with spoofed ParentSessionID on MachineID"},
+		{"server", spoofedRootOnServer, "headless session with spoofed RootSessionID on MachineID"},
+		{"work", forkFromRelay, "work machine claiming forked round id"},
+	}
+	for _, tc := range deniedCases {
+		t.Run("denied/"+tc.desc, func(t *testing.T) {
+			if s.assistantCaller(ctx, tc.machine, tc.session) {
+				t.Fatalf("assistantCaller(%s, %q) = true, want false (%s)", tc.machine, tc.session, tc.desc)
+			}
+			if tc.session != "" {
+				if _, ok := s.backgroundForkBase(ctx, tc.machine, tc.session); ok && tc.machine != "work" {
+					t.Fatalf("backgroundForkBase(%s, %q) = true, want false (%s)", tc.machine, tc.session, tc.desc)
+				}
+				res := privacyCall(t, s, tc.machine, tc.session, "todo_list", true)
+				if !res.IsError {
+					t.Fatalf("mcp.call from %s (%s/%s) succeeded unexpectedly: %+v", tc.desc, tc.machine, tc.session, res)
+				}
+			}
+		})
+	}
+
+	// Calling supervision_finish (silent before promotion) and task_review through mcp.call from the verified forked
+	// round succeeds (no assistant_denied) and resolves the base supervisor's supervision hold.
+	resFinish := privacyRequest(t, s, "other", "mcp.call", map[string]any{
+		"session_id": forkFromRelay,
 		"assistant":  true,
 		"name":       "supervision_finish",
 		"args":       map[string]any{"visibility": "silent", "summary": "Round finished"},
@@ -136,7 +197,7 @@ func TestBackgroundForkedRoundInheritsAuthAndSupervisionTools(t *testing.T) {
 		t.Fatalf("supervision_finish unexpected result: %+v", resFinish)
 	}
 
-	resReview := privacyRequest(t, s, "twin", "mcp.call", map[string]any{
+	resReview := privacyRequest(t, s, "other", "mcp.call", map[string]any{
 		"session_id": forkFromRelay,
 		"assistant":  true,
 		"name":       "task_review",
@@ -155,8 +216,9 @@ func TestBackgroundForkedRoundInheritsAuthAndSupervisionTools(t *testing.T) {
 	}
 }
 
-// Forked background supervisor round branches do not leak into the published session list (visible or archived) or the
-// agents_list tool output, while ordinary agents and the base background supervisor remain intact.
+// Manager-attested forked background supervisor round branches stay hidden from the published session list and
+// agents_list, while ordinary agents that merely carry ParentSessionID/RootSessionID pointing at the background
+// supervisor are NOT promoted to Assistant=true and NOT hidden.
 func TestBackgroundForkedRoundsExcludedFromAgentsList(t *testing.T) {
 	s, d, f, _ := privacyService(t)
 	ctx := context.Background()
@@ -174,26 +236,42 @@ func TestBackgroundForkedRoundsExcludedFromAgentsList(t *testing.T) {
 		{SessionID: "conv1", MachineID: "server", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle, Assistant: true, UpdatedAt: now},
 		{SessionID: "bg1", MachineID: "server", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle, Assistant: true, UpdatedAt: now},
 		{SessionID: "bg1-fork-a", MachineID: "server", Cwd: "/code/example", Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: now},
-		{SessionID: "bg1-fork-b", MachineID: "server", ParentSessionID: "bg1", Cwd: "/code/example", Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: now},
+		{SessionID: "agent-parent-linked", MachineID: "server", ParentSessionID: "bg1", Cwd: "/code/example", Status: proto.StatusWorking, State: proto.StateWorking, Title: "Parent Linked Agent", UpdatedAt: now},
+		{SessionID: "agent-root-linked", MachineID: "server", RootSessionID: "bg1", Cwd: "/code/example", Status: proto.StatusWorking, State: proto.StateWorking, Title: "Root Linked Agent", UpdatedAt: now},
 		{SessionID: "agent-real", MachineID: "server", Cwd: "/code/app", Status: proto.StatusWorking, State: proto.StateWorking, Title: "Real Agent", UpdatedAt: now},
 	}
 	d.setSessions("server", list)
 	f.setSessions("server", list...)
 	s.setSessions("server", list)
 
-	published := s.publishList("server")
-	var ids []string
-	for _, row := range published {
-		ids = append(ids, row.SessionID)
-	}
-	for _, hidden := range []string{"bg1-fork-a", "bg1-fork-b"} {
-		if slices.Contains(ids, hidden) {
-			t.Fatalf("publishList leaked forked round %q: %v", hidden, ids)
+	// setSessions must NOT auto-register arbitrary parent/root-linked sessions as round forks.
+	for _, ordinary := range []string{"agent-parent-linked", "agent-root-linked"} {
+		if _, ok := s.backgroundForkBase(ctx, "server", ordinary); ok {
+			t.Fatalf("setSessions promoted unverified parent/root-linked agent %q into round fork table", ordinary)
 		}
 	}
-	for _, kept := range []string{"conv1", "bg1", "agent-real"} {
-		if !slices.Contains(ids, kept) {
-			t.Fatalf("publishList dropped %q: %v", kept, ids)
+
+	published := s.publishList("server")
+	byID := map[string]proto.Session{}
+	for _, row := range published {
+		byID[row.SessionID] = row
+	}
+	if _, leaked := byID["bg1-fork-a"]; leaked {
+		t.Fatalf("publishList leaked verified forked round bg1-fork-a")
+	}
+	for _, kept := range []string{"conv1", "bg1", "agent-real", "agent-parent-linked", "agent-root-linked"} {
+		row, ok := byID[kept]
+		if !ok {
+			t.Fatalf("publishList dropped %q", kept)
+		}
+		if (kept == "agent-parent-linked" || kept == "agent-root-linked") && row.Assistant {
+			t.Fatalf("ordinary parent/root-linked agent %q was promoted to Assistant=true", kept)
+		}
+	}
+	for _, ordinary := range []string{"agent-parent-linked", "agent-root-linked"} {
+		row, ok := s.decoratedSession("server", ordinary)
+		if !ok || row.Assistant {
+			t.Fatalf("decoratedSession(%q) = (ok=%v, Assistant=%v), want (true, false)", ordinary, ok, row.Assistant)
 		}
 	}
 
@@ -201,10 +279,8 @@ func TestBackgroundForkedRoundsExcludedFromAgentsList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, hidden := range []string{"bg1-fork-a", "bg1-fork-b"} {
-		if strings.Contains(out, hidden) {
-			t.Fatalf("agents_list leaked forked round %q:\n%s", hidden, out)
-		}
+	if strings.Contains(out, "bg1-fork-a") {
+		t.Fatalf("agents_list leaked verified forked round bg1-fork-a:\n%s", out)
 	}
 	if !strings.Contains(out, "agent-real") {
 		t.Fatalf("agents_list missing real agent:\n%s", out)
@@ -248,9 +324,10 @@ func setupAllStoppedBackground(t *testing.T) (*Service, *fakeHub, Todo, string, 
 	return s, f, tNow, bg, nextSignal
 }
 
-// If a background supervisor round hits assistant_denied, the circuit breaker trips immediately: the next all_stopped
-// wake falls back once to the main conversation with a clear note instead of waking the background supervisor, and
-// subsequent wakes within the backoff window are suppressed.
+// If the background supervisor or a verified round fork hits assistant_denied, the circuit breaker trips immediately:
+// the next all_stopped wake falls back once to the main conversation with a clear note instead of waking the background
+// supervisor, and subsequent wakes within the backoff window are suppressed. An unrelated/unrecognized headless session
+// denied during an active round must NOT trip the background breaker.
 func TestBackgroundBreakerTripsOnAssistantDeniedAndFallsBackOnce(t *testing.T) {
 	s, f, _, bg, nextSignal := setupAllStoppedBackground(t)
 	ctx := context.Background()
@@ -261,12 +338,21 @@ func TestBackgroundBreakerTripsOnAssistantDeniedAndFallsBackOnce(t *testing.T) {
 		t.Fatalf("round 1 sends to bg = %d, want 1", got)
 	}
 
-	// Simulate an assistant_denied tool failure from the background supervisor machine during this active round.
-	res := s.mcpCall(ctx, "server", "unrecognized-fork-session", "task_review", json.RawMessage(`{}`), true)
-	if !res.IsError || !strings.Contains(res.Content[0].Text, "assistant") {
-		// In fakeHub (no fleetDevs), test direct noteAssistantDenied as well if assistantCaller allowed unknown session.
-		s.noteAssistantDenied(ctx, "server", "unrecognized-fork-session", "task_review")
+	// Regression (P2): an unrelated/unrecognized session hitting assistant_denied on the same machine while a round is
+	// active must NOT trip the global background breaker.
+	s.noteAssistantDenied(ctx, "server", "unrelated-headless-agent", "task_review")
+	r := &s.background.rounds
+	r.mu.Lock()
+	trippedByUnrelated := !r.breaker.authUntil.IsZero()
+	r.mu.Unlock()
+	if trippedByUnrelated {
+		t.Fatal("unrelated headless session tripped background supervisor breaker")
 	}
+
+	// Simulate an assistant_denied failure on a verified round fork of the background supervisor.
+	const verifiedFork = "bg1-verified-fork-denied"
+	s.registerBackgroundRoundFork(ctx, "server", verifiedFork, bg)
+	s.noteAssistantDenied(ctx, "server", verifiedFork, "task_review")
 
 	// Round 2: background supervisor is tripped -> falls back ONCE to main conversation conv1 with breaker note.
 	wakeRound(s, nextSignal(2))
@@ -348,9 +434,10 @@ func TestBackgroundBreakerTripsOnRepeatedNoOpAllStoppedAndResetsOnProgress(t *te
 	}
 }
 
-// If mcp.tools itself suffers an assistant-discovery denial during an active background round (downgrading tools to the
-// 4 ordinary agent tools), the breaker trips even if the model never invokes an MCP tool and falls back to Bash. An
-// unrelated terminal pane denied on the same machine does not trip the background supervisor's breaker.
+// If mcp.tools itself suffers an assistant-discovery denial for the current background supervisor or one of its
+// verified round forks, the breaker trips even if the model never invokes an MCP tool and falls back to Bash.
+// Unrelated terminal panes and unrelated headless task agents denied on the same machine during an active round must
+// NOT trip the background supervisor's breaker.
 func TestBackgroundBreakerTripsOnMCPToolsDiscoveryDowngrade(t *testing.T) {
 	s, d, _, _ := privacyService(t)
 	ctx := context.Background()
@@ -362,33 +449,41 @@ func TestBackgroundBreakerTripsOnMCPToolsDiscoveryDowngrade(t *testing.T) {
 		v.BackgroundSupervisorMachineID = "server"
 		v.BackgroundSupervisorAt = &at
 	})
+	const verifiedFork = "bg1-fork-verified"
+	s.registerBackgroundRoundFork(ctx, "server", verifiedFork, "bg1")
 	d.setSessions("server", []proto.Session{
 		{SessionID: "bg1", MachineID: "server", Cwd: "/home/u/.persona/assistant", Status: proto.StatusWorking},
+		{SessionID: verifiedFork, MachineID: "server", Cwd: "/code/example", Status: proto.StatusWorking},
 		{SessionID: "pane-agent", MachineID: "server", Cwd: "/home/u/.persona/assistant", PaneID: "pane-1", Status: proto.StatusWorking},
-		{SessionID: "orphan-branch", MachineID: "server", Cwd: "/code/example", Status: proto.StatusWorking},
+		{SessionID: "unrelated-headless", MachineID: "server", ParentSessionID: "bg1", Cwd: "/code/example", Status: proto.StatusWorking},
 	})
 	s.backgroundRoundDelivered(ctx, "bg1", relayMsg{Tool: superviseTool}, time.Now())
 
-	// An unrelated host pane hitting mcp.tools denial must NOT trip the background breaker.
-	_ = privacyTools(t, s, "server", "pane-agent", true)
-	r := &s.background.rounds
-	r.mu.Lock()
-	trippedAfterPane := !r.breaker.authUntil.IsZero()
-	r.mu.Unlock()
-	if trippedAfterPane {
-		t.Fatal("unrelated host pane tripped background supervisor breaker")
+	// Unrelated host panes and unrelated headless agents hitting mcp.tools denial must NOT trip the background breaker.
+	for _, sid := range []string{"pane-agent", "unrelated-headless"} {
+		_ = privacyTools(t, s, "server", sid, true)
+		r := &s.background.rounds
+		r.mu.Lock()
+		tripped := !r.breaker.authUntil.IsZero()
+		r.mu.Unlock()
+		if tripped {
+			t.Fatalf("unrelated session %q tripped background supervisor breaker", sid)
+		}
 	}
 
-	// A headless (non-pane) session on the background machine denied during an active background round trips the breaker.
-	downgraded := privacyTools(t, s, "server", "orphan-branch", true)
+	// If the actual verified round fork hits mcp.tools discovery denial (e.g. its machine loses personal trust), the
+	// breaker trips with lastDeniedTool == "mcp.tools".
+	d.machines["server"].trust = "work"
+	downgraded := privacyTools(t, s, "server", verifiedFork, true)
 	if !slices.Contains(downgraded, "report_to_supervisor") {
 		t.Fatalf("expected denied caller to receive agent tools, got %v", downgraded)
 	}
+	r := &s.background.rounds
 	r.mu.Lock()
 	tripped := !r.breaker.authUntil.IsZero() && r.breaker.lastDeniedTool == "mcp.tools"
 	r.mu.Unlock()
 	if !tripped {
-		t.Fatal("mcp.tools discovery downgrade during active background round did not trip breaker")
+		t.Fatal("mcp.tools discovery downgrade on verified background round fork did not trip breaker")
 	}
 }
 
@@ -457,6 +552,14 @@ func TestReplaceBackgroundClearsForkAndBreakerState(t *testing.T) {
 	}
 	if s.isBackgroundSession(ctx, staleFork) {
 		t.Fatal("stale fork from replaced supervisor is still authorized")
+	}
+	// Persisted fork table must also have been cleared so a restart does not resurrect staleFork.
+	r.mu.Lock()
+	r.forks = nil
+	r.forksLoaded = false
+	r.mu.Unlock()
+	if s.isBackgroundSession(ctx, staleFork) {
+		t.Fatal("stale fork from replaced supervisor was resurrected from persisted store")
 	}
 
 	// The new supervisor receives the next all_stopped wake cleanly (not suppressed or redirected to main).

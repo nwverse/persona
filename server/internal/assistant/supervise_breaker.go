@@ -130,29 +130,32 @@ func (s *Service) backgroundRoundDelivered(ctx context.Context, to string, msg r
 	}
 }
 
-// noteAssistantDenied trips the background supervisor circuit breaker when a background supervisor round hits
-// assistant_denied so the hub stops re-waking it on a broken auth path.
+// noteAssistantDenied trips the background supervisor circuit breaker when the current background supervisor or one of
+// its verified round forks hits assistant_denied so the hub stops re-waking it on a broken auth path. Unrelated or
+// unrecognized sessions on the same machine are ignored so an ordinary agent cannot disable background supervision.
 func (s *Service) noteAssistantDenied(ctx context.Context, machine, session, tool string) {
 	cfg := s.settings(ctx)
-	if cfg.BackgroundSupervisor == "" || session == cfg.Main || s.isLeader(ctx, session) {
+	if cfg.BackgroundSupervisor == "" || session == "" || session == cfg.Main || s.isLeader(ctx, session) {
 		return
 	}
-	isBg := s.isBackgroundSession(ctx, session)
-	if !isBg {
-		if sess, known := s.nodeSession(machine, session); known && sess.PaneID != "" {
-			return // an unrelated terminal pane must not trip the background supervisor's breaker
-		}
-	}
 	bgMachine := cmp.Or(cfg.BackgroundSupervisorMachineID, cfg.MachineID)
+	if machine != "" && bgMachine != "" && !s.sameMachine(machine, bgMachine) {
+		return
+	}
+	isBg := session == cfg.BackgroundSupervisor
+	if !isBg {
+		_, isBg = s.backgroundForkBase(ctx, machine, session)
+	}
+	if !isBg {
+		return
+	}
+	if sess, known := s.nodeSession(machine, session); known && sess.PaneID != "" {
+		return
+	}
 	r := &s.background.rounds
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	br := &r.breaker
-	if !isBg {
-		if br.active == nil || !s.sameMachine(machine, bgMachine) {
-			return
-		}
-	}
 	now := time.Now()
 	if br.active != nil {
 		br.active.authDenied = true
