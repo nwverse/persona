@@ -21,6 +21,7 @@ vi.hoisted(() => {
 });
 
 const { ModelPanel } = await import("./ModelPanel");
+const { panelStoreKey } = await import("./store");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -64,15 +65,18 @@ afterEach(() => {
   anchor.remove();
 });
 
-async function open(o: { onApplyCurrent?: () => Promise<boolean> } = {}) {
-  const onPick = vi.fn(async () => true);
+async function open(o: { state?: PanelState; onPick?: (c: unknown) => Promise<boolean>; onApplyCurrent?: (p: { effort?: string; fast?: boolean }) => Promise<boolean> } = {}) {
+  const onPick = vi.fn(o.onPick ?? (async () => true));
+  const onApplyCurrent = o.onApplyCurrent && vi.fn(o.onApplyCurrent);
   const onClose = vi.fn();
   act(() =>
-    root.render(<ModelPanel anchor={anchor} onClose={onClose} providers={[agy, claude, codex]} state={state} scope="assistant" onPick={onPick} onApplyCurrent={o.onApplyCurrent} />),
+    root.render(<ModelPanel anchor={anchor} onClose={onClose} providers={[agy, claude, codex]} state={o.state ?? state} scope="assistant" onPick={onPick} onApplyCurrent={onApplyCurrent} />),
   );
   await flush();
-  return { onPick, onClose };
+  return { onPick, onApplyCurrent, onClose };
 }
+
+const stored = (kind: "recent" | "overrides") => JSON.parse(localStorage.getItem(panelStoreKey("assistant", kind)) ?? "null");
 
 const sides = () => [...document.body.querySelectorAll<HTMLButtonElement>("[data-panel-side]")];
 const side = (id: string) => document.body.querySelector<HTMLButtonElement>(`[data-panel-side="${id}"]`)!;
@@ -139,5 +143,49 @@ describe("the model panel's columns", () => {
   it("has no speed switch for a model without one", async () => {
     await open();
     expect(document.body.querySelector("[data-panel-speed]")).toBeNull();
+  });
+
+  it("persists a folded running model's chosen level and lets clicking the running level cancel a pending switch", async () => {
+    const { onPick } = await open({
+      state: { ...state, pending: { provider: "agy", model: "gemini-4-neon-low" } },
+      onApplyCurrent: async () => true,
+    });
+    // clicking the running level while a switch is pending sends the running model ID to drop the switch
+    act(() => levels().find((b) => b.dataset.panelLevel === "xhigh")!.click());
+    await flush();
+    expect(onPick).toHaveBeenCalledWith({ provider: "agy", model: "gemini-4-neon-xhigh" });
+    expect(stored("overrides")).toEqual({ "agy\ngemini-4-neon": { effort: "xhigh" } });
+  });
+
+  it("does not store an override or Recent entry when picking a non-current level fails", async () => {
+    await open({ onPick: async () => false });
+    act(() => side("codex").click());
+    act(() => rows()[0].click());
+    await flush();
+    act(() => levels().find((b) => b.dataset.panelLevel === "high")!.click());
+    await flush();
+    act(() => root.unmount());
+    expect(stored("overrides")).toBeNull();
+    expect(stored("recent")).toBeNull();
+  });
+
+  it("records Recent for live effort and Fast edits on the running model only when onApplyCurrent succeeds", async () => {
+    const codexState: PanelState = { current: { provider: "codex", model: "gpt-5.5", effort: "medium" }, recommended: ["codex"] };
+    // rejected live effort edit writes neither Recent nor overrides
+    await open({ state: codexState, onApplyCurrent: async () => false });
+    act(() => levels().find((b) => b.dataset.panelLevel === "high")!.click());
+    await flush();
+    act(() => root.unmount());
+    expect(stored("overrides")).toBeNull();
+    expect(stored("recent")).toBeNull();
+
+    // successful Fast-only live edit records Recent on close
+    root = createRoot(host);
+    const { onApplyCurrent } = await open({ state: codexState, onApplyCurrent: async () => true });
+    act(() => document.body.querySelector<HTMLButtonElement>('[data-panel-speed="fast"]')!.click());
+    await flush();
+    expect(onApplyCurrent).toHaveBeenCalledWith({ fast: true });
+    act(() => root.unmount());
+    expect(stored("recent")).toEqual([{ provider: "codex", model: "gpt-5.5", effort: "medium", fast: true }]);
   });
 });

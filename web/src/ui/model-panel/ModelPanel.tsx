@@ -388,8 +388,8 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
     },
     [],
   );
-  const apply = async (run: () => boolean | Promise<boolean>, setup: PanelConfig | null) => {
-    if (picking) return;
+  const apply = async (run: () => boolean | Promise<boolean>, setup: PanelConfig | null): Promise<boolean> => {
+    if (picking) return false;
     setPicking(true);
     let ok = false;
     try {
@@ -401,9 +401,10 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
       if (columns) lastApplied.current = setup;
       else store.pushRecent(setup);
     }
-    if (!mounted.current) return;
+    if (!mounted.current) return ok;
     setPicking(false);
     if (ok && !columns) onClose();
+    return ok;
   };
   const pick = (row: PanelRow) => {
     if (columns) setSelectedKey(row.key);
@@ -432,23 +433,33 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
     return ok;
   };
 
-  const edit = async (row: PanelRow, patch: PanelOverride) => {
-    if (row.kind === "favorite" && row.favorite) return store.updateFavorite(row.favorite.uid, patch);
-    if (row.kind !== "model") return;
+  const edit = async (row: PanelRow, patch: PanelOverride): Promise<boolean> => {
+    if (row.kind === "favorite" && row.favorite) {
+      store.updateFavorite(row.favorite.uid, patch);
+      return true;
+    }
+    if (row.kind !== "model") return false;
     const variants = row.model.variants;
     if (variants && patch.effort !== undefined) {
-      // a model listed per level: its effort is another model ID. The one that runs now switches to it, as a pick does;
-      // any other row stands for the level chosen, and the list's first needs no override
+      // a model listed per level: its effort is another model ID. The one that runs now switches to it (or picks itself
+      // back to drop a pending switch), as a pick does; any other row stands for the level chosen, and the list's first
+      // needs no override
       if (row.current) {
         const setup = levelSetup(row, patch.effort);
-        if (setup && setup.model !== row.model.id) await apply(() => onPick(setup), setup);
-        return;
+        if (!setup || (setup.model === row.model.id && !state.pending)) return false;
+        const ok = await apply(() => onPick(setup), setup);
+        if (ok) store.setOverride(row.provider.id, variants.base, { effort: patch.effort === variants.first ? undefined : patch.effort });
+        return ok;
       }
       store.setOverride(row.provider.id, variants.base, { effort: patch.effort === variants.first ? undefined : patch.effort });
-      return;
+      return true;
     }
-    if (row.current && live && !(await applyLive(row, patch))) return;
+    if (row.current && live) {
+      if (!(await applyLive(row, patch))) return false;
+      if (columns) lastApplied.current = cleanSetup({ ...row.setup, ...patch });
+    }
     store.setOverride(row.provider.id, variants?.base ?? row.model.id, patch);
+    return !row.current || live;
   };
 
   const reset = async (row: PanelRow) => {
@@ -471,20 +482,20 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
   // the right column: a level of the model that runs applies at once as its flyout's slider does; any other model is
   // picked with that level (a model listed per level: that level's own model). Either way the level is kept as the
   // one this model opens at next time.
-  const chooseLevel = (row: PanelRow, effort: string) => {
+  const chooseLevel = async (row: PanelRow, effort: string) => {
     if (row.current && row.kind === "model") {
-      if (!row.model.variants) lastApplied.current = cleanSetup({ ...row.setup, effort });
-      return void edit(row, { effort });
+      await edit(row, { effort });
+      return;
     }
     const setup = row.model.variants ? levelSetup(row, effort) : cleanSetup({ ...row.setup, effort });
     if (!setup) return;
-    if (row.kind === "model") {
+    setSelectedKey(row.key);
+    const ok = await apply(() => onPick(setup), setup);
+    if (ok && row.kind === "model") {
       const variants = row.model.variants;
       if (variants) store.setOverride(row.provider.id, variants.base, { effort: effort === variants.first ? undefined : effort });
       else store.setOverride(row.provider.id, row.model.id, { effort });
     }
-    setSelectedKey(row.key);
-    void apply(() => onPick(setup), setup);
   };
   const levelOff = (row: PanelRow | undefined) =>
     picking || Boolean(applying) || !row || row.kind === "preset" || row.kind === "typed" || (Boolean(rowBlock(row.provider, state, row.current)) && !(row.current && rowCustomizable(row, state, live)));
@@ -575,7 +586,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
     const status = p.status && p.status !== why ? p.status : undefined;
     if (!why && !status && !p.error) return null;
     return (
-      <div role="note" data-panel-side-note className="flex w-0 min-w-full items-start gap-1.5 px-2.5 pt-1.5 pb-2 text-[11px] leading-[1.5] text-ink-3">
+      <div role="note" data-panel-side-note className="flex w-0 min-w-full items-start gap-1.5 px-2.5 pt-1.5 pb-2 text-submeta leading-[1.5] text-ink-3">
         <Icon name="info" size={12} className="mt-[2.5px] shrink-0" />
         <div className="min-w-0 break-words">
           {why && (
@@ -755,7 +766,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
                     <>
                       {found.map(renderRow)}
                       {loading && <div role="status" className="flex items-center gap-2 px-3 py-2 text-label text-ink-3"><Spinner size={12} />{t("ui-modelpanel.loading")}</div>}
-                      {!found.length && !loading && <div className="w-0 min-w-full px-3 py-6 text-center text-[13px] text-ink-3">{t("ui-modelpanel.no_match")}</div>}
+                      {!found.length && !loading && <div className="w-0 min-w-full px-3 py-6 text-center text-meta text-ink-3">{t("ui-modelpanel.no_match")}</div>}
                     </>
                   ) : side === SAVED_SIDE ? (
                     <>
@@ -774,7 +785,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
                     <div role="group" aria-label={sideSection.provider!.name} data-panel-section="provider">
                       {sideNote(sideSection.provider!)}
                       {sideSection.loading && (
-                        <div role="status" className="flex items-center gap-2 px-3 py-2 text-[12px] text-ink-3">
+                        <div role="status" className="flex items-center gap-2 px-3 py-2 text-label text-ink-3">
                           <Spinner size={12} />
                           {t("ui-modelpanel.loading")}
                         </div>
@@ -849,7 +860,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
                 )}
               </div>
             </div>
-            {columns && <LevelColumn row={levelRow} disabled={levelOff(levelRow)} onLevel={(effort) => levelRow && chooseLevel(levelRow, effort)} />}
+            {columns && <LevelColumn row={levelRow} disabled={levelOff(levelRow)} onLevel={(effort) => levelRow && void chooseLevel(levelRow, effort)} />}
           </div>
           <div className="flex shrink-0 items-center gap-2 border-t border-line px-3.5 py-[9px]">
             {columns && levelRow?.model.fast && levelRow.kind !== "preset" && (
