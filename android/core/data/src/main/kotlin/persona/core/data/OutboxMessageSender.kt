@@ -620,8 +620,11 @@ class OutboxMessageSender(
         }
         val state = classify(result)
         val error = (result as? MessageTransportResult.HubError)?.let { it.code ?: it.error }
+        val current = store.entries.first().firstOrNull { it.clientMessageId == id } ?: return state
+        // The operation that started this attempt may have been superseded by the composer's fresh retry id.
+        // Its late result must not write into the new attempt or change the visible message back to Sending.
+        if (current.operationId != entry.operationId) return current.state
         if (state == OutboxState.Sending) {
-            val current = store.entries.first().firstOrNull { it.clientMessageId == id } ?: return state
             // A composer completion is newer than an automatic attempt that was already in flight. Do not let
             // that older attempt put an already settled visible message back into Sending.
             if (current.state in settled) return current.state
