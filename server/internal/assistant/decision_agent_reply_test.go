@@ -424,3 +424,66 @@ func TestStaleTranscriptSideConversationDoesNotBlockOwnerHook(t *testing.T) {
 		t.Fatal("the owner's hook reply did not hand back to the supervisor")
 	}
 }
+
+// The hook transcript backstop must reject an injected notice with no MessageSource kind the
+// same way the user_spoke text path does. The item is fresh, so the stale-turn fail-open does
+// not apply: only the ParseInjected guard distinguishes it from an owner reply (CaC033
+// re-verification on #12383: this hook-path guard had no test).
+func TestInjectedNoticeHookDoesNotWithdrawDecision(t *testing.T) {
+	s, f, todo := decisionAgentReplyService(t)
+	a := askOf(s, todo.ID)
+	notice := prompts.RenderAssistantAnswerAgain(prompts.AssistantAnswerAgain{Language: "English"}) + " please reply"
+	if prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: notice}) != nil {
+		t.Fatal("the fixture notice gained a MessageSource kind; pick one without it")
+	}
+	now := time.Now()
+	f.items = []proto.Item{
+		{Seq: 1, Role: "user", Kind: proto.KindText, TS: now.Add(-time.Second), Text: notice},
+		{Seq: 2, Role: "assistant", Kind: proto.KindText, TS: now, Text: "On it."},
+	}
+	params, _ := json.Marshal(map[string]any{"session_id": a.SessionID, "event": "UserPromptSubmit", "prompt_source": "user"})
+	if !s.NodeEvent(a.MachineID, "hook.event", params) {
+		t.Fatal("hook event was not accepted")
+	}
+	time.Sleep(4 * shortSuperviseTimings.gather)
+	if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || !got.DueAt.IsZero() || got.Chosen != "" {
+		t.Fatalf("an injected notice hook changed the pending decision: %+v", got)
+	}
+	if signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
+		t.Fatal("an injected notice hook emitted a decision_reply signal")
+	}
+	if todoNow(s, todo.ID).Supervision.State != reviewNeedsUser {
+		t.Fatal("the pending decision left needs_user")
+	}
+}
+
+// On the hook path too, an owner pasting the side-conversation template inside a
+// ProtectUserMessage block keeps ownership: the UserAuthoredContext early return must win over
+// the raw markers, so the reply pauses the default and hands back instead of being dropped as a
+// side conversation (CaC033 re-verification on #12383: this hook-path guard had no test).
+func TestProtectedSideConversationPasteHookStillCountsAsOwner(t *testing.T) {
+	s, f, todo := decisionAgentReplyService(t)
+	a := askOf(s, todo.ID)
+	relay := prompts.RenderRelay(prompts.Relay{FromID: "conv-other", FromTitle: "Direction",
+		Tool: "conversation_send", Hop: 1, MaxHops: 3, Text: "take this follow-up"})
+	pasted := prompts.ProtectUserMessage(relay) + "\n" + prompts.RenderSideConversation("pasted side template")
+	now := time.Now()
+	f.items = []proto.Item{
+		{Seq: 1, Role: "user", Kind: proto.KindText, TS: now.Add(-time.Second), Text: pasted},
+		{Seq: 2, Role: "assistant", Kind: proto.KindText, TS: now, Text: "On it."},
+	}
+	params, _ := json.Marshal(map[string]any{"session_id": a.SessionID, "event": "UserPromptSubmit", "prompt_source": "user"})
+	if !s.NodeEvent(a.MachineID, "hook.event", params) {
+		t.Fatal("hook event was not accepted")
+	}
+	waitFor(t, "the protected owner hook reply to pause the default", func() bool {
+		got := askOf(s, todo.ID)
+		return got != nil && got.AgentReply != nil && !got.DueAt.IsZero()
+	})
+	if got := askOf(s, todo.ID); got.Chosen != "" || !got.AcceptedAt.IsZero() {
+		t.Fatalf("the protected hook paste was treated as a decision choice: %+v", got)
+	}
+	waitFor(t, "the protected owner hook hand-off", func() bool {
+		return signalled(s, f, todo.ID, sigDecisionReply, "task_decided")
+	})
+}
