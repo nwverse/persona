@@ -213,11 +213,13 @@ class AssistantForwardPhotosTest {
             // Background uploads resume through Robolectric's main dispatcher, not Compose's idle detection alone.
             androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
             org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-            if (condition()) return@waitUntil true
-            println("forward-photo-state: ${composerState.attachments.map { "${it.name}:${it.uploadState}:path=${it.path}:error=${it.error}" }}")
-            false
+            condition()
         }
-        waitMain { composerState.attachments.size == 2 && composerState.ready }
+        try {
+            waitMain { composerState.attachments.size == 2 && composerState.ready }
+        } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
+            throw AssertionError("forward-photo-state: ${composerState.attachments.map { "${it.name}:${it.uploadState}:path=${it.path}:error=${it.error}" }}; uploads=${composer.uploads}", timeout)
+        }
         rule.onNodeWithContentDescription("Photo 1", useUnmergedTree = true).assertExists()
         rule.onNodeWithContentDescription("Photo 2", useUnmergedTree = true).assertExists()
         assertEquals(setOf(main to "first.png", main to "second.png"), composer.uploads.toSet())
