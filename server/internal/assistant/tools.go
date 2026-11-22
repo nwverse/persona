@@ -44,7 +44,7 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
-	"direction_name", "leader_progress"}
+	"direction_name", "leader_progress", "decision_record", "decisions_query"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
@@ -149,6 +149,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 	}
 	switch name {
+	case "decision_record", "decisions_query":
+		return s.toolEntries(ctx, machine, self, name, args)
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
 	case "repositories_list", "repository_get":
@@ -1426,6 +1428,9 @@ func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 		return ActionResult{}, errInvalidQuestionCancel
 	}
 	r = honest(q.ix, r)
+	if err := s.ledgerCardDecisions(ctx, q.ix, r, "resolved"); err != nil {
+		return ActionResult{}, err
+	}
 	if !r.Cancel {
 		s.ownerHeard(q.ix.SessionID) // the owner's answer is their word in that conversation (ownerHeard)
 	}

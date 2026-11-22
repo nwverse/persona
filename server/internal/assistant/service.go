@@ -123,8 +123,9 @@ type Service struct {
 	humanSent      humanSends
 	storeApprovals storeApprovals
 
-	hub   Hub
-	store func() Store
+	hub         Hub
+	store       func() Store
+	entriesDial func(context.Context, any) ([]byte, error)
 	// trustSrc is Options.Trust.
 	trustSrc MachineTrust
 	logf     func(format string, args ...any)
@@ -392,6 +393,7 @@ func New(o Options) *Service {
 	s.directionNotesRoutes()
 	s.originRoutes()
 	s.profileRoutes()
+	s.entriesRoutes()
 	s.skillImportRoutes()
 	s.readinessRoutes()
 	s.availabilityRoutes()

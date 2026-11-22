@@ -709,7 +709,6 @@ private fun ChatPage(
     val exhausted = exhaustedRecovery(projection.lines, session?.modelFallback)
     val retryId = retryLine(projection.lines, session?.status == "working" || messages.isNotEmpty(),
         !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE, exhausted = exhausted != null)
-    val currentOpenPath by rememberUpdatedState(chrome.onOpenPath)
     // Paths in messages link only when there on the machine (PathLinks.kt): asked of the session's directory.
     val pathPresence = remember(chrome.files, key, session?.cwd, chrome.onOpenPath != null) {
         val files = chrome.files
@@ -723,19 +722,10 @@ private fun ChatPage(
     val imageDescription = stringResource(R.string.chat_content_image)
     val replyImages = remember(key, repository) { (repository as? ChatLocalStorage)?.replyImages(key) }
         ?.collectAsStateWithLifecycle(initialValue = null)?.value
-    val rowActions = remember(key, repository, replyImages, localImages, photos, retryId, exhausted, chrome.onOpenPath != null, pathPresence, chrome.files, session?.cwd) {
-        ChatRowActions(key, fullText = { item -> repository.fullText(key, item.id) },
-            openPath = if (chrome.onOpenPath != null) ({ path, line -> currentOpenPath?.invoke(path, line) }) else null,
-            paths = pathPresence,
-            photos = photos, pictures = { chatViewerImages(key, currentItems(), repository, imageDescription) },
-            openImages = { images, index -> viewer = ViewerRequest(images, index) },
-            menu = messageMenu, retryLineId = retryId, onRetry = { currentSend(continueText) }, imageDescription = imageDescription,
-            thumbnails = chrome.files?.let { files ->
-                val cwd = session?.cwd.orEmpty().ifBlank { "~" }
-                ({ path -> "${key.machineId}\n$cwd\n$path" to { pixels: Int -> files.thumbnail(key.machineId, cwd, path, pixels) } })
-            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) }, exhausted = exhausted,
-            replyImages = replyImages, localImages = localImages)
-    }
+    val rowActions = rememberChatRowActions(key, repository, replyImages, localImages, photos, retryId, exhausted,
+        chrome.onOpenPath, pathPresence, chrome.files, session?.cwd, chrome.onOpenPath,
+        { images, index -> viewer = ViewerRequest(images, index) }, currentItems, messageMenu,
+        { currentSend(continueText) }, imageDescription)
     val currentMarkdownPaths by rememberUpdatedState(rowActions.paths?.takeIf { rowActions.openPath != null })
     LaunchedEffect(liveItems) {
         liveItems.revisions.collect { revision ->
@@ -900,19 +890,7 @@ private fun ChatPage(
     } else null
     val replyUsage = rememberReplyUsage(snapshot.items, projection.lines,
         persona = renderStyle == ChatRenderStyle.Assistant, hideAnswerId = liveAnswerId, catalog = actionsService)
-    val starredChat = remember(key, renderStyle, session, personaName) {
-        StarredChatContext(
-            key = key,
-            conversation = if (renderStyle == ChatRenderStyle.Assistant) {
-                persona.core.contracts.api.StarredConversation.Assistant
-            } else {
-                persona.core.contracts.api.StarredConversation.Agent
-            },
-            title = session?.displayTitle.orEmpty(),
-            speaker = if (renderStyle == ChatRenderStyle.Assistant) personaName else session?.displayTitle.orEmpty(),
-            manager = session?.manager,
-        )
-    }
+    val starredChat = rememberStarredChat(key, renderStyle, session, personaName)
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
