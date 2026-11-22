@@ -10,6 +10,7 @@ draws, its scope, each client's code symbol and test, and whether drawing the ma
 - `matches` rows with the same label draw the same count;
 - the replays' report surfaces (`replays`) are rows of each lane, read from keys every fixture case has, and a
   lane's mark in a case (`known_differences.<lane>`) on a key a surface reads is in that row's `decisions`;
+- a replay's surfaces that draw the same count show one number in every case (the needs-you badge and header, D6);
 - the `differs` rows only go down: the README states how many there are, and none is new against the base commit
   but in the change that records a decided refinement of a count it draws (the count's `refined_by`), naming it;
 - a hub-fed surface (a row with `view`) names its fallback in no source file of its client but the fallback's own;
@@ -236,6 +237,38 @@ def replay_problems(table, root):
                 if not key or any(key not in case.get("expected", {}) for case in cases):
                     found.append(f"replays.{fixture}.{surface}: not every case's expected has {key}")
             found += mark_problems(table, fixture, cases, replay, surface, read)
+        found += same_count_problems(table, fixture, cases, replay)
+    return found
+
+
+def _number(value):
+    """What a surface shows for a case's expected value: a list counts its rows."""
+    return len(value) if isinstance(value, list) else value
+
+
+def same_count_problems(table, fixture, cases, replay):
+    """Surfaces one lane reports in a replay that draw the same count show one number in every case's `expected`
+    (docs/design/PRINCIPLES.md, "Consistency first"): a needs-you case gives the Agents tab's badge and the section's
+    header the same number (D6 of the plan). Marks are today's values and may differ until their decision lands."""
+    found = []
+    rows = {rid(row): row for row in table["surfaces"]}
+    surfaces = replay.get("surfaces") or {}
+    pairs = set()
+    for lane in replay.get("lanes", []):
+        drawn = {}
+        for surface in surfaces:
+            row = rows.get(f"{lane}.{surface}")
+            if row is not None:
+                drawn.setdefault(tuple(row["count"]), []).append(surface)
+        for count, names in drawn.items():
+            pairs.update((count, a, b) for i, a in enumerate(names) for b in names[i + 1:])
+    for count, a, b in sorted(pairs):
+        for case in cases:
+            expected = case.get("expected", {})
+            x, y = _number(expected.get(surfaces[a].get("value"))), _number(expected.get(surfaces[b].get("value")))
+            if x != y:
+                found.append(f"replays.{fixture}: case {case.get('name')} gives {a} {x} and {b} {y}, which both draw "
+                             f"{' + '.join(count)}; one count shows one number on every surface that draws it")
     return found
 
 
@@ -627,6 +660,31 @@ class SeededViolationTests(unittest.TestCase):
             {"name": "other", "expected": {"rows": [], "badge": 0, "extra": 0},
              "known_differences": {"ios": {"decision": "D7", "replace": {"extra": 1}}}}],
             self.TABLE["replays"]["cases"], "tab", {"value": "badge", "keys": "rows"}))
+
+    def test_surfaces_that_draw_one_count_show_one_number(self):
+        def section(t, count="agents"):
+            t["surfaces"].append({**copy.deepcopy(t["surfaces"][0]), "surface": "section", "count": [count]})
+            t["replays"]["cases"]["surfaces"]["section"] = {"value": "header", "keys": "rows"}
+        table = self.broken(section)
+        replay = table["replays"]["cases"]
+        split = [{"name": "split", "expected": {"rows": [{"id": "a"}, {"id": "b"}], "badge": 1, "header": 2}}]
+        found = same_count_problems(table, "cases", split, replay)
+        self.assertEqual(1, len(found), found)
+        self.assertTrue(all(w in found[0] for w in ("split", "section 2", "tab 1", "agents")), found)
+        # One number, or a mark at today's split: nothing to say.
+        one = [{"name": "one", "expected": {"rows": [{"id": "a"}, {"id": "b"}], "badge": 1, "header": 1},
+                "known_differences": {"ios": {"decision": "D1", "replace": {"header": 2}}}}]
+        self.assertEqual([], same_count_problems(table, "cases", one, replay))
+        # A list value counts its rows.
+        listed = self.broken(lambda t: (section(t), t["replays"]["cases"]["surfaces"]["section"].update(value="rows")))
+        self.assertEqual([], same_count_problems(listed, "cases", [
+            {"name": "rows", "expected": {"rows": [{"id": "a"}], "badge": 1}}], listed["replays"]["cases"]))
+        # Surfaces that draw different counts may differ.
+        other = self.broken(lambda t: section(t, "unread"))
+        self.assertEqual([], same_count_problems(other, "cases", split, other["replays"]["cases"]))
+        # The real table's needs-you replay: the Agents tab's badge and the section's header (D6).
+        real = json.loads(_read(TABLE))
+        self.assertEqual([], same_count_problems(real, "needs-you", _cases(ROOT, "needs-you"), real["replays"]["needs-you"]))
 
     def test_a_hub_fed_surface_names_its_fallback_only_in_the_fallback_file(self):
         def fed(t):

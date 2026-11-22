@@ -56,6 +56,9 @@ are held, so each names D11 (the web's switcher, which matched before, by it alo
 - each replay's surfaces are rows of every lane that reports them, read from keys every case's `expected` has;
 - a lane's mark in a replayed case (`known_differences.<lane>`) that changes a key a surface reads makes that lane's
   row differ and name the mark's decision;
+- a replay's surfaces that one lane draws from the same count show one number in every case's `expected` (principle 4):
+  a needs-you case gives `agents_tab` and `agents_section` the same number, the badge and the header (D6), while a
+  mark keeps today's split;
 - the `differs` rows only go down: the count above is the table's, and against the base commit (`CI_BASE_SHA`, else
   the merge base with `origin/main`) no row differs that did not, but a row that names a decision this change adds to
   the `refined_by` of a count it draws; once the base lists the refinement, no further row comes to differ by it;
