@@ -54,6 +54,31 @@ describe('antigravity transcript and tool mapping', () => {
     assert.equal(cleanUserText(raw), 'Hello world')
   })
 
+  it('projects native context resources without hiding ordinary user labels', () => {
+    const user = 'Please reply OK.\nKeep this second line.'
+    const label = 'Content of persona-context:///snapshot.txt:\n'
+    const context = '<persona-context>Attached context with /compact</persona-context>'
+    const cases = [
+      ['native first request', `<USER_REQUEST>\n${label}${context}${user}\n</USER_REQUEST>\n<ADDITIONAL_METADATA>clock</ADDITIONAL_METADATA>`, user],
+      ['unwrapped resource', label + context + user, user],
+      ['another Persona URI', 'Content of persona-context:///other.txt:\r\n' + context + user, user],
+      ['successive resources', label + context + '\n' + label + context + user, user],
+      ['no prefix', user, user],
+      ['literal label', label + user, label + user],
+      ['other URI', 'Content of file:///snapshot.txt:\n' + context + user, 'Content of file:///snapshot.txt:\n' + user],
+      ['similar scheme', 'Content of persona-context-extra:///snapshot.txt:\n' + context + user, 'Content of persona-context-extra:///snapshot.txt:\n' + user],
+      ['quoted label', 'Example:\n' + label + user, 'Example:\n' + label + user],
+      ['incomplete envelope', label + '<persona-context>unfinished', label + '<persona-context>unfinished'],
+    ]
+    for (const [name, content, expected] of cases) {
+      const steps = [{ step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', content }]
+      const { items } = stepsToItems(steps)
+      assert.equal(items[0].text, expected, name)
+      assert.equal(items[0].role, 'user', name)
+      assert.equal(steps[0].content, content, 'native content stays unchanged')
+    }
+  })
+
   it('maps tool names and inputs to Persona conventions', () => {
     assert.equal(mapToolName('run_command'), 'Bash')
     assert.deepEqual(mapToolInput('run_command', { CommandLine: 'npm test', toolSummary: 'Run tests' }), {
@@ -373,5 +398,62 @@ describe('antigravity transcript and tool mapping', () => {
     assert.equal(personaModeToAgy('default'), 'default')
     assert.equal(agyModeToPersona('accept-edits'), 'acceptEdits')
     assert.equal(cleanGenericOutput('Created At: 2026\nOutput:\nhello'), 'hello')
+  })
+
+  it('attaches per-step token usage and model in projected order and preserves usage across checkpoints and prefix cache reuse', () => {
+    const at = '2026-11-21T10:00:00Z'
+    const steps = [
+      { step_index: 0, type: 'PERSONA_MODE_NOTICE', created_at: at, content: 'mode fallback' },
+      { step_index: 1, native_step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: at, content: 'Inspect' },
+      {
+        step_index: 2, native_step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at,
+        model: 'claude-opus-5-5-high', thinking: 'Reading', content: 'Checking',
+        input_tokens: 1200, cache_read_tokens: 48800, cache_write_tokens: 300, cache_write_1h_tokens: 100, output_tokens: 180,
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'ls' } }],
+      },
+      { step_index: 3, native_step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: at, content: 'ok' },
+      { step_index: 4, native_step_index: 3, source: 'SYSTEM', type: 'CHECKPOINT', status: 'DONE', created_at: at, input_tokens: 3000, cache_read_tokens: 500000, output_tokens: 4000 },
+      {
+        step_index: 5, native_step_index: 4, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at,
+        model: '<synthetic>', content: 'Synthetic note', input_tokens: -5, output_tokens: -2,
+      },
+    ]
+
+    for (const full of [false, true]) {
+      const mapped = stepsToItems(steps, { full, cacheKey: `usage-prefix-${full}`, immutablePrefix: steps.length })
+      assert.deepEqual(mapped.usage, { contextTokens: 0, contextWindow: 0, outputTokens: 180, model: 'claude-opus-5-5-high' })
+      // Shifted seq 3 emitted 3 assistant items (thinking, text, tool_use): all get model, only the first gets usage.
+      const seq3 = mapped.items.filter((item) => item.seq === 3)
+      assert.equal(seq3.length, 3)
+      assert.deepEqual(seq3.map((item) => item.model), ['claude-opus-5-5-high', 'claude-opus-5-5-high', 'claude-opus-5-5-high'])
+      assert.deepEqual(seq3[0].usage, [{
+        model: 'claude-opus-5-5-high', in: 1200, out: 180, cache_read: 48800, cache_write: 300, cache_write_1h: 100,
+      }])
+      assert.equal(seq3[1].usage, undefined)
+      assert.equal(seq3[2].usage, undefined)
+      // Mode notice and synthetic/negative step stay clean.
+      assert.equal(mapped.items[0].usage, undefined)
+      assert.equal(mapped.items[0].model, undefined)
+      const seq6 = mapped.items.find((item) => item.seq === 6)
+      assert.equal(seq6.model, undefined)
+      assert.equal(seq6.usage, undefined)
+
+      // Reusing the cached prefix with a post-checkpoint reply preserves cumulative outputTokens and updates contextTokens/contextWindow.
+      const extended = [
+        ...steps,
+        {
+          step_index: 6, native_step_index: 5, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at,
+          model: 'gemini-4-neon-high', content: 'After compaction',
+          usage: { input_tokens: 12000, cache_read_input_tokens: 3000, cache_creation_input_tokens: 500, output_tokens: 220, model_context_window: 1048576 },
+        },
+      ]
+      const reused = stepsToItems(extended, { full, cacheKey: `usage-prefix-${full}`, immutablePrefix: extended.length })
+      assert.deepEqual(reused.usage, { contextTokens: 15500, contextWindow: 1048576, outputTokens: 400, model: 'gemini-4-neon-high' })
+      const seq7 = reused.items.find((item) => item.seq === 7)
+      assert.equal(seq7.model, 'gemini-4-neon-high')
+      assert.deepEqual(seq7.usage, [{
+        model: 'gemini-4-neon-high', in: 12000, out: 220, cache_read: 3000, cache_write: 500,
+      }])
+    }
   })
 })

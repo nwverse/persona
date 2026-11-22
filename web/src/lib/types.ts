@@ -973,6 +973,9 @@ export interface Delegate {
 
 export interface Launcher {
   name: string;
+  /** A verified separate runtime channel, independent of ordinary Assistant support. */
+  supervision_policy?: boolean;
+  assistant?: boolean;
   /** A Persona-managed provider's name for people, any language (#5029), or a runtime's name for a provider it runs
    *  (Paseo's label, "Grok", #8261); absent for an rc alias or from an older hub. Show it through lib/provider-names.ts. */
   display_name?: string;

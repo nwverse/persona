@@ -6,9 +6,13 @@ allows (sleep_ratchet.py), or a web/src file more hard-coded px font sizes than 
 allows (web_font_ratchet.py). Those scan the whole tree: seconds, and a failure in any file. This reads only the files
 the change touches and the baseline entries it edits, from Git objects, as the merge leaves them: the change's version,
 merged three ways (git merge-file) with the base's where the base changed the file too. No checkout is needed. Each
-ratchet's own counting and messages apply, and only what the merge adds is reported. A file the base already has away
-from its baseline is the base's failure, unless the change moves it further. A file the two sides change in
-conflicting ways is left to the merge itself, which refuses it.
+ratchet's own counting and messages apply, and only what the merge adds is reported. A count ratchet fails only when a
+count rises (docs/operations/testing.md, "Count ratchets"), so a merge is refused only when a file ends further above
+its baseline than the base has it: a file under its baseline merges, as the checkers pass it. A file the base already
+has above its baseline is the base's failure, unless the change moves it further. A file the two sides change in
+conflicting ways is left to the merge itself, which refuses it. Holding a changed file to its count at the base, as
+the checkers do with --base, is not done here: a change that raises a count back into the room a fall left under the
+baseline merges.
 
 scripts/hooks/merge-pr.sh runs it before merging, with its trusted copy of this script and of the ratchets:
 
@@ -199,9 +203,9 @@ class Change:
 
 
 def worse(got, allowed, base_got, base_allowed):
-    """Whether a file ends further from its baseline, in a failing direction, than the base has it."""
+    """Whether a file ends further above its baseline than the base has it. Under the baseline is never worse."""
     delta, base_delta = got - allowed, base_got - base_allowed
-    return delta > max(base_delta, 0) or delta < min(base_delta, 0)
+    return delta > max(base_delta, 0)
 
 
 def ratchet_failures(change, ratchet):
