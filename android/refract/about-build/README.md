@@ -6,8 +6,9 @@ No generator terminology appears in the product UI.
 
 ## Scope and rollback
 
-- Persona owns `AboutBuildRow.swift`, this mapping, the immutable `AboutBuildSnapshot.kt` test input and
-  `AboutBuildRefractTest.kt`. They cover only a Build row, never a whole page or a production variant.
+- Persona owns `AboutBuildRow.swift`, this mapping, the immutable `AboutBuildSnapshot.kt` test input/adapter and
+  `AboutBuildRefractTest.kt` / `AboutBuildSemanticsTest.kt`. They cover only a Build row, never a whole page or a
+  production variant.
 - The current subset does **not** accept a general nullable model protocol. This consumer uses its supported
   optional scalar **view input**, `let buildNumber: String?`, and explicit `if let` / `else` branches.
   This evidence is not a claim of nullable domain-object or `StateFlow` support.
@@ -20,7 +21,7 @@ No generator terminology appears in the product UI.
   `settings.not.provided` literally, so the absent branch deliberately uses a separate typed fallback component.
 - The generated Kotlin and test adapter live only in `:feature:settings`'s test source set. The production
   `AboutSettingsPage`, original Version generated file and original generator lock are untouched. There is no
-  variant, flag, route, runtime, preference or default choice. Removing this directory, the two new Kotlin test
+  variant, flag, route, runtime, preference or default choice. Removing this directory, its three Kotlin test
   files and `scripts/app/refract_about_build.py` plus its CI registration restores the original tree with no migration.
 
 ## Exact generator ownership
@@ -60,7 +61,16 @@ No iOS or HarmonyOS evidence is claimed.
 `AboutBuildRefractTest` compares generated and handwritten Build rows across all three existing styles, light/dark,
 en/zh-Hans/ja, standard/2x text, and present/absent values. It asserts exact pixels, localized fallback semantics,
 absence of a leaked resource key and the unchanged handwritten production About row. Captures stay in build output or
-`-Dpersona.shots=<dir>`, never in the repository. These are Native JVM Compose comparisons, not a physical device,
+`-Dpersona.shots=<dir>`, never in the repository.
+
+#13030 adds a test-only `PackageInfo.longVersionCode` adapter, preserving decimal numeric values including zero.
+Android supplies a non-null numeric build field; null coverage applies only to the generated component's optional
+input and must not imply a native missing-package-metadata state. `AboutBuildSemanticsTest` checks actual Robolectric
+package metadata and generated/native text, descriptions, click/custom actions and `Tokens.MinTouch.android` touch
+bounds in en/zh-Hans/ja for present and absent optional inputs. It does not alter the generated source or repeat the
+pixel matrix.
+
+These are Native JVM Compose comparisons, not a physical device,
 TalkBack, accessibility-service or performance result. This local generation, Kotlin compilation and JVM comparison
 does not complete any part of Gates A–D, their required visual/device acceptance, or the separately unauthorized
 HarmonyOS destination. It must not be cited as a Gate B/C pass or a readiness decision.
