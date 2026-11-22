@@ -214,8 +214,10 @@ A central list with a seam takes no new name. `server/internal/archguard/central
   heads. A draft whose head commit is more than 14 days old does not count. The script asks the archguard test for the
   names (`-central-list-names`), so they are in the form the freeze compares.
 - **Writing the list**: on the day a row lands, `pending --write` rewrites the list's file, after `origin/main` is merged
-  in. Once the list is on `main`, `--write` only prunes it: it drops pending names whose PRs closed, and keeps the ones
-  whose PRs merged as names the list has. So it is not how a later PR gets a name on a list.
+  in. Once the list is on `main`, `--write` only prunes it: it keeps the listed names `main` still has, a pending one
+  whose PR merged among them, and drops the names that have left and the pending ones whose PRs closed. It adds no
+  name: one that `main` has and the list lacks is reported as an error, and the freeze keeps failing on it. So it is
+  not how a later PR gets a name on a list.
 - **The mock hub too**: `scripts/mock/mock_hub_switches.py` uses the same module for the mock hub's switch freeze
   (`docs/operations/testing.md` "Mock hub domains").
 

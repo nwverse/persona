@@ -1,6 +1,6 @@
 """Tests for scripts/test/name_freezes.py: the name freezes' list format and rewrite, the open PRs it counts, and the
 server's central lists it reads through server/internal/archguard/central_lists_test.go."""
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import io
 from pathlib import Path
 import shutil
@@ -65,13 +65,22 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(self.rewrite(today, {'"POST /api/v1/c"': [7, 9]}, still_open=(4512, 7, 9), text=new), new)
         self.assertEqual(self.format.changes(LISTED, new), ['names: 2', 'pending: 2 +"POST /api/v1/c"'])
 
-    def test_a_prune_drops_closed_prs_and_keeps_merged_names(self):
-        # Pruned (nothing found added): #4512 merged, so the base has its route; #11's closed unmerged.
+    def test_a_land_day_rerun_drops_closed_prs_and_keeps_merged_names(self):
+        # Nothing found added: #4512 merged, so the base has its route; #11's closed unmerged.
         text = LISTED.replace('"PUT /api/v1/p" #4512', '"PUT /api/v1/gone" #11\n"PUT /api/v1/p" #4512')
         new = self.rewrite({'"GET /api/v1/a"', '"GET /api/v1/b"', '"PUT /api/v1/p"'}, still_open=(), text=text)
         self.assertEqual(new, '# a header\n"GET /api/v1/a"\n"GET /api/v1/b"\n"PUT /api/v1/p"\n')
         self.assertEqual(self.format.changes(text, new),
                          ['names: 3 +"PUT /api/v1/p"', 'pending: 0 -"PUT /api/v1/gone" -"PUT /api/v1/p"'])
+
+    def test_a_prune_of_a_landed_list_adds_no_name(self):
+        # On the base: "A", "C" (#5 merged), "X" (on no line: a red main, or a branch as the base); "B" has gone.
+        text = '# a header\n"A"\n"B"\n\n# pending, 2026-11-01\n"C" #5\n"D" #8\n"E" #9\n'
+        new, unlisted = self.format.prune(text, {'"A"', '"C"', '"X"'}, {8})
+        self.assertEqual(new, '# a header\n"A"\n"C"\n\n# pending, 2026-11-01\n"D" #8\n')
+        self.assertEqual(unlisted, ['"X"'])
+        self.assertEqual(self.format.changes(text, new), ['names: 2 +"C" -"B"', 'pending: 1 -"C" -"E"'])
+        self.assertEqual(self.format.prune(new, {'"A"', '"C"', '"D"'}, set()), ('# a header\n"A"\n"C"\n"D"\n', []))
 
     def test_the_committed_lists_read_cleanly(self):
         paths = sorted(LISTS.glob("*.txt"))
@@ -126,6 +135,50 @@ class CentralPendingTests(unittest.TestCase):
             today, found = name_freezes.central_pending("base", lists, prs, 14, "unused", log=io.StringIO())
         self.assertEqual(today, {"routes": {"A", "B"}, "prompts": {"P"}})
         self.assertEqual(found, {"routes": {"C": [1, 2]}, "prompts": {"Q": [2]}})
+
+
+class MainTests(unittest.TestCase):
+    """main()'s pending --write: a list the base has already is only pruned, and one it does not have yet takes every
+    name the base has and the names the open PRs add."""
+    TEXT = '# a header\n"A"\n"B"\n\n# pending, 2026-11-01\n"C" #5\n"D" #8\n"E" #9\n'
+    BUS = "server/bus.go"
+
+    def write(self, landed):
+        """(exit status, the list's file after, standard error) of pending --write against a made-up base, on which
+        "X" is a route the list lacks and "B" has gone, with #7 open and adding "F", #8 open and #5 and #9 closed."""
+        lists = [name_freezes.CentralList("routes", self.BUS, "routes.txt", "route")]
+        files = {("base", self.BUS): '"A"\n"C"\n"X"\n', ("head7", self.BUS): '"A"\n"F"\n', ("mb7", self.BUS): '"A"\n'}
+        prs = [name_freezes.read_pr(node(7, [self.BUS]), [self.BUS]), name_freezes.read_pr(node(8, ["web/a.ts"]), [])]
+        central_pending = name_freezes.central_pending
+
+        def names(work, sources=None):
+            return lists, {key: set(text.splitlines()) for key, text in (sources or {}).items()}
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root, "routes.txt")
+            path.write_text(self.TEXT)
+            err = io.StringIO()
+            with mock.patch.multiple(name_freezes, ROOT=Path(root), run=lambda args, timeout, **kw: "base\n",
+                                     show=lambda rev, p: files.get((rev, p)), merge_base=lambda head, base: "mb7",
+                                     fetch=lambda prs: None, central_names=names, open_prs=lambda paths: prs,
+                                     on_base=lambda base, p: landed,
+                                     central_pending=lambda *args: central_pending(*args, log=io.StringIO())), \
+                    mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", err):
+                code = name_freezes.main(["pending", "--write"])
+            return code, path.read_text(), err.getvalue()
+
+    def test_a_landed_list_is_pruned_and_a_name_it_lacks_fails(self):
+        code, text, err = self.write(landed=True)
+        self.assertEqual(text, '# a header\n"A"\n"C"\n\n# pending, 2026-11-01\n"D" #8\n')
+        self.assertEqual(code, 1)
+        self.assertIn('routes.txt: origin/main has "X", which the list does not: --write adds no name', err)
+        self.assertIn('routes.txt, names: 2 +"C" -"B" (on origin/main already: pruned, nothing added)', err)
+
+    def test_the_land_day_takes_every_name_the_base_has_and_the_pending_ones(self):
+        code, text, err = self.write(landed=False)
+        header = name_freezes.PENDING_HEADER.format(day=date.today().isoformat(), idle=14)
+        self.assertEqual(text, '# a header\n"A"\n"C"\n"X"\n\n%s\n"D" #8\n"F" #7\n' % header)
+        self.assertEqual(code, 0, err)
 
 
 @unittest.skipUnless(shutil.which("go"), "needs go")

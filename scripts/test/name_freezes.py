@@ -16,10 +16,13 @@ and reports the names it adds that its merge base with --base did not have, leav
 whose head commit is more than --idle-days old is left out. The archguard test itself reads the names
 (-central-list-names), so they are written in the form the freeze compares.
 
-`--write` rewrites each list's file: its leading comment, the names --base has, then the pending ones. A listed
-pending name --base now has joins the first part (its PR merged), one whose PRs have all closed comes off, one whose
-PR is still open stays. The names found now are added only to a list --base does not have yet, the day its freeze
-lands. Once a list is on --base, --write only prunes it: it is not how a later PR gets a name on a list.
+`--write` rewrites each list's file. For a list --base does not have yet, the day its freeze lands, that is its
+leading comment, every name --base has, then the pending ones: a listed pending name --base now has joins the first
+part (its PR merged), one whose PRs have all closed comes off, one whose PR is still open stays, and the names found
+now are added. Once a list is on --base, --write only prunes it: it keeps the listed names --base still has (a
+pending one whose PR merged among them) and the pending ones whose PRs are still open, under their header, and drops
+the rest. It adds no name. A name --base has that the list lacks (a red main, or a branch given as --base) is
+reported as an error, exit status 1, and stays off the list: it is not how a later PR gets a name on a list.
 """
 import argparse
 from datetime import date, datetime, timedelta, timezone
@@ -91,28 +94,67 @@ class Format:
         return entries, problems
 
     def rewrite(self, text, today, found, still_open, day, idle_days):
-        """The list's text rewritten: its leading comment, the names the base has (`today`), then the pending
-        entries. Those are the listed pending names the base does not have whose PRs are not all closed, with the PRs
-        still open (`still_open`, a set of numbers), and `found`'s ({name: [PR numbers]}). A listed pending name the
-        base has is one of its names now, since its PR merged, so no name the base has is dropped."""
+        """The list's text rewritten the day its freeze lands: its leading comment, every name the base has
+        (`today`), then the pending entries under a fresh header. Those are the listed pending names the base does not
+        have whose PRs are not all closed, with the PRs still open (`still_open`, a set of numbers), and `found`'s
+        ({name: [PR numbers]}). A listed pending name the base has is one of its names now, since its PR merged, so no
+        name the base has is dropped. Only for a list the base does not have yet: every name the base has goes in."""
+        lines = text.splitlines()
+        header = self.header.format(day=day, idle=idle_days).splitlines()
+        return self._compose(self._lead(lines), today, self._waiting(text, today, still_open, found), header)
+
+    def prune(self, text, today, still_open):
+        """(text, unlisted) for a list the base has already: its text pruned, and the names the base has that it
+        lacks. The first part keeps the listed names, of either part, that the base still has, so a pending one whose
+        PR merged joins it and one that has left the base comes off. The pending part keeps its header and the listed
+        pending names the base does not have yet whose PRs are still open (`still_open`). No name is added: a name
+        the base has that the list lacks is one the freeze fails on, and its entry belongs in its domain's seam."""
+        lines, entries = text.splitlines(), self.read(text)[0]
+        listed = {e.name for e in entries}
+        names = [e.line for e in entries if not e.prs]
+        pending = [e.line for e in entries if e.prs]
+        header = []
+        if names and pending:  # what sits between the last name and the first pending entry
+            header = lines[names[-1]:pending[0] - 1]
+            while header and not header[0].strip():
+                header.pop(0)
+            while header and not header[-1].strip():
+                header.pop()
+        return (self._compose(self._lead(lines), today & listed, self._waiting(text, today, still_open), header),
+                sorted(today - listed))
+
+    @staticmethod
+    def _lead(lines):
+        """The comment a list's file starts with, less the blank lines that end it."""
         lead = []
-        for line in text.splitlines():
+        for line in lines:
             if line.strip() and not line.lstrip().startswith("#"):
                 break
             lead.append(line)
         while lead and not lead[-1].strip():
             lead.pop()
+        return lead
+
+    def _waiting(self, text, today, still_open, found=None):
+        """{name: open PR numbers}: the listed pending names the base does not have whose PRs are not all closed,
+        and found's names the base does not have."""
         waiting = {}
         for entry in self.read(text)[0]:
             open_ones = {int(pr[1:]) for pr in entry.prs} & still_open
             if entry.prs and entry.name not in today and open_ones:
                 waiting[entry.name] = open_ones
-        for name, numbers in found.items():
+        for name, numbers in (found or {}).items():
             if name not in today:
                 waiting.setdefault(name, set()).update(numbers)
-        lines = lead + sorted(today)
+        return waiting
+
+    @staticmethod
+    def _compose(lead, names, waiting, header):
+        """A list's text: the leading comment, the names, then the pending entries, when there are any, after a
+        blank line and header (when there is one)."""
+        lines = lead + sorted(names)
         if waiting:
-            lines += [""] + self.header.format(day=day, idle=idle_days).splitlines()
+            lines += ([""] + header) if header else []
             lines += ["%s %s" % (name, " ".join("#%d" % n for n in sorted(waiting[name]))) for name in sorted(waiting)]
         return "\n".join(lines) + "\n"
 
@@ -313,6 +355,7 @@ def main(argv=None):
             print("%s %s" % (name, " ".join("#%d" % n for n in numbers)))
     if not args.write:
         return 0
+    failed, still_open = False, {pr.number for pr in prs}
     for l in lists:
         path = ROOT / l.file
         text = path.read_text() if path.exists() else (
@@ -323,15 +366,22 @@ def main(argv=None):
         if problems:
             print("fix %s first:\n%s" % (l.file, "\n".join(problems)), file=sys.stderr)
             return 1
-        landed = on_base(base, l.file)
-        add = {} if landed else found[l.id]
-        new = CENTRAL.rewrite(text, today[l.id], add, {pr.number for pr in prs}, date.today().isoformat(),
-                              args.idle_days)
+        if on_base(base, l.file):
+            new, unlisted = CENTRAL.prune(text, today[l.id], still_open)
+            note = " (on %s already: pruned, nothing added)" % args.base
+        else:
+            new, unlisted = CENTRAL.rewrite(text, today[l.id], found[l.id], still_open, date.today().isoformat(),
+                                            args.idle_days), []
+            note = ""
         path.write_text(new)
-        note = " (on %s already: pruned, nothing added)" % args.base if landed else ""
         for line in CENTRAL.changes(text, new):
             print("%s, %s%s" % (l.file, line, note), file=sys.stderr)
-    return 0
+        for name in unlisted:
+            failed = True
+            print("%s: %s has %s, which the list does not: --write adds no name to a list that has landed, so the "
+                  "freeze still fails on it. Move its entry to its domain's own file (docs/server/architecture.md "
+                  "\"Registering a domain's entries\")." % (l.file, args.base, name), file=sys.stderr)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
