@@ -61,9 +61,7 @@ func fakeCodex(t *testing.T, version string) {
 	t.Setenv("PATH", bin)
 	t.Setenv("HOME", t.TempDir()) // agentExecutable's fallbacks look under the home and in the system's places
 	t.Setenv("PERSONA_NODEJS", "")
-	systemDirs, distroDir := agentSystemDirs, distroNodeDir
-	agentSystemDirs, distroNodeDir = []string{t.TempDir()}, t.TempDir()
-	t.Cleanup(func() { agentSystemDirs, distroNodeDir = systemDirs, distroDir })
+	hideMachineAgents(t) // and under NVM_DIR: a codex installed with nvm would answer for the fake
 	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy"} {
 		t.Setenv(k, "")
 	}

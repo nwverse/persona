@@ -15,10 +15,14 @@ const (
 	ScopeAgentsRead    = "agents.read"
 	ScopeAgentsControl = "agents.control"
 	ScopeMachinesRead  = "machines.read"
-	ScopeNotify        = "notify"
-	ScopeAssistantAsk  = "assistant.ask"
-	ScopeTodosRead     = "todos.read"
-	ScopeTodosWrite    = "todos.write"
+	// ScopeBrowserRun lets an extension list browser-enabled computers (browser.machines) and run scripts inside an
+	// extension-isolated task space (browser.run) via a pluggable BrowserBackend (e.g. ego lite, future CDP). Granted
+	// by name only (#12866).
+	ScopeBrowserRun   = "browser.run"
+	ScopeNotify       = "notify"
+	ScopeAssistantAsk = "assistant.ask"
+	ScopeTodosRead    = "todos.read"
+	ScopeTodosWrite   = "todos.write"
 	// ScopeDecisionsRaise lets an explicitly authorized caller raise, poll and
 	// withdraw its own pending owner decisions. It never grants owner answers.
 	ScopeDecisionsRaise = "decisions.raise"

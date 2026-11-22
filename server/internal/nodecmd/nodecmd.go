@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/iphone"
+	"github.com/nwverse/persona/server/internal/machineops"
 	"github.com/nwverse/persona/server/internal/mcpserver"
 	"github.com/nwverse/persona/server/internal/node"
 	"github.com/nwverse/persona/server/internal/nodeclient"
@@ -48,6 +49,8 @@ const Usage = `  personad hook             Claude Code hook entry (reads hook JS
   personad office docx|pptx|xlsx|check …
                            write a Word document or a deck from Markdown, a workbook from JSON / CSV, or say what is in
                            one (the office skill): personad office --help
+  personad ops storage|hotspots|toolchain|network|ports|processes|services|service-logs|mcp|skill …
+                           on-demand read-only machine diagnostics CLI, stdio MCP server, and opt-in skill manager: personad ops --help
   personad claude-plugin status|install|uninstall|on|off
                            the Persona plugin for Claude Code on this computer, as JSON (persona-link plugin says it in
                            words; docs/operations/link.md "Claude Code plugin")
@@ -104,6 +107,8 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(scriptcli.Decision(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "office":
 		os.Exit(office.Main(rest, os.Stdout, os.Stderr))
+	case "ops":
+		os.Exit(machineops.Main(ctx, b.Version, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "claude-plugin": // the Persona plugin for Claude Code here, as JSON (node/claudeplugin.go; persona-link plugin)
 		os.Exit(node.ClaudePluginCommand(ctx, rest, os.Stdout, os.Stderr))
 	case "iphone": // this computer's paired iPhones for phone control (internal/iphone)

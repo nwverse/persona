@@ -9,6 +9,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, ApiError } from "./api";
+import type { TodoResponsible } from "./todos";
 
 export const DIRECTION_TREE_PATH = "/assistant/directions/tree";
 
@@ -42,6 +43,7 @@ export interface DirectionTask {
   title: string;
   state: DirectionTaskState;
   agents?: DirectionAgent[];
+  responsible?: TodoResponsible;
 }
 
 export interface Direction {
@@ -80,7 +82,16 @@ export function normalizeTree(raw: unknown): DirectionTree {
           running: typeof (d as { running?: unknown }).running === "boolean" ? d.running : counts.working > 0,
           tasks: (Array.isArray(d.tasks) ? d.tasks : [])
             .filter((td): td is DirectionTask => !!td && typeof td.id === "string")
-            .map((td) => ({ id: td.id, title: td.title ?? "", state: DIRECTION_TASK_STATES.includes(td.state) ? td.state : "working", agents: (Array.isArray(td.agents) ? td.agents : []).filter(validAgent).map(agent) })),
+            .map((td) => {
+              const responsible = normalizeResponsible((td as { responsible?: unknown }).responsible);
+              return {
+                id: td.id,
+                title: td.title ?? "",
+                state: DIRECTION_TASK_STATES.includes(td.state) ? td.state : "working",
+                agents: (Array.isArray(td.agents) ? td.agents : []).filter(validAgent).map(agent),
+                ...(responsible ? { responsible } : {}),
+              };
+            }),
         };
       }),
   };
@@ -95,6 +106,22 @@ function normalizeCounts(raw: unknown): DirectionCounts {
 
 function validAgent(a: unknown): a is DirectionAgent {
   return !!a && typeof (a as DirectionAgent).machine_id === "string" && typeof (a as DirectionAgent).session_id === "string";
+}
+
+function normalizeResponsible(raw: unknown): TodoResponsible | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Partial<Record<keyof TodoResponsible, unknown>>;
+  if (r.kind !== "session" && r.kind !== "person") return undefined;
+  const name = typeof r.name === "string" ? r.name.trim() : "";
+  if (!name) return undefined;
+  const machine_id = typeof r.machine_id === "string" && r.machine_id.trim() ? r.machine_id.trim() : undefined;
+  const session_id = typeof r.session_id === "string" && r.session_id.trim() ? r.session_id.trim() : undefined;
+  return {
+    kind: r.kind,
+    name,
+    ...(machine_id ? { machine_id } : {}),
+    ...(session_id ? { session_id } : {}),
+  };
 }
 
 /** The directions to show as such: the current leaders (never the secretary's group). */

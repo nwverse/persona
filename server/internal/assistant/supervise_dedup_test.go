@@ -48,6 +48,37 @@ func TestSupervisionPRConflictDedupPersistsAcrossHeadsAndRestart(t *testing.T) {
 	}
 }
 
+func TestSupervisionDraftPRDedupRetriesUndeliveredBeforeGoingPermanent(t *testing.T) {
+	st := &memStore{}
+	s, _ := newQuietServiceOn(t, st)
+	ctx, now := context.Background(), time.Now()
+	url := "https://github.com/example/app/pull/12"
+	e := prompts.SuperviseEntry{ID: "todo_example", Kind: sigDraftPR}
+	g := superviseSignal{Todo: e.ID, Kind: sigDraftPR, Key: url + "@head-a", PRURL: url}
+	s.signal(g) // durable delivery obligation, still unacknowledged after the reservation below
+	out, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{e}, []superviseSignal{g}, now)
+	if err != nil || len(out) != 1 {
+		t.Fatalf("first reservation = %v, %v", out, err)
+	}
+
+	// A restart loses rollback but not the dedup reservation or the pending obligation. The permanent head must not
+	// suppress this retry: no delivery or queue admission happened between those two durable writes.
+	restarted, _ := newQuietServiceOn(t, st)
+	out, _, _, err = restarted.reserveSupervision(ctx, []prompts.SuperviseEntry{e}, []superviseSignal{g}, now.Add(time.Hour))
+	if err != nil || len(out) != 1 {
+		t.Fatalf("undelivered permanent draft was suppressed: %d entries, %v; pending=%+v", len(out), err, storedSupervisePending(t, restarted))
+	}
+	restarted.ackSupervisePending([]superviseSignal{g}) // the retry really went out
+	restarted.supervise.dedupMu.Lock()
+	restarted.ackSupervisionDedupLocked(ctx, []superviseSignal{g})
+	restarted.supervise.dedupMu.Unlock()
+	afterAck, _ := newQuietServiceOn(t, st)
+	out, _, _, err = afterAck.reserveSupervision(ctx, []prompts.SuperviseEntry{e}, []superviseSignal{g}, now.Add(2*time.Hour))
+	if err != nil || len(out) != 0 {
+		t.Fatalf("an acknowledged draft head repeated permanently: %v, %v", out, err)
+	}
+}
+
 func TestSupervisionPRConflictDedupKeepsPermanentEntriesDuringOrdinaryExpiry(t *testing.T) {
 	st := &memStore{}
 	s, _ := newQuietServiceOn(t, st)
@@ -238,8 +269,9 @@ func TestSupervisionPRConflictFailedDispatchReleasesReservation(t *testing.T) {
 	f.mu.Lock()
 	f.failAssistant = nil
 	f.mu.Unlock()
-	if !s.deliverDigest(ctx, s.settings(ctx), "conv1", []superviseSignal{g}, "", time.Now(), time.Time{}) ||
-		len(f.notices()) != 1 {
-		t.Fatalf("failed dispatch permanently swallowed the conflict: %q", f.notices())
-	}
+	// Recovery goes through the real digest path: it must persist the restored outbox entry before direct delivery.
+	// Calling deliverDigest directly here would bypass the durable prerequisite added with #5732.
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: 1}
+	s.sendDigest(ctx)
+	waitFor(t, "the recovered conflict after its durable outbox write", func() bool { return len(f.notices()) == 1 })
 }

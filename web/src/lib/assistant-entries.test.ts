@@ -223,14 +223,14 @@ describe("the entries' open-to-do count follows the To-dos page's rule", () => {
     expect(openTaskItems(run([freshTodo]))[0]!.countsOpen).toBe(true);
   });
 
-  it("keeps a seen review visible under Persona reviewing, not Needs you, but counts it only while the page still has it open", () => {
+  it("keeps a seen review under Persona reviewing and counted until it is accepted", () => {
     const review = { at: stale, verdict: "needs_user" as const, note: "Choose the route." };
     const seen = base("review-seen", stale, { seen_at: stale, supervision: { supervisor: "main", state: "pending_review", reviews: [review], updated_at: stale } });
     const got = run([seen]);
     expect(got.needsYou).toEqual([]);
     expect(got.review.map((i) => i.key)).toEqual(["task:review-seen"]);
-    expect(openTaskItems(got)[0]!.countsOpen).toBe(false);
-    // nobody looked at the finished turn yet: the page keeps it in Just finished, so it still counts
+    // #8678 owns the neutral placement; #5732 keeps Seen a receipt, never acceptance or filing.
+    expect(openTaskItems(got)[0]!.countsOpen).toBe(true);
     const unseen = base("review-unseen", stale, { supervision: { supervisor: "main", state: "pending_review", reviews: [review], updated_at: stale } });
     expect(openTaskItems(run([unseen]))[0]!.countsOpen).toBe(true);
   });
@@ -254,7 +254,7 @@ describe("the entries' open-to-do count follows the To-dos page's rule", () => {
     const pageOpen = triageTodos(todos, makeSessionLookup([workingSession, loneAgent]), now).open;
     const chipOpen = openTaskItems(got).filter((i) => i.countsOpen).length;
     expect(chipOpen).toBe(pageOpen);
-    expect(chipOpen).toBe(3); // Working, unexpired parked and the unseen review; inactivity alone does not end an explicit wait.
+    expect(chipOpen).toBe(4); // Working, parked and both unaccepted reviews; stale shelves and done do not count.
     expect(got.review.map((i) => i.key)).toEqual(["task:review-unseen", "task:review-seen"]);
     expect(got.needsYou.some((i) => i.kind === "plan")).toBe(true);
     expect(got.running.some((i) => i.kind === "agent")).toBe(true);
