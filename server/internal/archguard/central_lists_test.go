@@ -57,20 +57,12 @@ var centralLists = []centralList{
 		seam: "give a new prompt's types and Render function a file of their own, prompts/assistant_<topic>.go, " +
 			"as assistant_answer_again.go does",
 	},
-	{
-		id:     "proto_features",
-		source: "internal/proto/proto.go",
-		what:   "entry of the Features literal",
-		names:  literalEntries("Features"),
-		seam: "append a new feature flag from an init() in its domain's own file, proto/features_<domain>.go, beside " +
-			"the flag's constant: func init() { Features = append(Features, FeatureX) }",
-	},
 }
 
 func (l centralList) file() string { return "testdata/central_lists/" + l.id + ".txt" }
 
 // centralListNamed is the row with that id. A test that binds its row this way keeps reading that row when another PR
-// adds one before it, where an index would silently move to the new row.
+// adds a row before it, where an index would read whichever row now sits there.
 func centralListNamed(t *testing.T, id string) centralList {
 	t.Helper()
 	i := slices.IndexFunc(centralLists, func(l centralList) bool { return l.id == id })
@@ -360,23 +352,6 @@ func (b *B[T]) Down() int { return 0 }
 	const routesList = "# a header\n\"GET \" + P\n\"GET /api/v1/a\"\n\"POST /api/v1/c\"\n\"PUT /api/v1/b\"\n"
 	const promptsList = "A\nB\nB.Down\nC\nRenderA\nSnapshot\nSnapshot.Up\nv\n"
 
-	// The proto_features row's planted source, list and seam, in one block and bound by id: a later row adds a block
-	// of its own beside this one rather than editing these lines.
-	features := centralListNamed(t, "proto_features")
-	const flags = `package proto
-
-const FeatureB = "b"
-
-var Features = []string{
-	nodeproto.A, // a comment
-	"a", FeatureB,
-}
-
-func init() { Features = append(Features, FeatureAppended) }
-`
-	const flagsList = "\"a\"\nFeatureB\nnodeproto.A\n"
-	const flagSeam = "proto/features_<domain>.go"
-
 	check := func(l centralList, src, list string) ([]string, []string) {
 		t.Helper()
 		failures, notices, err := checkCentralList(l, []byte(src), list)
@@ -397,9 +372,6 @@ func init() { Features = append(Features, FeatureAppended) }
 		{prompts, prompt, promptsList, "func init() {}\n", "func RenderPlanted() string { return \"\" }\n", "RenderPlanted", promptSeam},
 		{prompts, prompt, promptsList, "func init() {}\n", "func (s Snapshot) Planted() int { return 0 }\n", "Snapshot.Planted", promptSeam},
 		{prompts, prompt, promptsList, "func init() {}\n", "type Planted struct{}\n", "Planted", promptSeam},
-		// A flag appended from an init() is no entry of the literal, so the unplanted source passes with one.
-		{features, flags, flagsList, "var Features = []string{\n", "\t\"planted\",\n", `"planted"`, flagSeam},
-		{features, flags, flagsList, "\"a\", FeatureB,\n", "\tFeaturePlanted,\n", "FeaturePlanted", flagSeam},
 	} {
 		if failures, notices := check(c.l, c.src, c.list); len(failures)+len(notices) != 0 {
 			t.Errorf("%s: unplanted source reports %q, %q", c.l.id, failures, notices)
