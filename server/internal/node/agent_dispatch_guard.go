@@ -14,11 +14,13 @@ import (
 
 // The destination owns path resolution: the hub cannot resolve a remote symlink.
 func (n *Node) guardAgentDirectory(ctx context.Context, cwd string) error {
-	cwd = filepath.Clean(proto.ExpandHome(strings.TrimSpace(cwd), n.home))
+	cwd = proto.ExpandHome(strings.TrimSpace(cwd), n.home)
 	blocked := identity.IsAssistantDir(cwd)
 	resolved, err := filepath.EvalSymlinks(cwd)
 	if err == nil {
 		cwd = resolved
+	} else {
+		cwd = filepath.Clean(cwd)
 	}
 	blocked = blocked || identity.IsAssistantDir(cwd)
 	candidate, statErr := os.Stat(cwd)

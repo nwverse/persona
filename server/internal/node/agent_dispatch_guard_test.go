@@ -21,8 +21,17 @@ func TestAgentDirectoryGuardResolvesAliases(t *testing.T) {
 	if err := os.Symlink(assistant, alias); err != nil {
 		t.Fatal(err)
 	}
+	child := filepath.Join(assistant, "child")
+	if err := os.MkdirAll(child, 0700); err != nil {
+		t.Fatal(err)
+	}
+	childAlias := filepath.Join(home, "child-alias")
+	if err := os.Symlink(child, childAlias); err != nil {
+		t.Fatal(err)
+	}
 	n := &Node{home: home, dir: state}
-	for _, cwd := range []string{assistant, alias, "~/.persona/assistant", "~/" + compat.StateDir + "/assistant", assistant + "/../assistant"} {
+	// Resolve symlinks before lexical cleaning: alias/.. names the target's parent.
+	for _, cwd := range []string{assistant, alias, "~/.persona/assistant", "~/" + compat.StateDir + "/assistant", assistant + "/../assistant", childAlias + "/.."} {
 		if err := n.guardAgentDirectory(context.Background(), cwd); rpcCode(err) != "agent_assistant_workspace" {
 			t.Errorf("%s: expected workspace refusal, got %v", cwd, err)
 		}
