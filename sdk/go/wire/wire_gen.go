@@ -3978,6 +3978,8 @@ type ConnectorInboxThing struct {
 	// Marks the newest move: a different last adds to the open item.
 	Last string `json:"last,omitempty"`
 	URL  string `json:"url,omitempty"`
+	// The observed lifecycle of a GitHub pull request: open, closed or merged.
+	ThreadState string `json:"thread_state,omitempty"`
 	// A link the system opens instead (sms:…).
 	OpenURL string `json:"open_url,omitempty"`
 	// Where a reply goes and who sees it.
