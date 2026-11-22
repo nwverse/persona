@@ -17,6 +17,20 @@ import (
 
 // ---- acting ----
 
+// accountExhaustionRetryAllowed applies the separate, opt-in budget for an
+// exhausted upstream account pool to coding Agents, including task-leader
+// Agents. Every Assistant conversation keeps its existing mechanical recovery:
+// main chat, leader and background-supervision conversations, side chats,
+// scheduled-task and health chats, and meeting rooms. Only the first three
+// re-resolve their launcher and model on protected continuations. retries
+// counts continuations already sent in the transient run.
+func accountExhaustionRetryAllowed(c proto.Session, retries, limit int) bool {
+	if c.Assistant {
+		return true
+	}
+	return !modelretry.AccountExhausted(c.TurnError) || retries < max(limit, 0)
+}
+
 // actOn decides what the manager does about e's work state and records it on e (wake_at, a card). It sends nothing:
 // the tick does, after checking again.
 func (s *Service) actOn(ctx context.Context, v *workView, machine string, c proto.Session, e *db.SessionWork) {
@@ -38,6 +52,13 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 	case proto.WaitTransient:
 		if !sw.transientOn() {
 			w.Line = clip(oneLine(workT(l, "model_error", i18n.Args{"error": w.Wait})), 60)
+			return
+		}
+		if !accountExhaustionRetryAllowed(c, e.Retries, cfg.AccountExhaustionMaxRetries) {
+			e.WakeAt, w.WakeAt = nil, nil
+			w.Line = clip(oneLine(workT(l, "model_error", i18n.Args{"error": w.Wait})), 60)
+			s.logf("work %s/%s: not continued: account pool exhausted (budget %d, sent %d)", machine, short(c.SessionID),
+				cfg.AccountExhaustionMaxRetries, e.Retries)
 			return
 		}
 		after := modelretry.Delay(time.Duration(min(cmp0(cfg.RetryBaseSeconds, 15), 1800))*time.Second, e.Retries, rateLimitError(c.TurnError))

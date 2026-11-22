@@ -372,7 +372,7 @@ Clients calculate to-do runtime state live from linked active Agents; it is not 
 | :--- | :--- | :--- |
 | 0 | Didn't Start | Agent for a task created from chat failed to launch; assistant ends the to-do (`done_at` + `start_error`, #1077); client shows failure/removal, not active. It still waits on the owner: the To-dos SOP counts it open while rule 1 keeps it in Waiting on you, and so do the assistant's snapshot (marked "（没开起来）" in its open index) and `todo_get` (#10365). A supervised task whose new tab is kept by its computer (`shell_waiting`, `agent_start_stalled`) is first remedied, still "starting" to clients ("Remedying a start" below) |
 | 1 | Done | User marked done, or assistant judged a dispatched task complete (`done_at != null`; client shows **Auto-completed** for `done_by = "auto"`) |
-| 1.5 | Timed out | `supervision.state == "timed_out"`: an unattended stalled terminal Agent was stopped after `max(60 minutes, expect_minutes × 3)` without supervisor action or real progress. The to-do stays open and retains the original session and workspace; **Continue** resumes that session through `POST /api/v1/todos/{id}/retry`, and a new turn clears the timeout. Runtime-owned sessions do not get this state (#4784; `docs/assistant/unified-entry.md` "Supervision") |
+| 1.5 | Timed out | `supervision.state == "timed_out"`: an unattended stalled terminal Agent was stopped after `max(60 minutes, expect_minutes × 3)` without supervisor action or real progress. The to-do stays open and retains the original session and workspace; **Continue** resumes that session through `POST /api/v1/todos/{id}/retry`, and a new turn clears the timeout. An unrecoverable conversation keeps its invalid-conversation refusal instead of resuming. Runtime-owned sessions do not get this state (#4784; `docs/assistant/unified-entry.md` "Supervision") |
 | 2 | Needs You | A linked active Agent is `needs_you` (waiting for question, plan approval or authorization) |
 | 2.5 | Interrupted | A linked active Agent is stopped (`unread` / `idle`) with `turn_error`, no other participant is working or waiting to resume, and the task is not parked: a model-service failure interrupted the turn, or the hub reports a task turn with no output (`turn_error_kind` `no_output`, or `stopped` when Persona's Stop interrupted it, #10187, "Automatic completion" below), unfinished (#10399). **Continue** is only for recoverable errors or these silent turns. Account-sealed compaction marks the conversation invalid and directs the owner to a new conversation; it gets no retry. Closed tasks remain Done. A subscription usage limit is not this (the next row) |
 | 2.6 | Usage limit | A linked active Agent is stopped with `turn_error_kind` `usage_limit`, and the reset is not known or not more than 10 minutes past. Not red and not Interrupted: "Usage limit · resumes <time>" when the CLI or the hub will continue it, "Usage limit · resets <time>" when nothing will. An older hub that does not send the kind stays Interrupted |
@@ -1061,8 +1061,9 @@ them.
   outcome; prompts `server/internal/prompts/todo/lessons.md`, `lessons_input.md`). It reads the title, the owner's
   request, goal and criteria from the brief, the scope changes, each review of the stretch (verdict, round, note, the
   criteria not met with what was found), the owner's answers, how each criterion ended, the estimate against the time
-  taken, the newest Agent's last reply (2,000 characters), and the project's 12 newest lessons. The supervisor's
-  instructions and `task_review` are unchanged.
+  taken, the newest Agent's last reply (2,000 characters), and the primary project's 12 newest live lessons and 12
+  newest deletion records, each with its ID. It receives the deletions in a separate list and skips lessons it recognizes
+  as repeating one, even in different words. The supervisor's instructions and `task_review` are unchanged.
 - **What it answers**: at most 3 lessons, each `{kind, text, same_as}`. `kind` is `repeated_mistake`, `missing_context`,
   `wasted_step` or `improvement`, and `text` is one sentence of at most 200 characters in the owner's language that says
   what to do next time. `same_as` names a lesson of the project the new one repeats. Nothing is invented, and an empty
@@ -1080,10 +1081,13 @@ them.
   named, else one with the same letters and digits, `kb.LessonKey`) is taught again: a record that supersedes it, with
   `seen` up, the to-do added to its sources and its text kept (the owner may have corrected it). A to-do already among
   its sources does not count again, and a completion is learned from once (its record IDs start with a key of the to-do
-  and its completion time). A deleted lesson leaves a `lesson_retired` tombstone that keeps its text, and a lesson with
-  that text is never learned again. All writes go through `kb.Engine.UpdateProjectLessons`, which decides from the
-  lessons as they are under the store's lock, so a merge, an edit and a delete never supersede the same version twice. A
-  lessons read goes through at most the last 8 MiB of the file.
+  and its completion time). A deleted lesson leaves a `lesson_retired` tombstone that keeps its text. For each project,
+  the write rejects a lesson when its `same_as` names a tombstone or a linked version, or its normalized text matches
+  any readable version of a deleted lesson. A lessons read scans the last 8 MiB of the file. If a linked version is
+  missing or outside that range, its ID is still checked and the chain ends there. Rewordings without a deleted ID
+  depend on the model recognizing the deletion. All writes go through `kb.Engine.UpdateProjectLessons`, which decides
+  from the lessons as they are under the store's lock, so a merge, an edit and a delete never supersede the same
+  version twice.
 - **Handed to new Agents**: every new Agent of the project gets, after the project's own block (`todo/project.md` or
   `todo/project_memory.md`, both unchanged), a block of its own (`server/internal/prompts/todo/project_lessons.md`). It
   holds the fresh lessons, the most repeated first and then the most recently taught. At most 2 of one kind, 5 in all and
