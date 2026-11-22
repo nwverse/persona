@@ -82,18 +82,15 @@ func (s *Service) failTaskRun(ctx context.Context, t Task, run ScheduleRun, err 
 	return proto.Session{}, err
 }
 
-// Only structured, deterministic configuration refusals stop the automatic retry. An RPC, discovery or
-// provider error (even one with similar text) may be transient; a later scheduled or manual run stays possible.
+// Only structured parameter refusals stop the automatic retry. Provider configuration can change between
+// admission and request preparation, so provider/RPC/discovery errors retain their existing recovery path.
 func taskConfigurationRefusal(err error) bool {
 	var message *i18n.Message
 	if !errors.As(err, &message) {
 		return false
 	}
 	switch message.Key {
-	case "assistant-models.err_effort_unsupported", "assistant-models.err_model_invalid",
-		"assistant-models.err_provider_unsupported", "assistant-models.err_not_launcher", "assistant-models.err_api_as_launcher",
-		"assistant-model_pick.err_locked", "assistant-model_pick.err_no_model",
-		"assistant-schedule.execution_own_chat", "assistant-schedule.execution_health_directory":
+	case "assistant-models.err_effort_unsupported", "assistant-models.err_model_invalid":
 		return true
 	}
 	return false
