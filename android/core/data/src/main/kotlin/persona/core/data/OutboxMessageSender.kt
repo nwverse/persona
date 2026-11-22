@@ -401,8 +401,14 @@ class OutboxMessageSender(
             state == OutboxState.Sending -> opId
             else -> null
         }
-        check(if (next != null) store.transition(id, from, state, delivery.refusal?.code, next)
-            else store.transition(id, from, state, delivery.refusal?.code)) { "Message state changed" }
+        val moved = if (next != null) store.transition(id, from, state, delivery.refusal?.code, next)
+            else store.transition(id, from, state, delivery.refusal?.code)
+        if (starting && !moved) {
+            // A catch-up can observe the active composer row between its state and operation-id writes.
+            // It is the same attempt only when both already match; otherwise this is not a retry to repeat.
+            val current = store.entries.first().firstOrNull { it.clientMessageId == id }
+            check(current?.state == OutboxState.Sending && current.operationId == opId) { "Message state changed" }
+        } else check(moved) { "Message state changed" }
         // Composer retries bypass attempt(), but their fresh operation still belongs to this same visible message.
         if (state == OutboxState.Sending) receiptState.begin(attempt, entry.mainTarget)
         else receiptState.result(attempt, when (state) {
