@@ -32,6 +32,8 @@ export interface GroupedSource<T> {
   parentOf?: (row: T) => string | undefined;
   /** Stable structural placement, separate from the transport's cursor order (#11801). */
   rowOrder?: StableRowOrder<T>;
+  /** Row identities excluded from rendered section rows (e.g. in-flight launches shown under Starting). */
+  excludeIdentities?: ReadonlySet<string>;
 }
 
 export interface GroupedSessionsProps<T> {
@@ -78,6 +80,8 @@ function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, sou
   // leaves them alone for the same reason (it would start one read per group), except in the sidebar, whose title row
   // folds and opens them as the complete list's groups (`foldScope`, #6662): someone asked. What is folded is kept.
   const [folded, toggle] = useFolded(`sessions-by:${kind}:${dimension}:${group.key}`, !startsOpen, { holds, all: Boolean(foldScope), scope: foldScope });
+  const [excluded, setExcluded] = useState(0);
+  const shownCount = Math.max(0, group.count - (folded ? 0 : excluded));
   // a space is one computer's: two computers' spaces of one name are told apart by it
   const computer = dimension === "group" && several && group.places[0]?.machine ? machineName(group.places[0].machine) : "";
   return (
@@ -86,11 +90,11 @@ function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, sou
         title={<>{name}{computer && <span className="font-normal"> · {computer}</span>}</>}
         right={<>
           <NeedsCount n={group.needs} />
-          <GroupCount n={group.count} label={t("paged-agents.count", { count: group.count })} />
+          <GroupCount n={shownCount} label={t("paged-agents.count", { count: shownCount })} />
         </>}>
         {!folded && <>
           {dimension === "project" && <GroupPlaces group={group} machineName={machineName} />}
-          <GroupRows group={group} dimension={dimension} scope={scope} source={source} renderRow={renderRow} />
+          <GroupRows group={group} dimension={dimension} scope={scope} source={source} renderRow={renderRow} onExcluded={setExcluded} />
         </>}
       </Section>
     </div>
@@ -123,10 +127,10 @@ function GroupPlaces({ group, machineName }: { group: SessionGroup; machineName:
 }
 
 /** An open section's sessions: the list's own rows in presentation order. A few at first, then a page at a time. */
-function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
-  group: SessionGroup; dimension: GroupDimension; scope: ListFilters; source: GroupedSource<T>; renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode;
+function GroupRows<T>({ group, dimension, scope, source, renderRow, onExcluded }: {
+  group: SessionGroup; dimension: GroupDimension; scope: ListFilters; source: GroupedSource<T>; renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode; onExcluded?: (n: number) => void;
 }) {
-  const { path, identity, compare, removeIdentity, event, summary, roots, parentOf, rowOrder } = source;
+  const { path, identity, compare, removeIdentity, event, summary, roots, parentOf, rowOrder, excludeIdentities } = source;
   // rows only: the section's numbers are the ones its heading already has. A runtime section passes over the hints that
   // name none of its rows (#9176): with several open, each read for every agent's update anywhere.
   const follows = event === "sessions_list";
@@ -156,16 +160,25 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
     if (list.getSnapshot().loaded) list.invalidate();
   }, [list, heading]);
   const [limit, setLimit] = useState<number>(SESSION_LIST_METRICS.groupPreview);
-  const preview = page.rows.length > limit ? page.rows.slice(0, limit) : page.rows;
+  const visibleRows = useMemo(
+    () => excludeIdentities?.size ? page.rows.filter((row) => !excludeIdentities.has(identity(row))) : page.rows,
+    [page.rows, excludeIdentities, identity],
+  );
+  const excluded = page.rows.length - visibleRows.length;
+  useEffect(() => {
+    onExcluded?.(excluded);
+    return () => onExcluded?.(0);
+  }, [onExcluded, excluded]);
+  const preview = visibleRows.length > limit ? visibleRows.slice(0, limit) : visibleRows;
   // a session started from another one shown here comes under it, a level in (#5935), as in the flat list
-  const sourceRows = rowOrder ? page.rows : preview;
+  const sourceRows = rowOrder ? visibleRows : preview;
   const nesting = useMemo(() => parentOf ? nestUnderParents(sourceRows, identity, parentOf) : null, [sourceRows, identity, parentOf]);
   // The stable list retains displaced rows and sorts every admitted page by current structural placement.
   // Other lists keep the transport's newest-first order (#11801).
   const arranged = nesting?.rows ?? sourceRows;
   const rows = arranged.length > limit ? arranged.slice(0, limit) : arranged;
   const more = () => {
-    if (page.rows.length <= limit) void list.more().catch(() => {});
+    if (visibleRows.length <= limit) void list.more().catch(() => {});
     setLimit(limit + PAGE_SIZE);
   };
   return <>
@@ -174,9 +187,9 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
     </div>)}
     {page.loading && (!page.loaded || page.loadingMore) && <p role="status" className="px-2 py-1 text-xs text-ink-3">{t("sidebar.loading")}</p>}
     {page.error && <div className="px-2 py-1"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
-    {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-1 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
+    {page.loaded && !page.loading && !page.error && !visibleRows.length && <p className="px-2 py-1 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
     {/* not hidden by a background refresh (only `loading`): on a busy fleet one is nearly always out, and the button
         vanished under the pointer (#9215). A click during one queues its page. */}
-    {(page.rows.length > limit || page.hasMore) && !page.loadingMore && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={more} />}
+    {(visibleRows.length > limit || page.hasMore) && !page.loadingMore && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={more} />}
   </>;
 }

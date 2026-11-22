@@ -80,6 +80,10 @@ func (h *Manager) hostCLI(ctx context.Context, id string, spec extension.HostInt
 	if h.cfg.Lark.CLI == nil || !h.cfg.Lark.CLI.Extensions {
 		return nil, &rpc.Error{Code: extension.CodePermissionDenied, Message: "host CLI: integration is not enabled by the manager"}
 	}
+	profile, err := h.larkCLIExecutionProfile(ctx)
+	if err != nil {
+		return nil, publicHostCLIError(err)
+	}
 	h.hostCLIMu.Lock()
 	if h.hostCLIState == nil {
 		h.hostCLIState = &hostCLIState{}
@@ -87,7 +91,7 @@ func (h *Manager) hostCLI(ctx context.Context, id string, spec extension.HostInt
 	state := h.hostCLIState
 	h.hostCLIMu.Unlock()
 	version, err := state.current(ctx, func() hostCLI {
-		return larkcliadapter.New(larkcliadapter.Config{Bin: h.cfg.Lark.CLI.Bin, Profile: h.effectiveLarkCLIProfile(ctx), Timeout: 15 * time.Second})
+		return larkcliadapter.New(larkcliadapter.Config{Bin: h.cfg.Lark.CLI.Bin, Profile: profile, Timeout: 15 * time.Second, ResolveProfile: h.larkCLIExecutionProfile})
 	})
 	if err != nil {
 		return nil, publicHostCLIError(err)

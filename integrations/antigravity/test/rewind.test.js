@@ -430,3 +430,48 @@ test('a stale check cannot publish while a newer rewind is installing its cut', 
   assert.deepEqual(page.items.map((item) => item.text), records.slice(0, 2).map((step) => step.content))
   assert.equal(node.last('runtime.sessions').sessions[0].last_text, 'First answer')
 })
+
+test('native rewind drops rewound-away token usage and model from runtime.sessions while disk still holds the old tail', async (t) => {
+  const { node, transcript, rewind } = await fixture(t)
+  const seeded = [
+    records[0],
+    {
+      ...records[1],
+      model: 'gemini-4-carbon-high',
+      input_tokens: 10000,
+      cache_read_tokens: 2000,
+      output_tokens: 150,
+    },
+    records[2],
+    {
+      ...records[3],
+      model: 'claude-opus-5-5-high',
+      input_tokens: 5000,
+      cache_read_tokens: 40000,
+      cache_write_tokens: 500,
+      output_tokens: 400,
+      context_window: 1000000,
+    },
+  ]
+  writeFileSync(transcript, seeded.map((step) => JSON.stringify(step)).join('\n') + '\n')
+  const row = () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)
+  await node.peer.call('session.rename', { session_id: SESSION, title: 'Usage before rewind' })
+  await until('initial token usage published', () => row()?.context_tokens === 45500 && row()?.output_tokens === 550)
+  assert.equal(row().context_window, 1000000)
+  assert.equal(row().model, 'claude-opus-5-5-high')
+
+  // Partial rewind hides Turn 2 even though transcript_full.jsonl on disk still contains it.
+  await rewind()
+  await until('rewound session drops turn 2 usage', () => row()?.context_tokens === 12000 && row()?.output_tokens === 150)
+  assert.equal(row().context_window, undefined)
+  assert.equal(row().model, 'gemini-4-carbon-high')
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(page.items[1].usage, [{ model: 'gemini-4-carbon-high', in: 10000, out: 150, cache_read: 2000 }])
+  assert.equal(page.items.length, 2)
+
+  // Full rewind clears all projected steps; session row omits usage and model rather than reading stale disk.
+  await rewind({ occurrence: 1, prompts_after: 0 })
+  await until('fully rewound session clears usage', () => row()?.context_tokens === undefined && row()?.output_tokens === undefined)
+  assert.equal(row().context_window, undefined)
+  assert.equal(row().model, undefined)
+})

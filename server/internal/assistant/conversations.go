@@ -16,12 +16,10 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The assistant manages its own conversations (docs/assistant/assistant.md "Managing its own conversations", the user's ask on 2026-11-01):
@@ -159,6 +157,9 @@ func (s *Service) setArchived(ctx context.Context, machine, id string, on bool, 
 	b.mu.Unlock()
 	if err != nil {
 		return false, err
+	}
+	if on {
+		_ = s.call(ctx, machine, "assistant.cache_clear", map[string]any{"session_id": id}, nil)
 	}
 	s.publish(ctx) // the apps get the list with the flag now
 	return true, nil
@@ -786,8 +787,7 @@ func (msg relayMsg) source() *proto.MessageSource {
 // notice (quiet.go) is its own text, and the work it starts is not a hop of any chain.
 func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg relayMsg) error {
 	if msg.Tool == superviseTool && s.runtimeWithoutSupervisionPolicy(ctx, machine, to) {
-		return &rpc.Error{Code: assistantwire.CodeSupervisionRuntime,
-			Message: i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime")}
+		return s.supervisionRuntimeRefusal(ctx, machine)
 	}
 	text := relayDeliveryText(msg)
 	source, onceID := msg.source(), relayMsgID(to, msg)

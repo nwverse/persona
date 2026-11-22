@@ -1850,7 +1850,9 @@ class WatcherTests(unittest.TestCase):
         self.assertFalse(any(command[0].startswith("CI ") for command in commands))
         self.assertEqual(calls, [None, None, None, str(root / "scripts/operations"), None, None])
 
-    def test_changed_sleep_guard_requires_lowering_the_baseline(self):
+    def test_changed_sleep_guard_refuses_a_rise_and_passes_a_fall(self):
+        # Count ratchets fail only when a count rises (docs/operations/testing.md, "Count ratchets"): a test file under
+        # its baseline passes without the baseline lowered.
         import pr_watch_test_guards
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1862,8 +1864,12 @@ class WatcherTests(unittest.TestCase):
             test.parent.mkdir(parents=True)
             test.write_text("package example\n")
             with patch.object(pr_watch_test_guards, "checked", return_value=baseline.read_text()):
+                self.assertEqual(pr_watch_test_guards.baseline_guard("server/internal/example/example_test.go", root), [])
+            test.write_text("package example\n\nfunc TestWait(t *testing.T) {\n" + "\ttime.Sleep(time.Second)\n" * 3 + "}\n")
+            with patch.object(pr_watch_test_guards, "checked", return_value=baseline.read_text()):
                 violations = pr_watch_test_guards.baseline_guard("server/internal/example/example_test.go", root)
-            self.assertIn("lower the baseline", violations[0])
+            self.assertEqual(len(violations), 1)
+            self.assertIn("3 time.Sleep call(s), baseline 2", violations[0])
 
     def test_go_test_runner_uses_disposable_postgres_and_cleanup(self):
         import pr_watch_go_tests

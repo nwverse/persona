@@ -36,6 +36,9 @@ type Config struct {
 	InboxPageLimit int
 	// Now is injectable for expiry tests; production uses time.Now.
 	Now func() time.Time
+	// ResolveProfile gates execution until the host knows the saved identity. It is
+	// evaluated for every invocation, including a runner retained across recovery.
+	ResolveProfile func(context.Context) (string, error)
 }
 
 // Runner executes lark-cli with a bounded context and decodes only JSON output.
@@ -202,13 +205,17 @@ type LoginProcess struct {
 // has its own ten-minute lifetime so the HTTP request that began the login may
 // finish while the process continues in the background.
 func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
+	profile, err := r.resolveProfile(ctx)
+	if err != nil {
+		return nil, err
+	}
 	bin, err := r.binary(ctx)
 	if err != nil {
 		return nil, err
 	}
 	loginCtx, cancel := context.WithTimeout(context.Background(), loginTimeout)
 	p := &LoginProcess{ready: make(chan struct{}), done: make(chan struct{}), cancel: cancel}
-	argv := r.profileArgs([]string{"auth", "login", "--scope", strings.Join(ReadAsMeScopes, " ")})
+	argv := profileArgs(profile, []string{"auth", "login", "--scope", strings.Join(ReadAsMeScopes, " ")})
 	cmd := exec.CommandContext(loginCtx, bin, argv...)
 	cmd.Env = cliEnv(bin)
 	// lark-cli may launch a child process of its own. Killing only the shell
@@ -332,10 +339,17 @@ type profileWire struct {
 	TokenStatusSnake string `json:"token_status"`
 }
 
-func (r *Runner) profileArgs(args []string) []string {
+func (r *Runner) resolveProfile(ctx context.Context) (string, error) {
+	if r.cfg.ResolveProfile != nil {
+		return r.cfg.ResolveProfile(ctx)
+	}
+	return r.cfg.Profile, nil
+}
+
+func profileArgs(profile string, args []string) []string {
 	argv := make([]string, 0, len(args)+2)
-	if r.cfg.Profile != "" {
-		argv = append(argv, "--profile", r.cfg.Profile)
+	if profile != "" {
+		argv = append(argv, "--profile", profile)
 	}
 	return append(argv, args...)
 }
@@ -1024,13 +1038,17 @@ func (r *Runner) executeInput(ctx context.Context, args []string, mode outputMod
 }
 
 func (r *Runner) executeInputProfile(ctx context.Context, args []string, mode outputMode, identity string, input []byte, includeProfile bool) ([]byte, error) {
+	profile, err := r.resolveProfile(ctx)
+	if err != nil {
+		return nil, err
+	}
 	bin, err := r.binary(ctx)
 	if err != nil {
 		return nil, err
 	}
 	argv := args
 	if includeProfile {
-		argv = r.profileArgs(args)
+		argv = profileArgs(profile, args)
 	}
 	switch mode {
 	case outputAuth:
