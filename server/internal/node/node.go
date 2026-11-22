@@ -831,12 +831,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	if method == "session.send" || method == "codex.answer" {
 		ctx = promptLanguageContext(ctx, params)
 	}
-	if method == "sessions.history" {
-		return n.handleSessionsHistory(ctx, method, params)
+	if r, err, ok := nodeMethods.answer(n, ctx, methodName(method), params); ok { // registered from its domain's file (node_methods.go)
+		return r, err
 	}
 	switch method {
-	case "workspace.naming.resolve":
-		return n.resolveWorkspaceNaming(ctx, params)
 	case "session.share_projection":
 		return n.shareProjection(ctx, params)
 	case devicewire.MethodCloseTaskTerminal:
@@ -851,31 +849,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return n.peer != nil && n.peer.Call(ctx, devicewire.MethodAuthorizeTaskTerminal, a, &out) == nil && out.Authorized
 		})
 		return map[string]string{"status": status}, nil
-	case "node.doctor": // the machine page's "What this computer can do": node doctor's report, read-only unless {"fix":true} (doctor_rpc.go)
-		return n.doctor(ctx, params, false)
-	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
-		return n.doctor(ctx, params, true)
-	case proto.MethodMachineNetwork: // on-demand read-only network & proxy diagnostics (machine_network.go)
-		return n.machineNetwork(ctx, params)
-	case proto.MethodRoutineCheck:
-		return routineCheck(ctx, params)
-	case proto.MethodSecretRun: // the password card's commands (secretrun.go); its params never reach the decoding below
-		return n.secretRun(ctx, params)
-	case proto.MethodSecretStage: // a hand-off's values, kept for its start's ticket (secretenv.go); the same
-		return n.secretStageCall(params)
-	case proto.MethodModelHTTP: // an API connection's request sent through this computer (modelhttp.go); the same
-		return modelHTTP(ctx, params)
-	case proto.MethodModelRun: // an API purpose's request answered by a launcher here (modelrun.go); the same
-		return n.modelRun(ctx, params)
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
-	}
-	switch method { // sharing the clipboard with the phone (clipshare/)
-	case methodClipboardGet:
-		return clipshare.Get(ctx)
-	case methodClipboardSet:
-		return clipshare.Set(ctx, params)
 	}
 	switch method { // the machine page's diagnosis and cache cleanup (machdiag/)
 	case proto.MethodMachineDiagnose:
@@ -890,22 +866,6 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.machineStorageCleanup(ctx, params)
 	case proto.MethodMachineToolchain:
 		return n.machineToolchain(ctx, params)
-	}
-	switch method { // listening port inspector and process management (machine_procs.go)
-	case proto.MethodMachinePorts:
-		return n.machinePorts(ctx, params)
-	case proto.MethodMachineProcesses:
-		return n.machineProcesses(ctx, params)
-	case proto.MethodMachineProcessKill:
-		return n.machineProcessKill(ctx, params)
-	}
-	switch method { // the machine page's services and containers (machine_services.go)
-	case proto.MethodMachineServices:
-		return n.machineServices(ctx, params)
-	case proto.MethodMachineServiceLogs:
-		return n.machineServiceLogs(ctx, params)
-	case proto.MethodMachineServiceAction:
-		return n.machineServiceAction(ctx, params)
 	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
 		return n.codexTakeoverCall(ctx, method, params)

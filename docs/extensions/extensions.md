@@ -2011,6 +2011,7 @@ The [source handler contract](source-api-handlers.md) defines the separate typed
   | `actions?` | `[{pattern, what}]`: the "what it does" on the card; `pattern` is a regex against "METHOD /path" |
   | `tool?` | `{name, description}`: a tool for runtimes without Bash (parameters `{args: [the words after the command]}`), going through the same gate |
   | `auth?` | How the credential is added to the request (#1317): `{header, value}`, where `${name}` in `value` is replaced with that credential from `env`, e.g. `{"header": "X-Api-Key", "value": "${FEED_TOKEN}"}`; if omitted, a gate with exactly one `secret` (which is in `env`) and a `base_env` uses `Authorization: Bearer ${<secret>}`. `{"env": true}`: the script needs the credential itself, so it is put into the assistant's environment as before (the assistant can read it; not recommended). The header cannot be `Host`, `Content-Type`, `Origin`, `Cookie` or others managed by the proxy or transport |
+  | `socket_env?` | (#12904) The one of `env` holding the extension's unix socket on the manager's machine: the gate is **relayed**, so it works when the assistant runs on another computer than the hub. Needs `base_env` (the address the script calls when it is given one; the extension's `assistant.credentials` leaves it empty) and one `secret` (or an `auth` header saying how the token goes). The node's proxy gives the process its address in `base_env` and neither the socket nor the token, holds each call to `rules` as for any proxied gate, and sends it to the manager (`gate.relay`), which asks the extension for its credentials, dials the socket, puts the token on the call and returns the answer (bodies up to 8 MiB each way). The hub gives such a gate no `auth`, so a node from before keeps putting the socket and token into the process (it works only on the hub's machine, as before); the script should call `$<base_env>` when it is set and the socket otherwise |
 
   - **Credentials**: the hub only gives them to the node running the assistant (`assistant.lark`; the node asks at most once a minute) by calling the extension's `assistant.credentials {contribution}` → `{env}`; only names declared in `env` are kept, never written to disk or logs.
     **Credentials never enter the assistant's process** (#1317, `node/gateproxy.go`): the node starts a loopback-only proxy locally and gives each assistant process its own address (`http://127.0.0.1:<port>/<random string>`, invalid once the process ends),
@@ -3108,8 +3109,10 @@ its state, and a light in the model for each lamp that is on. The app sends `11`
 `hub.extension_points.ui` is `11`; there is no new `features` entry (an older hub holds the app's version to its own, and the
 extension sees that). One new component, `scene`, authoritative in `schema/extension/view.schema.json` (`SceneComponent` and
 its `Scene*` definitions, `x-since: 11`); the example is `schema/extension/examples/View.v11-scene-flat.json`. **An app sends
-11 only when it draws all of the below** (and all of 10). No app sends 11 yet: the iPhone and iPad are first
-(nwverse/persona#12544); until then every app gets the downgrade below.
+11 only when it draws all of the below** (and all of 10). **iOS** (#12544) draws `scene` in
+`apple/Persona/Views/Settings/ExtensionScene.swift` (`ExtensionSceneGeometry.swift`, `ExtensionSceneModel.swift`) and sends `11`
+for pages and cards (`pageVersion` and `cardVersion`, including Share as Image's direct still snapshot); **web** (#12641) and
+**Android** (#12642) stay on `10` and get the downgrade below until their renderers land.
 
 Extensions still run no code in the app and send no model file: they say what the shapes are, and each app builds them with
 its own engine. A list of simple shapes is the contract because no 3D file format is drawn by every client (SceneKit reads
@@ -3127,7 +3130,7 @@ angles in degrees, counter-clockwise from +x seen from above. A box at `yaw` 0 h
 | `labels` (0–32) | `{text, at, height?}`: quiet names on the floor, a room's. Not tappable, not components of the page; read out after `alt` |
 | `pins` (0–100) | `{id, at, height?, label, state?, icon?, tone? \| color?, light?, action?}`: a device in the model. Each pin counts as one of the page's 300 components. `tone` or a named `color`, never both, colors the pin's dot; `state` is plain words (On, Off, 26 °C) and is **required** whenever the tone is not neutral, a color is set or the light is on, so a state never rides on color or light alone. `light` (`{on?, warmth?: warm \| cool}`, off and warm when left out) lights the model around the pin when on; at most 16 pins of a scene have their light on (a phone lights so many at once). Tapping a pin does its `action`, as a tile's |
 | `camera` | Where the model is first seen from, orthographic, around the centre of the shapes' bounding box (pins and labels left out): `yaw`, the camera's direction from the centre (225, the default, stands south-west looking north-east), `pitch` above the floor plane (10–90, 35 by default, 90 straight down), `zoom` (0.5–4; 1, the default, fits the bounding box) |
-| `poster` | An `ImageSource` (version 6's rules: `ref` only from an extension, never in an assistant card): a picture of the model for an older app and for share as image |
+| `poster` | An `ImageSource` (version 6's rules: `ref` only from an extension, never in an assistant card): a picture of the model for an older app and for surfaces that export a downgraded card as an image (iOS renders the scene snapshot directly) |
 | `key` | As every component's: keeps the person's camera across redraws |
 
 **Colors.** A scene's shapes are content, like the pixels of an `image`, so their colors are the extension's own: walls, floors
