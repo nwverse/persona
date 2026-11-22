@@ -136,6 +136,11 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		Element    string               `json:"element"`   // feishu.card_stream: the element streamed into
 		Sequence   int64                `json:"sequence"`  // feishu.card_*: the write's place, larger than the last
 		Streaming  bool                 `json:"streaming"` // feishu.card_settings
+		// This optional constraint can only narrow a reminder post to its original private-chat pairing.
+		TodoReminderPairing *struct {
+			Owner    string    `json:"owner"`
+			PairedAt time.Time `json:"paired_at"`
+		} `json:"todo_reminder_pairing"`
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &a); err != nil {
@@ -164,6 +169,16 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		return map[string]any{}, h.testFeishuBot(ctx)
 	}
 	api, set := h.botAPI()
+	if binding := a.TodoReminderPairing; binding != nil {
+		// Use the very snapshot that supplies api and the destination below. A fresh status in the assistant is
+		// insufficient: pairing may change before this call. Subsequent changes cannot select a new recipient.
+		if method != assistantwire.FeishuPost || api == nil || set.Owner == nil || !set.Features.Pushes ||
+			binding.Owner == "" || binding.PairedAt.IsZero() || binding.Owner != set.Owner.OpenID ||
+			!binding.PairedAt.Equal(set.Owner.At) || set.Owner.ChatID == "" ||
+			a.ChatID != "" || a.ReplyTo != "" || a.InThread || callerKey(a.UUID, feishuMaxUUID-4) == "" {
+			return nil, &rpc.Error{Code: assistantwire.CodeChatDenied, Message: "feishu: original reminder pairing unavailable"}
+		}
+	}
 	if api == nil {
 		return nil, errBotOff
 	}

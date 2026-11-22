@@ -128,6 +128,8 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 
 ## Lark Open Platform bots (`docs/extensions/bots.md`)
 
+- A retry retains the original authority and privacy decision (#12609). Bind a reminder to the first ready owner's pairing generation and enforce it at the actual private-chat route, using the same snapshot for identity validation and recipient selection; checking status only in the assistant leaves a re-pairing gap. Health masking is sticky, unknown sources are hidden, and a bot attempt pins that route even if a companion appears later. The provider's one-hour UUID rule is at-most-once delivery, not a promise to return an old message ID: a fake that returns one tests only that fixture's receipt behavior. Treat definitive pre-transport refusal, no attempt and unknown acceptance as different outcomes.
+- A claimed to-do reminder and delivery of each channel copy are separate outcomes (#12609). Retrying the whole reminder would repeat the phone notification; recover only the failed Feishu copy with the existing finite retry policy. Key every card by the original reminder occurrence and index, so replaying a long reminder also covers an accepted continuation whose receipt was lost. Treat unknown status as temporary without sending, and stop on a confirmed disabled channel, refusal or obsolete reminder. Process-local retries do not survive restart; the durable reminder claim remains consumed.
 - A settings setter must return a failed write before reporting success or recording an audit. Restore only its own previous field while holding the same settings lock; this preserves an unset default and other successful saves. A fake store must reject the intended write, since one settings request can make several separate commits (#12666).
 - Inbound rich-text `code_block.text` can itself be a Markdown document (#12667). When flattening it for the bot's model context, use a backtick wrapper longer than every run in the body; a fixed three-backtick wrapper lets a literal fence become a closing delimiter and can turn following post nodes into code. Verify synthetic events through the public event/content parsers and check the resulting Markdown AST, alongside exact ordinary-output and adjacent-media controls. This is separate from escaping or folding outbound answer cards.
 
@@ -165,6 +167,17 @@ Track the one forced tenant-token refresh separately from the request attempt in
 an expired-token rejection. The refresh still consumes the existing attempt budget and must stop after one refresh;
 an expiry on the final attempt returns that expiry. A confirmed auth rejection permits replay of a UUID-less POST,
 while a transport/read failure or server error still stops it. Keep the original payload and UUID across keyed retries.
+
+## Feishu bot concurrent token refresh
+
+- Keep the tenant-token cache mutex out of HTTP exchanges (#12681). Concurrent calls share a per-client
+  completion signal and select their own context cancellation while waiting. Check the in-flight exchange
+  before a locally valid cached token: the API may already have rejected that token, and spending a final
+  attempt on it loses the request. On wake, recheck the current exchange and cache under the mutex rather
+  than returning a saved token that another refresh may have superseded. A successful cache generation
+  satisfies waiting refresh requests; after failure, surviving callers fetch with their own contexts.
+  Gate both initial and forced token exchanges in loopback tests, including final attempts and delayed wakes.
+  This coordination preserves credential/domain isolation, retry budgets and unkeyed-write replay rules.
 
 ## Message Tweaks and account settings
 

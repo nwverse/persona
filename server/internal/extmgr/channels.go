@@ -2,6 +2,7 @@ package extmgr
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -362,47 +363,27 @@ func (h *Manager) channelExtensionSet(ctx context.Context, id string, on bool) e
 
 // configureFeishu applies the assistant's changes to the bot's switches (feishu.configure): only what is given.
 func (h *Manager) configureFeishu(ctx context.Context, enabled *bool, features map[string]bool) error {
-	var fs *BotFeatures
+	var fs *botFeatureUpdate
 	if len(features) > 0 {
-		f := h.botFeatures()
+		patch := make(map[string]bool, len(features)+1)
 		for id, on := range features {
 			switch id {
-			case "main":
-				f.Main = on
-			case "cards":
-				f.Cards = on
-			case "all_cards":
-				f.AllCards = on
-				if on {
-					f.Cards = true
-				}
-			case "pushes":
-				f.Pushes = on
-			case "sync":
-				f.Sync = on
-			case "agents":
-				f.Agents = on
-			case "reports":
-				f.Reports = on
-			case "board":
-				f.Board = on
-			case "workbench":
-				f.Workbench = on
-			case "only_conclusions":
-				f.OnlyConclusions = on
-			case "report_steps":
-				f.ReportSteps = on
-			case "answer_new_card":
-				f.AnswerNewCard = on
-			case "topic_cot":
-				f.TopicCot = on
-			case "read_group":
-				f.ReadGroup = on
+			case "main", "cards", "all_cards", "pushes", "sync", "agents", "reports", "board", "workbench",
+				"only_conclusions", "report_steps", "answer_new_card", "topic_cot", "read_group":
+				patch[id] = on
 			default:
 				return errors.New(i18n.T(h.botLang(ctx), "hub-channels.no_feature", i18n.Args{"feature": id}))
 			}
 		}
-		fs = &f
+		// Enabling all cards also enables cards; disabling it leaves cards unchanged.
+		if patch["all_cards"] {
+			patch["cards"] = true
+		}
+		raw, err := json.Marshal(patch)
+		if err != nil {
+			return err
+		}
+		fs = &botFeatureUpdate{patch: raw}
 	}
 	return h.updateBot(ctx, enabled, nil, nil, nil, fs)
 }

@@ -110,7 +110,7 @@ func (s *Service) feishuMessage(ev feishubot.MessageEvent, st FeishuStatus, acti
 			return
 		}
 		content.Text = rest
-		if cmd == "/new" || cmd == "/新对话" {
+		if cmd == "/new" || cmd == "/新对话" { // i18n-ignore: command alias typed by the user
 			// The first message explicitly starts a conversation, even when replying to an old card.
 			// Keep the reply metadata for quoted context, but do not answer or route by that card.
 			target = botTarget{Kind: targetPersona}
@@ -426,6 +426,9 @@ func (s *Service) botQuote(ctx context.Context, id string, lang i18n.Lang) (*pro
 		return nil, nil
 	}
 	it := items[0]
+	if it.Deleted {
+		return nil, nil
+	}
 	c := feishubot.ParseContent(it.MsgType, it.Body.Content, it.MentionList())
 	who := "Persona"
 	if it.Sender.SenderType == "user" {
