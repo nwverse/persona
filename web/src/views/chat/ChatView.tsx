@@ -2176,11 +2176,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     : undefined, [overviewId, overviewOpen, showOverview]);
   // Its background detail takes the side panel's space, rather than squeezing the mounted overview and losing its place.
   const overviewDetail = panelDrawn && backgroundPanelOf(panel, mid, sid)?.from === "overview";
+  const isAssistant = Boolean(assistant || session?.assistant);
   const composerDisabled = Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"));
   const composerBlocked = gate.blocked ?? noRowBlock;
   const agentCompactBlocked = Boolean(composerDisabled || composerBlocked || hasTaskRoute);
   // Assistant compaction calls the hub HTTP endpoint directly, so composer send disables (e.g. offlineLine) do not gate it.
-  const compactBlocked = assistant ? Boolean(gate.blocked) : agentCompactBlocked;
+  const compactBlocked = isAssistant ? Boolean(gate.blocked) : agentCompactBlocked;
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
@@ -2496,10 +2497,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             <AgentStatusLine
               key={draftKey}
               session={session}
-              assistant={assistant}
+              assistant={isAssistant}
               items={earlier.liveItems}
               compactBlocked={compactBlocked}
-              onCompact={assistant || agentCompactBlocked ? undefined : compactSession}
+              onCompact={isAssistant || agentCompactBlocked ? undefined : compactSession}
               source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined}
             />
           </Suspense>

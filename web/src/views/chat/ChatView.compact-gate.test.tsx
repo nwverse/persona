@@ -218,4 +218,30 @@ describe("ChatView one-click /compact preconditions", () => {
     const agentDialog = await waitForSelector<HTMLElement>("[data-session-insights]");
     expect(agentDialog.querySelector("[data-insights-compact]")).toBeNull();
   });
+
+  it("uses assistant_compact instead of agent /compact when session.assistant is true on a generic ChatView without the assistant prop", async () => {
+    mocks.features = [COMPACT_FEATURE];
+    mocks.session = { ...mocks.session, assistant: true };
+
+    await act(async () => {
+      root.render(<ChatView mid="hub" sid="c1" offline="Computer offline" />);
+    });
+    const meter = await waitForSelector<HTMLButtonElement>('[data-composer-usage] button[aria-haspopup="dialog"]', host);
+    await act(async () => {
+      meter.click();
+    });
+    const dialog = await waitForSelector<HTMLElement>("[data-session-insights]");
+    const compactBtn = dialog.querySelector<HTMLButtonElement>("[data-insights-compact]")!;
+    expect(compactBtn).not.toBeNull();
+    expect(compactBtn.textContent).not.toContain("/compact");
+
+    await act(async () => {
+      compactBtn.click();
+    });
+    expect(mocks.apiOp).not.toHaveBeenCalled();
+    expect(mocks.api).toHaveBeenCalledWith("/assistant/conversations/c1/compact", {
+      method: "POST",
+      json: { machine_id: "hub" },
+    });
+  });
 });

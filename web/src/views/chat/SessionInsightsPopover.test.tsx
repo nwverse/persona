@@ -337,4 +337,35 @@ describe("ContextMeter + lazy SessionInsightsPopover", () => {
     expect(rows[1]).toContain("Opus 4.5");
     expect(rows[1]).toContain("Fast");
   });
+
+  it("displays identical cumulative totals in the ContextMeter pill and popover when subagent report fields move in opposite directions", async () => {
+    const noWindow: Session = { ...baseSession, context_tokens: undefined, context_window: undefined };
+    const reportItems: Item[] = [
+      {
+        id: "1",
+        seq: 1,
+        role: "assistant",
+        kind: "text",
+        usage: [{ id: "sub-1", model: "claude-opus-4-5", in: 1200, out: 400 }],
+      },
+      {
+        id: "2",
+        seq: 2,
+        role: "assistant",
+        kind: "text",
+        usage: [{ id: "sub-1", model: "claude-opus-4-5", in: 900, out: 700 }],
+      },
+    ];
+    await mount(<ContextMeter session={noWindow} items={reportItems} />);
+    const trigger = host.querySelector("button")!;
+    expect(trigger.textContent).toContain("1.9k tok");
+
+    await act(async () => {
+      trigger.click();
+    });
+    const dialog = await waitForPopover();
+    expect(dialog.querySelector("[data-insights-tokens]")?.textContent).toContain("1.9k");
+    expect(dialog.querySelector("[data-insights-input]")?.textContent).toBe("1.2k");
+    expect(dialog.querySelector("[data-insights-output]")?.textContent).toBe("700");
+  });
 });

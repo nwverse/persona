@@ -5,6 +5,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { contextHint, contextLabel, contextTier, contextTooltip, contextUsage, type ContextTier } from "../../lib/context-usage";
+import { bareModel } from "../../lib/model-change";
 import { compactTokens } from "../../lib/tokens";
 import { cx, EASE } from "../../ui/atoms";
 import type { Item, Session } from "../../lib/types";
@@ -14,28 +15,42 @@ const SessionInsightsPopover = lazy(() => import("./SessionInsightsPopover").the
 const TIER_BAR: Record<ContextTier, string> = { ok: "bg-accent", warn: "bg-orange", danger: "bg-orange" };
 const TIER_TEXT: Record<ContextTier, string> = { ok: "", warn: "font-medium text-orange", danger: "font-medium text-orange" };
 
-/** Lightweight cumulative token total from loaded items (deduplicating subagent reports) so the L1 pill can show
- *  even before the lazy SessionInsightsPopover chunk is fetched. */
+const positive = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+
+/** Lightweight cumulative token total from loaded items, matching aggregateSessionTokens' per-field maxima for
+ *  deduplicated `(id, bareModel, fast)` subagent reports so the L1 pill and lazy popover never disagree. */
 function sessionTokenTotal(items?: readonly Item[]): number {
   if (!items?.length) return 0;
   let sum = 0;
-  const seen = new Map<string, number>();
+  const reports = new Map<string, { inp: number; out: number; read: number; write: number }>();
   for (const it of items) {
     for (const list of [it.usage, it.fold?.usage]) {
       if (!list?.length) continue;
       for (const u of list) {
-        const n = (u.in ?? 0) + (u.out ?? 0) + (u.cache_read ?? 0) + (u.cache_write ?? 0);
-        if (!(n > 0)) continue;
+        const inp = positive(u.in);
+        const out = positive(u.out);
+        const read = positive(u.cache_read);
+        const write = positive(u.cache_write);
+        if (inp + out + read + write === 0) continue;
         if (u.id) {
-          const k = `${u.id}\n${u.model ?? ""}\n${u.fast ? 1 : 0}`;
-          seen.set(k, Math.max(seen.get(k) ?? 0, n));
+          const model = u.model ? bareModel(u.model) : "";
+          const key = `${u.id}\n${model}\n${u.fast ? 1 : 0}`;
+          const prev = reports.get(key);
+          if (prev) {
+            prev.inp = Math.max(prev.inp, inp);
+            prev.out = Math.max(prev.out, out);
+            prev.read = Math.max(prev.read, read);
+            prev.write = Math.max(prev.write, write);
+          } else {
+            reports.set(key, { inp, out, read, write });
+          }
         } else {
-          sum += n;
+          sum += inp + out + read + write;
         }
       }
     }
   }
-  for (const n of seen.values()) sum += n;
+  for (const r of reports.values()) sum += r.inp + r.out + r.read + r.write;
   return sum;
 }
 
@@ -46,7 +61,7 @@ export function hasSessionTokenUsage(items?: readonly Item[]): boolean {
     for (const list of [it.usage, it.fold?.usage]) {
       if (!list?.length) continue;
       for (const u of list) {
-        if ((u.in ?? 0) + (u.out ?? 0) + (u.cache_read ?? 0) + (u.cache_write ?? 0) > 0) return true;
+        if (positive(u.in) + positive(u.out) + positive(u.cache_read) + positive(u.cache_write) > 0) return true;
       }
     }
   }
