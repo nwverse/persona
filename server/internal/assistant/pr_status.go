@@ -231,28 +231,64 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 			})
 		}
 	}
-	var checks struct {
-		Total int `json:"total_count"`
-		Runs  []struct {
-			ID         int64  `json:"id"`
-			Name       string `json:"name"`
-			Status     string `json:"status"`
-			Conclusion string `json:"conclusion"`
-			DetailsURL string `json:"details_url"`
-			HTMLURL    string `json:"html_url"`
-			Output     struct {
-				Title   string `json:"title"`
-				Summary string `json:"summary"`
-			} `json:"output"`
-		} `json:"check_runs"`
+	type checkRun struct {
+		ID         int64  `json:"id"`
+		Name       string `json:"name"`
+		Status     string `json:"status"`
+		Conclusion string `json:"conclusion"`
+		DetailsURL string `json:"details_url"`
+		HTMLURL    string `json:"html_url"`
+		Output     struct {
+			Title   string `json:"title"`
+			Summary string `json:"summary"`
+		} `json:"output"`
 	}
-	if err := g.get(ctx, commit+"/check-runs?per_page=100&filter=latest", &checks); err != nil {
+	type checkRunsPage struct {
+		Total int        `json:"total_count"`
+		Runs  []checkRun `json:"check_runs"`
+	}
+	const maxCheckRunPages = 10
+	var firstChecks checkRunsPage
+	if err := g.get(ctx, commit+"/check-runs?per_page=100&filter=latest", &firstChecks); err != nil {
 		return TodoPRStatus{}, err
 	}
-	if checks.Total > len(checks.Runs) {
+	totalChecks := firstChecks.Total
+	allRuns := make([]checkRun, 0, len(firstChecks.Runs))
+	seenRunID := make(map[int64]bool, len(firstChecks.Runs))
+	appendRuns := func(runs []checkRun) {
+		for _, run := range runs {
+			if run.ID > 0 {
+				if seenRunID[run.ID] {
+					continue
+				}
+				seenRunID[run.ID] = true
+			}
+			allRuns = append(allRuns, run)
+		}
+	}
+	appendRuns(firstChecks.Runs)
+	for page := 2; totalChecks > len(allRuns) && len(firstChecks.Runs) > 0 && page <= maxCheckRunPages; page++ {
+		var next checkRunsPage
+		if err := g.get(ctx, fmt.Sprintf("%s/check-runs?per_page=100&filter=latest&page=%d", commit, page), &next); err != nil {
+			return TodoPRStatus{}, err
+		}
+		if next.Total > totalChecks {
+			totalChecks = next.Total
+		}
+		if len(next.Runs) == 0 {
+			break
+		}
+		before := len(allRuns)
+		appendRuns(next.Runs)
+		if len(allRuns) == before {
+			break
+		}
+	}
+	checksTruncated := totalChecks > len(allRuns) || (len(status.Statuses) > 0 && status.Total > len(status.Statuses))
+	if totalChecks > len(allRuns) {
 		out.Checks = joinCheckState(out.Checks, "pending")
 	}
-	for _, run := range checks.Runs {
+	for _, run := range allRuns {
 		state := "pending"
 		if run.Status == "completed" {
 			state = checkState(run.Conclusion)
@@ -274,6 +310,10 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 	}
 	if len(failedItems) > 0 {
 		sort.Slice(failedItems, func(i, j int) bool {
+			li, lj := strings.ToLower(failedItems[i].name), strings.ToLower(failedItems[j].name)
+			if li != lj {
+				return li < lj
+			}
 			if failedItems[i].name != failedItems[j].name {
 				return failedItems[i].name < failedItems[j].name
 			}
@@ -285,11 +325,15 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 			if item.name != "" && !slices.Contains(names, item.name) && len(names) < 3 {
 				names = append(names, item.name)
 			}
-			if item.id > 0 {
-				digest = append(digest, strconv.FormatInt(item.id, 10))
-			} else if item.name != "" {
-				digest = append(digest, item.name)
+			if key := normalizedFailingCheckIdentity(item.name, item.id); key != "" && !slices.Contains(digest, key) {
+				digest = append(digest, key)
 			}
+		}
+		sort.Strings(digest)
+		digestStr := strings.Join(digest, ",")
+		if checksTruncated {
+			// Never use a truncated API page's membership as an event fingerprint; keep it stable per head SHA.
+			digestStr = "truncated"
 		}
 		out.failingCheck = prFailingCheck{
 			ID:         failedItems[0].id,
@@ -298,10 +342,20 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 			URL:        failedItems[0].url,
 			Summary:    failedItems[0].summary,
 			Count:      len(failedItems),
-			Digest:     strings.Join(digest, ","),
+			Digest:     digestStr,
 		}
 	}
 	return out, nil
+}
+
+func normalizedFailingCheckIdentity(name string, id int64) string {
+	if norm := strings.ToLower(strings.Join(strings.Fields(name), " ")); norm != "" {
+		return norm
+	}
+	if id > 0 {
+		return "id:" + strconv.FormatInt(id, 10)
+	}
+	return ""
 }
 
 func checkState(state string) string {

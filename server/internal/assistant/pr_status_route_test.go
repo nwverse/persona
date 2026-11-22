@@ -701,7 +701,7 @@ func TestPRStatusForgeCapturesActionableReviewAndFailingChecks(t *testing.T) {
 			wantReviewID:   401,
 			wantReviewBody: "Fix error wrapping",
 			wantCheckName:  "server-tests",
-			wantCheckDig:   "901",
+			wantCheckDig:   "server-tests",
 		},
 		{
 			name:           "commented review ignores PR author and picks actionable collaborator review",
@@ -871,5 +871,366 @@ func TestPREventsRouteStoppedAgentNotResumedForPlainCommentedReview(t *testing.T
 	}
 	if _, ok := pendingPREventSignal(s, task.ID, task.PRURL, prEventKindReview); !ok {
 		t.Fatal("stopped Agent fallback for actionable collaborator COMMENTED review lost sigPREvent")
+	}
+}
+
+func TestPREventsRouteUncertainDeliveryPreservesSupervisionWakes(t *testing.T) {
+	idleAgent := proto.Session{
+		SessionID: "agent-uncertain", MachineID: "box", Cwd: "/code/app", Agent: "claude", Title: "worker",
+		Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now(),
+	}
+	st := &memStore{}
+	s, f, task := newBoundPRTask(t, st, idleAgent)
+	turnPREventsRouteOn(t, s)
+
+	var sendCalls int
+	var seenMsgIDs []string
+	f.answerNode(DeviceSessionSend, func(_ string, raw json.RawMessage) (any, error) {
+		var p struct {
+			ClientMsgID string `json:"client_msg_id"`
+		}
+		_ = json.Unmarshal(raw, &p)
+		sendCalls++
+		seenMsgIDs = append(seenMsgIDs, p.ClientMsgID)
+		return nil, context.DeadlineExceeded
+	})
+
+	ctx := context.Background()
+	if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
+		t.Fatal(err)
+	}
+	parkAt := todoNow(s, task.ID).Supervision.parking().At
+	reviewAt := parkAt.Add(time.Second)
+	status := TodoPRStatus{
+		URL:                task.PRURL,
+		State:              "open",
+		HeadOID:            "head-uncertain-1",
+		Conflicts:          true,
+		Checks:             "failure",
+		Review:             "changes_requested",
+		ChangesRequestedAt: &reviewAt,
+		CheckedAt:          parkAt.Add(2 * time.Second),
+		failingCheck:       prFailingCheck{ID: 71, Name: "ci-unit", Digest: "ci-unit"},
+		actionableReview: prActionableReview{
+			ID: 81, Author: "reviewer", State: "CHANGES_REQUESTED", Body: "Fix edge case", SubmittedAt: reviewAt,
+		},
+	}
+
+	// Pass 1: uncertain delivery records agent_uncertain and preserves all supervisor fallback paths.
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
+		t.Fatal(err)
+	}
+	if sendCalls != 3 {
+		t.Fatalf("pass 1 send calls = %d, want 3", sendCalls)
+	}
+	for _, id := range seenMsgIDs {
+		if id == "" {
+			t.Fatal("expected deterministic client_msg_id on uncertain send")
+		}
+	}
+	if _, ok := pendingPRConflict(s, task.ID); !ok {
+		t.Fatal("pass 1 uncertain delivery suppressed sigPRConflict")
+	}
+	if cur := todoNow(s, task.ID); cur.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) {
+		t.Fatalf("pass 1 uncertain delivery suppressed parked review wake: state=%q reviewSignal=%v", cur.Supervision.State, pendingReviewSignal(s, task.ID))
+	}
+	if _, ok := pendingPREventSignal(s, task.ID, task.PRURL, prEventKindCIFailure); !ok {
+		t.Fatal("pass 1 uncertain delivery lost sigPREvent for CI failure")
+	}
+
+	var saved map[string]prEventRouteRecord
+	if ok, err := st.Setting(ctx, prEventRouteDedupKey, &saved); err != nil || !ok || len(saved) != 3 {
+		t.Fatalf("persisted dedupe = %+v (ok=%v err=%v)", saved, ok, err)
+	}
+	for k, rec := range saved {
+		if rec.Outcome != prRouteOutcomeUncertain {
+			t.Fatalf("saved[%s].Outcome = %q, want %q", k, rec.Outcome, prRouteOutcomeUncertain)
+		}
+	}
+
+	// Simulate restart / re-park before supervision handled the conflict & review:
+	// Pass 2 must NOT resend to the Agent, yet must still preserve sigPRConflict and parked sigReview wakes.
+	s.supervise.mu.Lock()
+	clear(s.supervise.pending)
+	s.supervise.mu.Unlock()
+	s.prEventRoute.mu.Lock()
+	s.prEventRoute.loaded = false
+	s.prEventRoute.seen = nil
+	s.prEventRoute.mu.Unlock()
+	if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
+		t.Fatal(err)
+	}
+	parkAt2 := todoNow(s, task.ID).Supervision.parking().At
+	reviewAt2 := parkAt2.Add(time.Second)
+	status.ChangesRequestedAt = &reviewAt2
+	status.actionableReview.SubmittedAt = reviewAt2
+	status.CheckedAt = parkAt2.Add(2 * time.Second)
+
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
+		t.Fatal(err)
+	}
+	if sendCalls != 3 {
+		t.Fatalf("pass 2 after agent_uncertain re-sent to Agent: total sendCalls=%d, want 3", sendCalls)
+	}
+	if _, ok := pendingPRConflict(s, task.ID); !ok {
+		t.Fatal("pass 2 after agent_uncertain permanently suppressed sigPRConflict")
+	}
+	if cur := todoNow(s, task.ID); cur.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) {
+		t.Fatalf("pass 2 after agent_uncertain permanently suppressed parked review wake: state=%q reviewSignal=%v", cur.Supervision.State, pendingReviewSignal(s, task.ID))
+	}
+}
+
+type failPutKeyStore struct {
+	*memStore
+	key string
+	err error
+}
+
+func (f *failPutKeyStore) PutSetting(ctx context.Context, key string, val any) error {
+	if key == f.key && f.err != nil {
+		return f.err
+	}
+	return f.memStore.PutSetting(ctx, key, val)
+}
+
+func TestPREventsRoutePersistErrorPreservesFallbackAndCache(t *testing.T) {
+	idleAgent := proto.Session{
+		SessionID: "agent-persist-err", MachineID: "box", Cwd: "/code/app", Agent: "claude", Title: "worker",
+		Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now(),
+	}
+	st := &failPutKeyStore{memStore: &memStore{}, key: prEventRouteDedupKey, err: errors.New("db write failed")}
+	s, f, task := newBoundPRTask(t, st, idleAgent)
+	turnPREventsRouteOn(t, s)
+
+	ctx := context.Background()
+	if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
+		t.Fatal(err)
+	}
+	parkAt := todoNow(s, task.ID).Supervision.parking().At
+	reviewAt := parkAt.Add(time.Second)
+	beforeSends := len(sentToAgent(f))
+
+	status := TodoPRStatus{
+		URL:                task.PRURL,
+		State:              "open",
+		HeadOID:            "head-persist-err",
+		Conflicts:          true,
+		Checks:             "failure",
+		Review:             "changes_requested",
+		ChangesRequestedAt: &reviewAt,
+		CheckedAt:          parkAt.Add(2 * time.Second),
+		failingCheck:       prFailingCheck{ID: 88, Name: "ci-lint", Digest: "ci-lint"},
+		actionableReview: prActionableReview{
+			ID: 89, Author: "maintainer", State: "CHANGES_REQUESTED", Body: "Add test", SubmittedAt: reviewAt,
+		},
+	}
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(sentToAgent(f)) - beforeSends; got != 3 {
+		t.Fatalf("sent count = %d, want 3", got)
+	}
+	// In-memory seen map must NOT have recorded unpersisted entries, and in-flight claims must be released.
+	s.prEventRoute.mu.Lock()
+	seenLen := len(s.prEventRoute.seen)
+	inFlightLen := len(s.prEventRoute.inFlight)
+	s.prEventRoute.mu.Unlock()
+	if seenLen != 0 || inFlightLen != 0 {
+		t.Fatalf("after PutSetting failure: seen=%d inFlight=%d, want 0/0", seenLen, inFlightLen)
+	}
+	// Supervisor fallback must be preserved for all three event types.
+	if _, ok := pendingPRConflict(s, task.ID); !ok {
+		t.Fatal("PutSetting failure suppressed sigPRConflict")
+	}
+	if cur := todoNow(s, task.ID); cur.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) {
+		t.Fatalf("PutSetting failure suppressed parked review wake: state=%q reviewSignal=%v", cur.Supervision.State, pendingReviewSignal(s, task.ID))
+	}
+	if _, ok := pendingPREventSignal(s, task.ID, task.PRURL, prEventKindCIFailure); !ok {
+		t.Fatal("PutSetting failure suppressed sigPREvent for CI failure")
+	}
+
+	// Once persistence recovers, recording succeeds and populates both store and in-memory cache.
+	st.err = nil
+	if err := s.recordPREventRoute(ctx, "recovered-key", prEventRouteRecord{TodoID: task.ID, Outcome: prRouteOutcomeSent}); err != nil {
+		t.Fatalf("recordPREventRoute after recovery: %v", err)
+	}
+	s.prEventRoute.mu.Lock()
+	_, ok := s.prEventRoute.seen["recovered-key"]
+	s.prEventRoute.mu.Unlock()
+	if !ok {
+		t.Fatal("in-memory seen missing recovered-key after successful PutSetting")
+	}
+}
+
+func TestPRStatusFailingCheckDigestStableAcrossPaginationAndReruns(t *testing.T) {
+	const head = "deadbeef01020304"
+
+	t.Run("paginates beyond 100 check runs and stays invariant under page churn and rerun IDs", func(t *testing.T) {
+		phase := 0
+		srvComplete := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.RequestURI() {
+			case "/repos/example/app/pulls/12":
+				_, _ = fmt.Fprintf(w, `{"state":"open","head":{"sha":%q},"user":{"login":"author"}}`, head)
+			case "/repos/example/app/pulls/12/reviews?per_page=100":
+				_, _ = fmt.Fprint(w, `[]`)
+			case "/repos/example/app/commits/" + head + "/status":
+				_, _ = fmt.Fprint(w, `{"state":"success","total_count":0}`)
+			case "/repos/example/app/commits/" + head + "/check-runs?per_page=100&filter=latest":
+				if phase == 0 {
+					_, _ = fmt.Fprint(w, `{"total_count":3,"check_runs":[{"id":1001,"name":"Go  Test","status":"completed","conclusion":"failure"},{"id":1002,"name":"ok-1","status":"completed","conclusion":"success"}]}`)
+				} else {
+					_, _ = fmt.Fprint(w, `{"total_count":3,"check_runs":[{"id":2001,"name":"Lint","status":"completed","conclusion":"failure"},{"id":1002,"name":"ok-1","status":"completed","conclusion":"success"}]}`)
+				}
+			case "/repos/example/app/commits/" + head + "/check-runs?per_page=100&filter=latest&page=2":
+				if phase == 0 {
+					_, _ = fmt.Fprint(w, `{"total_count":3,"check_runs":[{"id":2001,"name":"Lint","status":"completed","conclusion":"failure"}]}`)
+				} else {
+					_, _ = fmt.Fprint(w, `{"total_count":3,"check_runs":[{"id":3001,"name":"go test","status":"completed","conclusion":"failure"}]}`)
+				}
+			default:
+				http.Error(w, "unexpected: "+r.URL.RequestURI(), http.StatusNotFound)
+			}
+		}))
+		defer srvComplete.Close()
+
+		forge := githubForge{base: srvComplete.URL, client: srvComplete.Client()}
+		st1, err := forge.PRStatus(context.Background(), "example/app", 12)
+		if err != nil {
+			t.Fatal(err)
+		}
+		phase = 1
+		st2, err := forge.PRStatus(context.Background(), "example/app", 12)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st1.failingCheck.Digest != "go test,lint" || st2.failingCheck.Digest != "go test,lint" {
+			t.Fatalf("multi-page digests = %q / %q, want go test,lint", st1.failingCheck.Digest, st2.failingCheck.Digest)
+		}
+
+		// End-to-end routing deduplicates both sweeps into a single Agent send.
+		idleAgent := proto.Session{
+			SessionID: "agent-ci-page", MachineID: "box", Cwd: "/code/app", Agent: "claude", Title: "worker",
+			Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now(),
+		}
+		s, f, _ := newBoundPRTask(t, &memStore{}, idleAgent)
+		turnPREventsRouteOn(t, s)
+		s.deploy.forge = forge
+		base := time.Now().UTC().Truncate(time.Second)
+		before := len(sentToAgent(f))
+		phase = 0
+		s.sweepPRStatuses(context.Background(), base)
+		phase = 1
+		s.sweepPRStatuses(context.Background(), base.Add(deployRecheck))
+		if got := len(sentToAgent(f)) - before; got != 1 {
+			t.Fatalf("pagination churn re-routed CI failure: sends=%d, want 1", got)
+		}
+	})
+
+	t.Run("truncated check runs use stable head-scoped digest despite page membership churn", func(t *testing.T) {
+		phase := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.RequestURI() {
+			case "/repos/example/app/pulls/12":
+				_, _ = fmt.Fprintf(w, `{"state":"open","head":{"sha":%q},"user":{"login":"author"}}`, head)
+			case "/repos/example/app/pulls/12/reviews?per_page=100":
+				_, _ = fmt.Fprint(w, `[]`)
+			case "/repos/example/app/commits/" + head + "/status":
+				_, _ = fmt.Fprint(w, `{"state":"success","total_count":0}`)
+			case "/repos/example/app/commits/" + head + "/check-runs?per_page=100&filter=latest":
+				if phase == 0 {
+					_, _ = fmt.Fprint(w, `{"total_count":1500,"check_runs":[{"id":101,"name":"check-a","status":"completed","conclusion":"failure"}]}`)
+				} else {
+					_, _ = fmt.Fprint(w, `{"total_count":1500,"check_runs":[{"id":202,"name":"check-b","status":"completed","conclusion":"failure"}]}`)
+				}
+			case "/repos/example/app/commits/" + head + "/check-runs?per_page=100&filter=latest&page=2":
+				_, _ = fmt.Fprint(w, `{"total_count":1500,"check_runs":[]}`)
+			default:
+				http.Error(w, "unexpected: "+r.URL.RequestURI(), http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		forge := githubForge{base: srv.URL, client: srv.Client()}
+		st1, err := forge.PRStatus(context.Background(), "example/app", 12)
+		if err != nil {
+			t.Fatal(err)
+		}
+		phase = 1
+		st2, err := forge.PRStatus(context.Background(), "example/app", 12)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st1.failingCheck.Digest != "truncated" || st2.failingCheck.Digest != "truncated" {
+			t.Fatalf("truncated digests = %q / %q, want truncated", st1.failingCheck.Digest, st2.failingCheck.Digest)
+		}
+		st1.URL, st2.URL = "https://github.com/example/app/pull/12", "https://github.com/example/app/pull/12"
+		ev1 := extractPREvents(Todo{ID: "t1", PRURL: st1.URL}, todoStage{PR: st1.URL}, nil, st1)
+		ev2 := extractPREvents(Todo{ID: "t1", PRURL: st2.URL}, todoStage{PR: st2.URL}, nil, st2)
+		if len(ev1) != 1 || len(ev2) != 1 || ev1[0].EventID != "checks:truncated" || ev2[0].EventID != "checks:truncated" {
+			t.Fatalf("truncated event IDs = %+v / %+v, want checks:truncated", ev1, ev2)
+		}
+	})
+}
+
+func TestPREventRoutePruneDeterministicAndProtectsJustRecorded(t *testing.T) {
+	s, _ := newQuietServiceOn(t, &memStore{})
+	ctx := context.Background()
+	openTodo, err := s.createTodo(ctx, "Open task", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedTodo, err := s.createTodo(ctx, "Closed task", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doneAt := time.Now().UTC()
+	s.todos.mu.Lock()
+	s.todos.todos[closedTodo.ID].DoneAt = &doneAt
+	s.todos.mu.Unlock()
+
+	ts := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	protectKey := "0000-just-recorded" // alphabetically smallest key; would be evicted first if unprotected
+	buildMap := func() map[string]prEventRouteRecord {
+		m := make(map[string]prEventRouteRecord, prEventRouteDedupCap+15)
+		m[protectKey] = prEventRouteRecord{TodoID: openTodo.ID, Outcome: prRouteOutcomeSent, At: ts}
+		for i := range 5 {
+			m[fmt.Sprintf("closed-%04d", i)] = prEventRouteRecord{TodoID: closedTodo.ID, Outcome: prRouteOutcomeSent, At: ts.Add(time.Hour)}
+		}
+		for i := range prEventRouteDedupCap + 9 {
+			m[fmt.Sprintf("open-%04d", i)] = prEventRouteRecord{TodoID: openTodo.ID, Outcome: prRouteOutcomeSent, At: ts}
+		}
+		return m
+	}
+
+	m1 := buildMap()
+	m2 := buildMap()
+	s.prunePREventRouteMap(m1, protectKey)
+	s.prunePREventRouteMap(m2, protectKey)
+
+	if len(m1) != prEventRouteDedupCap || len(m2) != prEventRouteDedupCap {
+		t.Fatalf("pruned lengths = %d / %d, want %d", len(m1), len(m2), prEventRouteDedupCap)
+	}
+	if _, ok := m1[protectKey]; !ok {
+		t.Fatalf("just-recorded key %q was evicted during pruning", protectKey)
+	}
+	// Closed todo entries must be evicted before open todo entries even when newer.
+	for i := range 5 {
+		if _, ok := m1[fmt.Sprintf("closed-%04d", i)]; ok {
+			t.Fatalf("closed todo entry closed-%04d survived pruning", i)
+		}
+	}
+	// Same-timestamp open entries must be evicted deterministically in ascending key order (open-0000..open-0009).
+	for i := range 10 {
+		if _, ok := m1[fmt.Sprintf("open-%04d", i)]; ok {
+			t.Fatalf("expected deterministic eviction of open-%04d", i)
+		}
+	}
+	if _, ok := m1["open-0010"]; !ok {
+		t.Fatal("expected open-0010 to survive deterministic pruning")
+	}
+	for k := range m1 {
+		if _, ok := m2[k]; !ok {
+			t.Fatalf("nondeterministic pruning: key %q in m1 but not m2", k)
+		}
 	}
 }

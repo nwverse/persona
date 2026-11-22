@@ -126,55 +126,98 @@ func (s *Service) releasePREventClaim(key string) {
 	b.mu.Unlock()
 }
 
-func (s *Service) recordPREventRoute(ctx context.Context, key string, rec prEventRouteRecord) {
+func (s *Service) recordPREventRoute(ctx context.Context, key string, rec prEventRouteRecord) error {
 	b := &s.prEventRoute
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
+
 	b.mu.Lock()
 	s.loadPREventRouteSeenLocked(ctx)
+	st := s.store()
+	if st != nil && !b.loaded {
+		delete(b.inFlight, key)
+		b.mu.Unlock()
+		return errors.New("pr_event_route: dedupe history not loaded")
+	}
 	next := maps.Clone(b.seen)
 	if next == nil {
 		next = map[string]prEventRouteRecord{}
 	}
+	if rec.At.IsZero() {
+		rec.At = time.Now().UTC()
+	}
 	next[key] = rec
 	if len(next) > prEventRouteDedupCap {
-		s.prunePREventRouteMap(next)
+		s.prunePREventRouteMap(next, key)
 	}
-	st := s.store()
+	b.mu.Unlock()
+
+	if st != nil {
+		if err := st.PutSetting(context.WithoutCancel(ctx), prEventRouteDedupKey, next); err != nil {
+			b.mu.Lock()
+			delete(b.inFlight, key)
+			b.mu.Unlock()
+			s.logf("pr_event_route: save dedupe history: %v", err)
+			return err
+		}
+	}
+
+	b.mu.Lock()
 	b.seen = next
 	delete(b.inFlight, key)
 	b.mu.Unlock()
-	if st != nil {
-		if err := st.PutSetting(context.WithoutCancel(ctx), prEventRouteDedupKey, next); err != nil {
-			s.logf("pr_event_route: save dedupe history: %v", err)
-		}
-	}
+	return nil
 }
 
-func (s *Service) prunePREventRouteMap(m map[string]prEventRouteRecord) {
+func (s *Service) prunePREventRouteMap(m map[string]prEventRouteRecord, protectKey string) {
+	openTodos := map[string]bool{}
 	s.todos.mu.RLock()
-	loaded := s.todos.loaded
-	for k, rec := range m {
-		if loaded && rec.TodoID != "" {
-			if todo := s.todos.todos[rec.TodoID]; todo == nil || todo.DoneAt != nil {
-				delete(m, k)
+	todosLoaded := s.todos.loaded
+	if todosLoaded {
+		for id, todo := range s.todos.todos {
+			if todo != nil && todo.DoneAt == nil {
+				openTodos[id] = true
 			}
 		}
 	}
 	s.todos.mu.RUnlock()
+	if todosLoaded {
+		for k, rec := range m {
+			if k == protectKey {
+				continue
+			}
+			if rec.TodoID != "" && !openTodos[rec.TodoID] {
+				delete(m, k)
+			}
+		}
+	}
 	if len(m) <= prEventRouteDedupCap {
 		return
 	}
 	type entry struct {
-		key string
-		at  time.Time
+		key  string
+		open bool
+		at   time.Time
 	}
 	list := make([]entry, 0, len(m))
 	for k, rec := range m {
-		list = append(list, entry{key: k, at: rec.At})
+		if k == protectKey {
+			continue
+		}
+		isOpen := !todosLoaded || (rec.TodoID != "" && openTodos[rec.TodoID])
+		list = append(list, entry{key: k, open: isOpen, at: rec.At})
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].at.Before(list[j].at) })
-	for i := 0; i < len(list)-prEventRouteDedupCap; i++ {
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].open != list[j].open {
+			return !list[i].open
+		}
+		if !list[i].at.Equal(list[j].at) {
+			return list[i].at.Before(list[j].at)
+		}
+		return list[i].key < list[j].key
+	})
+	excess := len(m) - prEventRouteDedupCap
+	for i := 0; i < excess && i < len(list); i++ {
 		delete(m, list[i].key)
 	}
 }
@@ -305,11 +348,10 @@ func (s *Service) routePREvents(ctx context.Context, t Todo, cur todoStage, held
 	if len(events) == 0 {
 		return false, false
 	}
-	now := time.Now().UTC()
 	for _, ev := range events {
 		key := prEventDedupeKey(ev)
 		if existing, dup := s.claimPREvent(ctx, key); dup {
-			if existing.Outcome != prRouteOutcomeFallback {
+			if existing.Outcome != prRouteOutcomeFallback && existing.Outcome != prRouteOutcomeUncertain {
 				if ev.Kind == prEventKindConflict {
 					conflictRouted = true
 				}
@@ -321,7 +363,23 @@ func (s *Service) routePREvents(ctx context.Context, t Todo, cur todoStage, held
 		}
 		outcome, err := s.deliverPREventToAgent(ctx, t, ev, key)
 		if err == nil {
-			s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: outcome, At: now})
+			if recErr := s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: outcome, At: time.Now().UTC()}); recErr != nil {
+				s.logf("task %s: PR %s (%s@%s) delivered to bound agent (%s) but dedupe persistence failed (%v); preserving supervisor fallback",
+					t.ID, ev.Kind, ev.PRURL, shortSHA(ev.HeadSHA), outcome, recErr)
+				if t.Supervision != nil {
+					switch ev.Kind {
+					case prEventKindConflict:
+						// Leave conflictRouted=false so applyPRStatus emits the existing sigPRConflict signal.
+					case prEventKindReview:
+						if !parkReviewChangeRequested(held, status) {
+							s.signal(prEventFallbackSignal(t.ID, ev, recErr))
+						}
+					case prEventKindCIFailure:
+						s.signal(prEventFallbackSignal(t.ID, ev, recErr))
+					}
+				}
+				continue
+			}
 			s.logf("task %s: PR %s (%s@%s) routed to bound agent (%s)", t.ID, ev.Kind, ev.PRURL, shortSHA(ev.HeadSHA), outcome)
 			if ev.Kind == prEventKindConflict {
 				conflictRouted = true
@@ -334,10 +392,17 @@ func (s *Service) routePREvents(ctx context.Context, t Todo, cur todoStage, held
 		s.logf("task %s: PR %s (%s@%s) direct routing unavailable (%v); falling back to supervisor",
 			t.ID, ev.Kind, ev.PRURL, shortSHA(ev.HeadSHA), err)
 		if sendUnknown(err) {
-			// Do not blindly resend an uncertain delivery on the next sweep; record and fall back so the supervisor checks.
-			s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: prRouteOutcomeUncertain, At: now})
+			// Do not blindly resend an uncertain delivery on the next sweep; record agent_uncertain and
+			// preserve the established supervisor fallback wakes (including sigPRConflict and parked sigReview).
+			if recErr := s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: prRouteOutcomeUncertain, At: time.Now().UTC()}); recErr != nil {
+				s.logf("task %s: PR %s (%s@%s) dedupe persistence failed after uncertain delivery: %v",
+					t.ID, ev.Kind, ev.PRURL, shortSHA(ev.HeadSHA), recErr)
+			}
 		} else if t.Supervision != nil {
-			s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: prRouteOutcomeFallback, At: now})
+			if recErr := s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: prRouteOutcomeFallback, At: time.Now().UTC()}); recErr != nil {
+				s.logf("task %s: PR %s (%s@%s) dedupe persistence failed on fallback: %v",
+					t.ID, ev.Kind, ev.PRURL, shortSHA(ev.HeadSHA), recErr)
+			}
 		} else {
 			s.releasePREventClaim(key)
 			continue
