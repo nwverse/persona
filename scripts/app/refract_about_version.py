@@ -249,6 +249,13 @@ def restore_reviewed_output(reviewed: bytes, generated: Path | None = None) -> N
         fail("Could not restore the reviewed Kotlin after a generation failure: restored bytes differ")
 
 
+def remove_new_output(generated: Path) -> None:
+    """Remove a failed run's new output, or preserve an explicit cleanup failure."""
+    generated.unlink(missing_ok=True)
+    if generated.exists():
+        fail("New unreviewed Kotlin still exists after removal")
+
+
 def check_unsupported_input(cli: Path, work: Path) -> None:
     """A valid sibling must not be published when another input has no native-component mapping."""
     unsupported = work / "UnsupportedAboutControl.swift"
@@ -261,7 +268,7 @@ struct UnsupportedAboutControl: View {
     }
 }
 """, encoding="utf-8")
-    before = GENERATED.read_bytes()
+    before = GENERATED.read_bytes() if GENERATED.exists() else None
     for mode in ("check", "generate"):
         android_out = work / mode / "android"
         harmony_out = work / mode / "harmony"
@@ -277,7 +284,8 @@ struct UnsupportedAboutControl: View {
                 fail(f"Unsupported component lacked a source-located diagnostic in {mode} mode: {diagnostics}")
         if android_out.exists() or harmony_out.exists():
             fail(f"Unsupported component published partial output in {mode} mode")
-        if GENERATED.read_bytes() != before:
+        current = GENERATED.read_bytes() if GENERATED.exists() else None
+        if current != before:
             fail(f"Rejected {mode} changed the reviewed generated Kotlin")
 
 
@@ -421,9 +429,10 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="persona-refract-about-") as temporary:
             work = Path(temporary)
             cli = args.cli.resolve() if args.cli is not None else build_cli(work, lock)
-            before = GENERATED.read_bytes()
+            before = GENERATED.read_bytes() if GENERATED.exists() else None
             check_unsupported_input(cli, work / "rejected")
-            if GENERATED.read_bytes() != before:
+            current = GENERATED.read_bytes() if GENERATED.exists() else None
+            if current != before:
                 restore_reviewed_output(before)
                 fail("Rejected input changed the reviewed Kotlin; the original reviewed bytes were restored")
             if args.mode == "generate":
@@ -469,11 +478,17 @@ def main() -> int:
                 report_process_failure(error)
             print(f"Refract About Version: FAILED: {error}", file=sys.stderr)
             try:
-                restore_reviewed_output(before)
+                if before is not None:
+                    restore_reviewed_output(before)
+                else:
+                    remove_new_output(GENERATED)
             except (ValueError, OSError) as restore_error:
                 print(f"Refract About Version: secondary restoration failure: {restore_error}", file=sys.stderr)
                 return 1
-            print("Refract About Version: original reviewed Kotlin restored after generation failure", file=sys.stderr)
+            if before is not None:
+                print("Refract About Version: original reviewed Kotlin restored after generation failure", file=sys.stderr)
+            else:
+                print("Refract About Version: new unreviewed Kotlin removed after generation failure", file=sys.stderr)
             return 1
         if isinstance(error, subprocess.CalledProcessError):
             report_process_failure(error)
