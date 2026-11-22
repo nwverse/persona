@@ -16,7 +16,8 @@ what failed in it:
                    each partition's printed whole, so it is read the same way (#12765)
   python -m unittest
                    the failing test ids (FAIL: and ERROR: lines; setUpClass names its class)
-  anything else    the command itself, a guard: the privacy scan, a ratchet, a typecheck, a checker script
+  anything else    the command itself, a guard: the privacy scan, a ratchet, gofmt, go vet (the Windows one
+                   through env, which it keeps), a typecheck, a checker script
 
 rerun prints the command that reruns just that, one line per failing package, suite or command of job <n>, for the
 summary's "rerun:" lines. A timed-out step reruns whole.
@@ -78,8 +79,14 @@ GO_RUNNER = "go_test_partitioned.py"
 
 
 def go_command(argv):
-    """The go command argv runs: argv itself for go, the one it hands the partitioned runner, or None for another."""
+    """The go command argv runs: argv itself for go, the one it hands the partitioned runner, the one env runs after
+    its assignments (check-fast's Windows vet: env GOOS=windows GOARCH=amd64 go vet ..., #12894), or None for another."""
     rest = list(argv)
+    if rest[:1] and posixpath.basename(rest[0]) == "env":
+        rest = rest[1:]
+        while rest and "=" in rest[0] and not rest[0].startswith("-"):
+            rest = rest[1:]
+        return rest if rest[:1] == ["go"] else None
     if rest[:1] and posixpath.basename(rest[0]).startswith("python"):
         rest = rest[1:]
         while rest and rest[0].startswith("-"):  # the interpreter's own flags (-B, -I)
@@ -511,7 +518,8 @@ class Step:
         if self.status != "FAIL":
             return [self.whole(root, "it timed out here")]
         argv = self.argv
-        if (go_command(argv) or [])[:2] == ["go", "test"]:
+        # A go test that env runs reruns whole: the named tests' reruns would lose its environment.
+        if (go_command(argv) or [])[:2] == ["go", "test"] and posixpath.basename(argv[0]) != "env":
             return self.go_failures(root)
         modules = unittest_modules(argv)
         if modules is not None:

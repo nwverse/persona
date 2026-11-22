@@ -187,6 +187,8 @@ class RerunLineTests(HelperTestCase):
         go = ["go", "test", "./..."]
         for argv, expected in ((go, go), ([*RUNNER, *go], go), (["python3", "-I", "x/go_test_partitioned.py", *go], go),
                                (["../scripts/test/go_test_partitioned.py", *go], go),
+                               (["env", "GOOS=windows", "GOARCH=amd64", "go", "vet", "./..."], ["go", "vet", "./..."]),
+                               (["env", "GOOS=windows", "python3", "x.py"], None), (["env"], None),
                                (["python3", "scripts/privacy_check.py"], None), (["python3", "-m", "unittest"], None),
                                (["python3", "go_test_partitioned.py"], None), (["npm", "test"], None), ([], None)):
             with self.subTest(argv=argv):
@@ -354,6 +356,20 @@ class CompareTests(HelperTestCase):
         checkout = compare.WorkingTree(self.root)
         command.compare(checkout, runner, compare.Timeouts(300, 120), lambda subject, output: "a log")
         self.assertEqual([(300, "go")], [(timeout, slot) for _, _, timeout, slot in runner.calls])
+
+    def test_a_go_command_env_runs_reruns_whole_with_its_environment(self):
+        # check-fast's Windows vet (#12894): its rerun keeps GOOS, and it reruns at the base in a go slot under the go
+        # timeout. A go test env runs stays whole too, since narrowing it to named tests would drop the environment.
+        vet = ["env", "GOOS=windows", "GOARCH=amd64", "go", "vet", "-ldflags=", "./internal/foo/..."]
+        windows = self.step("FAIL", "server", "vet: x.go:3:2: undefined: syscall.Kill\n", *vet)
+        named = self.step("FAIL", "server", GO_HEAD, "env", "GOOS=windows", "go", "test", "-count=1", "./...")
+        self.assertEqual(["(cd server && env GOOS=windows GOARCH=amd64 go vet -ldflags= ./internal/foo/...)",
+                          "(cd server && env GOOS=windows go test -count=1 ./...)"],
+                         compare.rerun_lines([windows, named], self.root))
+        command = compare.Command("server", vet, "GOOS=windows go vet ./internal/foo/...", root=self.root)
+        runner = FakeRunner(lambda argv, cwd: (1, "vet: x.go:3:2: undefined: syscall.Kill\n"))
+        command.compare(compare.WorkingTree(self.root), runner, compare.Timeouts(300, 120), lambda subject, out: "a log")
+        self.assertEqual([(vet, 300, "go")], [(argv, timeout, slot) for argv, _, timeout, slot in runner.calls])
 
     def test_a_command_narrows_to_itself_or_nothing(self):
         command = compare.Command(".", ["python3", "x.py"], "python3 x.py", root=self.root)
