@@ -70,6 +70,7 @@
   "scope_agents_control": "Control agents (create, message, interrupt, answer questions, approve)",
   "scope_agents_permission_mode": "Change the permission mode of the chats it started itself",
   "scope_machines_read": "View your computers (connectivity and load)",
+  "scope_browser_run": "Run scripts in an isolated tab of your paired computer's browser",
   "scope_notify": "Send notifications to your devices",
   "scope_assistant_ask": "Start Persona chats and read chat activity",
   "scope_assistant_read": "Read your Persona chats (your messages and its replies)",
