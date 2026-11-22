@@ -167,10 +167,10 @@ file. The append comes after the literal, which stays first and unchanged:
   serves.
 - **`proto.Features`**: `func init() { Features = append(Features, FeatureX) }` in `proto/features_<domain>.go`, beside
   the flag's constant, and `scripts/test/test_doc_wire.py` reads the appends too. Not on `main` yet (#7891).
-- **`extwire.RouteScopes`**: `addRouteScopes(map[string]string{…})` from an `init()` in `extwire/<domain>_scopes.go`.
-  It checks each entry as it is added and panics at start-up on a route that already has a scope, or on an entry that
-  is no route pattern or names no scope. `extwire/inbox_scopes.go` does this for the Inbox's routes (step S6 of the
-  Inbox plan), and archguard's `TestCentralListsGainNoInboxEntry` keeps them there.
+- **`extwire.RouteScopes`**: `addRouteScopes(…)` from an `init()` in `extwire/<domain>_scopes.go`, which panics on a key
+  that is already there, on a key that is no route pattern and on an empty scope, so a bad entry stops every program
+  that imports `extwire` at start-up. `extwire/inbox_scopes.go` does this for the Inbox's routes (step S6 of the Inbox
+  plan), and archguard's `TestCentralListsGainNoInboxEntry` keeps them there.
   `server/internal/hub/testdata/route_scopes.txt` stays one sorted golden, the permission list a reviewer reads.
 
 The hub's bus handlers already work this way: `handleBus("notify.request", (*Hub).busNotifyRequest)` runs from an

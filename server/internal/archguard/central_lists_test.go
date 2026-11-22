@@ -69,6 +69,17 @@ var centralLists = []centralList{
 
 func (l centralList) file() string { return "testdata/central_lists/" + l.id + ".txt" }
 
+// centralListByID is the row of centralLists with this id. A test names the list it plants in by id, not by its place
+// in centralLists, so a row added beside it moves nothing the test reads.
+func centralListByID(t *testing.T, id string) centralList {
+	t.Helper()
+	i := slices.IndexFunc(centralLists, func(l centralList) bool { return l.id == id })
+	if i < 0 {
+		t.Fatalf("no central list %q", id)
+	}
+	return centralLists[i]
+}
+
 func TestCentralListsTakeNoNewName(t *testing.T) {
 	for _, l := range centralLists {
 		src, err := os.ReadFile(filepath.Join(serverDir, l.source))
@@ -311,7 +322,6 @@ func TestCentralListNames(t *testing.T) {
 // notice, a pending one passes before and after its PR merges, and the list's format is checked.
 func TestCentralListFreeze(t *testing.T) {
 	routes, prompts := centralLists[0], centralLists[1]
-	scopes := centralLists[2]
 	const bus = `package assistantwire
 
 const P = "/api/v1/p"
@@ -325,6 +335,18 @@ var Routes = []string{
 var Other = []string{"GET /api/v1/other"}
 
 func init() { Routes = append(Routes, "GET /api/v1/appended") }
+`
+	// The route scopes' list is read like the routes' one, from a literal, but by its keys. A route given its scope from
+	// a domain's init() is no key of the literal, so it passes.
+	scopes := centralListByID(t, "extwire_route_scopes")
+	const scope = `package extwire
+
+var RouteScopes = map[string]string{
+	"GET /api/v1/a": ScopeA,
+	"PUT /api/v1/b": ScopeB, // a comment
+}
+
+func init() { addRouteScopes(map[string]string{"GET /api/v1/registered": ScopeA}) }
 `
 	const prompt = `package prompts
 
@@ -347,19 +369,9 @@ func (s Snapshot) Up() int { return 0 }
 
 func (b *B[T]) Down() int { return 0 }
 `
-	// A route given its scope from a domain's init() is no key of the literal, so it passes.
-	const scope = `package extwire
-
-var RouteScopes = map[string]string{
-	"GET /api/v1/a": ScopeA,
-	"PUT /api/v1/b": ScopeB, // a comment
-}
-
-func init() { addRouteScopes(map[string]string{"GET /api/v1/registered": ScopeA}) }
-`
 	const routesList = "# a header\n\"GET \" + P\n\"GET /api/v1/a\"\n\"POST /api/v1/c\"\n\"PUT /api/v1/b\"\n"
-	const promptsList = "A\nB\nB.Down\nC\nRenderA\nSnapshot\nSnapshot.Up\nv\n"
 	const scopesList = "\"GET /api/v1/a\"\n\"PUT /api/v1/b\"\n"
+	const promptsList = "A\nB\nB.Down\nC\nRenderA\nSnapshot\nSnapshot.Up\nv\n"
 
 	check := func(l centralList, src, list string) ([]string, []string) {
 		t.Helper()
@@ -370,7 +382,6 @@ func init() { addRouteScopes(map[string]string{"GET /api/v1/registered": ScopeA}
 		return failures, notices
 	}
 	const routeSeam, promptSeam = "assistantwire/<domain>.go", "prompts/assistant_<topic>.go"
-	const scopeSeam = "extwire/<domain>_scopes.go"
 	for _, c := range []struct {
 		l          centralList
 		src, list  string
@@ -379,11 +390,11 @@ func init() { addRouteScopes(map[string]string{"GET /api/v1/registered": ScopeA}
 		name, seam string // what the failure names
 	}{
 		{routes, bus, routesList, "var Routes = []string{\n", "\t\"DELETE /api/v1/planted\",\n", `"DELETE /api/v1/planted"`, routeSeam},
+		{scopes, scope, scopesList, "var RouteScopes = map[string]string{\n", "\t\"DELETE /api/v1/planted\": ScopeA,\n",
+			`"DELETE /api/v1/planted"`, "extwire/<domain>_scopes.go"},
 		{prompts, prompt, promptsList, "func init() {}\n", "func RenderPlanted() string { return \"\" }\n", "RenderPlanted", promptSeam},
 		{prompts, prompt, promptsList, "func init() {}\n", "func (s Snapshot) Planted() int { return 0 }\n", "Snapshot.Planted", promptSeam},
 		{prompts, prompt, promptsList, "func init() {}\n", "type Planted struct{}\n", "Planted", promptSeam},
-		{scopes, scope, scopesList, "var RouteScopes = map[string]string{\n", "\t\"DELETE /api/v1/planted\": ScopeA,\n",
-			`"DELETE /api/v1/planted"`, scopeSeam},
 	} {
 		if failures, notices := check(c.l, c.src, c.list); len(failures)+len(notices) != 0 {
 			t.Errorf("%s: unplanted source reports %q, %q", c.l.id, failures, notices)
