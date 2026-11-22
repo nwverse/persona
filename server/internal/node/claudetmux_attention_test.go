@@ -50,6 +50,9 @@ func TestTmuxClaudeWaitingOnADialogIsNotComputerOnly(t *testing.T) {
 	if s.PaneID != "tmux:%11" || s.Capabilities == nil || !s.Capabilities.Terminal {
 		t.Fatalf("not driven through its pane: %+v", s)
 	}
+	if cp := s.Capabilities; cp.QueueEdit == nil || !*cp.QueueEdit || cp.QueueSendNow == nil || !*cp.QueueSendNow {
+		t.Fatalf("its pane takes the queue's keys (#12789): %+v", cp)
+	}
 	if s.Status != proto.StatusBlocked || s.AttentionReason != want {
 		t.Fatalf("attention %q, want the dialog %q (status %s)", s.AttentionReason, want, s.Status)
 	}

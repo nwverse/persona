@@ -791,6 +791,7 @@ func (h *Hub) setPushGrading(ctx context.Context, on bool) error {
 	if err := h.push.setPushGrading(ctx, on); err != nil {
 		return err
 	}
+	h.broadcast(map[string]any{"type": "push_grading", "enabled": on})
 	h.assistantUpdated()
 	return nil
 }

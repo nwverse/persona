@@ -268,6 +268,10 @@ type RecMachine struct {
 
 // State is one machine as the manager has it.
 type State struct {
+	// TransportFor is an owning manager's retained transport identity. The hub
+	// validates the referenced computer belongs to that manager; it never resolves
+	// sessions or stores business mappings itself.
+	TransportFor string `json:"transport_for,omitempty"`
 	// Machine is what the apps get, but for what the hub adds (system, computer, browser).
 	Machine proto.Machine `json:"machine"`
 	// Config is the machine's entry: hub.json's, or a member's (a derived machine), as the hub gave it.
@@ -544,10 +548,3 @@ const (
 	// is a HeldAnswer. Nothing was written to the node.
 	CodeHeld = "held"
 )
-
-// OwnerUsageRoutes are the only usage-source operations opened by the hub owner Bearer token.
-// They do not grant access to admin settings, deletion, or other administrator APIs.
-var OwnerUsageRoutes = []string{
-	"POST /api/v1/usage-sources/test",
-	"PUT /api/v1/usage-sources/{id}",
-}

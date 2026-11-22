@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "ci"))
@@ -326,24 +327,35 @@ def problems(root, table, readme_text, plan_text, base_table=None, checks=None):
     return found
 
 
-def _git(*args):
-    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=60)
+def _git(root, *args):
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, timeout=60)
 
 
-def base_table():
+def base_table(root=ROOT):
     """The table at the base commit (CI_BASE_SHA, else the merge base with origin's default branch), or None: no base
-    here, or the table is new there."""
+    here, or the table is new there.
+
+    Whether the table is at the base comes from the tree, not from reading it: the scripts shards' checkout is
+    blobless (#12753), so the base's copy of a changed table is fetched on first read, and a failed fetch must not
+    count as "new there" (which would skip the only-go-down check)."""
     base = os.environ.get("CI_BASE_SHA", "").strip()
     if not base:
         for ref in ("refs/remotes/origin/HEAD", "refs/remotes/origin/main"):
-            merge = _git("merge-base", "HEAD", ref)
+            merge = _git(root, "merge-base", "HEAD", ref)
             if merge.returncode == 0:
                 base = merge.stdout.strip()
                 break
     if not base:
         return None
-    shown = _git("show", f"{base}:{TABLE}")
-    return json.loads(shown.stdout) if shown.returncode == 0 else None
+    listed = _git(root, "ls-tree", "-z", "--full-tree", base, "--", TABLE)
+    if listed.returncode != 0:
+        raise RuntimeError(f"cannot read the tree of the base commit {base}: {listed.stderr.strip()}")
+    if not any(entry.partition("\t")[2] == TABLE for entry in listed.stdout.split("\0")):
+        return None
+    shown = _git(root, "show", f"{base}:{TABLE}")
+    if shown.returncode != 0:
+        raise RuntimeError(f"cannot read {base}:{TABLE}: {shown.stderr.strip()}")
+    return json.loads(shown.stdout)
 
 
 def _read(path):
@@ -366,6 +378,47 @@ class RealTableTests(unittest.TestCase):
                        "ownerBadge", "waitingAgents", "setBadge", "islandState", "needsYou", "linkAttention",
                        "tellInboxNeedsYou", "Counts", "treeCounts", "counts"):
             self.assertIn(symbol, symbols)
+
+
+class BaseTableTests(unittest.TestCase):
+    """The base's table in a blobless clone, as the scripts shards check it out (#12753)."""
+
+    def test_a_base_table_that_cannot_be_fetched_is_an_error_not_a_new_table(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ):
+            os.environ.pop("CI_BASE_SHA", None)
+            work = Path(directory)
+            source, origin, clone = work / "source", work / "origin.git", work / "clone"
+            table = source / TABLE
+
+            def git(*args, cwd=source):
+                subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+                                "-c", "core.hooksPath=/dev/null", *args], cwd=cwd, check=True, capture_output=True,
+                               timeout=60)
+            source.mkdir()
+            (source / "README.md").write_text("fixture\n")
+            git("init", "-q", "-b", "main")
+            git("add", ".")
+            git("commit", "-q", "-m", "no table yet")
+            table.parent.mkdir(parents=True)
+            table.write_text('{"surfaces": ["base"]}\n')
+            git("add", ".")
+            git("commit", "-q", "-m", "the table")
+            git("checkout", "-q", "-b", "change")
+            table.write_text('{"surfaces": ["changed"]}\n')
+            git("commit", "-q", "-am", "change the table")
+            git("checkout", "-q", "main")
+            git("clone", "-q", "--bare", str(source), str(origin), cwd=work)
+            git("config", "uploadpack.allowFilter", "true", cwd=origin)
+            git("clone", "-q", "--filter=blob:none", "--branch", "change", origin.as_uri(), str(clone), cwd=work)
+            git("remote", "set-url", "origin", (work / "gone.git").as_uri(), cwd=clone)
+            with self.assertRaisesRegex(RuntimeError, "cannot read"):
+                base_table(clone)
+            git("remote", "set-url", "origin", origin.as_uri(), cwd=clone)
+            self.assertEqual({"surfaces": ["base"]}, base_table(clone))
+            # Against a base without the table, the table is new there, which the tree says without a fetch.
+            git("remote", "set-url", "origin", (work / "gone.git").as_uri(), cwd=clone)
+            git("update-ref", "refs/remotes/origin/main", "refs/remotes/origin/main~1", cwd=clone)
+            self.assertIsNone(base_table(clone))
 
 
 class SeededViolationTests(unittest.TestCase):
