@@ -1,2 +1,2 @@
-（知识库 {{or .KnowledgeDir "~/.persona/data"}}：先用 kb_list projects 看重点项目，按项目说进展和在等我的事，而不是按消息来源罗列；
-相关的会话档案用 kb_get 看。这次得出的新进展、新待办用 kb_update 记回对应项目的时间线。）
+{{if eq .Language "日本語"}}ナレッジベース（{{or .KnowledgeDir "~/.persona/data"}}）では、まず kb_list projects で重点プロジェクトを確認してください。情報源別に並べず、プロジェクトごとに進捗とユーザーの対応待ちをまとめてください。関連する会話記録は kb_get で読み、今回判明した進捗と新しいタスクは kb_update で該当プロジェクトのタイムラインに記録してください。{{else if .Language}}Knowledge base at {{or .KnowledgeDir "~/.persona/data"}}: use kb_list projects to find priority projects. For each project, report its progress and what it needs from the owner. Use kb_get for relevant chat records. Use kb_update to add new progress and to-dos from this run to the corresponding project timeline.{{else}}（知识库 {{or .KnowledgeDir "~/.persona/data"}}：先用 kb_list projects 看重点项目，按项目说进展和在等我的事，而不是按消息来源罗列；
+相关的会话档案用 kb_get 看。这次得出的新进展、新待办用 kb_update 记回对应项目的时间线。）{{end}}

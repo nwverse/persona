@@ -43,7 +43,7 @@ func TestUpgradeTurnsFactsOnForADefaultPrompt(t *testing.T) {
 	if !tasks[0].Facts || !tasks[1].Facts || tasks[2].Facts {
 		t.Fatalf("facts: morning %v evening %v other %v, want on, on, off", tasks[0].Facts, tasks[1].Facts, tasks[2].Facts)
 	}
-	if tasks[0].Prompt != prompts.RenderMorningRoutine() {
+	if tasks[0].Prompt != prompts.RenderMorningRoutine("") {
 		t.Fatalf("the prompt is the current default: %q", tasks[0].Prompt)
 	}
 

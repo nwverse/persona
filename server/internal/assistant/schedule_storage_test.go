@@ -456,7 +456,7 @@ func TestScheduleDefaultUpgradeWriteFailure(t *testing.T) {
 	st.failWrites("")
 	restarted := newServiceOn(t, newFakeHub(), st)
 	got, ok := taskByID(restarted, "morning")
-	if !ok || got.Prompt != prompts.RenderMorningRoutine() || !got.Facts || got.RunSessionID != old.RunSessionID || got.LastStatus != old.LastStatus {
+	if !ok || got.Prompt != prompts.RenderMorningRoutine("") || !got.Facts || got.RunSessionID != old.RunSessionID || got.LastStatus != old.LastStatus {
 		t.Fatalf("default upgrade did not recover or changed ownership: %+v", got)
 	}
 	assertScheduleStored(t, restarted, st)

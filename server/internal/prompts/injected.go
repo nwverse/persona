@@ -122,21 +122,23 @@ func ParseInjected(text string) *proto.Injected {
 			return nil
 		}
 		return &proto.Injected{Kind: proto.InjectedFollowup, State: "wake", Title: m[1], Line: "Persona 叫醒了它：看看「" + m[1] + "」好了没有"}
+	case strings.HasPrefix(head, ScheduleMarkerPrefix):
+		if run := ReadScheduledRun(text); run != nil {
+			return scheduleInjected(run.State, run.Title, run.Prompt)
+		}
+		return nil
 	case strings.HasPrefix(head, "⏰ "):
 		m := followupHeadRe.FindStringSubmatch(head)
 		if m == nil {
 			return nil
 		}
-		in := &proto.Injected{Kind: proto.InjectedFollowup, Title: m[1], Detail: followupDetail(rest)}
-		switch {
-		case m[2] == "你之前安排的跟进":
-			in.State, in.Line = "once", "跟进「"+m[1]+"」到时间了"
-		case strings.HasPrefix(m[2], "定时任务，每 "):
-			in.State, in.Line = "interval", "定时任务「"+m[1]+"」开始运行"
-		default:
-			in.State, in.Line = "daily", "定时任务「"+m[1]+"」开始运行"
+		state := "daily"
+		if m[2] == "你之前安排的跟进" {
+			state = "once"
+		} else if strings.HasPrefix(m[2], "定时任务，每 ") {
+			state = "interval"
 		}
-		return in
+		return scheduleInjected(state, m[1], followupDetail(rest))
 	case strings.HasPrefix(head, "📋 督办："):
 		// Only hubs that write it mark it: it is not in the shared fixtures the apps' own recognition runs.
 		m := superviseRe.FindStringSubmatch(head)

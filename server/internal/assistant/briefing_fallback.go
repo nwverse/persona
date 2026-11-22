@@ -26,7 +26,7 @@ func (s *Service) briefReportStart(ctx context.Context, t Task, now time.Time) s
 	if _, ok := s.store().(northStarStore); !ok {
 		return ""
 	}
-	return prompts.RenderNorthStarFacts(run.facts.NorthStarLines)
+	return prompts.RenderNorthStarFacts(run.facts.NorthStarLines, answerLanguage(string(run.facts.l)))
 }
 
 // briefFailure says this scheduled turn has full fixed facts whose model answer failed. Its ordinary error mirror and

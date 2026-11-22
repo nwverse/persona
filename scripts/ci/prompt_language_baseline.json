@@ -1,6 +1,6 @@
 {
   "assistant": {
-    "count": 56,
+    "count": 50,
     "files": [
       "assistant/acceptance.md",
       "assistant/acceptance_input.md",
@@ -13,17 +13,12 @@
       "assistant/lost_tasks.md",
       "assistant/main_handoff.md",
       "assistant/model_retry.md",
-      "assistant/north_star_facts.md",
       "assistant/refused.md",
       "assistant/relay.md",
       "assistant/route_agent.md",
       "assistant/route_input.md",
-      "assistant/routine_evening.md",
       "assistant/routine_evening_former1.md",
       "assistant/routine_evening_former2.md",
-      "assistant/routine_facts.md",
-      "assistant/routine_kb_hint.md",
-      "assistant/routine_morning.md",
       "assistant/routine_morning_former1.md",
       "assistant/routine_morning_former2.md",
       "assistant/routine_morning_former3.md",
@@ -52,7 +47,6 @@
       "assistant/task_ended.md",
       "assistant/task_goal.md",
       "assistant/task_notice.md",
-      "assistant/task_run.md",
       "assistant/turn_context.md",
       "assistant/usage_retry.md",
       "assistant/view_errors.md",

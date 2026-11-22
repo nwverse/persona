@@ -325,7 +325,7 @@ func TestNorthStarBriefingOpensWithIt(t *testing.T) {
 		t.Fatalf("card JSON lacks the rate: %s", card.JSON())
 	}
 	model := f.modelText()
-	if !strings.HasPrefix(model[strings.Index(model, "\n")+1:], "- 北极星指标") || !strings.Contains(model, want[1]) {
+	if !strings.HasPrefix(model[strings.Index(model, "\n")+1:], "- North star metrics") || !strings.Contains(model, want[1]) {
 		t.Fatalf("model facts do not open with the north star:\n%s", model)
 	}
 	body, err := json.Marshal(f.body(s, "Daily report"))
@@ -663,5 +663,5 @@ func TestGoldenNorthStarRunFacts(t *testing.T) {
 	golden(t, "north_star_facts", prompts.RenderNorthStarFacts([]string{
 		"Interruptions today: 1 (0 questions · 0 cards to act on · 1 notifications · 0 authorization cards); yesterday by this time 3, -2",
 		"Availability today (main and leader conversations): 75% (3 of 4 starts and resumes worked); yesterday by this time 50%, +25 pp",
-	}))
+	}, ""))
 }

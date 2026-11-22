@@ -175,7 +175,7 @@ func TestGoldenBriefFacts(t *testing.T) {
 	golden(t, "routine_facts.later", prompts.RenderBriefFacts(prompts.BriefFacts{Hours: 12, LaterTotal: 2}))
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	due := time.Date(2026, 10, 31, 1, 0, 0, 0, time.UTC)
-	golden(t, "task_prompt.daily_facts", taskPrompt(Task{Title: "早报", Prompt: prompts.RenderMorningRoutine(), Repeat: repeatDaily, Facts: true, factsText: facts},
+	golden(t, "task_prompt.daily_facts", taskPrompt(Task{Title: "早报", Prompt: prompts.RenderMorningRoutine(""), Repeat: repeatDaily, Facts: true, factsText: facts},
 		due, due, loc, false, false, false))
 }
 

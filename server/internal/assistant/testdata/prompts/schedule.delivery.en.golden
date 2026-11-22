@@ -1,0 +1,54 @@
+⏰ <persona-schedule>{"state":"daily","title":"Morning brief","prompt_bytes":880,"run_key":"RUN_KEY"}</persona-schedule>
+Scheduled task: Morning brief
+At the end of the run, if the task state changed, call schedule_state_set with the run_key above and the updated state text (up to 4096 bytes). Keep cursors and what was already reported.
+
+Facts calculated by Persona at the start of this run. Use these figures exactly; never change or invent them.
+- North star metrics: open the report with today's interruptions and availability, the change from the same period yesterday, and the data sources. Keep every figure unchanged and call unknown values unknown.
+  - North star: today's numbers could not be read; they are unknown.
+There will be no Lark card. The same entries appear on the web but not in the mobile app. After a one- or two-sentence overview, list one item per line in the following order. Say what the owner should do and where to click.
+- Waiting on the owner: 0
+- Past 12 hours, unsuccessful: 0
+- Past 12 hours, completed: 0
+- Awaiting the owner's acceptance: 0
+- Work in progress: 0
+- Disabled daily reports and patrols, one per line. If no disable time was recorded, say so. Never substitute the last run time.
+  - Evening review ·  · disable time not recorded
+- Today's confirmation counts could not be read; they are unknown.
+
+<persona-schedule-instructions>
+Give me today's morning briefing in one screen. Lead with the conclusion.
+For decisions waiting on me, work completed or unsuccessful in the past 12 hours, and work awaiting my acceptance, use the counts and listing instructions in “Facts calculated by Persona” above. If there is no facts section, put these items first using the snapshot, one per line. Say what I need to do and where to click.
+1. In one or two sentences, tell me what to do first today and why.
+2. Combine today's Lark and iPhone calendars, remove duplicates and mark meetings that need preparation.
+3. List items I need to handle: Lark mentions and unread direct messages needing my reply or decision, and important emails.
+For each meeting worth preparing for, use schedule_followup to schedule one preparation session 10 minutes before it starts, covering materials, previous minutes and talking points.
+</persona-schedule-instructions>
+
+---
+
+⏰ <persona-schedule>{"state":"daily","title":"Evening review","prompt_bytes":964,"run_key":"RUN_KEY"}</persona-schedule>
+Scheduled task: Evening review
+At the end of the run, if the task state changed, call schedule_state_set with the run_key above and the updated state text (up to 4096 bytes). Keep cursors and what was already reported.
+
+Facts calculated by Persona at the start of this run. Use these figures exactly; never change or invent them.
+- North star metrics: open the report with today's interruptions and availability, the change from the same period yesterday, and the data sources. Keep every figure unchanged and call unknown values unknown.
+  - North star: today's numbers could not be read; they are unknown.
+There will be no Lark card. The same entries appear on the web but not in the mobile app. After a one- or two-sentence overview, list one item per line in the following order. Say what the owner should do and where to click.
+- Waiting on the owner: 0
+- Past 12 hours, unsuccessful: 0
+- Past 12 hours, completed: 0
+- Awaiting the owner's acceptance: 0
+- Work in progress: 0
+- Disabled daily reports and patrols, one per line. If no disable time was recorded, say so. Never substitute the last run time.
+  - Evening review ·  · disable time not recorded
+- Today's confirmation counts could not be read; they are unknown.
+
+<persona-schedule-instructions>
+Give me today's evening review.
+For decisions still waiting on me, work completed or unsuccessful in the past 12 hours, and work awaiting my acceptance, use the counts and listing instructions in “Facts calculated by Persona” above. If there is no facts section, put these items first using the snapshot, one per line, and say what I need to do.
+1. In one or two sentences, say what I should wrap up first today.
+2. List today's meetings, outstanding to-dos and promises from meeting minutes or Lark messages, and Agents still running or stuck on each computer.
+3. Give tomorrow's earliest commitment.
+The Lark calendar snapshot contains only meetings that have not ended. Read the calendars for past meetings today and tomorrow's schedule: use phone_calendar_events for iPhone Calendar and, if configured, lark-cli calendar +agenda for Lark Calendar. Include tomorrow's times and what to prepare.
+Finish by asking whether I want the to-dos added to Reminders.
+</persona-schedule-instructions>

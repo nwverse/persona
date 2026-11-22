@@ -537,7 +537,7 @@ func TestTurnContextRows(t *testing.T) {
 // The evening review asks what meetings happened today and when tomorrow's first one is. The snapshot only carries the
 // meetings still to come (snapshot.go Snapshot.Upcoming), so both have to come from reading the calendar (#4596).
 func TestEveningRoutineReadsTheCalendar(t *testing.T) {
-	got := RenderEveningRoutine()
+	got := RenderEveningRoutine("")
 	for _, want := range []string{"今天开了哪些会", "phone_calendar_events", "飞书日历", "明天最早的安排"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the evening routine does not say %q:\n%s", want, got)

@@ -1238,7 +1238,7 @@ func TestUpgradeDefaultRoutines(t *testing.T) {
 	if !upgradeDefaultRoutines(tasks) {
 		t.Fatal("nothing upgraded")
 	}
-	if tasks[0].Prompt != prompts.RenderMorningRoutine() || tasks[1].Prompt != prompts.RenderEveningRoutine() {
+	if tasks[0].Prompt != prompts.RenderMorningRoutine("") || tasks[1].Prompt != prompts.RenderEveningRoutine("") {
 		t.Fatalf("the defaults are current: %q / %q", tasks[0].Prompt, tasks[1].Prompt)
 	}
 	if tasks[2].Prompt != formerM[1] {
@@ -1264,11 +1264,11 @@ func TestUpgradeDefaultRoutines(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := newServiceOn(t, newFakeHub(), store)
-	if got, _ := taskByID(h, "morning"); got.Prompt != prompts.RenderMorningRoutine() {
+	if got, _ := taskByID(h, "morning"); got.Prompt != prompts.RenderMorningRoutine("") {
 		t.Fatalf("loaded: %q", got.Prompt)
 	}
 	var saved []Task
-	if _, err := store.Setting(context.Background(), tasksKey, &saved); err != nil || len(saved) != 1 || saved[0].Prompt != prompts.RenderMorningRoutine() {
+	if _, err := store.Setting(context.Background(), tasksKey, &saved); err != nil || len(saved) != 1 || saved[0].Prompt != prompts.RenderMorningRoutine("") {
 		t.Fatalf("saved: %+v %v", saved, err)
 	}
 }

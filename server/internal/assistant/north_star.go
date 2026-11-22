@@ -933,5 +933,6 @@ func (s *Service) northStarRunFacts(ctx context.Context, now time.Time) string {
 	if _, ok := s.store().(northStarStore); !ok {
 		return ""
 	}
-	return prompts.RenderNorthStarFacts(s.briefNorthStarAt(ctx, now, s.location(ctx)).lines(s.botLang(ctx)))
+	l := s.botLang(ctx)
+	return prompts.RenderNorthStarFacts(s.briefNorthStarAt(ctx, now, s.location(ctx)).lines(l), answerLanguage(string(l)))
 }

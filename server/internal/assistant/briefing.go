@@ -473,7 +473,7 @@ func (s *Service) briefingGrace(ctx context.Context, local time.Time, start int)
 // modelText is the facts as the model is given them (prompts assistant/routine_facts): the card's rows plus the
 // model-only follow-ups, briefs and optional day recap.
 func (f *briefFacts) modelText() string {
-	b := prompts.BriefFacts{Hours: int(briefWindow / time.Hour), WaitingTotal: len(f.Waiting), DoneTotal: f.DoneTotal,
+	b := prompts.BriefFacts{Language: answerLanguage(string(f.l)), Hours: int(briefWindow / time.Hour), WaitingTotal: len(f.Waiting), DoneTotal: f.DoneTotal,
 		FailedTotal: f.FailedTotal, AcceptTotal: len(f.Accept), LaterTotal: f.LaterTotal, WaitingUnknown: f.WaitingUnknown, Card: f.Card}
 	for _, r := range f.Waiting {
 		if len(b.Waiting) < briefModelRows {
