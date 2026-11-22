@@ -282,4 +282,9 @@
     <string name="machines_link_switch_why_unknown">Something went wrong.</string>
     <string name="machines_link_switch_why_unavailable">This computer can\'t switch to Persona Link right now.</string>
     <string name="machines_manager_offline">Its assistant “%1$s” is offline. It comes back online once the assistant is back.</string>
+    <string name="machines_tokens_today_title">Today\'s tokens</string>
+    <string name="machines_tokens_total">Total</string>
+    <string name="machines_tokens_now">Now</string>
+    <string name="machines_tokens_cache_hit_rate">Cache hit rate</string>
+    <string name="machines_tokens_per_minute">%1$s/min</string>
 </resources>
