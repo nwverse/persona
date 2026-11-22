@@ -53,8 +53,12 @@ def main(path):
         elif t - pulled.get(k, -1e9) > PLAN:
             after, pulled[k] = after + 1, t
     after += len(held)
-    print("%d transcript changes over %.1f min in %d sessions (%d while working): pulls %.1f/min before, %.1f/min after"
-          % (len(events), mins, len({k for _, k, _ in events}), sum(1 for e in events if e[2]), before / mins, after / mins))
+    if mins > 0:
+        pulls = "pulls %.1f/min before, %.1f/min after" % (before / mins, after / mins)
+    else:
+        pulls = "pulls %d before, %d after (per-minute rates unavailable)" % (before, after)
+    print("%d transcript changes over %.1f min in %d sessions (%d while working): %s"
+          % (len(events), mins, len({k for _, k, _ in events}), sum(1 for e in events if e[2]), pulls))
 
 
 if __name__ == "__main__":
