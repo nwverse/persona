@@ -1,6 +1,6 @@
 {
   "name": "resource_status",
-  "description": "Read registered shared runners, queue tickets, duplicate markers and mirror freshness. An unknown or stale mirror is not a successful result.",
+  "description": "读取共享门禁、排队票号、重复标记和镜像时效。未知或过期不代表运行成功。",
   "input_schema": {
     "type": "object",
     "properties": {

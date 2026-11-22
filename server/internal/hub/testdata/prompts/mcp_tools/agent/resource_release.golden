@@ -1,6 +1,6 @@
 {
   "name": "resource_release",
-  "description": "Record the exit code and result of this session’s granted lease using its fencing token.",
+  "description": "使用 fencing token 记录本会话持有租约的退出码和结果。",
   "input_schema": {
     "type": "object",
     "properties": {
