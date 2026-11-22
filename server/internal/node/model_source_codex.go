@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -37,6 +38,9 @@ func ModelSourceLaunch(args []string) error {
 	cwd, _ := os.Getwd()
 	home, _ := os.UserHomeDir()
 	argv, env := codexModelSource(args, env, cwd, home)
+	if err := guardCodexWritableSymlinks(context.Background(), argv, env, cwd, home); err != nil {
+		return err
+	}
 	exe, env, err = codexStartProgram(exe, true, env)
 	if err != nil {
 		return err

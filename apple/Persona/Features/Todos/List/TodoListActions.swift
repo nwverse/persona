@@ -6,11 +6,18 @@ import UIKit
 
 /// One row of the V1 list and what it does: drawn from its own cell and the list's model, two references that stay the
 /// same, so a list update that leaves the row alone does not draw it again (P6). The link under it opens the to-do (no
-/// chevron on every row, as the Inbox's rows; iOS 18 draws the chevron of a link that is the row whatever it is told);
-/// a new to-do opens once the hub has it. The row's confirmations are presented from the row they ask about.
+/// chevron on any row, as the Agents list's and the Inbox's rows; iOS 18 draws the chevron of a link that is the row
+/// whatever it is told); a new to-do opens once the hub has it. The row's confirmations are presented from the row they
+/// ask about. The system's cell in its card: no row background of ours, so every shape a row takes in use is the
+/// system's (`sectionCards()`).
 struct TodoListCell: View {
     var cell: TodosListModel.Row
     var model: TodosListModel
+
+    /// A row's one padding is its own (`TodoListRow`); the card's inner inset at its sides, none above or below. Set by
+    /// the list on the row's outermost view (`TodoListView.row`): set here, inside the swipe and the long press, the
+    /// list never saw it, and the rows kept the system's margins on every side.
+    static let insets = EdgeInsets(top: Theme.Space.flush, leading: Theme.Space.l, bottom: Theme.Space.flush, trailing: Theme.Space.l)
 
     var body: some View {
         let c = cell.content
@@ -21,7 +28,6 @@ struct TodoListCell: View {
                 }
                 TodoRowDialogs(model: model, key: cell.id)
             }
-            .themedRow()
             .modifier(TodoRowActions(model: model, key: cell.id, row: c))
     }
 }
@@ -202,27 +208,6 @@ private struct TodoProjectMenu: View {
             Label(String(localized: "Project [To-dos Actions]"), systemImage: Theme.Icon.space)
         }
         .accessibilityIdentifier("todos.menu.project")
-    }
-}
-
-/// New To-Do, floating at the list's foot (the V1 frames' pill): the Theme Color's pill, as wide as its words.
-struct TodoNewPill: View {
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: Theme.Space.xs) {
-                ThemedIcon(Theme.Icon.add)
-                Text("New To-Do [To-dos Actions]").buttonLabelLine(minimumScale: 1)
-            }
-            .floatingPill(prominent: true)
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .buttonStyle(.plain)
-        .accessibilityShowsLargeContentViewer()
-        .accessibilityIdentifier("todos.new")
-        .padding(.vertical, Theme.Space.s)
-        .frame(maxWidth: .infinity) // the foot's blur across the page, the pill in its middle
     }
 }
 

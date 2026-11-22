@@ -73,6 +73,36 @@ func TestCodexModelSourcePreservesHeadersWithoutExposingValues(t *testing.T) {
 	}
 }
 
+func TestModelSourceLaunchKeepsCodexGuard(t *testing.T) {
+	const childEnv = "PERSONA_TEST_SOURCE_LAUNCH_GUARD"
+	if os.Getenv(childEnv) == "1" {
+		err := ModelSourceLaunch([]string{"codex", "--sandbox", "workspace-write"})
+		if rpcCode(err) != "codex_writable_symlink" {
+			t.Fatalf("source wrapper lost the native launch guard: %v", err)
+		}
+		return
+	}
+	home, cwd, sourceEnv := sourceCodexFixture(t, sourceCodexProvider)
+	if err := os.Symlink(t.TempDir(), filepath.Join(cwd, ".aws")); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(home, "bin")
+	fake := filepath.Join(bin, "codex")
+	writeFile(t, fake, "#!/bin/sh\nexit 73\n")
+	if err := os.Chmod(fake, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestModelSourceLaunchKeepsCodexGuard$")
+	cmd.Dir = cwd
+	cmd.Env = append(withoutEnv(os.Environ(), []string{"HOME", "USERPROFILE", "CODEX_HOME", "PATH", childEnv, modelhttp.SourceHostsEnv, modelSourceEnv, modelSourceBinEnv}),
+		"HOME="+home, "USERPROFILE="+home, "CODEX_HOME="+filepath.Join(home, ".codex"), "PATH="+bin,
+		childEnv+"=1", modelhttp.SourceHostsEnv+"=*.example.com")
+	cmd.Env = append(cmd.Env, sourceEnv...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("source launch guard: %v: %s", err, out)
+	}
+}
+
 func TestCodexModelSourceUsesEffectiveDestination(t *testing.T) {
 	for _, tc := range []struct {
 		name, hosts, config string

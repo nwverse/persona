@@ -116,6 +116,10 @@ type acceptAsk struct {
 	OutsideAnswer     *outsideAnswer `json:"outside_answer,omitempty"`
 	DefaultAllowed    bool           `json:"default_allowed,omitempty"`
 	WithdrawnAt       time.Time      `json:"withdrawn_at,omitzero"`
+	// Superseded marks a pending needs_user decision that supervision cleared via task_review (for example after new
+	// external information resolved it), with SupersededReason explaining why in natural language (#13112).
+	Superseded       bool   `json:"superseded,omitempty"`
+	SupersededReason string `json:"superseded_reason,omitempty"`
 }
 
 // acceptPostWindow is how long after an ask its card that did not go out (the bot's status could not be read, the send

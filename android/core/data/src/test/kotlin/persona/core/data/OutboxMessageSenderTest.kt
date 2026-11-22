@@ -15,6 +15,7 @@ import persona.core.contracts.api.ComposerDelivery
 import persona.core.contracts.api.DeliveryState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.advanceTimeBy
@@ -539,9 +540,12 @@ class OutboxMessageSenderTest {
         val automatic = async { sender.retry("visible") }
         val manual = withContext(Dispatchers.Default) {
             withTimeoutOrNull(10_000) { automaticStarted.await() } ?: error("Automatic send did not start")
-            // The automatic retry passed its active-composer check. Its durable retry write suspends until the
+            // The automatic attempt passed its active-composer check. Its durable Unknown write suspends until the
             // composer owns the message, reproducing the interleaving of two independent store operations.
             store.interleaveManual = true
+            withTimeoutOrNull(10_000) {
+                store.entries.first { it.single().state == OutboxState.Sending }
+            } ?: error("Automatic retry did not enter Sending")
             withTimeoutOrNull(10_000) { store.automaticStateWritten.await() } ?: error("Automatic transition did not start")
             async(start = CoroutineStart.UNDISPATCHED) { sender.beginComposerRetry("visible", "manual-operation") }.also {
                 store.continueAutomatic.complete(Unit)
@@ -570,10 +574,12 @@ class OutboxMessageSenderTest {
         override suspend fun recoverInterrupted() = delegate.recoverInterrupted()
 
         override suspend fun transition(id: String, from: Set<OutboxState>, to: OutboxState, error: String?): Boolean {
-            if (interleaveManual && to == OutboxState.Unknown) {
-                interleaveManual = false
+            if (to == OutboxState.Unknown) {
                 automaticStateWritten.complete(Unit)
-                continueAutomatic.await()
+                if (interleaveManual) {
+                    interleaveManual = false
+                    continueAutomatic.await()
+                }
             }
             return delegate.transition(id, from, to, error)
         }

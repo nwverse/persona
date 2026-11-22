@@ -303,7 +303,7 @@ func testHealthPhoneNotify(t *testing.T) {
 						t.Fatal(err)
 					}
 					if tc.redact {
-						want["title"], want["body"] = healthNotice(i18n.Lang(locale))
+						want["title"], want["body"] = spaceNotice(i18n.Lang(locale))
 					}
 					gotJSON, _ := json.Marshal(call["args"])
 					wantJSON, _ := json.Marshal(want)

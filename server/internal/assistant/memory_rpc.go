@@ -12,7 +12,7 @@ import (
 )
 
 // What an extension granted assistant.memory.read reads of the assistant's memory (docs/extensions/extensions.md
-// "Assistant memory"): the entries of the assistant's own space, never the health space's, with what their frontmatter
+// "Assistant memory"): the entries of the assistant's own space, never another space's, with what their frontmatter
 // says and, when asked, their text within bounds. The hub checked the grant; this only reads (node memory.go's list).
 
 // memoryIndexFile is the memory's index (one line per entry), not an entry of its own.
@@ -31,7 +31,7 @@ func (s *Service) extensionMemory(ctx context.Context, p assistantwire.Assistant
 	var res struct {
 		Files []memoryFileWire `json:"files"`
 	}
-	// space "": the assistant's own; the health space keeps its memory apart and an extension never reads it.
+	// space "": the assistant's own; every other space keeps its memory apart and an extension never reads it.
 	if err := s.memory(ctx, map[string]any{"op": "list", "space": ""}, &res); err != nil {
 		return out, memoryCallError(err)
 	}

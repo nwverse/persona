@@ -563,8 +563,11 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		}
 	}
 	if agent == "codex" {
-		cwd, _ := os.Getwd()
 		home, _ := os.UserHomeDir()
+		cwd, _ := os.Getwd()
+		if err := guardCodexWritableSymlinks(ctx, argv, env, cwd, home); err != nil {
+			return err
+		}
 		argv, env = codexModelSource(argv, env, cwd, home)
 	}
 	exe, argv, env, _ = launchExec(agent, exe, argv, env)

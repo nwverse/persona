@@ -120,7 +120,7 @@ type Task struct {
 	ModelRevision  int64  `json:"model_revision,omitempty"`
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Effort         string `json:"effort,omitempty"`
-	// Space is the space of the conversation that set it up ("health", docs/assistant/health.md): a run that starts a conversation
+	// Space is the space of the conversation that set it up (e.g. "health", docs/assistant/health.md): a run that starts a conversation
 	// starts it there. "" is the assistant's own.
 	Space string `json:"space,omitempty"`
 	// StartGrant: the owner let this schedule's own rounds start some kinds of task without the plan card (#8045,
@@ -1178,7 +1178,7 @@ func (sc *schedule) noteDeletionLocked(id, sessionID string, now time.Time) {
 	sc.deletedBy[id] = taskDeletion{session: sessionID, at: now}
 }
 
-// describeSchedule lists the tasks of space ("" the assistant's own, "health"): a conversation sees and changes only
+// describeSchedule lists the tasks of space ("" the assistant's own, or a registered space): a conversation sees and changes only
 // its own space's (docs/assistant/health.md).
 func (s *Service) describeSchedule(ctx context.Context, space string) string {
 	loc := s.location(ctx)
@@ -2252,8 +2252,8 @@ func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 	}
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if t.Space == SpaceHealth { // the lock screen does not name a health task (health.go)
-		name, _ = healthNotice(l)
+	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
+		name, _ = spaceNotice(l)
 	}
 	s.push(ctx, Notification{Title: i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: clip(oneLine(run.Error), 300)})
 }
@@ -2329,8 +2329,8 @@ func (s *Service) tellWaitingSkip(ctx context.Context, t Task, m Device) {
 	}
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if t.Space == SpaceHealth { // the lock screen does not name a health task (health.go)
-		name, _ = healthNotice(l)
+	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
+		name, _ = spaceNotice(l)
 	}
 	s.push(ctx, Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: t.RunSessionID,
 		Title: i18n.T(l, "assistant-schedule.waiting_skipped", i18n.Args{"name": name}), Body: i18n.T(l, "assistant-schedule.waiting_skipped_body")})
@@ -2439,8 +2439,8 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	run.Status, run.Error = runFailed, text
 	s.finishScheduledTodo(ctx, t, run)
 	name := t.labelIn(s.lang(ctx))
-	if t.Space == SpaceHealth { // the lock screen does not name a health task (health.go)
-		name, _ = healthNotice(s.lang(ctx))
+	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
+		name, _ = spaceNotice(s.lang(ctx))
 	}
 	if briefing {
 		s.briefFallback(ctx, run, t, m)
