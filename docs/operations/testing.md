@@ -417,8 +417,12 @@ example configs and services) and both watcher skills under `.claude/skills/`. T
   with the config's Xcode and in an `xcode` slot as `sim.sh` builds:
   `(eval "$(python3 scripts/persona_config.py env)" && python3 scripts/heavy_slot.py run --kind xcode -- xcodebuild -project apple/Persona.xcodeproj -scheme PersonaWatch -destination 'generic/platform=watchOS Simulator' -derivedDataPath build/DerivedData build)`.
 - **The commit stamp is Release only.** "Stamp the commit" (`apple/project.yml`, the iPhone and Vision apps) does nothing
-  in Debug: a Debug build's Settings › About › Build says Unknown, its Developing Persona package
-  (`docs/operations/developing-persona.md`) has an empty `commit`, and a build with nothing changed writes no Info.plist
+  in Debug. A Debug iPhone build gets "Stamp the debug build info" instead (#12926, `scripts/app/stamp_debug_build_info.sh`):
+  the `PersonaBuildInfo` dictionary (commit, branch, dirty, build time, build machine, Xcode, Swift, configuration) that
+  Settings › About › Build (`3518b00185-dirty · 11-22 15:00`) and its Debug Info section read through `BuildInfo`. It
+  writes only when the code was linked again (`Persona.debug.dylib`), the Info.plist was written again or HEAD moved
+  since its marker, and never fails a build (no git: Unknown). `PERSONA_BUILD_MACHINE` names the build machine for
+  captures shown in public. A build with nothing changed writes no Info.plist
   and signs nothing again, unless the opt-in Siri calls (`apple/siri-calls.yml`) or Meta glasses
   (`apple/meta-wearables.yml`) include is on: their build phases rewrite the built Info.plist on every build, so the app
   is signed again each time. Every Release build, and so every TestFlight build, is stamped as before; a Debug build that
@@ -555,8 +559,19 @@ launch, memory or download-size result. Watch, widgets, Vision, Persona Link and
 
 Transcript parsing uses real-sample golden tests (`server/internal/transcript/testdata/`, `fixtures_test.go`): each sample's parse result,
 "incremental read while writing = one full read", and "backward paging has no gaps/duplicates". After parsing changes run `go test ./internal/transcript -run Fixture -update` and review the golden diff.
-Before adding samples, redact with `scripts/diag/redact_transcript.py`, then manually review (`testdata/README.md`). After Claude Code / Codex upgrades, run
-`scripts/diag/transcript_stats.py` to find new types the parser doesn't recognize.
+Before adding samples, redact with `scripts/diag/redact_transcript.py`, then manually review (`testdata/README.md`). Use
+`scripts/diag/transcript_stats.py` to see observed record kinds and a local sample path for each. To compare two scans,
+save the baseline before changing the runtime, then scan again after the change with the same roots:
+
+```sh
+python3 scripts/diag/transcript_stats.py --json > before-upgrade.json
+python3 scripts/diag/transcript_stats.py --compare before-upgrade.json
+```
+
+The versioned JSON snapshot contains file and line totals and counts by record kind and runtime version. It omits
+sample paths and message bodies. The comparison marks kinds and versions as added (`+`), missing (`-`) or changed
+(`~`). An added kind is newly observed in the selected transcripts. Check its local sample before deciding whether
+the parser needs a new fixture or handling. Pass transcript directories to either command to limit the scan.
 
 API smoke tests: `curl -H "Authorization: Bearer $TOKEN" …/api/v1/machines`, `…/api/v1/sessions?machine_id=<machine>`.
 
