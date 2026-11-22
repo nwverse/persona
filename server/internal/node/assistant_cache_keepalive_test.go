@@ -119,6 +119,13 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 			}
 			cliWait(t, "fake provider request", func() bool { return requests.Load() == 1 })
 			f.idle(t, p.id)
+			// The result clears busy before it sends the turn's last delta, the clear of its live text: wait for that too,
+			// or it can land between the snapshots below and read as the refresh's output.
+			cliWait(t, "the turn's live text cleared", func() bool {
+				f.fh.mu.Lock()
+				defer f.fh.mu.Unlock()
+				return len(f.fh.deltas) > 0 && f.fh.deltas[len(f.fh.deltas)-1] == ""
+			})
 			var barrier any
 			if err := f.n.peer.Call(context.Background(), "assistant.lark", map[string]any{}, &barrier); err != nil {
 				t.Fatal(err)
