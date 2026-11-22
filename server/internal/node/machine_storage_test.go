@@ -40,8 +40,8 @@ func testStorageDeps(t *testing.T) (storageDeps, string, string) {
 		available: func(string) (int64, bool) { return 50 << 30, true },
 		lookPath:  func(string) (string, error) { return "", errors.New("not found") },
 		runCmd:    func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("not called") },
-		runningProcs: func(context.Context) ([]storageProcEntry, error) {
-			return []storageProcEntry{}, nil
+		runningProcs: func(context.Context) (storageProcList, error) {
+			return storageProcList{procs: []storageProcEntry{}, cmdlinesKnown: true}, nil
 		},
 		activeLogFiles: func(context.Context, []string) map[string]bool {
 			return map[string]bool{}
@@ -233,8 +233,11 @@ func TestMachineStorageCleanupRefusesSymlinkEscapeAndRespectsInUse(t *testing.T)
 		t.Fatal(err)
 	}
 	writeStorageFile(t, filepath.Join(home, ".cache", "go-build", "build.o"), 1024)
-	deps.runningProcs = func(context.Context) ([]storageProcEntry, error) {
-		return []storageProcEntry{{comm: "go", args: []string{"/usr/local/go/bin/go", "test", "./..."}}}, nil
+	deps.runningProcs = func(context.Context) (storageProcList, error) {
+		return storageProcList{
+			procs:         []storageProcEntry{{comm: "go", args: []string{"/usr/local/go/bin/go", "test", "./..."}, cmdlineKnown: true}},
+			cmdlinesKnown: true,
+		}, nil
 	}
 
 	res, err := runMachineStorageCleanup(context.Background(), deps, proto.StorageCleanupParams{
@@ -266,8 +269,8 @@ func TestMachineStorageCleanupFailsClosedWhenProcessListUnavailable(t *testing.T
 	writeStorageFile(t, pipFile, 512)
 	writeStorageFile(t, backupFile, 4096)
 
-	deps.runningProcs = func(context.Context) ([]storageProcEntry, error) {
-		return nil, errors.New("procfs unavailable")
+	deps.runningProcs = func(context.Context) (storageProcList, error) {
+		return storageProcList{}, errors.New("procfs unavailable")
 	}
 
 	// Hotspot scan must mark toolchain caches in_use when process state is unknown
@@ -330,11 +333,11 @@ func TestReadRunningProcsCrossPlatformAndUnsupportedFailClosed(t *testing.T) {
 			"/usr/local/bin/node /app/dist/server.js --port 3000",
 		}, "\n") + "\n"), nil
 	}
-	darwinProcs, err := readRunningProcsForOS(context.Background(), "darwin", darwinRun)
+	darwinList, err := readRunningProcsForOS(context.Background(), "darwin", darwinRun)
 	if err != nil {
 		t.Fatalf("darwin process enum failed: %v", err)
 	}
-	snap := storageProcSnapshot{procs: darwinProcs, known: true}
+	snap := storageProcSnapshot{procs: darwinList.procs, known: true, cmdlinesKnown: darwinList.cmdlinesKnown}
 	if inUse, unknown := storageToolchainInUse([]string{"go", "gopls"}, snap); !inUse || unknown {
 		t.Errorf("expected go in use on darwin, got inUse=%v unknown=%v", inUse, unknown)
 	}
@@ -350,11 +353,11 @@ func TestReadRunningProcsCrossPlatformAndUnsupportedFailClosed(t *testing.T) {
 	darwinNpmRun := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 		return []byte("/usr/local/bin/node --max-old-space-size=4096 /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js install\n"), nil
 	}
-	darwinNpmProcs, err := readRunningProcsForOS(context.Background(), "darwin", darwinNpmRun)
+	darwinNpmList, err := readRunningProcsForOS(context.Background(), "darwin", darwinNpmRun)
 	if err != nil {
 		t.Fatalf("darwin npm process enum failed: %v", err)
 	}
-	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: darwinNpmProcs, known: true}); !inUse {
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: darwinNpmList.procs, known: true, cmdlinesKnown: darwinNpmList.cmdlinesKnown}); !inUse {
 		t.Errorf("expected node running npm-cli.js to mark npm in use on darwin")
 	}
 
@@ -365,26 +368,101 @@ func TestReadRunningProcsCrossPlatformAndUnsupportedFailClosed(t *testing.T) {
 		t.Fatal("expected error when darwin ps fails")
 	}
 
-	// Windows tasklist CSV parsing
-	winRun := func(_ context.Context, name string, _ ...string) ([]byte, error) {
-		if name != "tasklist" {
+	// Windows PowerShell Win32_Process CSV with full command lines:
+	// - Detects node.exe running npm-cli.js (including quoted paths with spaces)
+	// - Allows cleanup when only an unrelated node.exe server is running with a known CommandLine
+	winCimNpmRun := func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name != "powershell" {
 			t.Fatalf("unexpected windows cmd: %s", name)
+		}
+		return []byte(strings.Join([]string{
+			`"Name","CommandLine"`,
+			`"go.exe","""C:\Program Files\Go\bin\go.exe"" test ./..."`,
+			`"python3.12.exe","""C:\Python312\python3.12.exe"" -m pip install wheel"`,
+			`"node.exe","""C:\Program Files\nodejs\node.exe"" ""C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js"" install"`,
+		}, "\r\n") + "\r\n"), nil
+	}
+	winNpmList, err := readRunningProcsForOS(context.Background(), "windows", winCimNpmRun)
+	if err != nil {
+		t.Fatalf("windows CIM process enum failed: %v", err)
+	}
+	winNpmSnap := storageProcSnapshot{procs: winNpmList.procs, known: true, cmdlinesKnown: winNpmList.cmdlinesKnown}
+	if inUse, unknown := storageToolchainInUse([]string{"go"}, winNpmSnap); !inUse || unknown {
+		t.Errorf("expected go in use on windows CIM, got inUse=%v unknown=%v", inUse, unknown)
+	}
+	if inUse, unknown := storageToolchainInUse([]string{"python"}, winNpmSnap); !inUse || unknown {
+		t.Errorf("expected python3.12 in use on windows CIM, got inUse=%v unknown=%v", inUse, unknown)
+	}
+	if inUse, unknown := storageToolchainInUse([]string{"npm", "npx"}, winNpmSnap); !inUse || unknown {
+		t.Errorf("expected Windows node.exe running npm-cli.js to mark npm in use, got inUse=%v unknown=%v", inUse, unknown)
+	}
+
+	// Windows PowerShell Win32_Process with only an unrelated node.exe server (readable CommandLine):
+	// npm/npx is NOT in use.
+	winCimServerRun := func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name != "powershell" {
+			t.Fatalf("unexpected windows cmd: %s", name)
+		}
+		return []byte(strings.Join([]string{
+			`"Name","CommandLine"`,
+			`"node.exe","""C:\Program Files\nodejs\node.exe"" ""C:\srv\my app\server.js"" --port 3000"`,
+		}, "\r\n") + "\r\n"), nil
+	}
+	winSrvList, err := readRunningProcsForOS(context.Background(), "windows", winCimServerRun)
+	if err != nil {
+		t.Fatalf("windows CIM unrelated node enum failed: %v", err)
+	}
+	winSrvSnap := storageProcSnapshot{procs: winSrvList.procs, known: true, cmdlinesKnown: winSrvList.cmdlinesKnown}
+	if inUse, unknown := storageToolchainInUse([]string{"npm", "npx"}, winSrvSnap); inUse || unknown {
+		t.Errorf("unrelated Windows node.exe server should not block npm cleanup, got inUse=%v unknown=%v", inUse, unknown)
+	}
+
+	// Windows PowerShell Win32_Process where a node.exe process has an empty/unreadable CommandLine
+	// (e.g. elevated process): MUST fail closed for npm/npx.
+	winCimEmptyNodeCmd := func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte(strings.Join([]string{
+			`"Name","CommandLine"`,
+			`"go.exe","""C:\Go\bin\go.exe"" version"`,
+			`"node.exe",""`,
+		}, "\r\n") + "\r\n"), nil
+	}
+	winElevatedList, err := readRunningProcsForOS(context.Background(), "windows", winCimEmptyNodeCmd)
+	if err != nil {
+		t.Fatalf("windows CIM elevated node enum failed: %v", err)
+	}
+	winElevatedSnap := storageProcSnapshot{procs: winElevatedList.procs, known: true, cmdlinesKnown: winElevatedList.cmdlinesKnown}
+	if inUse, unknown := storageToolchainInUse([]string{"npm", "npx"}, winElevatedSnap); !inUse || !unknown {
+		t.Errorf("Windows node.exe with unreadable CommandLine must fail closed for npm/npx, got inUse=%v unknown=%v", inUse, unknown)
+	}
+
+	// Windows fallback to image-name-only tasklist CSV when PowerShell fails:
+	// - go/python still detected accurately by image name
+	// - npm/npx MUST fail closed (inUse=true, unknown=true) because command lines are unavailable
+	winTasklistFallback := func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "powershell" {
+			return nil, errors.New("powershell unavailable")
+		}
+		if name != "tasklist" {
+			t.Fatalf("unexpected windows fallback cmd: %s", name)
 		}
 		return []byte("\"go.exe\",\"1234\",\"Console\",\"1\",\"10,000 K\"\n\"python3.12.exe\",\"5678\",\"Console\",\"1\",\"20,000 K\"\n"), nil
 	}
-	winProcs, err := readRunningProcsForOS(context.Background(), "windows", winRun)
+	winFallbackList, err := readRunningProcsForOS(context.Background(), "windows", winTasklistFallback)
 	if err != nil {
-		t.Fatalf("windows process enum failed: %v", err)
+		t.Fatalf("windows tasklist fallback failed: %v", err)
 	}
-	winSnap := storageProcSnapshot{procs: winProcs, known: true}
-	if inUse, _ := storageToolchainInUse([]string{"go"}, winSnap); !inUse {
-		t.Errorf("expected go in use on windows")
+	if winFallbackList.cmdlinesKnown {
+		t.Fatalf("expected tasklist fallback to report cmdlinesKnown=false")
 	}
-	if inUse, _ := storageToolchainInUse([]string{"python"}, winSnap); !inUse {
-		t.Errorf("expected python3.12 in use on windows")
+	winFallbackSnap := storageProcSnapshot{procs: winFallbackList.procs, known: true, cmdlinesKnown: winFallbackList.cmdlinesKnown}
+	if inUse, unknown := storageToolchainInUse([]string{"go"}, winFallbackSnap); !inUse || unknown {
+		t.Errorf("expected go in use on windows tasklist fallback, got inUse=%v unknown=%v", inUse, unknown)
 	}
-	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, winSnap); inUse {
-		t.Errorf("expected npm/npx not in use on windows")
+	if inUse, unknown := storageToolchainInUse([]string{"python"}, winFallbackSnap); !inUse || unknown {
+		t.Errorf("expected python3.12 in use on windows tasklist fallback, got inUse=%v unknown=%v", inUse, unknown)
+	}
+	if inUse, unknown := storageToolchainInUse([]string{"npm", "npx"}, winFallbackSnap); !inUse || !unknown {
+		t.Errorf("image-name-only tasklist fallback MUST fail closed for npm/npx, got inUse=%v unknown=%v", inUse, unknown)
 	}
 
 	// Unsupported OS must return an error so cleanup fails closed
@@ -476,9 +554,12 @@ func TestNpmCacheResolutionAndCmdlineInUseDetection(t *testing.T) {
 		return ""
 	}
 	// Unrelated long-running node server must NOT block npm cache cleanup.
-	deps.runningProcs = func(context.Context) ([]storageProcEntry, error) {
-		return []storageProcEntry{
-			{comm: "node", args: []string{"/usr/bin/node", "/srv/app/server.js", "--port", "8080"}},
+	deps.runningProcs = func(context.Context) (storageProcList, error) {
+		return storageProcList{
+			procs: []storageProcEntry{
+				{comm: "node", args: []string{"/usr/bin/node", "/srv/app/server.js", "--port", "8080"}, cmdlineKnown: true},
+			},
+			cmdlinesKnown: true,
 		}, nil
 	}
 
@@ -543,6 +624,76 @@ func TestNpmCacheResolutionAndCmdlineInUseDetection(t *testing.T) {
 		t.Fatalf("resolveNpmCacheDir(%q) = %q, want %q", directCacache, got, directCacache)
 	}
 
+	// 3b. If `_cacache` is a symlink, resolveNpmCacheDir must return `_cacache` so guardStorageDir
+	// rejects it instead of falling back to and wiping the parent cache root and sibling files.
+	symRoot := filepath.Join(home, "symlinked-npm")
+	symSibling := filepath.Join(symRoot, "npmrc-sibling.txt")
+	writeStorageFile(t, symSibling, 256)
+	realTarget := filepath.Join(home, "real-npm-store")
+	realTargetFile := filepath.Join(realTarget, "blob.bin")
+	writeStorageFile(t, realTargetFile, 1024)
+	if err := os.Symlink(realTarget, filepath.Join(symRoot, "_cacache")); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveNpmCacheDir(home, symRoot); got != filepath.Join(symRoot, "_cacache") {
+		t.Fatalf("symlinked _cacache resolved to %q, want %q", got, filepath.Join(symRoot, "_cacache"))
+	}
+	deps.getenv = func(k string) string {
+		if k == "npm_config_cache" {
+			return symRoot
+		}
+		return ""
+	}
+	symRes, err := runMachineStorageCleanup(context.Background(), deps, proto.StorageCleanupParams{
+		Targets: []string{proto.StorageTargetNpmCache},
+		Confirm: true,
+	})
+	if err != nil {
+		t.Fatalf("symlinked npm cleanup returned rpc err: %v", err)
+	}
+	if len(symRes.Items) != 1 || symRes.Items[0].Status != proto.StorageCleanupFailed {
+		t.Fatalf("expected symlinked _cacache cleanup to fail closed, got %+v", symRes.Items)
+	}
+	if _, err := os.Stat(symSibling); err != nil {
+		t.Fatalf("sibling file in parent npm cache root must NOT be deleted: %v", err)
+	}
+	if _, err := os.Stat(realTargetFile); err != nil {
+		t.Fatalf("symlink target file must NOT be deleted: %v", err)
+	}
+
+	// 3c. If `_cacache` is a regular file (non-directory), resolveNpmCacheDir must also return
+	// `_cacache` so guardStorageDir rejects it without touching parent sibling files.
+	fileRoot := filepath.Join(home, "file-cacache-npm")
+	fileSibling := filepath.Join(fileRoot, "sibling.txt")
+	cacacheFile := filepath.Join(fileRoot, "_cacache")
+	writeStorageFile(t, fileSibling, 256)
+	writeStorageFile(t, cacacheFile, 64)
+	if got := resolveNpmCacheDir(home, fileRoot); got != cacacheFile {
+		t.Fatalf("regular-file _cacache resolved to %q, want %q", got, cacacheFile)
+	}
+	deps.getenv = func(k string) string {
+		if k == "npm_config_cache" {
+			return fileRoot
+		}
+		return ""
+	}
+	fileRes, err := runMachineStorageCleanup(context.Background(), deps, proto.StorageCleanupParams{
+		Targets: []string{proto.StorageTargetNpmCache},
+		Confirm: true,
+	})
+	if err != nil {
+		t.Fatalf("regular-file _cacache cleanup returned rpc err: %v", err)
+	}
+	if len(fileRes.Items) != 1 || fileRes.Items[0].Status != proto.StorageCleanupFailed {
+		t.Fatalf("expected regular-file _cacache cleanup to fail closed, got %+v", fileRes.Items)
+	}
+	if _, err := os.Stat(fileSibling); err != nil {
+		t.Fatalf("sibling file in parent npm cache root must NOT be deleted when _cacache is a file: %v", err)
+	}
+	if _, err := os.Stat(cacacheFile); err != nil {
+		t.Fatalf("regular file _cacache must NOT be deleted: %v", err)
+	}
+
 	// 4. Linux /proc cmdline parsing: detects node running npm-cli.js / npx-cli.js / env npm / process.title "npm install"
 	// while ignoring unrelated node processes.
 	procDir := t.TempDir()
@@ -568,7 +719,7 @@ func TestNpmCacheResolutionAndCmdlineInUseDetection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readLinuxProcs failed: %v", err)
 	}
-	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs, known: true}); inUse {
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs.procs, known: true, cmdlinesKnown: procs.cmdlinesKnown}); inUse {
 		t.Fatalf("unrelated node process should not mark npm/npx in use")
 	}
 
@@ -578,7 +729,7 @@ func TestNpmCacheResolutionAndCmdlineInUseDetection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readLinuxProcs failed: %v", err)
 	}
-	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs, known: true}); !inUse {
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs.procs, known: true, cmdlinesKnown: procs.cmdlinesKnown}); !inUse {
 		t.Fatalf("expected node20 running npm-cli.js to mark npm in use")
 	}
 
@@ -593,7 +744,7 @@ func TestNpmCacheResolutionAndCmdlineInUseDetection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readLinuxProcs failed: %v", err)
 	}
-	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs2, known: true}); !inUse {
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs2.procs, known: true, cmdlinesKnown: procs2.cmdlinesKnown}); !inUse {
 		t.Fatalf("expected env node npx-cli.js to mark npx in use")
 	}
 
@@ -608,7 +759,7 @@ func TestNpmCacheResolutionAndCmdlineInUseDetection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readLinuxProcs failed: %v", err)
 	}
-	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs3, known: true}); !inUse {
+	if inUse, _ := storageToolchainInUse([]string{"npm", "npx"}, storageProcSnapshot{procs: procs3.procs, known: true, cmdlinesKnown: procs3.cmdlinesKnown}); !inUse {
 		t.Fatalf("expected npm process.title to mark npm in use")
 	}
 }
