@@ -200,11 +200,15 @@ type PlanTask struct {
 	planFirst bool
 	// callerPick: the launcher, model, effort, tier, permission mode and ultracode the task named itself, kept from its
 	// first start try in this process, so every try starts from them again whichever start-defaults rule fits it.
-	// Never serialized: the task as stored keeps its own value for whatever a policy filled in (storedLaunch).
+	// Never serialized: the task as stored keeps its own launch, not what a tier, Model configuration › Agents or a
+	// policy filled in for a start (storedLaunch, #12618).
 	callerPick *startPick
 	// startFilled: what the start-defaults policy filled in on this start try (start_defaults.go): the next try goes
 	// back to callerPick first, and the plan keeps the task's own value for exactly those. Never serialized.
 	startFilled startFill
+	// startNamed: what this start try put in place of the launch resolved for the task, which the task names from then
+	// on as its card shows it (storedLaunch). Never serialized; this try only.
+	startNamed startNamed
 	// startedAgent is the kind this start's answer reported, or the explicitly resolved launcher kind when that answer omitted it.
 	// Kept only until the Agent is linked; never serialized.
 	startedAgent string

@@ -136,6 +136,9 @@ const (
 )
 
 func (g superviseSignal) level() string {
+	if g.Kind == sigParkedSummary {
+		return supervisionInfo
+	}
 	if g.Kind == sigReport && g.Report == upReportProgress {
 		return supervisionInfo
 	}
@@ -225,6 +228,8 @@ type superviseBook struct {
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
+	// closeoutScanned bounds startup reconciliation; durable Automatic.Turn prevents replay across restarts.
+	closeoutScanned map[string]bool
 	// lines are the reports being paraphrased for the Progress row (report_line.go; the tests wait on them).
 	lines sync.WaitGroup
 }
@@ -833,7 +838,7 @@ func (s *Service) signalReplacing(old *superviseSignal, g superviseSignal) {
 			return // /stop silences the reporting task's notices on every route until the user speaks again (#3308)
 		}
 	}
-	if g.level() == supervisionInfo {
+	if g.level() == supervisionInfo && g.Kind != sigParkedSummary {
 		return // Progress is already recorded on the task card; it never wakes the assistant.
 	}
 	if g.At.IsZero() {
@@ -887,8 +892,8 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 					g.NotBefore = cur.NotBefore
 				}
 			}
-		} else {
-			g.At = cur.At // still waiting: it keeps its place
+		} else if g.Kind != sigParkedSummary || g.Key == cur.Key {
+			g.At = cur.At // still waiting: it keeps its place; a new summary day keeps its own date
 		}
 		if g.Ask == "" {
 			g.Ask = cur.Ask
@@ -1040,7 +1045,7 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 			if c.State == proto.StateWorking {
 				after = stallAfter(v.ExpectMinutes)
 			}
-			if still := now.Sub(moved); !moved.IsZero() && still >= after {
+			if still := v.activeTimeSince(moved, now); !moved.IsZero() && still >= after {
 				g := base
 				g.Kind, g.Key, g.Minutes = sigStalled, c.SessionID+"@"+moved.UTC().Format(time.RFC3339), int(still.Minutes())
 				g.Detail = strings.TrimSpace(c.Activity)
@@ -1107,6 +1112,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	history := s.planHistoryOnce() // and the plans read once, when a task's start needs them (start_remedy.go)
 	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)
 	groups := allStoppedTaskGroups(tasks)
+	backfilled := 0
 	for _, t := range tasks {
 		if t.Supervision == nil && t.DoneAt == nil {
 			// A legacy completion judged while no main existed deliberately stayed unjudged. Once main is configured,
@@ -1142,6 +1148,13 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		} else {
 			continue
 		}
+		if backfilled < closeoutBackfillMost {
+			var scanned bool
+			t, scanned = s.backfillCloseout(ctx, t, lists, now)
+			if scanned {
+				backfilled++
+			}
+		}
 		group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
 		allStopped := false
 		stalled := map[string]bool{}
@@ -1165,6 +1178,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		}
 		ownerEvidencePending := s.parkDecidedRetry(ctx, t) // a stored owner answer outranks legacy reconciliation
 		t = s.reconcileLegacyOwnerPriority(ctx, t, ownerEvidencePending)
+		if g, ok := s.automaticParkSummary(ctx, t, now.In(s.location(ctx))); ok {
+			s.signal(g)
+		}
 		if g, ok := parkDecidedSignal(t); ok { // a decision ended its parking, and no message carried that yet (parked.go)
 			s.signal(g)
 		}

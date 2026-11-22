@@ -377,6 +377,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return false
 	}
 	if len(entries) == 0 {
+		s.automaticParksTold(ctx, holds)
 		s.ackSupervisePending(list) // already covered by the deduplication history
 		s.agentDecisionRepliesTold(ctx, holds)
 		s.handoffResultsTold(ctx, holds)
@@ -422,6 +423,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.ackSupervisePending(list)
 		s.ackSupervisionDedupLocked(ctx, delivered)
 		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
+		s.automaticParksTold(ctx, kept)
 		s.estimateDueTold(ctx, kept)
 		s.parkDecidedTold(ctx, kept)
 		s.agentDecisionRepliesTold(ctx, kept)
@@ -429,6 +431,28 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.turnsTold(ctx, holds) // and how a turn ended: kept went, the rest of them was said the same within the window
 		s.finishFailedStartBatches(ctx, to, kept, settled, now)
 	}()
+	if !s.supervisePendingDurably(kept) {
+		// A daily parked summary is derived from the durable parking ledger, so reconstruction can present its next day
+		// before that replacement reached the outbox. Persist it before sending, without letting an older summary replace
+		// a newer pending one. The second check below still blocks the send if any outbox write failed (#5732).
+		r := &s.relays
+		r.mu.Lock()
+		if s.relayLocked(ctx) {
+			pending := maps.Clone(r.st.SupervisePending)
+			r.mu.Unlock()
+			for _, g := range kept {
+				if g.Kind != sigParkedSummary {
+					continue
+				}
+				if cur, ok := pending[g.id()]; ok && cur.At.After(g.At) {
+					continue
+				}
+				s.queueSignal(g)
+			}
+		} else {
+			r.mu.Unlock()
+		}
+	}
 	if !s.supervisePendingDurably(kept) {
 		// The initial outbox write failed or the exact stretch was replaced before this delivery. Restore the in-memory
 		// retry and let restoreDigest retry persistence first; neither a direct send nor queue admission may be acknowledged.
@@ -653,6 +677,12 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	var draft *TodoPRStatus
 	var estimateBrief *TaskBrief
 	switch g.Kind {
+	case sigParkedSummary:
+		r := v.parking()
+		wantTo := s.automaticParkSummaryTo(ctx, s.settings(ctx), t)
+		if r == nil || r.Automatic == nil || g.Key != g.At.Format(time.DateOnly)+"|"+r.Automatic.Dependency || wantTo != g.To {
+			return prompts.SuperviseEntry{}, false
+		}
 	case sigHandoffResult:
 		h := v.handoffResult()
 		if h == nil || h.ID != g.Key {
@@ -703,8 +733,8 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	case sigPRConflict:
 		p := t.PRStatus
 		if p == nil || p.URL != t.PRURL || p.State != "open" || !p.Conflicts || p.HeadOID == "" ||
-			g.Key != p.URL+"@"+p.HeadOID || s.stagePR(t.ID) != p.URL {
-			return prompts.SuperviseEntry{}, false // resolved, closed, or replaced while the signal waited
+			g.Key != p.URL+"@"+p.HeadOID || s.stagePR(t.ID) != p.URL || parkWaitsOnPR(v.parking(), p.URL) {
+			return prompts.SuperviseEntry{}, false // resolved, replaced, or parked for this PR while the signal waited
 		}
 	case sigTimedOut:
 		if st != reviewTimedOut {
@@ -857,7 +887,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	if g.Kind == sigRecheck || g.Kind == sigOwnerCannot {
 		e.Decision = g.Decision
 	}
-	if g.Kind == sigParkedDue { // what it waited for is the signal, not a reason in brackets
+	if g.Kind == sigParkedDue || g.Kind == sigParkedSummary {
 		e.Detail, e.Parked = "", s.parkedEntry(ctx, v.parking())
 	}
 	if g.Kind == sigParkDecided && st == reviewParked { // parked again before this went: what it waits for now

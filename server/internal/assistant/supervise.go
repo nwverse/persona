@@ -148,9 +148,13 @@ type TaskReview struct {
 	WaitingOn string    `json:"waiting_on,omitempty"`
 	Parks     int       `json:"parks,omitempty"`
 	DueAt     time.Time `json:"due_at,omitzero"`
+	// ParkEndedAt is recorded when this wait is replaced or resolved, so its time is excluded from stalled checks.
+	ParkEndedAt time.Time `json:"park_ended_at,omitzero"`
 	// Evidence is absent on legacy parks. A new park records its external wait, inspected source receipt and
 	// recording conversation here, in the existing Reviews JSON; it needs no new state store.
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
+	// Automatic keeps closeout admission and its unchanged-dependency streak in the existing review JSON.
+	Automatic *automaticPark `json:"automatic,omitempty"`
 	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
 	// ExternalPR is this external-event park's observed object, independent of the task's PR associations.
@@ -208,6 +212,10 @@ func (v *Supervision) clone() *Supervision {
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
 		out.Reviews[i].Options = slices.Clone(r.Options)
 		out.Reviews[i].Evidence = r.Evidence.clone()
+		if r.Automatic != nil {
+			a := *r.Automatic
+			out.Reviews[i].Automatic = &a
+		}
 		if r.Reply != nil {
 			receipt := *r.Reply
 			out.Reviews[i].Reply = &receipt
@@ -507,12 +515,28 @@ func (s *Service) updateSupervisionGuardedLockedAt(ctx context.Context, id strin
 		return *v, false, nil
 	}
 	before := v.State
+	var parkedAt time.Time
+	if p := v.parking(); p != nil {
+		parkedAt = p.At
+	}
 	park := v.parking()
 	if !change(v) {
 		return *v, false, nil
 	}
 	v.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
 	v.UpdatedAt = now.UTC()
+	if p := v.parking(); !parkedAt.IsZero() && (p == nil || !p.At.Equal(parkedAt)) {
+		for i := len(v.Reviews) - 1; i >= 0; i-- {
+			r := &v.Reviews[i]
+			if r.Verdict == reviewParked && r.At.Equal(parkedAt) {
+				r.ParkEndedAt = v.UpdatedAt
+				if i+1 < len(v.Reviews) {
+					r.ParkEndedAt = v.Reviews[i+1].At
+				}
+				break
+			}
+		}
+	}
 	v.PendingSince = pendingSince(before, v.State, v.PendingSince, v.UpdatedAt)
 	if park != nil && v.State == reviewPending && park.ExternalPR != nil && park.ExternalPR.wakes(park) {
 		// Match the review period after a reload. Postgres stores PendingSince to microsecond precision.
@@ -567,7 +591,9 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	case reviewUserCheck:
 		return "待你验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	case reviewNeedsUser:
-		return "等你处理", 0
+		if triageReviewState(t) == reviewNeedsUser {
+			return "等你处理", 0
+		}
 	case reviewPending:
 		return "已交付·待看", 1
 	case reviewAccepted:
