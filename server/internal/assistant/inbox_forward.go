@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -957,6 +958,19 @@ func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, 
 	// Append audit entry on the to-do for traceability.
 	if recordAudit {
 		s.recordTodoForwardAudit(ctx, &snap, curTodo, m.canonicalURL, res.status, res.machineID, res.sessionID, res.reason)
+	}
+	// If the task is in reviewNeedsUser and auto-forward delivered to the bound Agent (not already to the supervisor),
+	// also emit a non-destructive external-info wake so supervision can evaluate superseding the pending ask (#13112).
+	if res.commitLedger && res.status != TodoForwardFallback && needsUserWakeEligible(curTodo) {
+		source, summary := formatInboxExternalInfo(prompts.SuperviseInbox{
+			Item:    snap.ID,
+			Title:   clip(oneLine(snap.Title), 80),
+			Sender:  clip(oneLine(snap.Sender), 40),
+			Preview: clip(oneLine(snap.Preview), 140),
+			Count:   max(snap.Count, 1),
+			URL:     m.canonicalURL,
+		})
+		s.emitNeedsUserExternalInfo(ctx, curTodo, source, summary, "inbox_forward:"+snap.ID+"@"+snap.Last)
 	}
 }
 

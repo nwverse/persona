@@ -187,12 +187,17 @@ nonisolated struct ExtensionScenePreparedGeometry: Equatable, Sendable {
     var bounds: ExtensionSceneBounds
     var floorTop: Double
     var batches: [ExtensionSceneMeshBatch]
+    /// The walls drawn low for the cutaway it was built for (shape indices, sorted; #13036).
+    var lowered: [Int] = []
 
     var totalVertices: Int { batches.reduce(0) { $0 + $1.vertexCount } }
     var totalTriangles: Int { batches.reduce(0) { $0 + $1.triangleCount } }
 }
 
 nonisolated enum ExtensionSceneGeometryBuilder {
+    /// The batch of shapes the cutaway draws see-through (not one of the wire's materials).
+    static let seeThrough = "see-through"
+
     static let materialOrder: [String] = [
         ExtensionSceneMaterial.matte,
         ExtensionSceneMaterial.wood,
@@ -200,7 +205,13 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         ExtensionSceneMaterial.metal,
         ExtensionSceneMaterial.screen,
         ExtensionSceneMaterial.glass,
+        seeThrough,
     ]
+
+    /// Drawn see-through: glass, and what the cutaway shows through (#13036).
+    static func isSeeThrough(_ material: String) -> Bool {
+        material == ExtensionSceneMaterial.glass || material == seeThrough
+    }
 
     private struct Accumulator {
         var positions: [Float] = []
@@ -260,24 +271,38 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         }
     }
 
-    static func build(_ shapes: [ExtensionSceneShape]) -> ExtensionScenePreparedGeometry {
+    /// The meshes for `shapes`; with `cutawayYaw`, the cutaway for a camera at that yaw (#13036). The bounds are always
+    /// the whole model's, so the framing holds while walls come down.
+    static func build(_ shapes: [ExtensionSceneShape], cutawayYaw: Double? = nil) -> ExtensionScenePreparedGeometry {
         let bounds = ExtensionSceneBounds.of(shapes)
+        var drawn = shapes
+        var faded: Set<Int> = []
+        var lowered: [Int] = []
+        if let yaw = cutawayYaw {
+            let walls = ExtensionSceneCutaway.walls(shapes)
+            lowered = ExtensionSceneCutaway.lowered(walls, bounds: bounds, yaw: yaw)
+            if !lowered.isEmpty {
+                let treatments = ExtensionSceneCutaway.treatments(shapes, walls: walls, lowered: lowered, yaw: yaw)
+                (drawn, faded) = ExtensionSceneCutaway.apply(shapes, treatments: treatments)
+            }
+        }
         var floorTop = bounds.minH
         var buckets: [String: Accumulator] = [:]
-        for shape in shapes {
+        for (index, shape) in drawn.enumerated() {
+            let fade = faded.contains(index)
             switch shape {
             case .box(let box):
                 let top = max(box.bottom, box.top)
                 if top.isFinite, top - bounds.minH <= 0.25 { floorTop = max(floorTop, top) }
                 let mat = normalizedMaterial(box.material)
                 let col = linearRGBA(hex: box.color, material: mat)
-                appendBox(box, color: col, into: &buckets[mat, default: Accumulator()])
+                appendBox(box, color: col, into: &buckets[fade ? seeThrough : mat, default: Accumulator()])
             case .cylinder(let cyl):
                 let top = max(cyl.bottom, cyl.top)
                 if top.isFinite, top - bounds.minH <= 0.25 { floorTop = max(floorTop, top) }
                 let mat = normalizedMaterial(cyl.material)
                 let col = linearRGBA(hex: cyl.color, material: mat)
-                appendCylinder(cyl, color: col, into: &buckets[mat, default: Accumulator()])
+                appendCylinder(cyl, color: col, into: &buckets[fade ? seeThrough : mat, default: Accumulator()])
             case .prism(let prism):
                 let top = max(prism.bottom, prism.top)
                 if top.isFinite, top - bounds.minH <= 0.25 { floorTop = max(floorTop, top) }
@@ -289,7 +314,7 @@ nonisolated enum ExtensionSceneGeometryBuilder {
             }
         }
         let batches = materialOrder.compactMap { buckets[$0]?.freeze(material: $0) }
-        return ExtensionScenePreparedGeometry(bounds: bounds, floorTop: floorTop, batches: batches)
+        return ExtensionScenePreparedGeometry(bounds: bounds, floorTop: floorTop, batches: batches, lowered: lowered)
     }
 
     static func normalizedMaterial(_ raw: String?) -> String {
@@ -780,19 +805,30 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         case ExtensionSceneMaterial.screen:
             mat.roughness.contents = 0.18
             mat.metalness.contents = 0.08
+        case seeThrough:
+            // the cutaway's see-through furniture: its own colors, faint, never hiding what is behind it
+            mat.roughness.contents = 0.84
+            mat.metalness.contents = 0.0
+            seeThroughSurface(mat, opacity: Theme.Scene.cutawaySeeThroughOpacity)
         case ExtensionSceneMaterial.glass:
             mat.roughness.contents = 0.08
             mat.metalness.contents = 0.05
-            mat.transparency = Theme.Scene.glassOpacity
-            mat.blendMode = .alpha
-            mat.transparencyMode = .singleLayer
-            mat.writesToDepthBuffer = false
-            mat.isDoubleSided = true
+            seeThroughSurface(mat, opacity: Theme.Scene.glassOpacity)
         default:
             mat.roughness.contents = 0.84
             mat.metalness.contents = 0.0
         }
         return mat
+    }
+
+    /// A see-through surface at `opacity`. A physically based material ignores `transparency` (it drew glass solid, #13036):
+    /// the opacity goes in its transparent property, read from alpha (`.aOne`).
+    static func seeThroughSurface(_ mat: SCNMaterial, opacity: CGFloat) {
+        mat.transparent.contents = UIColor(white: 0, alpha: opacity)
+        mat.transparencyMode = .aOne
+        mat.blendMode = .alpha
+        mat.writesToDepthBuffer = false
+        mat.isDoubleSided = true
     }
 
     static func makeSCNGeometry(from batch: ExtensionSceneMeshBatch) -> SCNGeometry {
@@ -904,7 +940,7 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         for child in rig.meshRoot.childNodes { child.removeFromParentNode() }
         for batch in prepared.batches {
             let node = SCNNode(geometry: makeSCNGeometry(from: batch))
-            if batch.material == ExtensionSceneMaterial.glass {
+            if isSeeThrough(batch.material) {
                 node.castsShadow = false
                 node.renderingOrder = 10
             } else {

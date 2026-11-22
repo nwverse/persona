@@ -294,6 +294,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		for _, t := range started.Tasks {
 			if t.Error != "" {
 				fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
+			} else if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
+				fmt.Fprintf(&b, "- %s → todo %s on %s (queued: %s)\n", t.Title, t.TodoID, t.Machine, t.Queue.Reason)
 			} else {
 				fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
 			}
@@ -349,7 +351,11 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if t.Error != "" {
 			fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
 		} else {
-			fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
+			if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
+				fmt.Fprintf(&b, "- %s → todo %s on %s (queued: %s)\n", t.Title, t.TodoID, t.Machine, t.Queue.Reason)
+			} else {
+				fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
+			}
 			if todo, ok := s.todoNow(t.TodoID); ok && todo.Supervision != nil {
 				supervisor = todo.Supervision.Supervisor
 			}

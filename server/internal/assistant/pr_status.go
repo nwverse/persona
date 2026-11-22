@@ -571,6 +571,11 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		b.stageWriting.Unlock()
 		return nil // an older response must not replace newer facts or resolve a wait
 	}
+	var prevPR *TodoPRStatus
+	if previous != nil {
+		cp := *previous
+		prevPR = &cp
+	}
 	switch {
 	case cur.PR == status.URL:
 		cur.PRStatus = &status
@@ -607,63 +612,77 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	s.todos.mu.Unlock()
 	b.stageWriting.Unlock()
 	s.todosChanged(ctx)
-	if status.State == "open" && status.Draft && status.Own && status.HeadOID != "" && t.Supervision != nil {
-		s.signal(superviseSignal{Todo: t.ID, Kind: sigDraftPR, PRURL: status.URL, Key: status.URL + "@" + status.HeadOID})
-	}
-	conflictRouted, reviewRouted := false, false
-	if s.prEventsRouteToAgentOn(ctx) {
-		conflictRouted, reviewRouted = s.routePREvents(ctx, t, cur, held, status)
-	}
-	if !conflictRouted && status.URL == cur.PR && status.State == "open" && status.Conflicts && status.HeadOID != "" && t.Supervision != nil &&
-		!parkWaitsOnPR(t.Supervision.parking(), status.URL) {
-		// Only the current PR raises a conflict signal: the digest revalidates against the task/stage PR, so an
-		// earlier PR's conflict would be dropped there anyway.
-		s.signal(superviseSignal{Todo: t.ID, Kind: sigPRConflict, Key: status.URL + "@" + status.HeadOID,
-			Detail: fmt.Sprintf("PR %s at head %s is open and has merge conflicts.", status.URL, status.HeadOID)})
-	}
-	reviewChange := !reviewRouted && parkReviewChangeRequested(held, status)
-	if held != nil && (terminal && (wasOpen || legacyHold || held.Evidence != nil) || reviewChange) {
-		// Typed waits reconcile terminal facts even after a failed ledger write or a restart. Legacy parks retain
-		// their transition/stage gate. A new changes-request review is actionable before other PRs resolve.
-		v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			p := v.parking()
-			if p == nil || !p.At.Equal(held.At) {
-				return false
-			}
-			now, ok := s.todoNow(t.ID)
-			if !ok || now.DoneAt != nil || now.PRURL != status.URL && !slices.Contains(now.PRs, status.URL) || !s.stageFollows(t.ID, status.URL) {
-				return false
-			}
-			f := prFacts(now, status.URL)
-			if f == nil || f.State != status.State || !f.CheckedAt.Equal(status.CheckedAt) {
-				return false
-			}
-			if terminal {
-				if !parkPRsResolved(now, p, status.URL) {
+	parkWoke := false
+	preStage := t.Stage
+	needsUserMergeHandled := false
+	if needsUserWakeEligible(t) {
+		needsUserMergeHandled = s.maybeWakeNeedsUserForPR(ctx, t, prevPR, status)
+	} else {
+		if status.State == "open" && status.Draft && status.Own && status.HeadOID != "" && t.Supervision != nil {
+			s.signal(superviseSignal{Todo: t.ID, Kind: sigDraftPR, PRURL: status.URL, Key: status.URL + "@" + status.HeadOID})
+		}
+		conflictRouted, reviewRouted := false, false
+		if s.prEventsRouteToAgentOn(ctx) {
+			conflictRouted, reviewRouted = s.routePREvents(ctx, t, cur, held, status)
+		}
+		if !conflictRouted && status.URL == cur.PR && status.State == "open" && status.Conflicts && status.HeadOID != "" && t.Supervision != nil &&
+			!parkWaitsOnPR(t.Supervision.parking(), status.URL) {
+			// Only the current PR raises a conflict signal: the digest revalidates against the task/stage PR, so an
+			// earlier PR's conflict would be dropped there anyway.
+			s.signal(superviseSignal{Todo: t.ID, Kind: sigPRConflict, Key: status.URL + "@" + status.HeadOID,
+				Detail: fmt.Sprintf("PR %s at head %s is open and has merge conflicts.", status.URL, status.HeadOID)})
+		}
+		reviewChange := !reviewRouted && parkReviewChangeRequested(held, status)
+		if held != nil && (terminal && (wasOpen || legacyHold || held.Evidence != nil) || reviewChange) {
+			// Typed waits reconcile terminal facts even after a failed ledger write or a restart. Legacy parks retain
+			// their transition/stage gate. A new changes-request review is actionable before other PRs resolve.
+			v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+				p := v.parking()
+				if p == nil || !p.At.Equal(held.At) {
 					return false
 				}
-			} else if f.HeadOID != status.HeadOID || !parkReviewChangeRequested(p, *f) ||
-				!f.ChangesRequestedAt.Equal(*status.ChangesRequestedAt) {
-				return false
+				now, ok := s.todoNow(t.ID)
+				if !ok || now.DoneAt != nil || now.PRURL != status.URL && !slices.Contains(now.PRs, status.URL) || !s.stageFollows(t.ID, status.URL) {
+					return false
+				}
+				f := prFacts(now, status.URL)
+				if f == nil || f.State != status.State || !f.CheckedAt.Equal(status.CheckedAt) {
+					return false
+				}
+				if terminal {
+					if !parkPRsResolved(now, p, status.URL) {
+						return false
+					}
+				} else if f.HeadOID != status.HeadOID || !parkReviewChangeRequested(p, *f) ||
+					!f.ChangesRequestedAt.Equal(*status.ChangesRequestedAt) {
+					return false
+				}
+				v.State = reviewPending
+				return true
+			})
+			if err != nil {
+				return err
 			}
-			v.State = reviewPending
-			return true
-		})
-		if err != nil {
-			return err
-		}
-		if changed {
-			detail := "PR " + status.State + ": " + status.URL
-			if reviewChange {
-				detail = "PR changes requested: " + status.URL
+			if changed {
+				parkWoke = true
+				detail := "PR " + status.State + ": " + status.URL
+				if reviewChange {
+					detail = "PR changes requested: " + status.URL
+				}
+				s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: detail})
 			}
-			s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: detail})
 		}
 	}
 	if status.URL == t.PRURL && status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
 		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
 	}
 	if strings.EqualFold(status.State, "merged") {
+		if parkWoke || needsUserMergeHandled {
+			s.prMergeWakeTold(ctx, []superviseSignal{{Todo: t.ID, Kind: sigPRMerged, PRURL: status.URL, Key: prMergeSignalKey(status.URL)}})
+		} else {
+			s.maybeEmitUnparkedPRMerged(ctx, t.ID, status.URL, held, parkWoke, wasOpen, preStage)
+		}
+		s.drainWorkspaceQueuesForPrereq(ctx, t.ID)
 		s.evaluateTodoAfterDependents(ctx, t.ID)
 	}
 	return nil

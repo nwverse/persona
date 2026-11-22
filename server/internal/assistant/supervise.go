@@ -176,6 +176,9 @@ type TaskReview struct {
 	HoldReleased    bool      `json:"hold_released,omitempty"`
 	// Handoff is an internal wait recorded after session.send was acknowledged.
 	Handoff *taskHandoff `json:"handoff,omitempty"`
+	// SupersededReason records the supervisor's natural-language reason when this task_review superseded an earlier
+	// pending needs_user decision without fabricating an owner selection (#13112).
+	SupersededReason string `json:"superseded_reason,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
