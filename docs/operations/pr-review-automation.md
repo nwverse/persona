@@ -22,6 +22,35 @@ New commits invalidate all previous results. Duplicate comments are suppressed p
 
 Before publishing a fork continuation, the watcher checks GitHub again. It matches continuation references in the title or body and reuses an open continuation that contains the current fork head, or one merged after the fork head commit's committer timestamp. The watcher saves either lookup's result against the fork head SHA, so a restart or an advance of the base branch does not restart repair for the same fork head.
 
+
+### Dedicated local-runner merge evidence
+
+Automatic merges of this repository additionally require the latest GitHub commit status with context
+`persona/local-gate` on the exact PR head. The status must be `success`, created by a user who currently has
+repository write, maintain or admin permission. A human review, hosted check, cached semantic pass or the
+privacy merge wrapper cannot substitute for this evidence. Missing, pending, failed, unreadable or malformed
+statuses block merging with a stored diagnostic and a deduplicated PR comment. A newer failure supersedes an
+older success. This guard is mandatory even for `semantic_only` verification and merge retries.
+
+The maintainer or trusted local-runner adapter publishes this attestation **only after** collecting a completed
+run from the dedicated runner, checking its full `COMMIT` against the PR head, and recording the selected shards
+and sanitized result in the PR. Use description `EXIT_CODE=0` for a successful run. If existing failures remain,
+run the same shards on the fixed base with the same environment, compare concrete failure identities, record both
+runs and the comparison in the PR, and use `BASE=<full current base SHA> NEW_FAILURES=0`. A changed base invalidates
+that exception. A timeout, interrupted SSH connection, missing shard or unclassified failure is not a pass.
+Never publish raw runner logs, machine names, private paths or addresses to GitHub.
+
+For example, after validating and recording a successful runner result, publish its status with:
+
+```sh
+gh api --method POST "repos/<owner>/<repo>/statuses/<full head SHA>" \
+  -f context=persona/local-gate -f state=success -f description='EXIT_CODE=0'
+```
+
+The status is a repository writer's attestation of local-runner evidence, not an independently executed hosted
+check. The watcher reads it directly from GitHub immediately before invoking the exact-head merge wrapper; it
+never manufactures this status from its own lightweight checks. Other repositories retain their configured gates.
+
 ## Closing PRs after a week without progress
 
 A non-draft PR with no substantive progress for **more than seven days** is marked `stale`, told in English that it is being closed for long inactivity, and then closed without merging. New commits, reviews, contributor comments, publication of a newly found failure, or an automatic repair publication reset the interval. Polling, retrying an already recorded failure, and writing local retry counters do not. A fork PR with a published continuation is left to that continuation instead of being closed. The `close_stale` repository switch is an explicit local opt-in; dry runs and review-only examples do not close PRs.

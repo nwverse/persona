@@ -29,6 +29,7 @@ import pr_watch_repair
 import pr_watch_recovery
 from pr_watch_review import review as semantic_review
 import pr_watch_human
+from pr_watch_local_gate import require_local_gate, LocalGateError
 from pr_watch_verify import verify
 
 FORMAT_VERSION = 1
@@ -656,6 +657,7 @@ class Watcher:
             self.log("%s#%s passed; merge disabled" % (repo, number))
             return False
         if repo == repository("nwverse/persona"):
+            require_local_gate(repo, pr["headRefOid"], pr["baseRefOid"])
             # merge-pr.sh owns the shared lock for this path. Acquiring it in
             # another process while self.merging() holds it would deadlock.
             wrapper = str(Path(__file__).resolve().parents[2] / "scripts" / "hooks" / "merge-pr.sh")
@@ -1793,6 +1795,9 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                            merge_attempts=int(current.get("merge_attempts", 0)) + 1,
                            retry_after=retry, failure=str(error))
             self.log("%s#%s merge blocked: %s" % (repo, number, bounded(error, 700)))
+            if isinstance(error, LocalGateError) and current.get("local_gate_notice") != str(error) and not self.dry_run:
+                self.comment(repo, number, str(error))
+                self.state.put(repo, number, head, local_gate_notice=str(error))
 
     def worker(self):
         while True:
