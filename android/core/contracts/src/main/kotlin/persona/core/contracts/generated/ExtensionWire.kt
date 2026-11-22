@@ -2009,6 +2009,55 @@ data class ExtensionSecretsResolveResult(
 )
 
 /**
+ * A public field name/type; never a value or source path.
+ */
+@Serializable
+data class ExtensionSecretStoreField(
+    val name: String = "",
+    val type: String = "",
+)
+
+/**
+ * The canonical public target approved on the secret storage card.
+ */
+@Serializable
+data class ExtensionSecretStoreTarget(
+    val operation: String = "",
+    val vault: String = "",
+    val item: String? = null,
+    val title: String? = null,
+    val category: String? = null,
+    val fields: List<ExtensionSecretStoreField> = emptyList(),
+)
+
+/**
+ * secrets.store: describe metadata, prepare an expiring node HPKE key after explicit approval, commit one encrypted
+ * payload.
+ */
+@Serializable
+data class ExtensionSecretStoreParams(
+    val contribution: String? = null,
+    val phase: String = "",
+    val target: ExtensionSecretStoreTarget = ExtensionSecretStoreTarget(),
+    val machine: String = "",
+    val session: String = "",
+    @SerialName("key_id") val keyId: String? = null,
+    val sealed: String? = null,
+)
+
+/**
+ * Metadata and a recipient key, or references of written fields. Never values.
+ */
+@Serializable
+data class ExtensionSecretStoreResult(
+    val target: ExtensionSecretStoreTarget = ExtensionSecretStoreTarget(),
+    @SerialName("vault_name") val vaultName: String? = null,
+    val key: String? = null,
+    @SerialName("key_id") val keyId: String? = null,
+    val references: Map<String, String>? = null,
+)
+
+/**
  * secrets.used (an event to the provider, no answer): a reference it resolved was used, for the usage record its own
  * page shows. Never the value.
  */
