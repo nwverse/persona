@@ -155,7 +155,10 @@ func ParseQueue(raw []byte) (*Queue, error) {
 				if first := seen[key]; first != "" {
 					j.DuplicateOf = first
 				} else {
-					seen[key] = j.Identity()
+					seen[key] = j.Ticket
+					if seen[key] == "" {
+						seen[key] = j.Identity()
+					}
 				}
 			}
 		}
@@ -190,11 +193,11 @@ func ParseResult(raw []byte) (*Outcome, error) {
 
 // Identity retains legacy entries without inventing a runner ticket or a dedupe commit.
 func (j Job) Identity() string {
-	if j.Ticket != "" {
-		return j.Ticket
-	}
 	if j.Run != "" {
 		return j.Run
+	}
+	if j.Ticket != "" {
+		return j.Ticket
 	}
 	if j.Slot > 0 {
 		return "slot-" + strconv.Itoa(j.Slot) + "-" + j.StartedAt.UTC().Format(time.RFC3339Nano)

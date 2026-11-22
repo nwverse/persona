@@ -184,3 +184,11 @@ func TestQueuedClientHeartbeatExpiresWithoutPromotingDeadWork(t *testing.T) {
 		t.Fatalf("dead queued client was admitted: %+v", rows[0])
 	}
 }
+
+func TestLegacyRunIdentitySurvivesAnEmptyRunningTicket(t *testing.T) {
+	waiting := Job{Ticket: "000000000034", Run: "example-legacy-run", Position: 1}
+	running := Job{Ticket: "", Run: "example-legacy-run", Slot: 1}
+	if waiting.Identity() != running.Identity() {
+		t.Fatal("legacy queue-to-slot transition lost its result identity")
+	}
+}
