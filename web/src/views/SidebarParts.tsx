@@ -59,12 +59,15 @@ export function useGo(onNavigate?: () => void): GoFn {
     latest.current = onNavigate;
   });
   return useCallback(
-    (to: Route) => (e: React.MouseEvent) => {
+    (to: Route, open?: () => boolean) => (e: React.MouseEvent) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
       e.preventDefault();
-      // Reselecting the open Agent makes it a root: replace its drill-down entry even though the URL is unchanged.
-      const root = handoffFrom() !== undefined && href(to) === location.pathname + location.search;
-      navigate(to, root, root ? {} : null);
+      // `open`: a row that may open more than its route (Main Chat: the page its conversation kept, #13164)
+      if (!open?.()) {
+        // Reselecting the open Agent makes it a root: replace its drill-down entry even though the URL is unchanged.
+        const root = handoffFrom() !== undefined && href(to) === location.pathname + location.search;
+        navigate(to, root, root ? {} : null);
+      }
       latest.current?.();
     },
     [],
@@ -208,7 +211,8 @@ export type RegFn = (k: string) => (el: HTMLElement | null) => void;
 export const rowKey = (s: Pick<Session, "machine_id" | "session_id">) => `s:${agentKey(s)}`;
 /** Whether the open row (`activeKey`) is one of these agents': its group opens for it (useFolded). */
 export const holdsRow = (sessions: readonly Session[], activeKey: string) => sessions.some((s) => rowKey(s) === activeKey);
-export type GoFn = (to: Route) => (e: React.MouseEvent) => void;
+/** A row's click: goes to `to`, unless `open` opened what the row stands for itself (true). */
+export type GoFn = (to: Route, open?: () => boolean) => (e: React.MouseEvent) => void;
 /** `at`: where a right click or the menu key opened it; without it (the ⋯) the row's menu toggles beside its button.
  *  A row's ⋯ lies beside its link, not in it, and gives as `anchor` its parent, the box holding both: the menu
  *  closes on a pointerdown outside its anchor, and a press on the ⋯ has to stay inside it for the click that

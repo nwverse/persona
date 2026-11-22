@@ -171,10 +171,22 @@ previous page** for a page it cannot name, `views/chat/HandoffBack.tsx` `fromTit
 page. The sidebar keeps that page's row lit instead of the Agent's (`sidebarRoute` in `lib/persona-nav.ts`, read by
 `useActiveKey`), the Persona row for a Persona conversation's card opened as a page included. An Agent opened from an Agent's
 page that was itself opened from a page carries that first page too (`handoff.page`), so the lit row stays put through the
-chain. An Agent picked in the sidebar, reached by a link (`leaveChat(…, false)`) or opened by ⌘-click in a new tab lights
-its own row as before. Reselecting that open Agent in the sidebar replaces its current history entry without adding one,
-clears the hand-off origin and hides the strip even though the address does not change. A reload keeps the entry, and with
-it the lit row and the strip.
+chain. An Agent picked in the sidebar, reached by a link from any page but a Persona conversation, or opened by ⌘-click in
+a new tab lights its own row as before; a card's session or task link in a Persona conversation that opens a page (on a
+narrow window, or set to Full page) names the conversation, as the cards' Open does (`openLinkPage`, #13164). Reselecting
+that open Agent in the sidebar replaces its current history entry without adding one, clears the hand-off origin and hides
+the strip even though the address does not change. A reload keeps the entry, and with it the lit row and the strip.
+
+**Main Chat keeps the page its conversation opened** (#13164; iOS's `SidebarPageRoots`,
+[sidebar-navigation.md](../design/sidebar-navigation.md)). Set to Full page, the page the main conversation opened last
+(an Agent's or a task's, through `leaveChat`: a hand-off card's or a Brief row's Open, a task row, a held push, a card's
+link) stays its page while another place is in front. **Main Chat** picked in the sidebar or the folded rail from that
+place opens it again over the conversation: a new entry for the conversation, keeping where its chat was, under the
+page's own, which names the conversation, so the strip and Back return there (`pickMainChat` in `lib/handoff.ts`). Picked
+while the conversation or a page opened from it is in front, Main Chat goes to the bare conversation (a pop to its root)
+and the page is no longer kept; Back to the conversation drops it too. It is kept for the main conversation of the
+assistant shown, in this page only (a reload, or another hub's page, starts with none). The side panel mode is unchanged:
+the conversation brings its own side panel back (`lib/panel-memory.ts`).
 
 A `brief` card's waiting and later rows open the chat the row names (`machine_id` / `session_id`, #2320) in the app, as iOS
 and Android do: an Agent's where Settings › How Agents open says (the side panel, or its page with the way back), a Persona
@@ -2047,7 +2059,7 @@ CLAUDE.md requires links to open inside the App; on the web the browser itself i
   - Esc backs out one step at a time: first it closes the @ candidates, then goes from a reply / passage comment back to the whole-doc comment, and finally back to the doc. Pressing Esc never interrupts an Agent working in the chat.
   - Comments only; the body is never edited.
 - **Other web pages**: new tab. Most sites forbid being embedded in an iframe with X-Frame-Options / CSP, and the page can't tell it was blocked, so embedding them in the panel would only show a blank screen.
-- **This hub's Agent / task pages** (#2485, #5096, #5424): same-origin `/s/<machine>/<session>` and `/todos?id=<todo>` links (the kind the assistant writes when it says "who is handling it") follow Settings › How Agents open. Side panel (the default): on a wide screen they open in the Agent / task panel, leaving the current chat alone; a narrow screen has no room beside it, so they open as pages. The panel has a single header, the Agent chat's own session header (#3333, matching iOS #3255): × on the right closes it; the top of ⋯ is "Open in new window" (tasks also have "Remove task…"); a task with several Agents has ⌄ next to its title to switch. Full page: those pages at every width, as cindy's session links do; a task's link opens its most pressing Agent's page, or the to-do's page while no Agent is on it, and Back returns to the chat where it was left. The same paths from other origins, and the hub's other pages, still open in a new tab.
+- **This hub's Agent / task pages** (#2485, #5096, #5424): same-origin `/s/<machine>/<session>` and `/todos?id=<todo>` links (the kind the assistant writes when it says "who is handling it") follow Settings › How Agents open. Side panel (the default): on a wide screen they open in the Agent / task panel, leaving the current chat alone; a narrow screen has no room beside it, so they open as pages. The panel has a single header, the Agent chat's own session header (#3333, matching iOS #3255): × on the right closes it; the top of ⋯ is "Open in new window" (tasks also have "Remove task…"); a task with several Agents has ⌄ next to its title to switch. Full page: those pages at every width, as cindy's session links do; a task's link opens its most pressing Agent's page, or the to-do's page while no Agent is on it, and Back returns to the chat where it was left. A page such a link opens from a Persona conversation names it, as the conversation's hand-off cards do (the strip, the lit row: #13164). The same paths from other origins, and the hub's other pages, still open in a new tab.
   Assistant chats `/persona/<chat id>` (#2680) navigate within the page (a route change, no full reload). Besides the current page's origin, "this hub" also covers the addresses the hub declares in `endpoints` in hello
   (`public_url` first, which is what the assistant uses when writing links): when the web app is opened via a LAN address, links the assistant wrote with the public address still open in the page (`lib/links.ts` `hubOrigins`).
   Same-origin only: when the address the assistant wrote and the address the browser opened the web app with differ (for example one is an intranet address and the other a public domain), the link is not intercepted.
