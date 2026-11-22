@@ -748,6 +748,7 @@ class InboxHandOffDeliveryRegressionTest {
 
         suspend fun connect(): ChatComposerService = fixture.sender.connectComposer { transport ->
             HttpChatComposerService(pairing, transport, connection, "test-token",
+                onRetryStart = fixture.sender::beginComposerRetry,
                 onRetryDelivery = { id, delivery, opId, result ->
                     println("composer-retry-delivery: id=$id op=$opId state=${delivery.state} result=$result entry=${fixture.store.entries.value.firstOrNull { it.clientMessageId == id }}")
                     fixture.sender.recordComposerDelivery(id, delivery, opId, result)

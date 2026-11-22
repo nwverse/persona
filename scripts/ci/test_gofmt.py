@@ -74,10 +74,11 @@ class GoFmtRunTests(GoFmtTestCase):
     def test_an_unformatted_file_is_listed_and_fails(self):
         self.write("server/a.go")
         self.write("server/b.go", UNFORMATTED)
+        listed = "gofmt: needs formatting (run gofmt -w): server/b.go\n"
         code, out, _ = self.run_script("server/a.go", "server/b.go")
-        self.assertEqual((1, "server/b.go\n"), (code, out))
+        self.assertEqual((1, listed), (code, out))
         code, out, _ = self.run_script("server")
-        self.assertEqual((1, "server/b.go\n"), (code, out))
+        self.assertEqual((1, listed), (code, out))
 
     def test_a_named_file_that_is_gone_fails(self):
         self.write("server/a.go")

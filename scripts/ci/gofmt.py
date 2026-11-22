@@ -6,7 +6,7 @@
 
 A directory stands for every .go file below it, testdata included; a file stands for itself. A path that is neither is
 an error, so a list of changed files that names a deleted one fails instead of passing on nothing. gofmt -l runs on 100
-files at a time and prints the ones whose formatting differs; `gofmt -w <file>` rewrites one.
+files at a time; each file whose formatting differs gets a line `gofmt: needs formatting (run gofmt -w): <file>`.
 """
 from pathlib import Path
 import subprocess
@@ -37,7 +37,10 @@ def main(argv=None):
         result = subprocess.run(["gofmt", "-l", *files[offset:offset + 100]], capture_output=True, text=True,
                                 timeout=30)
         if result.stdout or result.returncode:
-            print(result.stdout + result.stderr, end="")
+            # gofmt -l prints bare file names; say what they are, so a failure summary has text to show.
+            for name in result.stdout.splitlines():
+                print(f"gofmt: needs formatting (run gofmt -w): {name}")
+            print(result.stderr, end="")
             failed = True
     return 1 if failed else 0
 

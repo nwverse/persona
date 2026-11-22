@@ -8,15 +8,16 @@ upgrade: a type the parser (server/internal/transcript) does not know shows up h
 content, and for each type one file:line to look at.
 """
 import collections
-import glob
 import json
 import os
 import sys
 
+from assistant_token_report import transcript_files
+
 
 def files(dirs):
-    for d in dirs:
-        yield from glob.glob(os.path.join(os.path.expanduser(d), "**", "*.jsonl"), recursive=True)
+    paths = map(os.path.expanduser, dirs)
+    return transcript_files(path for path in paths if os.path.isdir(path))
 
 
 def main():

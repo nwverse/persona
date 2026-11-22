@@ -391,7 +391,7 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("server/internal/foo/y.go", "package foo\n")
         out, _ = self.check_fast(code=1)
         self.assertIn("FAIL     gofmt (changed files)", out)
-        self.assertIn("server/internal/foo/x.go", out)
+        self.assertIn("gofmt: needs formatting (run gofmt -w): server/internal/foo/x.go", out)
         self.assertIn("rerun: python3 -B scripts/ci/gofmt.py server/internal/foo/x.go server/internal/foo/y.go", out)
         for line in ("PASS     server go test ./internal/foo/...", "PASS     server repo-wide guards",
                      "PASS     server go vet"):
