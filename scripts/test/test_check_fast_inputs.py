@@ -35,10 +35,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 FAKE_GO = '#!/bin/sh\nprintf "%s|%s\\n" "${PWD##*/}" "$*" >> "$FAKE_GO_LOG"\n'
-# The package lists of check-fast's two repo-wide guard calls: whole packages, and the named guard tests (-run) of two
-# packages whose other tests are slow or need Postgres.
-GUARD_PACKAGES = "./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins"
-GUARD_RUN_PACKAGES = "./internal/hub ./internal/assistant"
+# The package lists of check-fast's two repo-wide guard calls: whole packages, and the named guard and contract tests
+# (-run) of packages whose other tests are slow or need Postgres (#12842).
+GUARD_PACKAGES = "./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins ./internal/i18n ./internal/prompts"
+GUARD_RUN_PACKAGES = ("./internal/hub ./internal/assistant ./internal/update ./cmd/persona-hub ./cmd/persona-manager "
+                      "./cmd/persona-node")
 
 
 @unittest.skipUnless(shutil.which("timeout") or shutil.which("gtimeout"), "check-fast.sh needs GNU timeout")
@@ -282,15 +283,10 @@ class CheckFastServerInputsTests(unittest.TestCase):
         calls = self.guard_calls()
         self.assertEqual(2, len(calls), out)
         self.assertEqual("server|test -count=1 " + GUARD_PACKAGES, calls[0])
-        match = re.fullmatch(r"server\|test -count=1 -run \^\(([\w|]+)\)\$ " + re.escape(GUARD_RUN_PACKAGES), calls[1])
+        match = re.fullmatch(r"server\|test -count=1 -run \^\(([\w|.*]+)\)\$ " + re.escape(GUARD_RUN_PACKAGES), calls[1])
         self.assertIsNotNone(match, calls[1])
-        # go test -run passes when a name matches nothing: every named guard must exist, and every package directory.
-        sources = "".join(path.read_text() for package in GUARD_RUN_PACKAGES.split()
-                          for path in (ROOT / "server" / package).glob("*_test.go"))
-        defined = set(re.findall(r"^func (Test\w+)\(t \*testing\.T\)", sources, re.M))
-        self.assertEqual(set(), set(match.group(1).split("|")) - defined)
-        for package in (GUARD_PACKAGES + " " + GUARD_RUN_PACKAGES).split():
-            self.assertTrue((ROOT / "server" / package).is_dir(), package)
+        # go test -run passes when a name matches nothing: test_check_fast_guards.py's CheckFastGoGuardListTests holds
+        # every entry to a func of these packages in this repository, and every package directory to its tests.
 
     def test_a_plugin_change_runs_its_own_tests_and_the_guards_not_a_build(self):
         self.write("server/plugins/wechat/x.go", "package wechat\n")
@@ -312,6 +308,38 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertEqual(["./internal/guide/conformance/..."], packages, out)
         self.assertEqual([], self.guard_calls(), out)
         self.assertNotIn("repo-wide guards", out)
+
+    def test_the_assistant_group_runs_in_its_partitions_and_node_runs_as_given(self):
+        # Every Go group goes through scripts/test/go_test_partitioned.py (#12765). ./internal/assistant/... covers a
+        # partitioned package: its tests run in go_partitions.py's three partitions beside its subpackages, each with
+        # the group's flags and timeout. internal/node splits itself in its TestMain, so its group runs as given.
+        (self.go_log.parent / "go").write_text(
+            FAKE_GO + 'case "$*" in\n'
+            '  "list ./internal/assistant/...") printf "example.com/server/internal/assistant\\n'
+            'example.com/server/internal/assistant/inbox\\n" ;;\n'
+            '  "test -list .* ./internal/assistant") printf "TestA\\nTestB\\nTestC\\nTestD\\n'
+            'ok  \\texample.com/server/internal/assistant\\t0.1s\\n" ;;\n'
+            'esac\n')
+        self.env.pop("GOFLAGS", None)
+        self.env["CHECK_FAST_TIMEOUT_GO_TEST"] = "300"
+        self.write("server/internal/assistant/x.go", "package assistant\n")
+        self.write("server/internal/node/x.go", "package node\n")
+        out, _ = self.check_fast()
+        self.assertIn("PASS     server go test ./internal/assistant/...", out)
+        self.assertIn("PASS     server go test ./internal/node/...", out)
+        calls = [call for call in self.go_calls() if call not in self.guard_calls() and "|build " not in call]
+        self.assertEqual(sorted([
+            "server|list ./internal/assistant/...",
+            "server|test -list .* ./internal/assistant",
+            "server|test -count=1 example.com/server/internal/assistant/inbox",
+            "server|test -count=1 -run ^(TestA|TestD)$ ./internal/assistant",
+            "server|test -count=1 -run ^(TestB)$ ./internal/assistant",
+            "server|test -count=1 -run ^(TestC)$ ./internal/assistant",
+            "server|test -count=1 ./internal/node/...",
+        ]), sorted(calls), out)
+        timeouts = {re.search(r" -timeout (\S+)", call).group(1)
+                    for call in self.go_log.read_text().splitlines() if call.startswith("server|test -count=1 ")}
+        self.assertEqual({"290s"}, timeouts)  # inside CHECK_FAST_TIMEOUT_GO_TEST's 300 s, as before
 
     def test_go_runs_with_trimpath_and_the_callers_flags(self):
         # Worktrees share compiled packages only under -trimpath (#10614): check-fast adds it with
@@ -355,10 +383,15 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("web/src/x.ts", "export {}\n")
         self.check_fast()
         calls = [line.split("|", 3) for line in self.go_log.read_text().splitlines()]
-        in_slot = {(where, args.split()[0]) for where, marker, grandparent, args in calls
-                   if re.fullmatch(r"(go|web):\d+", marker) and marker.split(":")[1] == grandparent}
-        self.assertEqual({("server", "test"), ("web", "test")}, in_slot, calls)
-        self.assertEqual(3, sum(1 for where, marker, _, _ in calls if where == "server" and marker.startswith("go:")))
+        tests = [call for call in calls if call[3].split()[0] == "test"]
+        # The touched package's go test, the two guard calls and vitest, each checked on its own: the package's call
+        # goes through scripts/test/go_test_partitioned.py, which must exec go for it to sit right under the slot
+        # (the guards call go directly, so a set of (dir, subcommand) pairs would pass without that exec).
+        self.assertEqual(["server", "server", "server", "web"], sorted(call[0] for call in tests), calls)
+        self.assertEqual(1, sum(1 for where, _, _, args in tests if args.endswith(" ./internal/foo/...")), calls)
+        for where, marker, grandparent, args in tests:
+            self.assertRegex(marker, r"^(go|web):\d+$", (where, args))
+            self.assertEqual(marker.split(":")[1], grandparent, (where, args))
         # npm ci, the node_modules check and the typecheck take no slot.
         self.assertEqual({"ci", "run check:deps", "run typecheck"},
                          {args for where, marker, _, args in calls if where == "web" and not marker}, calls)

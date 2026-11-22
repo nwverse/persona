@@ -531,6 +531,13 @@ with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop 
 
 ### Antigravity CLI
 
+Assistant context remains an ACP embedded text resource followed by the user's separate text block (#12435).
+Antigravity exports that resource as a leading `Content of persona-context:///snapshot.txt:` line and context XML
+inside `USER_INPUT.content`. Both the companion and pane history readers remove the complete leading Persona resource
+envelope before projecting user text (#12813). Bare labels, other URI schemes and ordinary quoted text retain their
+existing behavior. History format versions invalidate cached items from before this cleanup; native exports and ACP
+payloads are unchanged.
+
 The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
 input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while

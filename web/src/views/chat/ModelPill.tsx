@@ -22,7 +22,7 @@ import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { launcherTitle } from "../../lib/provider-names";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readMainDefault, mainDefault, readSuperviseDefault, sessionModelHost, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
+  agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readMainDefault, mainDefault, readSuperviseDefault, sessionModelHost, useRevisionReread, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { turnErrorFix, type TurnFix } from "../../lib/readiness";
 import { launchModelForSession } from "../../lib/new-agent";
@@ -311,16 +311,15 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session, ma
     if (isMain) void readMainDefault(mid, { again: true });
     if (supervisor) void readSuperviseDefault(mid);
   }, [mid, scope, supervisor, isMain]);
-  // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that bumps
+  // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that moves
   // this conversation's revision re-reads the picker, so the pill can't keep an old model the hub no longer resolves.
-  const lastRev = useRef<number | undefined>(session?.rev);
-  useEffect(() => {
-    if (!mid || session?.rev === undefined || session.rev === lastRev.current) return;
-    lastRev.current = session.rev;
+  // Once per turn: the revision moves with every write while the turn streams (useRevisionReread).
+  useRevisionReread(session, Boolean(mid), () => {
+    if (!mid) return;
     void readAssistantLaunchers(mid, { again: true });
     if (isMain) void readMainDefault(mid, { again: true });
     if (supervisor) void readSuperviseDefault(mid, { again: true });
-  }, [mid, scope, session?.rev, supervisor, isMain]);
+  });
   // a pick of this page's that the list no longer offers (gone, or it can't run the assistant) goes back to the default,
   // its model and effort with it: on the new-conversation page they would otherwise go with the start
   useEffect(() => {

@@ -87,7 +87,7 @@ func sameAgyFile(a, b os.FileInfo) bool {
 }
 
 func agyStepsHistory(conversation string) agyHistory {
-	return agyHistory{token: "agy-pane:" + conversation + ":steps:lazy-media:checkpoints:wakes"}
+	return agyHistory{token: "agy-pane:" + conversation + ":steps:context-resources-v1:lazy-media:checkpoints:wakes"}
 }
 
 // agyRead loads the compact export for pages and live updates. The revision memo
@@ -270,6 +270,8 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	case "session.unwatch":
 		n.unwatch(id)
 		return okResult(nil), nil, true
+	case "session.info":
+		return n.agyPaneSessionInfo(id, pane), nil, true
 	case "session.items", "session.item", "session.image", "session.watch":
 	default:
 		return nil, nil, false
@@ -336,6 +338,55 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 		return nil, fmt.Errorf("no image"), true
 	}
 	return h.page(p), nil, true
+}
+
+func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
+	info := map[string]any{
+		"session_id": id, "agent": agyAgent,
+		"context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0,
+		"usage_unknown": true,
+	}
+	if a, ok := n.agent(id); ok {
+		info["cwd"] = a.Cwd
+	}
+	if st, ok := n.state.get(id); ok {
+		if st.Launcher != "" {
+			info["launcher"] = st.Launcher
+		}
+		if st.Model != "" {
+			info["model"] = st.Model
+		}
+	}
+	if conversation := n.agyConversation(id, pane); conversation != "" {
+		if runtimeRow, _, ok := n.runtimes.rowOf(agyAgent + "-" + conversation); ok {
+			if runtimeRow.Model != "" {
+				info["model"] = runtimeRow.Model
+			}
+			if runtimeRow.PermissionMode != "" {
+				info["permission_mode"] = runtimeRow.PermissionMode
+			}
+			if runtimeRow.Effort != "" {
+				info["effort"] = runtimeRow.Effort
+			}
+			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokens > 0 {
+				info["context_tokens"] = int(runtimeRow.ContextTokens)
+				info["output_tokens"] = runtimeRow.OutputTokens
+				delete(info, "usage_unknown")
+			}
+		} else if u, ok := n.agyTranscriptMeta(conversation); ok {
+			if u.model != "" {
+				info["model"] = u.model
+			}
+			info["compactions"] = u.compactions
+			info["turns"] = u.turns
+			if u.hasUsage {
+				info["context_tokens"] = u.contextTokens
+				info["output_tokens"] = u.outputTokens
+				delete(info, "usage_unknown")
+			}
+		}
+	}
+	return info
 }
 
 func (n *Node) watchAgyPane(parent context.Context, id, pane string, since int) {
