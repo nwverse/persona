@@ -46,11 +46,15 @@ export function useMainWaiting(main?: Session) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick refreshes time-based buckets once a minute
     [conversation, mainId, manager, todos, sessionRows, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick]);
   const waiting = useMemo(() => directUserWaiting(entries.needsYou, deferred), [entries.needsYou, deferred]);
-  const ownAsks = useMemo(() => {
+  const ownInteractions = useMemo(() => {
     if (!main) return EMPTY_ASKS;
-    const own = interactions.filter((ix) => ix.machine_id === main.machine_id
+    return interactions.filter((ix) => ix.machine_id === main.machine_id
       && (ix.session_id === main.session_id || ix.folded_under === main.session_id || ix.folded_side === main.session_id));
-    return own.filter(directUserInteraction);
   }, [main, interactions]);
-  return { waiting, ownAsks, count: directWaitingCount(waiting, ownAsks) };
+  const ownAsks = useMemo(() => ownInteractions.filter(directUserInteraction), [ownInteractions]);
+  const projectedCount = directWaitingCount(waiting, ownAsks);
+  // Older hubs and the first snapshot may expose only a scalar. Once cards are
+  // available, never let that scalar override the direct-user projection.
+  const count = projectedCount === 0 && ownInteractions.length === 0 ? (main?.pending_interactions ?? 0) : projectedCount;
+  return { waiting, ownAsks, count };
 }
