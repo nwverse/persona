@@ -161,6 +161,17 @@ func TestCodexOnTheMachineIsALauncher(t *testing.T) {
 	}
 }
 
+func TestCodexLauncherAliasProvenance(t *testing.T) {
+	plain := launcherBegin + "\x1d\x1d/usr/local/bin/codex\n" + launcherEnd
+	if names := codexAliasNames(plain); len(names) != 0 {
+		t.Fatalf("plain Codex aliases = %v, want none", names)
+	}
+	noOpAlias := launcherBegin + "\x1dcodex\x1fcodex\x1f\x1e\x1d/usr/local/bin/codex\n" + launcherEnd
+	if names := codexAliasNames(noOpAlias); !names["codex"] {
+		t.Fatalf("configured no-op Codex alias lost its provenance: %v", names)
+	}
+}
+
 // The parser on its own: separators, env flags, a wrapper with nothing after it.
 func TestParseAliasLaunchers(t *testing.T) {
 	rec := func(words ...string) string { return strings.Join(words, "\x1f") + "\x1f\x1e" }
@@ -233,6 +244,27 @@ func TestWorkAgentsOnPathAreLaunchers(t *testing.T) {
 	want := []string{"claude=", "pi=pi", "agy=agy"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("launchers %v, want %v", got, want)
+	}
+}
+
+// A launcher that names no model has no model on the wire either. The Chinese display placeholder older nodes sent is
+// not a model ID; an explicit Codex alias model stays exactly as the alias wrote it.
+func TestMergeLaunchersLeavesLauncherDefaultModelsEmpty(t *testing.T) {
+	rec := func(words ...string) string { return strings.Join(words, "\x1f") + "\x1f\x1e" }
+	parts := []string{"", rec("cx-plain", "codex") + rec("cx-explicit", "codex", "--model", "gpt-explicit"),
+		"/usr/bin/codex", "/usr/bin/traex", "/usr/bin/omp", "/usr/bin/pi", "/usr/bin/cursor-agent", "/usr/bin/agy", "", ""}
+	list, _, _, _ := mergeLaunchers(launcherBegin + strings.Join(parts, "\x1d") + launcherEnd)
+	models := byName(list)
+	for _, name := range []string{"claude", "codex", "cx-plain", "traex", "omp", "pi", "cursor", "agy"} {
+		if l := models[name]; l.Name != name || l.Model != "" {
+			t.Errorf("%s: model %q, want no explicit model (launcher %+v)", name, l.Model, l)
+		}
+	}
+	if got := models["cx-explicit"].Model; got != "gpt-explicit" {
+		t.Errorf("explicit model = %q, want gpt-explicit", got)
+	}
+	if l := models[traexAgent]; l.Agent != traexAgent || l.DisplayName != "TRAE CLI" {
+		t.Errorf("TRAE CLI launcher kind or display name changed: %+v", l)
 	}
 }
 

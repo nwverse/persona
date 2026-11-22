@@ -112,7 +112,7 @@ func Held(cfg Config) *Pause {
 	if err != nil {
 		return nil
 	}
-	v, ok := gates.Load(gateKey(cfg.BaseURL, key))
+	v, ok := gates.Load(gateKeyFor(cfg.API, cfg.BaseURL, key))
 	if !ok {
 		return nil
 	}
@@ -157,13 +157,29 @@ type turn struct {
 
 var gates sync.Map // gateKey → *gate
 
-func gateKey(baseURL, key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return strings.TrimRight(baseURL, "/") + "#" + hex.EncodeToString(sum[:8])
+func normalizeGateBase(api, baseURL string) string {
+	switch api {
+	case "chat":
+		baseURL = trimSingleEndpointPath(baseURL, "/chat/completions")
+	case "responses":
+		baseURL = trimVersionedEndpointPath(baseURL, "/responses")
+	default:
+		baseURL = trimVersionedEndpointPath(baseURL, "/messages")
+	}
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/")
 }
 
-func gateFor(baseURL, key string) *gate {
-	k := gateKey(baseURL, key)
+func gateKeyFor(api, baseURL, key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return normalizeGateBase(api, baseURL) + "#" + hex.EncodeToString(sum[:8])
+}
+
+func gateKey(baseURL, key string) string {
+	return gateKeyFor("", baseURL, key)
+}
+
+func gateForAPI(api, baseURL, key string) *gate {
+	k := gateKeyFor(api, baseURL, key)
 	if g, ok := gates.Load(k); ok {
 		return g.(*gate)
 	}
@@ -173,6 +189,10 @@ func gateFor(baseURL, key string) *gate {
 	}
 	g, _ := gates.LoadOrStore(k, &gate{host: host, wake: make(chan struct{})})
 	return g.(*gate)
+}
+
+func gateFor(baseURL, key string) *gate {
+	return gateForAPI("", baseURL, key)
 }
 
 // admit lets a request go out, waits its turn, or puts it off while the connection is held. Its turn: a slot under
@@ -417,7 +437,64 @@ type httpError struct {
 	noRetry    bool
 }
 
-func newHTTPError(resp *http.Response, raw []byte) *httpError {
+type redactedError struct {
+	error
+	text string
+}
+
+func (e *redactedError) Error() string { return e.text }
+func (e *redactedError) Unwrap() error { return e.error }
+
+func redactValues(text string, secrets []string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			text = strings.ReplaceAll(text, secret, "***")
+		}
+	}
+	return text
+}
+
+func (c *Client) secretValues(key string) []string {
+	secrets := []string{key}
+	for _, value := range c.cfg.Headers {
+		secrets = append(secrets, value)
+	}
+	return secrets
+}
+
+// redactError covers failures reported inside a 200 stream as well as HTTP errors. Typed errors keep their unwrap
+// chain and limit/model classification; the streamLimit's own message is scrubbed too because the gate logs it directly.
+func (c *Client) redactError(err error, key string) error {
+	if err == nil {
+		return nil
+	}
+	secrets := c.secretValues(key)
+	var limit *streamLimit
+	if errors.As(err, &limit) {
+		limit.msg = redactValues(limit.msg, secrets)
+	}
+	var stream *streamFailure
+	if errors.As(err, &stream) {
+		stream.msg = redactValues(stream.msg, secrets)
+	}
+	var httpFailure *httpError
+	if errors.As(err, &httpFailure) {
+		httpFailure.body = redactValues(httpFailure.body, secrets)
+		httpFailure.message = redactValues(httpFailure.message, secrets)
+	}
+	text := redactValues(err.Error(), secrets)
+	if text == err.Error() {
+		return err
+	}
+	return &redactedError{error: err, text: text}
+}
+
+func (c *Client) newHTTPError(resp *http.Response, raw []byte, key string) *httpError {
+	return newHTTPError(resp, raw, c.secretValues(key)...)
+}
+
+func newHTTPError(resp *http.Response, raw []byte, secrets ...string) *httpError {
+	raw = []byte(redactValues(string(raw), secrets))
 	code, message, errorType, envelope := gatewayErrorDetailsWithType(raw)
 	after := parseRetryAfter(resp.Header.Get("Retry-After"))
 	return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(raw[:min(len(raw), 300)])),

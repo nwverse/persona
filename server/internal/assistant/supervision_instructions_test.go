@@ -27,6 +27,20 @@ func TestGoldenSupervisionInstructions(t *testing.T) {
 	}
 }
 
+// A bullet must start on its own line. A dropped newline ("...rule.- `next`: ...") renders two rules as one bullet,
+// and the size ratchet/golden do not catch it because they are regenerated from the glued text (#12648 review).
+func TestSupervisionInstructionsBulletsAreSeparateLines(t *testing.T) {
+	raw, err := os.ReadFile("../prompts/assistant/supervision_instructions.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.Contains(line, ".- ") {
+			t.Fatalf("two bullets are glued on one line (missing newline): %q", line)
+		}
+	}
+}
+
 func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	ctx := context.Background()
@@ -52,7 +66,7 @@ func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 		machine, id string
 		want        bool
 	}{
-		{"server", "conv1", false}, {"server", "lead1", true},
+		{"server", "conv1", true}, {"server", "lead1", true},
 		{"server", "background", true}, {"server", "side", true},
 		{"server", "ordinary", false}, {"server", "worker", false},
 		{"server", "health", false}, {"server", "gone", false},
@@ -138,16 +152,22 @@ func TestSupervisionInstructionsFirstStartAndWarm(t *testing.T) {
 			}
 		})
 	}
+	// The legacy preference no longer demotes main: every new assistant-dispatched task is main-supervised (#5732).
+	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = nil })
+	if got := mustSupervisionInstructions(t, s, ctx, "server", s.settings(ctx).Main); got != policy {
+		t.Fatal("main lost its policy with the legacy preference unset")
+	}
+	no := false
+	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = &no })
+	if got := mustSupervisionInstructions(t, s, ctx, "server", s.settings(ctx).Main); got != policy {
+		t.Fatal("main lost its policy with the legacy preference off")
+	}
 	s.noBackground = false
-	if _, err := s.startBackground(ctx); err != nil {
-		t.Fatal(err)
+	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
+	if got := mustSupervisionInstructions(t, s, ctx, "server", "bg1"); got != policy {
+		t.Fatal("the existing legacy background supervisor lacks exact static policy")
 	}
-	f.mu.Lock()
-	got := f.sends[len(f.sends)-1]["supervision_instructions"]
-	f.mu.Unlock()
-	if got != policy {
-		t.Fatal("background supervisor's first start lacks exact static policy")
-	}
+	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "", "" })
 	s.warm("")
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -170,12 +190,53 @@ func TestSupervisionInstructionsFirstStartAndWarm(t *testing.T) {
 	}
 }
 
+func TestRelayAcknowledgementAndSilentSupervisionInstructions(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	yes := true
+	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = &yes })
+	// #5732 does not start a new background supervisor. Use an existing legacy conversation to test its relay behavior.
+	withBackgroundBG1(t, s, f)
+	const acknowledgement = "`conversation_send` 中继只需确认时，在本对话写一行正文，不调用 `conversation_send` 回传"
+	const relayHeader = "只是确认收到就不要回"
+	const silent = "supervision_finish visibility=\"silent\""
+	for name, id := range map[string]string{"main": "conv1", "background": "bg1"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := s.prepare(ctx, "server"); err != nil {
+				t.Fatal(err)
+			}
+			if md := f.prepared[len(f.prepared)-1]["claude_md"].(string); !strings.Contains(md, acknowledgement) {
+				t.Fatal("shared assistant instructions lack the local-only relay acknowledgement rule")
+			}
+
+			relay := relayMsg{From: "sender", FromTitle: "Example conversation", Tool: "conversation_send", Text: "The report is ready for reference."}
+			if err := s.deliverRelay(ctx, "server", id, relay); err != nil {
+				t.Fatal(err)
+			}
+			send := f.sends[len(f.sends)-1]
+			if send[holdPushesParam] == true || !strings.Contains(send["text"].(string), relayHeader) {
+				t.Fatal("conversation relay lost its legacy header or was dispatched as supervision")
+			}
+
+			event := relayMsg{Tool: superviseTool, Text: "Synthetic supervision event."}
+			if err := s.deliverRelay(ctx, "server", id, event); err != nil {
+				t.Fatal(err)
+			}
+			send = f.sends[len(f.sends)-1]
+			if send[holdPushesParam] != true || strings.Contains(send["text"].(string), relayHeader) ||
+				!strings.Contains(send["supervision_instructions"].(string), silent) {
+				t.Fatal("supervision event lost its silent disposition or gained the conversation relay header")
+			}
+		})
+	}
+}
+
 func TestSupervisionEventsContainFactsNotPolicy(t *testing.T) {
 	policy := prompts.RenderSupervisionInstructions()
-	for _, name := range []string{"overdue", "parked_due", "park_decided", "inbox", "ask", "escalated", "leader_stuck", "recheck", "undecidable", "owner_cannot_answer", "decide", "all_stopped", "pr_conflict"} {
+	for _, name := range []string{"overdue", "estimate_due", "parked_due", "park_decided", "inbox", "ask", "escalated", "leader_stuck", "recheck", "undecidable", "owner_cannot_answer", "decide", "all_stopped", "pr_conflict"} {
 		t.Run(name, func(t *testing.T) {
 			p := prompts.Supervise{Leader: true, Side: true, Background: true, Escalated: true, BackgroundEscalated: true,
-				LeaderStuck: true, Overdue: true, ParkedDue: true, ParkDecided: true, Asked: true, AskMinutes: 5, LowDistraction: true, Decisions: true, Inbox: true,
+				LeaderStuck: true, Overdue: true, ParkedDue: true, ParkDecided: true, Asked: true, AskMinutes: 5, PushGrading: true, Decisions: true, Inbox: true,
 				Entries: []prompts.SuperviseEntry{{ID: "todo_example", Title: "Example task", Kind: name, Last: "Task evidence"}}}
 			text := prompts.RenderSupervise(p)
 			for _, banned := range []string{"怎么处理", "task_review", "agent_send", "ask_escalate", "interaction_answer", "supervision_finish", "task_scope", "验收以它", "按任务本身", "Check each participant's stated wait", "Waiting on another stopped participant"} {
@@ -213,10 +274,7 @@ func TestSupervisionEventsContainFactsNotPolicy(t *testing.T) {
 			}
 		}
 	}
-	start := prompts.RenderSupervisorStart(prompts.SupervisorStart{Owner: "Example user"})
-	if strings.Contains(start, "task_review") || strings.Contains(start, "不要调用工具") {
-		t.Fatal("background startup repeated handling policy instead of role facts")
-	}
+	// #5732 has no background startup prompt: an existing legacy conversation only finishes its old work.
 }
 
 func mustSupervisionInstructions(t *testing.T, s *Service, ctx context.Context, machine, id string) string {

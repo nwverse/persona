@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/osproc"
@@ -22,9 +23,14 @@ func codexArgs(bin, key string, windows ...int) []string {
 	return codexArgsForHome(bin, key, "", true, windows...)
 }
 
-func (n *Node) codexAssistantArgs(key, home string, windows ...int) ([]string, bool) {
+func (n *Node) codexAssistantArgs(key, home, cwd string, windows ...int) ([]string, bool) {
 	personaMCPOnly := n.hubSupportsPersonaContracts()
-	return codexArgsForHome(n.bin, key, home, !personaMCPOnly, windows...), personaMCPOnly
+	args := codexArgsForHome(n.bin, key, home, !personaMCPOnly, windows...)
+	if assistantskills.WorkGuideReady(cwd) {
+		// A discovery in the current turn changes which original MCP tools Codex can call.
+		args = append(args, "-c", "features.mcp_tool_list_changed=true")
+	}
+	return args, personaMCPOnly
 }
 
 // codexArgsForHome: windows[0] is a compact limit to pass (a managed launcher's declared one, #3066, capped for the
@@ -92,6 +98,14 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 
 // codexAssistantCommand is the command that runs the Codex assistant's app-server with launcher in shell.
 func (n *Node) codexAssistantCommand(shell, launcher string, args []string) *exec.Cmd {
+	if provider, ok := n.managedLauncher(launcher); ok && provider.AgentType() == "codex" {
+		catalog, _ := n.codexCatalogFor(provider)
+		prefix := launchArgv("codex", nil, provider.Args, launcherDefaultEffort(provider), provider.Model, managedEnv(provider), catalog)
+		// Keep the assistant's MCP and provider flags before app-server. Running
+		// personad launch here bypasses the shell's codex wrapper and starts a TUI.
+		argv := append(append(prefix[1:], args...), "app-server")
+		return exec.Command(shell, append([]string{"-ic", `builtin command codex "$@"`, "persona"}, argv...)...)
+	}
 	return exec.Command(shell, append([]string{"-ic", codexShell(n.launcherForScript(launcher)), "persona"}, args...)...)
 }
 
@@ -100,7 +114,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	if err := execution.check("codex"); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(cwd, 0o700); err != nil {
+	if err := n.prepareAssistantCwd(cwd, execution.Strict); err != nil {
 		return nil, err
 	}
 	root, memDir := n.codexDirs(cwd)
@@ -110,10 +124,15 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 		return nil, err
 	}
 	compaction := n.assistantCompactionPolicy(launcher, cwd, "", execution)
-	args, personaMCPOnly := n.codexAssistantArgs(key, n.dir, compaction.codexLimit())
+	args, personaMCPOnly := n.codexAssistantArgs(key, n.dir, cwd, compaction.codexLimit())
 	cmd := n.codexAssistantCommand(shell, launcher, args)
 	cmd.Dir = root
 	cmd.Env = identity.Environment(os.Environ(), "PERSONA_ASSISTANT=1")
+	if provider, ok := n.managedLauncher(launcher); ok && provider.AgentType() == "codex" {
+		// Use the same managed environment and header bindings as personad launch,
+		// without passing secrets as shell code or command-line arguments.
+		cmd.Env = identity.Environment(withoutEnv(cmd.Env, envClearFor(provider)), managedEnv(provider)...)
+	}
 	gateEnv, releaseGates, nameGates := n.assistantLarkEnvNamed(cwd, id) // its addresses at the gate proxy go with the process
 	started := false
 	defer func() {
@@ -213,7 +232,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 // are writable roots, and its macOS sandbox refuses one with a symlink in it (~/.persona → .persona, a ~/.claude kept in
 // dotfiles), turning every command down before it runs. Only Codex sees the real paths; the session keeps its cwd.
 func (n *Node) codexDirs(cwd string) (root, memDir string) {
-	memDir = n.memoryDir(cwd)
+	memDir = n.memoryForUse(cwd)
 	if err := os.MkdirAll(memDir, 0o700); err != nil {
 		n.logger.Printf("assistant codex: memory dir: %v", err)
 	}

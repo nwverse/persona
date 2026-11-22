@@ -6,6 +6,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import persona.core.contracts.api.AgentLauncher
+import persona.core.contracts.api.HubLauncher
+import persona.core.contracts.api.UnavailableLauncher
 
 class ModelsTest {
     @Test fun agentTaskResultsDecodeRunningAndKeepOriginalReportIdentity() {
@@ -30,6 +33,26 @@ class ModelsTest {
         // D5 preserves unknown states instead of inferring a known state from status.
         assertEquals(AgentState.Unknown, s.agentState)
         assertEquals(0, s.pendingInteractions)
+    }
+
+    @Test fun sessionDecodesUndeliveredMessagesAndAnAbsentListIsEmpty() {
+        val session = JsonCodec.decodeFromString<Session>(
+            """{"session_id":"s","assistant":true,"undelivered":[""" +
+                """{"id":"kept-waiting","text":"hello","images":2,"at":"2026-11-17T10:00:00Z","state":"waiting",""" +
+                """"attempts":2,"next_at":"2026-11-17T10:01:00Z","error":"The assistant could not start"},""" +
+                """{"id":"kept-failed","text":"later","at":"2026-11-17T10:02:00Z","state":"failed"}]}""",
+        )
+        assertEquals(listOf("kept-waiting", "kept-failed"), session.undelivered.orEmpty().map { it.id })
+        val waiting = session.undelivered.orEmpty().first()
+        assertEquals("hello", waiting.text)
+        assertEquals(2, waiting.images)
+        assertEquals("2026-11-17T10:00:00Z", waiting.at)
+        assertEquals("waiting", waiting.state)
+        assertEquals(2, waiting.attempts)
+        assertEquals("2026-11-17T10:01:00Z", waiting.nextAt)
+        assertEquals("The assistant could not start", waiting.error)
+        assertEquals("failed", session.undelivered.orEmpty().last().state)
+        assertTrue(JsonCodec.decodeFromString<Session>("""{"session_id":"s"}""").undelivered.isNullOrEmpty())
     }
 
     @Test fun suggestionRiskDecodesAndAnAbsentFieldIsSafeByDefault() {
@@ -58,6 +81,16 @@ class ModelsTest {
         assertEquals(java.time.Instant.parse("2026-10-31T05:58:40.205893083Z"), parseTime("2026-10-31T13:58:40.205893083+08:00"))
         assertEquals(java.time.Instant.parse("2026-10-31T05:58:40.205893083Z"), parseTime("2026-10-31T05:58:40.205893083Z"))
         assertNull(parseTime("not a time"))
+        // Fast-path edge cases: negative & sub-hour offsets, leap years, non-leap Feb 29, lowercase t/z, fractional lengths, 2000 boundary.
+        assertEquals(java.time.Instant.parse("2024-02-29T23:59:59Z"), parseTime("2024-02-29T23:59:59Z"))
+        assertEquals(java.time.Instant.parse("2000-02-29T00:00:00Z"), parseTime("2000-02-29t00:00:00z"))
+        assertNull(parseTime("2025-02-29T00:00:00Z"))
+        assertNull(parseTime("2100-02-29T00:00:00Z"))
+        assertEquals(java.time.Instant.parse("2026-11-02T14:00:00.123456Z"), parseTime("2026-11-02T08:30:00.123456-05:30"))
+        assertEquals(java.time.Instant.parse("2000-01-01T00:00:00Z"), parseTime("2000-01-01T08:00:00+08:00"))
+        assertNull(parseTime("2000-01-01T07:59:59+08:00"))
+        assertNull(parseTime("2026-13-02T08:30:00Z"))
+        assertNull(parseTime("2026-11-02T08:30:00+25:00"))
     }
 
     @Test fun resolutionOmitsUnsetFields() {
@@ -108,12 +141,40 @@ class ModelsTest {
         assertEquals("Claude", label(""""agent":"claude""""))
         assertEquals("Codex", label(""""agent":"codex""""))
         assertEquals("Codex", label(""""source_kind":"codex_app_server""""))
-        assertEquals("TRAEX", label(""""agent":"traex""""))
+        assertEquals("TRAE CLI", label(""""agent":"traex""""))
+        assertEquals("TRAE CLI", label(""""agent":"traecli""""))
+        assertEquals("TRAE CLI", label(""""agent":"trae-cli""""))
         assertEquals("DSH", label(""""agent":"dsh","agent_label":"DSH""""))
         assertEquals("pi", label(""""agent":"pi""""))
         val dsh = JsonCodec.decodeFromString<Session>("""{"session_id":"s","agent":"dsh"}""")
         assertTrue(!dsh.isClaude && !dsh.isCodex)
         assertTrue(JsonCodec.decodeFromString<Session>("""{"session_id":"s","agent":""}""").isClaude)
+    }
+
+    @Test fun namedTraeCliLaunchersKeepTheirConfigurationIdentifiersAndCustomTitles() {
+        val builtIn = AgentLauncher(name = "traex", agentType = "traex")
+        for (label in listOf(null, "TRAEX", "TraeCLI")) {
+            assertEquals("TRAE CLI", builtIn.copy(displayName = label).title)
+            assertEquals("TRAE CLI", UnavailableLauncher(name = "traex", displayName = label, agent = "traex").title)
+            assertEquals("TRAE CLI", HubLauncher(name = "traex", displayName = label, agent = "traex").title)
+        }
+        assertEquals("traex", builtIn.name)
+        assertEquals("My CLI", builtIn.copy(displayName = "My CLI").title)
+        assertEquals("claude", builtIn.copy(name = "claude", agentType = "claude").title)
+        assertEquals("Custom Claude", HubLauncher(name = "traex", displayName = "Custom Claude").title)
+    }
+
+    @Test fun anOlderHubsBuiltinCliHasItsDisplayNameWithoutChangingAgentType() {
+        val raw = """{"name":"traex","base_url":"(traex)"}"""
+        val launcher = JsonCodec.decodeFromString<AgentLauncher>(raw)
+        val settings = JsonCodec.decodeFromString<HubLauncher>(raw)
+        assertEquals("traex", launcher.name)
+        assertEquals("claude", launcher.agentType)
+        assertEquals("TRAE CLI", launcher.title)
+        assertEquals("TRAE CLI", settings.title)
+        assertEquals("My CLI", launcher.copy(displayName = "My CLI").title)
+        assertEquals("traex", launcher.copy(source = "persona").title)
+        assertEquals("traex", launcher.copy(baseUrl = null).title)
     }
 
     @Test fun aPaseoProviderIsNamedByItsOwnNameNeverTheEngines() {
@@ -124,6 +185,13 @@ class ModelsTest {
         assertEquals("grok", label(""""agent_label":"Paseo","launcher":"grok""""))
         assertEquals("grok", label(""""agent_label":" ","launcher":"grok""""))
         assertEquals("grok", label(""""launcher":"grok""""))
+        for (id in listOf("traex", "traecli", "trae-cli")) {
+            assertEquals("TRAE CLI", label(""""agent_label":"TRAEX","launcher":"$id""""))
+            assertEquals("TRAE CLI", label(""""launcher":"$id""""))
+            assertEquals("My agent", label(""""agent_label":"My agent","launcher":"$id""""))
+            assertEquals("TRAE CLI", AgentLauncher(name = id, agentType = "paseo").title)
+            assertEquals("My agent", HubLauncher(name = id, agent = "paseo", displayName = "My agent").title)
+        }
         // Nothing else to go by: as before.
         assertEquals("Paseo", label(""""agent_label":"Paseo""""))
         assertEquals("paseo", label(""""status":"idle""""))
@@ -139,6 +207,7 @@ class ModelsTest {
         // A node that labels the card with the row's label (#8142): the provider's name.
         val named = JsonCodec.decodeFromString<Interaction>("""{"id":"p","kind":"question","agent":"paseo","agent_label":"Grok"}""")
         assertEquals("Grok", named.agentDisplayName)
+        assertEquals("TRAE CLI", named.copy(agentLabelHint = "TRAEX").agentDisplayName)
         assertTrue(named.fromOtherAgent)
         assertEquals("Grok 在问你", (named.headline).zhAny())
         // An older node's card names only the engine: no name, never "Paseo" (nor "Claude"), and still another agent's card.
@@ -161,6 +230,15 @@ class ModelsTest {
         assertEquals(null, legacy.alwaysHonored)
         val own = JsonCodec.decodeFromString<Interaction>("""{"id":"ix_own","machine_id":"computer","session_id":"chat","kind":"permission","tool_name":"iphone_do","always_honored":false}""")
         assertEquals(false, own.alwaysHonored)
+    }
+
+    @Test fun interactionDecodesOptionalPlanThen() {
+        val plan = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_plan_then","kind":"plan","plan":"1. Ship it","plan_then":"default"}""",
+        )
+        val encoded = JsonCodec.encodeToString(plan)
+        assertTrue(encoded, encoded.contains(""""plan_then":"default""""))
+        assertEquals(plan, JsonCodec.decodeFromString<Interaction>(encoded))
     }
 
     @Test fun interactionDecodesOptionalToolTitles() {
@@ -240,6 +318,11 @@ class ModelsTest {
     @Test fun personaOwnMcpServerShowsAsPersona() {
         assertEquals("Persona · agent read", toolDisplayName("mcp__persona__agent_read"))
         assertEquals("Persona · agent send", toolDisplayName("mcp__plugin_persona__agent_send"))
+        assertEquals("Persona · notify user", toolDisplayName("mcp_persona_notify_user"))
+        assertEquals("Persona · notify user", toolDisplayName("mcp_persona_0c671287_notify_user"))
+        for (server in ProtocolCompatibility.personaServers) {
+            assertEquals("mcp__persona__task_review", canonicalMcpToolName("mcp_${server}_55a1c59d_task_review"))
+        }
         assertEquals("Persona", toolDisplayName("mcp__persona"))
         assertEquals("github · create issue", toolDisplayName("mcp__github__create_issue"))
         assertEquals("persona_extra · x", toolDisplayName("mcp__persona_extra__x"))
@@ -276,5 +359,29 @@ class ModelsTest {
         val old = JsonCodec.decodeFromString<Interaction>("""{"id":"old","kind":"screen","dialog":{"question":"Continue?"}}""").dialog!!
         assertNull(old.command); assertNull(old.description); assertNull(old.warning); assertNull(old.risk)
         assertNull(old.deadline); assertNull(old.deadlineAction); assertNull(old.deadlineAt)
+    }
+
+    @Test fun clarificationCapabilityAndCurrentDeadlineRoundTripWithoutChangingOldHubDefaults() {
+        val updated = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_clarified","machine_id":"computer","session_id":"chat","kind":"permission",""" +
+                """"expires_at":"2026-11-20T03:00:00Z","can_clarify":true}""",
+        )
+        assertEquals(java.time.Instant.parse("2026-11-20T03:00:00Z"), parseTime(updated.expiresAt))
+        val wire = JsonCodec.encodeToString(updated)
+        assertTrue(wire, wire.contains(""""can_clarify":true"""))
+        assertTrue(wire, wire.contains(""""expires_at":"2026-11-20T03:00:00Z""""))
+        assertEquals(updated, JsonCodec.decodeFromString<Interaction>(wire))
+
+        val oldHub = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_old","kind":"permission","expires_at":"2026-11-19T03:00:00Z"}""",
+        )
+        val oldWire = JsonCodec.encodeToString(oldHub)
+        assertFalse(oldWire, oldWire.contains("can_clarify"))
+        assertEquals(oldHub, JsonCodec.decodeFromString<Interaction>(oldWire))
+        // A malformed additive flag drops only itself, retaining the legacy card and its fail-closed default.
+        val malformed = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_malformed","kind":"permission","can_clarify":"yes"}""",
+        )
+        assertFalse(JsonCodec.encodeToString(malformed).contains("can_clarify"))
     }
 }

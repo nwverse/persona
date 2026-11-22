@@ -31,11 +31,16 @@ func (s *Service) dropSearchIndex(ctx context.Context, st searchStore, machine, 
 }
 
 func (s *Service) finishDeletedConversation(ctx context.Context, machine, id string) error {
+	s.logicalChanged()
+	s.historyWake()
 	if err := s.dropSearchIndex(ctx, s.searchDB(), machine, id); err != nil {
 		return err
 	}
-	// A deleted conversation takes its user-defined tags with it (conversation_tags.go); a missing record is fine.
+	// A deleted conversation takes its user-defined tags and direction filing with it; a missing record is fine.
 	if err := s.dropConversationTags(ctx, id); err != nil {
+		return err
+	}
+	if err := s.dropDirectionSession(ctx, machine, id); err != nil {
 		return err
 	}
 	s.sessionsChanged(machine)

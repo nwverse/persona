@@ -29,6 +29,9 @@ const startThread = "01a19a00-0000-7000-8000-00000000c0de"
 
 var startFileRE = regexp.MustCompile(` codex-start '?([^' ]+?)'?$`)
 
+// startRolloutVersion is the Codex version codexStartHerdr's rollouts name.
+var startRolloutVersion = "0.169.0"
+
 // ran is the launcher's words the last start's file held, ranAgent its HERDR_AGENT.
 var (
 	ran      []string
@@ -74,7 +77,7 @@ func codexStartHerdr(t *testing.T, delay time.Duration) (*Node, *fakeHerdr, stri
 			dir := mkdir(t, filepath.Join(home, ".codex", "sessions", day.Format("2006"), day.Format("01"), day.Format("02")))
 			now := time.Now().UTC().Format(time.RFC3339Nano)
 			resolved, _ := filepath.EvalSymlinks(cwd) // Codex records the shell's working directory, resolved
-			meta, _ := json.Marshal(map[string]any{"timestamp": now, "type": "session_meta", "payload": map[string]any{"id": startThread, "cwd": resolved}})
+			meta, _ := json.Marshal(map[string]any{"timestamp": now, "type": "session_meta", "payload": map[string]any{"id": startThread, "cwd": resolved, "cli_version": startRolloutVersion}})
 			user, _ := json.Marshal(map[string]any{"timestamp": now, "type": "event_msg", "payload": map[string]any{"type": "item_completed",
 				"item": map[string]any{"type": "UserMessage", "id": "u1", "content": []any{map[string]any{"type": "text", "text": prompt}}}}})
 			_ = os.WriteFile(filepath.Join(dir, "rollout-2026-11-02T10-00-00-"+startThread+".jsonl"), []byte(string(meta)+"\n"+string(user)+"\n"), 0o600)
@@ -86,12 +89,16 @@ func codexStartHerdr(t *testing.T, delay time.Duration) (*Node, *fakeHerdr, stri
 func withCodexLaunchers(t *testing.T, launchers map[string][]string) {
 	t.Helper()
 	launcherCache.Lock()
-	old, oldAt := launcherCache.codex, launcherCache.at
-	launcherCache.codex, launcherCache.at = launchers, time.Now()
+	old, oldAt, oldAliases := launcherCache.codex, launcherCache.at, launcherCache.codexAliases
+	aliases := make(map[string]bool, len(launchers))
+	for name := range launchers {
+		aliases[name] = true
+	}
+	launcherCache.codex, launcherCache.at, launcherCache.codexAliases = launchers, time.Now(), aliases
 	launcherCache.Unlock()
 	t.Cleanup(func() {
 		launcherCache.Lock()
-		launcherCache.codex, launcherCache.at = old, oldAt
+		launcherCache.codex, launcherCache.at, launcherCache.codexAliases = old, oldAt, oldAliases
 		launcherCache.Unlock()
 	})
 }
@@ -330,6 +337,24 @@ func TestCodexStartRefusals(t *testing.T) {
 	}
 }
 
+func TestCodexStartWaitFromEnv(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", 180 * time.Second},
+		{" 4m30s ", 270 * time.Second},
+		{"invalid", 180 * time.Second},
+		{"0s", 180 * time.Second},
+		{"-1s", 180 * time.Second},
+	} {
+		t.Setenv(codexStartWaitEnv, tc.value)
+		if got := codexStartWaitFromEnv(); got != tc.want {
+			t.Errorf("%s=%q: got %s, want %s", codexStartWaitEnv, tc.value, got, tc.want)
+		}
+	}
+}
+
 // The launcher cannot run (the helper says so on the pane): the start fails at once with that line; nothing comes:
 // it fails after codexStartWait saying what to look at.
 func TestCodexStartFailures(t *testing.T) {
@@ -342,11 +367,12 @@ func TestCodexStartFailures(t *testing.T) {
 		t.Errorf("err %v after %s", err, time.Since(start))
 	}
 	old := codexStartWait
-	codexStartWait = 1500 * time.Millisecond
+	t.Setenv(codexStartWaitEnv, "1500ms")
+	codexStartWait = codexStartWaitFromEnv()
 	t.Cleanup(func() { codexStartWait = old })
 	f.setScreen("w1:p2", "› Ask Codex to do anything\n")
 	_, err = request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "nocodex", "prompt": "hi"})
-	if err == nil || !strings.Contains(err.Error(), "没认出它这次的会话") {
+	if err == nil || !strings.Contains(err.Error(), "1.5 秒内没认出它这次的会话") {
 		t.Errorf("timeout: %v", err)
 	}
 }

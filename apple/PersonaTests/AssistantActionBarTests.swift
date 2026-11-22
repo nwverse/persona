@@ -3,9 +3,9 @@ import Testing
 @testable import Persona
 import PersonaWire
 
-/// The action bar above the assistant's composer (#3393): what its two trays, Needs You and In Progress, list and count
-/// (each thing in one of them at most, finished things in neither), and its entries drawn exactly as low as the dock's
-/// capsules they replace.
+/// The action bar above the assistant's composer (#3393): what its trays, Needs You and In Progress, list and count (each
+/// thing in one of them at most, finished things in neither), what Finished lists (#10922), and its entries drawn exactly
+/// as low as the dock's capsules they replace.
 @MainActor
 struct AssistantActionBarTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -26,11 +26,22 @@ struct AssistantActionBarTests {
         return decode(t)
     }
 
-    private func session(_ id: String, _ state: String, todo: String? = nil) -> Session {
+    private func session(_ id: String, _ state: String, todo: String? = nil, turnError: String? = nil,
+                         turnErrorKind: String? = nil, workOn: String? = nil) -> Session {
         var s: [String: Any] = ["machine_id": "mac", "session_id": id, "title": id, "cwd": "/home/user/project", "state": state,
                                 "status": state, "updated_at": iso(5), "state_since": iso(5)]
         if let todo { s["todo"] = ["id": todo, "title": "task \(todo)"] }
+        if let turnError { s["turn_error"] = turnError }
+        if let turnErrorKind { s["turn_error_kind"] = turnErrorKind }
+        if let workOn { s["work"] = ["phase": "blocked", "on": workOn] }
         return decode(s)
+    }
+
+    private func errorSession(_ id: String, kind: String? = nil) -> Session {
+        var s = session(id, "idle")
+        s.turnError = "model failed"
+        s.turnErrorKind = kind
+        return s
     }
 
     private func ask(_ id: String, session: String, at: Double = 3) -> Interaction {
@@ -47,8 +58,15 @@ struct AssistantActionBarTests {
 
     private func ids(_ rows: [AssistantEntries.Row]) -> [String] { rows.map(\.id) }
 
-    @Test func twoEntriesOnly() {
-        #expect(ActionTray.allCases == [.needsYou, .running])
+    /// Needs You and In Progress always; Finished only while it lists something, or while its tray is open (#10922).
+    @Test func finishedIsTheThirdEntryOnlyWhileItListsSomething() {
+        #expect(ActionTray.allCases == [.needsYou, .running, .finished])
+        let empty = ActionTrayContent(split([]))
+        #expect(empty.entries(open: nil) == [.needsYou, .running])
+        #expect(empty.entries(open: .running) == [.needsYou, .running])
+        #expect(empty.entries(open: .finished) == [.needsYou, .running, .finished])
+        let finished = ActionTrayContent(split([todo("done", done: true)]))
+        #expect(finished.entries(open: nil) == [.needsYou, .running, .finished])
     }
 
     /// A task waiting for a decision or review is only in Needs You; once answered it is back in In Progress.
@@ -69,6 +87,79 @@ struct AssistantActionBarTests {
         #expect(ids(r.running) == ["task:run"])
         #expect(r.needsYou.isEmpty)
         #expect(r.running.first == .task(id: "run", status: .working, agents: 1))
+    }
+
+    /// A to-do nobody dispatched stays open and counted, with the not-started rank; a real pending start keeps that rank too.
+    @Test func plainTodosKeepTheirOpenRowsAndNotStartedRank() {
+        let own = todo("own", origin: "")
+        let leader = todo("leader")
+        var pending = todo("pending")
+        pending.planID = "plan-not-loaded"
+        let working = todo("working", agent: "w")
+        let r = split([own, leader, pending, working], [session("w", "working", todo: "working")])
+        #expect(r.needsYou.isEmpty)
+        #expect(Set(ids(r.running)) == ["task:own", "task:leader", "task:pending", "task:working"])
+        #expect(r.running.contains(.task(id: "own", status: .notStarted, agents: 0)))
+        #expect(r.running.contains(.task(id: "leader", status: .notStarted, agents: 0)))
+        #expect(r.running.contains(.task(id: "pending", status: .notStarted, agents: 0)))
+        #expect(r.running.contains(.task(id: "working", status: .working, agents: 1)))
+        #expect(ActionTrayContent(r).count(.running) == 4)
+        for task in [own, leader, pending] {
+            #expect(AssistantEntries.rank(task, .notStarted) == AssistantEntries.Status.notStarted.rank)
+            #expect(AssistantEntries.rank(task, .notStarted) != AssistantEntries.Status.working.rank)
+        }
+        #expect(AssistantEntries.rank(working, .working) == AssistantEntries.Status.working.rank)
+    }
+
+    /// The web's startInFlight (#7552): plan_id is enough before its plan loads; a takeover may have none.
+    @Test func startInFlightMatchesTheWebContract() {
+        let own = todo("own", origin: "")
+        #expect(!AssistantEntries.startInFlight(own, plans: [:])) // todo_create: no plan, dispatch or error
+
+        var direct = todo("direct")
+        direct.planID = "plan-not-loaded"
+        #expect(AssistantEntries.startInFlight(direct, plans: [:]))
+        #expect(AssistantEntries.startInFlight(direct, plans: ["loaded": takeoverPlan("loaded", .started, todoID: direct.id)]))
+
+        for state in [TaskPlan.State.open, .started] {
+            let taking = takeoverPlan("taking-\(state)", state, todoID: own.id)
+            #expect(AssistantEntries.startInFlight(own, plans: [taking.id: taking]), "a \(state) takeover starts without plan_id")
+        }
+        let dismissed = takeoverPlan("dismissed", .dismissed, todoID: own.id)
+        #expect(!AssistantEntries.startInFlight(own, plans: [dismissed.id: dismissed]))
+        let unrelated = takeoverPlan("unrelated", .started, todoID: "another-todo")
+        #expect(!AssistantEntries.startInFlight(own, plans: [unrelated.id: unrelated]))
+
+        var failed = own
+        failed.startError = "launcher not found"
+        #expect(!AssistantEntries.startInFlight(failed, plans: [:]))
+        var legacy = direct
+        legacy.planID = "failed"
+        let failedPlan = takeoverPlan("failed", .started, todoID: legacy.id, error: "rpc: connection closed")
+        #expect(!AssistantEntries.startInFlight(legacy, plans: [failedPlan.id: failedPlan]))
+        let failedTakeover = takeoverPlan("failed-takeover", .started, todoID: own.id, error: "launcher not found")
+        #expect(!AssistantEntries.startInFlight(own, plans: [failedTakeover.id: failedTakeover]))
+        var done = direct
+        done.doneAt = now
+        #expect(!AssistantEntries.startInFlight(done, plans: [:]))
+    }
+
+    @Test func transientReplacementWithTurnErrorOutranksOldInterruption() {
+        let staleInvalid = session("old", "idle", turnError: "Context unavailable", turnErrorKind: "unrecoverable", workOn: "transient")
+        let invalidOnly = todo("invalid", agent: "old")
+        #expect(AssistantEntries.todoStatus(invalidOnly, lookup: TodosLogic.makeSessionLookup([staleInvalid])) == .interrupted)
+
+        let old = session("old", "idle", turnError: "Context unavailable", turnErrorKind: "unrecoverable")
+        let replacement = session("replacement", "idle", turnError: "API Error: 503 Service Unavailable",
+                                  turnErrorKind: "transient", workOn: "transient")
+        let item: TodoItem = decode([
+            "id": "t", "title": "task t", "origin": "main", "created_at": iso(30), "updated_at": iso(30),
+            "agents": [
+                ["machine_id": "mac", "session_id": "old", "linked_at": iso(30)],
+                ["machine_id": "mac", "session_id": "replacement", "linked_at": iso(30)],
+            ],
+        ])
+        #expect(AssistantEntries.todoStatus(item, lookup: TodosLogic.makeSessionLookup([old, replacement])) == .waiting)
     }
 
     /// A task's agent asking puts the task (not the agent) in Needs You, and only there.
@@ -133,7 +224,7 @@ struct AssistantActionBarTests {
         #expect(ids(done.running) == ["agent:mac/p"])
     }
 
-    /// Finished things are in neither entry.
+    /// Finished things are in neither entry; the ones handed out in the last day are under Finished (#10922).
     @Test func finishedThingsAreInNeither() {
         let r = split([todo("done", agent: "a", done: true), todo("accepted", agent: "b", done: true, supervision: "accepted")],
                       [session("a", "idle"), session("b", "idle")],
@@ -141,11 +232,14 @@ struct AssistantActionBarTests {
         #expect(r.needsYou.isEmpty)
         #expect(r.running.isEmpty)
         #expect(r.shelved.isEmpty)
+        // the same moment: by id, as on the web and Android
+        #expect(r.finished.map(\.id) == ["task:accepted", "task:done"])
     }
 
-    /// Handed-out tasks that finished in the last day and were not opened since are a group under In Progress, newest
-    /// first and not counted (#8237); one seen since, one closed days ago and a to-do made by hand are not in it.
-    @Test func justFinishedTasksAreAnUncountedGroupUnderInProgress() {
+    /// Finished (#10922) lists the handed-out tasks that finished in the last day, seen or not, newest finished first, and
+    /// counts them; the ones nobody opened since they finished are new. One closed 24 hours ago or more, a to-do made by
+    /// hand and another conversation's work are not in it, and none of it is in Needs You or In Progress.
+    @Test func finishedListsTheLastDaySeenOrNot() {
         var older = todo("older", agent: "a", done: true)
         older.doneAt = now - 3 * 60
         let newer = todo("newer", agent: "b", done: true)
@@ -153,20 +247,108 @@ struct AssistantActionBarTests {
         seen.seenAt = now
         var stale = todo("stale", agent: "d", done: true)
         stale.doneAt = now - 48 * 3600
+        var day = todo("day", agent: "f", done: true)
+        day.doneAt = now - 24 * 3600
+        var almost = todo("almost", agent: "g", done: true)
+        almost.doneAt = now - 24 * 3600 + 1
         let byHand = todo("byHand", agent: "e", origin: "", done: true)
-        let r = split([older, newer, seen, stale, byHand], ["a", "b", "c", "d", "e"].map { session($0, "idle") })
-        #expect(ids(r.justFinished) == ["task:newer", "task:older"])
+        let r = split([older, newer, seen, stale, day, almost, byHand], ["a", "b", "c", "d", "e", "f", "g"].map { session($0, "idle") })
+        #expect(r.finished.map(\.id) == ["task:newer", "task:seen", "task:older", "task:almost"])
+        #expect(r.finished.map(\.fresh) == [true, false, true, true])
+        #expect(r.finished.first?.at == newer.doneAt)
         #expect(r.needsYou.isEmpty && r.running.isEmpty && r.shelved.isEmpty)
         let content = ActionTrayContent(r)
-        #expect(content.justFinished.map(\.id) == ["task:newer", "task:older"])
+        #expect(content.finished.map(\.id) == ["task:newer", "task:seen", "task:older", "task:almost"])
+        #expect(content.count(.finished) == 4)
         #expect(content.count(.running) == 0)
+        // opening the new one keeps it, as seen
+        var opened = newer
+        opened.seenAt = now
+        #expect(split([opened], [session("b", "idle")]).finished.map { [$0.id, "\($0.fresh)"] } == [["task:newer", "false"]])
         // another conversation lists only the finished work it handed out
-        #expect(ids(split([newer], [session("b", "idle")], conversation: "side").justFinished).isEmpty)
+        #expect(split([newer], [session("b", "idle")], conversation: "side").finished.isEmpty)
+    }
+
+    /// Seeing an unaccepted delivery clears only Finished's new marker; it stays open and awaiting review (#5732).
+    @Test func seenAwaitingReviewStaysOpenButIsNotNewInFinished() {
+        var delivered = todo("delivered")
+        delivered.delivery = .init(state: "live", at: now - 2 * 3600)
+        let unseen = TodoTriageLogic.triage(delivered, lookup: nil, now: now)
+        #expect(unseen.section == .justDone && unseen.rule == .finishedUnseen)
+        #expect(AssistantEntries.showsJustFinished(delivered, unseen, now: now))
+
+        delivered.seenAt = now
+        let seen = TodoTriageLogic.triage(delivered, lookup: nil, now: now)
+        #expect(seen.section == .justDone && seen.rule == .finishedUnseen)
+        #expect(!AssistantEntries.showsJustFinished(delivered, seen, now: now))
+    }
+
+    /// Interruptions keep their own urgency even on an accepted or review-pending task; usage limits remain at rest for
+    /// acceptance, but do not masquerade as an ordinary awaiting-review follow-up (#5732).
+    @Test func activeErrorsKeepTheirRankAcrossReviewStates() {
+        var accepted = todo("accepted", agent: "a", supervision: "accepted")
+        accepted.supervision?.reviews = [.init(verdict: "accepted")]
+        let pending = todo("pending", agent: "p", supervision: "pending_review")
+        let interruptedA = errorSession("a"), interruptedP = errorSession("p")
+        let limitedA = errorSession("a", kind: "usage_limit"), limitedP = errorSession("p", kind: "usage_limit")
+        let interruptedAccepted = AssistantEntries.todoStatus(accepted, lookup: { _, _ in interruptedA })
+        #expect(interruptedAccepted == .interrupted)
+        #expect(AssistantEntries.rank(accepted, interruptedAccepted) == 1)
+        let interruptedPending = AssistantEntries.todoStatus(pending, lookup: { _, _ in interruptedP })
+        #expect(interruptedPending == .interrupted)
+        #expect(AssistantEntries.rank(pending, interruptedPending) == 1)
+        let limitedAccepted = AssistantEntries.todoStatus(accepted, lookup: { _, _ in limitedA })
+        #expect(limitedAccepted == .usageLimit)
+        #expect(AssistantEntries.rank(accepted, limitedAccepted) == 8)
+        let limitedPending = AssistantEntries.todoStatus(pending, lookup: { _, _ in limitedP })
+        #expect(limitedPending == .usageLimit)
+        #expect(AssistantEntries.rank(pending, limitedPending) == 1.5)
+    }
+
+    @Test(arguments: ["decide", "cannot"])
+    func acceptedOwnerDecisionKeepsNeedsYouRank(outcome: String) {
+        var accepted = todo("accepted", agent: "a", supervision: "accepted",
+                            ask: ["verdict": "Choose the rollout", "asked_at": iso(2), "outcome": outcome])
+        accepted.supervision?.reviews = [.init(verdict: "accepted")]
+        #expect(accepted.waitsForOwner)
+        #expect(AssistantEntries.rank(accepted, .followUp) == 0)
+        let result = split([accepted], [session("a", "idle")])
+        #expect(ids(result.needsYou) == ["task:accepted"])
+        #expect(result.running.isEmpty)
+    }
+
+    @Test(arguments: ["decide", "cannot"])
+    func acceptedDismissedOwnerDecisionRestoresAcceptedRank(outcome: String) {
+        var accepted = todo("accepted", agent: "a", supervision: "accepted",
+                            ask: ["verdict": "Choose the rollout", "asked_at": iso(2), "outcome": outcome])
+        accepted.supervision?.reviews = [.init(verdict: "accepted")]
+        accepted.decisionReview = DecisionReview(reviewAt: iso(2), dismissalID: "dismiss-current-round")
+        #expect(accepted.decisionDismissed)
+        #expect(!accepted.waitsForOwner)
+        #expect(AssistantEntries.rank(accepted, .followUp) == 8)
     }
 
     private func plan(_ id: String, _ state: TaskPlan.State, tasks: Int, at: Double) -> TaskPlan {
         TaskPlan(id: id, conversation: "main", tasks: (0..<tasks).map { PlanTask(title: "task \($0)", prompt: "p", machine: "mac", cwd: "/demo") },
                  state: state, createdAt: now - at * 60)
+    }
+
+    private func takeoverPlan(_ id: String, _ state: TaskPlan.State, todoID: String, error: String? = nil) -> TaskPlan {
+        TaskPlan(id: id, conversation: "main", tasks: [PlanTask(title: "task \(todoID)", prompt: "p", machine: "mac", cwd: "/demo",
+                                                               todoID: todoID, error: error)], state: state, createdAt: now)
+    }
+
+    /// Slots with no to-do yet keep their existing rows: an open plan waits in Needs You, never as invented open to-dos.
+    @Test func planSlotsWithoutTodosKeepTheirExistingRows() {
+        let waiting = plan("waiting", .open, tasks: 2, at: 3)
+        let started = plan("started", .started, tasks: 1, at: 2)
+        let dismissed = plan("dismissed", .dismissed, tasks: 1, at: 1)
+        let r = split([], plans: [waiting, started, dismissed])
+        #expect(r.needsYou == [.plan(id: "waiting")])
+        #expect(r.running.isEmpty && r.shelved.isEmpty)
+        let content = ActionTrayContent(r)
+        #expect(content.count(.needsYou) == 1)
+        #expect(content.count(.running) == 0)
     }
 
     /// A plan waiting for Start is one row whatever its task count; a message card waits until sent, filed or put off.
@@ -191,6 +373,7 @@ struct AssistantActionBarTests {
 
     @Test func emptyConversationCountsNothing() {
         let content = ActionTrayContent(split([]))
+        #expect(content.finished.isEmpty)
         for tray in ActionTray.allCases {
             #expect(content.rows(tray).isEmpty)
             #expect(content.count(tray) == 0)

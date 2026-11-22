@@ -1,15 +1,14 @@
-// One row of the model panel's list (#5032, after Cindy's UnifiedModelRow), two lines. The first: the provider's mark,
+// One row of the model panel's list (#5032, after Cindy's UnifiedModelRow), two lines. The first: the Agent's mark (#5497),
 // the model's name, a star and Customize that show under the pointer (or on keyboard focus, or always on a touch screen),
-// and on the right what a pick applies: the Agent's mark, the effort, ⚡ for Fast. The second: where it comes from (All,
+// and on the right what a pick applies: the effort, ⚡ for Fast. The second: where it comes from (All,
 // Recent, Favorites) or what the model is (a provider's own view). The model that runs now has a whole-row fill and no
 // check mark. Enter or Space picks it, ← or a right-click opens its setup flyout. A name cut short shows the model's whole
-// ID as its second line (a touch screen has no tooltip), and a touch screen shows the ID instead of the provider's name.
+// ID as its second line (a touch screen has no tooltip), and a touch screen adds the full ID to the provider's line.
 import { useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type KeyboardEvent, type MouseEvent } from "react";
 import { t } from "../../i18n";
 import { priceTier, shownEffort, type PanelRow } from "../../lib/model-panel";
 import { effortTitle } from "../../lib/session-actions";
 import { agentName } from "../../lib/agent-kind";
-import { AgentMark } from "../AgentMark";
 import { cx } from "../atoms";
 import { Icon, type IconName } from "../icons";
 import { ProviderMark } from "./ProviderMark";
@@ -41,6 +40,13 @@ interface RowProps {
   /** The second line ("" for none) and whether it is the model's description (capped at about 30 characters). */
   second: string;
   describes?: boolean;
+  /** Search and saved setups always name their launcher, including touch and truncated names. */
+  keepSecond?: boolean;
+  /** A mixed disclosure list uses buttons rather than listbox options. */
+  asButton?: boolean;
+  /** The panel's middle column (#12315): one tighter line, the effort and Fast left to the columns beside it, a check on
+   *  the model that runs, a description kept for the tooltip. */
+  dense?: boolean;
   /** Why it can't be picked (its tooltip); undefined while it can. */
   blocked?: { reason: string };
   customizable: boolean;
@@ -59,9 +65,10 @@ interface RowProps {
   onForget?: () => void;
 }
 
-export function Row({ row, second, describes, blocked, customizable, flyoutOpen, starred, starRemoves, frozen, onPick, onStar, onCustomize, onCustomizeKey, onForget }: RowProps) {
+export function Row({ row, second, describes, keepSecond, asButton, dense, blocked, customizable, flyoutOpen, starred, starRemoves, frozen, onPick, onStar, onCustomize, onCustomizeKey, onForget }: RowProps) {
   const { model, provider } = row;
-  const name = row.kind === "typed" ? t("ui-modelpanel.use_typed", { id: model.id }) : row.preset ? row.preset.name : model.name;
+  const saved = row.kind === "favorite" || row.kind === "recent";
+  const name = row.kind === "typed" ? t("ui-modelpanel.use_typed", { id: model.id }) : row.preset ? row.preset.name : row.kind === "favorite" || row.kind === "recent" ? `${provider.name} · ${model.name}` : model.name;
   // a typed ID's "Use “…”" and a preset (a setup of the profile's, not a copy of one's own) have no star
   const stars = row.kind !== "typed" && row.kind !== "preset";
   const effort = shownEffort(row.setup, model);
@@ -92,6 +99,7 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
   // a typed ID's row is its ID already; a preset's second line describes it
   const hasId = row.kind !== "typed" && row.kind !== "preset";
   const idLine = hasId && cut ? "always" : hasId && !describes && model.id !== name ? "touch" : null;
+  const idContext = describes ? provider.name : second || provider.name;
   const key = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget || e.nativeEvent.isComposing) return;
     if (e.key === "ArrowLeft") {
@@ -107,12 +115,13 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
   };
   return (
     <div
-      role="option"
-      aria-selected={row.current}
+      role={asButton ? "button" : "option"}
+      aria-selected={asButton ? undefined : row.current}
+      aria-pressed={asButton ? row.current : undefined}
       aria-disabled={ariaOff || undefined}
       aria-keyshortcuts={customizable ? "ArrowLeft" : undefined}
       tabIndex={ariaOff ? -1 : 0}
-      title={blocked?.reason || undefined}
+      title={blocked?.reason || (dense && describes && second) || undefined}
       aria-description={blocked?.reason || undefined}
       data-panel-row={row.key}
       data-current={row.current || undefined}
@@ -128,18 +137,20 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
       }}
       onKeyDown={key}
       className={cx(
-        "group/row relative z-[1] flex w-full flex-col rounded-control px-3 py-2 text-[14px] leading-[1.43] text-ink outline-none select-none [&+[data-panel-row]]:mt-1",
+        "group/row relative z-[1] flex w-full flex-col rounded-control px-3 text-[14px] leading-[1.43] text-ink outline-none select-none",
+        dense ? "py-1.5 [&+[data-panel-row]]:mt-px" : "py-2 [&+[data-panel-row]]:mt-1",
         "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
         row.current && "bg-hover-2 data-[glide]:bg-transparent",
+        saved && "min-h-11 justify-center",
         ariaOff || frozen ? "cursor-not-allowed" : "cursor-pointer",
         ariaOff && "opacity-50",
       )}
     >
       <div className="flex min-w-0 items-center gap-2">
         <span className="flex size-[18px] shrink-0 items-center justify-center text-ink-2">
-          <ProviderMark name={provider.name} />
+          <ProviderMark engine={provider.engine} label={provider.engineLabel} size={16} />
         </span>
-        <span ref={nameEl} title={row.kind === "typed" ? model.id : name} className={cx("min-w-0 truncate leading-5 font-medium", model.custom && stars && "font-mono")}>{name}</span>
+        <span ref={nameEl} title={row.kind === "typed" ? model.id : cut ? name : undefined} className={cx("min-w-0 truncate leading-5 font-medium", model.custom && stars && "font-mono")}>{name}</span>
         {row.latest && <span data-row-latest className="shrink-0 text-submeta leading-5 text-ink-3">{t("ui-modelpanel.latest")}</span>}
         {tier && (
           <span data-price-tier={tier} aria-label={t("ui-modelpanel.price_tier", { tier })} title={t("ui-modelpanel.price_tier", { tier })} className="shrink-0 text-[11px] leading-none font-semibold tracking-[0.5px] text-ink-2">
@@ -174,23 +185,26 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
         {model.custom && row.kind === "model" && onForget && (
           <RowButton icon="x" disabled={frozen} label={t("ui-modelpanel.forget", { id: model.id })} onClick={onForget} className={cx("text-ink-3 hover:text-ink-2", REVEAL)} />
         )}
-        <span className="ml-auto flex shrink-0 items-center">
-          <span title={setupTitle} data-row-setup className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-[12px] text-ink-3">
-            <AgentMark agent={provider.engine} label={provider.engineLabel} size={12} decorative className="shrink-0" />
-            {effort && <span className="truncate">{effortTitle(effort)}</span>}
-            {row.setup.fast && <Icon name="bolt" size={11} className="shrink-0 fill-current" />}
+        {dense ? (
+          row.current && <Icon name="check" size={14} stroke={2.5} className="ml-auto shrink-0 text-ink" />
+        ) : (
+          <span className="ml-auto flex shrink-0 items-center">
+            <span title={setupTitle} data-row-setup className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-[12px] text-ink-3">
+              {effort && <span className="truncate">{effortTitle(effort)}</span>}
+              {row.setup.fast && <Icon name="bolt" size={11} className="shrink-0 fill-current" />}
+            </span>
           </span>
-        </span>
+        )}
       </div>
-      {second && idLine !== "always" && (
-        <div title={second} className={cx("min-w-0 truncate pt-px pl-[26px] text-[12px] leading-[1.4] text-ink-2", describes && "max-w-[30ch]", idLine === "touch" && "[@media(hover:none)]:hidden")}>
+      {!saved && second && !(dense && describes) && (keepSecond || idLine !== "always") && (
+        <div title={second} className={cx("min-w-0 truncate pt-px pl-[26px] text-[12px] leading-[1.4] text-ink-2", describes && "max-w-[30ch]", !keepSecond && idLine === "touch" && "[@media(hover:none)]:hidden")}>
           {second}
         </div>
       )}
-      {idLine && (
+      {!saved && idLine && (
         <div data-row-id={idLine} className={cx("min-w-0 pt-px pl-[26px]", idLine === "touch" && "hidden [@media(hover:none)]:block")}>
-          <div title={model.id} className="line-clamp-2 font-mono text-xs leading-[1.4] break-all text-ink-2">
-            {model.id}
+          <div title={`${idContext} · ${model.id}`} className="line-clamp-2 font-mono text-xs leading-[1.4] break-all text-ink-2">
+            {idContext} · {model.id}
           </div>
         </div>
       )}

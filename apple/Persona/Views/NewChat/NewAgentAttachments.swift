@@ -16,15 +16,16 @@ nonisolated enum FirstMessage {
         return text.isEmpty && photos > 0 ? String(localized: "Please look at the image [Assistant View 5ad878]") : text
     }
 
-    /// What the attachments hold Start Chat back for, said under it in a line; nil: nothing. A Codex launcher takes none:
-    /// it starts with its first message as text (`codexRefusal` says what to do). Paths go only once the files are on
-    /// the computer.
-    static func hold(codex: Bool, attached: Bool, uploading: Bool) -> String? {
+    /// What the attachments hold Start Chat back for, said under it in a line; nil: nothing. A Codex or omp launcher
+    /// takes none: it starts with its first message as text (`codexRefusal` says what to do). Paths go only once the
+    /// files are on the computer.
+    static func hold(codex: Bool, omp: Bool = false, attached: Bool, uploading: Bool) -> String? {
         if codex && attached { return String(localized: "Codex takes no attachments") }
+        if omp && attached { return String(localized: "omp takes no attachments") }
         return uploading ? String(localized: "Waiting for the files to finish uploading") : nil
     }
 
-    /// Under the attachments a Codex launcher can't take: the web's words when it refuses such a start.
+    /// Under the attachments a Codex or omp launcher can't take: the web's words when it refuses such a start.
     static var codexRefusal: String {
         String(localized: "This launcher can't take attachments in the first message. Pick another launcher, or start with text and send the attachments in the session.")
     }
@@ -53,13 +54,25 @@ final class NewAgentAttachments {
     var uploading: Bool { !uploads.items.isEmpty }
     var paths: [String] { files.map(\.path) }
 
-    func add(_ img: UIImage, model: AppModel) {
+    /// img among the first message's photos while it fits the hub's pictures (#12973); past them it is uploaded to `ref`
+    /// as a file with the others (written off the main actor), or turned away with no computer yet.
+    func add(_ img: UIImage, model: AppModel, to ref: MachineRef?) {
         note = nil
-        MessagePhotos.add(img, to: &images, model: model)
+        let spill: ((UIImage) -> Bool)? = ref.map { ref in
+            { [weak self] img in
+                Task { @MainActor in
+                    if let url = await Task.detached(priority: .userInitiated, operation: { MessagePhotos.fileCopy(img) }).value {
+                        self?.upload([url], to: ref, model: model)
+                    }
+                }
+                return true
+            }
+        }
+        MessagePhotos.add(img, to: &images, model: model, limits: model.imageLimits(ref?.group), spill: spill)
     }
 
-    func load(_ items: [PhotosPickerItem], model: AppModel) async {
-        await MessagePhotos.load(items, model: model) { add($0, model: model) }
+    func load(_ items: [PhotosPickerItem], model: AppModel, to ref: MachineRef?) async {
+        await MessagePhotos.load(items, model: model) { add($0, model: model, to: ref) }
     }
 
     /// Uploads urls to the computer one after another; each joins `files` once it is there.

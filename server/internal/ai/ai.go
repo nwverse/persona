@@ -63,23 +63,41 @@ func New(cfg Config) *Client {
 
 // NewWith is New sending its requests through transport (nil: this machine's network).
 func NewWith(cfg Config, transport http.RoundTripper) *Client {
-	return &Client{cfg: cfg, http: &http.Client{Timeout: 60 * time.Second, Transport: transport, CheckRedirect: checkRedirect}}
+	c := &Client{cfg: cfg}
+	c.http = &http.Client{Timeout: 60 * time.Second, Transport: transport, CheckRedirect: c.checkRedirect}
+	return c
 }
 
-// net/http copies headers from the first request on every redirect, so check the entire chain before retaining its
-// potentially private User-Agent. Once a chain leaves its original origin, all later hops use Persona's identity.
+// net/http copies headers from the first request on every redirect, so check the entire chain before retaining
+// provider-specific values. Once a chain leaves its original origin, all later hops use Persona's identity and omit
+// every custom provider header and gateway-scoped session header.
 func checkRedirect(req *http.Request, via []*http.Request) error {
+	return checkRedirectHeaders(req, via, nil)
+}
+
+func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
+	return checkRedirectHeaders(req, via, c.cfg.Headers)
+}
+
+func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[string]string) error {
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
 	origin := via[0].URL
-	if !sameOrigin(origin, req.URL) {
+	clearPrivate := func() {
+		for name := range headers {
+			req.Header.Del(name)
+		}
 		req.Header.Set("User-Agent", modelhttp.UserAgent())
+		modelhttp.ClearOpenCodeSession(req.Header)
+	}
+	if !sameOrigin(origin, req.URL) {
+		clearPrivate()
 		return nil
 	}
 	for _, previous := range via[1:] {
 		if !sameOrigin(origin, previous.URL) {
-			req.Header.Set("User-Agent", modelhttp.UserAgent())
+			clearPrivate()
 			break
 		}
 	}
@@ -154,6 +172,9 @@ type Request struct {
 	System    string
 	Messages  []Message
 	MaxTokens int // output limit for Messages and Chat Completions
+	// SessionID optionally scopes session-routed gateways (such as OpenCode Go) across turns; empty falls back to ctx
+	// (WithSessionID) or the client's stable session identifier.
+	SessionID string
 	// BoundOutput also enforces MaxTokens on Responses. Cost-sensitive background calls
 	// fail closed when a relay refuses the bound; legacy callers keep their existing behavior.
 	BoundOutput bool
@@ -202,7 +223,7 @@ func (c *Client) chat(ctx context.Context, r Request) (Reply, error) {
 	}
 	// Every client of one address and key goes through the same gate, which holds requests back while the upstream
 	// is out of quota or busy (limit.go).
-	g := gateFor(c.cfg.BaseURL, key)
+	g := gateForAPI(c.cfg.API, c.cfg.BaseURL, key)
 	t, err := g.admit(ctx)
 	if err != nil {
 		return Reply{}, err
@@ -242,6 +263,7 @@ func (c *Client) chat(ctx context.Context, r Request) (Reply, error) {
 	default:
 		reply, answered, err = c.messages(ctx, hc, key, r)
 	}
+	err = c.redactError(err, key)
 	returned = true
 	if reply.Model == "" {
 		reply.Model = c.cfg.Model
@@ -252,13 +274,70 @@ func (c *Client) chat(ctx context.Context, r Request) (Reply, error) {
 // errUnwound is what the gate is told of a request a panic unwound through: it ended, with no answer to read.
 var errUnwound = errors.New("ai: the request did not return")
 
-// apiEndpoint preserves deployment prefixes and accepts bases with or without /v1.
+// trimSingleEndpointPath drops one pasted endpoint suffix (e.g. /chat/completions) from the URL path of base,
+// leaving scheme, host, query and fragment intact.
+func trimSingleEndpointPath(base, suffix string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
+		return base
+	}
+	authority := strings.Index(base, "//") + len("//")
+	slash := strings.IndexByte(base[authority:], '/')
+	if slash < 0 {
+		return base
+	}
+	root, path := base[:authority+slash], base[authority+slash:]
+	if rest, ok := strings.CutSuffix(path, suffix); ok {
+		return root + strings.TrimRight(rest, "/")
+	}
+	return root + path
+}
+
+// trimVersionedEndpointPath drops a single pasted /v1<suffix> endpoint (e.g. /v1/messages or /v1/responses) while
+// keeping the preceding /v1 and leaving bare deployment prefixes ("https://gw/messages", "https://gw/responses") intact.
+func trimVersionedEndpointPath(base, suffix string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
+		return base
+	}
+	authority := strings.Index(base, "//") + len("//")
+	slash := strings.IndexByte(base[authority:], '/')
+	if slash < 0 {
+		return base
+	}
+	root, path := base[:authority+slash], base[authority+slash:]
+	rest, ok := strings.CutSuffix(path, suffix)
+	if !ok {
+		return root + path
+	}
+	rest = strings.TrimRight(rest, "/")
+	if !strings.HasSuffix(rest, "/v1") {
+		return root + path
+	}
+	return root + rest
+}
+
+// apiEndpoint preserves deployment prefixes, strips a pasted endpoint suffix, and accepts bases with or without /v1.
 func apiEndpoint(base, path string) string {
-	base = strings.TrimRight(base, "/")
+	switch path {
+	case "messages", "responses":
+		base = trimVersionedEndpointPath(base, "/"+path)
+	default:
+		base = trimSingleEndpointPath(base, "/"+path)
+	}
 	if !strings.HasSuffix(base, "/v1") {
 		base += "/v1"
 	}
 	return base + "/" + path
+}
+
+// setCustomHeaders applies provider fields before the protocol's own credentials and metadata, which always win.
+func (c *Client) setCustomHeaders(req *http.Request) {
+	for name, value := range c.cfg.Headers {
+		req.Header.Set(name, value)
+	}
 }
 
 // setUserAgent gives an explicit connection value precedence over Persona's default.
@@ -285,6 +364,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 	if err != nil {
 		return reply, false, err
 	}
+	c.setCustomHeaders(req)
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "text/event-stream")
 	if c.cfg.Bearer {
@@ -293,7 +373,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		req.Header.Set("x-api-key", key)
 	}
 	req.Header.Set("anthropic-version", "2023-06-01")
-	c.setUserAgent(req)
+	c.setGatewayHeaders(ctx, req, r)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return reply, false, fmt.Errorf("ai: %w", err)
@@ -301,7 +381,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return reply, false, newHTTPError(resp, raw)
+		return reply, false, c.newHTTPError(resp, raw, key)
 	}
 	in := bufio.NewReader(resp.Body)
 	if wholeMessage(in) {
@@ -606,10 +686,11 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	if err != nil {
 		return reply, false, err
 	}
+	c.setCustomHeaders(hreq)
 	hreq.Header.Set("content-type", "application/json")
 	hreq.Header.Set("accept", "text/event-stream")
 	hreq.Header.Set("authorization", "Bearer "+key)
-	c.setUserAgent(hreq)
+	c.setGatewayHeaders(ctx, hreq, r)
 	resp, err := hc.Do(hreq)
 	if err != nil {
 		return reply, false, fmt.Errorf("ai: %w", err)
@@ -617,7 +698,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return reply, false, newHTTPError(resp, raw)
+		return reply, false, c.newHTTPError(resp, raw, key)
 	}
 	var b strings.Builder
 	refused := false // a refusal content part came: the model declined, whatever else the stream says

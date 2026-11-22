@@ -21,7 +21,7 @@ import (
 // listenRuntimeSocket gives n a runtime socket of its own, at runtimePath, for the connection it serves itself
 // (`--stdio` with no resident node: runtimehost.go). A resident node's Nodes share one instead.
 func (n *Node) listenRuntimeSocket(ctx context.Context) (*RuntimeHost, error) {
-	rh := &RuntimeHost{reg: n.runtimes, path: n.runtimePath(), version: n.Version, logger: n.logger}
+	rh := &RuntimeHost{reg: n.runtimes, path: n.runtimePath(), version: n.Version, logger: n.logger, autoCompanions: n.autoCompanions}
 	if rh.reg == nil {
 		rh.reg = newRuntimeRegistry()
 	}
@@ -50,12 +50,29 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 	if !ready {
 		return // hello first
 	}
+	var about struct {
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal(params, &about) == nil && about.SessionID != "" && n.runtimeSessionBlocked(about.SessionID, "") {
+		return // a blocked Agent folder (agentdirs.go): nothing of it is sent
+	}
 	switch event {
+	case "usage.report":
+		n.runtimeUsageReport(h, params, time.Now())
+	case "usage.windows":
+		n.runtimeUsageWindows(h, params, time.Now())
+	case proto.EventModeSet:
+		var e proto.ModeSetEvent
+		if json.Unmarshal(params, &e) == nil && n.runtimes.owns(h, e.SessionID) && n.peer != nil {
+			_ = n.peer.Notify(proto.EventModeSet, params)
+		}
 	case "session.items":
 		var p struct {
 			SessionID string       `json:"session_id"`
 			Items     []proto.Item `json:"items"`
 			ToSeq     *int         `json:"to_seq"`
+			FromSeq   *int         `json:"from_seq"`
+			History   string       `json:"history"`
 		}
 		if json.Unmarshal(params, &p) != nil || !n.runtimes.owns(h, p.SessionID) {
 			return
@@ -70,18 +87,26 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 		if p.ToSeq != nil {
 			last = max(last, *p.ToSeq)
 		}
-		n.runtimes.pushed(p.SessionID, last)
+		n.runtimes.pushed(p.SessionID, last, p.History, p.FromSeq != nil && *p.FromSeq == 0)
 		if n.peer != nil {
-			_ = n.peer.Notify("session.items", n.echoedRaw(p.SessionID, params, "items")) // echo.go
+			raw := n.echoedRaw(p.SessionID, params, "items") // echo.go
+			raw = n.ttft.annotateRaw(p.SessionID, raw, "items", true)
+			_ = n.peer.Notify("session.items", raw)
 		}
 	case "session.delta":
 		var p struct {
 			SessionID string `json:"session_id"`
+			Text      string `json:"text"`
 		}
 		if json.Unmarshal(params, &p) != nil || !n.runtimes.owns(h, p.SessionID) || n.peer == nil {
 			return
 		}
+		if p.Text != "" {
+			n.ttft.firstToken(p.SessionID, time.Now(), "")
+		}
+		n.deltaMu.Lock()
 		_ = n.peer.Notify("session.delta", params)
+		n.deltaMu.Unlock()
 	case "interaction.cancel":
 		if n.peer != nil {
 			_ = n.peer.Notify("interaction.cancel", params)
@@ -91,7 +116,7 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 
 // normalizeRuntimeSessions keeps the sessions a runtime may list (valid ids, once each) and fills what the apps expect:
 // the agent and its label, the space kind (the runtime's id). It works in place: the rows kept are list's first ones,
-// in list's own array, the rest cleared, so list is the caller's to give up.
+// in list's own array, the rest cleared, so list is the caller's to give up. Rows share read-only capabilities when equal.
 func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Session {
 	h.mu.Lock()
 	rt, agent, label, caps, daemon := h.hello.Runtime, h.hello.Agent, h.hello.Name, h.hello.Caps, h.daemon != ""
@@ -112,6 +137,14 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 	_, engine := engineRuntimes[rt]
 	ownWorkspaces := engine && caps.Workspaces && !daemon
 	seen := make(map[string]bool, len(list))
+	capsByValue := map[proto.SessionCapabilities]*proto.SessionCapabilities{}
+	boolTrue, boolFalse := true, false
+	capBool := func(v bool) *bool {
+		if v {
+			return &boolTrue
+		}
+		return &boolFalse
+	}
 	panes := map[string]string{}
 	defer func() {
 		h.mu.Lock()
@@ -145,8 +178,8 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		if s.Agent == "" {
 			s.Agent = agent
 		}
-		if s.AgentLabel == "" && (s.Agent == rt || daemon && s.Agent != "claude") {
-			// The runtime runs its own agent (DSH): the apps call it by the runtime's name. A daemon is called by the
+		if s.AgentLabel == "" && (s.Agent == rt || (agent != "" && s.Agent == agent && agent != "claude") || daemon && s.Agent != "claude") {
+			// The runtime runs its own agent (DSH, opencode-<pid>): the apps call it by the runtime's name. A daemon is called by the
 			// name its config gives, whatever agent it runs (a platform running DSH), unless that is Claude Code.
 			s.AgentLabel = label
 		}
@@ -157,7 +190,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		// sending, interrupting, answering cards and every terminal control on capabilities, the hub guards sends.
 		// What a runtime declared, never more: no terminal, no attach, cards always answerable (they are its own asks).
 		s.SourceKind, s.SourceInstanceID, s.SourceThreadID, s.ParentThreadID = proto.SourceRuntime, rt, "", ""
-		if rt == paseoRuntimeID || rt == cindyRuntimeID {
+		if rt == paseoRuntimeID || rt == cindyRuntimeID || rt == t3codeRuntimeID {
 			s.Host = rt // an engine host, though no terminal (#2576)
 		} else {
 			s.Host = ""
@@ -184,16 +217,24 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		}
 		// The permission modes it lists for an agent that is not Claude Code (#8261) go with its modes too, and only where
 		// the apps' Claude Code chips do not stand (claudeModes): the apps switch between those instead.
-		claudeModes := modes && runtimeModes(caps.Modes, rt, s)
+		claudeModes := modes && runtimeModes(caps.Modes, rt, agent, s)
 		permissionModes := own.PermissionModes
 		if !modes || claudeModes {
 			permissionModes = 0
 		}
-		s.Capabilities = &proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,
-			Close: &caps.Close, Rename: proto.CanModes(caps.Rename && !sub), Modes: proto.CanModes(claudeModes),
-			Rewind: proto.CanModes(rewind), RewindCode: proto.CanModes(rewindCode),
-			Model:           proto.CanModes(caps.Modes && caps.Model && keeps(own.Model) && !strings.Contains(s.SessionID, subagentSep)),
+		rowCaps := proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,
+			A2AWakeOnSend:     caps.Send && own.A2AWakeOnSend && !sub && !s.Archived,
+			SupervisionPolicy: caps.Assistant && caps.SupervisionPolicy && !sub,
+			Close:             capBool(caps.Close), Rename: capBool(caps.Rename && !sub), Modes: capBool(claudeModes),
+			Rewind: capBool(rewind), RewindCode: capBool(rewindCode), Fork: caps.Fork && !sub,
+			QueueEdit: capBool(caps.QueueEdit && !sub), QueueSendNow: capBool(caps.QueueSendNow && !sub),
+			Model:           capBool(caps.Modes && caps.Model && keeps(own.Model) && !strings.Contains(s.SessionID, subagentSep)),
 			PermissionModes: permissionModes}
+		if s.Capabilities = capsByValue[rowCaps]; s.Capabilities == nil {
+			s.Capabilities = new(proto.SessionCapabilities)
+			*s.Capabilities = rowCaps
+			capsByValue[rowCaps] = s.Capabilities
+		}
 		s.ReadOnlyReason, s.Attached, s.CodexRoute, s.CodexRouteNote = readOnly, false, "", ""
 		// The pane is the engine's to show (pi.go joins it with the engine's pane), not part of the runtime's row.
 		if s.PaneID != "" && validPane(s.PaneID) {
@@ -227,6 +268,14 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 			s.UpdatedAt = time.Now().UTC()
 		}
 		s.UpdatedAt = s.UpdatedAt.UTC()
+		if bd := s.ContextBreakdown().Sanitized(); bd != nil {
+			if bd.Free == nil && s.ContextWindow > 0 && s.ContextTokens > 0 {
+				bd.Free = proto.Int(max(int(s.ContextWindow)-int(s.ContextTokens), 0))
+			}
+			s.SetContextBreakdown(bd)
+		} else if s.ContextBreakdown() != nil {
+			s.SetContextBreakdown(nil)
+		}
 		runtimeWork(&s)
 		out = append(out, s)
 	}
@@ -241,6 +290,12 @@ func (n *Node) runtimeWatch(h *runtimeConn, id string, since int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), runtimeCallTimeout)
 	defer cancel()
 	params := map[string]any{"session_id": id, "since_seq": since}
+	n.runtimes.mu.Lock()
+	history := n.runtimes.lastHistory[id]
+	n.runtimes.mu.Unlock()
+	if history != "" {
+		params["history"] = history
+	}
 	if n.runtimeTranscript(id) != "" {
 		params["since_seq"], params["transcript"] = 0, true
 	}
@@ -272,6 +327,9 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 	}
 	if !n.runtimes.owns(h, ix.SessionID) {
 		return nil, fmt.Errorf("session %s is not listed by this runtime", ix.SessionID)
+	}
+	if n.runtimeSessionBlocked(ix.SessionID, ix.Cwd) {
+		return proto.Resolution{Dismiss: true}, nil // a blocked Agent folder (agentdirs.go): handed back to the computer
 	}
 	rt := h.id()
 	// An id the runtime chose is the same when it asks again: the runtime SDK asks the next node with the same card
@@ -381,7 +439,7 @@ func runtimeHealth(h *runtimeConn, ix proto.Interaction) bool {
 // takes only its own approval and Allow all for those and for Codex (bridge.js modes). So a Paseo row running Codex,
 // opencode or any other agent gets none, and older apps show no chips there; its row lists the modes it takes instead
 // (capabilities.permission_modes, #8261).
-func runtimeModes(declared bool, rt string, s proto.Session) bool {
-	own := s.Agent == rt && rt != paseoRuntimeID
+func runtimeModes(declared bool, rt, rtAgent string, s proto.Session) bool {
+	own := (s.Agent == rt || (rtAgent != "" && s.Agent == rtAgent)) && rt != paseoRuntimeID
 	return declared && !strings.Contains(s.SessionID, subagentSep) && (s.Agent == "claude" || own)
 }

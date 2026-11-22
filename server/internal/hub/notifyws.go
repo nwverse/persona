@@ -72,10 +72,15 @@ func (h *Hub) notifyDoneUnder(owner, kind, machineID, machine, sessionID, title,
 		}
 		return p
 	}
-	h.emitToExtensions(owner, "agent.finished", map[string]any{"machine_id": machineID, "machine": machine, "session_id": sessionID, "title": title})
+	if !h.sessionHiddenFromExtensions(machineID, sessionID) { // only of a session the extensions are shown (extension_private.go)
+		h.emitToExtensions(owner, "agent.finished", map[string]any{"machine_id": machineID, "machine": machine, "session_id": sessionID, "title": title})
+	}
 	policy.manager, policy.title, policy.body = owner, title, text
 	pushSelected, pushReachable, heldReason := h.push.sendFromPolicy(owner, policy, build, collapseID, wants.fn(), wants.quiet(), nil, nil)
-	ws := h.notifyWSFrom(owner, kind, build, wants.fn(), wants.quiet())
+	var ws wsReach
+	if heldReason == "" {
+		ws = h.notifyWSFrom(owner, kind, build, wants.fn(), wants.quiet())
+	}
 	return pushOutcome{devices: pushSelected + ws.selected, reachable: pushReachable + ws.reachable, kept: ws.kept, held: heldReason}
 }
 
@@ -113,8 +118,9 @@ func (h *Hub) notifyReplyKeyed(owner, machineID, machine, sessionID, title, text
 	build := func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }
 	wants := pushWants{Kind: "input"}
 	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: replyKey(sessionID, text, key), title: title, body: text}
-	h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil)
-	h.notifyWSFrom(owner, "reply", build, wants.fn(), wants.quiet())
+	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil); heldReason == "" {
+		h.notifyWSFrom(owner, "reply", build, wants.fn(), wants.quiet())
+	}
 }
 
 // replyKey is the related key of a reply reminder: the manager's when it named one, else the session and a digest of
@@ -128,10 +134,11 @@ func replyKey(sessionID, text, given string) string {
 }
 
 // notifyDecide pushes a to-do whose conclusion waits for the owner's decision and recommends an option (#2056) to the
-// devices that take "needs you" pushes: category TODO_DECIDE, whose OK takes the recommendation (decidePayloadIn). On
-// the WebSocket it is an "assistant" notify carrying the same `todo`: a client that does not know it shows a plain
-// notification. Nothing finished: the extensions hear no agent.finished. One collapse id a to-do: a later round's push
-// takes the place of the earlier one, whose OK could only answer "already handled".
+// devices that take "needs you" pushes: category TODO_DECIDE, whose OK takes the recommendation, or TODO_DECIDE_OPEN,
+// with no action, when the manager says open_only (decidePayloadIn). On the WebSocket it is an "assistant" notify
+// carrying the same `todo`: a client that does not know it shows a plain notification. Nothing finished: the
+// extensions hear no agent.finished. One collapse id a to-do: a later round's push takes the place of the earlier one,
+// whose OK could only answer "already handled".
 func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo) {
 	build := func(i18n.Lang) map[string]any {
 		return decidePayloadIn(owner, machineID, machine, sessionID, title, text, todo)
@@ -141,8 +148,9 @@ func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text str
 	// One key a round: the same decision does not ring twice in 12 hours, but a new round of it (asked again) does.
 	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: "todo:" + todo.ID + "@" + todo.AskedAt.UTC().Format(time.RFC3339Nano),
 		title: title, body: text}
-	h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, nil)
-	h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
+	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, nil); heldReason == "" {
+		h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
+	}
 }
 
 // notifyInteraction pushes a new card. linkCovered: owner says its Persona Link summary rings for this card
@@ -168,23 +176,27 @@ func (h *Hub) notifyInteractionAt(owner string, ix proto.Interaction, machine st
 	if ix.Private { // a Just me turn's card: what it asks stays in the app
 		summary = ""
 	}
-	h.emitToExtensions(owner, "agent.needs_you", map[string]any{"machine_id": ix.MachineID, "machine": machine, "session_id": ix.SessionID,
-		"interaction_id": ix.ID, "kind": ix.Kind, "summary": summary})
+	if !h.hiddenFromExtensions(ix) { // only of a card the extensions are shown (extension_private.go)
+		h.emitToExtensions(owner, "agent.needs_you", map[string]any{"machine_id": ix.MachineID, "machine": machine, "session_id": ix.SessionID,
+			"interaction_id": ix.ID, "kind": ix.Kind, "summary": summary})
+	}
 	wants := pushWants{Kind: "input"}
 	if ix.Kind == proto.IxElicitation {
 		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,
 		// the push has no buttons) and the connections that declared it.
 		policy := pushPolicy{level: level, relatedKey: key, title: summary}
-		h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation)
-		h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
+		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation); heldReason == "" {
+			h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
+		}
 	} else {
 		// A card owner's Persona Link summary rings for: "Phone Muted" holds it back while one of owner's Persona Link
 		// desktops is there too (desktops.go); which cards those are is owner's to say. The desktop app's online check
 		// follows in sendCard and notifyWSFrom.
 		fn := alertWanted(wants.fn(), linkCovered && h.linkDesktopOnline(owner))
 		policy := pushPolicy{level: level, relatedKey: key, title: summary}
-		h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil)
-		h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
+		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil); heldReason == "" {
+			h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
+		}
 	}
 }
 
@@ -194,8 +206,9 @@ func (h *Hub) notifyInteractionAt(owner string, ix proto.Interaction, machine st
 // one that asked for it: a device that turned that manager's pushes off (NotifyPrefs.MutedManagers) gets none, as with
 // its push (Pusher.sendFrom); "" is the hub's own, for every device wants takes. Returns the selected count and the
 // count of capable connections before preferences are applied, each with the browsers its Web Push went to (or could
-// go to); neither is a client delivery receipt. A device without a push route and without a ws_notify socket now keeps
-// what its settings take for its next connection (notifyring.go): kept counts those, apart from selected.
+// go to); neither is a client delivery receipt. A device without a push route keeps what its settings take for its
+// next connection when no ws_notify socket accepts it (notifyring.go). kept counts those devices; a rejected socket
+// still counts as selected.
 func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(NotifyPrefs) bool, rule quietRule, required ...string) wsReach {
 	msgs := map[i18n.Lang]map[string]any{}
 	msgIn := func(l i18n.Lang) map[string]any {
@@ -250,12 +263,11 @@ func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(Not
 	var reach wsReach
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	live := map[string]bool{} // the devices with a ws_notify socket now
+	live := map[string]bool{} // devices whose ws_notify socket accepted this event
 	for c := range h.clients {
 		if !c.has("ws_notify") {
 			continue
 		}
-		live[c.device] = true
 		if len(required) > 0 && !c.has(required[0]) {
 			continue
 		}
@@ -264,8 +276,8 @@ func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(Not
 		if !ok {
 			continue
 		}
-		if b := msgFor(c.lang(), quiet); b != nil {
-			c.queue(b)
+		if b := msgFor(c.lang(), quiet); b != nil && c.queue(b) {
+			live[c.device] = true
 		}
 		reach.selected++
 	}
@@ -276,8 +288,8 @@ func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(Not
 	return reach
 }
 
-// wsReach is where notifyWSFrom put one notify event: selected and reachable as it says, and kept, the offline
-// devices that keep it for their next connection.
+// wsReach is where notifyWSFrom put one notify event: selected and reachable as it says, and kept, the devices
+// that keep it for their next connection (offline or rejected by every eligible socket).
 type wsReach struct {
 	selected, reachable, kept int
 }

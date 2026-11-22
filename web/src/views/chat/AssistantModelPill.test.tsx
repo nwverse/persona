@@ -17,6 +17,7 @@ import { getSession, getState, upsertSession, useStore } from "../../lib/store";
 import type { ChatLine } from "../../lib/turns";
 import type { Item, Session } from "../../lib/types";
 import type { ModelPanelProps } from "../../ui/model-panel/ModelPanel";
+import launcherFixture from "../../../../spec/fixtures/assistant-launchers/cases.json";
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
@@ -49,13 +50,18 @@ const codexList = { agent: "codex", models: [
   { id: "gpt-fast", name: "GPT Fast", efforts: ["low", "high"], service_tiers: [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }] },
   { id: "gpt-standard", name: "GPT Standard", efforts: ["low", "high"] },
 ] };
+const sharedLaunchers = launcherFixture.cases[0];
 let machine = 0;
 let host: HTMLDivElement;
 let root: Root;
 let calls: { method: string; url: string; body?: unknown }[];
 let pickAnswer: () => Response;
+let switchAnswer: () => Response;
 let defaultSetup: { provider: string; model: string; effort: string };
 let superviseSetup: { provider: string; model: string; effort: string };
+let mainSetup: { provider: string; model: string; effort: string } | null | undefined;
+let sharedPicker = false;
+let runtimeMain = false;
 
 const mid = () => `persona-${machine}`;
 const chat = (x: Partial<Session> = {}): Session =>
@@ -67,22 +73,42 @@ beforeEach(() => {
   toast.mockClear();
   calls = [];
   pickAnswer = () => json({ ok: true, model_pick: {} });
+  switchAnswer = () => json({ phase: "preparing" });
   defaultSetup = { provider: "claude", model: "opus", effort: "high" };
+  mainSetup = undefined;
   superviseSetup = defaultSetup; // the supervisor's own purpose follows Main chat until it is set apart
+  sharedPicker = false;
+  runtimeMain = false;
   Object.assign(getState(), { features: ["assistant_model_pick", "assistant_start_service_tier", "typed_models"], sessions: {}, assistant: { machine_id: mid(), launcher: "claude", main: "c1", conversations: [] } });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ method: init?.method ?? "GET", url, body });
+    if (url.endsWith("/api/v1/assistant")) {
+      const a = getState().assistant!;
+      const s = getSession(mid(), "c1");
+      const conversations = a.conversations ?? [];
+      return json({ ...a, conversations: s && !conversations.some((c) => c.session_id === s.session_id) ? [...conversations, s] : conversations });
+    }
     if (url.includes("/codex/models")) return json(codexList);
+    if (sharedPicker && url.includes("/runtime/models")) return json({ agent: "claude", models: [] });
     if (url.includes("/models")) return json(claudeList);
+    if (url.includes("/launchers?purpose=assistant.main")) return json({ default: mainSetup === undefined ? defaultSetup : mainSetup });
     if (url.includes("/launchers?purpose=assistant.supervise")) return json({ launchers: [{ name: "claude", source: "builtin" }], default: superviseSetup, unavailable: [] });
-    if (url.includes("/launchers?purpose=assistant")) return json({
-      launchers: [{ name: "claude", source: "builtin" }, { name: "relay", source: "zshrc" }, { name: "codex", source: "builtin", agent: "codex", agent_type: "codex" }],
+    if (url.includes("/launchers?purpose=assistant")) return json(sharedPicker ? {
+      launchers: sharedLaunchers.candidates,
+      default: defaultSetup,
+      unavailable: [],
+    } : {
+      launchers: [{ name: "claude", source: "builtin" }, { name: "relay", source: "zshrc" }, { name: "codex", source: "builtin", agent: "codex", agent_type: "codex" }, ...(runtimeMain ? [{ name: "hosted-claude", source: "runtime-other", agent: "claude", assistant: true }] : [])],
       default: defaultSetup,
       unavailable: [{ name: "gpt-direct", kind: "api", code: "api_protocol", reason: "Responses API" }],
     });
+    if (url.includes("/assistant/conversations/c1/segments?")) return json({ enabled: true, epoch: 4 });
+    if (url.endsWith("/assistant/conversations/c1/switch")) return switchAnswer();
     if (url.includes("/assistant/conversations/c1/model")) return pickAnswer();
+    // Newly listed chats re-read Assistant; return its complete snapshot instead of an operation receipt.
+    if (url.endsWith("/assistant")) return json(getState().assistant);
     return json({ ok: true });
   }));
   host = document.createElement("div");
@@ -191,6 +217,7 @@ describe("a Persona chat's pill on a hub that keeps picks", () => {
       Object.assign(getState().assistant!, { main: "other", leaders: undefined }, as);
       // it last ran on Haiku, but its next message follows Model configuration › Main chat (Opus)
       await show(chat({ launcher: "relay", model: "claude-haiku-5-5", ...(as.leaders ? {} : { origin: "task" }) }));
+      expect(getState().assistant).toMatchObject({ launcher: "claude", main: "other", leaders: as.leaders });
       expect(pill().textContent).toContain("Opus 5.5");
       expect(pill().textContent).not.toContain("Haiku");
       await open();
@@ -249,7 +276,7 @@ describe("a Persona chat's pill on a hub that keeps picks", () => {
   it("re-reads the effective Main chat model when a hub push bumps the conversation revision (#6542)", async () => {
     const s = chat();
     await show(s);
-    const assistantReads = () => calls.filter((c) => c.url.includes("/launchers?purpose=assistant")).length;
+    const assistantReads = () => calls.filter((c) => c.url.includes("/launchers?purpose=assistant.main")).length;
     const afterMount = assistantReads();
     expect(afterMount).toBeGreaterThan(0);
     // a re-render with no new push reads nothing again (the page-life cache stands)
@@ -262,6 +289,32 @@ describe("a Persona chat's pill on a hub that keeps picks", () => {
     act(() => root.render(<AssistantModelPill session={pushed} />));
     await flush();
     expect(assistantReads()).toBe(afterMount + 1);
+  });
+
+  it("holds those re-reads while a turn streams and reads once when it ends", async () => {
+    let s = chat({ status: "working", state: "working", rev: 1 });
+    await show(s);
+    const reads = () => {
+      const l = calls.filter((c) => c.url.includes("/launchers?purpose="));
+      return [l.filter((c) => c.url.includes("purpose=assistant.main")).length, l.filter((c) => /purpose=assistant(&|$)/.test(c.url)).length];
+    };
+    const afterMount = reads();
+    // every write of the turn moves the revision: none of them reads again
+    for (let rev = 2; rev <= 21; rev++) {
+      s = { ...s, rev };
+      await show(s);
+    }
+    expect(reads()).toEqual(afterMount);
+    // the turn ends: one read of each, then nothing more until the revision moves again
+    s = { ...s, status: "idle", state: "idle", rev: 22 };
+    await show(s);
+    expect(reads()).toEqual([afterMount[0] + 1, afterMount[1] + 1]);
+    await show({ ...s });
+    expect(reads()).toEqual([afterMount[0] + 1, afterMount[1] + 1]);
+    // a move after the turn (a hub-side change) reads at once
+    s = { ...s, rev: 23 };
+    await show(s);
+    expect(reads()).toEqual([afterMount[0] + 2, afterMount[1] + 2]);
   });
 });
 
@@ -409,6 +462,34 @@ describe("an older hub and the new-conversation page", () => {
     expect([pickedLauncher(NEW_CONVERSATION), pickedModel(NEW_CONVERSATION), pickedEffort(NEW_CONVERSATION)]).toEqual(["relay", "haiku", "low"]);
     expect(calls.some((c) => c.method !== "GET")).toBe(false);
   });
+
+  it("replays the shared eligible choices in both pickers without a legacy concrete default model", async () => {
+    sharedPicker = true;
+    defaultSetup = { provider: "runtime", model: "", effort: "high" };
+    expect(launcherFixture.version).toBe(1);
+    expect(sharedLaunchers.candidates.map((l) => l.name)).toEqual(["runtime", "codex-gw", "team-api"]);
+
+    await show(undefined);
+    await open();
+    const newProviders = panel.props!.providers;
+    const newNames = newProviders.filter((p) => !p.unavailable).map((p) => p.id);
+    const newModels = newProviders.flatMap((p) => p.models ?? []).map((m) => [m.id, m.name]);
+    act(() => root.render(<></>));
+    await flush();
+
+    await show(chat({ launcher: "runtime", agent: "claude", model: undefined, effort: "high" }));
+    await open();
+    const mainProviders = panel.props!.providers;
+    expect(mainProviders.filter((p) => !p.unavailable).map((p) => p.id)).toEqual(["runtime", "team-api"]);
+    expect(newNames).toEqual(sharedLaunchers.assistant);
+    expect(mainProviders.find((p) => p.id === "codex-gw")?.unavailable).toBe(t("chat-modelpanel.other_engine", { from: agentName("claude"), to: agentName("codex") }));
+
+    // An older node's display placeholder means the launcher's default, never a model ID or English row label.
+    expect(newModels.some(([id, name]) => id === "默认" || name === "默认")).toBe(false);
+    expect(mainProviders.flatMap((p) => p.models ?? []).some((m) => m.id === "默认" || m.name === "默认")).toBe(false);
+    expect(panel.props!.state.current).toBeNull();
+    expect(calls.every((c) => !c.url.includes("/launchers?") || c.url.includes("purpose=assistant"))).toBe(true);
+  });
 });
 
 // A model the chat can't run (turn_error_code model_route): "Fix it" on its error card opens this chat's own panel, where
@@ -484,4 +565,104 @@ describe("a model error's Fix it", () => {
     expect(button(t("chat-modelpill.undo_pick"))).toBeUndefined();
     expect(button(t("chat-lines.fix_it"))).toBeDefined();
   });
+});
+
+
+describe("main-only model defaults", () => {
+  it("shows the main binding and its next-message effort without changing a new side conversation", async () => {
+    mainSetup = { provider: "relay", model: "haiku", effort: "low" };
+    await show(chat({ effort: "high" }));
+    await open();
+    expect(panel.props!.state.current).toEqual(mainSetup);
+    act(() => root.render(<></>));
+    await flush();
+    await show(undefined);
+    await open();
+    expect(panel.props!.state.current).toEqual(defaultSetup);
+    act(() => root.render(<></>));
+    await flush();
+    mainSetup = { provider: "claude", model: "opus", effort: "high" };
+    await show(chat());
+    await open();
+    expect(panel.props!.state.current).toEqual(mainSetup);
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("uses main settings on the empty main starter while an ordinary starter keeps shared defaults", async () => {
+    mainSetup = { provider: "relay", model: "haiku", effort: "low" };
+    await act(() => root.render(<AssistantModelPill mainStart />));
+    await flush();
+    await open();
+    expect(panel.props!.state.current).toEqual(mainSetup);
+    act(() => root.render(<></>));
+    await flush();
+    await show(undefined);
+    await open();
+    expect(panel.props!.state.current).toEqual(defaultSetup);
+  });
+});
+
+
+it("keeps the shared default when an older hub returns no main-purpose binding", async () => {
+  mainSetup = null;
+  defaultSetup = { provider: "relay", model: "haiku", effort: "low" };
+  await show(chat());
+  await open();
+  expect(panel.props!.state.current?.provider).toBe("relay");
+  expect(panel.props!.state.current?.model).toBe("haiku");
+});
+describe("explicit logical conversation switch", () => {
+  it("shows other engines on a capable hub and sends nothing before confirmation", async () => {
+    getState().features.push("assistant_segments");
+    await show(chat());
+    await open();
+    expect(panel.props!.providers.find((p) => p.id === "codex")?.unavailable).toBeUndefined();
+    expect(await act(() => panel.props!.onPick({ provider: "codex", model: "gpt-standard", effort: "high" }))).toBe(false);
+    expect(panel.props!.held).toBe(true);
+    expect(calls.some((c) => c.url.endsWith("/switch"))).toBe(false);
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((b) => b.textContent === t("common.cancel"))!;
+    await act(() => cancel.click());
+    expect(sent("PUT")).toEqual([]);
+    expect(calls.some((c) => c.url.endsWith("/switch"))).toBe(false);
+  });
+  it("uses the explicit operation and preserves it after an unknown response", async () => {
+    getState().features.push("assistant_segments");
+    await show(chat());
+    await open();
+    await act(() => panel.props!.onPick({ provider: "codex", model: "gpt-standard", effort: "high" }));
+    switchAnswer = () => json({ error: "response unconfirmed", delivered: "unknown", code: "timeout" }, 502);
+    const confirm = () => [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((b) => b.textContent === t("chat-modelpanel.switch_confirm"))!;
+    await act(async () => confirm().click());
+    await flush();
+    expect(document.querySelector("[role=alert]")?.textContent).toBe(t("chat-modelpanel.switch_unconfirmed", { error: t("lib-api.computer_timeout") }));
+    const first = calls.find((c) => c.url.endsWith("/switch"))!;
+    expect(first.body).toMatchObject({ expected_epoch: 4, source_machine_id: mid(), machine_id: mid(), launcher: "codex", model: "gpt-standard", effort: "high" });
+    expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
+    switchAnswer = () => json({ phase: "preparing" });
+    await act(async () => confirm().click());
+    await flush();
+    expect(calls.filter((c) => c.url.endsWith("/switch")).map((c) => c.body)).toEqual([first.body, first.body]);
+    expect(calls.filter((c) => c.url.includes("/segments?"))).toHaveLength(2);
+    expect(sent("PUT")).toEqual([]);
+  });
+});
+
+
+it("keeps the actual engine connection until a same-kind runtime default is explicitly confirmed", async () => {
+  runtimeMain = true;
+  mainSetup = { provider: "hosted-claude", model: "opus", effort: "high" };
+  getState().features.push("assistant_segments");
+  await show(chat());
+  await open();
+  expect(panel.props!.state.current?.provider).toBe("claude");
+  expect(await act(() => panel.props!.onPick(mainSetup!))).toBe(false);
+  expect(calls.some((c) => c.url.endsWith("/switch"))).toBe(false);
+  expect(sent("PUT")).toEqual([]);
+  const confirm = [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((b) => b.textContent === t("chat-modelpanel.switch_confirm"))!;
+  await act(async () => confirm.click());
+  await flush();
+  expect(calls.filter((c) => c.url.endsWith("/switch")).map((c) => c.body)).toEqual([expect.objectContaining({ launcher: "hosted-claude", expected_epoch: 4, machine_id: mid() })]);
+  expect(getSession(mid(), "c1")?.launcher).toBe("claude");
+  expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
+  expect(defaultSetup).toEqual({ provider: "claude", model: "opus", effort: "high" });
 });

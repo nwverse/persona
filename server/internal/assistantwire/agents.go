@@ -1,6 +1,7 @@
 package assistantwire
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -24,11 +25,27 @@ type AgentsConfig struct {
 	// Dispatch is manager.json agents.dispatch: an agent handing a subtask to another connected computer
 	// (docs/plans/plan-agent-dispatch.md).
 	Dispatch DispatchConfig `json:"dispatch,omitzero"`
+	A2A      A2AConfig      `json:"a2a,omitzero"`
 	// LauncherHealth is manager.json agents.launcher_health: checking each machine's launchers (docs/server/launcher-health.md).
 	LauncherHealth LauncherHealthConfig `json:"launcher_health,omitzero"`
 	// Review is manager.json agents.review: the independent reviewer of a supervised task's finished change (#2173,
 	// docs/assistant/unified-entry.md "Independent review").
 	Review ReviewConfig `json:"review,omitzero"`
+}
+
+// A2AConfig defaults to the manager's confirmed personal computers. A supplied
+// list narrows that scope. PublicURL enables the authenticated HTTP interface.
+type A2AConfig struct {
+	Machines  []string `json:"machines,omitzero"`
+	PublicURL string   `json:"public_url,omitempty"`
+}
+
+const ScopeA2A = "agents.a2a"
+
+var A2AToolNames = []string{"a2a_sessions", "a2a_send", "a2a_get", "a2a_report", "a2a_cancel"}
+
+func IsA2ATool(name string) bool {
+	return slices.Contains(A2AToolNames, name)
 }
 
 // DispatchConfig is manager.json agents.dispatch: the agents' dispatch_start / dispatch_read tools. Off unless Enabled
@@ -141,11 +158,17 @@ type TriageConfig struct {
 	// TransientRetry: the initial value of the transient_retry switch (unset: on): "Continue" after a transient model
 	// error, as a rule, whether or not the triage itself is on.
 	TransientRetry *bool `json:"transient_retry,omitempty"`
-	// MaxRetries: "Continue" sent for one run of transient errors before leaving it to the user. Default 5.
+	// MaxRetries is retained for rolling compatibility; temporary model retries have no attempt limit.
 	MaxRetries int `json:"max_retries,omitempty"`
 	// RetryBaseSeconds: the first "Continue" after a transient error waits this long, each next one twice as long as
 	// the one before (a rate limit four times as long). Default 15.
 	RetryBaseSeconds int `json:"retry_base_seconds,omitempty"`
+	// AccountExhaustionMaxRetries bounds automatic continuations for coding Agents, including task-leader Agents,
+	// when the provider says no upstream account is available. All Assistant conversations keep their existing
+	// recovery: main, leader and background-supervision chats, side chats, scheduled-task and health chats, and
+	// meeting rooms. Zero (the default) disables these continuations; a positive value compares the shared consecutive
+	// transient retry count with that bound. Ordinary transient failures are not limited by this setting.
+	AccountExhaustionMaxRetries int `json:"account_exhaustion_max_retries,omitempty"`
 	// MaxWakes: wakes for one wait before asking the user. Default 6.
 	MaxWakes int `json:"max_wakes,omitempty"`
 	// SettleSeconds: how long a stopped session stays stopped before its turn is triaged. Default 15.
@@ -237,10 +260,14 @@ type SessionSeen struct {
 // agentRoutes are the Agents business's routes the manager answers (agents_routes.go there): its switches, its
 // numbers, renaming the tabs nobody named.
 var agentRoutes = []string{
+	"GET /api/v1/agents/display-settings",
+	"PUT /api/v1/agents/display-settings",
 	"GET /api/v1/agents/triage",
 	"PUT /api/v1/agents/triage",
 	"GET /api/v1/agents/work/stats",
 	"POST /api/v1/tabs/autoname",
+	"POST /api/v1/sessions/{mid}/{sid}/review",
+	"GET /api/v1/sessions/{mid}/{sid}/review",
 }
 
 func init() { Routes = append(Routes, agentRoutes...) }

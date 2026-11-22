@@ -589,8 +589,8 @@ class InboxRepositoryTest {
             repository.refresh()
             val avatar = repository.snapshot.value.records.single().avatar!!
             assertEquals("hub/generation:https://cdn.example.com/avatar/bot.jpg", avatar.cacheKey)
-            avatar.read()
-            avatar.read()
+            val _ = avatar.read()
+            val _ = avatar.read()
             // Read once as an avatar (the hub transport reads a full https URL directly); the second is cached.
             assertEquals(listOf("https://cdn.example.com/avatar/bot.jpg"), transport.avatarRefs)
         } finally {
@@ -617,11 +617,11 @@ class InboxRepositoryTest {
             }
             val other = image(ManagerPins.of(listOf(listOf("lark", "conversations", "feed")), "m-3"))
             assertEquals("hub/generation#m-3:/api/v1/lark/media/img", other.cacheKey)
-            other.read()
+            val _ = other.read()
             assertEquals("m-3", transport.messageManagers.last())
             val default = image(null)
             assertEquals("hub/generation:/api/v1/lark/media/img", default.cacheKey)
-            default.read()
+            val _ = default.read()
             assertNull(transport.messageManagers.last())
             assertEquals(listOf("/api/v1/lark/media/img" to "m-3", "/api/v1/lark/media/img" to null), transport.mediaReads)
         } finally {
@@ -673,8 +673,8 @@ class InboxRepositoryTest {
             assertEquals("hub/generation:/api/v1/lark/media/key?size=144", avatars["lark:chat:1"]?.cacheKey)
             assertNull(avatars["lark:dm:1"])
             assertNull(avatars["mail:1"])
-            avatars["lark:chat:1"]!!.read()
-            avatars["lark:chat:1"]!!.read()
+            val _ = avatars["lark:chat:1"]!!.read()
+            val _ = avatars["lark:chat:1"]!!.read()
             // Read with the pairing at the thumbnail size, and once: the second comes from the bytes cache.
             assertEquals(listOf("/api/v1/lark/media/key?size=144"), transport.mediaRefs)
             assertEquals(transport.mediaRefs, transport.avatarRefs)
@@ -683,6 +683,111 @@ class InboxRepositoryTest {
             repository.refresh()
             assertEquals(before, repository.snapshot.value.records)
         } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun connectorRowsUseAvatarUrlAtLarkThumbnailSizeAndCacheIt() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-connector-avatar-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val picture = "/api/v1/avatars/telegram/YS51MS41MDE"
+        val sized = "$picture?size=144"
+        try {
+            val transport = FakeTransport().apply {
+                items = JsonArray(listOf(
+                    buildJsonObject {
+                        put("id", "telegram:1"); put("source", "telegram"); put("kind", "dm"); put("title", "Person")
+                        // A connector's top-level avatar and its superseded raw media ref are not its picture URL.
+                        put("avatar", "/api/v1/lark/media/not-the-connector-picture")
+                        putJsonObject("connector") {
+                            put("thread", "u1"); put("avatar_url", picture); put("media_ref", "raw-connector-ref")
+                        }
+                    },
+                    buildJsonObject {
+                        put("id", "telegram:2"); put("source", "telegram"); put("kind", "dm"); put("title", "No picture")
+                        putJsonObject("connector") { put("thread", "u2"); put("media_ref", "raw-connector-ref") }
+                    },
+                    buildJsonObject {
+                        put("id", "lark:chat:1"); put("source", "lark"); put("kind", "group"); put("title", "Group")
+                        put("avatar", "/api/v1/lark/media/key"); putJsonObject("lark") { put("feed_id", "chat") }
+                    },
+                ))
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            repository.refresh()
+            val records = repository.snapshot.value.records.associate { it.item.id to it }
+            val connector = records.getValue("telegram:1")
+            assertEquals("hub/generation:$sized", connector.avatar?.cacheKey)
+            assertNull(records.getValue("telegram:2").avatar)
+            assertEquals("hub/generation:/api/v1/lark/media/key?size=144", records.getValue("lark:chat:1").avatar?.cacheKey)
+            val decoded = JsonCodec.encodeToJsonElement(InboxConnectorRef.serializer(), connector.connector!!).jsonObject
+            assertEquals(picture, decoded["avatar_url"]?.jsonPrimitive?.content)
+
+            val _ = connector.avatar!!.read()
+            val _ = connector.avatar!!.read()
+            val _ = records.getValue("lark:chat:1").avatar!!.read()
+            assertEquals(listOf(sized, "/api/v1/lark/media/key?size=144"), transport.avatarRefs)
+            // Rebuilding the same row retains its equal image and the authenticated bytes cache.
+            repository.refresh()
+            val rebuilt = repository.snapshot.value.records.single { it.item.id == "telegram:1" }
+            assertEquals(connector, rebuilt)
+            val _ = rebuilt.avatar!!.read()
+            assertEquals(listOf(sized, "/api/v1/lark/media/key?size=144"), transport.avatarRefs)
+        } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun connectorPicturesStayWithTheirManagerAndPreviousOwner() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-connector-avatar-manager-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val picture = "/api/v1/avatars/telegram/shared"
+        val sized = "$picture?size=144"
+        fun item(manager: String?, done: Boolean = false) = buildJsonObject {
+            put("id", "telegram:shared"); put("source", "telegram"); put("kind", "dm"); put("title", "Shared"); put("version", "v1")
+            putJsonObject("connector") { put("thread", "u1"); put("avatar_url", picture) }
+            if (manager != null) put("manager", manager)
+            if (done) { put("done_at", "2026-11-04T08:00:00Z"); put("done_by", "user") }
+        }
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val transport = FakeTransport().apply {
+                items = JsonArray(listOf(item("assistant"), item("m-3")))
+                onMedia = { _ ->
+                    when (currentCoroutineContext()[RequestManager]?.id) {
+                        "" -> byteArrayOf(1)
+                        "m-3" -> byteArrayOf(3)
+                        else -> error("connector picture read by the wrong manager")
+                    }
+                }
+                // A single-item answer is unstamped and must inherit the previous record's owner.
+                onSetDone = { _, done -> buildJsonObject { put("item", item(null, done)) } }
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            repository.refresh()
+            val records = repository.snapshot.value.records.associate { it.manager to it }
+            val default = records.getValue("assistant").avatar!!
+            val other = records.getValue("m-3").avatar!!
+            assertEquals("hub/generation:$sized", default.cacheKey)
+            assertEquals("hub/generation#m-3:$sized", other.cacheKey)
+            assertArrayEquals(byteArrayOf(1), default.read())
+            assertArrayEquals(byteArrayOf(3), other.read())
+            assertArrayEquals(byteArrayOf(1), default.read())
+            assertArrayEquals(byteArrayOf(3), other.read())
+            assertEquals(listOf(sized to "", sized to "m-3"), transport.mediaReads)
+
+            transport.onInbox = { throw IOException("offline") }
+            repository.setDone(records.getValue("m-3").item.id, true)
+            val updated = repository.snapshot.value.records.single { it.manager == "m-3" }.avatar!!
+            assertEquals("hub/generation#m-3:$sized", updated.cacheKey)
+            assertArrayEquals(byteArrayOf(3), updated.read())
+            assertEquals("the rebuilt row must use the other manager's kept bytes", 2, transport.mediaReads.size)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
             owner.coroutineContext[Job]!!.cancelAndJoin()
             directory.deleteRecursively()
         }
@@ -1726,6 +1831,7 @@ class InboxRepositoryTest {
         var onReply: suspend (String) -> JsonObject = { JsonObject(emptyMap()) }
         var items = JsonArray(emptyList())
         val mediaRefs = mutableListOf<String>()
+        var onMedia: suspend (String) -> ByteArray = { byteArrayOf(1) }
         var onMessages: suspend (Long?, String?, String?) -> JsonObject = { _, _, _ -> buildJsonObject {
             put("messages", JsonArray(emptyList())); put("sync_state", "complete")
         } }
@@ -1779,7 +1885,7 @@ class InboxRepositoryTest {
         val mediaReads = mutableListOf<Pair<String, String?>>()
         override suspend fun media(ref: String): ByteArray {
             mediaReads += ref to currentCoroutineContext()[RequestManager]?.id
-            return byteArrayOf(1).also { mediaRefs += ref }
+            return onMedia(ref).also { mediaRefs += ref }
         }
         /** Each Moments read with the manager its request names (RequestManager). */
         val momentsReads = mutableListOf<Pair<String, String?>>()

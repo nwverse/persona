@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -28,6 +30,7 @@ type durableConversationDeletions interface {
 // A tombstone keeps reference identity, never the deleted conversation's words.
 // The computer's transcript, task origins and previously derived records remain.
 type deletedConversation struct {
+	Hidden  bool      `json:"hidden_segment,omitempty"`
 	Machine string    `json:"machine_id"`
 	ID      string    `json:"session_id"`
 	Space   string    `json:"space,omitempty"`
@@ -61,15 +64,21 @@ func (s *Service) loadDeletedConversations(ctx context.Context) error {
 
 func (s *Service) deletedConversation(ctx context.Context, machine, id string) (deletedConversation, bool, error) {
 	if st, ok := s.store().(durableConversationDeletions); ok {
-		raw, found, err := st.ConversationDeletion(ctx, machine, id)
-		if err != nil || !found {
-			return deletedConversation{}, false, err
+		for _, alias := range s.physicalAliases(machine) {
+			raw, found, err := st.ConversationDeletion(ctx, alias, id)
+			if err != nil {
+				return deletedConversation{}, false, err
+			}
+			if !found {
+				continue
+			}
+			var row deletedConversation
+			if err := json.Unmarshal(raw, &row); err != nil {
+				return row, false, err
+			}
+			return row, true, nil
 		}
-		var row deletedConversation
-		if err := json.Unmarshal(raw, &row); err != nil {
-			return row, false, err
-		}
-		return row, true, nil
+		return deletedConversation{}, false, nil
 	}
 	b := &s.deletedConversations
 	b.mu.Lock()
@@ -80,8 +89,12 @@ func (s *Service) deletedConversation(ctx context.Context, machine, id string) (
 	if len(b.rows) == 0 {
 		return deletedConversation{}, false, nil
 	}
-	row, ok := b.rows[runtimeListID(machine, id)]
-	return row, ok, nil
+	for _, alias := range s.physicalAliases(machine) {
+		if row, ok := b.rows[runtimeListID(alias, id)]; ok {
+			return row, true, nil
+		}
+	}
+	return deletedConversation{}, false, nil
 }
 
 func (s *Service) conversationAvailable(ctx context.Context, machine, id string) error {
@@ -124,9 +137,26 @@ func (s *Service) deletionRows(ctx context.Context, machine string, list []proto
 	if len(b.rows) == 0 {
 		return list
 	}
+	lookup := func(id string) (deletedConversation, bool) {
+		for _, alias := range s.physicalAliases(machine) {
+			if row, ok := b.rows[runtimeListID(alias, id)]; ok {
+				row.Machine = machine
+				return row, true
+			}
+		}
+		return deletedConversation{}, false
+	}
+	kept := list[:0]
+	for _, session := range list {
+		if row, deleted := lookup(session.SessionID); deleted && row.Hidden {
+			continue
+		}
+		kept = append(kept, session)
+	}
+	list = kept
 	seen := map[string]bool{}
 	for i := range list {
-		if row, ok := b.rows[runtimeListID(machine, list[i].SessionID)]; ok {
+		if row, ok := lookup(list[i].SessionID); ok {
 			list[i] = s.deletedRow(ctx, row)
 			seen[row.ID] = true
 		}
@@ -134,7 +164,9 @@ func (s *Service) deletionRows(ctx context.Context, machine string, list []proto
 	if complete {
 		var missing []deletedConversation
 		for _, row := range b.rows {
-			if row.Machine == machine && !seen[row.ID] {
+			if s.physicalSameMachine(row.Machine, machine) && !seen[row.ID] && !row.Hidden {
+				row.Machine = machine
+				seen[row.ID] = true
 				missing = append(missing, row)
 			}
 		}
@@ -169,6 +201,11 @@ func (s *Service) deleteConversation(ctx context.Context, machine, id string) er
 	cfg := s.settings(ctx)
 	if cfg.Main == id || s.isBackground(ctx, id) {
 		return &rpc.Error{Code: "conversation_protected", Message: i18n.T(s.lang(ctx), "assistant-conversation_delete.protected")}
+	}
+	if slices.Contains(cfg.Leaders, id) {
+		// A current direction's lead conversation (#11392): unpinning it (…/end) ends the direction, after which it
+		// deletes as any other conversation.
+		return &rpc.Error{Code: "conversation_protected", Message: i18n.T(s.lang(ctx), "assistant-conversation_delete.lead_protected")}
 	}
 	c, found := s.session(ctx, machine, id)
 	if !found || !c.Assistant {
@@ -332,7 +369,14 @@ func (s *Service) writeConversationJSON(ctx context.Context, w http.ResponseWrit
 }
 
 func conversationWrite(method string) bool {
-	return method == "assistant.send" || method == "session.send" || method == "session.start" || method == "session.resume" || method == "session.fork" || method == "session.rewind"
+	if a2aDeliveryMethod(method) {
+		return true
+	}
+	switch method {
+	case "assistant.send", "session.send", DeviceSessionSendOnce, "session.start", "session.resume", "session.fork", "session.rewind", assistantwire.DeviceAssistantAnswerAgain:
+		return true
+	}
+	return false
 }
 
 // Check every referenced identity: a resume may name both a new session id and

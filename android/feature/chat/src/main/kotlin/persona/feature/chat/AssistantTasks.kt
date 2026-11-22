@@ -201,37 +201,46 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
     // Glass draws the records as iOS's new conversation layout does (#4339 C13); Brief and Board keep their looks.
     val glass = PersonaTheme.style == persona.core.designsystem.AppStyle.Glass
     val openTodo = todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } }
-    when (item.kind) {
-        "plan" -> (item.ref?.let { plans[it] } ?: item.plan)?.let { PlanCard(it, host) }
-        "task" -> todos.firstOrNull { it.id == item.ref }?.let { todo ->
-            val today = AssistantLines.time(item.at)?.atZone(ZoneId.systemDefault())?.toLocalDate() == LocalDate.now()
-            if (today) TaskCard(todo, host) else TaskLine(todo, host)
+    // The transcript hosts this row in a Box (`ChatSearchHighlight`). Two composables emitted here would occupy the
+    // same place. iOS `FeedLine` case `.routed` draws only the message (TaskViews.swift). A newly started Agent is not
+    // that line: `HandoffCardView` is an inbox write-back (`item.handoffCard`, kind `inboxSuggestion`), and
+    // `DispatchHandoffCards` names a plan or task item's Agents linked within two minutes of the first
+    // (DispatchHandoffCard.swift: a later Agent is not on this hand-off). This message's Agent is that later one, so
+    // it stays under the message. The gap is iOS's between hand-off cards (`VStack` spacing `Theme.Space.s`).
+    // `spacedBy` adds nothing around a single child, so every other row stays as it was.
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        when (item.kind) {
+            "plan" -> (item.ref?.let { plans[it] } ?: item.plan)?.let { PlanCard(it, host) }
+            "task" -> todos.firstOrNull { it.id == item.ref }?.let { todo ->
+                val today = AssistantLines.time(item.at)?.atZone(ZoneId.systemDefault())?.toLocalDate() == LocalDate.now()
+                if (today) TaskCard(todo, host) else TaskLine(todo, host)
+            }
+            "answered" -> AnsweredLine(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
+            "receipt" -> ReceiptCard(item, host, todos)
+            // The entry names its task itself (#5084): a review drawn in the conversation says which task even when the
+            // list no longer has it (then there is nothing to open).
+            "review" -> ReviewLine(item, todos.firstOrNull { it.id == item.ref }?.title ?: item.field("title")?.takeIf(String::isNotBlank) ?: title,
+                todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
+            "report" -> if (glass) ReportExchange(item, title, openTodo) else ReportCard(item, title, openTodo)
+            // Persona's own message to the task's agent is folded, never the user's bubble (#1542, #1623).
+            "routed" -> if (item.sentByPersona) { if (glass) RoutedExchange(item, title, openTodo) else SentLine(item, title, openTodo) }
+            else if (glass) UserRoutedExchange(item, title)
+            else Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.xxl).testTag("routed-owner"), horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                Text(stringResource(R.string.chat_tasks_routed_to, title), style = PersonaTheme.type.caption, color = PersonaTheme.palette.accent, maxLines = 1)
+                Text(item.field("text").orEmpty(), Modifier.clip(PersonaTheme.shapes.controlShape).background(PersonaTheme.palette.surfaceStrong)
+                    .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+            }
+            "today" -> TodayCard(item, host, todos)
+            "brief" -> BriefCard(item, host)
+            "message" -> if (item.ref != null && item.id !in later) MessageCard(item, host, todos)
+            // A live card: drawn where it was created, as the hub's latest version of it (docs/assistant/assistant-views.md "Live cards").
+            "view" -> item.ref?.let { id -> persona.core.designsystem.LocalViewBlocks.current?.live?.invoke(id) }
+            "notice" -> NoticeLine(item)
         }
-        "answered" -> AnsweredLine(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
-        "receipt" -> ReceiptCard(item, host, todos)
-        // The entry names its task itself (#5084): a review drawn in the conversation says which task even when the
-        // list no longer has it (then there is nothing to open).
-        "review" -> ReviewLine(item, todos.firstOrNull { it.id == item.ref }?.title ?: item.field("title")?.takeIf(String::isNotBlank) ?: title,
-            todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
-        "report" -> if (glass) ReportExchange(item, title, openTodo) else ReportCard(item, title, openTodo)
-        // Persona's own message to the task's agent is folded, never the user's bubble (#1542, #1623).
-        "routed" -> if (item.sentByPersona) { if (glass) RoutedExchange(item, title, openTodo) else SentLine(item, title, openTodo) }
-        else if (glass) UserRoutedExchange(item, title)
-        else Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.xxl), horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-            Text(stringResource(R.string.chat_tasks_routed_to, title), style = PersonaTheme.type.caption, color = PersonaTheme.palette.accent, maxLines = 1)
-            Text(item.field("text").orEmpty(), Modifier.clip(PersonaTheme.shapes.controlShape).background(PersonaTheme.palette.surfaceStrong)
-                .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
-        }
-        "today" -> TodayCard(item, host, todos)
-        "brief" -> BriefCard(item, host)
-        "message" -> if (item.ref != null && item.id !in later) MessageCard(item, host, todos)
-        // A live card: drawn where it was created, as the hub's latest version of it (docs/assistant/assistant-views.md "Live cards").
-        "view" -> item.ref?.let { id -> persona.core.designsystem.LocalViewBlocks.current?.live?.invoke(id) }
-        "notice" -> NoticeLine(item)
+        if (item.kind == "routed" && !item.sentByPersona && !item.field("new_agent").isNullOrBlank())
+            NewAgentHandoff(item, title, todos.firstOrNull { it.id == item.ref }, host)
     }
-    if (item.kind == "routed" && !item.sentByPersona && !item.field("new_agent").isNullOrBlank())
-        NewAgentHandoff(item, title, todos.firstOrNull { it.id == item.ref }, host)
 }
 
 /**
@@ -421,13 +430,20 @@ internal fun permissionLabel(mode: String?): String = when (mode ?: "default") {
 }
 
 /**
- * What a planned task runs on, as its chip says it: the model, else its launcher, by the short name the Agents rows and the
- * composer's pill use ("Opus 4.8", `modelShortName`; iOS writes the raw string), else "Default model". The Edit sheet's field
- * keeps the raw value: it is what the task starts with.
+ * What a planned task runs on: its explicit model's short name wins; otherwise its Agent preset, with its launcher when
+ * present; otherwise the existing launcher / default label. The Edit sheet's model field keeps the raw value and leaves
+ * the task's tier data untouched.
  */
 @Composable
-internal fun planModelLabel(task: persona.core.contracts.PlanTask): String =
-    persona.core.domain.modelShortName(task.model?.takeIf(String::isNotBlank) ?: task.launcher).ifEmpty { stringResource(R.string.chat_tasks_default_model) }
+internal fun planModelLabel(task: persona.core.contracts.PlanTask): String {
+    task.model?.takeIf(String::isNotBlank)?.let { return persona.core.domain.modelShortName(it) }
+    task.tier?.takeIf(String::isNotBlank)?.let { tier ->
+        val preset = stringResource(R.string.chat_tasks_preset, tier)
+        val launcher = task.launcher?.takeIf(String::isNotBlank)?.let { persona.core.domain.modelShortName(it) }.orEmpty()
+        return if (launcher.isEmpty()) preset else stringResource(R.string.chat_tasks_launcher_preset, launcher, preset)
+    }
+    return persona.core.domain.modelShortName(task.launcher).ifEmpty { stringResource(R.string.chat_tasks_default_model) }
+}
 
 /**
  * A plan as the conversation or a sheet draws it: the store's latest of it ([given] until it knows the plan), so a card left
@@ -476,6 +492,7 @@ internal fun PlanCard(given: TaskPlan, host: AssistantTaskHost) {
                             JChip(if (t.readonly == true) stringResource(R.string.chat_tasks_read_only) else permissionLabel(t.permission), selected = t.readonly == true)
                         }
                         t.why?.takeIf(String::isNotBlank)?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
+                        t.brief?.let { PlanTaskBrief(it, t.title) }
                     }
                 }
                 Row(Modifier.clickable { remember = !remember }, verticalAlignment = Alignment.CenterVertically) {
@@ -516,7 +533,7 @@ private fun TaskCard(todo: Todo, host: AssistantTaskHost) {
     val asks = remember(card) { card?.askLine() }
     val now = when {
         state == TaskState.NeedsYou -> asks?.text() ?: stringResource(R.string.chat_tasks_now_needs_you)
-        cut != null -> stringResource(R.string.chat_tasks_now_cut, cut.reason)
+        cut != null -> if (cut.plain) cut.reason.text() else stringResource(R.string.chat_tasks_now_cut, cut.reason)
         state == TaskState.Failed -> stringResource(R.string.chat_tasks_now_failed, todo.startError.orEmpty().trim())
         progress != null -> progress.text
         todo.agents.any { !it.startError.isNullOrBlank() } ->
@@ -662,7 +679,12 @@ private fun InterruptedReceipt(item: FeedItem, host: AssistantTaskHost, todos: L
     val todo = todos.firstOrNull { it.id == item.ref }
     val title = receiptTitle(item, todo) ?: stringResource(R.string.chat_tasks_default_title)
     val state = todo?.let { host.tasks.stateOf(it, host.sessions) }
-    if (todo != null && state != TaskState.Interrupted) {
+    // A turn with no output the hub still has pending (#10187): the hub's resolution says when it went on (it is sent
+    // again then), so its own sentence stands, not "resumed", unless the task is seen working or done here. The rows of
+    // the task's other Agents (or an offline stand-in for a missing one) say nothing of it.
+    val pendingSilent = todo != null && item.field("resolution") == "pending" && item.field("cause") in silentCauses &&
+        state != TaskState.Working && state != TaskState.Done
+    if (todo != null && state != TaskState.Interrupted && !pendingSilent) {
         Row(Modifier.clip(PersonaTheme.shapes.controlShape).clickable { openTask(host, todo) }.padding(vertical = Tokens.Space.xs),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             JIcon(if (state == TaskState.Done) PhIcons.Check else PhIcons.ArrowClockwise, decorative = true, size = Tokens.Space.m,
@@ -675,13 +697,16 @@ private fun InterruptedReceipt(item: FeedItem, host: AssistantTaskHost, todos: L
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
     val cut = todo?.let { Interruption.of(host.tasks.lead(it, host.sessions)) }
     val reason = cut?.reason ?: ApiErrorInfo.parse(item.field("error") ?: item.field("summary"))?.reason
+    // A turn with no output (#10187): the hub's own sentence, from the lead's row, or the receipt's (its cause says so)
+    // when the row is not at hand: never "Model service error".
+    val plain = cut?.takeIf { it.plain }?.reason?.text() ?: item.field("error")?.takeIf { item.field("cause") in silentCauses }
     val tone = PersonaTheme.palette.danger
     Row(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.cardShape).background(PersonaTheme.palette.statusSurface).padding(Tokens.Space.l),
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
         JIcon(PhIcons.WarningCircle, decorative = true, tint = tone.dot)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Text(stringResource(R.string.chat_tasks_interrupted_title, title), style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
-            Text(if (reason != null) stringResource(R.string.chat_tasks_now_cut, reason) else stringResource(R.string.chat_tasks_now_cut_plain), style = PersonaTheme.type.callout,
+            Text(plain ?: if (reason != null) stringResource(R.string.chat_tasks_now_cut, reason) else stringResource(R.string.chat_tasks_now_cut_plain), style = PersonaTheme.type.callout,
                 color = PersonaTheme.palette.ink2, maxLines = 4, overflow = TextOverflow.Ellipsis)
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 if (todo != null && cut?.canContinue != false) JButton(stringResource(R.string.chat_tasks_continue), { host.tasks.retryTask(todo, host.onError) },
@@ -703,6 +728,9 @@ private fun resolutionLabel(r: InterruptResolution): String = stringResource(whe
     InterruptResolution.Done -> R.string.chat_tasks_interrupt_done
 })
 
+/** The receipt causes of a turn with no output (#10187), whose `error` is the hub's own sentence for it. */
+private val silentCauses = setOf("no_output", "stopped")
+
 /** What cut a batch off (the hub's `cause`); one this build doesn't know reads as a model service error. */
 @Composable
 private fun causeLabel(cause: String): String = stringResource(when (cause) {
@@ -710,6 +738,7 @@ private fun causeLabel(cause: String): String = stringResource(when (cause) {
     "auth" -> R.string.chat_tasks_interrupt_cause_auth
     "model_route" -> R.string.chat_tasks_interrupt_cause_model_route
     "no_output" -> R.string.chat_tasks_interrupt_cause_no_output
+    "stopped" -> R.string.chat_tasks_interrupt_cause_stopped
     else -> R.string.chat_tasks_interrupt_cause_model_error
 })
 
@@ -793,6 +822,11 @@ internal fun QuickResultCard(result: QuickResult, undoState: QuickResultUndo = Q
     val locale = currentLocale
     val time = AssistantLines.time(result.time)?.let { LocalizedFormats.format(it, LocalizedFormats.MONTH_DAY_TIME, locale) }
     val undone = undoState == QuickResultUndo.Undone
+    val source = result.sourceDeviceName?.trim()?.takeIf { it.isNotEmpty() } ?: when (result.sourceDevicePlatform?.trim()?.lowercase()) {
+        "android" -> "Android"
+        "ios", "ios-app", "iphone" -> "iPhone"
+        else -> null
+    }
     // Undone gives way, as the same card does on iOS.
     val alpha by animateFloatAsState(if (undone) QuickResultUndoneAlpha else 1f,
         if (PersonaTheme.reduceMotion) snap() else tween(PersonaTheme.motion.standard), label = "quick-result-undone")
@@ -809,6 +843,10 @@ internal fun QuickResultCard(result: QuickResult, undoState: QuickResultUndo = Q
             }), style = PersonaTheme.type.bodyStrong, color = PersonaTheme.palette.ink)
             Text(listOfNotNull(time, result.title, result.place).joinToString(" · "), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (source != null) {
+                Text(stringResource(R.string.chat_content_from, source), style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         if (!undone && onUndo != null) JButton(stringResource(R.string.chat_tasks_quick_undo), onUndo,
             kind = JButtonKind.Secondary, size = JButtonSize.Small, enabled = undoState != QuickResultUndo.Undoing)

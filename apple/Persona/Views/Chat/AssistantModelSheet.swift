@@ -46,8 +46,15 @@ nonisolated enum AssistantModelChoice {
         let defaultModel = def?.model?.emptyAsNil
             ?? (launcher == provider ? model : nil)
         return Effective(launcher: provider, model: defaultModel,
-                         effort: effort ?? def?.effort?.emptyAsNil,
+                         effort: def?.effort?.emptyAsNil ?? effort,
                          source: response == nil ? .running : .defaultValue)
+    }
+
+    /// The shared catalog owns eligibility; only the main-purpose default is overlaid.
+    static func mainCatalog(shared: APIClient.LaunchersResponse, own: APIClient.LaunchersResponse) -> APIClient.LaunchersResponse {
+        var result = shared
+        result.default = own.default ?? shared.default
+        return result
     }
 
     /// The model id ticked for `launcher` in the sheet: nil when the setup runs on another launcher, "" on its Default
@@ -103,7 +110,7 @@ nonisolated enum AssistantModelChoice {
 
     /// The configured-model row for a launcher with no readable catalog or no models of its own.
     static func configuredFallback(_ launcher: Launcher, models: [AgentModel], locked: String?) -> ConfiguredFallback? {
-        guard models.isEmpty, let id = launcher.model?.emptyAsNil else { return nil }
+        guard models.isEmpty, let id = launcher.model?.emptyAsNil, id != "默认" else { return nil } // i18n-ignore: legacy wire value, never displayed
         return ConfiguredFallback(id: id, sendsDefault: locked != nil)
     }
 
@@ -166,7 +173,7 @@ final class AssistantModelPanelModel {
         var drop: (_ key: SessionKey) async -> Bool
         static var live: Deps {
             Deps(
-                launchers: { try await AppModel.shared.assistantLaunchers($0, refresh: $1) },
+                launchers: { try await AppModel.shared.assistantLaunchers($0, refresh: $1, main: true) },
                 models: { try await AppModel.shared.api($0.group)?.launcherModels(machine: $0.id, launcher: $1, refresh: $2, purpose: "assistant")
                     ?? LauncherModels(agent: "", models: [], locked: nil, machine: nil) },
                 keep: { await AppModel.shared.keepConversationModel($0, pick: $1) },
@@ -388,7 +395,7 @@ struct AssistantModelSheet: View {
                 // A real Default row comes from the catalog. Add one only when the current setup has no such row.
                 if selected != nil, configured == nil, !models.contains(where: { $0.isDefault }) {
                     row(launcher: launcher.name, modelID: "", title: String(localized: "Default [Prompt Composer 844b8c]"),
-                        detail: launcher.model, ticked: selected == "", locked: nil)
+                        detail: launcher.model == "默认" ? nil : launcher.model, ticked: selected == "", locked: nil) // i18n-ignore: legacy wire value, never displayed
                 }
                 if let locked {
                     Label(locked, systemImage: Theme.Icon.locked)
@@ -436,13 +443,14 @@ struct AssistantModelSheet: View {
                 }
             }
         } header: {
-            Text(launcher.displayName?.emptyAsNil ?? launcher.name)
+            Text(launcher.title)
         }
     }
 
     private func row(launcher: String, modelID: String, title: String, detail: String?, ticked: Bool,
                      locked: String?, custom: Bool = false) -> some View {
-        Button {
+        let second = launcherModelRowDetail(owner: launcher, detail: detail)
+        return Button {
             Haptics.tap()
             Task {
                 if await panel.choose(launcher: launcher, model: modelID.isEmpty ? nil : modelID, session: session) {
@@ -454,8 +462,8 @@ struct AssistantModelSheet: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(title).font(custom ? Theme.Font.heading.monospaced() : Theme.Font.heading)
                         .foregroundStyle(.primary).lineLimit(1)
-                    if let detail {
-                        Text(detail).font(Theme.Font.label.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                    if let second {
+                        Text(second).font(Theme.Font.label.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 Spacer(minLength: Theme.Space.s)

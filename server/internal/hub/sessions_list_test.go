@@ -52,7 +52,7 @@ func TestRuntimeAgentsOnly(t *testing.T) {
 	h.machines, h.byID["demo"] = []*Machine{m}, m
 	h.sessionListIndex()
 	m.sessions = []proto.Session{
-		{MachineID: "demo", SessionID: "agent-a", State: "working"},
+		{MachineID: "demo", SessionID: "agent-a", State: "working", ContextRestartRecommended: true},
 		{MachineID: "demo", SessionID: "agent-b", State: "idle"},
 		{MachineID: "demo", SessionID: "assistant", State: "working", Assistant: true},
 		{MachineID: "demo", SessionID: "former-main", State: "working", Assistant: true, Archived: true},
@@ -88,7 +88,8 @@ func TestRuntimeAgentsOnly(t *testing.T) {
 		t.Fatalf("ordinary list changed: %+v", page)
 	}
 	first := runtimePage(t, h, "limit=1&summary=1&agents_only=1")
-	if first.Total != 2 || !first.HasMore || len(first.Sessions) != 1 || first.Sessions[0].SessionID != "agent-a" {
+	if first.Total != 2 || !first.HasMore || len(first.Sessions) != 1 || first.Sessions[0].SessionID != "agent-a" ||
+		!first.Sessions[0].ContextRestartRecommended {
 		t.Fatalf("first page: %+v", first)
 	}
 	var counts sessionlist.Counts
@@ -1067,7 +1068,18 @@ func TestRuntimePageWithCounts(t *testing.T) {
 	if !slices.Contains(h.features(), featureSessionsPageCounts) || slices.Contains(proto.Features, featureSessionsPageCounts) {
 		t.Error("sessions_page_counts must be advertised by the hub")
 	}
-	if !slices.Contains(h.features(), featureAgentsPageCounts) || slices.Contains(proto.Features, featureAgentsPageCounts) {
-		t.Error("agents_page_counts must be advertised by the hub")
+}
+
+func TestRuntimeSummaryKeepsBypassPending(t *testing.T) {
+	body, err := json.Marshal(runtimeSummary(proto.Session{BypassPending: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(body, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := fields["bypass_pending"]; !ok || got != true {
+		t.Fatalf("summary lost the queued restart: %s", body)
 	}
 }

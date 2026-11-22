@@ -59,9 +59,11 @@ type Preview struct {
 	root                  string       // the staged package
 	l10n                  Translations // its translations, for the name and description shown (In)
 	staging               string
-	// config is the upgraded extension's saved settings at preview (nil for a fresh install): the address its "config:"
-	// lines name, which the upgrade keeps (#8570).
-	config json.RawMessage
+	// config is the upgraded extension's saved settings at preview after any declared fixed-slot migration: the
+	// addresses its "config:" lines name. migrationBase and migrating make installation reject configuration drift.
+	config        json.RawMessage
+	migrationBase json.RawMessage
+	migrating     bool
 }
 
 // MarketTrust is the market address and trusted public key pinned at preview time; it adds no protocol field.
@@ -361,7 +363,20 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 	if upgrade != "" {
 		pv.Upgrade, pv.From = true, cur.Record.Version
 		pv.MorePermissions = MorePermissions(cur, m)
-		pv.previous, pv.config = cur.Full, slices.Clone(cur.Record.Config)
+		pv.previous = cur.Full
+		pv.migrationBase = compactConfig(cur.Record.Config)
+		sealed, err := r.store.ExtensionSecrets(ctx, cur.Record.StorageKey())
+		if err != nil {
+			return fail(err)
+		}
+		pv.config, pv.migrating, err = migrateFixedSlots(cur.Full, m, pv.migrationBase, sealed)
+		if err != nil {
+			return fail(err)
+		}
+		nextSchema, _ := ParseSchema(m.Configuration)
+		if err := checkEntrySecretNamespace(m, nextSchema, pv.config); err != nil {
+			return fail(err)
+		}
 		pv.Permissions = ExplainWith(i18n.Default, m, pv.config)
 		pv.AddedPermissions = AddedWith(i18n.Default, cur.Full, m, pv.config)
 	}
@@ -476,6 +491,11 @@ func (r *Registry) conflictsCandidates(m *Manifest, candidates []*Manifest) erro
 		for _, id := range ids {
 			if who, ok := r.reserved[point][id]; ok {
 				errs = append(errs, fmt.Errorf("%s 里的 %q 已经是 %s 的", point, id, who))
+			}
+			// UI routes, contribution switches and page state already name the owning extension.
+			// Only IDs inside that manifest must be unique (checked by Manifest.Validate).
+			if point == "ui" {
+				continue
 			}
 			for otherID, other := range owners {
 				if otherID != m.ID && slices.Contains(other.Items(point), id) {

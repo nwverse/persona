@@ -58,12 +58,8 @@ var (
 	// decisionDefaultAfter: a decision that can be undone and has no deadline of its own takes its recommendation after
 	// this long.
 	decisionDefaultAfter = 24 * time.Hour
-	// decisionRecheckAfter: a decision that waited this long goes back to its supervisor once; decisionRaiseEvery: how
-	// often one that is never taken by default is raised to the owner again.
+	// decisionRecheckAfter: a decision that waited this long goes back to its supervisor once before it can be shown again.
 	decisionRecheckAfter = 24 * time.Hour
-	decisionRaiseEvery   = 24 * time.Hour
-	// decisionRecheckGrace: how long the supervisor has with a recheck before the owner is raised the decision again.
-	decisionRecheckGrace = time.Hour
 	// decisionSettle: how long after its review (or after its ask was taken) a needs_user task may be without an ask
 	// before that counts as undecidable: the ask is being written, or the answer is on its way to the agent.
 	decisionSettle = 10 * time.Minute
@@ -218,6 +214,19 @@ func (s *Service) decisionStands(t Todo) string {
 // backgroundText is a decision's one line of background: where its task came from, when, and where it stands. "" for
 // an ask that has none (not a decision, or one from before #3804).
 func backgroundText(l i18n.Lang, loc *time.Location, a *acceptAsk) string {
+	if a.OutsideID != "" {
+		kind := a.OutsideKind
+		switch kind {
+		case "script", "extension":
+		default:
+			kind = "app"
+		}
+		line := i18n.T(l, "assistant-reports.decision_outside_source_"+kind, i18n.Args{"source": a.OutsideSource})
+		if a.OutsideBackground != "" {
+			line += " · " + a.OutsideBackground
+		}
+		return line
+	}
 	f := a.From
 	if f == nil {
 		return ""
@@ -230,7 +239,16 @@ func backgroundText(l i18n.Lang, loc *time.Location, a *acceptAsk) string {
 		where = i18n.T(l, "assistant-reports.decision_where_named", i18n.Args{"title": f.Title})
 	}
 	args := i18n.Args{"where": where, "date": f.At.In(loc).Format("2006-01-02"), "message": f.Message}
-	line := i18n.T(l, "assistant-reports.decision_from_assistant", args)
+	origin := "assistant-reports.decision_from_assistant"
+	switch f.StartedBy {
+	case briefByLeader:
+		origin = "assistant-reports.decision_from_leader"
+	case briefByRoutine:
+		origin = "assistant-reports.decision_from_routine"
+	case briefByHub:
+		origin = "assistant-reports.decision_from_hub"
+	}
+	line := i18n.T(l, origin, args)
 	if !f.ByAssistant && f.Message != "" {
 		line = i18n.T(l, "assistant-reports.decision_from_owner", args)
 	}
@@ -256,13 +274,21 @@ func decisionLines(l i18n.Lang, loc *time.Location, a *acceptAsk) []string {
 	if a.CostOfWaiting != "" {
 		out = append(out, i18n.T(l, "assistant-reports.decision_cost", i18n.Args{"cost": a.CostOfWaiting}))
 	}
-	if neverDefault(a.WhyOwner) && a.Deadline.IsZero() {
+	if (neverDefault(a.WhyOwner) || a.OutsideID != "" && !a.DefaultAllowed) && a.Deadline.IsZero() {
 		out = append(out, i18n.T(l, "assistant-reports.decision_never_default"))
 	}
 	return out
 }
 
 // ---- answering ----
+
+// decisionTextDelivery distinguishes Agent delivery from a record awaiting supervisor follow-up.
+type decisionTextDelivery string
+
+const (
+	decisionTextAgent    decisionTextDelivery = "agent"
+	decisionTextRecorded decisionTextDelivery = "recorded_for_supervisor"
+)
 
 // errDecisionOption: the option named is none of the decision's.
 var errDecisionOption = errors.New("option is not one of the decision's options")
@@ -283,7 +309,8 @@ func (s *Service) askRound(id, asked string) (*acceptAsk, error) {
 			return nil, nil
 		}
 	}
-	if t, ok := s.todoNow(id); !ok || acceptAskEnded(&cp, t) || acceptAskStale(&cp, t) {
+	t, ok := s.todoNow(id)
+	if !ok || acceptAskEnded(&cp, t) || acceptAskStale(&cp, t) || !cp.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision) {
 		return nil, nil
 	}
 	return &cp, nil
@@ -293,6 +320,7 @@ func (s *Service) askRound(id, asked string) (*acceptAsk, error) {
 // "OK" takes it; another is their own choice, kept in the to-do's decisions and sent to the task's Agent, which ends
 // the decision. With no Agent that can receive it, the choice is still recorded and handed to the supervisor. A zero
 // result means the round is over. errDecisionOption: no such option; another delivery error leaves the round retryable.
+// A recurring check's decision (Check) goes to the supervisor, not the Agent, whichever option it is (checkDecided).
 func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (acceptResult, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
@@ -302,9 +330,15 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 	}
 	label = strings.TrimSpace(label)
 	i := slices.IndexFunc(a.Options, func(o DecisionOption) bool { return o.Label == label })
+	if a.OutsideID != "" {
+		if i < 0 {
+			return acceptResult{}, errDecisionOption
+		}
+		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: label}, false)
+	}
 	switch {
 	case label == a.Recommend && label != "":
-		return s.acceptTryAsDismissalLocked(ctx, id, "", false)
+		return s.acceptTryAsDismissalLocked(ctx, id, "", a.AskedAt, false)
 	case i < 0:
 		return acceptResult{}, errDecisionOption
 	}
@@ -317,14 +351,16 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 	s.deadlineAnswered(ctx, id, a.AskedAt) // their own answer: no default at its deadline, even if the send fails
 	msg := i18n.T(l, "assistant-reports.decision_chosen_to_agent", i18n.Args{"option": label, "leads_to": a.Options[i].LeadsTo})
 	var sendErr error
-	if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
-		return cur.DoneAt == nil && !acceptAskStale(a, cur)
-	}); err != nil {
-		s.logf("task %s: decision to agent: %v", id, err)
-		if !noAgentCanTake(err) {
-			return acceptResult{}, err
+	if a.Check == "" { // a recurring check's decision goes to the supervisor instead (checkDecided)
+		if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
+			return cur.DoneAt == nil && !acceptAskStale(a, cur)
+		}); err != nil {
+			s.logf("task %s: decision to agent: %v", id, err)
+			if !noAgentCanTake(err) {
+				return acceptResult{}, err
+			}
+			sendErr = err
 		}
-		sendErr = err
 	}
 	if st := s.todoDB(); st != nil {
 		at, dec := decisionNow(), "dec_"+randomHex(8)
@@ -338,9 +374,12 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 		}
 	}
 	result := acceptSucceeded()
-	if sendErr != nil {
+	switch {
+	case a.Check != "":
+		s.checkDecided(ctx, t, a, label, false)
+	case sendErr != nil:
 		result = s.decisionNotDelivered(ctx, id, a.AskedAt, label, sendErr)
-	} else {
+	default:
 		s.userDecided(ctx, id)
 	}
 	s.endAsk(ctx, id, a.AskedAt, "", label)
@@ -364,36 +403,90 @@ func (s *Service) routeDecisionAnswer(ctx context.Context, conversation, id, ask
 	if !ok || t.Origin != conversation {
 		return FeedItem{}, i18n.Err("assistant-tasks.route_no_task")
 	}
-	a, err := s.askRound(id, asked)
-	if err != nil {
-		return FeedItem{}, err
+	item, result, err := s.answerDecisionTextLocked(ctx, st, t, asked, text, false)
+	if err == nil && !result.taken {
+		err = i18n.Err("assistant-feishu_cards.already_handled")
 	}
-	if a == nil {
-		return FeedItem{}, i18n.Err("assistant-feishu_cards.already_handled")
+	return item, err
+}
+
+// answerDecisionText is the owner's own words answering task id's decision (asked: its round) from the asks route
+// (todo_asks_routes.go), which names no conversation: the words go where the hub's other relays to the task go, and
+// words no Agent can receive are still the owner's answer, recorded and handed to the supervisor as a chosen option
+// is (result.undelivered). A zero result means the round is over.
+func (s *Service) answerDecisionText(ctx context.Context, id, asked, text string) (acceptResult, error) {
+	s.reviewDismissals.actions.acquire(id)
+	defer s.reviewDismissals.actions.release(id)
+	if a, err := s.askRound(id, asked); err != nil {
+		return acceptResult{}, err
+	} else if a != nil && a.OutsideID != "" {
+		return s.answerOutside(ctx, id, asked, outsideAnswer{Text: decisionText(text)}, false)
+	}
+	st := s.todoDB()
+	if st == nil {
+		return acceptResult{}, errAcceptStore
+	}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return acceptResult{}, err
+	}
+	t, ok := s.todoNow(id)
+	if !ok {
+		return acceptResult{}, nil
+	}
+	_, result, err := s.answerDecisionTextLocked(ctx, st, t, asked, text, true)
+	return result, err
+}
+
+// answerDecisionTextLocked answers task t's decision with text, its caller holding t's action lock: relayed to its
+// Agent in its origin conversation (none for a to-do no conversation opened, as chooseOption relays), recorded as a
+// manual decision whose source is the routed item, the round ended. undeliverable: words no Agent can take are
+// recorded and handed to the supervisor instead of failing. A zero result means the round is over.
+func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t Todo, asked, text string, undeliverable bool) (FeedItem, acceptResult, error) {
+	id := t.ID
+	a, err := s.askRound(id, asked)
+	if err != nil || a == nil {
+		return FeedItem{}, acceptResult{}, err
+	}
+	if a.OutsideID != "" {
+		result, err := s.answerOutside(ctx, id, asked, outsideAnswer{Text: decisionText(text)}, false)
+		return FeedItem{}, result, err
 	}
 	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
 	if err != nil {
-		return FeedItem{}, err
+		return FeedItem{}, acceptResult{}, err
 	}
 	s.deadlineAnswered(ctx, id, a.AskedAt)
-	item, err := s.routeToTaskChecked(ctx, conversation, id, text, func(cur Todo) bool {
+	item, sendErr := s.routeToTaskChecked(ctx, t.Origin, id, text, func(cur Todo) bool {
 		return cur.DoneAt == nil && !acceptAskStale(a, cur)
 	})
-	if err != nil {
-		return FeedItem{}, err
+	if sendErr != nil {
+		if !undeliverable || !noAgentCanTake(sendErr) {
+			return FeedItem{}, acceptResult{}, sendErr
+		}
+		s.logf("task %s: decision in words to agent: %v", id, sendErr)
 	}
 	at := decisionNow()
 	row := db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id,
 		Question: cmp.Or(a.Reason, i18n.T(s.botLang(ctx), "assistant-reports.verdict_decide")),
 		Choice:   decisionText(text), Source: db.DecisionManual, SourceMessage: item.ID, CreatedAt: at}
 	if _, err := s.insertDecision(ctx, st, row); err != nil {
-		return FeedItem{}, err
+		if sendErr == nil { // its Agent has the words: say so, never "nothing was taken" (the to-do may be gone by now)
+			err = wordsSent{err}
+		}
+		return FeedItem{}, acceptResult{}, err
 	}
 	completeDismissal()
 	s.decisionsChanged(ctx, id, at)
-	s.userDecided(ctx, id)
-	s.endAsk(ctx, id, a.AskedAt, "", row.Choice)
-	return item, nil
+	result := acceptSucceeded()
+	delivery := decisionTextAgent
+	if sendErr != nil {
+		delivery = decisionTextRecorded
+		result = s.decisionNotDelivered(ctx, id, a.AskedAt, text, sendErr)
+	} else {
+		s.userDecided(ctx, id)
+	}
+	s.endAskWithTextDelivery(ctx, id, a.AskedAt, "", row.Choice, delivery)
+	return item, result, nil
 }
 
 // askCardNow: card is one of the cards of task id's ask as it is now ("" when Feishu does not say: taken as one), so a
@@ -406,6 +499,11 @@ func (s *Service) askCardNow(id, card string) bool {
 // endAsk marks task id's decision asked at as answered (response: the fixed answer it got, or chosen: the option
 // taken that was not the recommended one), and redraws its cards.
 func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, response, chosen string) {
+	s.endAskWithTextDelivery(ctx, id, asked, response, chosen, "")
+}
+
+// endAskWithTextDelivery persists the observed free-text outcome with the answer before redrawing any cards.
+func (s *Service) endAskWithTextDelivery(ctx context.Context, id string, asked time.Time, response, chosen string, delivery decisionTextDelivery) {
 	b := &s.accept
 	b.mu.Lock()
 	a := b.asks[id]
@@ -413,7 +511,9 @@ func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, respon
 		b.mu.Unlock()
 		return
 	}
-	a.AcceptedAt, a.Response, a.Chosen = time.Now().UTC(), response, chosen
+	a.AcceptedAt, a.Response, a.Chosen, a.TextDelivery = time.Now().UTC(), response, chosen, delivery
+	// Only option/fixed-answer callers use endAsk; explicit text always supplies its delivery outcome.
+	a.OptionTaken = delivery == "" && response == "" && chosen != ""
 	s.saveAcceptLocked(ctx)
 	cp := *a
 	b.mu.Unlock()
@@ -442,6 +542,10 @@ func (s *Service) ownerCannotAnswer(ctx context.Context, id, asked, response str
 	a, err := s.askRound(id, asked)
 	if err != nil || a == nil {
 		return false, err
+	}
+	if a.OutsideID != "" {
+		result, err := s.answerOutside(ctx, id, asked, outsideAnswer{Response: response}, false)
+		return result.taken, err
 	}
 	t, _ := s.todoNow(id)
 	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
@@ -533,55 +637,95 @@ func ownerHeld(v *Supervision) bool {
 	return r.OwnerResponse == respondNotAsked && !r.HoldReleased
 }
 
+// ownerDecisionReturned says the latest needs_user review is back with its supervisor, so neither its ask nor the bare
+// review may still look like a live owner decision. Fixed responses deliberately keep their existing visibility rules.
+func ownerDecisionReturned(v *Supervision) bool {
+	if v == nil || v.State != reviewNeedsUser || len(v.Reviews) == 0 {
+		return false
+	}
+	r := v.Reviews[len(v.Reviews)-1]
+	return r.Verdict == reviewNeedsUser && (!r.RecheckAt.IsZero() || !r.RestateAt.IsZero() && r.OwnerResponse == "")
+}
+
+// decisionRecheckDue says a complete decision is old enough that it must not be pushed again before its supervisor
+// confirms the facts. The sweep persists the hand-back; owner projections also honor an already-persisted marker.
+func decisionRecheckDue(a *acceptAsk, now time.Time) bool {
+	return a != nil && a.OutsideID == "" && decideAsk(a) && a.AgentReply == nil && a.Recommend != "" && now.Sub(a.AskedAt) >= decisionRecheckAfter
+}
+
 // ---- old and unanswerable decisions ----
 
-// sweepDecisionAges looks at the decisions still waiting: one older than decisionRecheckAfter goes back to its
-// supervisor once (recheck), and one that is never taken by default is raised to the owner again every
-// decisionRaiseEvery, after the supervisor had decisionRecheckGrace with its recheck.
+// markDecisionRecheck records the owner-facing hand-back on the same review round. A newer review that has not yet
+// replaced its ask cannot be marked by an older sweep. The ask write follows; if that write fails, the projection fails
+// closed (hidden) and the next sweep retries it before any signal goes out.
+func (s *Service) markDecisionRecheck(ctx context.Context, id string, asked, at time.Time) bool {
+	eligible := true
+	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		n := len(v.Reviews)
+		if v.State != reviewNeedsUser || n == 0 {
+			eligible = false
+			return false
+		}
+		r := &v.Reviews[n-1]
+		a, ok := s.askCopy(id)
+		if r.Verdict != reviewNeedsUser || !ok || !a.AskedAt.Equal(asked) || r.At.After(asked) {
+			eligible = false
+			return false
+		}
+		if r.RecheckAt.IsZero() {
+			r.RecheckAt = at
+			return true
+		}
+		return false
+	})
+	if err != nil {
+		s.logf("task %s: decision: recheck review: %v", id, err)
+		return false
+	}
+	return eligible
+}
+
+// sweepDecisionAges returns decisions older than decisionRecheckAfter to their supervisor once. Until a fresh review
+// re-issues one, its old facts leave every owner queue and cannot be answered, defaulted or pushed again. A persisted
+// recheck from an older release gets the matching review marker without another signal.
 func (s *Service) sweepDecisionAges(now time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	for _, w := range s.awaitingAcceptance(ctx) {
+	for _, w := range s.acceptanceRounds(ctx, true) {
 		a := w.ask
 		if !decideAsk(&a) || a.AgentReply != nil {
 			continue
 		}
-		// One that recommends nothing goes back as undecidable instead (undecidableSignal): not both.
-		recheck := a.RecheckAt.IsZero() && a.Recommend != "" && now.Sub(a.AskedAt) >= decisionRecheckAfter
-		raise := neverDefault(a.WhyOwner) && a.Response == "" && now.Sub(maxTime(a.AskedAt, a.RaisedAt)) >= decisionRaiseEvery &&
-			!a.RecheckAt.IsZero() && now.Sub(a.RecheckAt) >= decisionRecheckGrace
-		if !recheck && !raise {
+		if !a.RecheckAt.IsZero() {
+			s.markDecisionRecheck(ctx, w.todo, a.AskedAt, a.RecheckAt)
+			continue
+		}
+		if !decisionRecheckDue(&a, now) {
+			continue
+		}
+		if !s.markDecisionRecheck(ctx, w.todo, a.AskedAt, now.UTC()) {
 			continue
 		}
 		b := &s.accept
 		b.mu.Lock()
 		cur := b.asks[w.todo]
-		if cur == nil || !cur.AskedAt.Equal(a.AskedAt) || !cur.AcceptedAt.IsZero() || cur.AgentReply != nil {
+		if cur == nil || !cur.AskedAt.Equal(a.AskedAt) || !cur.AcceptedAt.IsZero() || cur.AgentReply != nil || !cur.RecheckAt.IsZero() {
 			b.mu.Unlock()
 			continue
 		}
 		prev := *cur
-		if recheck {
-			cur.RecheckAt = now.UTC()
-		} else {
-			cur.RaisedAt = now.UTC()
-		}
+		cur.RecheckAt = now.UTC()
 		if err := s.saveAcceptErrLocked(ctx); err != nil {
 			*cur = prev
 			b.mu.Unlock()
 			s.logf("task %s: decision: save: %v", w.todo, err)
 			continue
 		}
-		cp := *cur
 		b.mu.Unlock()
-		if recheck {
-			s.logf("task %s: its decision waited %s: back to its supervisor to confirm it", w.todo, humanDuration(now.Sub(a.AskedAt)))
-			s.signal(superviseSignal{Todo: w.todo, Kind: sigRecheck, Key: "recheck@" + a.AskedAt.UTC().Format(time.RFC3339Nano),
-				Minutes: int(now.Sub(a.AskedAt).Minutes()), Decision: s.signalDecision(ctx, &a)})
-			continue
-		}
-		s.logf("task %s: a decision never taken by default still waits: raised again", w.todo)
-		s.remindOverdue(ctx, w.todo, cp)
+		s.askChanged(ctx)
+		s.logf("task %s: its decision waited %s: back to its supervisor to confirm it", w.todo, humanDuration(now.Sub(a.AskedAt)))
+		s.signal(superviseSignal{Todo: w.todo, Kind: sigRecheck, Key: "recheck@" + a.AskedAt.UTC().Format(time.RFC3339Nano),
+			Minutes: int(now.Sub(a.AskedAt).Minutes()), Decision: s.signalDecision(ctx, &a)})
 	}
 }
 

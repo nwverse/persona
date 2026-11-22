@@ -131,6 +131,7 @@ struct AutoConversationsView: View {
     private func row(_ s: Session) -> some View {
         let title = s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title
         let from = AutoConversations.source(of: s, tasks: taskChats.known(on: model.api))
+        let opener = ConversationOpener.of(s) // the extension that opened it, whose own icon its mark draws when it can (#10358)
         let detail = [filter == .all ? from?.name : nil, [.working, .needsYou, .unread].contains(s.state) ? s.state.label : s.updatedAt.map { Fmt.relative($0) }]
             .compactMap { $0 }.joined(separator: " · ")
         // The hub's built-in background supervisor (#5083) stays listed: no Archive, no Pin.
@@ -145,7 +146,7 @@ struct AutoConversationsView: View {
                         } else {
                             Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                         }
-                        if let from { AutoSourceMark(source: from) } // what opened it, as in the sidebar (#3758, #5195)
+                        if let from { AutoSourceMark(source: from, opener: opener) } // what opened it, as in the sidebar (#3758, #5195)
                     }
                     if !detail.isEmpty {
                         Text(detail).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
@@ -159,8 +160,8 @@ struct AutoConversationsView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel([title, filter == .all ? nil : from?.markLabel, detail.isEmpty ? nil : detail].compactMap { $0 }
-            .joined(separator: String(localized: ", ", comment: "Separator between the parts of a VoiceOver label")))
+        .sourceLabel([title], source: filter == .all ? nil : from, opener: opener, [detail.isEmpty ? nil : detail],
+                     separator: String(localized: ", ", comment: "Separator between the parts of a VoiceOver label"))
         .accessibilityIdentifier("auto-conversation")
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             if !builtIn {
@@ -181,19 +182,21 @@ struct AutoConversationsView: View {
                     lead ? Label("Unpin [Assistant Sidebar b7c40e]", systemImage: Theme.Icon.unpin)
                         : Label("Pin [Assistant Sidebar 6d1f2a]", systemImage: Theme.Icon.pin)
                 }
+                // File it under a direction, or on its own (#11516): only where the hub files sessions.
+                MoveToMenu(key: s.key, title: title, state: s.state)
                 Button { Task { await model.archiveConversation(s.key, true) } } label: {
                     Label("Archive", systemImage: Theme.Icon.archive)
                 }
             }
         }
-        .confirmationDialog(
+        .accessibleConfirmationDialog(
             leaderConfirm.map { session in
                 model.assistantLeaders.contains(session.sessionID)
                     ? String(localized: "Unpin Confirmation Title [Leader Actions 6214]")
                     : String(localized: "Pin Confirmation Title [Leader Actions 6214]")
             } ?? "",
             isPresented: Binding(get: { leaderConfirm != nil }, set: { if !$0 { leaderConfirm = nil } }),
-            titleVisibility: .visible, presenting: leaderConfirm) { session in
+            titleVisibility: .visible, hasCancel: true, presenting: leaderConfirm) { session in
             let lead = model.assistantLeaders.contains(session.sessionID)
             Button(lead ? String(localized: "Unpin [Assistant Sidebar b7c40e]")
                        : String(localized: "Pin [Assistant Sidebar 6d1f2a]")) {
@@ -202,7 +205,7 @@ struct AutoConversationsView: View {
             Button("Cancel", role: .cancel) {}
         } message: { session in
             if model.assistantLeaders.contains(session.sessionID) {
-                Text(String(localized: "Unpin Confirmation Message \(title) [Leader Actions 6214]"))
+                Text(UnpinWords.message(String(localized: "Unpin Confirmation Message \(title) [Leader Actions 6214]"), model: model))
             } else {
                 Text(String(localized: "Pin Confirmation Message [Leader Actions 6214]"))
             }

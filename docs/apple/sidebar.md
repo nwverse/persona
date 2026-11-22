@@ -44,7 +44,8 @@ different scripts, weights or fonts then sits in rows of the same size.
   ```
 
 - **Web**: `--sidebar-row` and `--sidebar-row-pad` (`web/src/styles.css`) through the `sidebar-row` utility
-  (min-height, padding and a fixed 18 px line). A row adds no `py-*` of its own.
+  (min-height, padding and a fixed 18 px line). A row adds no `py-*` of its own. The top-level headings take
+  `--sidebar-heading` through the `sidebar-heading` utility (below, "The Sidebar layout's headings").
 
 ## Type
 
@@ -81,6 +82,11 @@ The Sidebar layout (#6332, `docs/apple/ios.md` "Sidebar layout (#6332)") heads i
 button is a sidebar row by size (`Theme.Sidebar.rowPadding`, `Theme.Sidebar.row`), so a finger always finds it and the
 words sit as the rows' do; the fold is remembered on the device (`sidebar.fold.places`, `sidebar.fold.chats`).
 
+On the web the top-level headings (Pages, Persona chats, Personal Agents, Agents) share one box too (#10637): the
+`sidebar-heading` utility sets their title row's content height to `--sidebar-heading`, 24 px (the Agents title row's
+fold-all button, its tallest control) and 44 px on a touch screen, and centres the controls beside the title in it, so
+they never set its height and the headings stand evenly apart, folded or not.
+
 ## Pinned directions
 
 The leader conversations (`assistant.leaders`) are the group headed **Pinned** (zh-Hans 常驻, ja 常駐; the catalog key
@@ -112,8 +118,44 @@ Pinned group at all.
   button says, with Expanded / Collapsed.
 - **Secretary** (书记官): no row in the sidebar (the main conversation's row stands for it, #4331); its to-dos are in the
   To-dos and Agents pages' Pinned grouping.
-- **Code**: `AssistantSidebarDirections.swift` (`AssistantSidebarDirection`);
-  `AssistantSidebar.swift` only places them where the direction rows were. Tests: `DirectionTreeTests`.
+- **Filed sessions and All ›** (#11516): while the hub lists `direction_sessions` and the app holds the default manager's
+  tree (`DirectionFilings.shows`), the open row lists after its to-dos the tree's `sessions`, the live sessions the owner
+  filed there or its leader opened (`working` or `needs_you`), what needs you first, then the newest added (the hub
+  gives them by computer and session id; the app orders them, `DirectionFilings.order`). They are drawn as the Agent
+  rows are (state dot, title, state word, one level in from the head like the to-dos), keyed by `machine_id/session_id`,
+  and a tap closes the drawer and opens the session. A last row, **All ›** (全部 / すべて; spoken "Tasks and Chats, <the
+  direction's name>", and "All" for Voice Control), opens the page of everything under the direction (`DirectionPage`,
+  `docs/design/DESIGN_SYSTEM.md` 3.4 "A direction's page"); on the phone it first puts the shell's Assistant page in
+  front, as the drawer's other picks do, so the page opens even when Assistant was never shown in this run. "No open to-dos" shows only while there are
+  neither to-dos nor filed rows. The row's "N need you" is unchanged: filings change neither `counts` nor `running`
+  (whether they should is #5974). Filing takes nothing out of Recent, All Chats or the Agents list, so a filed session
+  that needs you keeps its state wherever it was shown. Why a row of its own and not a section: the open row already is
+  the direction's short list, and its to-dos and its filed sessions are one owner's matter; the page has the rest.
+  The tree's `sessions` are taken out of the tree when it is read (`DirectionFilings.takeFiled`) into one observable box
+  per direction, so a filed session's turn redraws only that direction's `DirectionFiledRows`, never the tree's readers
+  (the sidebar, the To-dos and Agents groupings), which compare the tree as before #11516 (P5).
+- **Move To…** (移到… / 移動…, #11516): the long-press menu of a conversation row, here and in All Chats, after Pin,
+  and the Agent menus (row and the chat's ⋯, after the to-do's own entries) file the session under one of the current
+  directions, by name in the tree's order, or **On Its Own**. Not offered on the main conversation, the background
+  supervisor, a current leader conversation, an Agent of an open supervised to-do or a session under one (it follows
+  its task; the hub's 409 `direction_supervised_task` covers a lag), or another hub's session; an Agent on the owner's own
+  unsupervised to-do is offered it, and nothing is offered while a pick of the same session is out (one at a time).
+  Where the session is drawn under a direction (this row, the page) it moves at once and says Moving… until the hub
+  answers; a refusal puts it back with the hub's sentence (the hub's wording, which still names the group: #11395's to
+  change). A change shows a toast with Undo (`Toast` with an action, as the calendar's move), which sends the answer's
+  `previous` exactly, `null` written out, through the client the move went out with; the same place again says where
+  it already is, without Undo. It is sent once, only while the hub is reachable, never held for later; a lost answer
+  (cut off, timed out, `delivered: "unknown"`, or 503 `assistant_offline`, a cut link between hub and manager) reads
+  the tree and the page again and offers no Undo (`DirectionFilings`). A switch of hub or assistant drops the moves
+  out, their late answers and their toasts' Undo. A manager that answers the routes 404 or 405 without their codes
+  hides that hub's entries until its next hello.
+- **Unpin** keeps what was filed: while the hub files sessions the confirmation adds "What you added to it stays." in a
+  string of its own (filings come back if the same chat is pinned again, `docs/assistant/unified-entry.md` "The
+  direction tree").
+- **Code**: `AssistantSidebarDirections.swift` (`AssistantSidebarDirection`, the rows `DirectionTaskRow`,
+  `DirectionAgentRow`, `DirectionFiledRows`), `DirectionPage.swift` (the page, `MoveToMenu`), `DirectionFilings.swift`;
+  `AssistantSidebar.swift` only places them where the direction rows were. Tests: `DirectionTreeTests`,
+  `DirectionFilingsTests`, `AgentActionMenuTests`, `DirectionRowsUITests` (with `MOCK_DIRECTION_SESSIONS=1`).
 
 ## Checks
 
@@ -122,4 +164,5 @@ Pinned group at all.
 | `apple/PersonaTests/SidebarMetricsTests.swift` | Rows' `minHeight` is only `Theme.Sidebar.row` (headings: `HeadingMenu.minHeight`); each has `Theme.Sidebar.rowPadding`; no literal heights, vertical paddings or point sizes; the iOS row is 44 pt; a line of body text in SF and PingFang fits the row |
 | Retired native Mac sidebar tests | Historical only: the Mac row was 24 / 28 / 32 pt for the system's small / medium / large Sidebar icon size; the target and its tests were removed |
 | `web/src/views/SidebarRowTokens.test.ts` | `--sidebar-row` is 32 px; every sidebar row uses `sidebar-row` with no `py-*`; no heading is uppercased or letter-spaced |
+| `web/src/views/SidebarHeadingBox.test.tsx`, `web/e2e/sidebar-heading-spacing.mjs` | Every top-level heading's row takes `sidebar-heading` (24 px, 44 on touch, the fold-all button's size), folded and unfolded, with both Agents lists; in Chrome, equal heights and gaps within 0.5 px |
 | `apple/PersonaTests/TokenRatchetTests.swift` | Literal paddings, frames and radii in views only go down |

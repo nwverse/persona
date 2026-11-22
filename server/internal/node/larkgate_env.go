@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -55,8 +54,8 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 		}
 	}
 	skills := filepath.Join(cwd, ".claude", "skills")
-	if err := assistantskills.Sync(skills, assistantskills.UserDir(), n.signedInConnectors(cwd), n.logger.Printf); err != nil {
-		n.logger.Printf("assistant: skills: %v", err)
+	if n.assistantDirectoryPrepared(cwd) {
+		n.syncRuntimeSkillDir(cwd, skills)
 	}
 	bin := n.assistantBin(cwd)
 	_ = os.MkdirAll(bin, 0o755)
@@ -92,6 +91,9 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 			}
 			for _, m := range gateAuthRef.FindAllStringSubmatch(g.Auth.Value, -1) {
 				held[m[1]] = true
+			}
+			if g.Relay && g.SocketEnv != "" {
+				held[g.SocketEnv] = true // the manager's machine's socket: the proxy relays there (#12904)
 			}
 			b, done, err := gp.openIn(g.Command, session, health) // the proxy holds a health process's writes to the phone
 			if err != nil {

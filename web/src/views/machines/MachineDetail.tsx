@@ -9,6 +9,7 @@ import { offlineManagerOf, useRoster } from "../../lib/managers";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
 import { ago } from "../../lib/format";
+import { agentName, isTraeCli } from "../../lib/agent-kind";
 import {
   agentsBySpace,
   bytesAxis,
@@ -27,6 +28,7 @@ import {
   rate,
   systemFacts,
   systemLine,
+  temperature,
   usedOfTotal,
   type DetailMachine,
   type DetailMetrics,
@@ -42,13 +44,14 @@ import { openPanel } from "../../lib/panel";
 import { href, onLinkClick } from "../../lib/router";
 import { getState, refresh, useStore } from "../../lib/store";
 import { useFullAgentSessions } from "../../lib/sessions";
-import type { Launcher } from "../../lib/types";
+import type { Launcher, MachineLinkSwitch } from "../../lib/types";
 import { Button, cx, EASE, IconButton, Loading, toast } from "../../ui/atoms";
 import { AgentRow } from "./AgentRow";
 import { Icon } from "../../ui/icons";
 import { ProviderName } from "../../ui/ProviderName";
 import { MetricChart, type ChartSeries } from "./MetricChart";
 import { MachineDeploy } from "./MachineDeploy";
+import { homeUser, LinkSwitch } from "./LinkSwitch";
 import { BrowserSection } from "./BrowserSection";
 import { ComputerSection } from "./ComputerSection";
 import { IPhoneSection } from "./IPhoneSection";
@@ -213,6 +216,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   const goneWith = m ? offlineManagerOf(roster, m) : null;
   // a linked hub's computer is that hub's to give (`not_movable`): in a mesh every computer names its hub
   const selfHub = useStore((s) => s.mesh.find((x) => x.self)?.hub_id);
+  const ownHub = !m?.hub_id || !selfHub || m.hub_id === selfHub; // one of this hub's own computers
   const connFailure = m && !expectedDisconnect && !goneWith ? classifyConnection(m) : null;
   const groups = useMemo(() => (online ? agentsBySpace(sessions) : []), [online, sessions]);
   const agentCount = groups.reduce((n, g) => n + g.sessions.length, 0);
@@ -220,7 +224,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   const route = routeText(m, machines);
   const system = data?.metrics.system ?? m?.system;
   // a hub that renames computers, and one of its own (a linked hub's is renamed there)
-  const canRename = useStore((s) => s.features.includes(MACHINE_RENAME_FEATURE)) && m?.kind !== "hub" && (!m?.hub_id || !selfHub || m.hub_id === selfHub);
+  const canRename = useStore((s) => s.features.includes(MACHINE_RENAME_FEATURE)) && m?.kind !== "hub" && ownHub;
   const [renaming, setRenaming] = useState(false);
 
   if (!m) {
@@ -303,7 +307,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
             {route && <p className="mt-0.5 truncate text-[11.5px] text-ink-3" title={t("machines-machinedetail.route_hint")}>{t("machines-machinedetail.route", { route })}</p>}
           </div>
           {/* with several managers: give it to another one (a linked hub's computer is its own hub's) */}
-          <MoveToManager machineId={m.id} manager={m.manager} movable={m.kind !== "hub" && (!m.hub_id || !selfHub || m.hub_id === selfHub)} />
+          <MoveToManager machineId={m.id} manager={m.manager} movable={m.kind !== "hub" && ownHub} />
           {!online && !expectedDisconnect && !goneWith && (
             <Button tone="secondary" icon="retry" busy={reconnecting} onClick={() => void reconnect()}>
               {reconnecting ? t("machines-machinedetail.connecting") : t("machines.reconnect")}
@@ -326,6 +330,17 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
           </div>
         )}
         {online && m.error && <p className="mx-4 mb-3.5 rounded-[8px] bg-red-tint px-2.5 py-1.5 text-[12px] text-red">{m.error}</p>}
+        {/* switching it to Persona Link (#10662), on this hub's own computer (a linked hub's switches there); while one
+            runs, its disconnect is expected (machineDeployment) */}
+        <LinkSwitch
+          machineId={m.id}
+          name={m.name}
+          state={ownHub ? m.link_switch : undefined}
+          post={() => api<{ link_switch?: MachineLinkSwitch }>(`/machines/${enc(m.id)}/link-switch`, { method: "POST" })}
+          refresh={refresh}
+          user={homeUser(m.home)}
+          className="mx-4 mb-3.5"
+        />
         <MachineDeploy machine={m} className="mb-3.5" />
       </section>
 
@@ -463,7 +478,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
                   <div key={l.name} className="flex items-center gap-3 px-4 py-2">
                     {/* a provider's display name, its startup ID beside it (#5029); an rc alias's ID in mono, as before */}
                     <ProviderName of={l} className="min-w-0 truncate text-[12.5px] text-ink" idClassName="min-w-0 shrink-[2] truncate text-[11.5px] text-ink-3" />
-                    {kind !== "claude" && <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline">{kind === "codex" ? "Codex" : kind === "traex" ? "TRAEX" : kind}</span>}
+                    {kind !== "claude" && <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline">{kind === "codex" || isTraeCli(kind) ? agentName(kind) : kind}</span>}
                     <span className="flex-1" />
                     {l.model && <span className="shrink-0 truncate font-mono text-[11.5px] text-ink-3">{l.model}</span>}
                   </div>
@@ -630,6 +645,24 @@ function NowTiles({ s, cores }: { s: NonNullable<DetailMetrics["latest"]>; cores
     { label: t("machines-machinedetail.disk"), value: percent(diskPct), sub: s.disk_used !== undefined ? usedOfTotal(s.disk_used, s.disk_total) : undefined, frac: diskPct, lv: level(diskPct, 80, 90) },
     { label: t("machines-machinedetail.swap"), value: s.swap_total ? bytesBin(s.swap_used) : t("machines-machinedetail.swap_off"), sub: s.swap_total ? t("machines-machinedetail.swap_total", { total: bytesBin(s.swap_total) }) : undefined, frac: swapPct, lv: "normal" },
   ];
+  if (s.battery_percent !== undefined && Number.isFinite(s.battery_percent)) {
+    const charging = s.battery_charging === true;
+    tiles.push({
+      label: t("machines-machinedetail.battery"),
+      value: percent(s.battery_percent),
+      sub: charging ? t("machines-machinedetail.charging") : undefined,
+      frac: s.battery_percent,
+      lv: s.battery_percent <= 15 && !charging ? "critical" : s.battery_percent <= 25 && !charging ? "warning" : "normal",
+    });
+  }
+  if (s.temp_c !== undefined && Number.isFinite(s.temp_c)) {
+    tiles.push({
+      label: t("machines-machinedetail.temperature"),
+      value: temperature(s.temp_c),
+      frac: Math.min(100, (s.temp_c / 125) * 100),
+      lv: level(s.temp_c, 75, 90),
+    });
+  }
   return (
     <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
       {tiles.map((tile) => (

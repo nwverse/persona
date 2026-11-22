@@ -34,6 +34,8 @@ final class DemoHub {
     private let providers = DemoProviders()
     /// Settings › Claude Code › Blocked Config Folders: machine id → the rules typed in the demo (it has no other directories).
     private var blockedClaudeDirs: [String: [JSONValue]] = [:]
+    /// Settings › Agent › Hidden Agent Folders: machine id → the rules saved in the demo.
+    private var hiddenAgentDirs: [String: [JSONValue]] = [:]
     /// Settings › Claude Code › Live Replies, by machine (on unless turned off, as on a hub).
     private var liveReplies: [String: Bool] = [:]
     /// Settings › Knowledge Selection: what was saved in the demo (nil: the hub's defaults).
@@ -258,7 +260,7 @@ final class DemoHub {
             case "dirs":
                 guard online(id) else { throw APIError(status: 503, message: "\(id): machine is offline") }
                 return data["dirs"] ?? .object([:])
-            case "claude-settings", "codex-settings": return ["settings": .array([])]
+            case "claude-settings", "codex-settings", "agy-settings": return ["settings": .array([])]
             case "claude-dirs": return claudeDirsState(id)
             case "claude-live-replies": return ["on": .bool(liveReplies[id] ?? true)]
             #if os(macOS)
@@ -270,6 +272,8 @@ final class DemoHub {
             #endif
             default: throw notFound()
             }
+        case ("machines", 4) where p[2] == "agent-dirs" && p[3] == "hidden":
+            return ["rules": .array(hiddenAgentDirs[p[1]] ?? [])]
         #if os(macOS)
         case ("machines", 4) where p[2] == "fs" && p[3] == "find": // ⌘K's Files: a made-up checkout
             return ["cwd": .string(q["cwd"] ?? ""), "truncated": false, "source": "git",
@@ -528,6 +532,9 @@ final class DemoHub {
             guard let on = body["on"]?.bool else { throw refuse() }
             liveReplies[p[1]] = on
             return ["on": .bool(on)]
+        case ("machines", 4) where p[2] == "agent-dirs" && p[3] == "hidden" && method == "PUT":
+            hiddenAgentDirs[p[1]] = body["rules"]?.array ?? []
+            return ["rules": .array(hiddenAgentDirs[p[1]] ?? [])]
         case ("machines", 4) where p[2] == "claude-dirs" && p[3] == "blocked" && method == "PUT":
             blockedClaudeDirs[p[1]] = body["blocked"]?.array ?? []
             return claudeDirsState(p[1])

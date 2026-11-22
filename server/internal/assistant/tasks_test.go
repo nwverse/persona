@@ -22,8 +22,24 @@ import (
 // The hub's end-to-end tests of tasks (real todos, a real node) are hub/tasks_test.go; these need the assistant's own
 // state or timing.
 
-// toolTaskPlan is task_plan from the conversation sessionID on the main machine.
+// toolTaskPlan is task_plan from the conversation sessionID on the main machine. Valid fixtures get the ordinary
+// worker role centrally; the role-contract tests call MCP directly so an omitted role stays omitted.
 func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.RawMessage) (string, error) {
+	var in map[string]any
+	if json.Unmarshal(args, &in) == nil {
+		tasks, _ := in["tasks"].([]any)
+		for _, item := range tasks {
+			task, _ := item.(map[string]any)
+			if task != nil {
+				if _, ok := task["role"]; !ok {
+					task["role"] = "worker"
+				}
+			}
+		}
+		if raw, err := json.Marshal(in); err == nil {
+			args = raw
+		}
+	}
 	return s.toolTaskPlanFrom(ctx, s.mainMachine(ctx), sessionID, args)
 }
 
@@ -52,7 +68,7 @@ func planArgs(readonly bool) json.RawMessage {
 	}
 	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
 		"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
-		"readonly": readonly, "why": "这个仓库最近在 box 上", "permission": permission,
+		"role": "worker", "readonly": readonly, "why": "这个仓库最近在 box 上", "permission": permission,
 	}}})
 	return raw
 }
@@ -500,29 +516,34 @@ func TestAutoFinishLeavesAReopenedTask(t *testing.T) {
 	if todoNow(s, "todo_r").DoneAt != nil || todoNow(s, "todo_h").DoneAt != nil || f.judged != 0 {
 		t.Fatalf("closed: %+v %+v, %d judgments", todoNow(s, "todo_r"), todoNow(s, "todo_h"), f.judged)
 	}
-	// Work after the reopen is judged, and closes it.
+	// Work after the reopen is judged and delivered for review, not closed again (#5732).
 	s.autoFinishTask(todoNow(s, "todo_r"), time.Now(), true)
-	if got := todoNow(s, "todo_r"); got.DoneAt == nil || got.DoneBy != db.DoneByAuto || f.judged != 1 {
-		t.Fatalf("not closed after new work: %+v, %d judgments", got, f.judged)
+	if got := todoNow(s, "todo_r"); got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictDone || f.judged != 1 {
+		t.Fatalf("not judged after new work: %+v, %d judgments", got, f.judged)
 	}
 }
 
-// The agent of a task the judge closed is sent more (agent_send resumes it) and works again: the task is open again
-// while it does, and the turn's end is followed as ever — cut off by the model service, an interrupted receipt; a
-// finished one, a done receipt and the judge, which may close it again (#5892).
+// The agent of a task the supervisor accepted is sent more on its card and works again: the task is open again while
+// again while it does, and the turn's end is followed as ever — cut off by the model service, an interrupted receipt; a
+// finished one, a done receipt and a new delivery judgment, still without automatic closure (#5892, #5732).
 func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 	s, f := newTaskService(t)
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	todo := startedTask(t, s, f)
 	ctx := context.Background()
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "设计稿写好了", 0)
-	if ok, err := s.autoDoneTodo(ctx, todo.ID, "做完了", time.Now().Add(-time.Minute)); err != nil || !ok {
-		t.Fatalf("auto done: %v %v", ok, err)
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "做完了"})
+	if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
+		t.Fatalf("accept before more work: %v", err)
 	}
 	if _, ok := s.taskOf(ctx, "box", "s1"); ok {
 		t.Fatal("a closed task still follows its agent")
 	}
 	time.Sleep(5 * time.Millisecond)
+	if _, err := s.routeToTask(ctx, "conv1", todo.ID, "Please continue with the remaining cases"); err != nil {
+		t.Fatalf("send more after acceptance: %v", err)
+	}
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	got := todoNow(s, todo.ID)
 	if got.DoneAt != nil || got.ReopenedAt == nil || got.DoneBy != "" || got.DoneReason != "" {
@@ -562,7 +583,7 @@ func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 	if rb := lastReceipt(); rb.State != "done" {
 		t.Fatalf("a finished turn of the reopened task: receipt = %+v", rb)
 	}
-	if got := todoNow(s, todo.ID); got.DoneAt == nil || got.DoneBy != db.DoneByAuto {
+	if got := todoNow(s, todo.ID); got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictDone {
 		t.Fatalf("the work after the reopen is not judged: %+v", got)
 	}
 }
@@ -750,7 +771,8 @@ func TestSnapshotTaskFollowsTheAgent(t *testing.T) {
 				SessionID: "c1", State: proto.StateWorking, UpdatedAt: now, Activity: "在读 tasks.go", ActivityAt: &started}}, now),
 			got,
 		}}))
-	// #2935: a run in the background shows on its task and in its own line: the turn ended to wait for it.
+	// #2935, #11261: a run in the background shows on its task row (whose turn ended to wait for it), while the Agents
+	// section keeps only the working count.
 	wfLead := proto.Session{MachineID: "mac-a", SessionID: "d4a7f6ff-4a9b", State: proto.StateWorking, UpdatedAt: now,
 		LastText: "审计在后台跑，等结果", Workflows: []proto.Workflow{
 			{TaskID: "w1", Name: "parity-audit", Running: true, Status: proto.WorkflowRunning, Phases: []string{"Audit", "Verify"},
@@ -761,10 +783,8 @@ func TestSnapshotTaskFollowsTheAgent(t *testing.T) {
 	if len(wfTask.Workflows) != 1 || wfTask.Workflows[0].For != "14 分钟" {
 		t.Fatalf("task workflows: %+v", wfTask.Workflows)
 	}
-	running := runningWorkflows(wfLead, now)
-	running[0].Agent, running[0].Machine, running[0].Session = "各端对齐审计", "mac-a", "d4a7f6ff"
 	golden(t, "assistant_snapshot.workflows", prompts.RenderSnapshot(prompts.Snapshot{Now: now, Zone: "UTC",
-		Working: []prompts.SnapshotAgent{{Label: "各端对齐审计"}}, Workflows: running, Tasks: []prompts.SnapshotTask{wfTask}}))
+		Working: []prompts.SnapshotAgent{{Label: "各端对齐审计"}}, Tasks: []prompts.SnapshotTask{wfTask}}))
 	linked := got
 	linked.Link = todoLink("https://hub.example.com", "todo_1")
 	golden(t, "assistant_snapshot.links", prompts.RenderSnapshot(prompts.Snapshot{Now: now, Zone: "UTC",

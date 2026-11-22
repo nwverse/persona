@@ -423,14 +423,18 @@ func pendingPRConflict(s *Service, id string) (superviseSignal, bool) {
 	return g, ok
 }
 
-// Advance the signal queue without real sleeps or a timer racing the state changes under test.
+// Advance both the shared and recipient clocks without sleeps or a timer racing the state changes under test.
 func sendPendingPRConflicts(s *Service) {
 	b := &s.supervise
 	b.mu.Lock()
 	if b.timer != nil {
 		b.timer.Stop()
 	}
+	b.timer, b.timerAt = nil, time.Time{}
+	clear(b.told)
+	clear(b.batch)
 	for id, g := range b.pending {
+		g.batchTo, g.batchUntil = "", time.Time{}
 		g.At = time.Now().Add(-2 * time.Hour)
 		b.pending[id] = g
 	}
@@ -791,5 +795,41 @@ func TestPRStatusConflictSignalsOnlyForTheCurrentPR(t *testing.T) {
 	s.sweepPRStatuses(ctx, time.Now().Add(deployRecheck))
 	if g, ok := pendingPRConflict(s, task.ID); !ok || g.Key != current+"@head-b" {
 		t.Fatalf("the current PR's conflict = %+v, %v", g, ok)
+	}
+}
+
+func TestPRStatusConflictStaysQuietDuringItsMergePark(t *testing.T) {
+	for _, parkFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("park first %t", parkFirst), func(t *testing.T) {
+			s, f, task := newPRConflictTask(t, nil)
+			ctx := context.Background()
+			park := func() {
+				t.Helper()
+				if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if parkFirst {
+				park()
+			}
+			task, _ = s.todoNow(task.ID)
+			status := TodoPRStatus{URL: task.PRURL, State: "open", HeadOID: "conflicting-head", Conflicts: true, CheckedAt: time.Now()}
+			if err := s.applyPRStatus(ctx, task, status); err != nil {
+				t.Fatal(err)
+			}
+			if !parkFirst {
+				if _, ok := pendingPRConflict(s, task.ID); !ok {
+					t.Fatal("ordinary conflict was not queued before the park")
+				}
+				park()
+			} else if _, ok := pendingPRConflict(s, task.ID); ok {
+				t.Fatal("parked conflict queued a standalone signal")
+			}
+			sendPendingPRConflicts(s)
+			task, _ = s.todoNow(task.ID)
+			if task.PRStatus == nil || !task.PRStatus.Conflicts || task.Supervision.parking() == nil || len(f.notices()) != 0 {
+				t.Fatalf("fact=%+v park=%+v notices=%v", task.PRStatus, task.Supervision.parking(), f.notices())
+			}
+		})
 	}
 }

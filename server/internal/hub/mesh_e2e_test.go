@@ -19,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -30,8 +31,9 @@ import (
 // meshNode is a computer's node: it answers the calls a hub makes and can push events and ask questions. A resident
 // one takes one connection at a time (a new one drops the one before), like `personad node --attach`.
 type meshNode struct {
-	uid, host string
-	resident  bool
+	uid, host     string
+	resident      bool
+	portHalfClose bool
 
 	mu       sync.Mutex
 	sessions []proto.Session
@@ -126,11 +128,8 @@ func (f *meshNode) dialer(h *Hub) func(context.Context) (net.Conn, error) {
 			}
 		}
 		fc.p.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
-			if method == "port.dial" { // a forwarded port: a stream to 127.0.0.1:port
-				var p struct {
-					ID   string `json:"id"`
-					Port int    `json:"port"`
-				}
+			if method == devicewire.MethodPortDial { // a forwarded port: a stream to 127.0.0.1:port
+				var p devicewire.PortDial
 				_ = json.Unmarshal(params, &p)
 				c, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", itoa(p.Port)))
 				if err != nil {
@@ -140,8 +139,12 @@ func (f *meshNode) dialer(h *Hub) func(context.Context) (net.Conn, error) {
 					c.Close()
 					return nil, err
 				}
+				if f.portHalfClose && p.StreamVersion == devicewire.PortStreamHalfCloseV1 {
+					fc.mux.StartHalfClose(p.ID, c.(*net.TCPConn), true)
+					return devicewire.PortDialReply{StreamVersion: p.StreamVersion}, nil
+				}
 				fc.mux.Start(p.ID, c)
-				return map[string]any{}, nil
+				return devicewire.PortDialReply{}, nil
 			}
 			f.mu.Lock()
 			held := f.hold[method]
@@ -180,6 +183,7 @@ func (f *meshNode) dialer(h *Hub) func(context.Context) (net.Conn, error) {
 		}
 		go func() {
 			_ = fc.p.Serve(context.Background(), nodeSide)
+			fc.mux.CloseAll()
 			f.mu.Lock()
 			for i, c := range f.conns {
 				if c == fc {
@@ -198,6 +202,7 @@ func (f *meshNode) handle(method string, params json.RawMessage) (any, error) {
 		SessionID string `json:"session_id"`
 		AfterSeq  *int   `json:"after_seq"`
 		Text      string `json:"text"`
+		ClientID  string `json:"client_msg_id"`
 	}
 	_ = json.Unmarshal(params, &p)
 	f.mu.Lock()
@@ -220,6 +225,11 @@ func (f *meshNode) handle(method string, params json.RawMessage) (any, error) {
 		return map[string]any{}, nil
 	case "session.send":
 		f.sent = append(f.sent, p.Text)
+		return map[string]any{"delivered": "yes"}, nil
+	case "session.a2a.send":
+		f.sent = append(f.sent, p.Text)
+		items := f.items[p.SessionID]
+		f.items[p.SessionID] = append(items, proto.Item{Seq: len(items) + 1, Role: "user", Kind: proto.KindText, Text: p.Text, ClientMsgID: p.ClientID})
 		return map[string]any{"delivered": "yes"}, nil
 	case "terminal.watch":
 		var c struct {

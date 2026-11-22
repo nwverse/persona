@@ -65,6 +65,21 @@ describe("direction tree", () => {
     const planned = normalizeTree({ directions: [{ id: "c", counts: { planned: 2 }, tasks: [{ id: "p", title: "P", state: "planned" }] }] }).directions[0];
     expect(planned.tasks?.[0].state).toBe("planned");
     expect(planned.counts).toEqual(counts(0, 0, 0, 0, 2));
+    // responsible (#12712) is preserved when valid and omitted when malformed or absent
+    const withResp = normalizeTree({
+      directions: [{
+        id: "d",
+        counts: { working: 1 },
+        tasks: [
+          { id: "r1", title: "R1", state: "working", responsible: { kind: "session", name: " ops-watch ", machine_id: " box-1 ", session_id: " s-1 " } },
+          { id: "r2", title: "R2", state: "working", responsible: { kind: "invalid", name: "x" } },
+          { id: "r3", title: "R3", state: "working", responsible: { kind: "person", name: "   " } },
+        ],
+      }],
+    }).directions[0];
+    expect(withResp.tasks?.[0].responsible).toEqual({ kind: "session", name: "ops-watch", machine_id: "box-1", session_id: "s-1" });
+    expect("responsible" in (withResp.tasks?.[1] ?? {})).toBe(false);
+    expect("responsible" in (withResp.tasks?.[2] ?? {})).toBe(false);
   });
 
   it("groups by direction only with a leader; the secretary's group shows only with a leader and a task", () => {

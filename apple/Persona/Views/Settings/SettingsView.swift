@@ -3,6 +3,11 @@ import AuthenticationServices
 import SwiftUI
 import VisionKit
 import PersonaWire
+#if os(iOS)
+import PhotosUI
+import UIKit
+import Vision
+#endif
 
 struct SettingsView: View {
     @Environment(\.shell) private var shell
@@ -113,7 +118,7 @@ struct SettingsView: View {
             // (Channels; `-openChannel <id>` one of them).
             .onAppear(perform: openDebugPage)
             #endif
-            .confirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
+            .accessibleConfirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
                 Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
@@ -197,6 +202,10 @@ struct SettingsView: View {
                 settingsLink(.storage, "Storage", Theme.Icon.storage, id: "settings-storage", value: storage?.storageText ?? "")
                 #if os(iOS)
                 settingsLink(.health, "Health", Theme.Icon.health, id: "settings-health")
+                // The alarms and timers Persona set (#12805): AlarmKit's, iOS 26 and later, as the alarm tools.
+                if AlarmsAccess.isSupported {
+                    settingsLink(.alarms, "Alarms and Timers", Theme.Icon.alarmClock, id: "settings-alarms")
+                }
                 NavigationLink(value: SettingsPage.phoneData) {
                     SettingsRow(title: ConnectorText.device, symbol: Theme.Icon.thisDevice, tint: Theme.accent)
                 }
@@ -363,6 +372,11 @@ struct SettingsView: View {
             p.append(SettingsPage.liveScreen)
             #endif
         }
+        else if d.string(forKey: "openAlarms") != nil { // Settings › Alarms and Timers on made-up data (#12805)
+            #if os(iOS)
+            p.append(SettingsPage.alarms)
+            #endif
+        }
         else if d.bool(forKey: "openMeetingSettings") { // Settings › Meetings (#2981)
             #if os(iOS)
             p.append(SettingsPage.meetings)
@@ -372,6 +386,10 @@ struct SettingsView: View {
         else if let a = d.string(forKey: "openAbout") { // About (YES), or its Export Diagnostics (export, #9460)
             p.append(SettingsPage.about)
             if a == "export" { p.append(SettingsPage.devExport) }
+        }
+        else if d.string(forKey: "openMeetingTapes") != nil { // About › Replay a Meeting Tape (sample | empty, #10589)
+            p.append(SettingsPage.about)
+            p.append(SettingsPage.meetingTapes)
         }
         else if d.string(forKey: "openKnowledgeSelection") != nil { p.append(SettingsPage.knowledgeSelection) } // (rule | chat | doc: with that sheet)
         else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
@@ -410,8 +428,10 @@ enum SettingsPage: Hashable {
     case meetings
     /// Settings › Live Screen (#6396, #6398): the live screen's route and its quality on mobile data.
     case liveScreen
+    /// Settings › Alarms and Timers (#12805): the alarms and timers Persona set through AlarmKit.
+    case alarms
     #endif
-    case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishuBot, notifications, storage, translation, modelConfiguration
+    case persona, themeColor, style, colorScheme, language, assistant, claude, codex, agy, devices, phoneData, mail, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Connectors › This iPhone › iPhone Control: the guided setup (#8199).
     case iphoneSetup
     /// Settings › Connectors › the chat connector; `manager`: whose (Messages' Settings names the default's, whose
@@ -420,6 +440,8 @@ enum SettingsPage: Hashable {
     case models, agents, appearance, about, pairing, computers
     /// Settings › About › Export Diagnostics (Developing Persona, #9460).
     case devExport
+    /// Settings › About › Replay a Meeting Tape (Developing Persona, #10589).
+    case meetingTapes
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
     /// Assistant Profile › Standing Authorizations (#7002): the go-aheads Persona answers for the owner, each revocable.
@@ -494,7 +516,7 @@ private struct SettingsDestinations: ViewModifier {
         content
             .navigationDestination(for: SettingsPage.self) { destination($0).splitDetailPage() }
             .navigationDestination(for: MachineListRoute.self) { _ in MachinesView(settingsScope: true).splitDetailPage() }
-            .navigationDestination(for: ModelLaunchersRoute.self) { _ in ModelLaunchersView().splitDetailPage() }
+            .navigationDestination(for: ModelLaunchersRoute.self) { r in ModelLaunchersView(route: r).splitDetailPage() }
             .navigationDestination(for: ModelPurposeRoute.self) { r in ModelPurposeEditorView(purposeID: r.id).splitDetailPage() }
             .navigationDestination(for: ModelLauncherRoute.self) { r in ModelLauncherDetailView(name: r.name).splitDetailPage() }
             .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).splitDetailPage() }
@@ -524,6 +546,12 @@ private struct SettingsDestinations: ViewModifier {
         case .appearance: AppearanceSettingsPage()
         case .about: SettingsAboutPage()
         case .devExport: DevExportPage()
+        case .meetingTapes:
+            #if os(iOS)
+            MeetingTapesPage()
+            #else
+            EmptyView()
+            #endif
         case .pairing: SettingsPairingPage()
         case .computers: MachinesView(settingsScope: true)
         case .persona: PersonaSettingsPage()
@@ -547,6 +575,7 @@ private struct SettingsDestinations: ViewModifier {
         case .assistant: AssistantProfileView()
         case .claude: ClaudeSettingsView()
         case .codex: ClaudeSettingsView(agent: .codex)
+        case .agy: ClaudeSettingsView(agent: .agy)
         case .devices: DevicesView()
         case .phoneData: PhoneDataView()
         case .iphoneSetup:
@@ -564,6 +593,7 @@ private struct SettingsDestinations: ViewModifier {
         case .health: WorkoutReportSettingsView()
         case .meetings: MeetingSettingsView()
         case .liveScreen: LiveScreenSettingsView()
+        case .alarms: AlarmsPage()
         #endif
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()
@@ -679,6 +709,9 @@ struct PhoneDataView: View {
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             Text(s.title).lineLimit(1)
                             Text(s.detail).font(Theme.Font.label).foregroundStyle(.secondary)
+                            #if os(iOS)
+                            if s == .location, isOn(s) { LocationLevelRow() } // when the assistant may read it (#13200)
+                            #endif
                         }
                         Spacer(minLength: Theme.Space.s)
                         if asking == s {
@@ -734,7 +767,12 @@ struct PhoneDataView: View {
     }
 
     private func set(_ s: PhoneDataSource, _ on: Bool) async {
-        defer { model.registerPhone() } // what the hub may call follows the switch
+        defer {
+            model.registerPhone() // what the hub may call follows the switch
+            #if os(iOS)
+            if s == .location { BackgroundLocation.shared.apply() } // Location off: no Always session, no wakes (#13200)
+            #endif
+        }
         guard on else {
             s.isEnabled = false
             enabled[s] = false
@@ -762,6 +800,40 @@ struct PhoneDataView: View {
 }
 
 #if os(iOS)
+/// Under Location in Settings › Connectors › This iPhone (#13200): whether the assistant can read it while Persona isn't
+/// open, and the one thing to do about it: Allow Always while iOS can still ask, else iOS Settings. Words and button on
+/// one line where they fit, the button under the words where they don't.
+private struct LocationLevelRow: View {
+    var body: some View {
+        let location = BackgroundLocation.shared
+        if let line = BackgroundLocationPolicy.line(location.level, asked: location.state.asked) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) { words(line); button(line) }
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) { words(line); button(line) }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("location-level")
+        }
+    }
+
+    private func words(_ line: LocationLevelLine) -> some View {
+        Text(line.text).font(Theme.Font.label).foregroundStyle(.secondary)
+    }
+
+    private func button(_ line: LocationLevelLine) -> some View {
+        Button {
+            Haptics.tap()
+            if line.action == .allowAlways, BackgroundLocation.shared.allowAlways() { return }
+            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+        } label: {
+            Text(line.actionTitle).font(Theme.Font.labelStrong).lineLimit(1)
+        }
+        .buttonStyle(.borderless) // in the row: only the button takes its taps, not the switch beside it
+        .tapTargetOutset()
+        .accessibilityIdentifier(line.action == .allowAlways ? "location-allow-always" : "location-open-settings")
+    }
+}
+
 /// Settings › Phone Data › Reminders: import the reminders of the lists picked as to-dos, one way (#4009,
 /// `RemindersImport`). Off by default; every list until the user turns some off.
 private struct RemindersImportSection: View {
@@ -1034,6 +1106,10 @@ struct PairView: View {
     /// A scanned pairing link waiting for the user's Connect (#9929): a code read off a screen asks first, as a link
     /// from outside the app does.
     @State private var confirming: PairConfirmation?
+    #if os(iOS)
+    @State private var pickedPhoto: PhotosPickerItem?
+    @State private var readingPhoto = false
+    #endif
 
     private var other: Bool { start == .other || showOther }
 
@@ -1071,15 +1147,7 @@ struct PairView: View {
                 }
                 if !passwordMode && scanning && !other {
                     Section {
-                        QRScanner { code in
-                            if let cfg = ServerConfig(pairURL: code) {
-                                url = cfg.url.absoluteString
-                                token = cfg.token
-                                passwordMode = false
-                                scanning = false
-                                confirming = PairConfirmation(cfg, paired: model.registry.hubs.map(\.config))
-                            }
-                        }
+                        QRScanner { code in accept(code) }
                         #if os(iOS) || os(visionOS)
                         .scaledFrame(height: Theme.Size.box280)
                         .clipShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
@@ -1093,6 +1161,21 @@ struct PairView: View {
                         #endif
                     }
                 }
+                #if os(iOS)
+                if !passwordMode && !other && confirming == nil {
+                    Section {
+                        PhotosPicker(selection: $pickedPhoto, matching: .images) {
+                            HStack {
+                                Label("Choose from Photos", systemImage: Theme.Icon.photos).lineLimit(1)
+                                if readingPhoto { ProgressView() }
+                            }
+                        }
+                        .disabled(readingPhoto)
+                        .accessibilityIdentifier("pair.choosePhoto")
+                        .onChange(of: pickedPhoto) { _, item in choosePhoto(item) }
+                    }
+                }
+                #endif
                 if !passwordMode && !other {
                     Section {
                         Button { withAnimation(Theme.Motion.standard) { showOther = true } } label: {
@@ -1270,6 +1353,42 @@ extension AppModel {
 }
 
 extension PairView {
+    /// Camera and a picked photo use the same confirmation and connection path (#11057).
+    private func accept(_ code: String) {
+        guard let cfg = ServerConfig(pairURL: code) else { return }
+        url = cfg.url.absoluteString
+        token = cfg.token
+        passwordMode = false
+        scanning = false
+        confirming = PairConfirmation(cfg, paired: model.registry.hubs.map(\.config))
+    }
+
+    #if os(iOS)
+    private func choosePhoto(_ item: PhotosPickerItem?) {
+        guard let item, !readingPhoto else { return }
+        pickedPhoto = nil
+        error = nil
+        readingPhoto = true
+        Task {
+            defer { readingPhoto = false }
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else { throw PairingPhoto.Failure.unreadableImage }
+                let code = try await Task.detached { () throws -> String in
+                    guard let image = UIImage(data: data) else { throw PairingPhoto.Failure.unreadableImage }
+                    var payload: String?
+                    try PairingPhoto.decode(image) { payload = $0 }
+                    guard let payload else { throw PairingPhoto.Failure.unreadableImage }
+                    return payload
+                }.value
+                accept(code)
+            } catch {
+                let failure = error as? PairingPhoto.Failure ?? .unreadableImage
+                self.error = failure.localizedDescription
+            }
+        }
+    }
+    #endif
+
     fileprivate func connect() async {
         if passwordMode { await passwordLogin(); return }
         guard let u = URL(string: url.trimmingCharacters(in: .whitespaces)) else { return }
@@ -1327,6 +1446,53 @@ extension PairView {
         }
     }
 }
+
+#if os(iOS)
+/// One picked photo yields one QR payload, or a reason nothing was delivered (#11057).
+nonisolated enum PairingPhoto {
+    enum Failure: Error, Equatable, LocalizedError {
+        case unreadableImage
+        case noQRCode
+        case multipleQRCodes
+
+        var errorDescription: String? {
+            switch self {
+            case .unreadableImage: String(localized: "The photo couldn't be read. Try another one.")
+            case .noQRCode: String(localized: "No QR code was found in this photo. Try another one.")
+            case .multipleQRCodes: String(localized: "This photo contains more than one QR code. Choose a photo with one QR code.")
+            }
+        }
+    }
+
+    static func decode(_ image: UIImage, onCode: (String) -> Void) throws {
+        guard let cgImage = image.cgImage else { throw Failure.unreadableImage }
+        let request = VNDetectBarcodesRequest()
+        // Revision 1 also works in simulator runtimes without the default inference context.
+        request.revision = VNDetectBarcodesRequestRevision1
+        request.symbologies = [.qr]
+        let orientation: CGImagePropertyOrientation = switch image.imageOrientation {
+        case .up: .up
+        case .down: .down
+        case .left: .left
+        case .right: .right
+        case .upMirrored: .upMirrored
+        case .downMirrored: .downMirrored
+        case .leftMirrored: .leftMirrored
+        case .rightMirrored: .rightMirrored
+        @unknown default: .up
+        }
+        do {
+            try VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:]).perform([request])
+        } catch {
+            throw Failure.unreadableImage
+        }
+        guard let results = request.results, !results.isEmpty else { throw Failure.noQRCode }
+        guard results.count == 1 else { throw Failure.multipleQRCodes }
+        guard let payload = results[0].payloadStringValue else { throw Failure.unreadableImage }
+        onCode(payload)
+    }
+}
+#endif
 
 #if os(iOS) || os(visionOS)
 struct QRScanner: UIViewControllerRepresentable {

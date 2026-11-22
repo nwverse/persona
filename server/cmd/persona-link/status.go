@@ -33,6 +33,12 @@ type report struct {
 	Endpoints []link.Endpoint `json:"endpoints,omitempty"`
 	// SSH: the optional SSH tunnel in link.json.
 	SSH *link.SSH `json:"ssh,omitempty"`
+	// Proxy: link.json's outbound proxy without its user name and password, "off", or "invalid" when it cannot be
+	// used; missing when none is set (HTTPS_PROXY and ALL_PROXY apply). link.proxy says the one a link is connected
+	// through.
+	Proxy string `json:"proxy,omitempty"`
+	// ProxyAlways: proxy-only mode is set in link.json (persona-link proxy --always).
+	ProxyAlways bool `json:"proxy_always,omitempty"`
 	// Trust: how the hub is checked, "pin" (its key, from the pairing) | "system" (behind an HTTPS reverse proxy:
 	// the system's CAs and the host name).
 	Trust string `json:"trust,omitempty"`
@@ -91,6 +97,10 @@ func gather(e *env) report {
 	}
 	if c, err := link.Read(cfg); err == nil {
 		r.Mode = c.CurrentMode()
+		if r.Proxy = link.RedactedProxy(c.Proxy); r.Proxy == "" && c.Proxy != "" {
+			r.Proxy = proxyInvalid // nothing of an unusable setting is shown, but that there is one
+		}
+		r.ProxyAlways = c.ProxyAlways
 		if r.SSH == nil {
 			r.SSH = c.SSH
 		}
@@ -226,31 +236,67 @@ func (r report) text(now time.Time, user string) string {
 		}
 		if len(r.Endpoints) > 0 || r.SSH != nil {
 			line("%s", terminalText("link-cli.candidates_header"))
+			inUse := "" // the kind of route connected now
+			if live && st.State == "connected" {
+				inUse = st.Kind
+			}
+			notesText := func(notes []string) string {
+				if len(notes) == 0 {
+					return ""
+				}
+				return terminalText("link-cli.candidate_notes", i18n.Args{"notes": strings.Join(notes, terminalText("link-cli.candidate_note_separator"))})
+			}
+			// Proxy-only mode, unless Always use SSH (which wins) is set too.
+			proxyOnly := r.ProxyAlways && (r.SSH == nil || !r.SSH.Always)
 			sshLine := func() {
 				if r.SSH == nil {
 					return
 				}
 				var notes []string
-				if live && st.State == "connected" && st.Kind == link.KindSSH {
+				if inUse == link.KindSSH {
 					notes = append(notes, terminalText("link-cli.note_in_use"))
 				}
 				if r.SSH.Always {
 					notes = append(notes, terminalText("link-cli.note_always_ssh"))
 				}
-				note := ""
-				if len(notes) > 0 {
-					note = terminalText("link-cli.candidate_notes", i18n.Args{"notes": strings.Join(notes, terminalText("link-cli.candidate_note_separator"))})
+				if proxyOnly {
+					notes = append(notes, terminalText("link-cli.note_skip_proxy_only"))
 				}
 				line("%s", terminalText("link-cli.candidate_ssh", i18n.Args{
-					"kind": kindName(link.KindSSH), "server": r.SSH.Server, "target": r.SSH.Target, "notes": note,
+					"kind": kindName(link.KindSSH), "server": r.SSH.Server, "target": r.SSH.Target, "notes": notesText(notes),
 				}))
 			}
-			if r.SSH != nil && r.SSH.Always {
+			// The proxy: the one in use, else link.json's.
+			proxyLine := func() {
+				proxy := r.Proxy
+				if inUse != link.KindProxy && (proxy == "" || proxy == link.ProxyOff) {
+					return
+				}
+				var notes []string
+				if inUse == link.KindProxy {
+					proxy = st.Proxy
+					notes = append(notes, terminalText("link-cli.note_in_use"))
+				} else if proxy == proxyInvalid {
+					proxy = terminalText("link-errors.proxy_invalid")
+				}
+				if r.SSH != nil && r.SSH.Always {
+					notes = append(notes, terminalText("link-cli.note_skip_direct"))
+				}
+				if proxyOnly {
+					notes = append(notes, terminalText("link-cli.note_always_proxy"))
+				}
+				line("%s", terminalText("link-cli.candidate_endpoint", i18n.Args{"kind": kindName(link.KindProxy), "address": proxy, "notes": notesText(notes)}))
+			}
+			// Routes are listed as they are tried: the only one first.
+			switch {
+			case r.SSH != nil && r.SSH.Always:
 				sshLine()
+			case proxyOnly:
+				proxyLine()
 			}
 			for _, ep := range r.Endpoints {
 				var notes []string
-				if live && st.State == "connected" && st.Kind != link.KindSSH && st.Address == ep.URL {
+				if inUse != "" && inUse != link.KindSSH && inUse != link.KindProxy && st.Address == ep.URL {
 					notes = append(notes, terminalText("link-cli.note_in_use"))
 				}
 				if ep.Manual {
@@ -259,11 +305,13 @@ func (r report) text(now time.Time, user string) string {
 				if r.SSH != nil && r.SSH.Always {
 					notes = append(notes, terminalText("link-cli.note_skip_direct"))
 				}
-				note := ""
-				if len(notes) > 0 {
-					note = terminalText("link-cli.candidate_notes", i18n.Args{"notes": strings.Join(notes, terminalText("link-cli.candidate_note_separator"))})
+				if proxyOnly {
+					notes = append(notes, terminalText("link-cli.note_skip_proxy_only"))
 				}
-				line("%s", terminalText("link-cli.candidate_endpoint", i18n.Args{"kind": kindName(ep.Kind), "address": ep.URL, "notes": note}))
+				line("%s", terminalText("link-cli.candidate_endpoint", i18n.Args{"kind": kindName(ep.Kind), "address": ep.URL, "notes": notesText(notes)}))
+			}
+			if !proxyOnly {
+				proxyLine() // after the direct addresses, as it is tried
 			}
 			if r.SSH != nil && !r.SSH.Always {
 				sshLine()
@@ -408,7 +456,7 @@ func (r report) serviceText(line func(string, ...any), user string) {
 }
 
 var kindNames = map[string]string{
-	"lan": "link-errors.kind_lan", "ipv6": "link-errors.kind_ipv6", "name": "link-errors.kind_name", "ipv4": "link-errors.kind_ipv4",
+	"lan": "link-errors.kind_lan", "ipv6": "link-errors.kind_ipv6", "name": "link-errors.kind_name", "ipv4": "link-errors.kind_ipv4", link.KindProxy: "link-errors.kind_proxy",
 }
 
 func kindName(kind string) string {

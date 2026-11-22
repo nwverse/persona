@@ -20,6 +20,7 @@ import (
 // (#7314) when the launcher declares a larger window. What is not declared is left to the agent, Claude Code by the
 // model's own window, Codex by its model's default.
 type assistantCompaction struct {
+	cacheProxyBase string
 	// window: the declared automatic compaction window (CLAUDE_CODE_AUTO_COMPACT_WINDOW, a managed launcher's
 	// CompactWindow); capacity: the declared context window (CLAUDE_CODE_MAX_CONTEXT_TOKENS, MaxContext, the provider
 	// model's ContextWindow, Codex's model_context_window). 0: not declared.
@@ -407,6 +408,9 @@ func (n *Node) assistantCompactionSettings(id, cwd, settings string, c assistant
 	if c.toolSearchOff { // the endpoint refused tool search: over the provider's, the launcher's and the user's (#10365)
 		env[toolSearchEnv] = "false"
 	}
+	if c.cacheProxyBase != "" {
+		env["ANTHROPIC_BASE_URL"] = c.cacheProxyBase
+	}
 	s["env"] = env
 
 	// Keep the assistant's project/user instructions, data skills and auto-memory. Only the development workflows and
@@ -433,6 +437,11 @@ func (n *Node) assistantCompactionSettings(id, cwd, settings string, c assistant
 	}
 	s["skillOverrides"] = overrides
 	n.assistantUserSetup(s, cwd, c.profile) // a private profile: ~/.claude's instructions out, the user's skill switches in
+	// One memory whichever profile the conversation runs in (memory_merge.go): Claude Code takes the directory from
+	// --settings before the profile's own settings. A guest keeps none (guestSettingsFile turns auto memory off).
+	if dir := n.conversationMemoryDir(id, cwd); dir != "" {
+		s["autoMemoryDirectory"] = dir
+	}
 
 	b, err := json.Marshal(s)
 	if err != nil {

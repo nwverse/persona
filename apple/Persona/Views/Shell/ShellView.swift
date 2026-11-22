@@ -114,7 +114,18 @@ struct ShellView: View {
                          onMachines: { go(.machines) },
                          onOpenExtension: { go(.extensionPage($0)) },
                          openHealth: { go(.health) },
-                         openRecordingsPage: openRecordingsPage)
+                         openRecordingsPage: openRecordingsPage,
+                         openStarred: openStarredPage)
+            // Keep the drawer's route closures out of the page strip's opaque type (#6735, #12249).
+            .stackSegment()
+    }
+
+    private var openStarredPage: (() -> Void)? {
+        #if os(iOS)
+        { go(.starred) }
+        #else
+        nil
+        #endif
     }
 
     /// The drawer's Recordings: the page, which shows the recording running, else Record to start one.

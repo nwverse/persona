@@ -94,6 +94,7 @@ private fun SettingsContent(
     var tunnelPage by tunnelPageState
     val pairingDiagnosticsState = rememberSaveable(initialPage) { mutableStateOf(false) }
     var pairingDiagnostics by pairingDiagnosticsState
+    var diagnosticsExport by rememberSaveable(initialPage) { mutableStateOf(false) }
     // Model providers's own steps when they open in place: one provider, adding one, importing from ~/.zshrc.
     val providerState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var provider by providerState
@@ -115,6 +116,7 @@ private fun SettingsContent(
     LaunchedEffect(assistant.id) {
         if (shownFor == assistant.id) return@LaunchedEffect
         shownFor = assistant.id
+        ProviderImportRequests.cancel()
         if (initialPage == "settings" && isAssistantSettingsPage(page)) {
             page = "settings"; parents = emptyList(); purpose = null; purposeManager = null; extension = null; extensionManager = null
             connectorManager = null; channel = null; provider = null; providerStep = null
@@ -352,7 +354,12 @@ private fun SettingsContent(
         knowledgeSelection = knowledgeSelection, knowledgeSelectionAvailable = knowledgeSelectionAvailable,
         translationValue = translationValue, hubUpdateStatusState = hubUpdateStatusState,
         slotsState = slotsState, slotCards = slotCards, detailKey = detailKey,
-        back = back, openPage = ::open, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
+        back = back, openPage = ::open, openDiagnosticsExport = {
+            if (onBack == null) {
+                parents = parents + page
+                page = "about-export"
+            } else diagnosticsExport = true
+        }, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
         onNavigate = onNavigate, onClose = onClose, onDemo = onDemo, onExitDemo = onExitDemo,
     )
     // Routed Back leaves a page in one step. Pairing handles its own steps before returning to Settings or Hubs.
@@ -364,6 +371,13 @@ private fun SettingsContent(
     BackHandler(page == "managers" && manager != null) { manager = null }
     BackHandler(page == "providers" && (provider != null || providerStep != null)) { if (providerStep != null) providerStep = null else provider = null }
     BackHandler(page == "hubs" && tunnelPage != null) { tunnelPage = null }
+    if (diagnosticsExport && onBack != null) {
+        val close = { diagnosticsExport = false }
+        BackHandler(onBack = close)
+        JFullScreen(onDismiss = close) {
+            services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = close) }
+        }
+    }
     if (pairingDiagnostics && (page == "pair" || page == "hubs-add")) {
         val close = { pairingDiagnostics = false }
         JFullScreen(onDismiss = close) { DiagnosticsScreen(services, onBack = close, footer = deviceFeedback) }
@@ -427,6 +441,7 @@ private fun SettingsPageContent(
     detailKey: androidx.navigation3.runtime.NavKey?,
     back: () -> Unit,
     openPage: (SettingsPage) -> Unit,
+    openDiagnosticsExport: () -> Unit,
     deviceFeedback: @Composable () -> Unit,
     connectorItems: LazyListScope.() -> Unit,
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)?,
@@ -471,9 +486,11 @@ private fun SettingsPageContent(
             mainReadiness = services.readiness.takeUnless { services.demo }, skipWelcome = true)
         "capsule" -> CapsuleSettingsPage(services.capsule, back)
         "knowledge-selection" -> KnowledgeSelectionPage(knowledgeSelection, connectorsService, back)
-        // The current assistant's computers alone: their Claude Code / Codex settings.
+        // The current assistant's computers alone: their Claude Code / Codex / Antigravity settings.
         "claude" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, owns = { assistant.ownsOn(it.id, it.manager) })
         "codex" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Codex,
+            owns = { assistant.ownsOn(it.id, it.manager) })
+        "agy" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Agy,
             owns = { assistant.ownsOn(it.id, it.manager) })
         "models" -> purpose?.let { id -> ModelPurposePage(services.models.takeUnless { services.demo }, id, onBack = { purpose = null },
                 providers = services.providers.takeUnless { services.demo }, manager = purposeManager, machines = machines) }
@@ -513,7 +530,7 @@ private fun SettingsPageContent(
         }
         "agent-settings" -> JListPage(title = stringResource(R.string.settings_home_agents), onBack = back) {
             val entries = listOf(SettingsPage.ClaudeCode to R.string.settings_row_claude, SettingsPage.Codex to R.string.settings_row_codex,
-                SettingsPage.Triage to R.string.settings_triage_title)
+                SettingsPage.Agy to R.string.settings_row_agy, SettingsPage.Triage to R.string.settings_triage_title)
             itemsIndexed(entries) { index, (destination, title) -> JGroupItem(GroupPosition.of(index, entries.size)) {
                 JRow(stringResource(title), onClick = { open(destination) })
             } }
@@ -522,7 +539,26 @@ private fun SettingsPageContent(
         "storage" -> StoragePage(back, services.clearCacheFiles, footer = deviceFeedback)
         "providers" -> {
             val providerService = mine.providers.takeUnless { services.demo }
-            when {
+            // Take the link only after this destination's provider service can open it. Leaving the providers page or
+            // switching assistants cancels it, so a later service cannot replay a key-bearing link (#5428).
+            var importLink by remember(page, assistant.id) { mutableStateOf<String?>(null) }
+            var importGeneration by remember(page, assistant.id) { mutableLongStateOf(0L) }
+            DisposableEffect(page, assistant.id) { onDispose { ProviderImportRequests.cancel() } }
+            val requestedImport = ProviderImportRequests.pending.value
+            LaunchedEffect(requestedImport, providerService != null) {
+                if (requestedImport != null) {
+                    val link = ProviderImportRequests.takeIfReady(providerService != null)
+                    if (link != null) {
+                        importLink = link
+                        importGeneration = ProviderImportRequests.generation.longValue
+                    }
+                }
+            }
+            if (importLink != null && providerService != null) {
+                NewProviderPage(providerService, onBack = { ProviderImportRequests.cancel(); importLink = null; providerStep = null },
+                    onSaved = { importLink = null; providerStep = null }, readiness = services.readiness,
+                    machines = machines, importLink = importLink, importGeneration = importGeneration)
+            } else when {
                 providerStep == "add" && providerService != null -> NewProviderPage(providerService, onBack = { providerStep = null }, onSaved = { providerStep = null },
                     readiness = services.readiness, machines = machines)
                 providerStep == "import" && providerService != null -> ProviderImportPage(providerService, machines, onBack = { providerStep = null }, onDone = { providerStep = null })
@@ -564,8 +600,9 @@ private fun SettingsPageContent(
             item { PersonaSettings(demo = services.demo) }
             item { deviceFeedback() }
         }
+        "about-export" -> services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = back) }
         "about" -> JListPage(title = stringResource(R.string.settings_home_about), onBack = back) {
-            item { AboutSettingsPage() }
+            item { AboutSettingsPage(developing = services.developing, onExport = openDiagnosticsExport) }
             item { JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
                 JRow(stringResource(R.string.settings_update_check), subtitle = updateSubtitle, subtitleLines = 6, value = when {
                     busy -> stringResource(R.string.settings_update_checking)
@@ -909,6 +946,7 @@ private fun AssistantOfflinePage(page: String, assistant: persona.core.contracts
         SettingsPage.Channels -> R.string.settings_src_channels_title
         SettingsPage.ClaudeCode -> R.string.settings_row_claude
         SettingsPage.Codex -> R.string.settings_row_codex
+        SettingsPage.Agy -> R.string.settings_row_agy
         SettingsPage.Mail -> R.string.settings_src_mail_title
         SettingsPage.Feishu -> R.string.settings_src_lark_title
         SettingsPage.FeishuBot -> R.string.settings_feishu_bot_title

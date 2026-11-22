@@ -99,8 +99,8 @@ struct AssistantTextPart: View, Equatable {
             if let whole {
                 if let openFile {
                     // Documents as cards with their first page (#1543), the rest as chips (`AssistantText`).
-                    FileChips(paths: whole.chips, open: openFile)
-                    DocumentCards(paths: whole.files.filter(DocumentCards.isDocument), open: openFile)
+                    FileChips(paths: whole.chips, open: openFile.open)
+                    DocumentCards(paths: whole.files.filter(DocumentCards.isDocument), open: openFile.open)
                 }
                 PortChips(text: item.text ?? "")
             }
@@ -108,7 +108,7 @@ struct AssistantTextPart: View, Equatable {
         .markdownSoftBreakMode(.lineBreak)
         .lookUpFiles(whole.map { PathRefs.unique(text.asked + $0.chips, limit: 40) } ?? text.asked)
         .task(id: item.id) { if last { await AssistantText.preloadLinks(item) } }
-        .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
+        .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, starItem: item, showsStar: index == 0)
         // The list puts its own spacing between rows; the part sits where the answer's next block would.
         .padding(.top, index == 0 ? 0 : part.gap - Theme.Space.l)
     }

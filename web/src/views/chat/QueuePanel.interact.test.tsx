@@ -68,12 +68,30 @@ describe("QueuePanel row actions", () => {
     await settle();
   });
 
+  it.each([[true, true], [false, true], [true, false], [false, false]])("respects runtime queue capabilities (edit %s, steer %s)", (queue_edit, queue_send_now) => {
+    const runtime: Session = { ...session, agent: "agy", source_kind: "runtime", capabilities: { queue_edit, queue_send_now } };
+    render(<QueuePanel session={runtime} draftKey="qp-runtime-capabilities" canEdit />);
+    expect(Boolean(rows()[0].querySelector("[data-queue-edit]"))).toBe(queue_edit);
+    expect(Boolean(rows()[0].querySelector("[data-send-now]"))).toBe(queue_send_now);
+  });
+
   it("says in the Persona chat's words what sending now does", () => {
     const persona = { ...session, agent: undefined, assistant: true, queued: ["我的"] } as unknown as Session;
     render(<QueuePanel session={persona} draftKey="qp-persona-send" canEdit persona="Nova" />);
     const send = within(0, "[data-send-now]");
     expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Nova，不用等到下一步");
     expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Nova 会马上收到");
+  });
+
+  it("explains that a runtime assistant stops its turn and starts only the next queued message", () => {
+    const runtime: Session = { ...session, agent: "agy", assistant: true, source_kind: "runtime", capabilities: { queue_send_now: true } };
+    render(<QueuePanel session={runtime} draftKey="qp-runtime-assistant-send" canEdit persona="Nova" />);
+    const send = within(0, "[data-send-now]");
+    const tip = "停止 Nova 当前这一轮，开始处理下一条排队消息";
+    const body = "Nova 会停止当前这一轮，开始处理下一条排队消息。其余消息仍按原顺序排队。";
+    expect(send.getAttribute("aria-label")).toBe(tip);
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toBe(body);
+    expect(send.title).toBe(`${tip}\n${body}`);
   });
 
   it("shows a spinner where the busy row's actions were and takes no other action meanwhile", async () => {
@@ -96,7 +114,7 @@ describe("QueuePanel row actions", () => {
     // collapsed: the owner's row stays, the relayed one is only the summary line
     expect(rows()).toHaveLength(1);
     const summary = host.querySelector<HTMLElement>("[data-queue-relayed-summary]")!;
-    expect(summary.textContent).toContain("还有 1 条别的对话在排队");
+    expect(summary.textContent).toContain("1 条消息来自其他对话 · 对话空闲后送达");
     expect(summary.getAttribute("aria-expanded")).toBe("false");
     expect(host.querySelector("[data-queue-relayed-list]")).toBeNull();
     // the user's own row has nothing to move past
@@ -107,7 +125,8 @@ describe("QueuePanel row actions", () => {
     expect(summary.getAttribute("aria-expanded")).toBe("true");
     expect(rows()).toHaveLength(2);
     expect(rows()[1].querySelector("button")).toBeNull();
-    expect(rows()[1].querySelector("[data-queue-note]")!.textContent).toBe("其他对话");
+    expect(rows()[1].querySelector("[data-queue-note]")).toBeNull();
+    expect(rows()[1].querySelector("[data-queue-from]")!.textContent).toBe("日报");
     click(summary);
     expect(host.querySelector("[data-queue-relayed-list]")).toBeNull();
     expect(rows()).toHaveLength(1);
@@ -203,5 +222,213 @@ describe("QueuePanel fold", () => {
     key(within(0, "[data-queue-handle]"), "End");
     expect(calls()).toEqual([["/sessions/m/s/queue", { keep: [1, 2, 3, 4, 0] }]]);
     expect(texts()).toEqual(["二", "三", "四", "五", "一"]);
+  });
+});
+
+// jsdom has no layout: a cut line is simulated by the getters of scrollWidth / clientWidth
+describe("QueuePanel relayed group", () => {
+  const persona = (queued: string[], relayed: number) => ({ ...session, agent: undefined, assistant: true, queued, queued_relayed: relayed }) as unknown as Session;
+  const show = (queued: string[], relayed: number) => render(<QueuePanel session={persona(queued, relayed)} draftKey="qp-rg" canEdit persona="Nova" />);
+  const group = () => host.querySelector<HTMLElement>("[data-queue-relayed-group]")!;
+  const summary = () => host.querySelector<HTMLElement>("[data-queue-relayed-summary]")!;
+  const ownList = () => host.querySelector('[role="list"].px-1.pt-1\\.5');
+  const toggle = (row: number) => within(row, "[data-queue-relayed-toggle]");
+  const body = (row: number) => within(row, "[data-queue-row-body]");
+
+  const proto = HTMLElement.prototype;
+  const saved = { sw: Object.getOwnPropertyDescriptor(proto, "scrollWidth"), cw: Object.getOwnPropertyDescriptor(proto, "clientWidth") };
+  const cutLines = (cut: boolean) => {
+    Object.defineProperty(proto, "scrollWidth", { configurable: true, get: () => (cut ? 300 : 100) });
+    Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 100 });
+  };
+  afterEach(() => {
+    for (const [k, d] of [["scrollWidth", saved.sw], ["clientWidth", saved.cw]] as const) {
+      if (d) Object.defineProperty(proto, k, d);
+      else delete (proto as unknown as Record<string, unknown>)[k];
+    }
+  });
+
+  it("renders nothing without a queue", () => {
+    render(<QueuePanel session={{ ...session, queued: [] }} draftKey="qp-rg" canEdit />);
+    expect(host.innerHTML).toBe("");
+  });
+
+  it("draws no relayed group for one own message", () => {
+    render(<QueuePanel session={{ ...session, queued: ["只有一条"] }} draftKey="qp-rg" canEdit />);
+    expect(rows()).toHaveLength(1);
+    expect(host.querySelector("[data-queue-relayed-group]")).toBeNull();
+    expect(host.querySelector("[data-queue-relayed-summary]")).toBeNull();
+  });
+
+  it("draws neither an own list nor a hairline when only relayed messages are queued", () => {
+    show(["来自「主对话」：帮我看下日程", "来自「日报」：汇总"], 2);
+    expect(ownList()).toBeNull();
+    expect(host.querySelectorAll('[role="list"]')).toHaveLength(0);
+    expect(group().className).not.toContain("border-t");
+    expect(summary().textContent).toBe("2 条消息来自其他对话 · 对话空闲后送达");
+    expect(summary().querySelector("svg")).not.toBeNull();
+    click(summary());
+    expect(rows()).toHaveLength(2);
+    expect(rows().map((r) => r.querySelector("[data-queue-from]")!.textContent)).toEqual(["主对话", "日报"]);
+    expect(texts()).toEqual(["帮我看下日程", "汇总"]);
+    expect(host.textContent).not.toContain("来自「主对话」：");
+    expect(rows()[0].getAttribute("aria-label")).toBe("排队的第 1 条：来自「主对话」 · 帮我看下日程 · 对话空闲后送达");
+    expect(rows()[0].querySelector("[data-queue-note]")).toBeNull();
+  });
+
+  it("keeps the own rows' actions and a hairline above the relayed group with several of each", () => {
+    show(["我的一", "我的二", "来自「主对话」：甲", "来自「日报」：乙"], 2);
+    expect(ownList()).not.toBeNull();
+    expect(group().className).toContain("border-t border-line");
+    expect(summary().textContent).toContain("2 条消息来自其他对话");
+    click(summary());
+    expect(rows()).toHaveLength(4);
+    for (const i of [0, 1]) {
+      expect(within(i, "[data-queue-edit]")).not.toBeNull();
+      expect(within(i, "[data-queue-delete]")).not.toBeNull();
+    }
+    for (const i of [2, 3]) {
+      expect(rows()[i].querySelector("button")).toBeNull();
+      expect(rows()[i].querySelector("[data-queue-relayed-toggle]")).toBeNull();
+    }
+  });
+
+  it("shows a relayed line that is not a conversation_send as its raw text, with no from label", () => {
+    show(["日报的通知", "督办消息"], 2);
+    click(summary());
+    expect(host.querySelector("[data-queue-from]")).toBeNull();
+    expect(texts()).toEqual(["日报的通知", "督办消息"]);
+    expect(rows()[0].getAttribute("aria-label")).toBe("排队的第 1 条：其他对话 · 日报的通知 · 对话空闲后送达");
+    expect(rows()[0].querySelector("[data-queue-note]")).toBeNull();
+  });
+
+  it("has no send icon on a relayed row", () => {
+    show(["来自「主对话」：甲"], 1);
+    click(summary());
+    expect(rows()[0].querySelector("svg")).toBeNull();
+  });
+
+  it("opens a cut relayed line in place with its toggle, and closes it again", () => {
+    cutLines(true);
+    show(["来自「主对话」：一段很长很长的话"], 1);
+    click(summary());
+    expect(toggle(0).getAttribute("aria-expanded")).toBe("false");
+    expect(toggle(0).getAttribute("aria-label")).toBe("展开全文");
+    expect(body(0).className).toContain("truncate");
+    click(toggle(0));
+    expect(toggle(0).getAttribute("aria-expanded")).toBe("true");
+    expect(toggle(0).getAttribute("aria-label")).toBe("收起");
+    expect(body(0).className).not.toContain("truncate");
+    expect(body(0).className).toContain("whitespace-pre-wrap");
+    click(toggle(0));
+    expect(toggle(0).getAttribute("aria-expanded")).toBe("false");
+    expect(body(0).className).toContain("truncate");
+  });
+
+  it("toggles a cut relayed line by a click on the row, unless text is selected", () => {
+    cutLines(true);
+    show(["来自「主对话」：一段很长很长的话"], 1);
+    click(summary());
+    click(body(0));
+    expect(toggle(0).getAttribute("aria-expanded")).toBe("true");
+    click(body(0));
+    expect(toggle(0).getAttribute("aria-expanded")).toBe("false");
+    const sel = vi.spyOn(window, "getSelection").mockReturnValue({ toString: () => "很长" } as unknown as Selection);
+    click(body(0));
+    sel.mockRestore();
+    expect(toggle(0).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("measures again on closing, so a line opened while cut and widened to fit keeps no toggle", () => {
+    cutLines(true);
+    show(["来自「主对话」：一段很长很长的话"], 1);
+    click(summary());
+    click(toggle(0));
+    expect(toggle(0).getAttribute("aria-expanded")).toBe("true");
+    cutLines(false); // the composer widened while the line was open
+    expect(toggle(0).getAttribute("aria-expanded")).toBe("true");
+    click(toggle(0));
+    expect(host.querySelector("[data-queue-relayed-toggle]")).toBeNull();
+    expect(body(0).className).toContain("truncate");
+    click(body(0));
+    expect(body(0).className).toContain("truncate");
+  });
+
+  it("offers no toggle when the relayed line fits", () => {
+    cutLines(false);
+    show(["来自「主对话」：短"], 1);
+    click(summary());
+    expect(host.querySelector("[data-queue-relayed-toggle]")).toBeNull();
+    click(body(0));
+    expect(body(0).className).toContain("truncate");
+  });
+});
+
+describe("QueuePanel status, always-visible Send now and photo thumbnails (#10871)", () => {
+  const photo = (name: string) => `/Users/me/.persona/uploads/2026-11-20/${name}.png`;
+  const withPhotos = (...names: string[]) => `[Image #1]\n<attached_images>\n${names.map((n) => `path: ${photo(n)}`).join("\n")}\n</attached_images>`;
+  const errorImg = (img: HTMLImageElement) => act(() => void img.dispatchEvent(new Event("error")));
+
+  it("shows the queued status header in full layout and keeps Send now visible without hover on the first row", () => {
+    render(<QueuePanel session={session} draftKey="qp-10871-status" canEdit />);
+    const header = host.querySelector<HTMLElement>("[data-queue-header]");
+    expect(header).not.toBeNull();
+    expect(header!.textContent).toContain("已排队，尚未发送");
+
+    const firstRow = rows()[0];
+    const firstActions = firstRow.querySelector<HTMLElement>("[data-queue-actions]")!;
+    const firstSendNow = firstRow.querySelector<HTMLButtonElement>("[data-send-now]")!;
+    expect(firstActions.className).not.toContain("opacity-0");
+    expect(firstSendNow.className).not.toContain("opacity-0");
+    expect(firstSendNow.textContent).toContain("立即发送");
+    expect(firstSendNow.title).toContain("现在就把排队的消息全部发给 Claude");
+
+    const secondActions = rows()[1].querySelector<HTMLElement>("[data-queue-actions]")!;
+    expect(secondActions.className).toContain("opacity-0");
+  });
+
+  it("omits the full-layout status header in compact mode", () => {
+    render(<QueuePanel session={session} draftKey="qp-10871-compact" canEdit compact />);
+    expect(host.querySelector("[data-queue-header]")).toBeNull();
+  });
+
+  it("renders thumbnails for server-saved photo paths and falls back from thumb to inline download to icon", () => {
+    const raw = withPhotos("shot1");
+    render(<QueuePanel session={{ ...session, queued: [raw] }} draftKey="qp-10871-thumb" canEdit />);
+    const img = rows()[0].querySelector<HTMLImageElement>("[data-queue-photo-thumb]")!;
+    expect(img).not.toBeNull();
+    expect(img.src).toContain("/file/thumb?");
+    expect(img.src).toContain(encodeURIComponent(photo("shot1")));
+
+    // first error: fall back to inline file download
+    errorImg(img);
+    const inlineImg = rows()[0].querySelector<HTMLImageElement>("[data-queue-photo-thumb]")!;
+    expect(inlineImg.src).toContain("/file/download?");
+    expect(inlineImg.src).toContain("inline=1");
+
+    // second error: fall back gracefully to photo icon
+    errorImg(inlineImg);
+    expect(rows()[0].querySelector("[data-queue-photo-thumb]")).toBeNull();
+    expect(rows()[0].querySelector("[data-queue-photo-fallback] svg")).not.toBeNull();
+  });
+
+  it("uses local preview data URLs when freshly queued and collapses more than three photos into a +N badge", () => {
+    const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
+    const fivePhotos = withPhotos("p1", "p2", "p3", "p4", "p5");
+    render(
+      <QueuePanel
+        session={{ ...session, queued: [fivePhotos] }}
+        draftKey="qp-10871-multi"
+        canEdit
+        photoPreviewsOf={() => [dataUrl]}
+      />,
+    );
+    const thumbs = [...rows()[0].querySelectorAll<HTMLImageElement>("[data-queue-photo-thumb]")];
+    expect(thumbs).toHaveLength(3);
+    expect(thumbs[0].getAttribute("src")).toBe(dataUrl);
+    expect(thumbs[1].getAttribute("src")).toContain(encodeURIComponent(photo("p2")));
+    expect(thumbs[2].getAttribute("src")).toContain(encodeURIComponent(photo("p3")));
+    const overflow = rows()[0].querySelector<HTMLElement>("[data-queue-photo-overflow]");
+    expect(overflow?.textContent).toBe("+2");
   });
 });

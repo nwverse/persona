@@ -209,7 +209,7 @@ struct PromptComposer: View {
 /// What the composer's menus offer.
 enum PromptItems {
     static func attachments(camera: Bool, glasses: Bool = false) -> [PromptSource] {
-        var out = [PromptSource(id: "photo", name: String(localized: "Photos"), detail: String(localized: "Photos or videos, up to 4"), icon: .symbol(Theme.Icon.photos), kind: .attach)]
+        var out = [PromptSource(id: "photo", name: String(localized: "Photos"), detail: String(localized: "Photos or videos"), icon: .symbol(Theme.Icon.photos), kind: .attach)]
         if camera { out.append(PromptSource(id: "camera", name: String(localized: "Take Photo [Chat View 6e3a10]"), detail: String(localized: "Take one with the camera"), icon: .symbol("camera"), kind: .attach)) }
         if glasses { out.append(PromptSource(id: "glasses", name: String(localized: "Glasses Photo"), detail: String(localized: "Take one with the Meta glasses"), icon: .symbol(Theme.Icon.glasses), kind: .attach)) }
         out.append(PromptSource(id: "file", name: String(localized: "Files"), detail: String(localized: "Uploads to that computer and inserts the path"), icon: .symbol("doc"), kind: .attach))
@@ -218,10 +218,32 @@ enum PromptItems {
 
     /// Persona' quick messages under short "/" words (picking one types its message, sent with send), then Claude
     /// Code's own commands.
-    static func commands(clear: Bool, loop: Bool = false) -> [PromptCommand] {
+    static func commands(clear: Bool, loop: Bool = false, permissions: Bool = false) -> [PromptCommand] {
         var out = SlashCommand.commands(loop: loop).map { PromptCommand($0.word, detail: $0.detail, insert: $0.text) }
+        // Persona's own (#6513): the composer opens the mode list for it (`onCommand`), nothing is typed or sent.
+        if permissions { out.append(PromptCommand(SessionModes.permissionsCommand, detail: String(localized: "Switch permission mode"))) }
         if clear { out.append(PromptCommand("/clear", detail: String(localized: "Clear context and start a new session"))) }
         return out
+    }
+
+    /// The user's saved prompts (#9436) as commands: picking one types its text. Each has its own id (`saved:…`), as a
+    /// saved prompt may share its name with a command.
+    static func saved(_ prompts: [SavedPrompt]) -> [PromptCommand] {
+        prompts.map { PromptCommand("/" + $0.name, detail: SlashMenuRow.savedDetail, insert: $0.text, id: "saved:\($0.id)") }
+    }
+
+    /// Persona's own commands the chat runs when picked in the bar, instead of typing them.
+    enum OwnCommand: Equatable { case loop, permissions, clear }
+
+    /// Which of Persona's own commands a row picked in the bar is, by its id (#11410): a saved prompt's is `saved:…`, so
+    /// one named `permissions`, `loop` or `clear` types its text. `/permissions` only where the mode list is offered.
+    static func ownCommand(_ command: PromptCommand, permissions offered: Bool) -> OwnCommand? {
+        switch command.id {
+        case SlashCommand.loop.word: .loop
+        case SessionModes.permissionsCommand: offered ? .permissions : nil
+        case MainClearCommand.word: .clear
+        default: nil
+        }
     }
 
     /// Claude Code's `/model` aliases: picking one sends `/model <alias>` to the session.

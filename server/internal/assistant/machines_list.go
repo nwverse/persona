@@ -20,21 +20,24 @@ func known(v any) machineFact           { return machineFact{Value: v} }
 func unknown(reason string) machineFact { return machineFact{Reason: reason} }
 
 type machineFacts struct {
-	ID                   string      `json:"id"`
-	Name                 string      `json:"name"`
-	State                string      `json:"state"`
-	StateReason          machineFact `json:"state_reason"`
-	OS                   machineFact `json:"os"`
-	Cores                machineFact `json:"cores"`
-	CPUBusyPercent       machineFact `json:"cpu_busy_percent"`
-	Load                 machineFact `json:"load_1m"`
-	MemoryAvailableBytes machineFact `json:"memory_available_bytes"`
-	Swap                 machineFact `json:"swap_bytes"`
-	DiskFreeBytes        machineFact `json:"disk_free_bytes"`
-	SampleAgeSeconds     machineFact `json:"sample_age_seconds"`
-	WorkingAgents        machineFact `json:"working_agents"`
-	FailingLaunchers     machineFact `json:"failing_launchers"`
-	NodeOutdated         machineFact `json:"node_outdated"`
+	ID                   string       `json:"id"`
+	Name                 string       `json:"name"`
+	State                string       `json:"state"`
+	StateReason          machineFact  `json:"state_reason"`
+	OS                   machineFact  `json:"os"`
+	Cores                machineFact  `json:"cores"`
+	CPUBusyPercent       machineFact  `json:"cpu_busy_percent"`
+	Load                 machineFact  `json:"load_1m"`
+	MemoryAvailableBytes machineFact  `json:"memory_available_bytes"`
+	Swap                 machineFact  `json:"swap_bytes"`
+	DiskFreeBytes        machineFact  `json:"disk_free_bytes"`
+	BatteryPercent       *machineFact `json:"battery_percent,omitempty"`
+	BatteryCharging      *machineFact `json:"battery_charging,omitempty"`
+	TempC                *machineFact `json:"temp_c,omitempty"`
+	SampleAgeSeconds     machineFact  `json:"sample_age_seconds"`
+	WorkingAgents        machineFact  `json:"working_agents"`
+	FailingLaunchers     machineFact  `json:"failing_launchers"`
+	NodeOutdated         machineFact  `json:"node_outdated"`
 }
 
 // connectionReason follows the same categories as the machine page; unknown errors are not guessed.
@@ -56,6 +59,27 @@ func connectionReason(err string) string {
 		}
 	}
 	return "unknown"
+}
+
+// machineSilentAfter: a node samples every proto.MetricEvery; with a link that looks up but nothing reported for this
+// long (18 samples), it is not answering (a half-open connection), whatever the link says.
+const machineSilentAfter = 3 * time.Minute
+
+// silentNode reports a machine whose link is up but whose node has sent no sample for machineSilentAfter, counted from
+// the later of its last sample and its current connection (a fresh reconnect is not silent yet), and for how long.
+// A machine that never sampled is not judged: there is nothing to compare with.
+func (s *Service) silentNode(d Device, sample *proto.MetricSample, now time.Time) (bool, time.Duration) {
+	if !d.Reachable || sample == nil {
+		return false, 0
+	}
+	last := time.Unix(sample.T, 0)
+	if s.devs != nil {
+		if c := s.devs.ConnectedAt(d.ID); c.After(last) {
+			last = c
+		}
+	}
+	silent := now.Sub(last)
+	return silent > machineSilentAfter, silent
 }
 
 func (s *Service) toolMachinesList(ctx context.Context) (string, error) {
@@ -80,7 +104,11 @@ func (s *Service) toolMachinesList(ctx context.Context) (string, error) {
 			MemoryAvailableBytes: unknown("sample_not_reported"), Swap: unknown("sample_not_reported"), DiskFreeBytes: unknown("sample_not_reported"),
 			SampleAgeSeconds: unknown("sample_not_reported"), WorkingAgents: unknown("connection_not_available"),
 			FailingLaunchers: unknown("health_not_available"), NodeOutdated: unknown("connection_not_available")}
-		if d.Reachable {
+		if stale, silent := s.silentNode(d, sample, now); stale {
+			row.State = "unresponsive"
+			row.StateReason = known(map[string]any{"category": "no_recent_report", "last_report_age_seconds": int64(silent.Seconds()),
+				"detail": fmt.Sprintf("the link is up but the node has reported nothing for %s", silent.Round(time.Second))})
+		} else if d.Reachable {
 			row.State, row.StateReason = "online", unknown("not_applicable")
 		} else if m == nil {
 			row.StateReason = unknown("manager_snapshot_unavailable")
@@ -152,6 +180,18 @@ func (s *Service) toolMachinesList(ctx context.Context) (string, error) {
 					} else {
 						row.DiskFreeBytes = unknown("disk_measurement_missing_or_ambiguous")
 					}
+					if sample.BatteryPercent != nil {
+						f := known(*sample.BatteryPercent)
+						row.BatteryPercent = &f
+						if sample.BatteryCharging != nil {
+							c := known(*sample.BatteryCharging)
+							row.BatteryCharging = &c
+						}
+					}
+					if sample.TempC != nil {
+						f := known(*sample.TempC)
+						row.TempC = &f
+					}
 				}
 			}
 		}
@@ -162,7 +202,7 @@ func (s *Service) toolMachinesList(ctx context.Context) (string, error) {
 			} else {
 				count := 0
 				for _, c := range list {
-					if !c.Assistant && !c.Archived && c.State == proto.StateWorking {
+					if !c.HiddenByDirectory() && !c.Assistant && !c.Archived && c.State == proto.StateWorking {
 						count++
 					}
 				}

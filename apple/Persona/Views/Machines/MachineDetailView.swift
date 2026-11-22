@@ -87,14 +87,15 @@ struct MachineDetailView: View {
                         VStack(spacing: Theme.Space.m) {
                             MachineCard(machine: machine, metrics: data, showsMetrics: false, showsName: false)
                             // The card says a known error_code in words; the hub's own words stay here.
-                            if AddComputerText.machineProblem(machine.errorCode) != nil, let raw = machine.error, !raw.isEmpty {
+                            if !machine.linkSwitchRunning, AddComputerText.machineProblem(machine.errorCode) != nil, let raw = machine.error, !raw.isEmpty {
                                 problemDetails(raw)
                             }
                             // Offline with its manager (the card says so): it comes back with that manager, and Reconnect
                             // goes through it.
-                            if !online, !machine.isPending, model.offlineManager(of: machine, group: ref.group) == nil {
+                            if !online, !machine.linkSwitchRunning, !machine.isPending, model.offlineManager(of: machine, group: ref.group) == nil {
                                 connection(machine)
                             }
+                            MachineLinkSwitchView(machine: machine).id(Self.linkSwitchAnchor)
                         }
                         agentsSection(machine)
                         filesRow(online: online)
@@ -163,6 +164,15 @@ struct MachineDetailView: View {
                 try? await Task.sleep(for: .seconds(1)) // after the charts above have their height
                 scroller.scrollTo(Self.browserLoginsAnchor, anchor: .top)
             }
+            // `-openLinkSwitch YES`: the page opens with its Link-switch card at the top (screenshots, #10671).
+            .task(id: machine?.linkSwitch) {
+                guard machine?.linkSwitch != nil, UserDefaults.standard.string(forKey: "openLinkSwitch") != nil else { return }
+                try? await Task.sleep(for: .milliseconds(300))
+                scroller.scrollTo(Self.linkSwitchAnchor, anchor: .top)
+                // A different phase can change the card's height after that first layout, especially at xxxLarge.
+                try? await Task.sleep(for: .milliseconds(300))
+                scroller.scrollTo(Self.linkSwitchAnchor, anchor: .top)
+            }
             #endif
         }
         .themedGroupedPage()
@@ -222,6 +232,7 @@ struct MachineDetailView: View {
 
     private static let clipboardAnchor = "machine-clipboard"
     private static let browserLoginsAnchor = "machine-browser-logins"
+    private static let linkSwitchAnchor = "machine-link-switch"
 
     nonisolated private struct Poll: Hashable, Sendable { var range: MetricRange; var active: Bool }
     nonisolated private struct ExtensionsKey: Hashable, Sendable { var ref: MachineRef; var slots: Bool }
@@ -617,6 +628,17 @@ private struct NowGrid: View {
             tile(String(localized: "Swap"), sample.swapTotal > 0 ? MetricFormat.bytes(sample.swapUsed) : String(localized: "Off [Machine Detail View f95ea7]"),
                  detail: sample.swapTotal > 0 ? String(localized: "\(MetricFormat.bytes(sample.swapTotal)) total") : nil,
                  fraction: sample.swapPercent.map { $0 / 100 }, color: .secondary, level: .normal)
+            if let battery = sample.batteryPercent {
+                let charging = sample.batteryCharging == true
+                tile("Battery", MetricFormat.percent(battery), detail: charging ? "⚡" : nil,
+                     fraction: battery / 100, color: .secondary,
+                     level: !charging && battery <= 15 ? .critical : !charging && battery <= 25 ? .warning : .normal)
+            }
+            if let temp = sample.tempC {
+                tile("Temp", String(format: "%.1f°C", temp), detail: nil,
+                     fraction: min(1.0, max(0.0, temp / 125.0)), color: .secondary,
+                     level: MetricLevel.of(temp, warn: 75, crit: 90))
+            }
         }
     }
 

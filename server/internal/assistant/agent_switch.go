@@ -65,7 +65,7 @@ func (s *Service) toolAgentSwitch(ctx context.Context, machine, self string, arg
 			return "", fmt.Errorf("text is required: what %s should do on the new launcher (only an agent stopped on a usage limit "+
 				"goes on without it). Nothing was done", label)
 		}
-		text = prompts.RenderAgentLimitContinue() // what the manager sends it once the limit resets (agents_work_tick.go)
+		text = prompts.RenderAgentLimitContinue(answerLanguage(s.hello(ctx).Locale)) // what the manager sends it once the limit resets (agents_work_tick.go)
 	}
 	if exitText(text) {
 		return "", errors.New("text cannot be /exit or /quit: the agent is moved to go on working. Nothing was done")
@@ -82,7 +82,7 @@ func (s *Service) toolAgentSwitch(ctx context.Context, machine, self string, arg
 	if _, theirs, err := s.supervisedElsewhere(ctx, self, am, c); err != nil {
 		return "", err
 	} else if theirs {
-		text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: text})
+		text = prompts.RenderSideConversation(text)
 	}
 	if err := s.moveAgent(ctx, am, c, t, text); err != nil {
 		return "", fmt.Errorf("%s was not moved to %s: %w. Nothing was sent", label, t.Launcher, err)
@@ -115,7 +115,7 @@ func switchUnsupported(c proto.Session, launcher string) error {
 	case stoppedAgent(c) || c.Status == proto.StatusOffline:
 		return fmt.Errorf("%s has stopped, so it was not moved. agents_switch can make its next resume (the user's Resume, or "+
 			"agent_send with resume) come up on the launcher, or start a new agent with agent_start in its directory on that launcher", label)
-	case cmp.Or(c.Launcher, "claude") == launcher:
+	case cmp.Or(c.Launcher, "claude") == launcher && !c.OffLauncher: // off it, its own launcher is a switch back (#11792)
 		return errOnLauncherAlready
 	}
 	return nil
@@ -124,7 +124,7 @@ func switchUnsupported(c proto.Session, launcher string) error {
 // switchReachable says why agents on am cannot be moved to launcher now, nil when they can: this manager connects the
 // computer, its node can (capability), and the launcher is in the computer's scope.
 func (s *Service) switchReachable(ctx context.Context, am Device, launcher, capability string) error {
-	nodes, _ := s.devs.(nodeAnnouncer)
+	nodes, _ := s.physicalDevices().(nodeAnnouncer)
 	if s.devs == nil || nodes == nil || !s.devs.Has(am.ID) {
 		return fmt.Errorf("%s is not connected by this manager: it cannot move agents there", am.Name)
 	}
@@ -162,7 +162,10 @@ func (s *Service) moveAgent(ctx context.Context, am Device, c proto.Session, t s
 		params["apply_switch"], params["switch_now"] = true, true
 		err = s.call(wctx, am.ID, DeviceSessionSend, params, nil)
 	}
-	if err != nil {
+	// For an agent off its launcher, picking that launcher again is no way to drop the switch back to it: it is the
+	// switch back (a switch to another launcher it does cancel). The node drops it on a refusal; one whose message never
+	// got there waits for the user's next message (or 24 h).
+	if err != nil && !(c.OffLauncher && t.Launcher == own) {
 		s.dropAgentSwitch(wctx, am.ID, c.SessionID, own)
 	}
 	return err

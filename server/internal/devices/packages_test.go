@@ -86,7 +86,7 @@ func (r *fakeRelease) requests() []string {
 }
 
 // publish puts release m up at dl/<dir>/ (and as latest.json when latest) with builds: download name (no .gz) ->
-// the binary, each listed in Files or Nodes by its name.
+// the binary, each listed in Files, Nodes or Links by its name.
 func (r *fakeRelease) publish(t *testing.T, dir string, m update.Manifest, latest bool, builds map[string]string) *update.Manifest {
 	t.Helper()
 	m.Files = map[string]update.File{}
@@ -102,12 +102,18 @@ func (r *fakeRelease) publish(t *testing.T, dir string, m update.Manifest, lates
 		outer, inner := sha256.Sum256(gz.Bytes()), sha256.Sum256(raw)
 		f := update.File{Name: name + ".gz", Size: int64(gz.Len()), SHA256: hex.EncodeToString(outer[:]), BinarySHA256: hex.EncodeToString(inner[:])}
 		if plat, ok := strings.CutPrefix(name, "persona-node-"); ok {
+			plat = strings.TrimSuffix(plat, ".exe")
 			if m.Nodes == nil {
 				m.Nodes = map[string]map[string]update.File{"persona-node": {}}
 			}
 			m.Nodes["persona-node"][plat] = f
+		} else if plat, ok := strings.CutPrefix(name, programConnector+"-"); ok {
+			if m.Links == nil {
+				m.Links = map[string]update.File{}
+			}
+			m.Links[plat] = f
 		} else {
-			m.Files[strings.TrimPrefix(name, "personad-")] = f
+			m.Files[strings.TrimSuffix(strings.TrimPrefix(name, "personad-"), ".exe")] = f
 		}
 		r.mu.Lock()
 		r.files["/"+dir+"/"+f.Name] = gz.Bytes()
@@ -145,6 +151,72 @@ func packageDevices(t *testing.T, hub, site string) (*Devices, string, string) {
 func overlapping(version string, build int64) update.Manifest {
 	return update.Manifest{Version: version, Build: build, NodeProtocol: nodeproto.Version, NodeProtocolMin: nodeproto.MinManagerVersion,
 		NodeCapabilities: nodeproto.Announced}
+}
+
+// Windows node downloads keep .exe through manifest lookup, download and the on-disk cache. A hub never acquires a
+// Windows self-update entry; these files are only node packages fetched by a manager.
+func TestWindowsNodePackagesRetainExecutableNames(t *testing.T) {
+	const goos, arch = "windows", "amd64"
+	plat := goos + "-" + arch
+	full := updatetest.Program(t, nodeproto.ProgramPersonad, goos, arch)
+	node := updatetest.Program(t, nodeproto.ProgramPersonaNode, goos, arch)
+	ctx := context.Background()
+	for _, program := range []string{nodeproto.ProgramPersonad, nodeproto.ProgramPersonaNode} {
+		t.Run(program, func(t *testing.T) {
+			site := newFakeRelease(t)
+			manifest := site.publish(t, "v2", overlapping("v2", 2), false, map[string]string{
+				nodeproto.ProgramPersonad + "-" + plat + ".exe": full,
+				program + "-" + plat + ".exe": map[string]string{
+					nodeproto.ProgramPersonad: full, nodeproto.ProgramPersonaNode: node}[program]})
+			d, _, _ := packageDevices(t, "v2", site.srv.URL)
+			pkg, err := d.nodePackageFor(ctx, goos, arch, program)
+			if err != nil || pkg.Program != program || pkg.file.Name != program+"-"+plat+".exe.gz" {
+				t.Fatalf("lookup: %+v %v", pkg, err)
+			}
+			bin, err := d.fetchPackage(ctx, pkg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasSuffix(bin, program+"-"+plat+".exe") {
+				t.Fatalf("the cached Windows executable lost its suffix: %s", bin)
+			}
+			if update.ProgramOf(bin) != program {
+				t.Fatalf("the wrong program was downloaded: %s", bin)
+			}
+			// A cache hit uses the same executable filename and bytes rather than dropping .exe or redownloading.
+			asked := len(site.requests())
+			again, err := d.fetchPackage(ctx, pkg)
+			if err != nil || again != bin || len(site.requests()) != asked {
+				t.Fatalf("cache hit: %q %q %v, requests %v", again, bin, err, site.requests())
+			}
+
+			// The offline cache also uses the full executable name.
+			site.setDown(true)
+			if cached, err := d.lookupPackage(ctx, d.packageKey(goos, arch, program)); err != nil || cached.path != bin {
+				t.Fatalf("offline cache: %+v %v", cached, err)
+			}
+			site.setDown(false)
+			for _, wrong := range []string{program + "-" + plat + ".gz", program + "-windows-arm64.exe.gz", "../" + pkg.file.Name} {
+				f := pkg.file
+				f.Name = wrong
+				if program == nodeproto.ProgramPersonaNode {
+					manifest.Nodes[program][plat] = f
+				} else {
+					manifest.Files[plat] = f
+				}
+				raw, err := json.Marshal(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				site.mu.Lock()
+				site.files["/v2/manifest.json"] = raw
+				site.mu.Unlock()
+				if _, err := d.lookupPackage(ctx, d.packageKey(goos, arch, program)); err == nil {
+					t.Errorf("accepted an unrelated Windows artifact: %s", wrong)
+				}
+			}
+		})
+	}
 }
 
 // The hub's own builds come first and need no network; a persona-node device gets the release's persona-node when
@@ -222,22 +294,76 @@ func TestNodePackageLookupOrder(t *testing.T) {
 		if err != nil || update.ProgramOf(bin) != nodeproto.ProgramPersonaNode || !strings.HasPrefix(bin, identity.NodePackageCacheDir()) {
 			t.Fatalf("fetched %s %v", bin, err)
 		}
+		t.Run("cached Windows node", func(t *testing.T) {
+			const goos, arch = "windows", "amd64"
+			plat := goos + "-" + arch
+			full := updatetest.Program(t, nodeproto.ProgramPersonad, goos, arch)
+			node := updatetest.Program(t, nodeproto.ProgramPersonaNode, goos, arch)
+			d, dir, _ := packageDevices(t, "v2", "")
+			for name, program := range map[string]string{"personad-windows-amd64.exe": full, "persona-node-windows-amd64.exe": node} {
+				raw, err := os.ReadFile(program)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, name), raw, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, name+".version"), []byte("v2\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, tc := range []struct{ program, name string }{
+				{nodeproto.ProgramPersonad, "personad-windows-amd64.exe"},
+				{nodeproto.ProgramPersonaNode, "persona-node-windows-amd64.exe"},
+			} {
+				pkg, err := d.nodePackageFor(ctx, goos, arch, tc.program)
+				if err != nil || pkg.path != filepath.Join(dir, tc.name) || pkg.Program != tc.program {
+					t.Errorf("local %s: %+v %v", plat, pkg, err)
+				}
+			}
+		})
+
 		// A personad node is sent the hub's own personad: no download for it.
 		if pkg, _ := d.nodePackageFor(ctx, otherOS, otherArch, nodeproto.ProgramPersonad); pkg.path != filepath.Join(dir, "personad-"+plat) {
 			t.Fatalf("personad: %+v", pkg)
 		}
 	})
 
-	t.Run("fallback", func(t *testing.T) {
+	t.Run("fallback for the running program", func(t *testing.T) {
 		site := newFakeRelease(t)
-		site.publish(t, "v9-1", overlapping("v9-1", 9), true, map[string]string{"personad-" + plat: full})
-		d, _, _ := packageDevices(t, "1.2.3", site.srv.URL) // an image's version: no release of it
+		site.publish(t, "v9-1", overlapping("v9-1", 9), true, map[string]string{"personad-" + plat: full, "persona-node-" + plat: node})
+		d, _, _ := packageDevices(t, "1.2.3", site.srv.URL)
 		pkg, err := d.nodePackageFor(ctx, otherOS, otherArch, nodeproto.ProgramPersonaNode)
-		if err != nil || !pkg.Fallback || pkg.Version != "v9-1" || pkg.Program != nodeproto.ProgramPersonad {
+		if err != nil || !pkg.Fallback || pkg.Version != "v9-1" || pkg.Program != nodeproto.ProgramPersonaNode {
 			t.Fatalf("%+v %v", pkg, err)
 		}
 		if got := site.requests(); len(got) != 2 || got[0] != "/1.2.3/manifest.json" || got[1] != "/latest.json" {
 			t.Fatalf("asked %v", got)
+		}
+	})
+
+	t.Run("personad-only releases and cache", func(t *testing.T) {
+		for _, hub := range []string{"v2", "v1"} {
+			t.Run(hub, func(t *testing.T) {
+				site := newFakeRelease(t)
+				site.publish(t, "v2", overlapping("v2", 2), true, map[string]string{"personad-" + plat: full})
+				d, _, _ := packageDevices(t, hub, site.srv.URL)
+				pkg, err := d.nodePackageFor(ctx, otherOS, otherArch, "")
+				if err != nil || pkg.Program != nodeproto.ProgramPersonad {
+					t.Fatalf("legacy node: %+v %v", pkg, err)
+				}
+				if _, err := d.fetchPackage(ctx, pkg); err != nil {
+					t.Fatal(err)
+				}
+				if pkg, err := d.nodePackageFor(ctx, otherOS, otherArch, nodeproto.ProgramPersonaNode); err == nil {
+					t.Fatalf("selected personad for a persona-node from the manifest: %+v", pkg)
+				}
+				site.setDown(true)
+				d.packages.results = nil
+				if pkg, err := d.nodePackageFor(ctx, otherOS, otherArch, nodeproto.ProgramPersonaNode); !siteAway(err) {
+					t.Fatalf("selected personad for a persona-node from the offline cache: %+v %v", pkg, err)
+				}
+			})
 		}
 	})
 
@@ -562,8 +688,8 @@ func TestNodeOnTheFallbackBuildIsUpToDate(t *testing.T) {
 	s := m.snapshot()
 	want := i18n.T(i18n.Default, "devices-deploy.no_package", i18n.Args{"os": otherOS, "arch": "mips", "version": "v9-1",
 		"name": "personad-" + otherOS + "-mips"})
-	if s.CanDeploy == nil || *s.CanDeploy || s.DeployReason != want {
-		t.Fatalf("no build: %v %q", s.CanDeploy, s.DeployReason)
+	if s.CanDeploy == nil || *s.CanDeploy || s.DeployReason != want || !s.DeployNoPackage {
+		t.Fatalf("no build: %v %q no_package=%v", s.CanDeploy, s.DeployReason, s.DeployNoPackage)
 	}
 	if err := m.startDeploy(); err == nil || err.Error() != want {
 		t.Fatalf("Redeploy anyway: %v", err)

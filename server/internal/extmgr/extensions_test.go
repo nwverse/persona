@@ -121,6 +121,10 @@ func TestMain(m *testing.M) {
 		serveQuotaExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "usage" {
+		serveUsageExtensionForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "messaging" {
 		serveMessagingExtensionForTest()
 		return
@@ -135,6 +139,10 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "agentsrc" {
 		serveAgentSourceExtensionForTest()
+		return
+	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "live" {
+		serveLiveExtensionForTest()
 		return
 	}
 	// The official market (#2351) is added only by the tests about it: the others' markets are their own.

@@ -8,11 +8,13 @@ import { t } from "../../i18n";
 import { lazyPage } from "../../lib/lazy-page";
 import { useInboxSourcesGraphShown } from "../../lib/subscriptions";
 import { SUBSCRIPTIONS_UI } from "../../lib/subscriptions-ui";
+import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { Loading } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { usePersona } from "../assistant/Persona";
 import { Segmented } from "../assistant/parts";
 import { askAssistant, ExtensionUI } from "../settings/ExtensionView";
+import { InboxForwardSetting } from "../settings/InboxForwardSetting";
 
 // The relationship view and its layout are a chunk of their own, loaded when it is first shown.
 const SourcesGraphView = lazyPage(() => import("./SourcesGraph").then((m) => m.SourcesGraphView));
@@ -37,10 +39,14 @@ export function SourcesUI({ title, state, onGraph }: { title: string; state?: st
     setOpened(page);
     onGraph?.(on && !page);
   };
+  // The reserved id scopes what a graph's `key` keeps (lib/extension-owner.tsx): these pages' graphs keep their own
+  // pan, zoom and folds, apart from any extension's page that shares a key.
   const pages = (first?: string) => (
-    <ExtensionUI key={first ?? ""} extension={SUBSCRIPTIONS_UI} ui="pages" title={title} bare state={first} context={context} onDepth={setDepth} />
+    <ExtensionOwnerScope owner={SUBSCRIPTIONS_UI}>
+      <ExtensionUI key={first ?? ""} extension={SUBSCRIPTIONS_UI} ui="pages" title={title} bare state={first} context={context} onDepth={setDepth} />
+    </ExtensionOwnerScope>
   );
-  if (!offered) return pages(state);
+  if (!offered) return <>{pages(state)}{!state && <InboxForwardSetting />}</>;
   if (graph && opened)
     return (
       <div>
@@ -74,7 +80,10 @@ export function SourcesUI({ title, state, onGraph }: { title: string; state?: st
           </Suspense>
         </>
       ) : (
-        pages()
+        <>
+          {pages()}
+          {depth <= 1 && <InboxForwardSetting />}
+        </>
       )}
     </div>
   );

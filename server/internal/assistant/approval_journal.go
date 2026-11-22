@@ -12,16 +12,22 @@ import (
 
 const approvalJournalKey = "assistant.approval_clarifications"
 
+var errApprovalConversationGone = errors.New("the originating conversation no longer exists")
+
 // approvalJournalEntry contains delivery state only. In particular it has no
 // executable callback, tool arguments, Resolution.Values or approval fields.
 type approvalJournalEntry struct {
-	ID        string    `json:"id"`
-	MachineID string    `json:"machine_id"`
-	SessionID string    `json:"session_id"`
-	Status    string    `json:"status,omitempty"`
-	Result    string    `json:"result,omitempty"`
-	Accepted  bool      `json:"accepted,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        string `json:"id"`
+	MachineID string `json:"machine_id"`
+	SessionID string `json:"session_id"`
+	Status    string `json:"status,omitempty"`
+	Result    string `json:"result,omitempty"`
+	Private   bool   `json:"private,omitempty"`
+	// Continuation marks a detached command result whose retry instruction is
+	// valid only while its one-time grant remains unused.
+	Continuation bool      `json:"continuation,omitempty"`
+	Accepted     bool      `json:"accepted,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (s *Service) loadApprovalJournalLocked(ctx context.Context) bool {
@@ -61,7 +67,7 @@ func (s *Service) approvalJournalStarted(ctx context.Context, ix proto.Interacti
 	if slices.ContainsFunc(b.list, func(a approvalJournalEntry) bool { return a.ID == ix.ID }) {
 		return nil
 	}
-	b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID, UpdatedAt: time.Now().UTC()})
+	b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID, Private: ix.Private, UpdatedAt: time.Now().UTC()})
 	if err := s.saveApprovalJournalLocked(ctx); err != nil {
 		b.list = slices.DeleteFunc(b.list, func(a approvalJournalEntry) bool { return a.ID == ix.ID })
 		return fmt.Errorf("keep the clarification result journal: %w", err)
@@ -81,8 +87,10 @@ func (s *Service) approvalJournalApplying(ctx context.Context, ix proto.Interact
 	}
 	i := slices.IndexFunc(b.list, func(a approvalJournalEntry) bool { return a.ID == ix.ID })
 	if i < 0 {
-		b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID})
+		b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID, Private: ix.Private})
 		i = len(b.list) - 1
+	} else if ix.Private {
+		b.list[i].Private = true
 	}
 	if b.list[i].Result != "" {
 		return errors.New("the approval already has a terminal result")
@@ -112,8 +120,8 @@ func (s *Service) approvalJournalAborted(ctx context.Context, id string) {
 // original card is no longer waiting, including when execution is uncertain.
 func approvalResultText(id, status, text string) string {
 	word := map[string]string{
-		"resolved": "applied", "denied": "denied", "expired": "expired",
-		"replaced": "replaced", "stale": "stale and cancelled", "cancelled": "cancelled",
+		"resolved": "applied", "approved": "approved", "covered": "covered by a newer Always allow", "denied": "denied", "expired": "expired",
+		"replaced": "replaced", "stale": "stale and cancelled", "cancelled": "cancelled", "dismissed": "dismissed",
 		"failed": "left with an uncertain execution outcome",
 	}[status]
 	if word == "" {
@@ -131,12 +139,16 @@ func (s *Service) approvalJournalFinished(ctx context.Context, ix proto.Interact
 	}
 	i := slices.IndexFunc(b.list, func(a approvalJournalEntry) bool { return a.ID == ix.ID })
 	if i < 0 {
-		b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID})
+		b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID, Private: ix.Private})
 		i = len(b.list) - 1
+	} else if ix.Private {
+		// Upgrade a legacy or recovered entry before its terminal delivery.
+		b.list[i].Private = true
 	}
 	if b.list[i].Result == "" {
 		b.list[i].Status = status
 		b.list[i].Result = approvalResultText(ix.ID, status, text)
+		b.list[i].Continuation = ix.Detachable && status == "approved"
 		b.list[i].UpdatedAt = time.Now().UTC()
 	}
 	if err := s.saveApprovalJournalLocked(ctx); err != nil {
@@ -149,7 +161,10 @@ func (s *Service) approvalJournalFinished(ctx context.Context, ix proto.Interact
 // deliverApprovalResults hands each result to the exact conversation or its
 // durable relay queue. There is deliberately no fallback to today's main chat.
 // A single drain prevents concurrent accepts; a result added during a drain
-// triggers one more pass, while failures wait for the bounded retry timer.
+// triggers one more pass. Transient failures wait for the retry timer; a result
+// handed to the conversation or durable queue is removed. A result is
+// permanently undeliverable only when the deletion ledger names its original
+// conversation; an uncertain execution outcome stays durable even then.
 func (s *Service) deliverApprovalResults() {
 	b := &s.approvals
 	b.mu.Lock()
@@ -166,25 +181,50 @@ func (s *Service) deliverApprovalResults() {
 	for {
 		b.again = false
 		var due []approvalJournalEntry
+		kept := b.list[:0]
+		cleaned := false
 		for _, a := range b.list {
-			if a.Result != "" && !a.Accepted {
+			if a.Accepted {
+				// Versions before result cleanup retained handed-off entries forever.
+				cleaned = true
+				continue
+			}
+			kept = append(kept, a)
+			if a.Result != "" {
 				due = append(due, a)
+			}
+		}
+		b.list = kept
+		if cleaned {
+			if err := s.saveApprovalJournalLocked(context.Background()); err != nil {
+				s.logf("clean handed-off approval results: %v", err)
 			}
 		}
 		b.mu.Unlock()
 		failed := false
 		for _, a := range due {
-			if err := s.deliverApprovalResult(a); err != nil {
+			err := s.deliverApprovalResult(a)
+			gone := errors.Is(err, errApprovalConversationGone)
+			if err != nil && !gone {
 				failed = true
 				s.logf("deliver approval result %s: %v", a.ID, err)
 				continue
 			}
+			if gone && a.Status == "failed" {
+				// A deleted destination cannot receive the warning, but its durable
+				// record is the last evidence that execution may have happened.
+				s.logf("retain uncertain approval result %s for recovery: %v", a.ID, err)
+				continue
+			}
+			if gone {
+				s.logf("discard approval result %s: %v", a.ID, err)
+			}
 			b.mu.Lock()
-			if i := slices.IndexFunc(b.list, func(x approvalJournalEntry) bool { return x.ID == a.ID }); i >= 0 {
-				b.list[i].Accepted = true
-				b.list[i].UpdatedAt = time.Now().UTC()
+			before := len(b.list)
+			b.list = slices.DeleteFunc(b.list, func(x approvalJournalEntry) bool { return x.ID == a.ID })
+			if len(b.list) != before {
 				if err := s.saveApprovalJournalLocked(context.Background()); err != nil {
-					s.logf("mark approval result %s accepted: %v", a.ID, err)
+					s.logf("remove handed-off approval result %s: %v", a.ID, err)
 				}
 			}
 			b.mu.Unlock()
@@ -218,6 +258,25 @@ func (s *Service) scheduleApprovalResultRetryLocked() {
 func (s *Service) deliverApprovalResult(a approvalJournalEntry) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
+	if a.Continuation {
+		// Serialize with grant consumption through the actual conversation/queue
+		// handoff. If another call consumed first, the late result must not tell
+		// the model to execute that same call again (especially under Always).
+		s.detached.mu.Lock()
+		defer s.detached.mu.Unlock()
+		pending, err := s.detachedContinuationPendingLocked(ctx, a.ID)
+		if err != nil {
+			return fmt.Errorf("check detached continuation before delivery: %w", err)
+		}
+		if !pending {
+			a.Result = fmt.Sprintf("Approval %s is no longer pending. Its one-time continuation was already consumed or is no longer available. Do not retry it automatically; check whether the exact call already ran.", a.ID)
+		}
+	}
+	if _, deleted, err := s.deletedConversation(ctx, a.MachineID, a.SessionID); err != nil {
+		return fmt.Errorf("check the originating conversation's deletion record: %w", err)
+	} else if deleted {
+		return errApprovalConversationGone
+	}
 	var res struct {
 		OK bool `json:"ok"`
 	}
@@ -225,10 +284,12 @@ func (s *Service) deliverApprovalResult(a approvalJournalEntry) error {
 		return err
 	}
 	if !res.OK {
-		return errors.New("the originating conversation no longer exists")
+		// session.get reads the manager's current cache. A restart, an offline
+		// node, or a list that has not arrived yet says nothing about deletion.
+		return errors.New("the originating conversation is not currently listed")
 	}
-	msg := relayMsg{From: "approval-result-" + a.ID, FromTitle: "Approval result", Tool: askAnswerTool,
-		Text: a.Result, At: a.UpdatedAt}
+	msg := relayMsg{From: approvalResultFrom + a.ID, FromTitle: "Approval result", Tool: askAnswerTool,
+		Text: a.Result, At: a.UpdatedAt, Private: a.Private}
 	if msg.At.IsZero() {
 		msg.At = time.Now().UTC()
 	}
@@ -237,9 +298,11 @@ func (s *Service) deliverApprovalResult(a approvalJournalEntry) error {
 		working = c.Status == proto.StatusWorking || c.Starting
 	}
 	if !working {
-		if err := s.deliverRelay(ctx, a.MachineID, a.SessionID, msg); err == nil {
+		if err := s.tryDirectRelay(ctx, a.MachineID, a.SessionID, &msg); err == nil {
 			return nil
-		} else if !relayInDoubt(err) {
+		} else if s.refusedDirect(ctx, a.MachineID, a.SessionID, msg, err) {
+			return nil // a runtime conversation that cannot take it: the owner was pushed (relayRefused)
+		} else if !relayInDoubt(err) && !refusedForGood(err) {
 			// A transient send refusal may still be retried through the durable
 			// queue; an actually missing conversation was rejected above.
 			s.logf("approval result %s direct send: %v; queued", a.ID, err)
@@ -285,6 +348,14 @@ func (s *Service) recoverApprovalJournals(ctx context.Context) {
 	}
 	var unfinished []approvalJournalEntry
 	for i := range b.list {
+		if b.list[i].Status != "approved" {
+			// A continuation grant is valid only with its completed approved
+			// result. Revoke interrupted, cancelled and failed outcomes before
+			// delivery; a crashed apply must never leave an execution permit.
+			if err := s.revokeDetachedGrant(ctx, b.list[i].ID); err != nil {
+				s.logf("revoke interrupted approval %s: %v", b.list[i].ID, err)
+			}
+		}
 		if b.list[i].Result != "" {
 			continue
 		}

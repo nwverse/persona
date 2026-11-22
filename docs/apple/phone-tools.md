@@ -2,7 +2,7 @@
 
 `apple/Persona/PhoneTools/`: wraps iPhone capabilities as MCP tools so Claude on a computer can operate phone data. Toggles and authorization are under Settings › Connectors › This iPhone (called "Phone data" before 2026-11-01).
 
-Route: Claude calls a `phone_*` tool → `personad mcp` → node.sock → hub → an online device (iPhone, Android, or Mac, WebSocket `tool_call`) →
+Route: Claude calls a `phone_*` tool → `personad mcp` → node.sock → hub → an online device (iPhone, Android, or Mac, WebSocket `tool_call`; which one: "Which device takes a call" below) →
 the app queries/writes locally → `tool_result` returns along the same route.
 
 Device tool descriptions and schemas are registered by the app (iOS `apple/Persona/PhoneTools/`, Android `android/platform/phonetools/` (`PhoneToolCatalog.kt`)). The hub adds an optional `queue_if_offline` parameter to confirmed writes and supplies its own queue management tools from `server/internal/prompts/mcp/phone/` (`docs/assistant/prompts.md`, "MCP tools"). `personad mcp` adds `file` and `trim` to `phone_clipboard_set` (see "Copying a file to the clipboard").
@@ -10,6 +10,41 @@ A conversation lists its tools once (`personad mcp` says `listChanged: false`): 
 Descriptions and parameters for tools with the same name must match exactly on both platforms (the hub merges tools from all phones by name; `PhoneToolCatalogTest` compares against the catalog exported by iOS).
 
 Mail tools `mail_*` use the same `personad mcp`, but execute on the hub without going through the phone; see "Mail tools (mail_*)" below.
+
+## Which device takes a call
+
+Several of the owner's devices can offer phone tools at once: an iPhone and an iPad on one account, an Android phone.
+Each call goes to one of them (`callPhoneWithWait` in `server/internal/hub/hub.go`, `server/internal/hub/phone_primary.go`):
+
+- **Automatic** (the default, nothing chosen): among the connected devices that registered the tool, a real device
+  before a simulator, then the one that sent a message last. With none connected, the hub wakes the iOS device that
+  registered the tool most recently (silent push, at most one per device every 30 seconds) and waits up to 20 seconds
+  for a phone that offers it.
+- **A primary device** (#12019): the owner picks one in Settings › Devices on iPhone or iPad (`PUT /api/v1/phone/primary`,
+  `docs/protocol/protocol.md` "Authentication"). The hub keeps it in its own settings (`phone.primary`), one value for
+  every client. While the primary device offers the tool (connected: what its app offers now; away: its latest
+  registration):
+  1. connected, it takes the call, even when another device was active more recently;
+  2. not connected, the hub wakes it (iOS only; an Android phone is never woken) and waits up to 20 seconds for it
+     alone: another device connecting meanwhile does not end the wait;
+  3. still away, another connected device that offers the tool answers, in the automatic order. With none, the call
+     fails naming the primary device (`tools/phone_primary_offline.md`).
+
+  A primary device that cannot be reached (switched off, or Persona force-quit so the silent push never wakes it)
+  costs every call that wait before another device answers; choosing Automatic while it is away avoids it.
+
+  The clipboard tools (`phoneOnScreenTools`) are never woken for: a connected primary device takes them, otherwise
+  another connected device, otherwise the usual "open Persona" answer. Queued writes ("Offline write queue" below) wait
+  for the primary device: they are queued while it is away, even when another device is connected, and delivered to it
+  when it connects. When the primary device does not offer the tool (that data source is off there, or the tool is
+  another platform's, such as Android's `phone_notifications_list`), the call follows the automatic order.
+- **Saying which device answered**: whenever a primary device is chosen and another device answers, the result tells
+  the model so, with both devices' names (`tools/phone_stand_in.md`), so the assistant can tell the owner where an
+  answer came from, a location above all. A result that is one JSON object gets the note as its `device_note` field,
+  because the map and quick-result cards read that object from the result's text blocks joined into one; any other
+  result gets the note as a text block of its own.
+- Revoking the primary device's credential ends the choice: Settings › Devices shows Automatic again, and calls follow
+  the automatic order.
 
 ## Registration and toggles
 
@@ -29,8 +64,8 @@ A source that is on but refused is not offered either. One that iOS hasn't asked
 
 The table above is for iOS (Mac uses the same code). **Android** uses `PhoneToolRegistry.kt` in `android/platform/phonetools/`, also with `all`, `enabledSpecs()`, and `call(…)`; all calls pass through this single gate:
 
-- **Toggles** are under Settings › Phone data (Android has no "Connectors" group), one per data source (contacts / calendar / location / health / photos / clipboard / device information / notifications, no reminders). All default to off and are stored separately per pairing (`PhoneToolSettings`).
-- **Foreground restrictions** are declared in the tool catalog: `PhoneToolCatalog.kt` marks `phone_location_current` and the two clipboard tools with `foreground = true`. When the app is not in the foreground, `enabledSpecs()` omits them and calls are rejected, telling the model to ask the user to open Persona and retry. Moving to the background during execution also interrupts the call.
+- **Toggles** are under Settings › Phone data (Android has no "Connectors" group), one per data source (contacts / calendar / location / health / photos / clipboard / device information / notifications / calls, no reminders). All default to off and are stored separately per pairing (`PhoneToolSettings`).
+- **Foreground restrictions** are declared in the tool catalog: `PhoneToolCatalog.kt` marks `phone_location_current`, the two clipboard tools and `phone_call_start` with `foreground = true`. When the app is not in the foreground, `enabledSpecs()` omits them and calls are rejected, telling the model to ask the user to open Persona and retry. Moving to the background before execution also interrupts the call.
   - **iOS** has the same rule for the two clipboard tools (#4192): iOS gives an app in the background no clipboard, so a write
     woken by a silent push was dropped while the tool answered ok, and a read came back empty. `ClipboardTool` refuses both
     while Persona is not the active app, with the "open Persona and try again" answer of the other tools that need it on screen
@@ -39,7 +74,7 @@ The table above is for iOS (Mac uses the same code). **Android** uses `PhoneTool
     for them (`phoneOnScreenTools` in `hub.go`): with no connected phone offering one it answers "open Persona" at once, as it ends
     up doing for an Android phone that stopped offering them. A phone still connected in the background gets the call and refuses it.
 - **Hub registration** is handled by `PhoneToolsRuntime.kt`: send `register_phone` after connecting. When toggles, foreground/background state, or the persistent service change (permissions are also rechecked on every return to the foreground), recalculate `enabledSpecs()` and resend only if it changed. Send an empty list on disconnect or unpairing. Tools are offered only while the app is in the foreground or the persistent service is enabled; with neither, none are offered.
-- Before execution, check toggles, permissions, foreground state, and online status in order; writes requiring confirmation (only event creation) recheck after the user taps Allow. Duplicate delivery of the same `call_id` returns the previous result without executing again.
+- Before execution, check toggles, permissions, foreground state, and online status in order; writes requiring confirmation (calendar and contact changes, and calls) recheck after the user taps Allow. Duplicate delivery of the same `call_id` returns the previous result without executing again.
 
 See `docs/android/android.md` ("App shell and direct page navigation," the Settings › Phone data item; "Phone data tools aligned with iOS (2026-11-02)") and `android/platform/phonetools/README.md` for wiring and details.
 
@@ -59,7 +94,7 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_reminders_update {id, title?, due?, notes?, priority?, list?, location?}` | Reminders | **Yes** | Changes only the fields given; `due: null` removes the due date, `notes` replaces the notes (`null` removes them), `list` moves it, `location: null` stops it going off at a place; the card lists every field that changes (#2277) |
 | `phone_reminders_complete {id}` | Reminders | **Yes** | Marks complete (using the id returned by `phone_reminders_list`) |
 | `phone_reminders_delete {id}` | Reminders | **Yes** | Deletes a reminder the user no longer needs |
-| `phone_location_current {}` | Location (while in use) | No | One-shot location, waits up to 15 seconds; returns latitude/longitude, accuracy, altitude, time, time zone, and reverse-geocoded address |
+| `phone_location_current {}` | Location (While Using; Always also while Persona isn't open, "Location when Persona isn't open") | No | One-shot location, waits up to 15 seconds; returns latitude/longitude, accuracy, altitude, time, time zone, and reverse-geocoded address |
 | `phone_location_search {query, limit?}` | Location | No | Finds a place by name or address (MapKit): name, address, latitude, longitude, up to 10 |
 | `phone_maps_search_nearby {query, latitude?, longitude?, radius_meters?, limit?}` | Location | No | Places around the current fix (or the given point), nearest first: name, address, coordinates, distance, category, phone, website and the source (#2281). MapKit gives apps no opening hours; the result says so |
 | `phone_maps_navigate {latitude, longitude, name?, mode?}` | None (foreground) | No | Opens directions in Apple Maps (`driving` / `walking` / `transit`) and returns `opened: maps`: navigation runs in Maps, not in Persona |
@@ -70,7 +105,7 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_workout_detail {id}` | Health (read) | No | One workout by id: the same row plus per-kilometre splits (pauses left out) and minute-average heart rate |
 | `phone_photos_recent {limit?, days?, screenshots_only?}` | Photos (read) | No | Recent photo/video metadata: local id, time, type, dimensions, screenshot/favorite flags, duration, latitude/longitude |
 | `phone_photo_get {id, max_size?}` | Photos (read) | No | Returns the JPEG image itself (default longest edge 1280, quality 0.7) + metadata |
-| `phone_device_info {}` | None | No | Model identifier, iOS version, battery and charging state, Low Power Mode, storage, network type, time zone, language, thermal state, the app's `app_version`, `app_build` and `app_channel` (`debug` / `release`; the app carries no commit) |
+| `phone_device_info {}` | None | No | Model identifier, iOS version, battery and charging state, Low Power Mode, storage, network type, time zone, language, thermal state, the app's `app_version`, `app_build` and `app_channel` (`debug` / `release`); on iOS also `build` (`commit`, `dirty`, `branch`, `built_at`, `builder`, `xcode`, `swift`, `configuration`, `bundle_id`: a Debug build has them all, a Release build the commit) and `runtime` (`hub_host`, `hub_version`, `hub_connection`, `launched_at`). `build` and `runtime` are `AppDebugInfo` (`apple/Persona/App/BuildInfo.swift`), the same value Settings › About › Debug Info shows and copies (#12926); any field may be missing (older apps, Android), and the hub relays the result as it is |
 | `phone_clipboard_get {}` | None (foreground; system paste prompt) | No | Reads clipboard text |
 | `phone_clipboard_set {text}` or `{file, trim?}` | None (foreground) | No | Replaces clipboard text; `file` copies a text file from the agent's computer without the model reading it (see "Copying a file to the clipboard") |
 | `phone_notify {title, body, delay_seconds?}` | Notifications | No | Local notification, optionally delayed up to 24 hours |
@@ -79,7 +114,7 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_timer_start {seconds, label?}` | Alarms | **Yes** | Countdown timer, 1 s – 24 h |
 | `phone_alarm_cancel {id}` / `phone_alarm_pause {id}` / `phone_alarm_resume {id}` | Alarms | Cancel only | Only ids of Persona's own alarms |
 | `phone_messages_compose {recipients, body}` | None (foreground) | System sheet | Prefills `MFMessageComposeViewController` (#2279); the user sends or cancels there and the result is `sent` / `cancelled` / `failed`. Nothing is sent silently, nothing is read |
-| `phone_call_start {number, kind?, name?}` | None (foreground) | **Yes** | `tel:` / `facetime:` / `facetime-audio:` (#2280); one number only (letters or two numbers are refused), then iOS asks again. The result says the call was handed to iOS, not that it connected |
+| `phone_call_start {number, kind?, name?}` | None (foreground) | **Yes** | iOS: `tel:` / `facetime:` / `facetime-audio:` (#2280); one number only (letters or two numbers are refused), then iOS asks again. Android accepts `kind: phone` only, opens `ACTION_DIAL` with the normalized `tel:` URI and never requests `CALL_PHONE`; FaceTime kinds fail as unsupported. The result says the call was handed to iOS / Android, not that it connected |
 | `phone_shortcuts_list {}` / `phone_shortcuts_forget {name}` | None | No | The Shortcuts the user allowed (#2283), kept on the phone |
 | `phone_shortcuts_register {name, purpose?}` | None | **Yes** | Allowing a shortcut is the confirmation; after that it runs without asking |
 | `phone_shortcuts_run {name, input?}` | None (foreground) | No | Only an allowed shortcut; `shortcuts://x-callback-url/run-shortcut` with `x-success` / `x-cancel` / `x-error` back to `persona://shortcut-callback/…` (`ShortcutCallbacks`, handled first in `onOpenURL`). Waits 90 s for the callback, then says no answer came |
@@ -173,8 +208,8 @@ Tools by platform:
 - **iOS**: everything above except `phone_notifications_list`. The Home tools only in a build with the HomeKit capability ("iPhone system integrations" below).
 - **Mac** (`PersonaMac`): no health tools (Mac has no health data, `PhoneToolRegistry.healthTools`) and none of the iPhone system integrations
   (alarms, messages, calls, shortcuts, media, home, Maps' nearby search and navigation); otherwise the same as iOS. Vision Pro: the same as the Mac plus health.
-- **Android**: no reminder tools, `phone_health_write_sample`, `phone_location_search`, or any tool of #2276–#2286 yet; adds `phone_notifications_list`.
-  `phone_location_current` is available only while the app is in the foreground. `scripts/assets/export_ios_phone_tools.py` leaves these out of the Android fixture
+- **Android**: adds `phone_notifications_list`; supports the calendar / contact write tools and `phone_call_start`, but no reminder tools, `phone_health_write_sample`, `phone_location_search`, alarms, messages, maps, shortcuts, media or home tools. Calls accept only `kind: phone`, use a foreground `ACTION_DIAL` handoff and return `handed_to_android`; FaceTime kinds fail as unsupported.
+  `phone_location_current` is available only while the app is in the foreground. `scripts/assets/export_ios_phone_tools.py` leaves the unsupported tools out of the Android fixture
   (`IOS_ONLY`, `IOS_ONLY_TOOLS`).
 
 ### iPhone system integrations (#2276–#2286)
@@ -189,8 +224,8 @@ Code: `CalendarTool`, `RemindersTool`, `ContactsTool` (changes), `MapsTool`, `Al
 - **Foreground**: messages, calls, Maps, Shortcuts and Spotify / YouTube need Persona on screen (`Foreground.require`): iOS only opens another app, or
   shows a sheet, for the app in front. In the background they fail and ask the user to open Persona.
 - **The hub waits for the user** on every tool with a card and on `phone_messages_compose` (`phoneConfirmedTools`, 30 minutes).
-- **Alarms** need `NSAlarmKitUsageDescription` and iOS 26 (the deployment target). Not yet: a Live Activity for `AlarmAttributes<PersonaAlarmData>` in the
-  widget extension, so a timer's countdown is not drawn on the Lock Screen / Dynamic Island; the alert itself rings.
+- **Alarms** need `NSAlarmKitUsageDescription` and iOS 26+ (absent on iOS 18). A timer's countdown is drawn on the Lock Screen and in the
+  Dynamic Island by `AlarmLiveActivity` in the widget extension (`docs/apple/live-activity.md`, "Alarms and timers (AlarmKit)"); the alert rings as the Clock app's.
 - **Apple Music** needs `NSAppleMusicUsageDescription` and the MusicKit app service on the App ID (developer account); without the service catalog
   requests fail and the tool reports it.
 - **Home** needs the HomeKit capability on the App ID and the `com.apple.developer.homekit` entitlement, a signing change for the owner of the
@@ -203,11 +238,34 @@ Code: `CalendarTool`, `RemindersTool`, `ContactsTool` (changes), `MapsTool`, `Al
 Results are consistently pretty-printed JSON text (`ToolContent.text`), with all timestamps in ISO 8601 including the local time-zone offset; date fields use
 `yyyy-MM-dd`. `phone_photo_get` also includes a `ToolContent.image`.
 
+### Alarms and timers page
+
+AlarmKit alarms don't show in the Clock app, so before #12805 an alarm Persona set was visible nowhere until it rang. **Settings › This Device ›
+Alarms and Timers** (`AlarmsPage`, iOS 26+ like the tools; also in Settings search) lists every alarm and timer Persona set. It serves
+anyone who asked the assistant for one.
+
+- **Rows**: the name from `AlarmsTool.Labels` ("Alarm" / "Timer" without one), the time on the phone's clock or a timer's time left, how it
+  repeats (once, every day, weekdays, weekends, or the days) or a timer's length, and the state (scheduled, counting down, paused, ringing).
+  Timers come first, ringing ones on top. A timer's time left comes from the Live Activity AlarmKit runs for it
+  (`Activity<AlarmAttributes<PersonaAlarmData>>`): AlarmKit's `Alarm` has no fire date. Until the activity agrees with the alarm's state,
+  the row has no digits, and the feed reads it again for up to three seconds.
+- **Actions**: Delete on every row, after a confirmation (swipe or long press); Pause / Resume on a counting or paused timer. They call
+  the tools' own `AlarmsTool.cancel` / `pause(_:resume:)`, so a deleted alarm's label goes the same way as with `phone_alarm_cancel`. The
+  row changes at once, and AlarmKit's next list confirms it (`AlarmsPageModel.merge`).
+- **Live**: it follows `AlarmManager.shared.alarmUpdates` (`AlarmFeed`) only while the page is in front (`.tabActiveTask`). Leaving the page
+  or its tab, or the app going to the background, stops listening; coming back reads the list again.
+- **Permission**: opening the page never asks. Not asked yet: Allow Alarms asks. Refused: Open Settings. Same pattern as Settings ›
+  Meetings' calendar access.
+- **Data and tests**: AlarmKit is read into `AlarmEntry`, a plain value (`AlarmEntry(id:state:schedule:countdown:label:activity:)`), and the
+  page reaches AlarmKit only through `AlarmsPageModel.Deps`. `AlarmsPageTests` builds rows from AlarmKit's own types and drives the
+  model with a fake. `-openAlarms list|empty|denied|notAsked` (DEBUG) opens the page on made-up data for screenshots, so AlarmKit's
+  prompt never shows.
+
 ## Confirmation flow
 
 Writes (create / change / delete event, create / change / complete / delete reminder, write health data, create / change contact, alarms and timers,
-calls, allowing a shortcut, Home changes and scenes) carry a `confirmation` closure; before execution, the app shows a confirmation card (Android only confirms event creation, since it lacks the other three write tools), with a summary such as "Create event ‘…’ 14:00 → 15:00"
-or "Write health: weight 72.5 kg". If the user denies, the tool returns `isError=true` with `The user declined on the phone.`. Confirmation covers only one call;
+calls, allowing a shortcut, Home changes and scenes) carry a `confirmation` closure; before execution, the app shows a confirmation card with a summary such as "Create event ‘…’ 14:00 → 15:00"
+or "Write health: weight 72.5 kg". Android uses the same per-call confirmation for its calendar / contact writes and calls. If the user denies, the tool returns `isError=true` with `The user declined on the phone.`. Confirmation covers only one call;
 if Claude calls again, it asks again.
 
 - **One at a time** (#4456, `PhoneConfirmations`): a write that comes while another is on screen waits behind it and shows once that one is answered.
@@ -237,15 +295,17 @@ Read tools, `phone_clipboard_set`, and `phone_notify` cannot be queued. A write 
 registration; the hub refuses tools that no registered phone offers.
 
 - **Default unchanged**: omitting the parameter, or setting it to false, uses the existing call and background wake path;
-  an unreachable phone still returns an error. With true and no connected device offering that tool, the hub saves the
-  request immediately and returns its queue record and opaque `id`. After admission, it also attempts a silent push
+  an unreachable phone still returns an error. With true and no connected device offering that tool (with a primary
+  device chosen that offers it: while that device is not connected), the hub saves the request immediately and
+  returns its queue record and opaque `id`. After admission, it also attempts a silent push
   in the background using the same device selection and 30-second throttle as ordinary calls. The caller waits for
   neither the push nor reconnection. Without push configuration this attempt does nothing; the entry waits for the
   app to connect. With a connected device, the call runs normally and waits for its result. An error after sending
   never turns into a new queue entry.
 - **Confirmation still required**: accepting a queue entry does not mean the write happened. When a phone registers
   the needed tool, one delivery loop sends queued entries in their original order among the currently available tools,
-  waiting for each result before sending the next. Every delivery uses the normal app confirmation flow and starts its
+  waiting for each result before sending the next; an entry for a tool the primary device offers goes only to that
+  device ("Which device takes a call"). Every delivery uses the normal app confirmation flow and starts its
   own `phoneConfirmWait` deadline (30 minutes). Registration does not wait for queue delivery, and a tool unavailable
   on every connected device stays queued.
 - **Deduplication before delivery**: a queued entry with the same tool and normalized JSON arguments returns the existing
@@ -348,7 +408,7 @@ actual use of a tool (#7659).
 | Contacts | `NSContactsUsageDescription` | `requestAccess(for: .contacts)`, full or limited |
 | Calendar | `NSCalendarsFullAccessUsageDescription` | iOS 17+ `requestFullAccessToEvents()` |
 | Reminders | `NSRemindersFullAccessUsageDescription` | iOS 17+ `requestFullAccessToReminders()` |
-| Location | `NSLocationWhenInUseUsageDescription` | `requestWhenInUseAuthorization()` |
+| Location | `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription` | `requestWhenInUseAuthorization()`; Always with `requestAlwaysAuthorization()`, only after the owner taps Allow (below) |
 | Health | `NSHealthShareUsageDescription`, `NSHealthUpdateUsageDescription` (+ entitlement) | `requestAuthorization(toShare: five write types, read: …)` |
 | Photos | `NSPhotoLibraryUsageDescription` | `.readWrite`, possibly limited (only user-selected photos are readable) |
 | Notifications | None (runtime authorization) | `requestAuthorization([.alert, .sound, .badge])` |
@@ -366,6 +426,41 @@ Android's `phone_health_summary` (implemented in #278, omitted when #632 merged 
 "read permission is never reported to the app," because the hub stores a single tool catalog). The difference: Health Connect tells the app which read permissions were granted,
 so settings can show "Only some data allowed," and unauthorized metrics appear in `not_granted`; if none are granted, return an error rather than an empty result.
 Health Connect is built into Android 14 and later; on 8–13 it must be installed separately (usually absent on phones without Google services), in which case the tool returns "This phone has no Health Connect."
+
+### Location when Persona isn't open
+
+`phone_location_current` reaches a phone that is not in front through the hub's silent push ("iOS limitations"). With
+While Using, iOS gives an app its location only while it is in use: in front, and a few seconds after it leaves, so a
+push-woken read usually fails. With Always it works (#13200, `apple/Persona/PhoneTools/BackgroundLocation.swift`):
+
+- **Asked once, when it explains itself** (the owner's call, 2026-11-23). A read that fails while Persona is not in front
+  with While Using answers the model "open Persona and try again" (`LocationTool.whileUsingRefusal`) and is remembered.
+  The next time Persona comes to the front it shows `LocationAlwaysSheet` once: why now, when the location is read, that
+  nothing records where the user goes, then Allow and Not Now. Only Allow calls `requestAlwaysAuthorization()`, and iOS
+  shows its own Keep Only While Using / Change to Always Allow, once ever. Nothing asks at launch, and a first use still
+  asks for When In Use (no provisional Always, whose second dialog iOS times).
+- **Settings › Connectors › This iPhone**, under Location while it is on: "Only while Persona is open" with **Allow
+  Always** while iOS can still ask, **Open Settings** after; "Also when Persona isn't open" with **Open Settings**. Not
+  asked yet and refused show no line: the switch says those, as for every source. No new switch.
+- **The Always session**: from iOS 18 Always is effective only while the app holds `CLServiceSession(authorization:
+  .always)` (WWDC24 10212), and a session with that goal asks iOS for Always whenever the app is in front. So Persona
+  holds one only once iOS says Always and Location is on (`BackgroundLocationPolicy.runs`), never for an owner who
+  hasn't chosen it; `BackgroundLocationTests` pins it.
+- **A launch after a long move**: with Always and Location on, the significant-change service runs (about 500 m, at most
+  every 5 minutes; cell and Wi-Fi, no GPS). Its only job is that iOS launches Persona again after it was ended, so a later
+  push finds it; the fix is not kept or sent, and a launch in the background opens no hub connection
+  (`AppModel.start`). `BackgroundLocation.launch()` runs first thing in `didFinishLaunching`, because Core Location keeps a
+  relaunched app's session and service only a few seconds. No `location` background mode, no continuous updates, no
+  blue indicator.
+- **Swiped away**: a silent push never launches an app the user swiped away. Whether a significant change does, and
+  whether pushes reach the app again after it, Apple's engineers have answered both ways, and there are reports that
+  iOS 26.4 doesn't: checked on a device after release. Not done: the hub keeping the latest fix to answer from, a
+  separate privacy decision.
+- **Battery**: estimated under 0.1% a day for the reads and about 0.05–0.3% on a day of ordinary travel for the
+  significant-change launches (#13200 has the sources); measured on a device from the iOS Battery page's daily use and
+  background time.
+- A few days after Always is given, iOS itself reminds the owner that Persona used the location in the background,
+  with a map, and offers While Using again.
 
 ## Implementation notes
 
@@ -385,7 +480,7 @@ Health Connect is built into Android 14 and later; on 8–13 it must be installe
 - **The app must be connected to the hub**: the hub can send `tool_call` only to a phone that has sent `register_phone`. In the foreground or just after entering the background, the WebSocket
   remains available to receive calls; when iOS suspends the iPhone app, the hub first sends a silent push to wake it in the background and waits up to 20 seconds for connection (`hub.go`, `wakePhone`). Only the most recently registered device is woken; if it was woken within 30 seconds, skip the push but still wait 20 seconds. Hub push configuration is required; Android is not woken.
   If waking fails, return an error asking the model to have the user open Persona and retry. The clipboard tools are never woken for: they answer that at once ("Foreground restrictions"). A call waits at most 2 minutes for the phone (a confirmed write 30 minutes, see "Confirmation flow"); timeout also returns an error.
-- **Background location is unavailable**: only "While Using" permission is requested, so location fails outside the foreground.
+- **Location outside the foreground needs Always**: with While Using, a push-woken `phone_location_current` usually gets no fix. Always is asked only after the owner agrees ("Location when Persona isn't open").
 - **Clipboard reads trigger a system prompt**: when reading content copied in another app, iOS asks "Allow Paste?" and the user must allow it.
 - **Health data is aggregated by day only**: no individual-record queries; steps/energy are totals, heart rate is daily average/minimum/maximum, and sleep is daily time asleep
   (the `asleep` types, excluding "In Bed").

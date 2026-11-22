@@ -117,8 +117,9 @@ fun ChatTopBar(
         }
     }
     val leading = resolveDetailLeading(LocalSplitDetail.current, onBack)
+    val rootLeading = LocalRootLeading.current.takeIf { LocalIsSidebarRoot.current }
     val back: @Composable () -> Unit = {
-        when (leading) {
+        if (rootLeading != null) rootLeading() else when (leading) {
             is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), leading.onClick)
             is DetailLeading.Back -> JIconButton(if (style == AppStyle.Glass) PhIcons.CaretLeft else PhIcons.ArrowLeft, stringResource(R.string.designsystem_back), leading.onClick)
             DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
@@ -242,7 +243,7 @@ fun WorkGroup(
                 .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm),
         ) {
-            if (running) JSpinner(Modifier.size(Tokens.Space.Standard.m), stroke = Tokens.Space.Standard.xxs)
+            if (running) JSpinner(Modifier.size(Tokens.Space.Standard.m), color = palette.working.dot, stroke = Tokens.Space.Standard.xxs)
             Text(summary, style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             trailing?.let { CompositionLocalProvider(LocalContentColor provides palette.ink2, LocalTextStyle provides type.micro) { it() } }
             JIcon(if (expanded) persona.core.designsystem.icons.PersonaIcons.expand else PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3)
@@ -493,6 +494,8 @@ fun ComposerFrame(
     // A tap on the frame's blank space that nothing inside handled (around the field, beside the buttons).
     onBlankTap: (() -> Unit)? = null,
     expanded: Boolean = false,
+    // The compact Agent composer uses the shell's opaque material and a tighter toolbar.
+    useShellSurface: Boolean = false,
     field: @Composable BoxScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -503,45 +506,49 @@ fun ComposerFrame(
     // being cut off or ending there at once (#4210 T3). Brief and Board draw it in one place and invoke it directly.
     val trailingNow by rememberUpdatedState(trailing)
     val movableTrailing = remember { movableContentWithReceiverOf<RowScope> { trailingNow?.invoke(this) } }
-    if (PersonaTheme.style == AppStyle.Glass && LocalHomeChrome.current != null) {
-        val shape = RoundedCornerShape(HomeTokens.composerRadius.bubbleCorner)
-        val fill = if (PersonaTheme.darkTheme) HomeTokens.composerDark else HomeTokens.composerLight
-        val stroke = if (PersonaTheme.darkTheme) HomeTokens.composerStrokeDark else HomeTokens.composerStrokeLight
-        Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
-            .shadow(HomeTokens.composerShadow, shape, clip = false,
-                ambientColor = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha),
-                spotColor = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha))
-            .clip(shape).background(fill).border(HomeTokens.composerStroke, stroke, shape)
-            .then(keepsKeyboard).padding(Tokens.Space.s)) {
-            accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s), content = it) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (!expanded) leading?.invoke(this)
-                Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.android).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
-                    contentAlignment = Alignment.CenterStart, content = field)
-                if (!expanded && trailing != null) movableTrailing(this)
-            }
-            if (expanded) Row(verticalAlignment = Alignment.CenterVertically) {
-                leading?.invoke(this)
-                Spacer(Modifier.weight(1f))
-                if (trailing != null) movableTrailing(this)
-            }
-        }
-        return
-    }
     when (PersonaTheme.style) {
-        AppStyle.Glass -> Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
-            .floatingSurface(RoundedCornerShape(HomeTokens.composerRadius.bubbleCorner)).then(keepsKeyboard).padding(Tokens.Space.s)) {
-            accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs), content = it) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (!expanded) leading?.invoke(this)
-                Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.ios).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
-                    contentAlignment = Alignment.CenterStart, content = field)
-                if (!expanded && trailing != null) movableTrailing(this)
+        AppStyle.Glass -> {
+            val home = LocalHomeChrome.current != null
+            val shape = RoundedCornerShape(HomeTokens.composerRadius.bubbleCorner)
+            val surface = if (home || useShellSurface) {
+                val fill = if (PersonaTheme.darkTheme) HomeTokens.composerDark else HomeTokens.composerLight
+                val stroke = if (PersonaTheme.darkTheme) HomeTokens.composerStrokeDark else HomeTokens.composerStrokeLight
+                val shadow = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha)
+                Modifier.shadow(HomeTokens.composerShadow, shape, clip = false, ambientColor = shadow, spotColor = shadow)
+                    .clip(shape).background(fill).border(HomeTokens.composerStroke, stroke, shape)
+            } else Modifier.floatingSurface(shape)
+            val fieldHeight = if (home || useShellSurface) Tokens.MinTouch.android else Tokens.MinTouch.ios
+            val accessoryPadding = if (home || useShellSurface) Tokens.Space.flush else Tokens.Space.xs
+            val bodyInsets = when {
+                !useShellSurface -> Modifier.padding(Tokens.Space.s)
+                expanded -> Modifier.padding(start = Tokens.Space.sm, end = Tokens.Space.sm, bottom = Tokens.Space.xs)
+                else -> Modifier.padding(horizontal = Tokens.Space.xxs)
             }
-            if (expanded) Row(verticalAlignment = Alignment.CenterVertically) {
-                leading?.invoke(this)
-                Spacer(Modifier.weight(1f))
-                if (trailing != null) movableTrailing(this)
+            val fieldTop = when {
+                useShellSurface && expanded -> Tokens.Space.s
+                useShellSurface -> Tokens.Space.xs
+                else -> Tokens.Space.m
+            }
+            val fieldBottom = when {
+                useShellSurface && expanded -> Tokens.Space.flush
+                useShellSurface -> Tokens.Space.xs
+                else -> Tokens.Space.m
+            }
+            Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
+                .then(surface).then(keepsKeyboard).then(bodyInsets)) {
+                accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s, vertical = accessoryPadding), content = it) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (!expanded) leading?.invoke(this)
+                    Box(Modifier.weight(1f).heightIn(min = fieldHeight)
+                        .padding(start = Tokens.Space.s, top = fieldTop, end = Tokens.Space.s, bottom = fieldBottom),
+                        contentAlignment = Alignment.CenterStart, content = field)
+                    if (!expanded && trailing != null) movableTrailing(this)
+                }
+                if (expanded) Row(verticalAlignment = Alignment.CenterVertically) {
+                    leading?.invoke(this)
+                    if (!useShellSurface || trailing == null) Spacer(Modifier.weight(1f))
+                    if (trailing != null) movableTrailing(this)
+                }
             }
         }
         AppStyle.Brief -> Column(modifier.fillMaxWidth().background(palette.background).then(keepsKeyboard).padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)) {
@@ -638,10 +645,19 @@ internal fun SendButtonBody(
     onClick: () -> Unit, modifier: Modifier, enabled: Boolean, kind: SendKind, loading: Boolean, pressScales: Boolean, inert: Boolean,
 ) {
     val palette = PersonaTheme.palette
+    val glass = PersonaTheme.style == AppStyle.Glass
     val board = PersonaTheme.style == AppStyle.Board
     val shape = if (board) RoundedCornerShape(8.dp.corner) else CircleShape
-    val fill = when { kind == SendKind.Stop -> palette.danger.dot; enabled -> palette.action; else -> palette.surfaceStrong }
-    val ink = when { kind == SendKind.Stop -> palette.danger.onDot; enabled -> palette.onAction; else -> palette.ink3 }
+    val fill = when {
+        kind == SendKind.Stop -> if (glass) palette.action else palette.danger.dot
+        enabled -> palette.action
+        else -> palette.surfaceStrong
+    }
+    val ink = when {
+        kind == SendKind.Stop -> if (glass) palette.onAction else palette.danger.onDot
+        enabled -> palette.onAction
+        else -> palette.ink3
+    }
     val spoken = stringResource(if (kind == SendKind.Stop) R.string.designsystem_send_stop else R.string.designsystem_send)
     // Send and Stop are felt, as on iOS (DESIGN_SYSTEM.md 4.3).
     val haptics = rememberHaptics()
@@ -689,10 +705,15 @@ fun JumpToLatest(count: Int, onClick: () -> Unit, modifier: Modifier = Modifier)
             .clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = spoken }
             .padding(horizontal = 14.dp.dense),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
     ) {
         val ink = if (style == AppStyle.Brief) palette.onAction else palette.ink
         JIcon(PhIcons.ArrowDown, null, size = 18.dp, tint = ink)
-        if (count > 0) { Spacer(Modifier.width(6.dp.dense)); Text("$count", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.Bold), color = ink) }
+        if (count > 0) {
+            Spacer(Modifier.width(6.dp.dense))
+            Text("$count", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.Bold), color = ink,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
@@ -723,19 +744,21 @@ fun PlanPill(step: Int, total: Int, done: Int, onClick: () -> Unit, modifier: Mo
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp.dense),
     ) {
-        if (allDone) JIcon(PhIcons.Check, null, size = 14.dp, tint = ink)
+        val progressInk = if (style == AppStyle.Glass) palette.positive else ink
+        if (allDone) JIcon(PhIcons.Check, null, size = 14.dp, tint = progressInk)
         else {
-            val fraction = if (total > 0) step.toFloat() / total else 0f
+            val fraction = if (total > 0) (if (style == AppStyle.Glass) done.toFloat() else step.toFloat()) / total else 0f
             Box(Modifier.size(16.dp).drawBehind {
                 val stroke = 2.dp.toPx()
                 val arc = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
                 val at = Offset(stroke / 2, stroke / 2)
-                drawArc(ink.copy(alpha = 0.3f), 0f, 360f, false, at, arc, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
-                drawArc(ink, -90f, 360f * fraction, false, at, arc,
+                drawArc(ink.copy(alpha = 0.2f), 0f, 360f, false, at, arc, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+                if (fraction > 0f) drawArc(progressInk, -90f, 360f * fraction, false, at, arc,
                     style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
             })
         }
-        Text(stringResource(R.string.designsystem_plan_step, step, total), style = PersonaTheme.type.caption, color = ink, maxLines = 1)
+        Text(stringResource(R.string.designsystem_plan_step, step, total), style = PersonaTheme.type.caption, color = ink,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

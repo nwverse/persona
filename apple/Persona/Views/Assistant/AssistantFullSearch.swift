@@ -27,10 +27,12 @@ struct AssistantFullSearch: View {
     /// What was said in the chats, found by the manager (#6284): merged into the title / last-message matches.
     @State private var chatSearch: AssistantChatSearch? // made on the first query (P3: no work in the initial value)
 
-    init(scope: Scope = .chats, open: @escaping (SessionKey) -> Void, onOpenAgent: ((SessionKey) -> Void)? = nil) {
+    /// `query`: words to start with (the To-dos list's "Search Chats for …"); none from anywhere else.
+    init(scope: Scope = .chats, query: String = "", open: @escaping (SessionKey) -> Void, onOpenAgent: ((SessionKey) -> Void)? = nil) {
         self.open = open
         self.onOpenAgent = onOpenAgent
         _scope = State(initialValue: onOpenAgent == nil ? .chats : scope)
+        _query = State(initialValue: query)
     }
 
     /// The sidebar's conversations (the latest first), read here: the sidebar under the cover is off the window, and what
@@ -96,7 +98,7 @@ struct AssistantFullSearch: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { bar }
         .background(Theme.pageBackground.ignoresSafeArea())
         .onAppear { focused = true }
-        .onChange(of: query) { _, q in
+        .onChange(of: query, initial: true) { _, q in
             if chatSearch == nil, !q.isEmpty { chatSearch = AssistantChatSearch() }
             chatSearch?.search(q, api: model.api, on: model.features(model.hub?.group ?? "").contains(AssistantChatSearch.feature))
         }
@@ -194,7 +196,8 @@ struct AssistantFullSearch: View {
 
     /// `said`: the message a search found it by (#6284): its sentence in place of the last message, and opened at.
     private func row(_ s: Session, said: AssistantSearchAnswer.Hit? = nil) -> some View {
-        let title = s.key == model.assistantMain ? AssistantSidebar.mainDisplayName(model)
+        let isMain = s.key == model.assistantMain
+        let title = isMain ? String(localized: "Main Chat")
             : s.title.isEmpty || s.title == "Claude Code" ? String(localized: "New Chat [Quick Actions ea4b29]") : s.title
         let preview = s.lastText.map { Fmt.plain($0).replacingOccurrences(of: "\n", with: " ") } ?? ""
         return Button {
@@ -202,7 +205,7 @@ struct AssistantFullSearch: View {
             open(s.key)
         } label: {
             HStack(spacing: Theme.Space.m) {
-                ThemedIcon(Theme.Icon.conversation)
+                ThemedIcon(isMain ? Theme.Icon.home : Theme.Icon.conversation) // the main conversation's own, as its sidebar row (#9973)
                     .font(Theme.Font.body)
                     .foregroundStyle(.secondary)
                     .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)

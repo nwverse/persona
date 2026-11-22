@@ -162,15 +162,19 @@ func TestCallCancelledContextDoesNotRetry(t *testing.T) {
 	})
 }
 
-// A 4xx business error is not a transport problem: one attempt, APIError with its code.
+// A business error keeps its code and message on 2xx and 4xx responses, without retries.
 func TestCallBusinessErrorNotRetried(t *testing.T) {
-	c, _, hits, _ := retryAPIClient(t, func(w http.ResponseWriter, _ *http.Request, _ *atomic.Int32) {
-		w.WriteHeader(http.StatusBadRequest)
-		okJSON(w, map[string]any{"code": 230002})
-	})
-	var apiErr *APIError
-	if err := callOnce(c); !errors.As(err, &apiErr) || apiErr.Code != 230002 || hits.Load() != 1 {
-		t.Fatalf("err=%v hits=%d", err, hits.Load())
+	for _, status := range []int{http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			c, _, hits, _ := retryAPIClient(t, func(w http.ResponseWriter, _ *http.Request, _ *atomic.Int32) {
+				w.WriteHeader(status)
+				okJSON(w, map[string]any{"code": 230002, "msg": "synthetic business error"})
+			})
+			var apiErr *APIError
+			if err := callOnce(c); !errors.As(err, &apiErr) || apiErr.Code != 230002 || apiErr.Msg != "synthetic business error" || hits.Load() != 1 {
+				t.Fatalf("err=%v hits=%d", err, hits.Load())
+			}
+		})
 	}
 }
 

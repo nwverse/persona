@@ -1,5 +1,4 @@
 import Foundation
-import PersonaWire
 
 // Subscription rate-limit windows (#2432, #2595, docs/server/usage-windows.md): GET /api/v1/usage/windows lists the accounts the
 // machines' agents are signed in to, and those an account-pool gateway keeps, with how much of each window (5h, 7d …)
@@ -145,6 +144,12 @@ public nonisolated enum UsageWindows {
         let expected = elapsed / total * 100
         let diff = w.usedPercent - expected
         return Pace(expected: expected, state: diff > paceTolerance ? .over : diff < -paceTolerance ? .under : .on)
+    }
+
+    /// The pace of one of an account's windows, as the cards show it. An out-of-date reading says nothing about how fast it
+    /// is being used now, so a stale account has none (#12411): its numbers and reset stay, faded and dated.
+    public static func pace(_ w: UsageWindow, stale: Bool, now: Date = .now) -> Pace? {
+        stale ? nil : pace(w, now: now)
     }
 
     public static func paceLabel(_ s: PaceState) -> String {

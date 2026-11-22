@@ -7,6 +7,7 @@ import androidx.compose.runtime.compositionLocalOf
 import persona.core.contracts.Item
 import persona.core.contracts.Machine
 import persona.core.domain.lines.ChatLine
+import persona.core.domain.lines.EngineChanges
 import persona.core.domain.ComputerSteps
 import persona.core.domain.MessageContext
 import persona.core.domain.decodeXmlEntities
@@ -73,7 +74,9 @@ internal fun messageModel(raw: String, from: String? = null, user: Boolean = fal
     // The hub's interject note is model instructions, never a quote chip in the owner's bubble (#6595); parseContexts
     // already strips the block from the written text, so only drop it from the rendered contexts.
     val (parsedContexts, written) = parseContexts(raw)
-    val contexts = parsedContexts.filterNot(MessageContext::isInterjectContext)
+    val contexts = parsedContexts.filterNot {
+        it.isInterjectContext() || (user && EngineChanges.fromContext(it) != null)
+    }
     // Only the exact tag the hub ends a card's answer with, only on the user's own message.
     val card = if (user) persona.core.domain.views.PersonaActionTag.split(written) else null
     val (attached, text) = parseAttachedFiles(card?.first ?: written)
@@ -120,6 +123,9 @@ private val softBreak = Regex("([^\n])\n(?=[^\n])")
 internal data class MarkdownText(val key: String, val text: String) {
     private val asked by lazy { PathLinks.asked(text) }
     @Volatile private var linked: Pair<Set<String>, String>? = null
+    internal var ancillary: AssistantAncillaryStream? = null
+
+    internal fun withAncillary(stream: AssistantAncillaryStream): MarkdownText = apply { ancillary = stream }
 
     /**
      * What the row parses [text] as (ChatMarkdownBody): with the paths [paths] knows to be there as links, when the page
@@ -127,6 +133,11 @@ internal data class MarkdownText(val key: String, val text: String) {
      * parse instead of parsing again.
      */
     fun source(paths: PathPresence?): String {
+        ancillary?.let { stream ->
+            val current = stream.update(text, linkable = emptySet())
+            val linkable = if (paths == null) emptySet() else current.paths.filterTo(LinkedHashSet(), paths::linkable)
+            return stream.update(text, linkable = linkable).linkedMarkdown
+        }
         if (paths == null) return text
         val linkable = asked.filterTo(LinkedHashSet(), paths::linkable)
         linked?.takeIf { it.first == linkable }?.let { return it.second }
@@ -154,6 +165,18 @@ internal class MarkdownPrewarm(private val limit: Int = 80) {
     /** Where the last item's texts are: at the end of [latest] (1), at the start of [earlier] (2), nowhere (0); and how many. */
     private var lastSide = 0
     private var lastCount = 0
+    private var structureGeneration = -1L
+    private val ancillary = object : LinkedHashMap<String, AssistantAncillaryStream>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, AssistantAncillaryStream>) = size > 8
+    }
+
+    /** A conflated revision still proves whether its structural base was the one this consumer last processed. */
+    @Synchronized fun split(revision: ChatLiveItems.Revision): Pair<List<MarkdownText>, List<MarkdownText>> {
+        val result = if (revision.lastTextOnly && revision.structureGeneration == structureGeneration)
+            splitLast(revision.items, streamingLast = true) else split(revision.items)
+        structureGeneration = revision.structureGeneration
+        return result
+    }
 
     @Synchronized fun split(items: List<Item>): Pair<List<MarkdownText>, List<MarkdownText>> {
         val before = this.items
@@ -182,8 +205,34 @@ internal class MarkdownPrewarm(private val limit: Int = 80) {
         return latest to earlier
     }
 
-    private fun texts(item: Item) = messageParts(item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it }, item.from)
-        .mapIndexedNotNull { index, part -> (part as? MessagePart.Text)?.let { MarkdownText("${item.id}/$index", it.text) } }
+    @Synchronized fun splitLast(items: List<Item>, streamingLast: Boolean = false): Pair<List<MarkdownText>, List<MarkdownText>> {
+        val last = items.lastOrNull()
+        val was = this.items.lastOrNull()
+        if (last == null || was == null || this.items.size != items.size || last.id != was.id || last.seq != was.seq ||
+            last.role != was.role || last.kind != was.kind) return split(items)
+        // The caller's live revision proves that every earlier item is unchanged; do not compare the whole prefix again.
+        this.items = items
+        if (lastSide != 0) {
+            val texts = texts(last, streamingLast)
+            if (lastSide == 1) latest = latest.subList(0, latest.size - lastCount) + texts
+            else earlier = texts + earlier.subList(lastCount, earlier.size)
+            lastCount = texts.size
+        }
+        return latest to earlier
+    }
+
+    private fun texts(item: Item, streaming: Boolean = false): List<MarkdownText> {
+        val raw = item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it }
+        if (streaming && item.from.isNullOrBlank()) {
+            val stream = ancillary.getOrPut(item.id) { AssistantAncillaryStream { _, _ -> } }
+            return stream.update(raw, linkable = emptySet()).model.parts.mapIndexedNotNull { index, part ->
+                (part as? MessagePart.Text)?.let { MarkdownText("${item.id}/$index", it.text).withAncillary(stream) }
+            }
+        }
+        return messageParts(raw, item.from).mapIndexedNotNull { index, part ->
+            (part as? MessagePart.Text)?.let { MarkdownText("${item.id}/$index", it.text) }
+        }
+    }
 }
 
 /**
@@ -340,6 +389,33 @@ internal fun latestPlan(steps: List<WorkItem>): LinePlan? = steps.asReversed().f
     (step as? WorkItem.Tool)?.call?.let { call ->
         todoEntries(call.use.item)?.takeIf { it.size >= 2 }?.let { LinePlan(call.id, it, call.failed) }
     }
+}
+
+/**
+ * The chat's newest non-failed plan across all items (including collapsed work lines and hub-folded snapshots, mirroring
+ * iOS `ChatPlan.latest`), so Glass can show its floating `PlanPill` above the composer even while work lines are folded.
+ */
+internal fun latestChatPlan(items: List<Item>): LinePlan? {
+    val failed = mutableSetOf<String>()
+    for (item in items.asReversed()) {
+        val snap = item.fold?.tasks?.lastOrNull { it.replace == "todo" && it.entries.size >= 2 }
+        if (snap != null) {
+            val todos = snap.entries.mapNotNull { entry ->
+                val content = entry.subject?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val rawStatus = entry.status
+                if (rawStatus == "deleted") return@mapNotNull null
+                val status = if (rawStatus == "completed" || rawStatus == "in_progress") rawStatus else "pending"
+                TodoEntry(content, status, entry.description)
+            }
+            if (todos.size >= 2) return LinePlan(snap.sourceItemId, todos, failed = false)
+        }
+        if (item.kind == "tool_result" && item.isError == true) item.toolUseId?.let(failed::add)
+        if (item.kind == "tool_use" && item.toolName == "TodoWrite" && item.toolUseId !in failed) {
+            val todos = todoEntries(item)?.takeIf { it.size >= 2 }
+            if (todos != null) return LinePlan(item.id, todos, failed = false)
+        }
+    }
+    return null
 }
 
 /** Where the newest plan card is drawn: its line ([lineId]) and the plan. */

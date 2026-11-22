@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // What a runtime that is a machine's engine needs beyond listing and driving its sessions (Paseo, docs/integrations/paseo.md):
@@ -152,10 +154,9 @@ func (n *Node) runtimeLauncherModels(name string) (proto.LauncherModels, bool) {
 	return launcherModelsOf(n.runtimeOf(name), name)
 }
 
-// agyRuntimeModels is the Antigravity runtime's own launcher models, which a managed launcher named agy does not hide:
-// what a managed Antigravity launcher starts (startRuntime) and offers.
+// agyRuntimeModels is the Antigravity companion's advertised catalog for settings.
 func (n *Node) agyRuntimeModels() (proto.LauncherModels, bool) {
-	return launcherModelsOf(n.runtimes.launcherRuntime("agy"), "agy")
+	return launcherModelsOf(n.runtimes.launcherRuntime(agyAgent), agyAgent)
 }
 
 // launcherModelsOf is runtime h's advertisement for its launcher name; false without a runtime.
@@ -179,6 +180,8 @@ func launcherModelsOf(h *runtimeConn, name string) (proto.LauncherModels, bool) 
 type runtimeStartParams struct {
 	Cwd, Prompt, Launcher         string
 	Model, PermissionMode, Effort string
+	ClientMsgID                   string
+	Images                        []proto.Image
 	WorkspaceID                   string // a space of the runtime's to start in (one of its sessions' space_id)
 	Resume                        string // the Claude session to take over and continue (caps.resume)
 	// SessionID: the id the hub named for a new session (session.start's session_id, #8130): the manager finds a
@@ -187,15 +190,17 @@ type runtimeStartParams struct {
 	SessionID string
 	// AgentType: the kind of agent Launcher starts (claude, codex…), for a runtime that runs only its own launchers
 	// (caps.same_kind) and does not have it: it starts one of its own of that kind, or refuses.
-	AgentType     string
-	Shell         bool // Launcher is a login shell's launcher: the runtime picks its own of that name (no caps.same_kind)
-	OpenElsewhere bool // a running claude has Resume open: only a runtime running it may take it
+	AgentType       string
+	RequireLauncher bool // the start carries context to a fresh session on its old launcher
+	Shell           bool // Launcher is a login shell's launcher: the runtime picks its own of that name (no caps.same_kind)
+	OpenElsewhere   bool // a running claude has Resume open: only a runtime running it may take it
 }
 
 // engineRuntimes maps the engines that are a runtime to that runtime's id (engine.go).
 var engineRuntimes = map[string]string{
-	proto.EnginePaseo: proto.EnginePaseo,
-	proto.EngineCindy: proto.EngineCindy,
+	proto.EnginePaseo:  proto.EnginePaseo,
+	proto.EngineCindy:  proto.EngineCindy,
+	proto.EngineT3Code: proto.EngineT3Code,
 }
 
 // engineRuntime is the runtime that is the host of a start in ctx (Paseo: the one the start named, else the machine's
@@ -228,6 +233,23 @@ func (n *Node) engineRuntimeAway(ctx context.Context) error {
 		"在电脑上打开 %s 后再试。", name, name, name), nil)
 }
 
+// resumeHostRefusal is why no resume could go on in the host a start names (host; "" the machine's default),
+// whatever the id: a host this computer does not enable (checkStartHost), or an engine runtime that is not connected
+// (engineRuntimeAway, Paseo restarting its bridge included). An extension's resume the computer does not know
+// (resumeOutsideHealth) is told this before resume_unknown, as the owner's resume of any id is: the engine may have the
+// session (Paseo keeps its Agents, and lists an archived one only for a while), and the refusal says nothing of the id
+// (#10941). A host a record of the session picks (withResumeHost) is not asked: that would depend on the id.
+func (n *Node) resumeHostRefusal(ctx context.Context, host string) error {
+	if err := n.checkStartHost(host); err != nil {
+		return err
+	}
+	ctx = withStartHost(ctx, host)
+	if _, runtime := engineRuntimes[n.startKind(ctx)]; runtime && n.engineRuntime(ctx) == nil {
+		return n.engineRuntimeAway(ctx)
+	}
+	return nil
+}
+
 // startOnEngineRuntime starts a session on the machine's engine runtime: a launcher of the login shell's, or a session
 // to continue (resume), go there too — on such a machine there is no terminal to start them in.
 func (n *Node) startOnEngineRuntime(ctx context.Context, p runtimeStartParams) (*proto.Session, *proto.StartInstead, error) {
@@ -246,6 +268,9 @@ func (n *Node) startOnEngineRuntime(ctx context.Context, p runtimeStartParams) (
 	// default (shell_launcher). A managed launcher's own settings apply only where personad launch runs it
 	// (runtimeStart), never inside the engine.
 	if _, own := h.launcherNamed(p.Launcher); !own && p.Launcher != "" {
+		if p.RequireLauncher {
+			return nil, nil, refusal("launcher_missing", i18n.T(i18n.From(ctx), "hub-context_handoff.launcher_missing"), nil)
+		}
 		if sameKind(h) {
 			p.AgentType = n.agentKindOf(p.Launcher, p.AgentType)
 		} else {
@@ -312,7 +337,7 @@ func (n *Node) watchTakenOver(h *runtimeConn, id string) {
 	if w == nil || w.parent == nil || w.ctx.Err() != nil || n.runtimes.watchedOn(h, id) {
 		return
 	}
-	attempt := n.runtimes.watch(h, id, 0, w.parent)
+	attempt := n.runtimes.watch(h, id, 0, "", w.parent)
 	if err := n.runtimeWatch(h, id, attempt.since); err != nil {
 		n.runtimes.watchFailed(h, id, attempt.token)
 	}
@@ -358,6 +383,7 @@ func (n *Node) liveRuntimeModels(ctx context.Context, h *runtimeConn, name strin
 	// Apply the same bounds as runtime.launchers before exposing a native response.
 	clean := cleanLaunchers([]runtimeLauncher{{Name: name, Agent: fallback.Agent, Models: out.Models}})
 	out.Agent, out.Models = fallback.Agent, clean[0].Models
+	out.SupportsStartModel = false // only the node's native omp start can advertise this.
 	if out.Models == nil {
 		out.Models = []proto.AgentModel{}
 	}
@@ -388,6 +414,11 @@ func (n *Node) runtimeLauncherCheck(ctx context.Context, h *runtimeConn, name, c
 	if err := h.peer.Call(ctx, "launchers.check", params, &result); err != nil {
 		result = proto.LauncherCheck{Error: err.Error()}
 	}
+	// The runtime's CLI may print colour and shell integration like any other: the record and the apps read it clean.
+	if result.Error != "" {
+		result.Error = textfmt.LauncherErrorSummary(result.Error, 400)
+	}
+	result.Answer = textfmt.StripTerminalEscapes(result.Answer)
 	launcher, _ := h.launcherNamed(name)
 	result.Agent = launcher.Agent
 	if result.Agent == "" {

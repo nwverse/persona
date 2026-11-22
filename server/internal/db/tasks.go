@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -78,6 +79,16 @@ func (d *DB) TaskPlans(ctx context.Context, conversation string) ([]TaskPlanRow,
 	return scanTaskPlans(rows)
 }
 
+// OpenTaskPlans reads this manager's plans still waiting for the owner, across conversations.
+func (d *DB) OpenTaskPlans(ctx context.Context) ([]TaskPlanRow, error) {
+	rows, err := d.pool.Query(ctx, `SELECT id, conversation, tasks, state, created_at, updated_at FROM task_plans
+ WHERE state = 'open' ORDER BY created_at, id`)
+	if err != nil {
+		return nil, err
+	}
+	return scanTaskPlans(rows)
+}
+
 // TaskPlansMadeSince lists the plans made at or after since that were started or dismissed, oldest first: what the
 // owner did with the plan cards lately, counted when a standing rule is suggested (assistant/rule_suggest.go, #4929).
 func (d *DB) TaskPlansMadeSince(ctx context.Context, since time.Time) ([]TaskPlanRow, error) {
@@ -126,6 +137,80 @@ func (d *DB) UpdateTaskPlan(ctx context.Context, id, from, to string, tasks json
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// EditStartedPlanTask applies edit to the current task while holding the database row lock.
+// A manager claiming the queue on another connection serializes with this edit.
+func (d *DB) EditStartedPlanTask(ctx context.Context, id string, index int, edit func(json.RawMessage) (json.RawMessage, error)) (*TaskPlanRow, error) {
+	var row TaskPlanRow
+	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		var task json.RawMessage
+		err := tx.QueryRow(ctx, `SELECT state, tasks->$2::integer FROM task_plans WHERE id = $1 FOR UPDATE`, id, index).Scan(&row.State, &task)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrTaskPlanNotFound
+		}
+		if err != nil || row.State != "started" || index < 0 || task == nil {
+			return err
+		}
+		next, err := edit(task)
+		if err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `UPDATE task_plans SET tasks = jsonb_set(tasks, ARRAY[$2::integer::text], $3::jsonb), updated_at = clock_timestamp()
+			WHERE id = $1 RETURNING id, conversation, tasks, state, created_at, updated_at`, id, index, next).
+			Scan(&row.ID, &row.Conversation, &row.Tasks, &row.State, &row.CreatedAt, &row.UpdatedAt)
+	})
+	if err != nil || row.ID == "" {
+		return nil, err
+	}
+	return &row, nil
+}
+
+const compareTaskQueueSQL = `UPDATE task_plans SET tasks = jsonb_set(tasks, ARRAY[$2::integer::text, 'queue'], $5::jsonb), updated_at = $6
+	WHERE id = $1 AND state = 'started' AND tasks->$2::integer->>'todo_id' = $3 AND tasks->$2::integer->'queue' = $4::jsonb`
+
+// CompareTaskQueue changes one authorized start's queue only if it is still the entry the dispatcher read.
+func (d *DB) CompareTaskQueue(ctx context.Context, id string, index int, todoID string, before, after json.RawMessage, at time.Time) (bool, error) {
+	tag, err := d.pool.Exec(ctx, compareTaskQueueSQL, id, index, todoID, []byte(before), []byte(after), at)
+	return tag.RowsAffected() == 1, err
+}
+
+const unstartedQueueTodo = `SELECT 1 FROM todos WHERE id = $1 AND plan_id = $2 AND origin <> ''
+	AND done_at IS NULL AND done_by <> 'cancelled' AND start_error = ''
+	AND (reopened_at IS NULL OR reopened_at <= $3)`
+
+// UnstartedQueuedTodo reads durable eligibility immediately before dispatch.
+// A manager's already-loaded to-do book cannot attest to another writer's changes.
+func (d *DB) UnstartedQueuedTodo(ctx context.Context, todoID, planID string, since time.Time) (bool, error) {
+	var eligible bool
+	err := d.pool.QueryRow(ctx, `SELECT EXISTS (`+unstartedQueueTodo+`)
+		AND NOT EXISTS (SELECT 1 FROM todo_agents WHERE todo_id = $1)`, todoID, planID, since).Scan(&eligible)
+	return eligible, err
+}
+
+// ClaimUnstartedTaskQueue combines to-do eligibility and the exact queue CAS.
+// Agent link writers lock the same to-do row. Check membership in a separate
+// statement after acquiring it so links committed while the lock was busy are visible.
+func (d *DB) ClaimUnstartedTaskQueue(ctx context.Context, planID string, index int, todoID string, since time.Time, before, after json.RawMessage, at time.Time) (bool, error) {
+	var claimed bool
+	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		var one int
+		err := tx.QueryRow(ctx, unstartedQueueTodo+` FOR UPDATE`, todoID, planID, since).Scan(&one)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var linked bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM todo_agents WHERE todo_id = $1)`, todoID).Scan(&linked); err != nil || linked {
+			return err
+		}
+		tag, err := tx.Exec(ctx, compareTaskQueueSQL, planID, index, todoID, []byte(before), []byte(after), at)
+		claimed = tag.RowsAffected() == 1
+		return err
+	})
+	return claimed && err == nil, err
 }
 
 func (d *DB) AppendFeed(ctx context.Context, f FeedRow) error {
@@ -226,6 +311,63 @@ func (d *DB) MarkFeedSent(ctx context.Context, kind, ref string, at time.Time, p
 		return nil, err
 	}
 	return scanFeed(rows)
+}
+
+// feedByRefSQL is FeedByRef's query. Its WHERE matches the partial index assistant_feed_unsent (migrations/0392), as
+// markFeedSentSQL's does: only a message card ever gets sent_at, so for every other kind the predicate leaves nothing
+// out, and a to-do's history is read off the index instead of the whole feed, which is never pruned.
+const feedByRefSQL = `SELECT id, conversation, at, kind, ref, body FROM assistant_feed
+	WHERE kind = ANY($1) AND ref = $2 AND NOT body ? 'sent_at'
+	ORDER BY at DESC, id DESC LIMIT $3`
+
+// ErrFeedByRefMessage: FeedByRef was asked for message cards, which it cannot read whole (a sent one left its index).
+var ErrFeedByRefMessage = errors.New("FeedByRef does not read message cards")
+
+// FeedByRef lists the items of kinds about ref, whatever conversation they are in, newest first, at most limit (#10465:
+// a to-do's history). It refuses the message kind (ErrFeedByRefMessage) rather than leave the sent cards out.
+func (d *DB) FeedByRef(ctx context.Context, ref string, kinds []string, limit int) ([]FeedRow, error) {
+	if slices.Contains(kinds, "message") {
+		return nil, ErrFeedByRefMessage
+	}
+	if len(kinds) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := d.pool.Query(ctx, feedByRefSQL, kinds, ref, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanFeed(rows)
+}
+
+// feedConversationsSQL is FeedConversations' query, through assistant_feed_unsent as feedByRefSQL is.
+const feedConversationsSQL = `SELECT DISTINCT ref, conversation FROM assistant_feed
+	WHERE kind = ANY($1) AND ref = ANY($2) AND NOT body ? 'sent_at'
+	ORDER BY ref, conversation`
+
+// FeedConversations are the conversations the items of kinds about each of refs are in, by ref, each once and in
+// order; a ref with none is left out (#10941: whose words a to-do's history may hold, every item counted, not only the
+// newest FeedByRef reads). It refuses the message kind as FeedByRef does.
+func (d *DB) FeedConversations(ctx context.Context, refs, kinds []string) (map[string][]string, error) {
+	if slices.Contains(kinds, "message") {
+		return nil, ErrFeedByRefMessage
+	}
+	out := map[string][]string{}
+	if len(kinds) == 0 || len(refs) == 0 {
+		return out, nil
+	}
+	rows, err := d.pool.Query(ctx, feedConversationsSQL, kinds, refs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ref, conversation string
+		if err := rows.Scan(&ref, &conversation); err != nil {
+			return nil, err
+		}
+		out[ref] = append(out[ref], conversation)
+	}
+	return out, rows.Err()
 }
 
 func scanFeed(rows pgx.Rows) ([]FeedRow, error) {

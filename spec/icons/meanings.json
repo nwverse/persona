@@ -45,9 +45,17 @@
       "sf": "chevron.left",
       "phosphor": "caret-left"
     },
+    "backgroundMonitor": {
+      "sf": "display",
+      "phosphor": "monitor"
+    },
     "backgroundTask": {
       "sf": "gearshape.2",
       "phosphor": "gear-six"
+    },
+    "backgroundTasks": {
+      "sf": "list.clipboard",
+      "phosphor": "list-checks"
     },
     "backgroundWaiting": {
       "sf": "clock.fill",
@@ -245,6 +253,10 @@
       "sf": "chevron.forward",
       "phosphor": "caret-right"
     },
+    "forwardMessage": {
+      "sf": "arrowshape.turn.up.right",
+      "phosphor": "arrow-bend-up-right"
+    },
     "gitBranch": {
       "sf": "arrow.triangle.branch",
       "phosphor": "git-branch"
@@ -345,6 +357,10 @@
       "sf": "books.vertical",
       "phosphor": "book-open"
     },
+    "knowledgeMap": {
+      "sf": "map",
+      "phosphor": "tree-structure"
+    },
     "laptop": {
       "sf": "laptopcomputer",
       "phosphor": "laptop"
@@ -412,6 +428,10 @@
     "music": {
       "sf": "music.note",
       "phosphor": "music-note"
+    },
+    "muted": {
+      "sf": "bell.slash.fill",
+      "phosphor": "prohibit"
     },
     "newConversation": {
       "sf": "plus.bubble",
@@ -617,6 +637,10 @@
       "sf": "puzzlepiece.extension",
       "phosphor": "puzzle-piece"
     },
+    "someday": {
+      "sf": "moon.stars.fill",
+      "phosphor": "couch"
+    },
     "space": {
       "sf": "square.stack.3d.up",
       "phosphor": "stack"
@@ -664,6 +688,10 @@
     "time": {
       "sf": "clock",
       "phosphor": "clock"
+    },
+    "topic": {
+      "sf": "lightbulb.2",
+      "phosphor": "lightbulb"
     },
     "today": {
       "sf": "sun.max.fill",

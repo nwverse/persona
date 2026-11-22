@@ -40,13 +40,15 @@ internal const val MAX_COMPOSER_MEDIA = 4
 data class ChatComposerDraft(
     val text: String = "", val attachments: List<ComposerAttachment> = emptyList(),
     val sessionVersion: DraftSessionVersion? = null,
+    val hasPickedSavedPrompt: Boolean = false,
 )
 
 private fun DraftAttachment.composerAttachment() = ComposerAttachment(
     id, name, uri, type == DraftAttachmentType.Image, uploadedPath, error, size, uploadState,
     video = type == DraftAttachmentType.Video, duration = duration)
 
-internal fun DraftSnapshot.composerDraft() = ChatComposerDraft(text, attachments.map { it.composerAttachment() }, sessionVersion)
+internal fun DraftSnapshot.composerDraft() =
+    ChatComposerDraft(text, attachments.map { it.composerAttachment() }, sessionVersion, hasPickedSavedPrompt)
 
 internal fun ChatComposerDraft.storedAttachments() = attachments.map {
     DraftAttachment(it.id, when {
@@ -71,29 +73,53 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
     var videosOnlyText: String = ""
     /** What [message] says for ordinary files sent without words or photos; kept like [photosOnlyText]. */
     var filesOnlyText: String = ""
-    var value by mutableStateOf(TextFieldValue(initial.text, TextRange(initial.text.length)))
+    private var fieldValue by mutableStateOf(TextFieldValue(initial.text, TextRange(initial.text.length)))
+    internal var hasPickedSavedPrompt by mutableStateOf(initial.hasPickedSavedPrompt)
+        private set
+    var value: TextFieldValue
+        get() = fieldValue
+        set(value) {
+            if (value.text != fieldValue.text) hasPickedSavedPrompt = false
+            fieldValue = value
+        }
     var draftLoaded by mutableStateOf(false)
-    private var attachmentList by mutableStateOf(initial.attachments)
+    private var attachmentOrder by mutableStateOf(initial.attachments.map { it.id })
+    private val attachmentStates = mutableStateMapOf<String, ComposerAttachment>().apply { putAll(initial.attachments.associateBy { it.id }) }
     /** Edited photos' sources, edits and history by attachment id (#4992): kept in memory beside the draft, never sent. */
     internal var photoEdits by mutableStateOf<Map<String, PhotoEdits>>(emptyMap())
     /** The draft's attachments; a photo that leaves it takes its kept edits along. */
     var attachments: List<ComposerAttachment>
-        get() = attachmentList
+        get() = attachmentOrder.mapNotNull(attachmentStates::get)
         set(value) {
-            attachmentList = value
-            if (photoEdits.keys.any { id -> value.none { it.id == id } }) photoEdits = photoEdits.filterKeys { id -> value.any { it.id == id } }
+            val ids = value.mapTo(mutableSetOf()) { it.id }
+            attachmentStates.keys.filter { it !in ids }.forEach(attachmentStates::remove)
+            value.forEach { attachmentStates[it.id] = it }
+            attachmentOrder = value.map { it.id }
+            if (photoEdits.keys.any { id -> id !in ids }) photoEdits = photoEdits.filterKeys { it in ids }
         }
+
+    /** A background upload updates its own row, never a stale copy of another attachment's state. */
+    internal fun updateAttachment(id: String, update: (ComposerAttachment) -> ComposerAttachment) {
+        attachmentStates[id]?.let { attachmentStates[id] = update(it) }
+    }
     var sessionVersion by mutableStateOf(initial.sessionVersion)
     var currentSessionVersion by mutableStateOf<DraftSessionVersion?>(null)
     val oldVersion get() = hasContent && (currentSessionVersion?.replaced == true || sessionVersion?.let { origin ->
         currentSessionVersion?.let(origin::differsFrom)
     } == true)
-    val draft get() = ChatComposerDraft(value.text, attachments, sessionVersion)
+    val draft get() = ChatComposerDraft(value.text, attachments, sessionVersion, hasPickedSavedPrompt)
     val ready get() = attachments.all { it.path != null && it.uploadState != DraftUploadState.Invalid }
     val hasContent get() = value.text.isNotBlank() || attachments.isNotEmpty()
 
     internal fun beginEdit() {
         if (!hasContent) sessionVersion = currentSessionVersion
+    }
+
+    internal fun fillSavedPrompt(text: String) {
+        beginEdit()
+        value = TextFieldValue(text, TextRange(text.length))
+        hasPickedSavedPrompt = true
+        focusRequest++
     }
 
     fun insert(text: String, atSelection: Boolean) {
@@ -122,7 +148,7 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
 
     /** Fills an empty composer with a stored draft: the composer is drawn before the draft is read (#4045). */
     internal fun load(draft: ChatComposerDraft) {
-        val tagged = parseAttachedFiles(draft.text).first.any { it.kind == "file" || it.kind == "video" }
+        val tagged = !draft.hasPickedSavedPrompt && parseAttachedFiles(draft.text).first.any { it.kind == "file" || it.kind == "video" }
         if (tagged) {
             // Drafts written by an older build can still carry tags as words; bring their files back as ready rows.
             editMessage(draft.text)
@@ -134,6 +160,7 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
             value = TextFieldValue(draft.text, TextRange(draft.text.length))
             attachments = draft.attachments
         }
+        hasPickedSavedPrompt = draft.hasPickedSavedPrompt
         sessionVersion = draft.sessionVersion
         draftLoaded = true
     }
@@ -204,11 +231,12 @@ class ChatComposerState(initial: ChatComposerDraft = ChatComposerDraft()) {
     companion object {
         val Saver = listSaver<ChatComposerState, String>(
             save = { state -> listOf(state.value.text, JsonCodec.encodeToString(state.draft.storedAttachments()),
-                state.sessionVersion?.let { JsonCodec.encodeToString(it) }.orEmpty()) },
+                state.sessionVersion?.let { JsonCodec.encodeToString(it) }.orEmpty(), state.hasPickedSavedPrompt.toString()) },
             restore = { values ->
-                if (values.size == 3) ChatComposerState(ChatComposerDraft(values[0],
+                if (values.size == 3 || values.size == 4) ChatComposerState(ChatComposerDraft(values[0],
                     JsonCodec.decodeFromString<List<DraftAttachment>>(values[1]).map { it.composerAttachment() },
-                    values[2].takeIf(String::isNotEmpty)?.let { JsonCodec.decodeFromString<DraftSessionVersion>(it) }))
+                    values[2].takeIf(String::isNotEmpty)?.let { JsonCodec.decodeFromString<DraftSessionVersion>(it) },
+                    values.getOrNull(3).toBoolean()))
                 else ChatComposerState(ChatComposerDraft(values.first(), values.drop(1).chunked(6).map {
                     ComposerAttachment(it[0], it[1], it[2], it[3].toBoolean(), it[4].ifEmpty { null }, it[5].ifEmpty { null })
                 }))

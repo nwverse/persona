@@ -14,6 +14,8 @@ FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 # The browser's OPAQUE implementation is built from the same Go sources as the hub.
 COPY --from=go-toolchain /usr/local/go/ /usr/local/go/
 ENV PATH="/usr/local/go/bin:${PATH}"
+ARG NODE_OPTIONS=
+ENV NODE_OPTIONS=${NODE_OPTIONS}
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 # Packages the project keeps in web/vendor/ (SheetJS publishes its current releases only as a tarball, docs/web/web.md "Spreadsheets").
@@ -40,6 +42,8 @@ COPY spec/desktop-bridge.d.ts /src/spec/desktop-bridge.d.ts
 # the admin page's assistant card preview and the showcase glob its examples (import.meta.glob, which comes out empty
 # without them), and tests import example JSON (TS2307 in tsc -b without it).
 COPY schema/extension/ /src/schema/extension/
+# The configuration form's schema and validation cases: its web tests import them directly (TS2307 in tsc -b without them).
+COPY schema/configuration/ /src/schema/configuration/
 # Without prebuild's privacy check: it scans the whole checkout (scripts/, git), which is not in this context. It
 # runs on the checkout before the image is built (.github/workflows/release.yml; locally the hooks and web builds).
 RUN npm run pake:build && npm run build --ignore-scripts
@@ -69,6 +73,7 @@ RUN go run ./internal/webasset/precompress internal/hub/webdist
 COPY integrations/antigravity/ /src/integrations/antigravity/
 COPY integrations/claude-code-plugin/ /src/integrations/claude-code-plugin/
 COPY integrations/dsh/ /src/integrations/dsh/
+COPY integrations/opencode/ /src/integrations/opencode/
 COPY integrations/paseo/ /src/integrations/paseo/
 COPY integrations/pi/ /src/integrations/pi/
 COPY integrations/runtime-sdk/ /src/integrations/runtime-sdk/
@@ -95,12 +100,15 @@ RUN for p in persona-hub persona-manager; do \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker -X main.image=$IMAGE -X main.updateURL=$UPDATE_URL" -o /out/$p ./cmd/$p || exit 1; \
     done
 
-FROM alpine:3.22
-ARG TARGETARCH
+FROM alpine:3.22 AS sandbox-runtime
 # ssh: machines the hub reaches over ssh (optional with tailcat); su-exec: the entrypoint drops to the persona user.
-RUN apk add --no-cache ca-certificates tzdata openssh-client su-exec \
+# bubblewrap uses unprivileged user namespaces; the Compose seccomp profile permits its setup syscalls.
+RUN apk add --no-cache ca-certificates tzdata openssh-client su-exec bubblewrap \
+ && chmod 0755 /usr/bin/bwrap \
  && adduser -D -h /home/persona -u 1000 persona \
  && mkdir -p /home/persona/.persona && chown persona:persona /home/persona/.persona && chmod 700 /home/persona/.persona
+FROM sandbox-runtime
+ARG TARGETARCH
 COPY --from=build /out/nodes/ /opt/persona/nodes/
 RUN ln -s /opt/persona/nodes/personad-linux-$TARGETARCH /opt/persona/personad && /opt/persona/personad version
 # Next to the binary personad runs as (the link resolves into nodes/), where the hub looks for it.

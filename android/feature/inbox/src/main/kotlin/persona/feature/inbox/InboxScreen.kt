@@ -120,6 +120,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         landing?.let { it.drawn++ }
         onDispose { landing?.let { it.drawn-- } }
     }
+    val isGlass = PersonaTheme.style == AppStyle.Glass
     val listStates = rememberSaveableStateHolder()
     var error by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(repository, snapshot.refreshes) {
@@ -181,9 +182,21 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             emptyList(), emptyList(), folded = false)
     // A choice draws its section alone; All draws every section, folding as before.
     val groups = if (chosen == InboxBar.ALL) displayGroups else displayGroups.filter { it.id == chosen }
-    val sources = listOf("" to res.getString(R.string.inbox_all_sources)) + snapshot.records.map { record ->
-        record.item.account to record.sourceLabel.ifBlank { if (record.feedId != null) res.getString(R.string.inbox_source_lark) else record.item.account.ifBlank { res.getString(R.string.inbox_source_mail) } }
-    }.filter { it.first.isNotEmpty() }.distinctBy { it.first }
+    val sourceOptions = remember(snapshot.records, res) {
+        snapshot.records.map { record ->
+            val label = record.sourceLabel.ifBlank {
+                if (record.feedId != null) res.getString(R.string.inbox_source_lark)
+                else record.item.account.ifBlank { res.getString(R.string.inbox_source_mail) }
+            }
+            val type = when {
+                record.isLark -> "lark"
+                record.isMail -> "mail"
+                else -> record.source
+            }
+            InboxSourceOption(record.item.account, label, type)
+        }.filter { it.id.isNotEmpty() }.distinctBy { it.id }.distinctBy { it.label }
+    }
+    val sources = listOf("" to res.getString(R.string.inbox_all_sources)) + sourceOptions.map { it.id to it.label }
     var showFilters by remember { mutableStateOf(false) }
     var filterPage by remember { mutableStateOf<String?>(null) }
     var handingOff by remember { mutableStateOf<String?>(null) }
@@ -335,9 +348,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     }
     // The title while the hub is out of reach opens why, since when and "Retry now" in place (iOS ConnectionTitle).
     val connectionDetails = rememberConnectionDetails(shownConnection, { navigator.navigate(ConnectionSettingsRoute) }, onRetry = { refresh(collectNow = false) })
-    fun allTargets(shown: List<InboxGroup>) = shown.filter { it.id != "done" }.flatMap { it.rows }
-        .filter { it.type == InboxRowType.Item }.mapNotNull { records[it.id] }
-        .filterNot { it.item.isDone }.distinctBy { it.item.id }.map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) }
+    fun allTargets(shown: List<InboxGroup>) = bulkTargets(shown, records)
     // Clean up all keeps its scope whatever the bar shows: every open item under the filters and search.
     val bulk = allTargets(displayGroups)
     // Groups (#2576): one row is one item. Only open ones Persona isn't working on can be picked.
@@ -561,12 +572,39 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     Bay(inboxChoiceTitle(choice.id), choice.count, Status.NeedsYou.takeIf { choice.id == InboxBar.ACTION },
                         countTone = when (choice.tone) { InboxBar.Tone.Needs -> Status.NeedsYou; InboxBar.Tone.Neutral -> Status.Idle; null -> null })
                 }
-                // A search or a link can choose All or Done past the edge of a narrow bar: it scrolls them into sight, while
-                // Needs you stays at the start so its count is in sight from every choice (DESIGN_SYSTEM 3.4), and the edge
-                // that cuts choices off fades so the strip reads as one that scrolls.
-                QuickFilterBar(bays, selected = barView.choices.indexOfFirst { it.id == chosen },
-                    onSelect = { landing?.picked(); moveBar(InboxBar.picked(bar, barView.choices[it].id)) }, revealSelected = true, pinFirst = true,
-                    fadeCut = true)
+                if (isGlass) {
+                    val capsuleGroupings = if (chosen == InboxBar.DONE || chosen == InboxBar.WORKING) emptyList() else listOf(
+                        JAction(res.getString(R.string.inbox_grouping_source), checked = grouping != InboxGroups.TIME) {
+                            filter(currentFilters.copy(grouping = InboxGroups.SOURCE))
+                        },
+                        JAction(res.getString(R.string.inbox_grouping_time), checked = grouping == InboxGroups.TIME) {
+                            filter(currentFilters.copy(grouping = InboxGroups.TIME))
+                        },
+                    )
+                    JInboxSectionCapsule(
+                        bays = bays,
+                        selected = barView.choices.indexOfFirst { it.id == chosen },
+                        onSelect = { landing?.picked(); moveBar(InboxBar.picked(bar, barView.choices[it].id)) },
+                        groupLabel = stringResource(R.string.inbox_grouping_title),
+                        groupActions = capsuleGroupings,
+                    )
+                    Spacer(Modifier.height(Tokens.Space.xs))
+                    GlassInboxFilterStrip(
+                        sources = sourceOptions,
+                        activeSource = source,
+                        activeKind = kind,
+                        onSelectSource = { next -> animateChange { filter(currentFilters.copy(source = next)) } },
+                        onSelectKind = { next -> animateChange { filter(currentFilters.copy(kind = next)) } },
+                        onClearAll = { animateChange { filter(currentFilters.copy(source = "", kind = "")) } },
+                    )
+                } else {
+                    // A search or a link can choose All or Done past the edge of a narrow bar: it scrolls them into sight, while
+                    // Needs you stays at the start so its count is in sight from every choice (DESIGN_SYSTEM 3.4), and the edge
+                    // that cuts choices off fades so the strip reads as one that scrolls.
+                    QuickFilterBar(bays, selected = barView.choices.indexOfFirst { it.id == chosen },
+                        onSelect = { landing?.picked(); moveBar(InboxBar.picked(bar, barView.choices[it].id)) }, revealSelected = true, pinFirst = true,
+                        fadeCut = true)
+                }
                 Spacer(Modifier.height(Tokens.Space.s))
                 JSearchField(query, { filter(currentFilters.copy(query = it)) }, stringResource(R.string.inbox_search_hint))
             }
@@ -629,15 +667,27 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     onStart = { selecting = true; picked = setOf(row.id); haptics(Haptic.Tap) })
                 if (row.type == InboxRowType.Interaction) {
                     interactions[row.id]?.let { interaction ->
-                        MessageItem(sender = "Persona", title = interaction.sessionTitle.ifBlank { interaction.title },
-                            preview = interaction.summary ?: interaction.title, position = position, status = Status.NeedsYou, dimmed = selecting,
-                            onClick = {
-                                if (selecting) return@MessageItem
+                        val openInteraction: () -> Unit = {
+                            if (!selecting) {
                                 // A card outside any session (`personad ask` in a plain terminal) has no chat to open.
                                 if (interaction.sessionId.isNotBlank()) navigator.navigate(ChatRoute(interaction.machineId, interaction.sessionId))
                                 else onOpenCard?.invoke(persona.core.navigation.RequestRef(interaction.machineId, interaction.id))
                                     ?: navigator.selectTab(persona.core.navigation.AppTab.Agents)
-                            })
+                            }
+                        }
+                        if (isGlass) {
+                            GlassInboxAgentRow(
+                                interaction = interaction,
+                                machineName = snapshot.machines[interaction.machineId],
+                                position = position,
+                                dimmed = selecting,
+                                onClick = openInteraction,
+                            )
+                        } else {
+                            MessageItem(sender = "Persona", title = interaction.sessionTitle.ifBlank { interaction.title },
+                                preview = interaction.summary ?: interaction.title, position = position, status = Status.NeedsYou, dimmed = selecting,
+                                onClick = openInteraction)
+                        }
                     }
                 } else records[row.id]?.let { record ->
                     val done = pending[record.item.id] ?: record.item.isDone
@@ -650,6 +700,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             val sections: (String, List<InboxGroup>) -> Unit = { prefix, shownGroups -> shownGroups.forEach { group ->
                 val manager = prefix.removeSuffix(":")
                 val subs = subsOf(group, manager)
+                val sectionTargets = allTargets(listOf(group))
                 val sectionPickable = if (selecting && subs.isEmpty()) group.rows.filter(::selectable).map { it.id } else emptyList()
                 item("section:$prefix${group.id}", contentType = "section") {
                     val title = if (group.id == "working") group.title.text() else inboxGroupTitle(group)
@@ -702,6 +753,27 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 if (subs.isEmpty()) rows(prefix, group.visibleRows)
                 else subs.forEach { sub ->
                     val open = InboxGroups.isOpen(group.id, sub.key, folds)
+                    val clear = when (group.id) {
+                        "fyi" -> Triple(res.getString(R.string.inbox_mark_all_seen), res.getString(R.string.inbox_group_fyi),
+                            R.plurals.inbox_mark_all_in_seen)
+                        "noise" -> Triple(res.getString(R.string.inbox_clear_all), res.getString(R.string.inbox_section_folded),
+                            R.plurals.inbox_clear_all_in)
+                        else -> null
+                    }
+                    val groupTargets = bulkTargets(listOf(group.copy(rows = sub.rows)), records)
+                    // FYI and Collapsed group titles offer that group or the whole section (#10425). Needs you,
+                    // In progress and Done keep their existing titles; one group keeps the section's direct action.
+                    val clearChoices = if (selecting || clear == null || groupTargets.isEmpty() ||
+                        sectionTargets.size <= groupTargets.size) emptyList() else {
+                        listOf(
+                            JAction(res.getQuantityString(clear.third, sub.count, sub.count, sub.title), subtitle = scopeText) {
+                                markAll(groupTargets, InboxBulkAction.Done, animate = true)
+                            },
+                            JAction(res.getQuantityString(clear.third, group.count, group.count, clear.second), subtitle = scopeText) {
+                                markAll(sectionTargets, InboxBulkAction.Done, animate = true)
+                            },
+                        )
+                    }
                     // A group's title stays at the top while its rows scroll under it (#2059 "Jump to").
                     stickyHeader("group:$prefix${group.id}/${sub.key}", contentType = "group") { index ->
                         val pickable = sub.rows.filter(::selectable).map { it.id }
@@ -715,7 +787,15 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                                 animateChange { setFolds(InboxGroups.toggle(group.id, sub.key, folds)) }
                             },
                             leading = if (selecting && pickable.isNotEmpty()) ({ InboxGroupTick(pickable, picked, sub.title) { picked = it } }) else null,
-                            trailing = if (selecting && n > 0) androidx.compose.ui.res.pluralStringResource(R.plurals.inbox_group_picked, n, n) else null)
+                            trailing = if (selecting && n > 0) androidx.compose.ui.res.pluralStringResource(R.plurals.inbox_group_picked, n, n) else null,
+                            action = if (clearChoices.isEmpty() || clear == null) null else ({
+                                var menu by remember(group.id, sub.key) { mutableStateOf(false) }
+                                JTextButton(clear.first, { menu = true }, icon = PersonaIcons.expand)
+                                // Keep the pull-down at every text size; multiline choices prevent its capped width
+                                // from ellipsizing the count, destination, verb or filter scope at larger text.
+                                JMenu(menu, { menu = false }, clearChoices,
+                                    multilineActions = res.configuration.fontScale > 1f)
+                            }))
                     }
                     if (open) rows("$prefix${group.id}/${sub.key}:", sub.rows)
                     // A counted group not all in (#3016): its own first page as it opens, then Show older inside it.

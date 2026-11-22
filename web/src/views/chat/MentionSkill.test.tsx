@@ -6,7 +6,7 @@ import { loadPages } from "../../lib/lazy-page";
 import { getContexts, removeContext } from "../../lib/links";
 import { sendDraft } from "../../lib/drafts";
 import { parseQueued } from "../../lib/queue";
-import { restoreQueued } from "./QueueStrip";
+import { restoreQueued } from "./queue-restore";
 import { t } from "../../i18n";
 import { skillContext, skillDraft } from "../../lib/skill-mentions";
 import { onModelPicker } from "../../lib/model-switch";
@@ -74,14 +74,17 @@ it("searches name/description locally, disambiguates equal names, selects with k
   render();
   await type("@");
   await waitForOptions(3); // two skills and the existing Add files action
-  expect(options().map((o) => o.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("project · ."), expect.stringContaining("user")]));
+  expect(options()[1].textContent).not.toContain("project · .");
+  key("ArrowDown");
+  expect(host.querySelector("[data-picker-detail]")?.textContent).toContain("project · .");
   await type("@security");
   expect(options()).toHaveLength(1);
   expect(api).toHaveBeenCalledTimes(1);
   expect(api.mock.calls[0][1]).toMatchObject({ headers: { "X-Persona-Manager": "helper-a" } });
   key("Enter");
   expect(box().value).toBe("");
-  expect(host.textContent).toContain("review · project · .");
+  expect(host.textContent).toContain("review · project");
+  expect(host.textContent).not.toContain("project · .");
   await type("Check this");
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
   expect(onSend.mock.calls[0][0].text).toContain('kind="skill" title="review" url="" ref="a"');
@@ -121,13 +124,15 @@ it("supports touch/click removal, restores edit/queue references and persists th
   expect(getContexts("skill-test")).toHaveLength(0);
 });
 
-it.each(["manager", "directory"])("never offers stale rows across %s switches, ignores late responses, and allows ordinary chat on failure", async (change) => {
+it.each(["manager", "directory", "machine", "session", "launcher", "environment"])("never offers stale rows across %s switches, ignores late responses, and allows ordinary chat on failure", async (change) => {
   let resolve!: (value: unknown) => void;
   api.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
   render();
   await type("@review");
   await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
-  render(change === "directory" ? { ...source, cwd: "/example/changed" } : { ...source, skills: { ...source.skills!, manager: "helper-b", environment: "profile-b" } });
+  const next = change === "directory" ? { ...source, cwd: "/example/changed" } :
+    { ...source, skills: { ...source.skills!, [change]: "changed" } };
+  render(next, undefined, change === "machine" ? "computer-b" : "computer");
   await waitForOptions(2);
   await act(async () => resolve({ catalog_version: 1, complete: true, skills: [{ ...skills[0], name: "stale" }] }));
   expect(host.textContent).not.toContain("stale");
@@ -174,9 +179,9 @@ it("keeps existing file rows reachable beside a large skill catalog and searches
   }));
   render({ ...source, files: () => ["/example/report.ts"] });
   await type("@");
-  await waitForOptions(5); // three skill previews, the existing file, and Add files
+  await waitForOptions(52); // all 50 skills plus the file and Add files
   expect(options().some((o) => o.textContent?.includes("report.ts"))).toBe(true);
-  expect(options().filter((o) => o.textContent?.includes("review-"))).toHaveLength(3);
+  expect(options().filter((o) => o.textContent?.includes("review-"))).toHaveLength(50);
   await type("@review-49");
   expect(options()).toHaveLength(1);
   expect(options()[0].textContent).toContain("review-49");
@@ -189,17 +194,63 @@ const COMMANDS: ComposerCommand[] = [
 ];
 const focused = () => host.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]');
 
-it("lists matching skills after commands in the slash palette and reads the catalog only on opening", async () => {
+it("keeps bare / clean and matches skills on a non-empty keyword with one catalog read", async () => {
   render(source, COMMANDS);
   expect(api).not.toHaveBeenCalled();
   await type("/");
-  await waitForOptions(4);
+  await waitForOptions(2);
+  expect(options().map((o) => o.textContent)).toEqual(["alpha", "beta"]);
+  expect(host.querySelectorAll("[data-picker-group]")).toHaveLength(0);
+  expect(api).not.toHaveBeenCalled();
+
+  await type("/e");
+  await waitForOptions(3); // beta command plus both review skills
   expect(api).toHaveBeenCalledTimes(1);
-  expect(options().slice(0, 2).map((o) => o.textContent)).toEqual(["alpha", "beta"]);
-  expect(options()[2].textContent).toContain("Inspect security boundaries");
-  expect(options()[2].textContent).toContain("project · .");
-  expect(options()[3].textContent).toContain("Check wording");
-  expect(options()[3].textContent).toContain("user");
+  expect([...host.querySelectorAll("[data-picker-group]")].map((g) => g.textContent)).toEqual([
+    t("chat-slashpalette.label"),
+    t("chat-composerpanel.skills"),
+  ]);
+  expect(options()[0].textContent).toBe("beta");
+  expect(options()[1].textContent).toContain("Inspect security boundaries");
+  expect(options()[1].textContent).not.toContain("project · .");
+  expect(options()[2].textContent).toContain("Check wording");
+  act(() => options()[2].dispatchEvent(new MouseEvent("mousemove", { bubbles: true })));
+  expect(host.querySelector("[data-picker-detail]")?.textContent).toContain("user");
+
+  // Further keystrokes filter locally without extra network calls.
+  await type("/rev");
+  await waitForOptions(2);
+  await type("/review");
+  await waitForOptions(2);
+  expect(api).toHaveBeenCalledTimes(1);
+});
+
+it("resets the highlight to the first row when moving from bare / into a keyword query", async () => {
+  render(source, COMMANDS);
+  await type("/");
+  await waitForOptions(2);
+  key("ArrowDown");
+  expect(focused()?.textContent).toBe("beta");
+  await type("/e");
+  await waitForOptions(3);
+  expect(focused()?.textContent).toBe("beta");
+  // Backspacing back to bare / restores the clean command-only palette.
+  await type("/");
+  await waitForOptions(2);
+  expect(options().map((o) => o.textContent)).toEqual(["alpha", "beta"]);
+  expect(host.querySelectorAll("[data-picker-group]")).toHaveLength(0);
+});
+
+it("handles an empty skill catalog cleanly on keyword search while keeping commands usable", async () => {
+  api.mockImplementationOnce(async () => ({ catalog_version: 1, complete: true, skills: [] }));
+  render(source, COMMANDS);
+  await type("/alpha");
+  await waitForOptions(1);
+  expect(options().map((o) => o.textContent)).toEqual(["alpha"]);
+  expect(host.querySelector("[role=status]")).toBeNull();
+  await type("/zzz");
+  await waitForOptions(0);
+  expect(host.textContent).toContain(t("chat-slashpalette.no_match_skills"));
 });
 
 it("keeps commands usable without a machine or a skill source and never invents a catalog request", async () => {
@@ -329,20 +380,19 @@ it.each([{ name: "model", key: "Enter" }, { name: "permissions", key: "Tab" }])(
 
 it("wraps arrows across the whole command and skill list", async () => {
   render(source, COMMANDS);
-  await type("/");
-  await waitForOptions(4);
-  expect(focused()?.textContent).toBe("alpha");
+  await type("/e");
+  await waitForOptions(3);
+  expect(focused()?.textContent).toBe("beta");
   key("ArrowUp");
   expect(focused()?.textContent).toContain("Check wording");
   key("ArrowDown");
-  expect(focused()?.textContent).toBe("alpha");
+  expect(focused()?.textContent).toBe("beta");
 });
 
 it("resets a stale skill highlight when the execution environment changes", async () => {
   render(source, COMMANDS);
-  await type("/");
-  await waitForOptions(4);
-  key("ArrowDown");
+  await type("/e");
+  await waitForOptions(3);
   key("ArrowDown");
   key("ArrowDown");
   expect(focused()?.textContent).toContain("Check wording");
@@ -350,17 +400,21 @@ it("resets a stale skill highlight when the execution environment changes", asyn
   api.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
   render({ ...source, skills: { ...source.skills!, environment: "profile-b" } }, COMMANDS);
   await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(2));
-  expect(focused()?.textContent).toBe("alpha");
+  expect(focused()?.textContent).toBe("beta");
   await act(async () => resolve({ catalog_version: 1, complete: true, skills: [{ id: "new", name: "replacement", description: "New environment", source: "project" }] }));
-  await waitForOptions(3);
-  expect(focused()?.textContent).toBe("alpha");
+  await waitForOptions(2);
+  expect(focused()?.textContent).toBe("beta");
 });
 
 it("keeps commands and the highlighted row stable while the slash catalog loads, then keeps commands on failure", async () => {
   let resolve!: (value: unknown) => void;
   api.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
-  render(source, COMMANDS);
-  await type("/");
+  const cmds: ComposerCommand[] = [
+    { word: "/echo", desc: "First command", text: "/echo" },
+    { word: "/beta", desc: "Second command", text: "/beta" },
+  ];
+  render(source, cmds);
+  await type("/e");
   await waitForOptions(2);
   await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1));
   expect(host.textContent).toContain("正在读取");
@@ -376,7 +430,7 @@ it("keeps commands and the highlighted row stable while the slash catalog loads,
   act(() => options()[0].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
   expect(focused()?.textContent).toBe("beta"); // a shifted command under a resting pointer is not a hover either
   act(() => options()[0].dispatchEvent(new MouseEvent("mousemove", { bubbles: true })));
-  expect(focused()?.textContent).toBe("alpha");
+  expect(focused()?.textContent).toBe("echo");
   key("ArrowDown");
   expect(focused()?.textContent).toBe("beta");
   act(() => options()[2].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
@@ -389,14 +443,17 @@ it("keeps commands and the highlighted row stable while the slash catalog loads,
   key("Escape");
   await type("text");
   api.mockImplementationOnce(async () => { throw new Error("unavailable"); });
-  await type("/");
+  await type("/e");
   await waitForOptions(2);
   await vi.waitFor(() => expect(host.textContent).toContain("技能暂不可用"));
-  expect(options().map((o) => o.textContent)).toEqual(["alpha", "beta"]);
+  expect(options().map((o) => o.textContent)).toEqual(["echo", "beta"]);
 });
 
-it("opens the slash palette for a Persona chat with no commands and restores a picked skill through queue pullback", async () => {
+it("keeps bare / closed when a Persona chat has no commands, opens on keyword, and restores a picked skill through queue pullback", async () => {
   render(source, []);
+  await type("/");
+  expect(host.querySelector("[data-slash-palette]")).toBeNull();
+  expect(api).not.toHaveBeenCalled();
   await type("/wording");
   await waitForOptions(1);
   key("Tab");
@@ -420,7 +477,7 @@ it("waits for the first skill answer before announcing an empty skills-only pale
   let resolve!: (value: unknown) => void;
   api.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
   render(source, []);
-  await type("/");
+  await type("/review");
   await vi.waitFor(() => expect(api).toHaveBeenCalledTimes(1));
   expect(options()).toHaveLength(0);
   expect(host.textContent).not.toContain(t("chat-slashpalette.no_match_skills"));
@@ -431,20 +488,26 @@ it("waits for the first skill answer before announcing an empty skills-only pale
   expect(host.textContent).not.toContain(t("chat-slashpalette.no_match_skills"));
 });
 
-it("never lets a large skill catalog push commands out of the shared slash row cap", async () => {
-  render(source, Array.from({ length: 30 }, (_, i) => ({ word: `/command-${i}`, desc: "", text: `/command-${i}` })));
+it("keeps bare / at 25 commands with no skills and lists 25 ranked commands plus matching skills on keyword", async () => {
+  const many = Array.from({ length: 30 }, (_, i) => ({ word: `/command-${i}`, desc: "", text: `/command-${i}` }));
+  render(source, many);
   await type("/");
   await waitForOptions(25);
   expect(options().map((o) => o.textContent)).toEqual(Array.from({ length: 25 }, (_, i) => `command-${i}`));
+  expect(api).not.toHaveBeenCalled();
+
+  await type("/c");
+  await waitForOptions(27);
+  expect(options().slice(0, 25).map((o) => o.textContent)).toEqual(Array.from({ length: 25 }, (_, i) => `command-${i}`));
   expect(api).toHaveBeenCalledTimes(1);
 });
 
 it("keeps commands but no skill rows when the slash catalog uses an unsupported version", async () => {
   api.mockImplementationOnce(async () => ({ catalog_version: 2, complete: true, skills }));
   render(source, COMMANDS);
-  await type("/");
+  await type("/e");
   await vi.waitFor(() => expect(host.textContent).toContain(t("chat-composerpanel.skills_error")));
-  expect(options().map((row) => row.textContent)).toEqual(["alpha", "beta"]);
+  expect(options().map((row) => row.textContent)).toEqual(["beta"]);
   expect(host.textContent).not.toContain("Inspect security boundaries");
 });
 
@@ -471,8 +534,8 @@ it.each((["Enter", "Tab", "ArrowDown", "ArrowUp"] as const).flatMap((pressed) =>
   { composition: "keyCode 229", pressed },
 ]))("does not navigate or pick a skill with $pressed during $composition", async ({ composition, pressed }) => {
   render(source, COMMANDS);
-  await type("/");
-  await waitForOptions(4);
+  await type("/e");
+  await waitForOptions(3);
   key("ArrowUp");
   const selected = focused()?.textContent;
   expect(selected).toContain("Check wording");
@@ -483,6 +546,40 @@ it.each((["Enter", "Tab", "ArrowDown", "ArrowUp"] as const).flatMap((pressed) =>
     await Promise.resolve();
   });
   expect(focused()?.textContent).toBe(selected);
-  expect(box().value).toBe("/");
+  expect(box().value).toBe("/e");
   expect(getContexts("skill-test").filter((row) => row.kind === "skill")).toHaveLength(0);
+});
+
+it("renders warm results across triggers, preserves a selected identity on reorder and rechecks removed skills", async () => {
+  render(source, COMMANDS);
+  await type("@review");
+  await waitForOptions(2);
+  key("Escape");
+  let resolve!: (value: unknown) => void;
+  api.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+  await type("/review");
+  await waitForOptions(2);
+  key("ArrowDown");
+  expect(focused()?.textContent).toContain("Check wording");
+  await act(async () => resolve({ catalog_version: 1, complete: true, skills: [skills[1]] }));
+  await waitForOptions(1);
+  expect(focused()?.textContent).toContain("Check wording");
+  key("Tab");
+  expect(getContexts("skill-test")[0].attrs?.ref).toBe("b");
+});
+
+it("keeps the selected local file when skills arrive after several @ edits", async () => {
+  let resolve!: (value: unknown) => void;
+  api.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+  render({ ...source, files: () => ["review.md", "review.txt"] });
+  await type("@");
+  await type("@re");
+  await type("@review");
+  await waitForOptions(2);
+  key("ArrowDown");
+  await act(async () => resolve({ catalog_version: 1, complete: true, skills }));
+  await waitForOptions(4);
+  expect(focused()?.textContent).toContain("review.txt");
+  key("Enter");
+  expect(box().value).toBe("@review.txt ");
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFilter, arrangeSpaces, botmuxAndFilter, isBotmux, withoutBotmux, filterCounts, matchesFilter, matchingKeys, shownFilters, agentFilter, unreadOf, type SpaceLike } from "./agent-filter";
+import { applyFilter, arrangeSpaces, isBotmux, withoutBotmux, filterCounts, matchesFilter, matchingKeys, shownFilters, agentFilter, unreadOf, type SpaceLike } from "./agent-filter";
 import { isQuiet, type AgentMutes } from "./agent-groups";
 import { NO_PINS } from "./pins";
 import type { AgentState, Session } from "./types";
@@ -96,11 +96,31 @@ describe("空间的顺序", () => {
     expect(r2.idle.map((x) => x.name)).toEqual(["a"]);
   });
 
-  it("有筛选时全部列出、最近的在前，不折叠", () => {
+  it("有筛选时全部列出、保持原有顺序，不折叠", () => {
     const r = arrangeSpaces([a, b, d, c], { pins: NO_PINS, mutes: none, filtered: true, busy });
-    // b is working since :02 (its own lines do not move it), c finished at :07, the quiet one at :08
-    expect(r.active.map((x) => x.name)).toEqual(["安静", "c", "a", "b"]);
+    // Activity still updates each row, but no longer moves its workspace (#11801).
+    expect(r.active.map((x) => x.name)).toEqual(["a", "b", "安静", "c"]);
     expect(r.idle).toEqual([]);
+  });
+
+  it("retains a quieted active space but brings new attention out of Idle (#11801)", () => {
+    const currentBusy = (x: SpaceLike) => x.sessions.some((s) => !isQuiet(s, none));
+    const busyA = sp("a", [session("a1", "working")]);
+    const quietB = sp("b", [session("b1", "idle")]);
+    const quietC = sp("c", [session("c1", "idle")]);
+    const first = arrangeSpaces([busyA, quietB, quietC], { pins: NO_PINS, mutes: none, filtered: false, busy: currentBusy });
+    expect(first.active.map((x) => x.name)).toEqual(["a"]);
+    expect(first.idle.map((x) => x.name)).toEqual(["b", "c"]);
+
+    const quietA = sp("a", [session("a1", "idle", { updated_at: date(10) })]);
+    const busyB = sp("b", [session("b1", "needs_you", { updated_at: date(11) })]);
+    const finishedC = sp("c", [session("c1", "idle", { work: { phase: "done", just_finished: true } })]);
+    const after = arrangeSpaces([quietA, busyB, finishedC], { pins: NO_PINS, mutes: none, filtered: false, busy: currentBusy, retainedActive: new Set(first.active.map((x) => x.key)) });
+    expect(after.active.map((x) => x.name)).toEqual(["a", "b", "c"]);
+    expect(after.idle).toEqual([]);
+    expect(after.active[0]!.sessions[0]!.state).toBe("idle");
+    expect(after.active[1]!.sessions[0]!.state).toBe("needs_you");
+    expect(after.active[2]!.sessions[0]!.work?.just_finished).toBe(true);
   });
 });
 
@@ -112,10 +132,7 @@ describe("筛选栏的「botmux」显示 / 隐藏（#2786）", () => {
     expect(withoutBotmux(all, false)).toBe(all);
   });
 
-  it("飞书群和隐藏 botmux 不同时成立：飞书群下隐藏回到全部，隐藏时选飞书群重新显示", () => {
-    expect(botmuxAndFilter("feishu", true, "botmux")).toEqual({ filter: "all", hidden: true });
-    expect(botmuxAndFilter("feishu", true, "filter")).toEqual({ filter: "feishu", hidden: false });
-    expect(botmuxAndFilter("unread", true, "botmux")).toEqual({ filter: "unread", hidden: true });
-    expect(botmuxAndFilter("feishu", false, "botmux")).toEqual({ filter: "feishu", hidden: false });
+  it("does not offer an empty Lark group filter even when previously selected", () => {
+    expect(shownFilters("feishu", { needs: 0, unread: 0, working: 0, bg_waiting: 0, feishu: 0, terminal: 0 })).toEqual(["all"]);
   });
 });

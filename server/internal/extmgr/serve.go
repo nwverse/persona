@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension/uistream"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -121,6 +122,7 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	h.messagingRoutes(api)
 	h.adminExtensionRoutes(api) // with the old /api/v1/admin/plugins paths
 	h.subscriptionRoutes(api)
+	h.avatarRoutes(api)
 	api.HandleFunc("POST /api/v1/error-reports", h.postErrorReports)
 	// The assistant's WebSocket routes, relayed like the extensions' (a relay stream), are the assistant's to answer.
 	for _, pattern := range assistantwire.SocketRoutes {
@@ -234,6 +236,13 @@ func (w *localeWriter) Lang() i18n.Lang { return w.lang }
 // Unwrap preserves streaming and WebSocket access to the underlying writer.
 func (w *localeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// relayIdleTimeout is longer than the hub's relayIdleFor (90 s) so the hub retires idle relay streams first.
+const relayIdleTimeout = 2 * time.Minute
+
+func (h *Manager) relayServer() *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: relayIdleTimeout}
+}
+
 // Accept is extwire.MethodAccept: the hub holds a request for the manager; it dials the relay with the id and serves
 // the request (and any after it on the same connection) there.
 func (h *Manager) Accept(ctx context.Context, id string) error {
@@ -262,7 +271,7 @@ func (h *Manager) Accept(ctx context.Context, id string) error {
 			// there, losing the answer's tail.
 			cancel()
 		}()
-		srv := &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second}
+		srv := h.relayServer()
 		_ = srv.Serve(&oneConn{c: mine, done: make(chan struct{})})
 	}()
 	return nil
@@ -495,6 +504,7 @@ func (h *Manager) hubCall(ctx context.Context, method string, params json.RawMes
 		Base      string          `json:"base"`
 		TZ        string          `json:"tz"`
 		Sender    string          `json:"sender"`
+		Proof     string          `json:"proof"`
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &a); err != nil {
@@ -510,6 +520,12 @@ func (h *Manager) hubCall(ctx context.Context, method string, params json.RawMes
 	case extwire.HubSettingsTool:
 		text, err := h.toolPersonaSettings(ctx, a.MachineID, a.SessionID, a.Arguments)
 		return map[string]any{"text": text}, err
+	case extwire.HubClarificationTake:
+		proof, ok := h.clarificationProofs.take(a.Proof)
+		if !ok {
+			return nil, errors.New("clarification proof is unknown, expired, or already used")
+		}
+		return proof, nil
 	case extwire.HubAudit:
 		var au extwire.Audit
 		if err := json.Unmarshal(params, &au); err != nil || au.Extension == "" ||
@@ -691,6 +707,12 @@ func (h *Manager) AgentTools(ctx context.Context, assistant bool) (agents, assis
 		assistantOnly = append(assistantOnly, h.iphoneTools()...)
 		assistantOnly = append(assistantOnly, h.subscriptionTools()...)
 		assistantOnly = append(assistantOnly, h.connectors.ToolsFor(ctx, false)...)
+	}
+	for _, list := range [][]proto.Tool{agents, assistantOnly} {
+		for i, t := range list {
+			localized := prompts.LocalizeTool(prompts.MCPTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}, string(i18n.From(ctx)))
+			list[i].Description, list[i].InputSchema = localized.Description, localized.InputSchema
+		}
 	}
 	return agents, assistantOnly
 }

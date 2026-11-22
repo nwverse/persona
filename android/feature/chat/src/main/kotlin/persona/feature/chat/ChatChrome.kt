@@ -28,6 +28,7 @@ import persona.core.domain.sort.canRename
 import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.closeConfirmation
 import persona.core.domain.sort.deleteConfirmation
+import persona.core.domain.sort.isRex
 import persona.core.domain.sort.isTern
 import persona.core.domain.sort.resumeCommand
 import persona.core.domain.sort.slotLabel
@@ -47,6 +48,7 @@ internal fun ChatHeader(
     onFiles: (() -> Unit)? = null, onGit: (() -> Unit)? = null, gitLabel: String = "Git",
     onSearch: (() -> Unit)? = null,
     statusState: StatusLineState = StatusLineState(), onDetails: () -> Unit = {},
+    onBackgroundTasks: (() -> Unit)? = null,
     onOpenTodo: ((String) -> Unit)? = null,
     agentShares: (() -> AgentShares)? = null,
     worktrees: (() -> persona.core.contracts.api.AgentCreationService?)? = null,
@@ -68,9 +70,10 @@ internal fun ChatHeader(
     sides: List<Session> = emptyList(),
     sideRollup: SideRollup = SideRollup(),
     onOpenSide: ((SessionKey) -> Unit)? = null,
+    menuOpen: MutableState<Boolean> = remember { mutableStateOf(false) },
     actions: @Composable RowScope.() -> Unit = {},
 ) {
-    var menu by remember { mutableStateOf(false) }
+    var menu by menuOpen
     var sharing by remember(session?.key, agentShares) { mutableStateOf<AgentShares?>(null) }
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
     var title by rememberSaveable { mutableStateOf("") }
@@ -186,6 +189,7 @@ internal fun ChatHeader(
         onSearch?.let { add(JAction(stringResource(R.string.chat_chrome_search), PhIcons.MagnifyingGlass, onClick = it)) }
         onFiles?.let { add(JAction(stringResource(R.string.chat_chrome_files), PhIcons.FolderSimple, onClick = it)) }
         onGit?.let { add(JAction(gitLabel, onClick = it)) }
+        onBackgroundTasks?.let { add(JAction(stringResource(R.string.chat_background_title), PersonaIcons.backgroundTasks, onClick = it)) }
         add(JAction(stringResource(R.string.chat_chrome_details), onClick = onDetails))
         add(JAction(stringResource(R.string.chat_chrome_info), PhIcons.Info, enabled = session != null) { dialog = "info" })
         if (session?.assistant == false) {
@@ -249,7 +253,11 @@ internal fun ChatHeader(
             content = {
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                     if (!session?.paneId.isNullOrBlank()) JTextField(tabName, { tabName = it }, singleLine = true,
-                        label = stringResource(if (session?.isTern == true) R.string.chat_chrome_tab_name_tern else R.string.chat_chrome_tab_name))
+                        label = stringResource(when {
+                            session?.isTern == true -> R.string.chat_chrome_tab_name_tern
+                            session?.isRex == true -> R.string.chat_chrome_tab_name_rex
+                            else -> R.string.chat_chrome_tab_name
+                        }))
                     JTextField(title, { title = it }, label = stringResource(R.string.chat_chrome_session_name), singleLine = true)
                 }
             })
@@ -307,6 +315,7 @@ internal fun ChatHeader(
 internal fun chatRenameNote(session: Session?): Int? = when {
     session?.canTerminal == false -> null
     session?.isTern == true -> R.string.chat_chrome_rename_text_tern
+    session?.isRex == true -> R.string.chat_chrome_rename_text_rex
     else -> R.string.chat_chrome_rename_text
 }
 
@@ -344,17 +353,22 @@ internal fun headerStatus(state: StatusLineState, session: Session?): Status {
 /**
  * The slim bar an Agent chat's header folds into on Glass (iOS `compactChrome`, #4339 C4): back, the agent's mark, the
  * state's dot and the title, or "Connecting…" while the hub is out of reach; a tap opens the header again.
+ * The compact phone layout keeps the open header's session actions on the right.
  */
 @Composable
 internal fun ChatSlimHeader(
-    session: Session?, statusState: StatusLineState, connection: ConnectionState?, onBack: () -> Unit, onOpen: () -> Unit,
+    session: Session?, statusState: StatusLineState, connection: ConnectionState?, onBack: () -> Unit,
+    onMore: (() -> Unit)? = null, onOpen: () -> Unit,
 ) {
     val title = session?.displayTitle ?: stringResource(R.string.chat_chrome_title_default)
     val link = connectionTitle(connection)
     val haptics = rememberHaptics()
     ChatSlimBar(title, stringResource(R.string.chat_chrome_slim_open, link ?: title), onOpen = { haptics(Haptic.Tap); onOpen() },
         onBack = onBack, status = headerStatus(statusState, session), agentMark = session?.agentMark, linkText = link,
-        waiting = session?.let(::AgentSession)?.waitsInBackground == true)
+        waiting = session?.let(::AgentSession)?.waitsInBackground == true,
+        trailing = onMore?.let { open -> {
+            JIconButton(PersonaIcons.moreMenu, stringResource(R.string.chat_chrome_more), open, raised = false, tint = PersonaTheme.palette.accent)
+        } })
 }
 
 /** The states the line under the title names by its dot only (iOS `ChatView.quiet`). */

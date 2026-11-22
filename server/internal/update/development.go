@@ -22,10 +22,46 @@ type DevelopmentConfig struct {
 }
 
 type DevelopmentBackupConfig struct {
-	Quiesce        []string `json:"quiesce"`
-	Resume         []string `json:"resume"`
+	// Quiesce and Resume are the optional advanced override for installations
+	// with writers outside the hub's control. When both are empty the hub
+	// pauses its own writers (the built-in child manager, background writes and
+	// request writes) for the snapshot, and Builtin is set for the helper.
+	Quiesce        []string `json:"quiesce,omitempty"`
+	Resume         []string `json:"resume,omitempty"`
 	ExtraRoots     []string `json:"extra_roots,omitempty"`
 	ExtraDatabases []string `json:"extra_databases,omitempty"`
+	// Directory is the snapshot store (an absolute path; empty uses the
+	// runtime's update/development-backups) and Retain how many verified
+	// snapshots are kept (0 uses the default of three).
+	Directory string `json:"directory,omitempty"`
+	Retain    int    `json:"retain,omitempty"`
+	// Builtin is true when the hub itself paused the writers, so the helper
+	// must not run quiesce/resume hooks or its own coordination marker.
+	Builtin bool `json:"builtin,omitempty"`
+}
+
+// ExternalQuiesce reports whether both quiesce and resume hooks are configured.
+// A half-configured pair is refused rather than silently replaced by the
+// built-in pause.
+func (c DevelopmentBackupConfig) ExternalQuiesce() bool {
+	return len(c.Quiesce) > 0 && len(c.Resume) > 0
+}
+
+// RequiresExternalQuiesce reports whether the backup configuration includes
+// extra roots or extra databases that the hub's built-in pause cannot stop or
+// verify.
+func (c DevelopmentBackupConfig) RequiresExternalQuiesce() bool {
+	return len(c.ExtraDatabases) > 0 || len(c.ExtraRoots) > 0
+}
+
+// Coordinated reports whether the configured writer coordination is usable:
+// both hooks together, or neither (the built-in pause) when no extra databases
+// or extra roots are configured.
+func (c DevelopmentBackupConfig) Coordinated() bool {
+	if len(c.Quiesce) > 0 || len(c.Resume) > 0 {
+		return len(c.Quiesce) > 0 && len(c.Resume) > 0
+	}
+	return !c.RequiresExternalQuiesce()
 }
 
 type DevelopmentCandidate struct {

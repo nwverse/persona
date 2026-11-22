@@ -2,7 +2,7 @@
 // "Section bar", #9053), filters by source and kind, search, then the section chosen; under All every section stacked,
 // Needs you (agents waiting on you first), In progress, FYI, Collapsed and Done, each opening / closing from its title.
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { agentDraft, agentWorking, conversationRoute, fromLine, interactionAsk, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
+import { agentDraft, agentWorking, conversationRoute, interactionAsk, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
 import { lineSummary, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
 import { repeatsSummary, interactionAgentTitle, listInboxMutes, muteLine, muteShortName, muteTitle, policyMenuTitle, unmuteInbox, BULK_CONFIRM_AT, bulkScope, bulkScopeName, mailShort } from "../../lib/inbox-page";
 import { nowText, rowMeta } from "../../lib/inbox-now";
@@ -19,6 +19,7 @@ import { subscriptionsHref, useInboxSourcesShown, useSubscriptionsShown } from "
 import { type Manager } from "../../lib/managers";
 import { scoped, useScope, useScoped } from "../../lib/current-assistant";
 import { useStore } from "../../lib/store";
+import { directoryVisibleCards } from "../../lib/sessions";
 import type { Interaction } from "../../lib/types";
 import { t } from "../../i18n";
 import { requestRoute } from "../../lib/card-focus";
@@ -36,6 +37,7 @@ import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
 import { UnreadNotice } from "./UnreadNotice";
 import { EventMark } from "./InboxEvent";
+import { todoForwardLabel } from "./InboxTaskLinks";
 import { canMerge, mergeItems } from "../../lib/inbox-actions";
 import { openTodoDialog } from "./InboxTodoDialog";
 import { FolderBar, FolderLine, FolderSettingsDialog, openFolderDialog, useFoldersShown } from "./InboxFolders";
@@ -142,7 +144,7 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
   // The agents waiting, picked in the store: the list holds the store's own interaction objects, so a sessions or
   // machines push that leaves them as they were keeps the same array (useStore compares it item by item) and the list,
   // with every row in it, does not render again.
-  const agents = useScoped(useStore((st) => waitingAgents(st.interactions, st.sessions, st.mutes, { source, kind, query, folder })));
+  const agents = useScoped(useStore((st) => waitingAgents(directoryVisibleCards(st.interactions), st.sessions, st.mutes, { source, kind, query, folder })));
   // the sections opened or closed by hand, by "<manager group>:<section>" (each manager's group keeps its own; one
   // manager: the group ""), the others as they are at first
   const [toggled, setToggled] = useState<Set<string>>(() => view.listToggled());
@@ -869,8 +871,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
   const rows = !done ? it.doc?.rows ?? [] : [];
   const first = rows[0];
   const translated = hubTranslation(it, useTranslatePrefs());
-  // Translated mail keeps the old optional-preview path exactly; mail has no `where`.
-  const meta = translated ? fromLine(it, translated.preview) : rowMeta(it);
+  const meta = rowMeta(it, translated?.preview);
   const from = markdownInSummary(it) ? withoutMarks(meta) : meta; // an older assistant row's line is its Markdown (#9041)
   // a right click: "Done" / "Move back", then what it can be muted by (iOS: the row's long press)
   // (the menu key / Shift+F10 open it next to the row, see ui/context-menu.ts)
@@ -885,6 +886,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
             <span className={cx("truncate text-[13.5px] group-focus-within:pr-11 group-hover:pr-11", done ? "text-ink-2" : "font-semibold text-ink")}>{translated?.subject || it.title}</span>
             {translated && <span role="img" aria-label={t("inbox-inboxlist.translated")} title={t("inbox-inboxlist.translated")} className="shrink-0 text-ink-3"><Icon name="translate" size={12} /></span>}
             {label && <Tag urgent={labelIsUrgent(it)}>{label}</Tag>}
+            {it.todo_forward && <Tag urgent={it.todo_forward.status === "fallback" || it.todo_forward.status === "failed"}><span data-inbox-forward-badge={it.todo_forward.status}>{todoForwardLabel(it.todo_forward.status)}</span></Tag>}
             <span className="flex-1" />
             <span className={cx("shrink-0 text-[11.5px] text-ink-3 tabular-nums group-focus-within:invisible group-hover:invisible", TOUCH_DONE_ROOM)}>{shortTime(it.updated_at)}</span>
           </span>
@@ -899,7 +901,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
               ) : (
                 <span className="line-clamp-2 text-[12.5px] leading-[1.5] break-words text-ink-2">{from}</span>
               )}
-              {it.merged_from && it.merged_from.length > 0 && <span className="mt-0.5 block truncate text-[11px] text-ink-3" data-merged>{t("inbox-inboxlist.merged_from", { count: it.merged_from.length + 1 })}</span>}
+              {it.merged_from && it.merged_from.length > 0 && <span className="mt-0.5 block truncate text-label text-ink-3" data-merged>{t("inbox-inboxlist.merged_from", { count: it.merged_from.length + 1 })}</span>}
               {showAccount && !isLark(it) && !it.connector && <span className="mt-0.5 block truncate text-[11px] text-ink-3">{it.account_name}</span>}
               {folder !== undefined && <FolderLine it={it} folder={folder} />}
             </span>

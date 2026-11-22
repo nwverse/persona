@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -17,9 +18,10 @@ import (
 type ctxAwareLinkStore struct {
 	*profileTaskStore
 	todoStore
-	mu     sync.Mutex
-	rows   []db.TodoRow
-	linked int
+	mu          sync.Mutex
+	rows        []db.TodoRow
+	linked      int
+	failSession string
 }
 
 func newCtxAwareLinkStore() *ctxAwareLinkStore {
@@ -54,7 +56,13 @@ func (st *ctxAwareLinkStore) CreateTodo(_ context.Context, t db.TodoRow) error {
 	st.rows = append(st.rows, t)
 	return nil
 }
-func (st *ctxAwareLinkStore) link(ctx context.Context) ([]string, error) {
+func (st *ctxAwareLinkStore) link(ctx context.Context, sessionID string) ([]string, error) {
+	if sessionID == st.failSession {
+		st.mu.Lock()
+		st.linked++
+		st.mu.Unlock()
+		return nil, errors.New("injected exact-session link failure")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err // what pgx answers when the start's own context is already spent
 	}
@@ -63,11 +71,11 @@ func (st *ctxAwareLinkStore) link(ctx context.Context) ([]string, error) {
 	st.mu.Unlock()
 	return nil, nil
 }
-func (st *ctxAwareLinkStore) LinkTodoAgentWithSource(ctx context.Context, _, _, _, _, _, _, _, _, _ string, _ time.Time) ([]string, error) {
-	return st.link(ctx)
+func (st *ctxAwareLinkStore) LinkTodoAgentWithSource(ctx context.Context, _, _, sessionID, _, _, _, _, _, _ string, _ time.Time) ([]string, error) {
+	return st.link(ctx, sessionID)
 }
-func (st *ctxAwareLinkStore) LinkTodoAgentOfDoneTask(ctx context.Context, _, _, _, _, _, _, _, _, _ string, _ time.Time) ([]string, error) {
-	return st.link(ctx)
+func (st *ctxAwareLinkStore) LinkTodoAgentOfDoneTask(ctx context.Context, _, _, sessionID, _, _, _, _, _, _ string, _ time.Time) ([]string, error) {
+	return st.link(ctx, sessionID)
 }
 func (st *ctxAwareLinkStore) linkCount() int {
 	st.mu.Lock()

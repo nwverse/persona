@@ -121,16 +121,13 @@ enum class AgentQuickFilter(val state: AgentState?, val source: AgentSource? = n
         this == Working -> session.state == AgentState.Working && !session.waitsInBackground
         else -> state == null || session.state == state
     }
-    /** "Lark group" matches botmux sessions only, so it and a hidden botmux cannot both hold (web `botmuxAndFilter`). */
-    val showsBotmux: Boolean get() = this == Feishu
-
     companion object {
         /**
          * "All", and the filters with agents right now; the chosen one stays while it empties, so it can be left (iOS
          * `QuickFilterBar`, web `shownFilters`). When the rest still do not fit a row, the bar scrolls sideways.
          */
         fun shown(selected: AgentQuickFilter, counts: Map<AgentQuickFilter, Int>): List<AgentQuickFilter> =
-            entries.filter { it == All || it == selected || (counts[it] ?: 0) > 0 }
+            entries.filter { it == All || (it != Feishu && it == selected) || (counts[it] ?: 0) > 0 }
     }
 }
 
@@ -189,25 +186,28 @@ data class AgentMachineGroup(
 
 /**
  * State First's order, the index into By Status's sections ([AgentStateSections], iOS `AgentListOrder.rank`): Needs You →
- * Unread → Awaiting Reply → Working → Waiting in the background ([AgentSession.waitsInBackground]) → Waiting → Muted → Seen.
+ * Unread → Awaiting Reply → Working → Waiting in the background ([AgentSession.waitsInBackground]) → Just finished →
+ * Waiting → Muted → Seen.
  * Muted agents that are working, finished-unread or waiting rank as Muted; a muted one that only waits for the user's
- * reply is just Seen ([AgentSession.awaitsReply]); one that needs you stays first.
+ * reply or is just finished is just Seen ([AgentSession.awaitsReply], [AgentSession.justFinished]); one that needs you stays first.
  */
 fun agentRank(session: AgentSession, mutes: AgentPreferences = AgentPreferences()): Int = when {
     session.state == AgentState.NeedsYou -> 0
     (session.state == AgentState.Working || session.state == AgentState.Unread ||
-        session.isQuiet && session.heldInList || session.isWaiting) && mutes.mutes(session) -> 6
+        session.isQuiet && session.heldInList || session.isWaiting) && mutes.mutes(session) -> 7
     session.state == AgentState.Unread || session.isQuiet && session.heldInList -> 1
     session.awaitsReply(mutes) -> 2
     session.state == AgentState.Working -> if (session.waitsInBackground) 4 else 3
-    session.isWaiting -> 5
-    else -> 7
+    session.isWaiting -> 6
+    session.justFinished(mutes) -> 5
+    else -> 8
 }
 
 /** By Status's sections in rank order ([agentRank]): each one's key (its group is `state/<key>`) and title (iOS `stateTitles`). */
 val AgentStateSections: List<Pair<String, CoreText.Key>> = listOf("needs" to CoreText.Key.StateNeedsYou, "unread" to CoreText.Key.StateUnread,
     "awaiting" to CoreText.Key.StateAwaitingReply, "working" to CoreText.Key.StateWorking, "background" to CoreText.Key.StateBackgroundWaiting,
-    "waiting" to CoreText.Key.StateWaiting, "muted" to CoreText.Key.StateMuted, "idle" to CoreText.Key.StateIdle)
+    "just_finished" to CoreText.Key.StateJustFinished, "waiting" to CoreText.Key.StateWaiting,
+    "muted" to CoreText.Key.StateMuted, "idle" to CoreText.Key.StateIdle)
 
 /** By Status's Seen, the long tail: it starts folded, and its id is kept in the folds once it is opened (iOS `foldedByDefault`). */
 const val StateSeenGroup = "state/idle"
@@ -278,7 +278,10 @@ fun buildFlatAgentList(
     val machineNames = machines.associate { it.id to it.name }
     val base = foldRows(sessions, settings.hierarchy).filter { settings.admits(it.session, pins, machineNames, settings.now) && !(settings.hideBotmux && it.session.isBotmux) }
     val counts = AgentQuickFilter.entries.filter { it != AgentQuickFilter.All }
-        .associateWith { filter -> base.count { !it.isNestedSubtask && filter.matches(it) } }
+        .associateWith { filter ->
+            base.count { row -> !row.isNestedSubtask && filter.matches(row) &&
+                (filter != AgentQuickFilter.Feishu || settings.grouping == AgentGrouping.Recent || settings.draws(row, pins)) }
+        }
     val filtered = base.filter { settings.quick.matches(it) || it.id in settings.kept }
     val pinned = filtered.filter { it.id in pins.sessions }.sortedBy { pins.sessions.indexOf(it.id) }
     val live = filtered.filter { it.id !in pins.sessions && settings.draws(it, pins) }

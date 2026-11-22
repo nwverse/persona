@@ -242,6 +242,108 @@ pathlib.Path({str(resumed)!r}).touch()
         self.assertTrue((self.root/"events").read_text().endswith("pause\nresume\n"))
         self.assertFalse((store/"coordination-pending.json").exists())
 
+    def test_builtin_quiesce_custom_directory_and_retention(self):
+        request = self.history_fixture()
+        runtime = Path(request["runtime"])
+        # The Hub paused the writers itself: no hooks, no coordination marker.
+        directory = runtime / "backups/web-dev"
+        request["config"]["backup"] = {"builtin": True, "directory": str(directory), "retain": 2}
+        receipts = [webdev.snapshot(request) for _ in range(3)]
+        snapshots = sorted(p for p in directory.iterdir() if webdev.NAME.fullmatch(p.name))
+        self.assertEqual(len(snapshots), 2)
+        self.assertEqual([p.name for p in snapshots], [r["id"] for r in receipts[-2:]])
+        self.assertEqual(receipts[-1]["retained"], 2)
+        self.assertFalse((runtime / "update/development-backups").exists())
+        self.assertFalse((directory / "coordination-pending.json").exists())
+        # A folder inside the runtime is never archived into the next snapshot.
+        with tarfile.open(snapshots[-1] / "files.tar.gz") as archive:
+            self.assertFalse(any("backups/web-dev" in member.name for member in archive))
+        # The folder must be private.
+        public = runtime / "public-snapshots"
+        public.mkdir()
+        public.chmod(0o755)
+        request["config"]["backup"]["directory"] = str(public)
+        with self.assertRaisesRegex(ValueError, "private"):
+            webdev.snapshot(request)
+        # Relative paths and an out-of-range retention are refused.
+        for broken in ({"directory": "relative/dir"}, {"directory": str(directory), "retain": 51}):
+            request["config"]["backup"] = dict(broken, builtin=True)
+            with self.assertRaises(ValueError):
+                webdev.snapshot(request)
+        # Without the built-in pause, hooks are still required.
+        request["config"]["backup"] = {}
+        with self.assertRaisesRegex(ValueError, "quiesce"):
+            webdev.snapshot(request)
+
+    def test_existing_backslash_runtime_and_backup_directory(self):
+        request = self.history_fixture()
+        original_runtime = Path(request["runtime"])
+        runtime = self.root / r"persona\prod"
+        original_runtime.rename(runtime)
+        request["runtime"] = str(runtime)
+        recommended = runtime / "update" / "development-backups"
+        request["config"]["backup"] = {"builtin": True, "directory": str(recommended)}
+        receipt = webdev.snapshot(request)
+        manifest = webdev.verify(recommended / receipt["id"])
+        self.assertEqual(manifest["roots"], [str(runtime.resolve())])
+
+        existing_store = self.root / r"existing\store"
+        existing_store.mkdir(mode=0o700)
+        request["config"]["backup"] = {"builtin": True, "directory": str(existing_store)}
+        receipt2 = webdev.snapshot(request)
+        webdev.verify(existing_store / receipt2["id"])
+
+        for bad in (
+            str(runtime / r"new\dir"),
+            str(runtime / r"new\dir" / "snapshots"),
+            str(runtime) + "//update/development-backups",
+            str(runtime / "update" / ".." / "escape"),
+            str(runtime / "bad\x00dir"),
+        ):
+            request["config"]["backup"] = {"builtin": True, "directory": bad}
+            with self.assertRaisesRegex(ValueError, "invalid backup directory"):
+                webdev.backup_store(request)
+
+    def test_builtin_quiesce_refuses_extra_sources_and_other_local_managers(self):
+        request = self.history_fixture()
+        external = dict(request["config"]["backup"])
+        runtime = Path(request["runtime"])
+        extra_root = self.root / "extra-root"
+        extra_root.mkdir()
+        (extra_root / "note.txt").write_text("extra")
+
+        # Built-in pause refuses extra_databases and extra_roots.
+        for extra in ({"extra_databases": ["extra-db"]}, {"extra_roots": [str(extra_root)]}):
+            request["config"]["backup"] = dict(extra, builtin=True)
+            with self.assertRaisesRegex(ValueError, "built-in writer pause"):
+                webdev.snapshot(request)
+
+        # Built-in pause refuses another local manager even with no owned machines.
+        other = runtime / "managers" / "m-other"
+        other.mkdir(parents=True)
+        (other / "manager.json").write_text(json.dumps({"database_url": "other-manager-db"}))
+        request["config"]["backup"] = {"builtin": True}
+        with self.assertRaisesRegex(ValueError, "other local managers"):
+            webdev.snapshot(request)
+
+        # External quiesce/resume hooks still work with extra sources and another local manager.
+        request["config"]["backup"] = dict(external, extra_databases=["extra-db"], extra_roots=[str(extra_root)])
+        receipt = webdev.snapshot(request)
+        manifest = webdev.verify(runtime / "update/development-backups" / receipt["id"])
+        self.assertEqual(manifest["databases"], 3)
+        self.assertIn(str(extra_root.resolve()), manifest["roots"])
+
+    def test_store_may_not_be_or_contain_a_collected_root(self):
+        request = self.history_fixture()
+        runtime = Path(request["runtime"])
+        # The store and everything below it leave the archive: a store that is
+        # the runtime, or holds it, would drop what the snapshot is for.
+        for store in (runtime, runtime.parent):
+            request["config"]["backup"] = {"builtin": True, "directory": str(store)}
+            with self.assertRaisesRegex(ValueError, "may not be the runtime or contain"):
+                webdev.snapshot(request)
+        self.assertFalse((runtime / "update" / "development-backups").exists())
+
     def test_apply_backup_stages_only_saved_programs_and_preserves_live_data(self):
         request = self.history_fixture()
         request.update(from_version="web-dev-old", from_commit="b"*40, from_build=202611120001,

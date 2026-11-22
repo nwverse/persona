@@ -48,10 +48,16 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
     var terminalResume: TerminalResume
     var phone: Bool
     var paneActions: Bool
+    /// Move To…'s choices (#11516, `DirectionFilings.offers`): none, no Move To… (no `direction_sessions`, another
+    /// manager's page, an Agent that follows its supervised task).
+    var moveChoices: [DirectionFilings.Choice]
 
+    /// From the model: only `AgentActionMenuReader` may, so what the facts read is observed by the menu alone, never
+    /// by a row or a header that holds it (#10231). Elsewhere this does not compile.
     @MainActor
-    init(session: Session, model: AppModel, currentPane: SessionPane = .chat, hosted: Bool = false, showsSpace: Bool = true,
-         sides: SideSessions? = nil) {
+    fileprivate init(session: Session, model: AppModel, currentPane: SessionPane = .chat, hosted: Bool = false,
+                     showsSpace: Bool = true, sides: SideSessions? = nil) {
+        let moveChoices = DirectionFilings.shared.offers(session.key, in: model)
         self.init(session: session,
                   pinned: model.isPinned(session.key), muted: model.isMuted(session.key),
                   panes: AgentMenuFacts.panes(session, git: AgentMenuRouting.shared.gitStatus(session)),
@@ -64,7 +70,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
                   hosted: hosted, showsSpace: showsSpace,
                   terminalResume: session.status == .offline || session.status == .unknown
                     ? session.terminalResume(on: model.machine(session.key.machineRef)) : .hidden,
-                  phone: AgentMenuFacts.isPhone)
+                  phone: AgentMenuFacts.isPhone, moveChoices: moveChoices)
     }
 
     /// Test and preview construction needs no live hub. Production uses the model initializer above.
@@ -72,7 +78,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
          paneBadges: [SessionPane: String] = [:], currentPane: SessionPane = .chat, review: Bool = false,
          preview: Bool = false, screen: Bool = false, todoHub: Bool = false, sideCount: Int = 0,
          hosted: Bool = false, showsSpace: Bool = true, terminalResume: TerminalResume = .hidden,
-         phone: Bool = false, git: GitStatus? = nil) {
+         phone: Bool = false, git: GitStatus? = nil, moveChoices: [DirectionFilings.Choice] = []) {
         key = session.key
         self.session = session
         self.pinned = pinned
@@ -92,6 +98,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
         self.terminalResume = terminalResume
         self.phone = phone
         paneActions = NodeMenu.offersPaneActions(session)
+        self.moveChoices = moveChoices
     }
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
@@ -110,6 +117,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
             && a.session.todo == b.session.todo
             && a.session.subagents?.count == b.session.subagents?.count && a.session.spaceID == b.session.spaceID
             && a.session.paneID == b.session.paneID && a.paneActions == b.paneActions
+            && a.moveChoices == b.moveChoices
     }
 
     /// The complete ordered inventory, including the nested node actions as separate entries.
@@ -128,7 +136,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
         if showsSpace, session.spaceID != nil { add(.space) }
         if session.canAttach { add(.attach) }
         if session.state.isLive, session.canInterrupt { add(.interrupt) }
-        if session.state == .unread { add(.markSeen) }
+        if session.needsSeen(muted: muted) { add(.markSeen) }
         if phone {
             if offersTakeover { add(.takeover) }
             if offersContinuation { add(.continueInNewSession) }
@@ -140,6 +148,8 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
             if session.todo != nil { add(.todo, .session); add(.moveTodo, .session); add(.unlinkTodo, .session) }
             else { add(.linkTodo, .session) }
         }
+        // After the to-do's own entries, so Move To… reads apart from Move to Another To-do… (#11516).
+        if !moveChoices.isEmpty { add(.moveTo, .session) }
         if session.loop != nil { add(.stopLoop, .session) }
         add(.handToPersona, .session)
         if screen { add(.screen, .session) }
@@ -195,7 +205,7 @@ nonisolated struct AgentActionItem: Equatable, Identifiable, Sendable {
     enum ID: String, Sendable {
         case backToChat, files, git, review, preview, subagents, sideSessions, space
         case attach, interrupt, markSeen, takeover, continueInNewSession, rename, pin, mute
-        case todo, moveTodo, unlinkTodo, linkTodo, stopLoop, handToPersona, screen
+        case todo, moveTodo, unlinkTodo, linkTodo, moveTo, stopLoop, handToPersona, screen
         case copyDirectory, terminal, copyResume, resume
         case splitPane, splitRight, splitDown, nodeGit, gitPull, gitPush, gitFetch, closeTab, close, delete
     }
@@ -227,6 +237,34 @@ final class AgentMenuHandlers {
         self.takeover = takeover
         self.continueInNewSession = continueInNewSession
     }
+}
+
+/// `AgentActionMenu` with its facts read in its own `body`. A menu's content is built with the view that holds it (a
+/// row's `.contextMenu`, the chat header's `Menu`), so facts built there made that view observe what they read of the
+/// model: the machines (whose heartbeat changes on every push of a busy hub), the hub links, pins and side sessions.
+/// Every row of the Agents list was drawn again on each push (#10231). Read here, only this view observes them.
+struct AgentActionMenuReader: View {
+    @Environment(AppModel.self) private var model
+    let session: Session
+    var currentPane: SessionPane = .chat
+    var hosted = false
+    var showsSpace = true
+    var sides: SideSessions?
+    let handlers: AgentMenuHandlers
+
+    var body: some View {
+        AgentActionMenu(facts: AgentActionFacts(session: session, model: model, currentPane: currentPane, hosted: hosted,
+                                                showsSpace: showsSpace, sides: sides),
+                        handlers: handlers)
+            .equatable()
+    }
+
+    #if DEBUG
+    /// The facts this menu shows, for tests. Not for views: built in a body, they make that view observe the model.
+    static func factsForTesting(session: Session, model: AppModel) -> AgentActionFacts {
+        AgentActionFacts(session: session, model: model)
+    }
+    #endif
 }
 
 /// One menu definition and one renderer shared by an Agents row's long press and its detail's More button.
@@ -331,6 +369,12 @@ struct AgentActionMenu: View, Equatable {
                     catch { model.show(error) }
                 }
             } label: { Label("Unlink", systemImage: Theme.Icon.link) }
+        case .moveTo:
+            MoveToChoices(choices: facts.moveChoices) { choice in
+                guard let s = now() else { return }
+                DirectionFilings.shared.move(s.key, title: s.displayTitle, state: s.state, to: choice,
+                                             from: DirectionFilings.shared.placed(s.key))
+            }
         case .stopLoop:
             Button(role: .destructive) { model.stopLoop(facts.key) } label: { Label("Stop Loop", systemImage: Theme.Icon.stopLoop) }
         case .handToPersona:

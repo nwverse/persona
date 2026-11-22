@@ -3,7 +3,15 @@ import { Blob as NodeBlob } from "node:buffer";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-vi.mock("../../i18n", () => ({ t: (key: string, vars?: Record<string, number>) => key === "lib-work-groups.dur_seconds" ? `${vars?.s}s` : key, currentLanguage: () => "en", formatNumber: String }));
+vi.mock("../../i18n", () => ({
+  t: (key: string, vars?: Record<string, number>) => key === "lib-work-groups.dur_seconds" ? `${vars?.s}s`
+    : key === "lib-tasks.exit_code" ? `Exit code ${vars?.code}`
+      : key === "chat-activity.output_lines" ? `lines:${vars?.count}`
+        : key === "chat-activity.output_tail_lines" ? `tail-lines:${vars?.count}` : key,
+  currentLanguage: () => "en",
+  formatNumber: String,
+  formatDate: (value: number) => new Date(value).toISOString(),
+}));
 vi.hoisted(() => {
   window.matchMedia = (() => ({ matches: false, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
 });
@@ -34,6 +42,7 @@ const text = () => host.querySelector("[data-command-output]")?.textContent;
 const signal = (n = 0) => (fetcher.mock.calls[n][1] as RequestInit).signal!;
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  vi.setSystemTime("2026-11-18T10:00:00Z");
   vi.stubGlobal("Blob", NodeBlob);
   Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
   fetcher = vi.fn(async () => response("sample output")); vi.stubGlobal("fetch", fetcher);
@@ -64,6 +73,7 @@ it("reads a bounded suffix through authenticated API and renders literal output 
 it("distinguishes empty running output from an ended empty read without claiming success", async () => {
   fetcher.mockImplementation(async () => response("")); draw(); await flush();
   expect(text()).toBe("chat-activity.output_empty_running");
+  expect(host.querySelector("[data-command-lines]")?.textContent).toBe("lines:0");
   draw({ running: false }); await flush(); expect(fetcher).toHaveBeenCalledTimes(2);
   expect(text()).toBe("chat-activity.output_empty_ended"); expect(host.textContent).toContain("chat-activity.output_not_running");
   await tick(10_000); expect(fetcher).toHaveBeenCalledTimes(2);
@@ -119,6 +129,7 @@ it("shows a bounded tail and removes its incomplete first line", async () => {
   expect(new TextEncoder().encode(suffix).length).toBe(65_536);
   fetcher.mockResolvedValueOnce(response(suffix, 90_000)); draw(); await flush();
   expect(text()).toBe("last line here!"); expect(host.textContent).toContain("chat-activity.output_tail");
+  expect(host.querySelector("[data-command-lines]")?.textContent).toBe("tail-lines:1");
 });
 
 it("preserves a nonempty long-line suffix ending in newline instead of claiming no output", async () => {
@@ -188,14 +199,53 @@ it.each(["owner", "manager"])("does not send a late retired %s 401 into sign-in 
   } finally { handleUnauthorized(previous); }
 });
 
-it("shows elapsed time only while the command is still listed as running", async () => {
-  draw({ task: { ...task, started_at: new Date(Date.now() - 5000).toISOString() } }); await flush();
-  expect(host.querySelector("[data-command-elapsed]")?.textContent).toBe("5s");
-  expect(host.querySelector("[data-command-elapsed]")?.closest('[role="status"]')).toBeNull();
-  expect(host.querySelector('[role="status"]')?.textContent).toBe("lib-tasks.loop_running_short");
-  await tick(1000); expect(host.querySelector("[data-command-elapsed]")?.textContent).toBe("6s");
-  draw({ running: false }); await flush(); expect(host.querySelector("[data-command-elapsed]")).toBeNull();
-  expect(host.querySelector('[role="status"]')?.textContent).toBe("chat-activity.output_not_running");
+it("shows live runtime while running, then the retained result, exit code, final runtime and start time", async () => {
+  const startedAt = new Date(Date.now() - 5000).toISOString();
+  draw({ task: { ...task, started_at: startedAt } }); await flush();
+  expect(host.querySelector("[data-command-runtime]")?.textContent).toBe("5s");
+  expect(host.querySelector('[role="status"]')?.textContent).toBe("chat-subagentcard.status_running");
+  expect(host.querySelector("[data-command-started]")?.textContent).toBe(startedAt);
+  await tick(1000); expect(host.querySelector("[data-command-runtime]")?.textContent).toBe("6s");
+  const beforeEnd = fetcher.mock.calls.length;
+  draw({ running: false, task: { ...task, started_at: startedAt, status: "completed", ended_at: new Date(Date.now()).toISOString(), exit_code: 0 } });
+  await flush();
+  expect(host.querySelector('[role="status"]')?.textContent).toBe("chat-subagentcard.status_completed");
+  expect(host.querySelector("[data-command-exit-code]")?.textContent).toBe("Exit code 0");
+  expect(host.querySelector("[data-command-runtime]")?.textContent).toBe("6s");
+  await tick(10_000);
+  expect(host.querySelector("[data-command-runtime]")?.textContent).toBe("6s");
+  expect(fetcher).toHaveBeenCalledTimes(beforeEnd + 1);
+});
+
+it.each([
+  { status: "failed", exitCode: 23, word: "chat-subagentcard.status_failed" },
+  { status: "stopped", exitCode: undefined, word: "chat-subagentcard.status_stopped" },
+])("keeps a $status command's outcome without inventing an exit code", async ({ status, exitCode, word }) => {
+  draw({ running: false, task: { ...task, started_at: "2026-11-18T09:59:48Z", ended_at: "2026-11-18T10:00:00Z", status, exit_code: exitCode } });
+  await flush();
+  expect(host.querySelector('[role="status"]')?.textContent).toBe(word);
+  expect(host.querySelector("[data-command-runtime]")?.textContent).toBe("12s");
+  expect(host.querySelector("[data-command-exit-code]")?.textContent).toBe(exitCode === undefined ? undefined : `Exit code ${exitCode}`);
+  const reads = fetcher.mock.calls.length;
+  await tick(10_000); expect(fetcher).toHaveBeenCalledTimes(reads);
+});
+
+it("expands the full command and labels the output lines actually read", async () => {
+  const command = "printf 'a long command'\n&& npm test -- --runInBand";
+  fetcher.mockResolvedValueOnce(response("first\nsecond\n"));
+  draw({ task: { ...task, command } }); await flush();
+  const full = host.querySelector<HTMLElement>("[data-command-full]")!;
+  expect(full.textContent).toBe(command); expect(full.className).toContain("line-clamp-3");
+  expect(host.querySelector("[data-command-lines]")?.textContent).toBe("lines:2");
+  const more = button("chat-activity.command_show_more");
+  expect(more.getAttribute("aria-expanded")).toBe("false"); expect(more.getAttribute("aria-controls")).toBe(full.id);
+  expect(more.className).toContain("touch-hit");
+  act(() => more.click());
+  expect(full.className).not.toContain("line-clamp-3");
+  expect(full.className).toContain("max-h-48"); expect(full.className).toContain("overflow-y-auto");
+  expect(button("chat-activity.command_show_less").getAttribute("aria-expanded")).toBe("true");
+  act(() => button("chat-activity.command_show_less").click());
+  expect(full.className).toContain("line-clamp-3");
 });
 
 it("disables Retry immediately during a pending retry and preserves the last good output", async () => {
@@ -223,4 +273,40 @@ it.each(["owner", "manager", "session"])("fences stale Copy and Open handlers at
     copy.click(); file.click();
   });
   await flush(); expect(writeText).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled();
+});
+
+const monitor: BackgroundTask = { id: "monitor-a", kind: "monitor", description: "Synthetic monitor", command: "tail -f sample.log | grep warning" };
+
+it("shows a Monitor with no output file yet, then switches to its output in place once the file arrives (#10852)", async () => {
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  const startedAt = new Date(Date.now() - 5000).toISOString();
+  draw({ task: { ...monitor, started_at: startedAt } }); await flush();
+  expect(host.querySelector('[role="status"]')?.textContent).toBe("chat-subagentcard.status_running");
+  expect(host.querySelector("[data-command-runtime]")?.textContent).toBe("5s");
+  expect(host.querySelector("[data-command-started]")?.textContent).toBe(startedAt);
+  expect(host.querySelector("[data-command-full]")?.textContent).toBe(monitor.command);
+  expect(text()).toBe("chat-activity.output_empty_running");
+  expect(host.querySelector("[data-bg-open-file]")).toBeNull(); expect(host.querySelector("[data-command-lines]")).toBeNull();
+  expect(document.activeElement).toBe(button("chat-activity.back"));
+  act(() => button("chat-activity.copy_command").click()); await flush(); expect(writeText).toHaveBeenCalledWith(monitor.command);
+  await tick(6000); expect(fetcher).not.toHaveBeenCalled(); expect(host.querySelector("[data-command-runtime]")?.textContent).toBe("11s");
+  // The reader unfolds the command and moves on to Copy; the first event names the file.
+  act(() => button("chat-activity.command_show_more").click());
+  const copy = button("chat-activity.copy_command"); act(() => copy.focus());
+  draw({ task: { ...monitor, started_at: startedAt, output_file: "/tmp/monitor.log" } }); await flush();
+  expect(fetcher.mock.calls[0][0]).toBe("/api/v1/machines/machine-a/file/download?path=%2Ftmp%2Fmonitor.log&cwd=%2Ftmp");
+  expect(text()).toBe("sample output"); expect(host.querySelector("[data-command-lines]")?.textContent).toBe("lines:1");
+  expect(document.activeElement).toBe(copy); expect(button("chat-activity.command_show_less")).toBeDefined();
+  act(() => button("chat-activity.open_output_file").click()); expect(open).toHaveBeenCalledOnce();
+  await tick(); expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+it("says an ended task that never named an output file had no output, without reading anything", async () => {
+  draw({ running: false, task: { ...monitor, status: "completed", started_at: "2026-11-18T09:59:48Z", ended_at: "2026-11-18T10:00:00Z" } });
+  await flush();
+  expect(host.querySelector('[role="status"]')?.textContent).toBe("chat-subagentcard.status_completed");
+  expect(host.querySelector("[data-command-runtime]")?.textContent).toBe("12s");
+  expect(text()).toBe("chat-activity.output_empty_ended"); expect(host.querySelector("[data-bg-open-file]")).toBeNull();
+  await tick(10_000); expect(fetcher).not.toHaveBeenCalled();
 });

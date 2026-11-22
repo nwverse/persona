@@ -2,7 +2,7 @@
 // (docs/protocol/protocol.md `/mutes`, `/modes`, `/rename`; iOS Pins.togglingMute, SessionModes).
 import { t } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
-import { sessionCan } from "./format";
+import { herdrTabName, sessionCan } from "./format";
 import type { Session } from "./types";
 
 export interface ModeOption {
@@ -70,13 +70,14 @@ export function effortTitle(id?: string): string {
 }
 
 /** The two chips (Claude Code's TUI bottom bar). The node says where they work (`capabilities.modes`, #1843): a runtime
- *  that applies them (Orca, Antigravity), never a Claude outside Persona's terminals. An older node does not say, and the
- *  chips follow the agent: Claude Code in Persona's terminals, Antigravity; Codex, a compatible CLI and other sources not. */
+ *  that applies them (Orca, Antigravity), never a Claude outside Persona's terminals nor an agent in a terminal whose mode
+ *  is its start's (cursor, agy: the node refuses the switch). An older node does not say, and the chips follow the agent:
+ *  Claude Code in Persona's terminals, Antigravity's runtime; Codex, agy in a terminal pane and other sources not, as on
+ *  iOS and Android (`canChangeModes`). */
 export function hasModes(s: Session | undefined): boolean {
   if (!s || s.assistant) return false;
   if (typeof s.capabilities?.modes === "boolean") return s.capabilities.modes;
-  if (s.agent === "agy") return true;
-  if (s.source_kind) return false;
+  if (s.source_kind) return s.agent === "agy";
   return !s.agent || s.agent === "claude";
 }
 
@@ -138,8 +139,15 @@ export function toggleMute(s: Pick<Session, "machine_id" | "session_id" | "space
 
 /** The rename request (iOS RenameSessionAlert): only what changed; the herdr tab only for an agent in a herdr pane.
  * Returns null when nothing changed. */
-export function renameBody(s: Session, tab: string, title: string): { tab_name?: string; title?: string } | null {
+export function renameBody(s: Session, tab: string, title: string, unified = false): { tab_name?: string; title?: string } | null {
   const t = tab.trim(), n = title.trim();
+  if (unified) {
+    if (!t) return null;
+    const cli = s.agent ?? "claude";
+    const syncTitle = cli === "claude" || cli === "codex";
+    if (t === herdrTabName(s) && (!syncTitle || t === s.title)) return null;
+    return syncTitle ? { tab_name: t, title: t } : { tab_name: t };
+  }
   const body: { tab_name?: string; title?: string } = {};
   if (!s.assistant && s.slot_id && t && t !== (s.slot_name ?? "")) body.tab_name = t;
   if (n && n !== s.title) body.title = n;

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.LocalRippleConfiguration
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -15,9 +16,12 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import java.time.Instant
@@ -58,8 +62,8 @@ import persona.core.domain.tasks.HandoffWake
 import persona.core.domain.tasks.TasksStore
 
 /**
- * #8312: the hand-off card says the failure and the cut-off, Needs you and In progress carry the actions, and Just
- * finished sits under In progress. Native captures in build/quiet-task-shots.
+ * #8312: the hand-off card says the failure and the cut-off, Needs you and In progress carry the actions, and what just
+ * finished is under Finished (#10922), where opening it keeps it. Native captures in build/quiet-task-shots.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -109,7 +113,7 @@ class QuietTasksUiTest {
         override suspend fun removeTask(todoId: String) { removed += todoId }
         override suspend fun setTodoSeen(id: String, seen: Boolean): Todo {
             this.seen += id
-            return rows.first { it.id == id }.copy(seenAt = "2026-11-15T12:00:00Z")
+            return rows.first { it.id == id }.copy(seenAt = Instant.now().toString())
         }
         override suspend fun route(conversation: String, todoId: String, text: String): FeedItem = error("unused")
         override suspend fun today(conversation: String): FeedItem = error("unused")
@@ -126,16 +130,73 @@ class QuietTasksUiTest {
         return api to host
     }
 
-    @Test fun theRowsActOnTheirOwnAndJustFinishedIsNotCounted() {
+    @Test fun unrecoverableWireKindUsesTheLocalizedInvalidConversationOutcome() {
+        showInvalidConversationOutcome(cut.copy(turnErrorKind = "unrecoverable"), shots = "default")
+    }
+
+    @Config(fontScale = 2f)
+    @Test fun unrecoverableWireKindUsesTheLocalizedInvalidConversationOutcomeAtLargestText() {
+        showInvalidConversationOutcome(cut.copy(turnErrorKind = "unrecoverable"), shots = "large")
+    }
+
+    @Test fun compactionSealedWireCodeUsesTheLocalizedInvalidConversationOutcome() {
+        showInvalidConversationOutcome(cut.copy(turnErrorCode = "compaction_sealed"))
+    }
+
+    private fun showInvalidConversationOutcome(session: Session, shots: String? = null) {
+        val raw = "opaque account transition 7A99"
+        val sealed = session.copy(turnError = raw)
+        val api = Api(listOf(interrupted), emptyList())
+        val store = TasksStore(api, Connection(), scope)
+        store.reloadTodos()
+        store.load("main")
+        val host = AssistantTaskHost(store, "main", listOf(sealed), { it }, {}, { throw it }, {})
+        val tray = AssistantTrayState().also { it.expanded = AssistantTray.NeedsYou }
+        val explanation = "Conversation invalid: its compacted context belongs to another account. Start a new conversation to continue."
+        rule.setContent {
+            PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
+                Text(explanation, Modifier.testTag("invalid-two-line-control").width(200.dp),
+                    style = PersonaTheme.type.caption, maxLines = 2)
+                Column(Modifier.testTag("invalid-shot").background(PersonaTheme.palette.background)) {
+                    AssistantTrays(host, tray, emptyList(), emptyList(), emptyList(), { 900.dp }, busy = false, enabled = true,
+                        onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
+                }
+            }
+        }
+        val inOutcome = hasAnyAncestor(hasTestTag("assistant-tray-interrupted"))
+        rule.onNode(hasText("Invalid conversation") and inOutcome).assertIsDisplayed()
+        val texts = rule.onAllNodes(inOutcome).fetchSemanticsNodes().flatMap { node ->
+            node.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text }
+        }
+        assertEquals(explanation, texts.single { it != interrupted.title && it != "Invalid conversation" })
+        rule.onNode(hasText(explanation) and inOutcome).assertIsDisplayed()
+        rule.onNodeWithText(raw).assertDoesNotExist()
+        rule.onNodeWithTag("assistant-tray-continue").assertDoesNotExist()
+        val subtitle = rule.onNode(hasText(explanation) and hasAnyAncestor(hasTestTag("assistant-tray-interrupted")))
+        val subtitleHeight = subtitle.getUnclippedBoundsInRoot().height
+        val twoLines = rule.onNodeWithTag("invalid-two-line-control").getUnclippedBoundsInRoot().height
+        assertTrue("The invalid-conversation explanation must not be clipped to two lines: $subtitleHeight vs $twoLines",
+            subtitleHeight > twoLines)
+        rule.runOnIdle { assertTrue(api.retried.isEmpty()) }
+        if (shots != null) {
+            val output = File("build/invalid-conversation-shots").also { it.mkdirs() }
+            for (s in listOf(AppStyle.Glass, AppStyle.Brief, AppStyle.Board)) for (d in listOf(false, true)) {
+                style = s; dark = d
+                Snapshot.sendApplyNotifications()
+                rule.waitForIdle()
+                val bitmap = rule.onNodeWithTag("invalid-shot").captureToImage().asAndroidBitmap()
+                File(output, "invalid-${s.name.lowercase()}-${if (d) "dark" else "light"}-$shots.png").outputStream()
+                    .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            }
+        }
+    }
+
+    @Test fun theRowsActOnTheirOwnAndFinishedKeepsWhatWasOpened() {
         val (api, host) = ready()
-        val needs = AssistantTrayState().also { it.expanded = AssistantTray.NeedsYou }
-        val running = AssistantTrayState().also { it.expanded = AssistantTray.Running }
-        var showNeeds by mutableStateOf(true)
+        val tray = AssistantTrayState().also { it.expanded = AssistantTray.NeedsYou }
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
-                if (showNeeds) AssistantTrays(host, needs, emptyList(), emptyList(), emptyList(), { 900.dp }, busy = false, enabled = true,
-                    onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
-                else AssistantTrays(host, running, emptyList(), emptyList(), emptyList(), { 900.dp }, busy = false, enabled = true,
+                AssistantTrays(host, tray, emptyList(), emptyList(), emptyList(), { 900.dp }, busy = false, enabled = true,
                     onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
             }
         }
@@ -149,23 +210,31 @@ class QuietTasksUiTest {
         rule.runOnIdle { assertEquals(listOf("failed", "cut"), api.retried); assertNull(host.sheet.value) }
         rule.onNodeWithText("Publish the notes").performClick()
         rule.runOnIdle { assertEquals(TaskSheet.Task("failed"), host.sheet.value) }
-        showNeeds = false
-        Snapshot.sendApplyNotifications()
+        rule.runOnIdle { tray.expanded = AssistantTray.Running }
         rule.waitForIdle()
-        rule.onNodeWithText("Just finished").assertIsDisplayed()
+        // what finished is no longer under In progress: it has its own entry (#10922)
+        rule.onNodeWithText("Just finished").assertDoesNotExist()
+        rule.onNodeWithText("Renamed the button").assertDoesNotExist()
         rule.onNodeWithText("Usage Limit", substring = true).assertIsDisplayed()
         rule.onNodeWithText("Weekly limit reached", substring = true).assertIsDisplayed()
         rule.onNodeWithText("Resets", substring = true).assertIsDisplayed()
-        rule.onNodeWithText("Renamed the button").assertIsDisplayed()
-        rule.onNodeWithText("Done").assertIsDisplayed()
         rule.onNodeWithTag("assistant-entry-running").assertIsDisplayed()
         rule.onNodeWithText("Continue").performClick()
         rule.runOnIdle { assertEquals(listOf("failed", "cut", "limit"), api.retried) }
-        rule.onNodeWithTag("assistant-just-finished-row").performClick()
+        rule.onNodeWithTag("assistant-entry-finished").assertIsDisplayed().performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("assistant-tray-finished").assertIsDisplayed()
+        rule.onNodeWithTag("assistant-finished-row-new").assert(hasText("Just finished")).assert(hasText("Renamed the button"))
+        rule.onNodeWithTag("assistant-finished-row-new").performClick()
         rule.runOnIdle {
             assertEquals(TaskSheet.Task("done"), host.sheet.value)
             assertEquals(listOf("done"), api.seen)
         }
+        rule.waitForIdle()
+        // seen, it stays: Done instead of Just finished, and the entry still lists it
+        rule.onNodeWithTag("assistant-finished-row-new").assertDoesNotExist()
+        rule.onNodeWithTag("assistant-finished-row").assert(hasText("Done")).assert(hasText("Renamed the button"))
+        rule.onNodeWithTag("assistant-entry-finished").assertIsDisplayed()
     }
 
     private var style by mutableStateOf(AppStyle.Glass)
@@ -175,6 +244,7 @@ class QuietTasksUiTest {
         val (_, host) = ready()
         val needs = AssistantTrayState().also { it.expanded = AssistantTray.NeedsYou }
         val running = AssistantTrayState().also { it.expanded = AssistantTray.Running }
+        val finishedTray = AssistantTrayState().also { it.expanded = AssistantTray.Finished }
         rule.setContent {
             PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
                 CompositionLocalProvider(LocalRippleConfiguration provides null) {
@@ -184,6 +254,8 @@ class QuietTasksUiTest {
                         AssistantTrays(host, needs, emptyList(), emptyList(), emptyList(), { 700.dp }, busy = false, enabled = true,
                             onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
                         AssistantTrays(host, running, emptyList(), emptyList(), emptyList(), { 700.dp }, busy = false, enabled = true,
+                            onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
+                        AssistantTrays(host, finishedTray, emptyList(), emptyList(), emptyList(), { 700.dp }, busy = false, enabled = true,
                             onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
                     }
                 }
@@ -200,7 +272,7 @@ class QuietTasksUiTest {
             style = s; dark = d
             Snapshot.sendApplyNotifications()
             rule.waitForIdle()
-            rule.onNodeWithText("Just finished").assertIsDisplayed()
+            rule.onNodeWithTag("assistant-finished-row-new").assert(hasText("Just finished"))
             rule.onNodeWithText("Retry").assertIsDisplayed()
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
             if (!d) light[s] = bitmap.copy(Bitmap.Config.ARGB_8888, false)

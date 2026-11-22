@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Where the assistant's tokens go: model usage per round kind, from Claude Code and Codex transcripts.
 
-    scripts/diag/assistant_token_report.py [--since 2026-11-01] [--json] [path ...]
+    scripts/diag/assistant_token_report.py [--since 2026-11-01] [--json] [--request-breakdown] [path ...]
 
 A round starts with a message typed into a conversation: the owner's, or one Persona sends (a supervision event, a
 follow-up or scheduled run, a task notice, another conversation's message...). Every model call until the next such
@@ -14,16 +14,22 @@ is unknown rather than zero. If an aggregate includes unknown values, it and its
 It also sizes each supervision event's text and the part of it that is the general handling manual (#5665).
 
 Prints counts and sizes only, never message content, so the output can be pasted into an issue.
+--request-breakdown adds source byte inventories and explicit local request exports; see
+docs/assistant/assistant.md, "Local request source diagnostics" for boundaries and unknowns.
 """
 import argparse
 import collections
+import datetime as dt
 import glob
+import importlib.util
 import json
 import os
+from pathlib import Path
 import re
 import sys
 
 USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+TIME_FRACTION = re.compile(r"^(.{10}[T ][0-9]{2}:[0-9]{2}:[0-9]{2})[.,]([0-9]+)")
 
 # The leading <persona-context> blocks a message can start with (snapshot, message source, forwarded text).
 LEAD_CONTEXT = re.compile(r"(?s)^\s*<persona-context\b([^>]*)>(.*?)</persona-context>\s*")
@@ -36,6 +42,7 @@ CODEX_CONTEXT = re.compile(r"(?s)^\s*<(environment_context|codex_internal_contex
 # messages carried their source. They match the Chinese prompts the hub sends, so they stay in Chinese.
 FIRST_LINE_KINDS = [
     ("supervision", re.compile(r"^📋 督办：")),
+    ("followup", re.compile(r"^<persona-limit-continue />$")),  # localized usage-limit continuation
     ("followup", re.compile(r"^⏰（Persona 叫你接着做）")),  # limit_continue: the usage limit reset
     ("wake", re.compile(r"^⏰（Persona 叫醒你")),
     ("followup", re.compile(r"^⏰ ")),
@@ -80,11 +87,19 @@ def default_codex_files():
 
 
 def transcript_files(paths):
+    seen = set()
     for p in paths:
         if os.path.isdir(p):
-            yield from sorted(glob.glob(os.path.join(p, "**", "*.jsonl"), recursive=True))
+            candidates = sorted(glob.glob(os.path.join(p, "**", "*.jsonl"), recursive=True))
         elif os.path.isfile(p):
-            yield p
+            candidates = (p,)
+        else:
+            continue
+        for candidate in candidates:
+            resolved = os.path.realpath(candidate)
+            if resolved not in seen:
+                seen.add(resolved)
+                yield candidate
 
 
 def message_text(entry):
@@ -135,15 +150,49 @@ def classify(text):
     return "owner", rest
 
 
+def timestamp_key(value):
+    if not isinstance(value, str):
+        return None
+    # Parse whole seconds with their offset. Keep the decimal fraction separately so Python 3.9 can
+    # parse arbitrary widths and a cutoff can still distinguish timestamps within a microsecond.
+    match = TIME_FRACTION.match(value)
+    fraction = ""
+    if match:
+        fraction = match[2].rstrip("0")
+        value = match[1] + value[match.end():]
+    try:
+        instant = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=dt.timezone.utc)
+    return instant, fraction
+
+
 class Report:
-    def __init__(self, since=None):
-        self.since = since
+    def __init__(self, since=None, request_breakdown=False):
+        self.since = timestamp_key(since)
+        if since is not None and self.since is None:
+            raise ValueError("--since must be an ISO date or timestamp")
         self.kinds = collections.defaultdict(lambda: collections.Counter())
         self.conversations = collections.defaultdict(lambda: collections.Counter())
         self.events = []  # (total bytes, manual bytes) per supervision event
         self.sidechain = collections.Counter()
         self.files = 0
         self.unknown = collections.defaultdict(set)
+        self.breakdown = None
+        if request_breakdown:
+            # The report can also be loaded directly by file path, without this directory on sys.path.
+            spec = importlib.util.spec_from_file_location("request_breakdown", Path(__file__).with_name("request_breakdown.py"))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.breakdown = module.Breakdown()
+
+    def includes_timestamp(self, value):
+        if self.since is None:
+            return True
+        timestamp = timestamp_key(value)
+        return timestamp is not None and timestamp >= self.since
 
     def add_round(self, kind, text, rest, counted):
         if not counted:
@@ -157,6 +206,8 @@ class Report:
             self.events.append((len(text.encode()), len(body), manual))
 
     def add_file(self, path):
+        if self.breakdown is not None:
+            self.breakdown.add_file(path, self.includes_timestamp)
         with open(path, errors="replace") as f:
             try:
                 first = json.loads(f.readline())
@@ -178,7 +229,7 @@ class Report:
                     continue
                 if not isinstance(e, dict):
                     continue
-                counted = not self.since or str(e.get("timestamp", "")) >= self.since
+                counted = self.includes_timestamp(e.get("timestamp"))
                 if e.get("type") == "user" and e.get("isCompactSummary"):
                     kind = "after_compaction"
                 text = message_text(e)
@@ -254,7 +305,7 @@ class Report:
                 if not isinstance(e, dict) or not isinstance(e.get("payload"), dict):
                     continue
                 p = e["payload"]
-                counted = not self.since or str(e.get("timestamp", "")) >= self.since
+                counted = self.includes_timestamp(e.get("timestamp"))
                 if e.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user":
                     last_event = None
                     parts = p.get("content") or []
@@ -348,8 +399,11 @@ class Report:
             # No category's share of an unknown total can be calculated.
             for row in kinds.values():
                 row[key + "_share"] = None
-        return {"files": self.files, "conversations": len(self.conversations), "total": dict(total),
-                "by_kind": kinds, "supervision_events": ev, "sidechain": dict(self.sidechain)}
+        result = {"files": self.files, "conversations": len(self.conversations), "total": dict(total),
+                  "by_kind": kinds, "supervision_events": ev, "sidechain": dict(self.sidechain)}
+        if self.breakdown is not None:
+            result["request_breakdown"] = self.breakdown.summary()
+        return result
 
 
 def print_text(s):
@@ -377,19 +431,34 @@ def print_text(s):
     if ev["count"]:
         print(f"supervision events: {ev['count']}, median {ev['median_bytes']} B, largest {ev['max_bytes']} B; "
               f"{ev['with_manual']} carry the handling manual, {ev['manual_share_of_body']:.0%} of their text after the context blocks")
+    if "request_breakdown" in s:
+        print("Request source sizes (UTF-8 content / canonical JSON bytes; ? = unavailable):")
+        for index, row in enumerate(s["request_breakdown"]["rows"], 1):
+            print(f"  {index}: {row['boundary']} / {row['lifecycle']}")
+            print("    " + ", ".join(f"{key}={value['bytes'] if value['bytes'] is not None else '?'}"
+                                       for key, value in row["sources"].items()))
+            print(f"    observed content={row['observed_content_bytes']}; largest tool result={row['largest_tool_result']}")
+            if "provider_usage" in row:
+                print("    observed provider usage: " + json.dumps(row["provider_usage"], sort_keys=True))
+        print("  Limits: " + "; ".join(s["request_breakdown"]["limits"]))
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("paths", nargs="*", help="transcript files or directories (default: the assistant directory's projects)")
-    ap.add_argument("--since", help="only lines at or after this ISO time, e.g. 2026-11-01")
+    ap.add_argument("--since", help="only lines at or after this ISO date or timestamp (UTC if no offset is given)")
     ap.add_argument("--json", action="store_true", help="print JSON")
+    ap.add_argument("--request-breakdown", action="store_true",
+                    help="include local source byte inventories and explicit request exports; unknowns are not zero")
     args = ap.parse_args(argv)
+    try:
+        r = Report(args.since, request_breakdown=args.request_breakdown)
+    except ValueError as error:
+        ap.error(str(error))
     paths = args.paths or [*default_paths(), *default_codex_files()]
     if not paths:
         print("no assistant transcripts found; pass a directory", file=sys.stderr)
         return 1
-    r = Report(args.since)
     for path in transcript_files(paths):
         r.add_file(path)
     s = r.summary()

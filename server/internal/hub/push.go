@@ -32,6 +32,7 @@ type apnsConfig = apns.Config
 type Pusher struct {
 	dir     string
 	store   Store
+	quiesce *writeQuiescer
 	logf    func(string, ...any)
 	traffic func(trafficKey, int64, time.Duration)
 	// direct: the hub's own APNs key. Set, every push goes straight to APNs as before; nil, through the relay.
@@ -85,17 +86,17 @@ type Pusher struct {
 	// and mu, never by a push.
 	prefsEdit sync.Mutex
 
-	// lnMu guards the low-distraction mode state (lnmode.go): the cached switch, the per-key push times for the
+	// gradingMu guards the low-distraction mode state (push_grading.go): the cached switch, the per-key push times for the
 	// 12-hour rule, the held-push list and the delivered-push counts.
-	lnMu         sync.Mutex
-	lnCached     *bool
-	lnCachedAt   time.Time
-	lnRefreshing bool
-	lnVersion    uint64 // bumped by setLnMode, so a refresh that read before it does not undo it
-	lnLastPush   map[string]time.Time
-	intercepts   []pushIntercept
-	sent         []pushSent
-	lnDirty      bool // the held-push list changed since the last save
+	gradingMu         sync.Mutex
+	gradingCached     *bool
+	gradingCachedAt   time.Time
+	gradingRefreshing bool
+	gradingVersion    uint64 // bumped by setPushGrading, so a refresh that read before it does not undo it
+	gradingLastAlert  map[string]time.Time
+	intercepts        []heldPushRecord
+	sent              []pushSent
+	heldDirty         bool // the held-push list changed since the last save
 	// sentPending are the delivered pushes not yet appended to the store's record (pushSentStore); sentPrunedAt is
 	// when its last sweep ran.
 	sentPending  []pushSent
@@ -106,7 +107,11 @@ type Pusher struct {
 	sentMirrorDue  bool
 	sentMirroredAt time.Time
 	sentMirrorMu   sync.Mutex
-	lnWriting      bool // the one saver goroutine is running
+	gradingWriting bool // the one saver goroutine is running
+
+	maintenanceWake     chan struct{}
+	maintenanceDeferred bool
+	pendingForgets      []Device
 }
 
 // deviceStoreTimeout: how long a device row write may take before it gives up (the pool has no statement_timeout).
@@ -131,7 +136,7 @@ func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
 		}
 		cancel()
 	}
-	p.loadLnState() // the grading switch and held pushes survive restarts (hub_settings), whether or not APNs is configured
+	p.loadPushGradingState() // the grading switch and held pushes survive restarts (hub_settings), whether or not APNs is configured
 	b, err := os.ReadFile(filepath.Join(dir, "apns.json"))
 	if err != nil {
 		logf("push: no %s, pushing through each phone's relay (docs/operations/push-relay.md)", filepath.Join(dir, "apns.json"))
@@ -170,6 +175,10 @@ func validRelayURL(s string) bool {
 }
 
 func (p *Pusher) register(d Device) error {
+	return p.registerContext(context.Background(), d)
+}
+
+func (p *Pusher) registerContext(ctx context.Context, d Device) error {
 	d.UpdatedAt = p.now().UTC()
 	d.RegisteredAt = d.UpdatedAt
 	d.Registering = true
@@ -204,7 +213,7 @@ func (p *Pusher) register(d Device) error {
 	p.mu.Unlock()
 	// Publish only after the ownership check and duplicate retirement commit.
 	// A failed enrollment must not expose an unpersisted APNs target to sends.
-	if err := p.writeDevice(d); err != nil {
+	if err := p.writeDeviceIn(ctx, d); err != nil {
 		return err
 	}
 	d.Registering = false
@@ -237,6 +246,12 @@ func (p *Pusher) writeDevice(d Device) error {
 func (p *Pusher) writeDeviceIn(parent context.Context, d Device) error {
 	if p.store == nil {
 		return nil
+	}
+	if !quiesceHeld(parent) {
+		if !p.quiesce.begin() {
+			return i18n.Err("hub-selfupdate.err_quiesced")
+		}
+		defer p.quiesce.end()
 	}
 	ctx, cancel := context.WithTimeout(parent, p.storeTimeout)
 	defer cancel()
@@ -351,6 +366,14 @@ func (p *Pusher) deleteRow(d Device) {
 // grant), and that late answer must not delete the new registration and its settings. Under saveMu, so a save of a
 // newer registration is not undone by the delete that follows it, or the other way round.
 func (p *Pusher) forgetIfCurrent(d Device) {
+	if !p.quiesce.beginOrDefer(func() {
+		p.mu.Lock()
+		p.pendingForgets = append(p.pendingForgets, d)
+		p.mu.Unlock()
+	}) {
+		return
+	}
+	defer p.quiesce.end()
 	p.saveMu.Lock()
 	defer p.saveMu.Unlock()
 	p.mu.Lock()

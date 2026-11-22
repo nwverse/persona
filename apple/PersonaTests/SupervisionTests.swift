@@ -135,6 +135,15 @@ struct SupervisionTests {
         #expect(TodoItem(id: "t", title: "x").reviewBadge == nil)
     }
 
+    @Test func personalVerificationIsOpenUntilPass() {
+        let ledger = TaskSupervision(supervisor: "main", state: "user_check", reviews: [.init(verdict: "accepted")])
+        let waiting = sup(ledger)
+        #expect(waiting.doneAt == nil && waiting.reviewState == .userCheck && !waiting.acceptanceStands)
+        #expect(waiting.reviewBadge?.label == "待你验收" && waiting.reviewBadge?.tone == .caution)
+        let passed = sup(ledger, done: true, doneBy: "review")
+        #expect(passed.reviewState == .accepted && passed.reviewBadge?.label == "已验收")
+    }
+
     /// An accepted or cancelled task the user reopened goes on again.
     @Test func reopenedAcceptedCountsAsInProgress() {
         let accepted = TaskSupervision(supervisor: "main", doneWhen: ["A"], state: "accepted")
@@ -143,6 +152,18 @@ struct SupervisionTests {
         #expect(reopened.reviewState == .ongoing && reopened.reviewBadge?.label == "督办中")
         let cancelled = TaskSupervision(supervisor: "main", state: "cancelled")
         #expect(sup(cancelled, done: false).reviewState == .ongoing)
+    }
+
+    /// A continuation's new round (#11553): `task_plan` continues reopened an accepted task with a new Agent, and the hub
+    /// kept the acceptance in the reviews but put the ledger back to going on. The history alone never makes the to-do
+    /// accepted; more work sent to the accepted task's Agent (#3156) keeps the ledger, and the chip, accepted.
+    @Test func aContinuationShowsItsNewRoundNotTheEarlierAcceptance() {
+        let earlier = TaskSupervision.Review(verdict: "accepted", checks: [.init(criterion: "A", met: true)])
+        let continued = sup(.init(supervisor: "main", doneWhen: ["A"], state: "", reviews: [earlier]), done: false)
+        #expect(!continued.acceptanceStands && continued.reviewState == .ongoing)
+        #expect(continued.reviewBadge?.label == "督办中" && continued.reviewBadge?.tone == .neutral)
+        let standing = sup(.init(supervisor: "main", doneWhen: ["A"], state: "accepted", reviews: [earlier]), done: false)
+        #expect(standing.acceptanceStands && standing.reviewBadge?.label == "已验收")
     }
 
     @Test func statusLabelOfAReviewedTask() {
@@ -278,10 +299,11 @@ struct ChatSupervisionTests {
 
     @Test func canonicalToolNamespacesMatchTheWebExactly() {
         for bare in ["notify_user", "ask_user", "supervision_finish", "task_review"] {
-            for prefix in ["", "mcp__persona__", "mcp__plugin_persona__", "mcp__\(LegacyNames.product)__", "mcp__plugin_\(LegacyNames.product)__"] {
+            for prefix in ["", "mcp__persona__", "mcp__plugin_persona__", "mcp__\(LegacyNames.product)__", "mcp__plugin_\(LegacyNames.product)__",
+                           "mcp_persona_", "mcp_persona_0c671287_", "mcp_\(LegacyNames.product)_", "mcp_\(LegacyNames.product)_55a1c59d_"] {
                 #expect(Supervision.tool(prefix + bare) == bare)
             }
-            for prefix in ["mcp__fictional__", "mcp__persona_other__", "mcp__plugin_persona_other__", "mcp__persona__extra__"] {
+            for prefix in ["mcp__fictional__", "mcp__persona_other__", "mcp__plugin_persona_other__", "mcp__persona__extra__", "mcp_persona_other_"] {
                 #expect(Supervision.tool(prefix + bare) == nil)
             }
         }
@@ -357,7 +379,7 @@ struct ChatSupervisionTests {
         folded.fold?.supervisionUser = nil
         folded.supervisionUser = nil
         #expect(!visible([input(1), folded]))
-        #expect(ChatCache.folder == "chats-v19")
+        #expect(ChatCache.folder == "chats-v22")
     }
 
     @Test func queuedSupervisionAndTheNextGenuineQueuedInputAreSeparateTurns() {

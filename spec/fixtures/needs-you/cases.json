@@ -73,7 +73,18 @@
             ]
           }
         ],
-        "badge": 1
+        "badge_rows": [
+          {
+            "id": "agent:studio/s1",
+            "cards": [
+              "ix-plan",
+              "ix-question",
+              "ix-permission"
+            ]
+          }
+        ],
+        "badge": 1,
+        "header": 1
       },
       "source": [
         "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
@@ -110,7 +121,14 @@
             "cards": []
           }
         ],
-        "badge": 1
+        "badge_rows": [
+          {
+            "id": "agent:macbook/s2",
+            "cards": []
+          }
+        ],
+        "badge": 1,
+        "header": 1
       },
       "source": [
         "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
@@ -218,7 +236,26 @@
             ]
           }
         ],
-        "badge": 3
+        "badge_rows": [
+          {
+            "id": "agent:studio/s1",
+            "cards": [
+              "ix-1"
+            ]
+          },
+          {
+            "id": "agent:macbook/s2",
+            "cards": []
+          },
+          {
+            "id": "agent:macbook/s3",
+            "cards": [
+              "ix-3"
+            ]
+          }
+        ],
+        "badge": 3,
+        "header": 3
       },
       "source": [
         "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
@@ -296,7 +333,22 @@
             ]
           }
         ],
-        "badge": 2
+        "badge_rows": [
+          {
+            "id": "card:ix-a",
+            "cards": [
+              "ix-a"
+            ]
+          },
+          {
+            "id": "card:ix-b",
+            "cards": [
+              "ix-b"
+            ]
+          }
+        ],
+        "badge": 2,
+        "header": 2
       },
       "source": [
         "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
@@ -345,7 +397,16 @@
             ]
           }
         ],
-        "badge": 1
+        "badge_rows": [
+          {
+            "id": "agent:studio/s1",
+            "cards": [
+              "ix-1"
+            ]
+          }
+        ],
+        "badge": 1,
+        "header": 1
       },
       "source": [
         "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
@@ -399,7 +460,9 @@
       },
       "expected": {
         "rows": [],
-        "badge": 0
+        "badge_rows": [],
+        "badge": 0,
+        "header": 0
       },
       "source": [
         "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
@@ -408,7 +471,7 @@
     },
     {
       "name": "muted_and_quiet_agents_are_rows_but_not_on_the_badge",
-      "description": "A muted agent, an agent in a muted space and a quiet task's agent still need the user and stay rows; the tab's badge leaves them out (the main conversation tells about a quiet task's agent).",
+      "description": "A muted agent, an agent in a muted space and a quiet task's agent still need the user and stay rows; the section's header, the Needs you filter and the tab's badge leave them out (the main conversation tells about a quiet task's agent), so the header says 2 over the five rows.",
       "input": {
         "sessions": [
           {
@@ -498,7 +561,43 @@
             "cards": []
           }
         ],
-        "badge": 2
+        "badge_rows": [
+          {
+            "id": "agent:studio/s3",
+            "cards": []
+          },
+          {
+            "id": "agent:macbook/s5",
+            "cards": []
+          }
+        ],
+        "badge": 2,
+        "header": 2
+      },
+      "known_differences": {
+        "ios": {
+          "decision": "D6",
+          "why": "iOS's Needs you header and filter count every row of the section, muted agents and a quiet task's agent included: 5, not 2.",
+          "source": [
+            "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+            "apple/Persona/Views/Chats/ChatsView.swift ChatsView.agentList",
+            "docs/plans/plan-derived-counts.md 6.1, D6"
+          ],
+          "replace": {
+            "header": 5
+          }
+        },
+        "android": {
+          "decision": "D6",
+          "why": "Android's Needs you header and filter count every row of the section, muted agents and a quiet task's agent included: 5, not 2.",
+          "source": [
+            "android/feature/agents/src/main/kotlin/persona/feature/agents/AgentsListInfo.kt agentNeedsYouRows",
+            "docs/plans/plan-derived-counts.md 6.1, D6"
+          ],
+          "replace": {
+            "header": 5
+          }
+        }
       },
       "source": [
         "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
@@ -567,11 +666,782 @@
       },
       "expected": {
         "rows": [],
-        "badge": 0
+        "badge_rows": [],
+        "badge": 0,
+        "header": 0
       },
       "source": [
         "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
         "issue #3580"
+      ]
+    },
+    {
+      "name": "a_childs_card_counts_under_its_parent",
+      "description": "A child the hub folds under its parent (folded_under) asks: its card sits under the parent's row, which waits through the children rollup while its own state says working. One row, counted once.",
+      "input": {
+        "sessions": [
+          {
+            "machine_id": "studio",
+            "session_id": "lead",
+            "title": "Release notes",
+            "cwd": "/home/user/project",
+            "state": "working",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z",
+            "children": {
+              "total": 1,
+              "working": 0,
+              "needs_you": 1
+            }
+          },
+          {
+            "machine_id": "studio",
+            "session_id": "worker",
+            "title": "Check the changelog",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "updated_at": "2026-11-10T08:05:00Z",
+            "state_since": "2026-11-10T08:05:00Z",
+            "folded_under": "lead"
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-child",
+            "machine_id": "studio",
+            "session_id": "worker",
+            "kind": "permission",
+            "created_at": "2026-11-10T08:05:00Z",
+            "tool_name": "Bash",
+            "summary": "npm test",
+            "folded_under": "lead"
+          }
+        ],
+        "mutes": {
+          "sessions": [],
+          "spaces": [],
+          "allowed": []
+        },
+        "quiet": []
+      },
+      "expected": {
+        "rows": [
+          {
+            "id": "agent:studio/lead",
+            "cards": [
+              "ix-child"
+            ]
+          }
+        ],
+        "badge_rows": [
+          {
+            "id": "agent:studio/lead",
+            "cards": [
+              "ix-child"
+            ]
+          }
+        ],
+        "badge": 1,
+        "header": 1
+      },
+      "source": [
+        "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+        "android/app/src/main/java/persona/android/ui/ShellCounts.kt agentRows",
+        "docs/protocol/protocol.md \"Session hierarchy\"",
+        "docs/plans/plan-derived-counts.md step 3"
+      ]
+    },
+    {
+      "name": "a_side_counts_under_its_parent",
+      "description": "A side session (folded_as side: a desktop app's side chat or /btw question) asks while its parent is idle: the side is no row of its own; its card sits under the parent's row, which waits through the sides it holds. One row, counted once.",
+      "input": {
+        "sessions": [
+          {
+            "machine_id": "studio",
+            "session_id": "main",
+            "title": "Photo sync",
+            "cwd": "/home/user/project",
+            "state": "idle",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z",
+            "children": {
+              "total": 1,
+              "needs_you": 1,
+              "sides": 1,
+              "sides_needs_you": 1
+            }
+          },
+          {
+            "machine_id": "studio",
+            "session_id": "btw",
+            "title": "Which formats?",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "updated_at": "2026-11-10T08:03:00Z",
+            "state_since": "2026-11-10T08:03:00Z",
+            "folded_under": "main",
+            "folded_as": "side"
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-side",
+            "machine_id": "studio",
+            "session_id": "btw",
+            "kind": "question",
+            "created_at": "2026-11-10T08:03:00Z",
+            "questions": [
+              {
+                "question": "Which port should the demo use?",
+                "options": [
+                  {
+                    "label": "8080"
+                  },
+                  {
+                    "label": "9090"
+                  }
+                ]
+              }
+            ],
+            "folded_under": "main",
+            "folded_as": "side"
+          }
+        ],
+        "mutes": {
+          "sessions": [],
+          "spaces": [],
+          "allowed": []
+        },
+        "quiet": []
+      },
+      "expected": {
+        "rows": [
+          {
+            "id": "agent:studio/main",
+            "cards": [
+              "ix-side"
+            ]
+          }
+        ],
+        "badge_rows": [
+          {
+            "id": "agent:studio/main",
+            "cards": [
+              "ix-side"
+            ]
+          }
+        ],
+        "badge": 1,
+        "header": 1
+      },
+      "source": [
+        "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+        "apple/Shared/SideFold.swift SideFold.fold",
+        "android/app/src/main/java/persona/android/ui/ShellCounts.kt agentRows",
+        "docs/apple/ios.md \"Side sessions\"",
+        "docs/plans/plan-derived-counts.md step 3"
+      ]
+    },
+    {
+      "name": "a_quiet_tasks_card_is_a_row_but_not_on_the_badge",
+      "description": "A quiet task's agent asks with a card: it is a row with its card, but the section's header, the Needs you filter and the tab's badge leave it out, as they do a quiet task's agent waiting in its terminal (the main conversation tells about it). The other agent's card counts.",
+      "input": {
+        "sessions": [
+          {
+            "machine_id": "macbook",
+            "session_id": "q",
+            "title": "Weekly report",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z"
+          },
+          {
+            "machine_id": "macbook",
+            "session_id": "p",
+            "title": "Login form",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "updated_at": "2026-11-10T08:01:00Z",
+            "state_since": "2026-11-10T08:01:00Z"
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-quiet",
+            "machine_id": "macbook",
+            "session_id": "q",
+            "kind": "question",
+            "created_at": "2026-11-10T08:00:00Z",
+            "questions": [
+              {
+                "question": "Which port should the demo use?",
+                "options": [
+                  {
+                    "label": "8080"
+                  },
+                  {
+                    "label": "9090"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "ix-plain",
+            "machine_id": "macbook",
+            "session_id": "p",
+            "kind": "permission",
+            "created_at": "2026-11-10T08:01:00Z",
+            "tool_name": "Bash",
+            "summary": "npm test"
+          }
+        ],
+        "mutes": {
+          "sessions": [],
+          "spaces": [],
+          "allowed": []
+        },
+        "quiet": [
+          "macbook/q"
+        ]
+      },
+      "expected": {
+        "rows": [
+          {
+            "id": "agent:macbook/q",
+            "cards": [
+              "ix-quiet"
+            ]
+          },
+          {
+            "id": "agent:macbook/p",
+            "cards": [
+              "ix-plain"
+            ]
+          }
+        ],
+        "badge_rows": [
+          {
+            "id": "agent:macbook/p",
+            "cards": [
+              "ix-plain"
+            ]
+          }
+        ],
+        "badge": 1,
+        "header": 1
+      },
+      "known_differences": {
+        "ios": {
+          "decision": "D6",
+          "why": "iOS's Needs you header and filter count the quiet task's agent's row too: 2, not 1.",
+          "source": [
+            "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+            "apple/Persona/Views/Chats/ChatsView.swift ChatsView.agentList",
+            "docs/plans/plan-derived-counts.md 6.1, D6"
+          ],
+          "replace": {
+            "header": 2
+          }
+        },
+        "android": {
+          "decision": "D6",
+          "why": "Android's Needs you header and filter count the quiet task's agent's row too: 2, not 1.",
+          "source": [
+            "android/feature/agents/src/main/kotlin/persona/feature/agents/AgentsListInfo.kt agentNeedsYouRows",
+            "docs/plans/plan-derived-counts.md 6.1, D6"
+          ],
+          "replace": {
+            "header": 2
+          }
+        }
+      },
+      "source": [
+        "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+        "apple/Persona/App/AppModel.swift countBadges",
+        "android/app/src/main/java/persona/android/ui/ShellCounts.kt agentRows",
+        "issue #1731",
+        "docs/plans/plan-derived-counts.md step 3"
+      ]
+    },
+    {
+      "name": "a_directory_hidden_card_counts_nowhere",
+      "description": "A session an Agent-folder hide rule matches (hidden_by_directory) asks with a card: neither it nor its card is a row, and the badge does not count it. The visible agent's card counts.",
+      "input": {
+        "sessions": [
+          {
+            "machine_id": "studio",
+            "session_id": "h",
+            "title": "Scratch",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z",
+            "hidden_by_directory": true
+          },
+          {
+            "machine_id": "studio",
+            "session_id": "v",
+            "title": "Visible",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "updated_at": "2026-11-10T08:01:00Z",
+            "state_since": "2026-11-10T08:01:00Z"
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-hidden",
+            "machine_id": "studio",
+            "session_id": "h",
+            "kind": "permission",
+            "created_at": "2026-11-10T08:00:00Z",
+            "tool_name": "Bash",
+            "summary": "npm test"
+          },
+          {
+            "id": "ix-visible",
+            "machine_id": "studio",
+            "session_id": "v",
+            "kind": "question",
+            "created_at": "2026-11-10T08:01:00Z",
+            "questions": [
+              {
+                "question": "Which port should the demo use?",
+                "options": [
+                  {
+                    "label": "8080"
+                  },
+                  {
+                    "label": "9090"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "mutes": {
+          "sessions": [],
+          "spaces": [],
+          "allowed": []
+        },
+        "quiet": []
+      },
+      "expected": {
+        "rows": [
+          {
+            "id": "agent:studio/v",
+            "cards": [
+              "ix-visible"
+            ]
+          }
+        ],
+        "badge_rows": [
+          {
+            "id": "agent:studio/v",
+            "cards": [
+              "ix-visible"
+            ]
+          }
+        ],
+        "badge": 1,
+        "header": 1
+      },
+      "known_differences": {
+        "android": {
+          "decision": "D1",
+          "why": "Android reads no hidden_by_directory: the hidden session and its card are a row, and the badge and the header count it.",
+          "source": [
+            "android/core/domain/src/main/kotlin/persona/core/domain/sort/AgentsNeedsYou.kt needsYouCards, needsYouWaiting",
+            "android/app/src/main/java/persona/android/ui/ShellCounts.kt agentRows",
+            "docs/plans/plan-derived-counts.md section 2, Android Agents tab"
+          ],
+          "replace": {
+            "rows": [
+              {
+                "id": "agent:studio/h",
+                "cards": [
+                  "ix-hidden"
+                ]
+              },
+              {
+                "id": "agent:studio/v",
+                "cards": [
+                  "ix-visible"
+                ]
+              }
+            ],
+            "badge_rows": [
+              {
+                "id": "agent:studio/h",
+                "cards": [
+                  "ix-hidden"
+                ]
+              },
+              {
+                "id": "agent:studio/v",
+                "cards": [
+                  "ix-visible"
+                ]
+              }
+            ],
+            "badge": 2,
+            "header": 2
+          }
+        }
+      },
+      "source": [
+        "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+        "apple/Persona/App/AppModel.swift directoryVisibleInteractions",
+        "apple/Persona/App/AppModel.swift countBadges",
+        "docs/protocol/protocol.md \"Agent directory visibility\"",
+        "docs/plans/plan-derived-counts.md step 3"
+      ]
+    },
+    {
+      "name": "a_held_card_is_listed_but_counts_nowhere",
+      "description": "A question the assistant is still deciding whether it may answer for the user (delegating) is held: its session is a row with the card, answerable there, but no count includes it until the card is handed to the user, though the session's state says needs_you (D11's state path).",
+      "input": {
+        "sessions": [
+          {
+            "machine_id": "studio",
+            "session_id": "d",
+            "title": "Pick a port",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z"
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-delegating",
+            "machine_id": "studio",
+            "session_id": "d",
+            "kind": "question",
+            "created_at": "2026-11-10T08:00:00Z",
+            "questions": [
+              {
+                "question": "Which port should the demo use?",
+                "options": [
+                  {
+                    "label": "8080"
+                  },
+                  {
+                    "label": "9090"
+                  }
+                ]
+              }
+            ],
+            "delegating": true
+          }
+        ],
+        "mutes": {
+          "sessions": [],
+          "spaces": [],
+          "allowed": []
+        },
+        "quiet": []
+      },
+      "expected": {
+        "rows": [
+          {
+            "id": "agent:studio/d",
+            "cards": [
+              "ix-delegating"
+            ]
+          }
+        ],
+        "badge_rows": [],
+        "badge": 0,
+        "header": 0
+      },
+      "known_differences": {
+        "ios": {
+          "decision": "D11",
+          "why": "iOS counts every pending card's session, a held card's too: the badge, the header and the filter count the session whose only card is held.",
+          "source": [
+            "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+            "apple/Persona/App/AppModel.swift countBadges",
+            "docs/plans/plan-derived-counts.md 6.1, D11"
+          ],
+          "replace": {
+            "badge_rows": [
+              {
+                "id": "agent:studio/d",
+                "cards": [
+                  "ix-delegating"
+                ]
+              }
+            ],
+            "badge": 1,
+            "header": 1
+          }
+        },
+        "android": {
+          "decision": "D11",
+          "why": "Android counts every pending card's session, a held card's too: the badge, the header and the filter count the session whose only card is held.",
+          "source": [
+            "android/core/domain/src/main/kotlin/persona/core/domain/sort/AgentsNeedsYou.kt needsYouBadgeRows",
+            "android/app/src/main/java/persona/android/ui/ShellCounts.kt agentRows",
+            "android/feature/agents/src/main/kotlin/persona/feature/agents/AgentsListInfo.kt agentNeedsYouRows",
+            "docs/plans/plan-derived-counts.md 6.1, D11"
+          ],
+          "replace": {
+            "badge_rows": [
+              {
+                "id": "agent:studio/d",
+                "cards": [
+                  "ix-delegating"
+                ]
+              }
+            ],
+            "badge": 1,
+            "header": 1
+          }
+        }
+      },
+      "source": [
+        "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+        "android/app/src/main/java/persona/android/ui/ShellCounts.kt agentRows",
+        "docs/assistant/assistant.md \"Assistant answers questions first\"",
+        "docs/design/DESIGN_SYSTEM.md 4.8",
+        "docs/assistant/unified-entry.md \"Asks go to the supervisor first\"",
+        "docs/plans/plan-derived-counts.md 6.1, D11"
+      ]
+    },
+    {
+      "name": "a_handed_card_beside_a_held_one_counts",
+      "description": "Only held cards leave the count: a session with a held question and a permission card already handed to the user is a row, with both cards, and it counts.",
+      "input": {
+        "sessions": [
+          {
+            "machine_id": "studio",
+            "session_id": "m",
+            "title": "Release notes",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z"
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-held",
+            "machine_id": "studio",
+            "session_id": "m",
+            "kind": "question",
+            "created_at": "2026-11-10T08:00:00Z",
+            "questions": [
+              {
+                "question": "Which port should the demo use?",
+                "options": [
+                  {
+                    "label": "8080"
+                  },
+                  {
+                    "label": "9090"
+                  }
+                ]
+              }
+            ],
+            "delegating": true
+          },
+          {
+            "id": "ix-handed",
+            "machine_id": "studio",
+            "session_id": "m",
+            "kind": "permission",
+            "created_at": "2026-11-10T08:01:00Z",
+            "tool_name": "Bash",
+            "summary": "npm test"
+          }
+        ],
+        "mutes": {
+          "sessions": [],
+          "spaces": [],
+          "allowed": []
+        },
+        "quiet": []
+      },
+      "expected": {
+        "rows": [
+          {
+            "id": "agent:studio/m",
+            "cards": [
+              "ix-held",
+              "ix-handed"
+            ]
+          }
+        ],
+        "badge_rows": [
+          {
+            "id": "agent:studio/m",
+            "cards": [
+              "ix-held",
+              "ix-handed"
+            ]
+          }
+        ],
+        "badge": 1,
+        "header": 1
+      },
+      "source": [
+        "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+        "android/core/domain/src/main/kotlin/persona/core/domain/sort/AgentsNeedsYou.kt needsYouBadgeRows",
+        "docs/plans/plan-derived-counts.md 6.1, D11"
+      ]
+    },
+    {
+      "name": "a_routed_terminal_question_still_counts",
+      "description": "A parsed terminal question that went to its task's supervisor (delegating, kind screen) still counts, and so does the terminal dialog behind it: D11's case for routed terminal questions waits for the owner's confirmation (docs/plans/plan-derived-counts.md, 6.1).",
+      "input": {
+        "sessions": [
+          {
+            "machine_id": "studio",
+            "session_id": "t",
+            "title": "Port the demo",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z"
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-terminal",
+            "machine_id": "studio",
+            "session_id": "t",
+            "kind": "screen",
+            "created_at": "2026-11-10T08:00:00Z",
+            "screen": "Which port should the demo use?\n\n❯ 1. 8080\n  2. 9090\n",
+            "dialog": {
+              "question": "Which port should the demo use?",
+              "options": [
+                {
+                  "key": "1",
+                  "label": "8080",
+                  "keys": [
+                    "1"
+                  ]
+                },
+                {
+                  "key": "2",
+                  "label": "9090",
+                  "keys": [
+                    "2"
+                  ]
+                }
+              ],
+              "rev": "5f0c2a9d41b7"
+            },
+            "delegating": true
+          }
+        ],
+        "mutes": {
+          "sessions": [],
+          "spaces": [],
+          "allowed": []
+        },
+        "quiet": []
+      },
+      "expected": {
+        "rows": [
+          {
+            "id": "agent:studio/t",
+            "cards": [
+              "ix-terminal"
+            ]
+          }
+        ],
+        "badge_rows": [
+          {
+            "id": "agent:studio/t",
+            "cards": [
+              "ix-terminal"
+            ]
+          }
+        ],
+        "badge": 1,
+        "header": 1
+      },
+      "source": [
+        "server/internal/assistant/ask_route.go askLadder, askTick",
+        "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+        "android/core/domain/src/main/kotlin/persona/core/domain/sort/AgentsNeedsYou.kt needsYouBadgeRows",
+        "docs/plans/plan-derived-counts.md 6.1, D11"
+      ]
+    },
+    {
+      "name": "an_elicitation_makes_its_session_wait",
+      "description": "An MCP server's form (kind elicitation) is the session's only card while its state still says working: the session waits, is a row and counts on the badge.",
+      "input": {
+        "sessions": [
+          {
+            "machine_id": "studio",
+            "session_id": "e",
+            "title": "Sign in to the tracker",
+            "cwd": "/home/user/project",
+            "state": "working",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z"
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-form",
+            "machine_id": "studio",
+            "session_id": "e",
+            "kind": "elicitation",
+            "created_at": "2026-11-10T08:00:00Z",
+            "mcp_server_name": "tracker",
+            "elicitation": {
+              "mode": "form",
+              "message": "Choose a project",
+              "requested_schema": {
+                "type": "object",
+                "properties": {
+                  "project": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "mutes": {
+          "sessions": [],
+          "spaces": [],
+          "allowed": []
+        },
+        "quiet": []
+      },
+      "expected": {
+        "rows": [
+          {
+            "id": "agent:studio/e",
+            "cards": [
+              "ix-form"
+            ]
+          }
+        ],
+        "badge_rows": [
+          {
+            "id": "agent:studio/e",
+            "cards": [
+              "ix-form"
+            ]
+          }
+        ],
+        "badge": 1,
+        "header": 1
+      },
+      "source": [
+        "apple/Persona/Views/Chats/AgentsNeedsYouRows.swift AgentsNeedsYou.rows",
+        "android/app/src/main/java/persona/android/ui/ShellCounts.kt agentRows",
+        "docs/protocol/protocol.md \"MCP elicitation\"",
+        "docs/plans/plan-derived-counts.md step 3"
       ]
     }
   ]

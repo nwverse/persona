@@ -154,10 +154,22 @@ TAGS="$(cat build-tags.txt)"
 # machine gets the one it runs (machine_platform), and the hub keeps all four for "Redeploy" (#3103).
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64)
 # persona-node is the device's own program (cmd/persona-node): the hub keeps it beside personad, and "Redeploy" gives it
-# to a machine whose node runs it (devices/deploy.go nodeBinary). Machines this script installs get personad.
+# to a machine whose node runs it (devices/deploy.go nodeBinary). The connector (cmd/persona-link) goes there too: a
+# switch of an ssh computer to Persona Link sends it (devices/connector_package.go). Machines this script installs get
+# personad.
 for plat in "${PLATFORMS[@]}"; do
   GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/personad-$plat" ./cmd/personad
   GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/persona-node-$plat" ./cmd/persona-node
+  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/persona-link-$plat" ./cmd/persona-link
+done
+# The Windows node programs, named with .exe as the release names them (publish.sh): no machine this script installs
+# runs Windows, but the hub keeps them for Redeploy. Without them the hub's version has no Windows build of its own,
+# and the one an earlier deploy or update left there is another build (#12958).
+WINDOWS_PLATFORMS=(windows-amd64 windows-arm64)
+for plat in "${WINDOWS_PLATFORMS[@]}"; do
+  for p in personad persona-node; do
+    GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/$p-$plat.exe" "./cmd/$p"
+  done
 done
 # adhoc_identifiers <dir>: the darwin builds in dir, signed ad hoc again under their program's identifier
 # (com.nwverse.personad, com.nwverse.persona-node, ...) in place of the a.out Go's linker always writes. Only the name
@@ -377,6 +389,15 @@ for t in "${TARGETS[@]}"; do
         # that stops half way leaves persona-node unused, never a new or torn binary under the old version.
         remote_state "$PERSONA_HUB_SSH" 'n="$PERSONA_HOME/bin/nodes/'"persona-node-$plat"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/persona-node-$plat"
         printf '%s\n' "$VERSION" | remote_state "$PERSONA_HUB_SSH" 'cat > "$PERSONA_HOME/bin/nodes/'"persona-node-$plat.version"'"'
+        # The connector the same way: a switch to Persona Link sends it only while its version file says the hub's.
+        remote_state "$PERSONA_HUB_SSH" 'n="$PERSONA_HOME/bin/nodes/'"persona-link-$plat"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/persona-link-$plat"
+        printf '%s\n' "$VERSION" | remote_state "$PERSONA_HUB_SSH" 'cat > "$PERSONA_HOME/bin/nodes/'"persona-link-$plat.version"'"'
+      done
+      # The Windows node programs the same way, under the names the hub looks them up by (devices/packages.go).
+      for plat in "${WINDOWS_PLATFORMS[@]}"; do
+        remote_state "$PERSONA_HUB_SSH" 'mkdir -p "$PERSONA_HOME/bin/nodes"; n="$PERSONA_HOME/bin/nodes/'"personad-$plat.exe"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/personad-$plat.exe"
+        remote_state "$PERSONA_HUB_SSH" 'n="$PERSONA_HOME/bin/nodes/'"persona-node-$plat.exe"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/persona-node-$plat.exe"
+        printf '%s\n' "$VERSION" | remote_state "$PERSONA_HUB_SSH" 'cat > "$PERSONA_HOME/bin/nodes/'"persona-node-$plat.exe.version"'"'
       done
       remote_state "$PERSONA_HUB_SSH" 'persona_alias_binaries "$PERSONA_HOME/bin/nodes"'
       hub_plat=$(machine_platform "$t") || exit 2

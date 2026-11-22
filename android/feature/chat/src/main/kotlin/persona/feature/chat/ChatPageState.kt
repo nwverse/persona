@@ -65,6 +65,8 @@ import androidx.compose.ui.res.stringResource
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
@@ -103,21 +105,29 @@ internal fun rememberChatPageRequests(key: SessionKey, chrome: ChatChromeBinding
     val sideFold = persona.core.domain.sort.SideFold.FEATURE in features
     val sidePage = sideFold && (sessionList.firstOrNull { it.key == key } ?: chrome.lookupRows.firstOrNull { it.key == key })
         ?.isFoldedSide == true
-    val requests = chatPageCards(taps.shown(allRequests), key, taskKeys, sideFold, sidePage)
-        .sortedBy { if (it.id == chrome.requestId) 0 else 1 }
+    val requests = remember(allRequests, taps, key, taskKeys, sideFold, sidePage, chrome.requestId) {
+        chatPageCards(taps.shown(allRequests), key, taskKeys, sideFold, sidePage)
+            .sortedBy { if (it.id == chrome.requestId) 0 else 1 }
+    }
     // The cards above the composer, as iOS's footer has them. An Agent's chat: the stack holds every card it waits on.
     // Persona's conversation: the oldest question of its tasks is a card of its own above the Needs you / In progress
     // entries (iOS TaskQuestions), under its task's name with "N more"; the stack below them holds the conversation's own
     // cards alone (#4883), so its "N pending" counts only them (DESIGN_SYSTEM.md 4.8, #4339 C10).
     val assistantChat = renderStyle == ChatRenderStyle.Assistant
-    val taskAsk = if (!assistantChat) null else taskQuestion(requests, taskKeys) { card ->
-        val raw = GroupKeys.rawKey(card.sessionKey)
-        taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }?.title?.takeIf(String::isNotBlank)
-            ?: card.taskTitle?.takeIf(String::isNotBlank) ?: card.sessionTitle?.takeIf(String::isNotBlank)
-            ?: sessionList.firstOrNull { it.key == card.sessionKey }?.displayTitle
+    val taskAsk = remember(assistantChat, requests, taskKeys, taskTodos, sessionList) {
+        if (!assistantChat) null else taskQuestion(requests, taskKeys) { card ->
+            val raw = GroupKeys.rawKey(card.sessionKey)
+            taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }?.title?.takeIf(String::isNotBlank)
+                ?: card.taskTitle?.takeIf(String::isNotBlank) ?: card.sessionTitle?.takeIf(String::isNotBlank)
+                ?: sessionList.firstOrNull { it.key == card.sessionKey }?.displayTitle
+        }
     }
-    val stackCards = if (assistantChat) requests.filter { it.homeKey == key } else requests
-    val messages = chatBubbles(allMessages, key, snapshot.items)
+    val stackCards = remember(assistantChat, requests, key) {
+        if (assistantChat) requests.filter { it.homeKey == key } else requests
+    }
+    val messages = remember(allMessages, key, snapshot.items) {
+        chatBubbles(allMessages, key, snapshot.items)
+    }
     val composerDeliveriesState = (composerService?.deliveries ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, ComposerDelivery>())
     }).collectAsStateWithLifecycle()
@@ -294,10 +304,12 @@ internal fun rememberChatPageTrays(key: SessionKey, chrome: ChatChromeBindings, 
     }
     val mainConversation by (chrome.tasks?.mainConversation ?: remember { kotlinx.coroutines.flow.MutableStateFlow<String?>(null) })
         .collectAsStateWithLifecycle()
-    val foldsBackground = renderStyle.compactToolSummary &&
-        persona.core.domain.tasks.BackgroundFolding.foldsConversation(
-            key.sessionId, mainConversation ?: foldSetting.main, foldSetting.on, chrome.leaderConversations,
+    val resolvedMain = mainConversation ?: chrome.mainConversation ?: foldSetting.main
+    val supervisingConversation = renderStyle.compactToolSummary &&
+        persona.core.domain.tasks.BackgroundFolding.supervisesConversation(
+            key.sessionId, resolvedMain, chrome.leaderConversations,
         )
+    val foldsBackground = supervisingConversation && foldSetting.on
     LaunchedEffect(chrome.inboxTrays, chrome.inboxScope, assistantTrays.expanded) {
         if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.NeedsYou) {
             try { chrome.inboxScope?.let { chrome.inboxTrays?.refresh(it) } }
@@ -306,7 +318,7 @@ internal fun rememberChatPageTrays(key: SessionKey, chrome: ChatChromeBindings, 
         }
     }
     return ChatPageTrays(assistantTrays, trayApprovingState, traySendingState, trayPlanState, trayScheduleState, traySendIds,
-        inboxDraftsState, traySchedulesState, foldsBackground)
+        inboxDraftsState, traySchedulesState, foldsBackground, supervisingConversation)
 }
 
 /** What [rememberChatPageTrays] hands back to ChatPage: plain values, and the state objects ChatPage reads and writes. */
@@ -320,27 +332,30 @@ internal class ChatPageTrays(
     val inboxDrafts: State<List<AssistantInboxDraft>>,
     val traySchedules: MutableState<List<persona.core.contracts.api.ScheduledTask>>,
     val foldsBackground: Boolean,
+    val supervisingConversation: Boolean,
 )
 
 /** ChatPage's lines: the projection as presented, with task cards, subagents and model changes (moved as is). */
 @Composable
 internal fun rememberChatPageLines(key: SessionKey, renderStyle: ChatRenderStyle,
     snapshot: persona.core.contracts.api.ChatSnapshot, session: Session?, foldsBackground: Boolean,
+    supervisingConversation: Boolean,
     tasks: persona.core.domain.tasks.TasksStore?, taskTodos: List<persona.core.contracts.Todo>, search: ChatSearchState,
     openWork: Set<String>, projection: persona.core.domain.lines.ChatSnapshot, feed: List<persona.core.contracts.FeedItem>,
     taskPlans: Map<String, TaskPlan>, taskCardProjection: Map<String, List<AssistantTaskCard>>,
-    children: List<Session> = emptyList()): ChatPageLines {
+    children: List<Session> = emptyList(), modeChanges: List<persona.core.contracts.ModeChange> = emptyList(),
+    modeChangesUntil: java.time.Instant? = null): ChatPageLines {
     val jumpItemState = remember { mutableStateOf<String?>(null) }
     var jumpItem by jumpItemState
     // Glass draws the hub's task records among the lines, as iOS does (#4339 C13), and folds a supervision round into one
     // line there rather than moving it to the background record; Brief and Board keep both behind the trays.
     val inlineRecords = PersonaTheme.style == AppStyle.Glass
-    val backgroundFolding = if (foldsBackground || (inlineRecords && renderStyle.compactToolSummary))
+    val backgroundFolding = if (foldsBackground || ((inlineRecords || !supervisingConversation) && renderStyle.compactToolSummary))
         persona.core.domain.tasks.BackgroundFolding(openWork, search.selected?.itemId ?: jumpItem, rounds = foldsBackground) else null
-    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding, inlineRecords) {
+    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle, backgroundFolding, inlineRecords, supervisingConversation) {
         if (renderStyle.compactToolSummary) {
             val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items, backgroundFolding,
-                inline = inlineRecords)
+                inline = inlineRecords, supervisingConversation = supervisingConversation)
             presentation.copy(background = persona.core.domain.tasks.AssistantLines.lines(presentation.background,
                 persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed, inlineRecords)))
         } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
@@ -355,7 +370,7 @@ internal fun rememberChatPageLines(key: SessionKey, renderStyle: ChatRenderStyle
     val modelChanges = PersonaTheme.style == AppStyle.Glass
     val childPlaces = remember(key) { persona.core.domain.lines.ChildSessionPlaces() }
     val places = remember(children) { childPlaces.places(children) }
-    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords, nestedSubagents, viewedStrips, modelChanges, places, snapshot.hasOlder, openWork) {
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle, inlineRecords, nestedSubagents, viewedStrips, modelChanges, places, snapshot.hasOlder, openWork, modeChanges, modeChangesUntil) {
         searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
             .let {
                 when {
@@ -369,7 +384,15 @@ internal fun rememberChatPageLines(key: SessionKey, renderStyle: ChatRenderStyle
             .let { persona.core.domain.lines.ChildSessionCards.lines(it, places, !snapshot.hasOlder, openWork) }
             // The strip of what a turn's work looked at is Glass's, as iOS draws it (#4339 C9); Brief and Board keep their lines.
             .let { if (viewedStrips) it else it.filterNot { line -> line is ChatLine.Viewed } }
-            .let { if (modelChanges) persona.core.domain.lines.ModelChanges.mark(it) else it }.asReversed()
+            .let { if (modelChanges) persona.core.domain.lines.ModelChanges.mark(it) else it }
+            .let { if (renderStyle == ChatRenderStyle.Agent) persona.core.domain.lines.EngineChanges.mark(it) else it }
+            .let {
+                if (renderStyle == ChatRenderStyle.Assistant) it else persona.core.domain.lines.ModeChanges.merge(it, modeChanges,
+                    earliest = if (snapshot.hasOlder) snapshot.items.firstNotNullOfOrNull { item ->
+                        persona.core.contracts.parseTime(item.ts)
+                    } ?: java.time.Instant.MAX else null,
+                    until = modeChangesUntil)
+            }.asReversed()
     }
     return ChatPageLines(jumpItemState, assistantPresentation, subagentCards, lines)
 }
@@ -407,7 +430,10 @@ internal class ChatPageRecap(
 
 /** ChatPage's subagent links and workflow cards, with what is folded in them (moved as is). */
 @Composable
-internal fun rememberChatPageSubagents(key: SessionKey, chrome: ChatChromeBindings, readOnly: Boolean, session: Session?): ChatPageSubagents {
+internal fun rememberChatPageSubagents(
+    key: SessionKey, chrome: ChatChromeBindings, readOnly: Boolean, session: Session?,
+    openBackground: ((BackgroundDestination) -> Unit)?,
+): ChatPageSubagents {
     val subagentLinks = remember(session?.subagents, chrome.onOpenSession, readOnly, key.machineId) {
         val listed = session?.subagents.orEmpty()
         if (listed.isEmpty()) null
@@ -419,11 +445,15 @@ internal fun rememberChatPageSubagents(key: SessionKey, chrome: ChatChromeBindin
     // A Workflow call draws its run's card (#3435): the session's runs by the call that launched them, their agents
     // opening as "View sub-agent" does. What the reader opens or folds in them lasts while this chat is open.
     val workflowFolds = remember(key) { persona.core.designsystem.WorkflowFolds() }
-    val workflowCards = remember(session?.workflows, chrome.onOpenSession, readOnly, key.machineId, workflowFolds) {
+    val background = rememberUpdatedState(openBackground)
+    val hasBackgroundAction = openBackground != null
+    val workflowCards = remember(session?.workflows, chrome.onOpenSession, readOnly, key.machineId, workflowFolds, hasBackgroundAction) {
         val open = chrome.onOpenSession?.takeIf { !readOnly }
         session?.workflows.orEmpty().filter { !it.toolUseId.isNullOrBlank() }.associateBy { it.toolUseId!! }
             .takeIf { it.isNotEmpty() }
-            ?.let { runs -> ChatWorkflows(runs, workflowFolds, open?.let { o -> { agent -> o(SessionKey(key.machineId, agent.sessionId)) } }) }
+            ?.let { runs -> ChatWorkflows(runs, workflowFolds,
+                open?.let { o -> { agent -> o(SessionKey(key.machineId, agent.sessionId)) } },
+                if (hasBackgroundAction) ({ run -> background.value?.invoke(BackgroundDestination.Run(run.backgroundId())) }) else null) }
     }
     return ChatPageSubagents(subagentLinks, subagentFolds, workflowCards)
 }
@@ -438,10 +468,11 @@ internal class ChatPageSubagents(
 /** ChatPage's reader state: the plan sheet, seen tracking, the newest visible item, the image loader (moved as is). */
 @Composable
 internal fun rememberChatPageReader(key: SessionKey, repository: ChatRepository,
-    snapshot: persona.core.contracts.api.ChatSnapshot, chatList: ChatListState, lines: List<ChatLine>): ChatPageReader {
+    snapshot: persona.core.contracts.api.ChatSnapshot, chatList: ChatListState, lines: List<ChatLine>,
+    liveItems: ChatLiveItems): ChatPageReader {
     val planSheetState = remember { mutableStateOf(false) }
     val sheetPlanState = remember { mutableStateOf<LinePlan?>(null) }
-    val currentItemsState = rememberUpdatedState(snapshot.items)
+    val currentItems = remember(liveItems) { { liveItems.currentItems() } }
     // Rows map to lines by key, never by position: a failed send can sit between lines (#2769).
     val currentLinesByKeyState = rememberUpdatedState(remember(lines) { lines.associateBy { it.contentKey } })
     val currentLinesByKey by currentLinesByKeyState
@@ -462,7 +493,7 @@ internal fun rememberChatPageReader(key: SessionKey, repository: ChatRepository,
         pairingLoader ?: chatImageLoader(context.applicationContext, repository)
     }
     val markdownCache = remember { ChatMarkdownCache() }
-    return ChatPageReader(planSheetState, sheetPlanState, currentItemsState, currentLinesByKeyState, list, reportedSeenState,
+    return ChatPageReader(planSheetState, sheetPlanState, currentItems, currentLinesByKeyState, list, reportedSeenState,
         newestVisibleItemState, readThrough, context, pairingLoader, loader, markdownCache)
 }
 
@@ -470,7 +501,7 @@ internal fun rememberChatPageReader(key: SessionKey, repository: ChatRepository,
 internal class ChatPageReader(
     val planSheet: MutableState<Boolean>,
     val sheetPlan: MutableState<LinePlan?>,
-    val currentItems: State<List<Item>>,
+    val currentItems: () -> List<Item>,
     val currentLinesByKey: State<Map<String, ChatLine>>,
     val list: androidx.compose.foundation.lazy.LazyListState,
     val reportedSeen: MutableState<Item?>,
@@ -555,7 +586,8 @@ internal class ChatPageAwait(
 @Composable
 internal fun rememberChatPageSession(key: SessionKey, chrome: ChatChromeBindings, renderStyle: ChatRenderStyle,
     historyReadOnly: Boolean, historyFooter: (@Composable () -> Unit)?, historySession: Session?,
-    res: android.content.res.Resources, sessionList: List<Session>, adoptedSessions: List<Session>): ChatPageSession {
+    res: android.content.res.Resources, sessionList: List<Session>, listedSessions: List<Session>, adoptedSessions: List<Session>,
+    keptReceipts: List<persona.core.contracts.api.MessageSendReceipt>): ChatPageSession {
     val parent = sessionList.firstOrNull { it.machineId == key.machineId && it.subagents.orEmpty().any { child -> child.sessionId == key.sessionId } }
     val child = parent?.subagents?.firstOrNull { it.sessionId == key.sessionId }
     // A workflow's agent reads like a subagent (`<session>@<agent id>`, #2935).
@@ -584,18 +616,68 @@ internal fun rememberChatPageSession(key: SessionKey, chrome: ChatChromeBindings
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { /* Keep held detail; the info sheet still offers an explicit retry. */ }
     }
-    // What an Agent's summary row leaves out and `info` doesn't say: the launcher switch waiting for the next message
-    // (#5055), read from the session's complete row where the hub looks one up (`sessions_lookup`); Glass's pill shows it.
-    var completeRow by remember(key) { mutableStateOf<Session?>(null) }
-    val lookup = "sessions_lookup" in LocalHubFeatures.current && renderStyle != ChatRenderStyle.Assistant &&
-        PersonaTheme.style == AppStyle.Glass && AgentModelPanel.LAUNCHER_SWITCH in LocalHubFeatures.current
-    LaunchedEffect(key, row?.waiting != null, row?.rev, chrome.actions, lookup) {
-        if (row?.waiting == null || !lookup) return@LaunchedEffect
-        try { completeRow = chrome.actions?.completeRow(row) }
-        catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { /* The switch the chat held stays. */ }
+    // A paged hint can describe a change the summary omits. Only a fresh complete row is evidence of a switch.
+    val details = remember(key, chrome.actions, chrome.connection) { SessionDetailObservations(key) }
+    val features = LocalHubFeatures.current
+    val trackSwitch = !readOnly && renderStyle == ChatRenderStyle.Agent && PersonaTheme.style == AppStyle.Glass &&
+        (AgentModelPanel.LAUNCHER_SWITCH in features || AgentModelPanel.ENGINE_SWITCH in features)
+    val exact = "sessions_lookup" in features
+    val refreshDetail: suspend () -> Unit = {
+        val actions = chrome.actions
+        if (actions != null && row != null && exact &&
+            (trackSwitch || renderStyle == ChatRenderStyle.Assistant && row.waiting != null)) {
+            details.read(row, actions, trackSwitch)
+        }
     }
-    val liveSession = row?.let { sessionWithDetail(it, lastSession, detailInfo, completeRow) } ?: child?.let {
+    val refreshLatest by rememberUpdatedState(refreshDetail)
+    val listed = listedSessions.firstOrNull { it.key == key && it.waiting == null }
+    LaunchedEffect(details, trackSwitch, exact, listed) {
+        if (trackSwitch && !exact && listed != null) details.pushed(listed)
+    }
+    LaunchedEffect(details, row?.key, row?.waiting != null, row?.rev, exact, trackSwitch, keptReceipts) {
+        try { refreshLatest() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { /* Until a complete read arrives, keep what the chat last saw. */ }
+    }
+    val connection = chrome.connection
+    LaunchedEffect(details, connection, key, trackSwitch, exact) {
+        if (!trackSwitch || connection == null) return@LaunchedEffect
+        coroutineScope {
+            val reads = Channel<Unit>(Channel.CONFLATED)
+            launch {
+                connection.events.collect { event ->
+                    when (event) {
+                        is SessionsListEvent -> if (exact) reads.trySend(Unit)
+                        is SessionRowEvent -> details.pushed(event.session)
+                        is SessionsEvent -> event.sessions.firstOrNull { it.sessionId == key.sessionId &&
+                            event.machineId == key.machineId }
+                            ?.let { details.pushed(it.copy(machineId = key.machineId)) }
+                        else -> Unit
+                    }
+                }
+            }
+            // The authenticated socket identity also changes when the UI stays Online through a quick reconnect.
+            if (exact) launch {
+                connection.currentHello.drop(1).collect { hello -> if (hello != null) reads.trySend(Unit) }
+            }
+            if (exact) launch {
+                connection.state.drop(1).collect { state -> if (state == ConnectionState.Online) reads.trySend(Unit) }
+            }
+            for (ignored in reads) {
+                // Coalesce bursts without starving a busy chat or overlapping exact reads.
+                delay(100)
+                reads.tryReceive()
+                try { refreshLatest() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { /* A failed read is not a cancellation. */ }
+            }
+        }
+    }
+    val switch = details.switch.takeIf { trackSwitch }
+    val liveSession = row?.let { listedRow ->
+        val merged = sessionWithDetail(listedRow, lastSession, detailInfo, details.completeRow)
+        switch?.over(merged) ?: merged
+    } ?: child?.let {
         parent?.copy(sessionId = it.sessionId, title = it.description?.takeIf(String::isNotBlank) ?: it.type,
             status = if (it.running) "working" else "done", state = if (it.running) "working" else "unread", subagents = emptyList(),
             queued = null, loop = null, background = null, pendingInteractions = 0)
@@ -608,10 +690,10 @@ internal fun rememberChatPageSession(key: SessionKey, chrome: ChatChromeBindings
     } ?: lastSession
     SideEffect { if (liveSession != null) lastSession = liveSession }
     val session = liveSession ?: readOnlySessionMetadata(key, historyReadOnly, historySession)
-    return ChatPageSession(child, workflowAgent, historyOnly, footer, readOnly, row, session)
+    return ChatPageSession(child, workflowAgent, historyOnly, footer, readOnly, row, session, switch?.version ?: 0L, refreshDetail)
 }
 
-/** What [rememberChatPageSession] hands back to ChatPage: plain values, and the state objects ChatPage reads and writes. */
+/** What [rememberChatPageSession] hands back to ChatPage: plain values, and the detail reload action. */
 internal class ChatPageSession(
     val child: persona.core.contracts.Subagent?,
     val workflowAgent: persona.core.contracts.WorkflowAgent?,
@@ -620,16 +702,17 @@ internal class ChatPageSession(
     val readOnly: Boolean,
     val row: Session?,
     val session: Session?,
+    val switchObservation: Long,
+    val refreshDetail: suspend () -> Unit,
 )
 
 /** ChatPage's launcher switch and closeout: the switch drawn here, the closeout card's detail (moved as is). */
 @Composable
 internal fun rememberChatPageCloseout(key: SessionKey, chrome: ChatChromeBindings, renderStyle: ChatRenderStyle,
     child: persona.core.contracts.Subagent?, workflowAgent: persona.core.contracts.WorkflowAgent?, row: Session?,
-    session: Session?): ChatPageCloseout {
-    val drawnSwitchState = remember(key) { mutableStateOf<DrawnSwitch?>(null) }
-    var drawnSwitch by drawnSwitchState
-    val switchSession = session?.let { drawnSwitch.over(it) }
+    session: Session?, switchObservation: Long): ChatPageCloseout {
+    val drawnSwitchState = remember(key, switchObservation) { mutableStateOf<DrawnSwitch?>(null) }
+    val switchSession = session?.let { drawnSwitchState.value.over(it, switchObservation) }
     // A stopped agent's closeout is a card above the transcript (#3612): its own session's, never an assistant
     // conversation's, a subagent's or a workflow agent's (those pages borrow their parent's row).
     val listedCloseout = session?.takeIf { renderStyle != ChatRenderStyle.Assistant && !it.assistant && child == null && workflowAgent == null }?.shownCloseout
@@ -660,19 +743,13 @@ internal class ChatPageCloseout(
 @Composable
 internal fun rememberChatPageSources(key: SessionKey, repository: ChatRepository, sender: MessageSender,
     interactions: InteractionCenter, sessions: SessionsRepository, chrome: ChatChromeBindings,
-    textUpdates: Map<String, ChatTextUpdate>, statusBindings: ChatStatusBindings): ChatPageSources {
+    statusBindings: ChatStatusBindings): ChatPageSources {
     val scope = rememberCoroutineScope()
     val haptics = persona.core.designsystem.rememberHaptics()
     val res = LocalResources.current
     val recovery = remember(key, statusBindings.recovery) { ChatStatusRecovery(res, statusBindings.recovery, scope, sessions::refresh) }
-    val source = remember(repository, key) { repository.observe(key) }
+    val source = remember(repository, key) { repository.observeStructure(key) }
     val snapshotState = source.collectAsStateWithLifecycle(ChatSnapshot())
-    val snapshot by snapshotState
-    val liveTextUpdates = remember(snapshot.items, snapshot.streamingItemIds, textUpdates) {
-        snapshot.items.filter { it.id in snapshot.streamingItemIds }.associate {
-            it.id to ChatTextUpdate(it.text.orEmpty(), streaming = true)
-        } + textUpdates
-    }
     val application = LocalContext.current.applicationContext
     val renamer = chrome.renamer ?: remember(application) {
         if (application is GeneratedComponentManager<*>)
@@ -693,6 +770,7 @@ internal fun rememberChatPageSources(key: SessionKey, repository: ChatRepository
         if (lookupRows.isEmpty()) sessions.sessions.value else (sessions.sessions.value + lookupRows).distinctBy { it.key }
     }
     val sessionListState = sessionSource.collectAsStateWithLifecycle(initialSessions)
+    val listedSessionsState = sessions.sessions.collectAsStateWithLifecycle()
     val managerChoiceState = AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val machinesState = sessions.machines.collectAsStateWithLifecycle()
     val allRequestsState = interactions.pending.collectAsStateWithLifecycle()
@@ -705,7 +783,7 @@ internal fun rememberChatPageSources(key: SessionKey, repository: ChatRepository
     val sendReceipts = allSendReceipts.filter { receipt -> receipt.session == key ||
         (receipt.session == PendingMainConversation && receipt.mainTarget &&
             allMessages.any { it.session == key && it.clientMessageId == receipt.clientMessageId }) }
-    return ChatPageSources(scope, haptics, res, recovery, snapshotState, liveTextUpdates, renamer, sessionListState,
+    return ChatPageSources(scope, haptics, res, recovery, snapshotState, renamer, sessionListState, listedSessionsState,
         managerChoiceState, machinesState, allRequestsState, allMessagesState, adoptedSessionsState, startedThreadsState,
         writtenAtState, sendReceipts)
 }
@@ -717,9 +795,9 @@ internal class ChatPageSources(
     val res: android.content.res.Resources,
     val recovery: ChatStatusRecovery,
     val snapshot: State<persona.core.contracts.api.ChatSnapshot>,
-    val liveTextUpdates: Map<String, ChatTextUpdate>,
     val renamer: persona.core.domain.sort.SessionRenamer?,
     val sessionList: State<List<Session>>,
+    val listedSessions: State<List<Session>>,
     val managerChoice: State<AssistantManagerChoice.Choice>,
     val machines: State<List<Machine>>,
     val allRequests: State<List<Interaction>>,

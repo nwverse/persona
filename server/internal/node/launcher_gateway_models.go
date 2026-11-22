@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -121,6 +122,7 @@ func (n *Node) gatewayModels(ctx context.Context, l proto.ManagedLauncher) []pro
 		}
 	}
 	modelhttp.SetDefaultUserAgent(req.Header)
+	modelhttp.SetOpenCodeSession(req.Header, req.URL.String(), "")
 	resp, err := gatewayClient(env).Do(req)
 	if err != nil {
 		n.logf("launcher %s: its gateway's model list: %v", l.Name, redactSecrets(err.Error()))
@@ -165,13 +167,17 @@ func firstPartyHost(base string) bool {
 // gatewayClient sends the request through the proxy env names for it (lower case first, as the runtime under Claude
 // Code reads them) and follows no redirect, as Claude Code's own request does not.
 func gatewayClient(env map[string]string) *http.Client {
+	dt, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Client{Transport: http.DefaultTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
 	cfg := httpproxy.Config{
 		HTTPProxy:  cmp.Or(env["http_proxy"], env["HTTP_PROXY"]),
 		HTTPSProxy: cmp.Or(env["https_proxy"], env["HTTPS_PROXY"]),
 		NoProxy:    cmp.Or(env["no_proxy"], env["NO_PROXY"]),
 	}
 	proxy := cfg.ProxyFunc()
-	t := http.DefaultTransport.(*http.Transport).Clone()
+	t := dt.Clone()
 	t.Proxy = func(r *http.Request) (*url.URL, error) { return proxy(r.URL) }
 	return &http.Client{Transport: t, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
@@ -179,11 +185,22 @@ func gatewayClient(env map[string]string) *http.Client {
 // withGatewayModels adds the gateway's models to a /model list, after it, leaving out those it already has (by id,
 // or as an alias resolves, with or without [1m]): the CLI lists them itself when its cache was this gateway's.
 func withGatewayModels(list, gateway []proto.AgentModel) []proto.AgentModel {
+	if len(gateway) == 0 {
+		return list
+	}
+	offered := make(map[string]bool, len(gateway))
+	for _, m := range gateway {
+		offered[m.ID] = true
+	}
+	list = slices.Clone(list)
 	seen := map[string]bool{}
-	for _, m := range list {
+	for i, m := range list {
 		seen[strings.TrimSuffix(m.ID, oneMillionSuffix)] = true
 		if m.Resolved != "" {
 			seen[strings.TrimSuffix(m.Resolved, oneMillionSuffix)] = true
+			if m.ID != m.Resolved && offered[m.Resolved] {
+				list[i].ResolvedOffered = true
+			}
 		}
 	}
 	for _, m := range gateway {
