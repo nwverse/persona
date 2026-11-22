@@ -6,7 +6,7 @@
 // A list read from the agent takes seconds the first time, so what was read is kept per computer, launcher and host for the
 // page's life: the pill and a later opening show the last list at once, and an opening reads every list again behind it
 // (the session's own first, at most three at a time).
-import { useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { ApiError, credentialOwner, errorText, onCredentialChange } from "./api";
 import { agentId, sessionAgent } from "./agent-kind";
@@ -152,6 +152,52 @@ export function readAssistantLaunchers(mid: string, o: { again?: boolean } = {})
   });
   assistantReads.set(key, read);
   return read;
+}
+
+/** Calls `read` after a push moved conversation `s`'s revision (#6542), once per turn instead of once per write: `rev`
+ *  moves whenever the transcript does (proto Session.Rev), many times a minute while a turn streams, and what these
+ *  reads show (the computer's launchers, Main chat's default) only matters for the next message. A move while the
+ *  conversation works waits until it stops; a move while it doesn't reads at once. A move while `enabled` is false
+ *  (no computer yet) is kept and read once it turns true. Another conversation (machine and session id) starts afresh:
+ *  its revision is not a move, and nothing owed carries over. `read` may return a cleanup, run before the next read,
+ *  when the conversation changes or `enabled` turns false, and on unmount, not when the conversation starts working: a
+ *  turn starting must not drop what the last read left pending (a trailing read, #12778 review). */
+export function useRevisionReread(s: Session | undefined, enabled: boolean, read: () => void | (() => void)): void {
+  const rev = s?.rev;
+  const who = `${s?.machine_id ?? ""}/${s?.session_id ?? ""}`;
+  const working = Boolean(s && stateOf(s) === "working" && !s.background_working);
+  const seen = useRef({ who, rev });
+  const owed = useRef(false);
+  const latest = useRef(read);
+  const cleanup = useRef<(() => void) | undefined>(undefined);
+  useLayoutEffect(() => {
+    latest.current = read;
+  });
+  useEffect(() => {
+    const done = () => {
+      cleanup.current?.();
+      cleanup.current = undefined;
+    };
+    if (seen.current.who !== who) {
+      seen.current = { who, rev };
+      owed.current = false;
+      done();
+      return;
+    }
+    if (rev !== undefined && rev !== seen.current.rev) {
+      seen.current.rev = rev;
+      owed.current = true;
+    }
+    if (!enabled) done();
+    if (!owed.current || working || !enabled) return;
+    owed.current = false;
+    done();
+    cleanup.current = latest.current() || undefined;
+  }, [who, rev, working, enabled]);
+  useEffect(() => () => {
+    cleanup.current?.();
+    cleanup.current = undefined;
+  }, []);
 }
 
 // at most three lists are read at a time (each may start the agent's CLI on the computer); `first` jumps the queue

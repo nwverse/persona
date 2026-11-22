@@ -158,6 +158,9 @@ func (s *Service) setArchived(ctx context.Context, machine, id string, on bool, 
 	if err != nil {
 		return false, err
 	}
+	if on {
+		_ = s.call(ctx, machine, "assistant.cache_clear", map[string]any{"session_id": id}, nil)
+	}
 	s.publish(ctx) // the apps get the list with the flag now
 	return true, nil
 }

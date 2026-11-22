@@ -43,6 +43,7 @@ import persona.core.designsystem.AgentMarkKind
 import persona.core.designsystem.AgentMarkSpec
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.LocalHubFeatures
+import persona.core.designsystem.JLoadable
 import persona.core.designsystem.ModelPillWidth
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.models.AgentModelPanel
@@ -191,9 +192,16 @@ class ModelPillTest {
     private open class Hub : AssistantManagement {
         val asked = mutableListOf<String>()
         val launcherListRefreshes = mutableListOf<Boolean>()
+        var configReads = 0
+            private set
         var launcherListReads = 0
             private set
-        override suspend fun config() = AssistantConfig(machineId = "box", launcher = "claude", main = "main")
+        override suspend fun config(): AssistantConfig {
+            configReads++
+            return AssistantConfig(machineId = "box", launcher = "claude", main = "main")
+        }
+        override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers =
+            assistantLauncherList(machineId, refresh)
         override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
             launcherListReads++
             return AssistantLaunchers(
@@ -409,7 +417,7 @@ class ModelPillTest {
                 }
             }
         }
-        rule.waitUntil(5_000) { hub.launcherListReads >= 1 } // the config is read, but the picker is never drawn
+        rule.waitUntil(5_000) { hub.configReads >= 1 } // the role is known; no picker is drawn for another assistant chat
         rule.onNodeWithTag("model-pill").assertDoesNotExist()
         assertTrue("nothing is written for a conversation without a pick", hub.asked.isEmpty())
     }
