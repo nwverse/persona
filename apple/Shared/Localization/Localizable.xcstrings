@@ -45946,25 +45946,25 @@
       },
       "extractionState" : "manual"
     },
-    "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. iOS asks for permission the first time Claude uses one, or when you turn it on here; Health asks only here. If you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data." : {
+    "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. iOS asks for permission the first time Claude uses one, or when you turn it on here; Apple Health asks only here. If you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. iOS asks for permission the first time Claude uses one, or when you turn it on here; Health asks only here. If you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data."
+            "value" : "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. iOS asks for permission the first time Claude uses one, or when you turn it on here; Apple Health asks only here. If you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "オンにしたデータは、Claudeがphone_*ツールで読み取れます。予定やリマインダーの作成などの書き込みは、先にiPhoneで確認します。Claudeが初めて使うとき、またはここでオンにしたときに、システムの許可を求めます（ヘルスケアはここでのみ）。以前に拒否した場合は設定に移動します。ハブがiPhoneにアクセスできるのは、Personaがフォアグラウンドにある（またはバックグラウンドに移った直後の）ときだけです。iOSではメッセージ、メモ、他社製Appのデータは利用できません。"
+            "value" : "オンにしたデータは、Claudeがphone_*ツールで読み取れます。予定やリマインダーの作成などの書き込みは、先にiPhoneで確認します。Claudeが初めて使うとき、またはここでオンにしたときに、システムの許可を求めます（Apple ヘルスケアはここでのみ）。以前に拒否した場合は設定に移動します。ハブがiPhoneにアクセスできるのは、Personaがフォアグラウンドにある（またはバックグラウンドに移った直後の）ときだけです。iOSではメッセージ、メモ、他社製Appのデータは利用できません。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "打开的数据，Claude 可以通过 phone_* 工具读取；新建日程、提醒等写操作会先在手机上问你。Claude 第一次用到某项数据时，或你在这里打开它时，系统会请求权限；健康数据只在这里请求。以前拒绝过的会跳到系统设置。Persona 在前台（或刚切到后台）时，hub 才能调到手机。iOS 不开放短信、备忘录、第三方 App 的数据。"
+            "value" : "打开的数据，Claude 可以通过 phone_* 工具读取；新建日程、提醒等写操作会先在手机上问你。Claude 第一次用到某项数据时，或你在这里打开它时，系统会请求权限；Apple 健康只在这里请求。以前拒绝过的会跳到系统设置。Persona 在前台（或刚切到后台）时，hub 才能调到手机。iOS 不开放短信、备忘录、第三方 App 的数据。"
           }
         }
       }
@@ -84195,6 +84195,98 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Apple Health" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Health"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple ヘルスケア"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 健康"
+          }
+        }
+      }
+    },
+    "Works with Apple Health" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Works with Apple Health"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple ヘルスケアと連携"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "支持 Apple 健康"
+          }
+        }
+      }
+    },
+    "Reads steps, sleep, heart rate, weight and more from Apple Health, and saves the entries you confirm to it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reads steps, sleep, heart rate, weight and more from Apple Health, and saves the entries you confirm to it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple ヘルスケアから歩数、睡眠、心拍数、体重などを読み取り、確認した記録をヘルスケアに保存します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 Apple 健康读取步数、睡眠、心率、体重等，你确认过的记录会写回 Apple 健康。"
+          }
+        }
+      }
+    },
+    "Persona reads Apple Health only after you allow it, and saves an entry only after you confirm it. You can change this anytime." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona reads Apple Health only after you allow it, and saves an entry only after you confirm it. You can change this anytime."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona は許可した後にだけ Apple ヘルスケアを読み取り、記録は確認した後にだけ保存します。いつでも変更できます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 只在你允许后读取 Apple 健康，每条记录也要你确认后才写入。随时可以更改。"
+          }
+        }
+      }
     },
     "Health" : {
       "localizations" : {
@@ -161554,24 +161646,24 @@
       },
       "extractionState" : "manual"
     },
-    "Sleep, steps, heart rate, weight and diet, answered from the health data on your phone. Chats and memory here are kept apart from Persona's other chats." : {
+    "Sleep, steps, heart rate, weight and diet, answered from your Apple Health data. Chats and memory here are kept apart from Persona's other chats." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sleep, steps, heart rate, weight and diet, answered from the health data on your phone. Chats and memory here are kept apart from Persona's other chats."
+            "value" : "Sleep, steps, heart rate, weight and diet, answered from your Apple Health data. Chats and memory here are kept apart from Persona's other chats."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "睡眠、歩数、心拍数、体重、食事について、iPhoneのヘルスケアデータに基づいて回答します。ここでのチャットとメモリはPersonaの他のチャットとは分けられています。"
+            "value" : "睡眠、歩数、心拍数、体重、食事について、Apple ヘルスケアのデータに基づいて回答します。ここでのチャットとメモリはPersonaの他のチャットとは分けられています。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "睡眠、步数、心率、体重、饮食，基于你手机里的健康数据回答。这里的对话和记忆与 Persona 的其他对话分开。"
+            "value" : "睡眠、步数、心率、体重、饮食，基于你的 Apple 健康数据回答。这里的对话和记忆与 Persona 的其他对话分开。"
           }
         }
       },
@@ -167783,6 +167875,305 @@
         }
       }
     },
+    "Reset timeline" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset timeline"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リセットのタイムライン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重置时间线"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Now" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "现在"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Protect %lld%%" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protect %1$lld%%"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保護 %1$lld%%"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保护 %1$lld%%"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "5h window resets" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "5h window resets"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "5h ウィンドウのリセット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "5h 窗口恢复"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "7d window resets" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "7d window resets"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "7d ウィンドウのリセット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "7d 窗口恢复"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Account types shown" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account types shown"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "表示するアカウントの種類"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示的账号类型"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "usage.duration.minutes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldm"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld分"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld分"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "usage.duration.hours" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@h"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@時間"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@小时"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "usage.duration.days" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldd"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld日"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld天"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "usage.duration.daysHours" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldd %2$lldh"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld日%2$lld時間"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld天%2$lld时"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "usage.provider.other" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Other"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その他"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "usage.axis.hours" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldh"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldh"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldh"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "usage.axis.days" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldd"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldd"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lldd"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Subscription Usage" : {
       "localizations" : {
         "en" : {
@@ -168263,24 +168654,24 @@
       },
       "extractionState" : "manual"
     },
-    "Summaries of steps, heart rate, sleep, and more; saves once you confirm" : {
+    "Reads steps, heart rate, sleep, and more from Apple Health; saves to it once you confirm" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Summaries of steps, heart rate, sleep, and more; saves once you confirm"
+            "value" : "Reads steps, heart rate, sleep, and more from Apple Health; saves to it once you confirm"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "歩数、心拍数、睡眠などの概要。確認後に書き込み"
+            "value" : "Apple ヘルスケアから歩数、心拍数、睡眠などを読み取り、確認後に書き込み"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "步数、心率、睡眠等汇总，经你确认后写入"
+            "value" : "从 Apple 健康读取步数、心率、睡眠等，经你确认后写入"
           }
         }
       },
