@@ -194,6 +194,7 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
     private var format = VoiceAudioFormat.provisional
     private var playout = VoicePlayout<Piece>(rate: VoiceFrame.defaultOutputRate)
     private var holdTimer: Task<Void, Never>?
+    private var holdDue: TimeInterval?
     /// The loudness of each piece still queued, the first one playing.
     private var queued: [Float] = []
     /// Bumped by `clear` and `stop`: completions of what was scheduled before are ignored.
@@ -223,7 +224,7 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
         guard format != self.format else { return }
         dropQueued()
         self.format = format
-        playout = VoicePlayout(rate: format.outputRate)
+        playout = VoicePlayout(rate: format.outputRate, level: playout.level) // the same call's link (#12922)
     }
 
     func play(_ pcm: Data) { schedule(pcm, voice: true) }
@@ -270,24 +271,31 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { channel.update(from: $0.baseAddress!, count: samples.count) }
         guard voice else { return enqueue(buffer, level: nil, on: player) }
-        let ready = playout.add(Piece(buffer: buffer, level: VoicePCM.rms(samples)), frames: samples.count, playing: !queued.isEmpty)
-        if playout.isHolding {
-            waitForLead()
-        } else {
-            holdTimer?.cancel()
-            holdTimer = nil
+        let stalled = playout.stalls
+        let ready = playout.add(Piece(buffer: buffer, level: VoicePCM.rms(samples)), frames: samples.count, playing: !queued.isEmpty,
+                                at: ProcessInfo.processInfo.systemUptime)
+        if playout.stalls > stalled {
+            let gap = Int(playout.lastGap * 1000), lead = Int(playout.leadNow * 1000)
+            Self.log.notice("meeting call: the voice ran dry mid-reply for \(gap, privacy: .public) ms; gathering \(lead, privacy: .public) ms before playing")
         }
+        holdUntilDue()
         for piece in ready { enqueue(piece.buffer, level: piece.level, on: player) }
     }
 
-    /// Plays what is held once the first of it has waited `VoicePlayout.wait`, lead or not.
-    private func waitForLead() {
-        guard holdTimer == nil else { return }
+    /// Plays what is held when `VoicePlayout.due` comes, lead or not; nothing held, no wait.
+    private func holdUntilDue() {
+        let due = playout.due
+        guard due != holdDue else { return }
+        holdTimer?.cancel()
+        holdTimer = nil
+        holdDue = due
+        guard let due else { return }
         let generation = generation
         holdTimer = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(VoicePlayout<Piece>.wait))
+            try? await Task.sleep(for: .seconds(max(0, due - ProcessInfo.processInfo.systemUptime)))
             guard !Task.isCancelled, let self else { return }
             holdTimer = nil
+            holdDue = nil
             guard generation == self.generation, let player = capture.callPlayer, capture.engineRunning else { return playout.clear() }
             for piece in playout.release() { enqueue(piece.buffer, level: piece.level, on: player) }
         }
@@ -312,6 +320,7 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
         if let next = queued.first {
             events?(.outputLevel(next))
         } else {
+            playout.ranDry(at: ProcessInfo.processInfo.systemUptime)
             stopped()
         }
     }
@@ -349,6 +358,7 @@ nonisolated final class MeetingTalkTap: @unchecked Sendable {
         generation += 1
         holdTimer?.cancel()
         holdTimer = nil
+        holdDue = nil
         playout.clear()
         queued = []
         silentEnd?.cancel()

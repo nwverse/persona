@@ -199,7 +199,7 @@ func TestStaleDeployErrorClearsWhenTheNodeMatches(t *testing.T) {
 }
 
 func TestLinkedDeployCapabilities(t *testing.T) {
-	hubNodeBinary(t, "linux", "amd64")
+	hubNodeBinary(t, "linux", "amd64", "new-build")
 	for _, kind := range []string{kindLink, kindService} {
 		t.Run(kind, func(t *testing.T) {
 			_, m, _, _ := linkedDeployFixture(t, kind)
@@ -255,7 +255,7 @@ func TestLinkedDeployTransfersAndConfirms(t *testing.T) {
 // Redeploy sends the kind of program the node says it runs: persona-node to persona-node, personad to the rest; so
 // does an update the hub queued before it restarted, when the node comes back (nodeUpdateConnected).
 func TestRedeployBringsTheProgramTheNodeRuns(t *testing.T) {
-	fullBuild := updatetest.Program(t, nodeproto.ProgramPersonad, "linux", "amd64")
+	fullBuild := updatetest.VersionedProgram(t, nodeproto.ProgramPersonad, "linux", "amd64", "new-build") // linkedDeployFixture's hub
 	nodeBuild := updatetest.Program(t, nodeproto.ProgramPersonaNode, "linux", "amd64")
 	for _, tc := range []struct{ program, via, path string }{
 		{nodeproto.ProgramPersonaNode, "redeploy", ""},
