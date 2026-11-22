@@ -1129,29 +1129,29 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 
 - Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:19,258,294`). Re-tapping Assistant opens its menu. Explicitly selecting Agents opens its list, clearing any retained detail navigation; re-tapping Agents from a detail returns to the list. Re-tapping Agents while already at the list opens the existing list-options menu. A card, notification or session link remains a targeted open and goes directly to that Agent, not through the list. This list-first rule serves people moving between their everyday Assistant conversation and Agent work, without a setting or a new visual style.
 - Sidebar places and tasks (#6599, one-button amendment #7799, `docs/design/sidebar-navigation.md`): a place chosen in the drawer (a conversation, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Recordings, extension pages, Profile) switches the page under the open drawer without animation, then the drawer closes; each place keeps its stack while the user is elsewhere, and choosing the place in front returns it to its root. On iPhone a place's root shows ☰ (`ShellPlaceRoot`) in place of Back; its sub-pages show Back and no ☰. Return to the conversation by choosing one in the drawer, or with the root's system edge-swipe (Back is hidden but the existing pop-gesture delegate remains enabled). A sub-page's edge-swipe goes back to its root. The drawer's sideways pan still yields every pushed page to that system gesture, so the two never compete. A place has at most one top-trailing action on iPhone: Inbox's Select, Knowledge's filter and map, an Inbox item's Done, a Lark chat's Pins and summary, and Browser Sign-ins' Select join their existing ⋯ menus. The multi-hub Inbox's picker joins that menu, and only on iPhone does selection's Select All join the bottom action bar; outside the iPhone shell it remains at the original top leading, verified by `IPadInboxSelectionTests`. These consolidations do not change iPad or Mac layouts. A task (Settings, Archived, Auto conversations, Search) opens over the open drawer and returns to it; a conversation picked in one opens after its sheet has gone. The drawer's closing never runs with a push, a slide or a sheet.
-- **To-dos places** (#10465; iOS, hubs with `todo_view`, from #10465's switch-on; `docs/design/proposals/todos-redesign.md`
-  3.3; the V1 frames `iphone/list~drawer`, `~menu`, `~today`, `~kyoto`): the drawer's and the sidebar's To-dos row is All
-  To-dos and folds open the places under it: Today, Upcoming, a gap of `Theme.Space.m`, up to five knowledge-base
-  projects with open to-dos, each with its part of N (`CountBadge(.needs)`, hidden at 0, said as "1 needs you"), then
-  All Projects…, a sheet of every project, those with nothing open too (the knowledge base's long-running ones first,
-  then by name), each with its part of N in blue and how many
-  to-dos are open in it in a plain secondary number (`TodoCounts.open`, counted on the device from its rows: not
-  closed, not in Someday, a step with its parent), drawn before N so N keeps the row's end as on the sidebar's rows,
-  which keep N alone; its rows are section cards, as the list's, in every style. The sidebar stays two
-  levels deep, with no Projects heading. The places are the sidebar's own rows (`plainAction`, `BUISidebarRow` in BeautifulUI) set in by the
-  symbol column, their symbols where To-dos' words start (BeautifulUI's row sets itself in by its own measures,
-  `indent`). The projects go by name; with more than five those with a part of N are chosen first, so one that needs
-  the owner is never behind All Projects…, and rows trade places only on a rename. The chevron beside To-dos folds them
-  (`sidebar.fold.todos`, kept on the device), spoken as To-dos as a Pinned direction's chevron says its direction; they
-  start unfolded and never fold by themselves, so the rows under them never jump; Reduce Motion folds them without
-  the slide. In BeautifulUI the chevron lies over the row's end, so the row keeps its siblings' height and one shade
-  spans both; its target is then the row's height by 44 pt wide, as tall as every BeautifulUI sidebar row's target
-  (32 pt at the default size, the style's density, as its 30-32 pt chips, HIG_AUDIT HIG-020), since its rows sit
-  2-3 pt apart and a taller target would take the ends of Inbox and Today. With several assistants only the current one's projects are listed. A project's part of N is counted from
-  its rows, as its place's Filter and Needs you header count them; a step filed in another project than its open
-  parent counts with its parent, as the hub rolls it up. Today's symbol is the outlined sun (`Theme.Icon.todoToday`),
-  as the sidebar's places are outlines; the filled one is the conversation's Today card.
-  A hub that never listed `todo_places` in this run shows To-dos alone, as before; a hello that stops listing it (a
+- **To-dos places** (#10465; iOS, hubs with `todo_view`, from #10465's switch-on;
+  `docs/design/proposals/todos-redesign.md` 3.3; the V1 frames `iphone/list~drawer`, `~menu`, `~today`, `~kyoto`): the
+  drawer's and the sidebar's To-dos row is All To-dos and folds open the places under it: Today, Upcoming, a gap of
+  `Theme.Space.m`, up to five knowledge-base projects with open to-dos, each with its part of N (`CountBadge(.needs)`,
+  hidden at 0, said as "1 needs you"), then All Projects…, a sheet of every project, those with nothing open too (the
+  knowledge base's long-running ones first, then by name), each with its part of N in blue and how many to-dos are open
+  in it in a plain secondary number (`TodoCounts.open`, counted on the device from its rows: not closed, not in Someday,
+  a step with its parent), drawn before N so N keeps the row's end as on the sidebar's rows, which keep N alone; its
+  rows are section cards, as the list's, in every style. The sidebar stays two levels deep, with no Projects heading.
+  The places are the sidebar's own rows (`plainAction`, `BUISidebarRow` in BeautifulUI) set in by the symbol column,
+  their symbols where To-dos' words start (BeautifulUI's row sets itself in by its own measures, `indent`). The projects
+  go by name; with more than five those with a part of N are chosen first, so one that needs the owner is never behind
+  All Projects…, and rows trade places only on a rename. The chevron beside To-dos folds them (`sidebar.fold.todos`,
+  kept on the device), spoken as To-dos as a Pinned direction's chevron says its direction; they start unfolded and
+  never fold by themselves, so the rows under them never jump; Reduce Motion folds them without the slide. In
+  BeautifulUI the chevron lies over the row's end, so the row keeps its siblings' height and one shade spans both; its
+  target is then the row's height by 44 pt wide, as tall as every BeautifulUI sidebar row's target (32 pt at the default
+  size, the style's density, as its 30-32 pt chips, HIG_AUDIT HIG-020), since its rows sit 2-3 pt apart and a taller
+  target would take the ends of Inbox and Today. With several assistants only the current one's projects are listed. A
+  project's part of N is counted from its rows, as its place's Filter and Needs you header count them; a step filed in
+  another project than its open parent counts with its parent, as the hub rolls it up. Today's symbol is the outlined
+  sun (`Theme.Icon.todoToday`), as the sidebar's places are outlines; the filled one is the conversation's Today card. A
+  hub that never listed `todo_places` in this run shows To-dos alone, as before; a hello that stops listing it (a
   manager reconnecting) takes nothing away. Who it serves: anyone who keeps to-dos for different parts of life, who
   reaches today's or one project's to-dos in one tap, with no filter to learn.
   - **The title menu** is the HIG's second way to the same places: the list's title is the place's name with the
@@ -1180,8 +1180,9 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
     its ⋯ holding Show as Calendar alone (the to-dos calendar of the same to-dos, coloured by the hub's view, with no
     "without a due date" line and no Show Done, an empty slot opening New To-Do at that day and hour); a project, its
     to-dos, line 3 leaving its name out of every row. A step whose parent the place holds counts with its parent; one
-    whose parent Today or Upcoming leaves out (a dated step of an undated to-do) is a row there. Search To-dos sets the place aside as it sets the choice aside: while the field has
-    words the list is every open to-do that matches, whatever the place (places pick where, search finds any to-do).
+    whose parent Today or Upcoming leaves out (a dated step of an undated to-do) is a row there. Search To-dos sets the
+    place aside as it sets the choice aside: while the field has words the list is every open to-do that matches,
+    whatever the place (places pick where, search finds any to-do).
   - **What needs the owner elsewhere** (3.4 "Sessions that need the user"): the list's one guard line, its first line
     over the first card (`TodosGuardLine`), in every place but All To-dos also counts what needs the owner outside the
     place, and names the place when nothing it counts is the place's own: "● 2 more need you, not in Today · Show All".

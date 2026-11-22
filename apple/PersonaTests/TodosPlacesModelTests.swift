@@ -115,7 +115,7 @@ struct TodosPlacesModelTests {
         #expect(upcoming == ["due", "late", "earlier", "later"])
     }
 
-    /// A project holds its rows, closed ones too (the bar's Done); a step its parent carries is never a row of its own.
+    /// A project holds its rows, closed ones too (the Filter's Done); a step its parent carries is never a row of its own.
     @Test func aProjectHoldsItsRowsLessTheStepsTheirParentsCarry() {
         let rows = [Self.filed("t01", TodoListSection.needsYou, project: "kyoto"),
                     Self.filed("t01-s1", project: "kyoto", partOf: "t01"),
