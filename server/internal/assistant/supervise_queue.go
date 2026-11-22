@@ -23,7 +23,11 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 	if len(originalFresh) > 0 {
 		fresh = originalFresh[0]
 	}
-	return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background,
+	level := supervisionTriage
+	if len(list) > 0 && !slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind != sigParkedSummary }) {
+		level = supervisionInfo
+	}
+	return prompts.RenderSupervise(prompts.Supervise{Level: level, Entries: sortEntries(list), Leader: leader, Background: background,
 		Fresh: fresh, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
 		BackgroundEscalated: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigEscalated && e.Background }),
 		LeaderStuck:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),

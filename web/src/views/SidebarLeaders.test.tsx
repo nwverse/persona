@@ -13,7 +13,9 @@ vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 import { t } from "../i18n";
+import { setToken } from "../lib/api";
 import { resetDirectionNames } from "../lib/direction-names";
+import { chooseManager, resetManagerChoice, setRosterDefault } from "../lib/manager-choice";
 import { setRecentCount } from "../lib/sidebar-recent";
 import { connect, refresh, reset } from "../lib/store";
 import type { Session } from "../lib/types";
@@ -33,6 +35,7 @@ const base = [
 ];
 let conversations: Session[];
 let leaders: string[] | undefined;
+let assistantManager: string | undefined;
 let named: unknown;
 let posts: string[] = [];
 
@@ -50,6 +53,7 @@ beforeEach(() => {
   localStorage.clear();
   conversations = base;
   leaders = ["lead-a", "lead-b"];
+  assistantManager = undefined;
   posts = [];
   named = { leaders: [
     // lead-b has a task in the working state whose Agents all stopped: nothing runs under it (#6626)
@@ -69,7 +73,7 @@ beforeEach(() => {
       // `running` only where a case gives it: without it the tree is an older hub's
       return Promise.resolve(new Response(JSON.stringify({ directions: [...list.map((l) => ({ id: l.id, name: l.name, counts: { stuck: 0, review: 0, ...(l.counts as object) }, ...(l.running === undefined ? {} : { running: l.running }), tasks: [] })), { id: "main", name: "", secretary: true, counts: { working: 9, needs_you: 9, stuck: 0, review: 0 }, tasks: [] }] }), { headers: { "Content-Type": "application/json" } }));
     }
-    const body = path === "/api/v1/assistant" ? { machine_id: "hub", main: "main", leaders, conversations } : path === "/api/v1/assistant/leaders" ? named : path === "/api/v1/machines" ? { machines: [{ id: "hub", name: "Hub", online: true }] } : {};
+    const body = path === "/api/v1/assistant" ? { manager: assistantManager, machine_id: "hub", main: "main", leaders, conversations } : path === "/api/v1/assistant/leaders" ? named : path === "/api/v1/machines" ? { machines: [{ id: "hub", name: "Hub", online: true }] } : {};
     return Promise.resolve(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
   }));
   history.replaceState(null, "", "/overview");
@@ -83,6 +87,7 @@ afterEach(() => {
   host.remove();
   reset();
   resetDirectionNames();
+  resetManagerChoice();
   vi.unstubAllGlobals();
 });
 
@@ -353,5 +358,157 @@ describe("the leader conversations in the sidebar", () => {
     await flush();
     // the ended ones leave 常驻 and are back among 最近 by their time
     expect(rowIds()).toEqual(["mine", "newest", "lead-a", "lead-b"]);
+  });
+});
+
+describe("cold full-page reloads (#12231)", () => {
+  /** A warm answer may have persisted a snapshot; a query-shaped lightweight read is also allowed to answer early. */
+  async function coldReload(early: unknown, authoritative: unknown, beforeRead?: () => void) {
+    const ordinary = fetch;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    act(() => root.unmount());
+    reset();
+    resetDirectionNames();
+    root = createRoot(host);
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://x");
+      if (url.pathname === "/api/v1/assistant") {
+        if (url.search) return Promise.resolve(Response.json(early));
+        return held.then(() => Response.json(authoritative));
+      }
+      return ordinary(input, init);
+    }));
+    act(() => beforeRead?.());
+    let loading!: Promise<void>;
+    act(() => {
+      loading = refresh();
+      root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />);
+    });
+    await flush();
+    return async () => {
+      release();
+      await act(async () => { await loading; });
+      await flush();
+    };
+  }
+
+  it("draws directions, recent chats and All chats before the full assistant answer, then reconciles them", async () => {
+    setToken("first-credential");
+    await renderSidebar();
+    expect(rowIds()).toEqual(["lead-a", "lead-b", "newest", "mine"]);
+    const early = { machine_id: "hub", main: "main", leaders, conversations: base };
+    const fresh = conversation("fresh", "Fresh authoritative chat", "2026-11-11T09:00:00Z");
+    const full = { ...early, conversations: [...base, fresh] };
+    const finish = await coldReload(early, full);
+
+    expect(rowIds()).toEqual(["lead-a", "lead-b", "newest", "mine"]);
+    expect(headings()).toEqual([t("sidebar.directions"), t("sidebar.recent_chats")]);
+    const allChats = host.querySelector<HTMLAnchorElement>('a[href="/history"]')!;
+    expect(allChats).not.toBeNull();
+    expect(allChats.textContent).toContain(String(base.length));
+
+    await finish();
+    expect(rowIds()).toEqual(["lead-a", "lead-b", "fresh", "newest", "mine"]);
+    expect(row("fresh").getAttribute("href")).toBe("/persona/fresh");
+    expect(row("lead-a").getAttribute("href")).toBe("/persona/lead-a");
+    expect(host.querySelector<HTMLAnchorElement>('a[href="/history"]')!.textContent).toContain(String(base.length + 1));
+  });
+
+  it.each(["credential", "manager", "default manager"])("never draws the warm sidebar for a different %s", async (change) => {
+    setToken("first-credential");
+    setRosterDefault("first-manager");
+    await renderSidebar();
+    expect(row("newest").textContent).toContain("Trip plan");
+    const other = {
+      machine_id: "hub", main: "main", leaders: [], conversations: [
+        conversation("main", "Other main", "2026-11-10T09:00:00Z"),
+        conversation("other-chat", "Other owner's chat", "2026-11-10T08:00:00Z"),
+      ],
+    };
+    const finish = await coldReload(other, other, () => {
+      if (change === "credential") setToken("second-credential");
+      else if (change === "manager") chooseManager("other-manager");
+      else setRosterDefault("other-manager");
+    });
+
+    expect(host.textContent).not.toContain("Trip plan");
+    expect(host.textContent).not.toContain("Release notes");
+    await finish();
+    expect(row("other-chat").getAttribute("href")).toBe("/persona/other-chat");
+    expect(host.textContent).not.toContain("Trip plan");
+  });
+
+  it("retires a pre-roster answer and its read when the roster names another default", async () => {
+    setToken("first-credential");
+    const ordinary = fetch;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input), "http://x").pathname === "/api/v1/managers") return new Promise<Response>(() => {});
+      return ordinary(input, init);
+    }));
+    assistantManager = "first-manager";
+    await renderSidebar();
+    expect(row("newest").textContent).toContain("Trip plan");
+
+    assistantManager = "other-manager";
+    conversations = [
+      conversation("main", "Other main", "2026-11-10T09:00:00Z"),
+      conversation("other-chat", "Other default's chat", "2026-11-10T08:00:00Z"),
+    ];
+    act(() => setRosterDefault("other-manager"));
+    await flush();
+
+    expect(host.textContent).not.toContain("Trip plan");
+    expect(row("other-chat").getAttribute("href")).toBe("/persona/other-chat");
+  });
+
+  it("does not let an older default answer overtake its replacement", async () => {
+    setToken("first-credential");
+    assistantManager = "first-manager";
+    const ordinary = fetch;
+    const pending: (() => void)[] = [];
+    let holdAnswers = false;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://x");
+      if (url.pathname === "/api/v1/managers") return new Promise<Response>(() => {});
+      if (url.pathname === "/api/v1/assistant") {
+        const body = { manager: assistantManager, machine_id: "hub", main: "main", leaders, conversations };
+        if (holdAnswers) return new Promise<Response>((resolve) => pending.push(() => resolve(Response.json(body))));
+        return Promise.resolve(Response.json(body));
+      }
+      return ordinary(input, init);
+    }));
+    await renderSidebar();
+
+    holdAnswers = true;
+    act(() => root.unmount());
+    reset();
+    root = createRoot(host);
+    let loading!: Promise<void>;
+    act(() => {
+      loading = refresh();
+      root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />);
+    });
+    await flush();
+    expect(row("newest").textContent).toContain("Trip plan");
+    expect(pending).toHaveLength(1);
+
+    assistantManager = "other-manager";
+    conversations = [
+      conversation("main", "Other main", "2026-11-10T09:00:00Z"),
+      conversation("other-chat", "Other default's chat", "2026-11-10T08:00:00Z"),
+    ];
+    act(() => setRosterDefault("other-manager"));
+    await flush();
+    expect(pending).toHaveLength(2);
+    expect(host.textContent).not.toContain("Trip plan");
+
+    pending[0]();
+    await act(async () => { await loading; });
+    await flush();
+    expect(host.textContent).not.toContain("Trip plan");
+    pending[1]();
+    await flush();
+    expect(row("other-chat").getAttribute("href")).toBe("/persona/other-chat");
   });
 });

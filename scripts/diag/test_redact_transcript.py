@@ -89,6 +89,21 @@ class RangeTests(unittest.TestCase):
 
 
 class OutputTests(unittest.TestCase):
+    def test_skips_non_record_lines_and_keeps_later_valid_entries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / "source.jsonl", root / "output.jsonl"
+            rows = ['{"type":"user","line":1}', "null", "[]", "42", '"text"', "{",
+                    '{"type":"api-request","line":7}', '{"type":"assistant","line":8}']
+            original = "\n".join(rows) + "\n"
+            source.write_text(original)
+            run = subprocess.run([sys.executable, "-B", redact.__file__, "-o", str(output), str(source)],
+                                 capture_output=True, text=True, timeout=10)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual([json.loads(line) for line in output.read_text().splitlines()],
+                             [{"type": "user", "line": 1}, {"type": "assistant", "line": 8}])
+            self.assertEqual(source.read_text(), original)
+
     def test_refuses_output_alias_of_an_input(self):
         transcript = b'{"type":"user","signature":"synthetic fixture"}\n'
         for alias in ("direct", "symlink", "hardlink"):

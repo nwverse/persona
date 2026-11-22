@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -298,24 +299,25 @@ type Followup struct {
 
 // ScheduleRun is one entry of the history: a task that ran, failed to start, or was skipped.
 type ScheduleRun struct {
-	TodoProgress       *ScheduleTodoAssessment `json:"todo_progress,omitempty"`
-	Conversation       string                  `json:"conversation,omitempty"` // source / resumed / new
-	ConversationReason string                  `json:"conversation_reason,omitempty"`
-	Execution          *TaskExecution          `json:"execution,omitempty"`
-	ID                 string                  `json:"id"`
-	Kind               string                  `json:"kind"`   // routine / followup (Task.kind)
-	RefID              string                  `json:"ref_id"` // the task's id
-	Title              string                  `json:"title"`
-	Due                time.Time               `json:"due"` // when it was meant to run (the tap for "Run now")
-	At                 time.Time               `json:"at"`  // when it ran
-	Status             string                  `json:"status"`
-	Error              string                  `json:"error,omitempty"`
-	RunIfError         string                  `json:"run_if_error,omitempty"`
-	ConditionSkipped   bool                    `json:"condition_skipped,omitempty"`
-	OwnerSkipped       bool                    `json:"owner_skipped,omitempty"`
-	Manual             bool                    `json:"manual,omitempty"` // "Run now"
-	MachineID          string                  `json:"machine_id,omitempty"`
-	SessionID          string                  `json:"session_id,omitempty"`
+	TodoProgress          *ScheduleTodoAssessment `json:"todo_progress,omitempty"`
+	Conversation          string                  `json:"conversation,omitempty"` // source / resumed / new
+	ConversationReason    string                  `json:"conversation_reason,omitempty"`
+	Execution             *TaskExecution          `json:"execution,omitempty"`
+	CompatibilityFallback string                  `json:"compatibility_fallback,omitempty"`
+	ID                    string                  `json:"id"`
+	Kind                  string                  `json:"kind"`   // routine / followup (Task.kind)
+	RefID                 string                  `json:"ref_id"` // the task's id
+	Title                 string                  `json:"title"`
+	Due                   time.Time               `json:"due"` // when it was meant to run (the tap for "Run now")
+	At                    time.Time               `json:"at"`  // when it ran
+	Status                string                  `json:"status"`
+	Error                 string                  `json:"error,omitempty"`
+	RunIfError            string                  `json:"run_if_error,omitempty"`
+	ConditionSkipped      bool                    `json:"condition_skipped,omitempty"`
+	OwnerSkipped          bool                    `json:"owner_skipped,omitempty"`
+	Manual                bool                    `json:"manual,omitempty"` // "Run now"
+	MachineID             string                  `json:"machine_id,omitempty"`
+	SessionID             string                  `json:"session_id,omitempty"`
 	// Retried: this run is the automatic retry after a failure (so a retry that fails again does not retry forever).
 	Retried bool `json:"retried,omitempty"`
 	// DeliveryUnknown: the send may have reached the agent without a conversation receipt; it also cancels older retries.
@@ -1941,7 +1943,9 @@ func taskMessageSource(t Task) *proto.MessageSource {
 }
 
 func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (proto.Session, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	policy := taskExecutionPolicyOf(s.hello(context.Background()))
+	ctx := devicewire.WithTaskExecutionWait(devicewire.WithTaskExecutionEvidence(context.Background()))
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute+policy.wait)
 	defer cancel()
 	loc, kb := s.location(ctx), s.kbReady(ctx)
 	run := ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: due.UTC(), At: time.Now().UTC(), Manual: manual, Status: runOK,
@@ -1965,7 +1969,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		}
 		return s.failTaskRun(ctx, t, run, err, false)
 	}
-	legacyExecution := t.SessionID == "" && t.Space == "" && t.StartGrant == nil &&
+	legacyExecution := policy.legacyFallback && t.SessionID == "" && t.Space == "" && t.StartGrant == nil &&
 		t.ExecutionMachineID == "" && t.Cwd == "" && model.override == (ModelBinding{})
 	fresh := t.startsFresh()
 	if fresh {
@@ -2001,6 +2005,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	draftHandedOff := false
 	startRun := func(m *Device) {
 		draftHandedOff = true
+		taskRunCompatibilityEvidence(ctx, &run)
 		s.startScheduledRun(run, t, m)
 	}
 	if t.Repeat != repeatOnce {

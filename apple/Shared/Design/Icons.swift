@@ -307,6 +307,8 @@ extension Theme {
         /// Archive a conversation (out of the list, kept under Archived) and bring it back.
         static let archive = "archivebox"
         static let unarchive = "tray.and.arrow.up"
+        /// Move To…: file a chat or an Agent under one of the owner's long-running matters, or on its own (#11516).
+        static let moveTo = "rectangle.stack.badge.plus"
         static let mute = "bell.slash"
         static let unmute = "bell"
         /// An Inbox rule: where a chat's, sender's or repository's items go and what the AI twin does with them.

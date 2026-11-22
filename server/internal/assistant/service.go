@@ -673,13 +673,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: nodeMethod(method, params), Params: raw}
-	res, ok, err := s.logicalCall(ctx, device, p.Method, p.Params)
-	if !ok {
-		res, ok, err = s.localFleetDeviceCall(ctx, p)
-	} // what the hub answered before the nodes' events were the manager's
-	if !ok {
-		res, err = s.hub.DeviceCall(ctx, p)
-	}
+	res, err := s.callDevice(ctx, p)
 	// Not taken: refused before anything was typed, or it never reached the computer (relay_refusal.go).
 	taken = err == nil || !sendNotTaken(err)
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {
