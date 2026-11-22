@@ -250,7 +250,8 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
   through `scripts/ci/ratchet_base.py`. A file the change touches may not rise above its count there, even where the baseline still
   has room, so the slack a fall leaves under a baseline cannot be spent by the next change. An entry the merge base's baseline does
   not have yet is the change's own (a file the web font's `--update` let take sizes that moved to it, or a raise the sleep ratchet
-  refuses anyway), and only the baseline holds it. check-fast's diff mode passes `--base`, and hosted CI sets `CI_BASE_SHA`.
+  refuses anyway), and only the baseline holds it. check-fast's diff mode runs the sleep ratchet with `--base` (it does not run
+  the other two), and hosted CI sets `CI_BASE_SHA`.
 - **With no base, only the baseline holds**, so a full-tree run on `main` checks only `count > baseline`. There is no fallback to
   the clone's `origin/main`: it is only as fresh as the last fetch, and main verification pins `HEAD` by SHA without moving it
   (`docs/operations/main-verification.md`), so right after a merge it usually names the parent and would hold the merged files to
@@ -258,6 +259,10 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
   its merge base is `HEAD`. The never-raise checks on the baseline files themselves keep their defaults (the clone's default
   branch for the sleep ratchet, `origin/main` for the prompt-language ratchet). The ratchets inside `go test`, vitest and the
   Android scripts know no base and check only the baseline, as does `changed_ratchets.py` at merge time.
+- **Merge time does not hold a file to its merge-base count.** `scripts/hooks/merge-pr.sh` (through `changed_ratchets.py`, which
+  covers the sleep and web font ratchets) refuses a merge that raises a count above its baseline, but one that raises a count back
+  into the room a fall left merges. check-fast's diff mode refuses that for the sleep ratchet; for the web font and prompt-language
+  ratchets only a hosted run on the branch or a run with `--base` does. A merge-time refusal is a separate change.
 - **Lowering is tidying anyone can run.** `python3 scripts/ci/lower_baselines.py` runs each ratchet's own update (all of the table
   but the Inbox book readers, a Go literal lowered by hand) and keeps the result only if it lowered: no raised number, no new entry, no new file (a removed entry or file is a count gone to zero). A ratchet whose
   update fails, or would raise or add (a count above its baseline, the web font's moved file, a prompt-size move between pieces), is

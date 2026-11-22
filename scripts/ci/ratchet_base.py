@@ -7,14 +7,14 @@ lower of its baseline and its count at the merge base; a file the change does no
 already. With no base (none given, or a tree outside Git) only the baseline applies: a full-tree run checks only
 count > baseline.
 
-A base is known only when it is given: --base, else CI_BASE_SHA. check-fast's diff mode passes --base, and hosted CI
-sets CI_BASE_SHA (on a main run, origin/main of its fresh clone, so the merge base is HEAD). There is no fallback to
-the clone's default branch, because that ref is only as fresh as the last fetch: main verification pins HEAD by SHA
-and leaves origin/main alone, and in an ordinary clone scripts/hooks/merge-pr.sh's fetch moves it to the pre-merge
-main, so right after a merge a fallback would hold the new commit to its parent's counts. merge-pr.sh does not apply
-that limit (scripts/ci/changed_ratchets.py), so the same commit on main would pass or fail depending on who fetched
-last. The never-raise checks on the baselines themselves (the sleep ratchet's ancestors, the prompt-language ratchet's
---base) keep their own defaults.
+A base is known only when it is given: --base, else CI_BASE_SHA. check-fast's diff mode passes --base to the sleep
+ratchet (it runs neither of the others), and hosted CI sets CI_BASE_SHA (on a main run, origin/main of its fresh
+clone, so the merge base is HEAD). There is no fallback to the clone's default branch, because that ref is only as
+fresh as the last fetch: main verification pins HEAD by SHA and leaves origin/main alone, and in an ordinary clone
+scripts/hooks/merge-pr.sh's fetch moves it to the pre-merge main, so right after a merge a fallback would hold the new
+commit to its parent's counts. merge-pr.sh does not apply that limit (scripts/ci/changed_ratchets.py), so the same
+commit on main would pass or fail depending on who fetched last. The never-raise checks on the baselines themselves
+(the sleep ratchet's ancestors, the prompt-language ratchet's --base) keep their own defaults.
 
 An explicit base that does not resolve is an error, never "no base": that would quietly drop the limit. Whether a file
 is at the merge base comes from the tree (git ls-tree), and a listed file that cannot be read is an error too: CI's

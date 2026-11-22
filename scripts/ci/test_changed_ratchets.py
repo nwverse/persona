@@ -136,6 +136,17 @@ class CheckTests(RepositoryCase):
         self.assertEqual(self.check(), ([sleep_ratchet.over_message(GO, 2, 1)]
                                         + web_font_ratchet.violations({WEB: 3}, {WEB: 2}), []))
 
+    def test_a_count_raised_back_into_room_a_fall_left_merges(self):
+        # Merge time holds a file to its baseline only, never to its count at the base: re-adding what main took out
+        # without lowering the baseline merges ("Count ratchets" in docs/operations/testing.md). The checkers' --base
+        # mode refuses it; a merge-time refusal would be a separate change.
+        self.on_main(lambda: (self.write(GO, go(0)), self.write(WEB, tsx(1))))
+        self.git("merge", "-q", "--no-edit", "main")
+        self.write(GO, go(1))
+        self.write(WEB, tsx(2))
+        self.commit("adds back what main took out")
+        self.assertEqual(self.check(), ([], []))
+
     def test_worse_refuses_only_a_rise_above_what_the_base_has(self):
         worse = changed_ratchets.worse
         self.assertFalse(worse(0, 1, 1, 1))  # lowered under the baseline

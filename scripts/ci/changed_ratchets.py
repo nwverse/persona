@@ -11,7 +11,8 @@ count rises (docs/operations/testing.md, "Count ratchets"), so a merge is refuse
 its baseline than the base has it: a file under its baseline merges, as the checkers pass it. A file the base already
 has above its baseline is the base's failure, unless the change moves it further. A file the two sides change in
 conflicting ways is left to the merge itself, which refuses it. Holding a changed file to its count at the base, as
-the checkers do with --base, is not done here.
+the checkers do with --base, is not done here: a change that raises a count back into the room a fall left under the
+baseline merges.
 
 scripts/hooks/merge-pr.sh runs it before merging, with its trusted copy of this script and of the ratchets:
 
