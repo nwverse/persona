@@ -18,6 +18,7 @@ type logicalAuthenticated struct {
 }
 
 func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
+	ctx = asToolCall(ctx) // a model waits on it: its node calls are bounded (tool_node_wait.go)
 	if caller, ok := ctx.Value(logicalAuthenticatedKey{}).(logicalAuthenticated); ok && caller.Machine == call.MachineID && caller.Session == call.SessionID {
 		if caller.Lease != nil && caller.Lease.Load() {
 			return s.tool(ctx, call)

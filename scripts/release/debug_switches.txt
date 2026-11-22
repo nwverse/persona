@@ -332,6 +332,8 @@ showLauncherCheck
 showLauncherHelp
 showLiftLines
 showListOffset
+showLocationAlwaysOffer
+showLocationLevel
 showLookBlink
 showLoopDraft
 showMacDropCover
