@@ -325,17 +325,10 @@ func TestFeishuTopicRemovalCancelsAndFencesLateCreation(t *testing.T) {
 	watched := make(chan struct{})
 	go func() { s.watchChannelRun(r); close(watched) }()
 	var p *chanLive
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
+	waitFor(t, "watcher registration", func() bool {
 		_, p = s.channelRunByID(r.ID)
-		if p != nil {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if p == nil {
-		t.Fatal("watcher did not start")
-	}
+		return p != nil
+	})
 	s.chans.mu.Lock()
 	p.items = initial.items
 	s.chans.mu.Unlock()
@@ -359,25 +352,17 @@ func TestFeishuTopicRemovalCancelsAndFencesLateCreation(t *testing.T) {
 	w := p.native
 	s.chans.st.Runs = nil
 	s.chans.mu.Unlock()
-	// Wait until removal has canceled this generation before releasing its reply.
-	deadline = time.Now().Add(2 * time.Second)
-	aborted := false
-	for time.Now().Before(deadline) {
-		w.mu.Lock()
-		aborted = w.aborted
-		w.mu.Unlock()
-		if aborted {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if !aborted {
-		t.Error("removed run did not cancel native work")
-	}
+	// The real watcher cancels native work before returning.
 	select {
 	case <-watched:
-	case <-time.After(time.Second):
-		t.Error("removed run watcher did not stop")
+	case <-time.After(2 * time.Second):
+		t.Fatal("removed run watcher did not stop")
+	}
+	w.mu.Lock()
+	aborted := w.aborted
+	w.mu.Unlock()
+	if !aborted {
+		t.Error("removed run did not cancel native work")
 	}
 	unblock()
 	select {
@@ -453,17 +438,10 @@ func TestFeishuTopicRealFoldHasOneSerializedNativeEnd(t *testing.T) {
 		t.Fatalf("fold completed native message %d times before append returned", got)
 	}
 	var nextProgress *chanLive
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
+	waitFor(t, "next run watcher registration", func() bool {
 		_, nextProgress = s.channelRunByID(next.ID)
-		if nextProgress != nil {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if nextProgress == nil {
-		t.Fatal("next run watcher did not start")
-	}
+		return nextProgress != nil
+	})
 	feishuSink{s}.progress(context.Background(), &next, time.Second, nil, "")
 	finishTopicCot(t, s, &next, &channel.Result{Answer: "Synthetic next answer"})
 	if got := len(f.appParams(AppFeishu, FeishuCotComplete)); got != 0 {

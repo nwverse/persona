@@ -316,17 +316,11 @@ func waitTopicCot(t *testing.T, s *Service, r *channel.Run) {
 
 func waitCotWorker(t *testing.T, w *cotWorker) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	waitFor(t, "native worker to become idle", func() bool {
 		w.mu.Lock()
-		idle := !w.queued && w.cancel == nil
-		w.mu.Unlock()
-		if idle {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("native worker did not become idle")
+		defer w.mu.Unlock()
+		return !w.queued && w.cancel == nil
+	})
 }
 
 func topicCotProgress(t *testing.T, s *Service, r *channel.Run, took time.Duration, steps []string, live string) {
