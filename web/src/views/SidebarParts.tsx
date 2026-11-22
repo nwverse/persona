@@ -62,7 +62,9 @@ export function useGo(onNavigate?: () => void): GoFn {
     (to: Route) => (e: React.MouseEvent) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
       e.preventDefault();
-      navigate(to);
+      // Reselecting the open Agent makes it a root: replace its drill-down entry even though the URL is unchanged.
+      const root = handoffFrom() !== undefined && href(to) === location.pathname + location.search;
+      navigate(to, root, root ? {} : null);
       latest.current?.();
     },
     [],

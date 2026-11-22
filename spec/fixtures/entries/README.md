@@ -34,6 +34,10 @@ same input the same way. Rows and wording are each platform's own; the split and
   review", in order: tasks there because their supervisor's review is under way while nothing of them runs or asks.
 - `expected.web_parked` (optional, absent means none; web only): rows from `running` that the web places in its
   separate Parked tray. An old interrupted conversation cannot bring a parked task back to Needs you.
+- A current replacement waiting without background work on another Agent, an external event, or a transient failure keeps an
+  old interruption out of Needs you. `invalid_conversation_waiting_replacement` pins the shared transient-wait case with the
+  replacement's own recoverable `turn_error`; `invalid_conversation_unfinished` keeps a permanent error with stale transient
+  work interrupted. The waiting fixture's `expected.activity` is null because the replacement has no background work.
 - `expected.web_review` (optional, absent means none; web only, #8678): the rows the web lists under Persona
   reviewing, in its order, instead of the `needs_you` or `running` rows above: every task waiting for its supervisor's
   review with nothing of it running or asking, however long it has waited. The web checks `needs_you`, `running` and

@@ -1249,6 +1249,19 @@ directory, changes permissions, or writes assistant instructions into it. Automa
 also stays confined to prepared assistant directories; project-owned skill files are preserved. An empty path uses the prepared assistant
 space as before. The task records the physical directory used, so a changed symlink target requires a fresh chat.
 A node must announce `task_execution`; unsupported nodes refuse the new execution request with `node_outdated`.
+For a scheduled run this is a definite pre-delivery refusal, so the same marshaled request waits for the update instead of
+repeating model preparation or conversation bookkeeping. The default bound is 600 seconds, configurable as
+`assistant.task_execution_wait_seconds` (0–3600) in `manager.json`. Zero records the refusal immediately. A successful update releases exactly one send with
+every required option unchanged. If the bound expires, the run records `task_execution_wait_timeout` as a definite
+not-sent deadline and does not arm the ordinary one-off retry; there is no late queued attempt. Uncertain delivery keeps
+its existing no-replay classification.
+
+Only an attested inherited ordinary task may use the old-node omission. Setting
+`assistant.task_execution_legacy_fallback: false` disables it and makes those tasks wait too. Explicit computer,
+directory, launcher, model, effort, Health and strict-snapshot choices never qualify. Actual omission adds
+`compatibility_fallback: "legacy_task_execution"` to the run's history; `execution.legacy_compatible` alone means only
+that the task was eligible, not that the fallback happened. The web history appends **Used legacy task execution** to
+the run's ordinary outcome and timing detail.
 
 The scheduler and **Run now** share `runTask` and the frozen resolved binding. A reusable conversation must match its
 computer, launcher/agent, model/effort/runtime fingerprint and physical directory. The fingerprint includes the execution

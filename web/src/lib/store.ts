@@ -8,6 +8,7 @@ import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
 import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
+import { clearAssistantSnapshot, readAssistantSnapshot, writeAssistantSnapshot } from "./assistant-snapshot";
 import { useRef, useSyncExternalStore } from "react";
 import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
 import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts, supportsPagedAgents } from "./runtime-list";
@@ -108,6 +109,20 @@ export interface State {
   spacesSupported: boolean;
 }
 
+function currentAssistantSnapshot(page: string) {
+  const kept = readAssistantSnapshot(page);
+  if (kept && !page && defaultKnown() && kept.manager && kept.manager !== defaultManager()) {
+    clearAssistantSnapshot(page);
+    return null;
+  }
+  return kept;
+}
+
+const initialAssistantPage = chosenManager() ?? "";
+const initialAssistant = currentAssistantSnapshot(initialAssistantPage);
+let restoredAssistant = initialAssistant ? { page: initialAssistantPage, manager: initialAssistant.manager } : null;
+let defaultAssistantRetry = "";
+
 let state: State = {
   conn: "connecting",
   link: { ...NO_LINK, networkUp: networkUp() },
@@ -126,7 +141,7 @@ let state: State = {
   answered: {},
   delegated: {},
   reanswered: {},
-  assistant: null,
+  assistant: initialAssistant?.assistant ?? null,
   assistantError: null,
   mutes: { spaces: [], sessions: [], allowed: [] },
   pins: NO_PINS,
@@ -1706,18 +1721,44 @@ export function patchAssistant(patch: Partial<Omit<AssistantInfo, "conversations
   if (a) set({ assistant: { ...a, ...patch } });
 }
 
+/** A different default owns every no-header answer still on its way. Retire those reads and ask once for the new one. */
+function replaceDefaultAssistant() {
+  const manager = defaultManager();
+  if (defaultAssistantRetry === manager) return;
+  defaultAssistantRetry = manager;
+  assistantAsked.forget();
+  restoredAssistant = null;
+  assistantByManager.delete("");
+  clearAssistantSnapshot("");
+  set({ assistant: null, assistantError: null });
+  void refreshAssistant().catch(() => {});
+}
+
 /** Reads the page's assistant again; true when its answer is the one in place now (not one a later answer, or another
  *  manager's page, made old meanwhile). */
 export async function refreshAssistant(): Promise<boolean> {
-  const asked = assistantAsked.ask();
   const from = pageOf();
+  if (!state.assistant) {
+    const kept = currentAssistantSnapshot(from);
+    restoredAssistant = kept ? { page: from, manager: kept.manager } : null;
+    if (kept) set({ assistant: kept.assistant, assistantError: null });
+  }
+  const asked = assistantAsked.ask();
   try {
     const a = await asked.answer;
     if (!asked.fresh() || from !== pageOf()) return false;
     const assistant = { ...a, conversations: (a.conversations ?? []).filter(availableConversation) };
+    const manager = assistant.manager || from || (defaultKnown() ? defaultManager() : "");
+    if (!from && defaultKnown() && manager && manager !== defaultManager()) {
+      replaceDefaultAssistant();
+      return false;
+    }
+    defaultAssistantRetry = "";
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
     if (cached && (cached.manager ?? "") === from && (cached.machineID !== mainConversationMachine(assistant) || cached.sessionID !== assistant.main)) discardFeedCache(scope);
+    restoredAssistant = null;
+    writeAssistantSnapshot(from, manager, assistant);
     assistantByManager.set(cacheKey(), assistant);
     // its conversations' own requests (feed, stop…) go to it, whichever manager the page shows later
     // (the default's are not noted: with no header the hub finds their manager itself)
@@ -1758,7 +1799,14 @@ onManagerChoice(() => {
   drawnPage = { page, manager };
   if (same) return;
   assistantAsked.forget();
-  set({ assistant: assistantByManager.get(cacheKey()) ?? null, assistantError: null });
+  restoredAssistant = null;
+  let assistant = assistantByManager.get(cacheKey());
+  if (!assistant) {
+    const kept = currentAssistantSnapshot(page);
+    assistant = kept?.assistant;
+    if (kept) restoredAssistant = { page, manager: kept.manager };
+  }
+  set({ assistant: assistant ?? null, assistantError: null });
   void refreshAssistant().catch(() => {});
 });
 
@@ -1766,6 +1814,17 @@ onManagerChoice(() => {
 onDefaultManager((was) => {
   if (!was.settled && drawnPage.page === "") drawnPage = { page: "", manager: defaultManager() };
   const kept = assistantByManager.get("");
+  const current = pageOf() === "" ? restoredAssistant?.manager || state.assistant?.manager || kept?.manager : undefined;
+  const staleKept = kept?.manager && kept.manager !== defaultManager();
+  if (staleKept) {
+    assistantByManager.delete("");
+    clearAssistantSnapshot("");
+  }
+  if (current && current !== defaultManager()) {
+    replaceDefaultAssistant();
+    return;
+  }
+  if (staleKept) return;
   if (was.settled || !kept) return;
   assistantByManager.delete("");
   assistantByManager.set(defaultManager(), kept);
@@ -1893,6 +1952,8 @@ export function reset() {
   pushedAgain = false; // the next login reads its own list
   assistantAsked.forget();
   assistantByManager.clear();
+  restoredAssistant = null;
+  defaultAssistantRetry = "";
   // and so do the pins and mutes of a refresh() or a failed save still on its way
   mutesSaves.rev++;
   pinsSaves.rev++;
