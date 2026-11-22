@@ -1012,6 +1012,9 @@ func sendUnknown(err error) bool {
 	if err == nil || errors.Is(err, rpc.ErrNotSent) {
 		return false
 	}
+	if _, ok := errors.AsType[*nodeSilentError](err); ok {
+		return true // the request went out and no answer came back in time (tool_node_wait.go)
+	}
 	switch nodeDelivered(err) {
 	case "none":
 		return false
@@ -1571,7 +1574,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		c proto.Session
 	}
 	var rows []row
-	var offline []string
+	var offline, unresponsive []string
 	want, wanted := Device{}, false
 	if machine != "" {
 		want, wanted = s.machineByName(ctx, machine)
@@ -1582,6 +1585,12 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		if !m.Online {
 			offline = append(offline, m.Name)
+		} else if s.devs != nil {
+			if _, sample, _ := s.devs.MachineResources(m.ID); sample != nil {
+				if stale, silent := s.silentNode(m, sample, time.Now()); stale {
+					unresponsive = append(unresponsive, fmt.Sprintf("%s (nothing reported for %s)", m.Name, silent.Round(time.Second)))
+				}
+			}
 		}
 		list, muted, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
@@ -1717,6 +1726,9 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 	}
 	if len(offline) > 0 {
 		fmt.Fprintf(&b, "(offline machines: %s)\n", strings.Join(offline, ", "))
+	}
+	if len(unresponsive) > 0 { // the link is up but the node is not answering: its agents' states below may be old
+		fmt.Fprintf(&b, "(unresponsive machines, calls to them may hang: %s)\n", strings.Join(unresponsive, ", "))
 	}
 	if machine == "" || wanted {
 		b.WriteString(s.healthLines(ctx, want.ID))

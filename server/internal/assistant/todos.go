@@ -1385,10 +1385,12 @@ func (s *Service) todoRoutes() {
 		}
 
 		now := time.Now().UTC()
+		var unlinkedCwd string
 		s.todos.mu.Lock()
 		if target, ok := s.todos.todos[todoID]; ok {
 			for i := range target.Agents {
 				if target.Agents[i].MachineID == mid && target.Agents[i].SessionID == sid {
+					unlinkedCwd = target.Agents[i].Cwd
 					target.Agents[i].ReleasedAt = &now
 					target.Agents[i].DismissedAt = &now
 					break
@@ -1404,6 +1406,9 @@ func (s *Service) todoRoutes() {
 
 		s.linksChanged(r.Context())
 		s.todosChanged(r.Context())
+		if unlinkedCwd != "" {
+			s.drainWorkspaceQueue(r.Context(), mid, unlinkedCwd)
+		}
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
 }
@@ -1969,9 +1974,11 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 	}
 	s.todos.mu.Lock()
 	t := s.todos.todos[id]
+	var before Todo
 	var failKeys [][2]string
 	var closing *threadEvent
 	if t != nil {
+		before = copyTodoLocked(t)
 		closing = threadClosing(t.DoneAt == nil, reason, "")
 		if t.DoneAt == nil {
 			t.DoneAt = &doneAt
@@ -2000,6 +2007,7 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 	}
 	s.linksChanged(ctx)
 	s.todosChanged(ctx)
+	s.onTodoWorkspaceReleased(ctx, before, false)
 	return true, nil
 }
 
@@ -2063,6 +2071,7 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	s.todoRowSet(ctx, doneKeys)
 	if row.DoneAt != nil {
 		s.goRecordTaskOutcome(before, *row.DoneAt) // what the task came to (todo_outcome.go, #2820)
+		s.onTodoWorkspaceReleased(ctx, before, true)
 		s.evaluateTodoAfterDependents(ctx, id)
 		s.evaluateParentCloseoutForChild(ctx, id)
 	}

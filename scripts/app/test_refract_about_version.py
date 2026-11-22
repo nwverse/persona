@@ -63,6 +63,60 @@ value = model.versionName.value
 REVIEWED_KOTLIN = VALID_KOTLIN.encode()
 
 
+class ProductionExclusionTests(unittest.TestCase):
+    def check_source(self, source_set, source):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "android/feature/settings/src" / source_set / "kotlin/Host.kt"
+            target.parent.mkdir(parents=True)
+            target.write_text(source, encoding="utf-8")
+            generated = root / "AboutVersionRow.kt"
+            generated.write_bytes(REVIEWED_KOTLIN)
+            cli = root / "refract"
+            cli.touch()
+
+            def generate(cli, mode, android_out, harmony_out, sources=(pilot.SOURCE,)):
+                if len(sources) == 2:
+                    raise subprocess.CalledProcessError(1, str(cli), stderr=DIAGNOSTIC)
+                android_out.mkdir(parents=True)
+                (android_out / generated.name).write_bytes(REVIEWED_KOTLIN)
+
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with mock.patch.object(pilot, "ROOT", root), mock.patch.object(pilot, "GENERATED", generated), \
+                    mock.patch.object(pilot, "validate_lock", return_value={"commit": pilot.EXPECTED["commit"]}), \
+                    mock.patch.object(pilot, "run", generate), \
+                    mock.patch.object(sys, "argv", ["refract_about_version.py", "check", "--cli", str(cli)]), \
+                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                result = pilot.main()
+            self.assertEqual(generated.read_bytes(), REVIEWED_KOTLIN)
+            self.assertEqual(target.read_text(encoding="utf-8"), source)
+            return result, stdout.getvalue(), stderr.getvalue()
+
+    def test_production_variants_reject_pilot_references(self):
+        for source_set, source in (
+            ("main", "val row: AboutVersionModel? = null\n"),
+            ("debug", "val row: AboutVersionSnapshot? = null\n"),
+            ("release", "import persona.feature.settings.generated.AboutVersionRow\n"),
+            ("debug", 'val label = "${AboutVersionSnapshot}"\n'),
+        ):
+            with self.subTest(source_set=source_set, source=source):
+                result, stdout, stderr = self.check_source(source_set, source)
+                self.assertEqual(result, 1, stdout)
+                self.assertIn(f"src/{source_set}/kotlin/Host.kt", stderr)
+                self.assertNotIn("PASSED", stdout)
+
+    def test_prose_and_test_source_sets_are_allowed(self):
+        for source_set, source in (
+            ("main", '// AboutVersionModel\nval prose = "generated.AboutVersionRow"\n'),
+            ("test", "val row: AboutVersionSnapshot? = null\n"),
+            ("androidTest", "val row: AboutVersionModel? = null\n"),
+        ):
+            with self.subTest(source_set=source_set):
+                result, stdout, stderr = self.check_source(source_set, source)
+                self.assertEqual(result, 0, stderr)
+                self.assertIn("PASSED", stdout)
+
+
 class ProcessDiagnosticTests(unittest.TestCase):
     def test_text_and_raw_bytes_use_the_same_failure_reporter(self):
         cases = (

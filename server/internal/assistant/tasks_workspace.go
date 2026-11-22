@@ -34,6 +34,7 @@ const (
 type TaskWorkspace struct {
 	Mode      string
 	Existing  string
+	Queue     bool
 	Branch    string
 	Backend   *BackendWorkspaceSelection
 	Container *ContainerWorkspaceSelection
@@ -68,6 +69,7 @@ func (w *TaskWorkspace) UnmarshalJSON(raw []byte) error {
 		Backend   *BackendWorkspaceSelection   `json:"backend"`
 		Container *ContainerWorkspaceSelection `json:"container"`
 		Existing  string                       `json:"existing"`
+		Queue     bool                         `json:"queue"`
 		New       *struct {
 			Branch string `json:"branch"`
 		} `json:"new"`
@@ -79,14 +81,14 @@ func (w *TaskWorkspace) UnmarshalJSON(raw []byte) error {
 	}
 	in.Existing = strings.TrimSpace(in.Existing)
 	if in.Backend != nil {
-		if in.Container != nil || in.New != nil || in.Existing != "" || !workspacenaming.ValidOperationID(in.Backend.OperationID) {
+		if in.Container != nil || in.New != nil || in.Existing != "" || in.Queue || !workspacenaming.ValidOperationID(in.Backend.OperationID) {
 			return fmt.Errorf("workspace.backend requires a single saved operation_id")
 		}
 		w.Mode, w.Backend = workspaceBackend, in.Backend
 		return nil
 	}
 	if in.Container != nil {
-		if in.New != nil || in.Existing != "" {
+		if in.New != nil || in.Existing != "" || in.Queue {
 			return fmt.Errorf("workspace must select exactly one of new, existing, none, backend, or container")
 		}
 		sel := &ContainerWorkspaceSelection{
@@ -121,10 +123,10 @@ func (w *TaskWorkspace) UnmarshalJSON(raw []byte) error {
 		return nil
 	}
 	if in.Existing != "" && in.New == nil {
-		w.Mode, w.Existing = workspaceExisting, in.Existing
+		w.Mode, w.Existing, w.Queue = workspaceExisting, in.Existing, in.Queue
 		return nil
 	}
-	if in.New != nil && in.Existing == "" {
+	if in.New != nil && in.Existing == "" && !in.Queue {
 		w.Mode, w.Branch = workspaceNew, strings.TrimSpace(in.New.Branch)
 		return nil
 	}
@@ -138,6 +140,9 @@ func (w TaskWorkspace) MarshalJSON() ([]byte, error) {
 	case workspaceContainer:
 		return json.Marshal(map[string]any{"container": w.Container})
 	case workspaceExisting:
+		if w.Queue {
+			return json.Marshal(map[string]any{"existing": w.Existing, "queue": true})
+		}
 		return json.Marshal(map[string]string{"existing": w.Existing})
 	case workspaceNew:
 		if w.Branch != "" {
@@ -453,8 +458,16 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 		s.resolveTaskRepo(ctx, t)
 	}
 	if t.Workspace.Mode != workspaceNone {
-		if err := s.taskWorkspaceBusy(ctx, t.Machine, t.Cwd, t.TodoID); err != nil {
-			return err
+		if owner := s.taskWorkspaceOwner(ctx, t.Machine, t.Cwd, t.TodoID, false); owner != nil {
+			if s.shouldQueueExistingWorkspace(ctx, *t, owner) {
+				return &workspaceBusyQueueError{
+					machine:    s.effectiveBoardMachine(t.Machine),
+					path:       t.Cwd,
+					ownerID:    owner.ID,
+					ownerTitle: owner.Title,
+				}
+			}
+			return i18n.ErrEnglish("assistant-tasks_workspace.busy", i18n.Args{"id": owner.ID, "title": owner.Title, "machine": t.Machine, "path": t.Cwd})
 		}
 		if t.TodoID != "" {
 			claim := s.effectiveBoardMachine(t.Machine) + "\x00" + s.taskDirKey(ctx, t.Machine)(t.Cwd)
@@ -580,13 +593,28 @@ func nodePathWithin(p, dir string) bool {
 	return p == dir || strings.HasPrefix(p, dir+"/")
 }
 
-func (s *Service) releaseTaskWorkspace(todoID string) {
+func (s *Service) releaseWorkspaceClaimsOnly(todoID string) []workspaceTarget {
+	if todoID == "" {
+		return nil
+	}
 	s.tasks.mu.Lock()
 	defer s.tasks.mu.Unlock()
+	var released []workspaceTarget
 	for key, owner := range s.tasks.workspaceClaims {
 		if owner == todoID {
 			delete(s.tasks.workspaceClaims, key)
+			if m, dir, ok := strings.Cut(key, "\x00"); ok && m != "" && dir != "" {
+				released = append(released, workspaceTarget{machine: m, path: dir})
+			}
 		}
+	}
+	return released
+}
+
+func (s *Service) releaseTaskWorkspace(todoID string) {
+	released := s.releaseWorkspaceClaimsOnly(todoID)
+	if len(released) > 0 {
+		s.drainReleasedWorkspaces(released)
 	}
 }
 

@@ -1151,6 +1151,15 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   one home of those requests, not a second home, and counts what the switch and tabs count (`agentsWaiting`). **The usage
   strip** (`SidebarUsageStrip`): the two fullest subscription accounts as name, percent and `UsageMeter`, the web
   sidebar's foot (#2432); a tap opens Machines. Separate stays the default and pixel-identical.
+  **Usage details** (#13173, web `UsagePopover`): one card per provider (`border-line`, `rounded-control`, 10 px padding) with the
+  provider's name (13 px semibold `--ink`), the account count and the newest sample age (11 px `--ink-3`); every account inside,
+  soonest 7d reset first, each with a `5h` and a `7d` row (bar with pace tick, percent, reset text). Under the accounts, **one
+  reset timeline per card**: a shared axis (45% of the width for the first day, 55% for days 1-7), a row per account in the
+  same order, a teal (`--hue-teal`) 5h capsule over a blue (`--hue-blue`) 7d capsule from the `--ink` now line to the reset, a
+  hollow end dot (`--surface` fill) and the time left (9.5 px semibold, white inside the capsule past 80% of the width). A
+  window's `protect_percent`, when the hub sends it, adds a 2 px `--orange` notch on its bar, a 9 px "protect N%" flag and a
+  hatched `--orange` zone to 100%. Colors and sizes are existing tokens; iOS and Android follow the same rule with their own
+  tokens (`docs/server/usage-windows.md`, "Provider cards and the reset timeline").
 - Android (#6378) offers the same **Separate** and **Merged** values under **Settings › Appearance › Sidebar**.
   Separate is the Android default at every width. Merged uses the current left drawer and the regular window's
   existing beside or overlay policy. Main conversation stays above the scrollable Pages, Persona Chats and Agents.
@@ -1183,6 +1192,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 
 - **Live recording sheet** (#4240, `RecordingLiveSheet`; full screen and dark while it records since #8731, "The meeting room" below): a screen with its own navigation stack for something that keeps running when it is dismissed. It opens by itself when the activity starts, **Hide** or a swipe leaves it, and a one-row card on the page is the way back. After the activity ends the same sheet cross-fades to a wrap-up of what happens next, so the user is not dropped on a list. Reason: a recording is the one task whose controls must stay under the thumb while the user looks at what is being heard, and whose end needs visible follow-through (saved, transcribed, synced, minutes) instead of a word in a list row. A room meeting's sheet (#3862, a phone meeting recording started while the hub listed `meeting_conversation`) shows the meeting page in place of the live view, and after Stop the same page goes on as the meeting's thread in place of the wrap-up ("Meeting page (#3862)" below); ordinary recordings and #3746 meetings keep this sheet's look.
 - **Consent sheet** (#4741, `RecordingDayConsentView`): before something that records other people or sends their words to a model starts for the first time. A large-detent sheet with an inline title: the mode's mark, a heading that says what is about to happen, then one row per point (a `ThemedIcon` in the accent beside the words, read as one element), what the user can do later in a caption, and **Agree** (prominent, the one solid button) over **Not Now** (borderless) pinned at the bottom in a safe-area inset, so both stay in reach at every text size while the points scroll. Agree is the only way to agree; Not Now and a swipe down change nothing. The agreement is stored with the sheet's version, and a new version asks again. The points come from one list (`RecordingDayConsentPoint`) the tests count, not from the view.
+  The same sheet asks before a system permission whose dialog iOS shows only once (#13200, `LocationAlwaysSheet`, Always for the location): its heading says why it shows now, **Allow** in Agree's place is the only thing that shows iOS's dialog, and it is shown once; its points come from `LocationAlwaysPoint`.
 - System `.sheet` with detents for most things (43 detent sites). Settings is a near-full sheet with a close button.
 - The composer's + panel on the iPhone (`AttachSheet`) is a system sheet with detents medium and large and the drag indicator, like the system's photo picker; its bar sits in `safeAreaInset(edge: .bottom)` so the keyboard pushes it up (#4312).
 - Link card: detents 0.6 and large, background stays interactive down to 0.6 (`apple/Persona/Views/Link/LinkSheet.swift:142-146`).

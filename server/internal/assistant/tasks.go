@@ -347,6 +347,10 @@ type tasksState struct {
 	// the task's agent link or failure is recorded.
 	workspaceMu     sync.Mutex
 	workspaceClaims map[string]string
+	// workspaceQueueMu serializes deterministic FIFO dequeues for occupied existing workspaces (task_workspace_queue.go).
+	workspaceQueueMu     sync.Mutex
+	workspaceDispatching map[string]bool
+	lastWorkspaceQueueAt time.Time
 	// turns: the turns completion handling took up, kept in the database (task_turns.go).
 	turns turnsState
 	// quiet: the verdicts on task Agents' turns with no output, and the agents Persona's Stop interrupted (silent_turns.go).
@@ -357,7 +361,8 @@ func newTasksState() tasksState {
 	return tasksState{recoverBefore: time.Now(), plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
 		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]*taskStart{},
 		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, taking: map[string]*taskStart{}, sendsOut: map[[2]string]*sendsOut{},
-		sendsRetryAfter: sendsRetryEvery,
+		workspaceDispatching: map[string]bool{},
+		sendsRetryAfter:      sendsRetryEvery,
 		turns: turnsState{again: map[string]bool{}, looked: map[turnRecoveryKey]turnLook{}, recovering: map[string]bool{}, tries: map[string]int{},
 			retry:   map[turnRecoveryKey]turnRetry{},
 			judging: map[string]int{}, closed: map[SessionRef]turnLook{}}}

@@ -488,6 +488,7 @@
   "usage.hours",
   "usage.minutes",
   "usage.not_connected",
+  "usage.protect_",
   "usage.reset_",
   "usage.source_local",
   "usage.sources_title",

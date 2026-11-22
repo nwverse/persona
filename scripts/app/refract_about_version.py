@@ -281,6 +281,116 @@ struct UnsupportedAboutControl: View {
             fail(f"Rejected {mode} changed the reviewed generated Kotlin")
 
 
+def kotlin_code_only(source: str) -> str:
+    """Blank comments and literal text, retaining interpolation as Kotlin code.
+
+    This is a bounded lexer for the exclusion check, not a Kotlin parser. Nested block comments and
+    nested interpolation braces are tracked so a literal cannot hide a real interpolated reference.
+    """
+    code = []
+    stack = [("code", 0)]
+    index = 0
+    while index < len(source):
+        kind, depth = stack[-1]
+        char = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if kind == "code":
+            if source.startswith("//", index):
+                code.append("  ")
+                stack.append(("line", 0))
+                index += 2
+            elif source.startswith("/*", index):
+                code.append("  ")
+                stack.append(("block", 1))
+                index += 2
+            elif source.startswith('"""', index):
+                code.append("   ")
+                stack.append(("raw", 0))
+                index += 3
+            elif char in ('"', "'"):
+                code.append(" ")
+                stack.append(("string" if char == '"' else "char", 0))
+                index += 1
+            elif char == "}" and depth:
+                code.append(char)
+                stack.pop()
+                index += 1
+            elif char == "{" and depth:
+                stack[-1] = (kind, depth + 1)
+                code.append(char)
+                index += 1
+            else:
+                code.append(char)
+                index += 1
+        elif kind == "line":
+            code.append("\n" if char == "\n" else " ")
+            index += 1
+            if char == "\n":
+                stack.pop()
+        elif kind == "block":
+            if source.startswith("/*", index):
+                stack[-1] = (kind, depth + 1)
+                code.append("  ")
+                index += 2
+            elif source.startswith("*/", index):
+                code.append("  ")
+                index += 2
+                if depth == 1:
+                    stack.pop()
+                else:
+                    stack[-1] = (kind, depth - 1)
+            else:
+                code.append("\n" if char == "\n" else " ")
+                index += 1
+        elif kind == "char":
+            code.append("\n" if char == "\n" else " ")
+            if char == "\\":
+                code.append("\n" if following == "\n" else " ")
+                index += 2
+            else:
+                index += 1
+                if char == "'":
+                    stack.pop()
+        else:
+            if char == "\\" and kind == "string":
+                code.append("  ")
+                index += 2
+            elif (kind == "raw" and source.startswith('"""', index)) or (kind == "string" and char == '"'):
+                terminator = 3 if kind == "raw" else 1
+                code.append(" " * terminator)
+                index += terminator
+                stack.pop()
+            elif char == "$" and following == "{":
+                code.append("${")
+                stack.append(("code", 1))
+                index += 2
+            elif char == "$" and (following == "_" or following.isalpha()):
+                code.append(char)
+                stack[-1] = (kind + "-interpolation", 0)
+                index += 1
+            else:
+                code.append("\n" if char == "\n" else " ")
+                index += 1
+        if stack[-1][0].endswith("-interpolation"):
+            while index < len(source) and (source[index] == "_" or source[index].isalnum()):
+                code.append(source[index])
+                index += 1
+            stack[-1] = (stack[-1][0][:-len("-interpolation")], 0)
+    return "".join(code)
+
+
+def validate_production_exclusion(android: Path, identifiers: tuple[str, ...], message: str) -> None:
+    for production in android.rglob("*.kt"):
+        relative = production.relative_to(android)
+        parts = relative.parts
+        source_sets = {parts[index + 1] for index, part in enumerate(parts[:-1]) if part == "src"}
+        if not source_sets or source_sets <= {"test", "androidTest"}:
+            continue
+        code = kotlin_code_only(production.read_text(encoding="utf-8"))
+        if any(identifier in code for identifier in identifiers):
+            fail(f"{message}: {relative}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("check", "generate"), nargs="?", default="check")
@@ -341,10 +451,9 @@ def main() -> int:
                 fail("Generated UI must not own framework metadata or clipboard behavior")
             if not (SCHEMA_ONLY_HARMONY / "string.json").is_file():
                 fail("Missing CLI schema-validation resource fixture")
-            for production in (ROOT / "android").glob("**/src/main/**/*.kt"):
-                source = production.read_text(encoding="utf-8")
-                if "AboutVersionModel" in source or "AboutVersionSnapshot" in source or "generated.AboutVersionRow" in source:
-                    fail(f"Ordinary production source must exclude the pilot: {production.relative_to(ROOT)}")
+            validate_production_exclusion(
+                ROOT / "android", ("AboutVersionModel", "AboutVersionSnapshot", "generated.AboutVersionRow"),
+                "Ordinary production source must exclude the pilot")
             if args.mode == "generate":
                 # Compare two invocations, but never confuse the first unreviewed output with the entry snapshot.
                 first_generation = GENERATED.read_bytes()
