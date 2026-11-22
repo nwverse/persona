@@ -470,7 +470,7 @@ func (s *Service) machineLauncherRoutes() {
 		var unavailable []unavailableLauncher
 		var all []ConfiguredLauncher
 		switch purpose {
-		case "assistant":
+		case "assistant", purposeSupervise:
 			if !d.ExternalInventory {
 				// Leave a short window for own-service checks even when the shell uses its full sync timeout.
 				ctx = context.WithValue(ctx, pickerDiscoveryDeadline{}, time.Now().Add(launcherSyncTimeout+time.Second))
@@ -493,6 +493,9 @@ func (s *Service) machineLauncherRoutes() {
 		if err != nil {
 			apierr.Call(w, err)
 			return
+		}
+		if purpose == purposeSupervise {
+			list, unavailable = s.supervisionPickerLaunchers(list, unavailable, s.requestLang(r))
 		}
 		// A launcher whose latest check failed is left out of the pickers and of the presets that name it; the launcher
 		// the configuration runs with no pick stays, with its record, so the form can still say why this start may fail.

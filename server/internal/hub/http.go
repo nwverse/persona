@@ -69,6 +69,7 @@ func (h *Hub) routes() http.Handler {
 	h.paneRoutes(api)
 	h.nodeDoctorRoutes(api)
 	h.machineProcRoutes(api)
+	h.machineToolchainRoutes(api)
 	h.machineServicesRoutes(api)
 	h.machineNetworkRoutes(api)
 	h.machineStorageRoutes(api)
@@ -869,6 +870,10 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeBodyErr(w, err, err)
+		return
+	}
+	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) {
+		writeErrCode(w, http.StatusBadRequest, "client_msg_id_reserved", i18n.Err("hub-send.reserved_id"))
 		return
 	}
 	if p.WorkSession && (p.Launcher == "" || p.AgentType == "" || strings.TrimSpace(p.Cwd) == "" ||

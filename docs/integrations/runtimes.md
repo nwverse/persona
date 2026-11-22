@@ -31,7 +31,21 @@ The runtime doesn't need to know where the hub is, open ports or authenticate (a
 
 A runtime that can't reach the local socket (it's a long-running service: another system user, in a container, on another machine) connects the other way round and is called a **daemon** (`docs/integrations/daemons.md`):
 it opens a WebSocket endpoint and node connects to it per `~/.persona/daemons.json`, with a token. Once connected it speaks the same protocol, and the SDK driver doesn't change a line
-(`createRuntime(driver, {listen: {port, token}})`). The name comes from config and session ids are namespaced, so a daemon can't touch other sessions on the machine, and it has no `mcp.*`.
+(`createRuntime(driver, {listen: {port, token}})`). The name comes from config and session ids are namespaced.
+The daemon's config can enroll it in [A2A](a2a.md) for its own sessions.
+
+For [A2A](a2a.md) tools, use `rt.tools({sessionId})` and
+`rt.callTool({name, args, session_id: sessionId})` with the executing Agent's
+session ID. The node checks runtime ownership before a call. A local runtime
+that configures a provider's stdio MCP server can request a ticket with
+`rt.a2aMcpToken(sessionId)`. Pass it as `PERSONA_A2A_TOKEN`, alongside
+`PERSONA_SESSION_ID`, to a private `personad mcp` process. The ticket grants
+that provider A2A tools for its own session and should stay in its MCP environment.
+
+A runtime that releases idle sessions and can safely wake them with an
+ordinary send may set `capabilities.a2a_wake_on_send` on those rows. The
+node passes `a2a_wake_on_send: true` to `send` when delivering a task update
+through that path. Decline if the session was manually stopped or archived.
 
 ## What to implement
 
@@ -517,6 +531,13 @@ with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop 
 
 ### Antigravity CLI
 
+Assistant context remains an ACP embedded text resource followed by the user's separate text block (#12435).
+Antigravity exports that resource as a leading `Content of persona-context:///snapshot.txt:` line and context XML
+inside `USER_INPUT.content`. Both the companion and pane history readers remove the complete leading Persona resource
+envelope before projecting user text (#12813). Bare labels, other URI schemes and ordinary quoted text retain their
+existing behavior. History format versions invalidate cached items from before this cleanup; native exports and ACP
+payloads are unchanged.
+
 The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
 input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
@@ -615,7 +636,8 @@ on success, failure or timeout. Completed probe workspaces stay out of the user 
 The runtime bounds native calls to a 75-second budget, followed by bounded session cleanup. Older runtimes keep the
 node's shell check. Shell and managed launchers keep their own execution context.
 
-A chat gets Persona's MCP server once, named `persona`, through ACP `mcpServers`. `agy` defers the tools over its
+A chat gets Persona's MCP server, named `persona`, through ACP `mcpServers`. Regular Agent chats can also get
+`persona_a2a` with a session-scoped ticket. `agy` defers the tools over its
 declaration budget, largest first, and has no `call_mcp_tool` for servers passed through ACP, so an assistant chat's
 server runs behind `integrations/antigravity/mcp-proxy.mjs`, which adds a small `persona_call` tool that calls any
 Persona tool by name (#7333). The proxy declares only the tools larger than `persona_call`, so it is always the smallest
@@ -723,3 +745,19 @@ Don't put host pane information in the runtime id: panes are matched on node's s
 
 Platforms built on DSH that don't run `dsh web` (multi-tenant, running DSH in containers) implement the same protocol on the platform side and connect as a daemon (`docs/integrations/daemons.md`),
 reusing the SDK and `integrations/dsh/lib/map.js` directly, with no code added on the Persona side.
+
+### Assistant admission evidence (#11936)
+
+`TestCodexAndPiAssistantConversationRoles` exercises manager admission and actual
+fake-node delivery for `codex` and `pi`, each with `main`,
+`background_supervisor`, `direction_supervisor`, and `scheduled_task` subtests.
+Supervisor inputs carry the exact manager policy; scheduled runs resume the same
+conversation and retain their execution binding. The managed Codex launcher and
+the policy-capable pi-web companion use the contracts merged in #12569
+(`7085c82a1f`). Pi's runtime hook contract is also covered by
+`assistant policy/context and tool authority are isolated to the actual pi session`
+in `integrations/pi/test/assistant.test.js`. Tests use fake runtimes/models.
+
+Unproven supervision channels (plugin paths, DSH, Grok, Cursor ACP and TRAE)
+remain refused as required by the adopted isolation review. Their refusal does
+not imply that Codex or a verified pi companion is ineligible.

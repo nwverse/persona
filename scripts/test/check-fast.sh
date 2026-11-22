@@ -15,6 +15,9 @@
 #   scripts/check-fast.sh --dry-run --changed-from <file|-> --each
 #                                         # the plan of each listed path on its own, after a "== <path>" line;
 #                                         # scripts/ci/affected_drift.py compares them with the CI lanes (#11026)
+#   scripts/check-fast.sh --compare-main  # after the run, rerun only what failed at the merge base and say, for each
+#                                         # failure, whether the base fails it too (scripts/ci/check_fast_compare.py)
+#   scripts/check-fast.sh --compare-tip   # --compare-main, and the failures the base has too also at the base ref's tip
 #   scripts/check-fast.sh -h|--help
 #
 # Path mapping (diff mode): the table in scripts/ci/check_fast_map.py maps each changed path to its checks, and a new
@@ -69,6 +72,18 @@
 # Every check prints one PASS / FAIL / TIMEOUT / SKIP line with its duration, followed by a summary; a check that
 # waited for a slot names the wait apart from its own time: "PASS     server go test ./... (95s, plus 140s waiting for a
 # go slot)". The temp log directory is kept when a check fails or times out and removed on a fully clean run.
+# Each failed or timed-out check ends with a "rerun:" line per failure, the command that reruns just that: the failing
+# Go tests of each package (go test -count=1 -run '^(A|B)$' ./pkg), the failing unittest ids, or the step's own
+# command. step() records each failed step for them (record_step); scripts/ci/check_fast_compare.py narrows it.
+#
+# --compare-main (#12733): when a check failed, rerun only the failures, in a detached worktree of the merge base
+# (<log dir>/compare/base, removed afterwards by that path; a signal removes it too), and print one line for each:
+# ALREADY (also fails at the base), NEW (passes there and fails again rerun here on its own, so likely this change),
+# FLAKY (passes there and rerun here on its own), EDITED (not attributable: the change edits that test's files) or
+# UNKNOWN (not compared, and why). The rules are the PR watcher's: named tests only, no attribution when the change
+# edits the test. --compare-tip also reruns the ALREADY ones at the base ref's tip
+# (TIP-PASS: main fixed it since; TIP-FAIL: it still fails; TIP-?: no answer there). The exit code stays the run's: a failure main already has
+# is still a failure here. With --all the merge base and the change's files are found as in diff mode.
 #
 # Exit codes: 0 all checks passed, skipped or not needed; 1 one or more checks FAILED; 124 no failure but at least
 # one check TIMEOUT (a timeout is reported, not silently treated as success; run the full suite when that happens).
@@ -90,6 +105,7 @@ set -uo pipefail
 
 CALLER_DIR=$PWD  # a relative --changed-from file is read from here
 cd "$(dirname "$0")/../.."
+ROOT=$PWD  # the directory each failed step ran in is recorded relative to it (record_step)
 
 # Per-command timeouts in seconds (CLAUDE.md: every background step carries a timeout). Override for slow machines.
 TIMEOUT_NPM_CI="${CHECK_FAST_TIMEOUT_NPM_CI:-600}"
@@ -103,6 +119,7 @@ usage() {
 
 ALL=0
 BASE_REF=""
+COMPARE=0  # 1: --compare-main, 2: --compare-tip
 DRY_RUN=0
 CHANGED_FROM=""
 EACH=0
@@ -124,6 +141,8 @@ while [ $# -gt 0 ]; do
       CHANGED_FROM=${1#*=}
       [ -n "$CHANGED_FROM" ] || { echo "check-fast: --changed-from needs a file (- for stdin)" >&2; exit 2; } ;;
     --each) EACH=1 ;;
+    --compare-main) [ "$COMPARE" -eq 2 ] || COMPARE=1 ;;
+    --compare-tip) COMPARE=2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "check-fast: unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
@@ -136,6 +155,9 @@ if [ -n "$CHANGED_FROM" ] && { [ "$DRY_RUN" -eq 0 ] || [ "$ALL" -eq 1 ] || [ -n 
 fi
 if [ "$EACH" -eq 1 ] && [ -z "$CHANGED_FROM" ]; then
   echo "check-fast: --each needs --dry-run --changed-from <file>" >&2; exit 2
+fi
+if [ "$COMPARE" -gt 0 ] && [ "$DRY_RUN" -eq 1 ]; then
+  echo "check-fast: --compare-main and --compare-tip rerun failures, which a dry run has none of" >&2; exit 2
 fi
 case "$CHANGED_FROM" in ""|-|/*) ;; *) CHANGED_FROM="$CALLER_DIR/$CHANGED_FROM" ;; esac
 if [ -n "$CHANGED_FROM" ] && [ "$CHANGED_FROM" != "-" ] && [ ! -f "$CHANGED_FROM" ]; then
@@ -173,6 +195,8 @@ fi
 HEAVY_SLOT="$PWD/scripts/heavy_slot.py"
 # The per-path table: the checks each changed path selects (plan_changes reads it once a run).
 CHECK_FAST_MAP=scripts/ci/check_fast_map.py
+# What a failed step's rerun line is, and --compare-main's reruns at the merge base (#12733).
+COMPARE_HELPER=scripts/ci/check_fast_compare.py
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/check-fast.XXXXXX")
 # Keep WORK after a failure or timeout (its logs are the trail to read); a clean run removes it on exit.
@@ -245,6 +269,10 @@ on_signal() {  # on_signal <signal name> <exit code>
   fi
   wait
   exec 2>&3 3>&-
+  # --compare-main's checkouts: the helper removes them itself, but it was just killed with the rest. By their paths.
+  for _p in "$WORK/compare/base" "$WORK/compare/tip"; do
+    [ -d "$_p" ] && "$TIMEOUT_BIN" -k 5s 120 git worktree remove --force "$_p" >/dev/null 2>&1
+  done
   KEEP_WORK=1
   echo >&2
   echo "check-fast: interrupted (SIG$_sig); stopped the running checks; logs in $WORK" >&2
@@ -280,7 +308,8 @@ step() {
   #   go test panics "panic: test timed out after …" when ITS suite deadline kills the run;
   #   node's TAP reporter emits "failureType: 'testTimeoutFailure'". A node per-test timeout under the default
   #   reporter is a clean exit 1 naming the test, so it rightly stays a FAIL, not a whole-job TIMEOUT.
-  local _out="$WORK/job.${JOB_I:-x}.steps.log" _rc
+  local _out="$WORK/job.${JOB_I:-x}.steps.log" _rc _from=0
+  [ -f "$_out" ] && _from=$(wc -c < "$_out")
   # The slot comes before the timeout, so waiting in its queue is not counted as a hung step. The helper's lines come
   # before the command's first output: slot_lines shows them live on fd 4 (launch_all's stderr) and records the wait.
   # fd 4 is closed for the command and tee, so nothing a check leaves running holds the caller's stderr open.
@@ -297,19 +326,41 @@ step() {
     # The helper's own 124: no slot came free in time, so the command never ran (not a hung check).
     [ -n "${JOB_SLOT:-}" ] && grep -q '^heavy_slot: timed out' "$_out" 2>/dev/null &&
       _hint=" (no ${JOB_SLOT:-} slot came free; it did not run)$_hint"
+    record_step TIMEOUT "$_rc" "$_from" "$_desc" "$@"
     printf 'TIMEOUT\t%s\t%s\t%s%s\n' "$_rc" "$SECONDS" "$_desc" "$_hint" > "$JOB_STATUS"
     exit 0
   fi
   if [ "$_rc" -eq 137 ]; then
     # SIGKILL: timeout -k's kill after a command that ignored TERM, or the OOM killer — both mean "did not finish".
+    record_step TIMEOUT "$_rc" "$_from" "$_desc" "$@"
     printf 'TIMEOUT\t%s\t%s\t%s (killed: timeout SIGKILL or OOM)%s\n' "$_rc" "$SECONDS" "$_desc" "$_hint" > "$JOB_STATUS"
     exit 0
   fi
   if [ "$_rc" -ne 0 ] && grep -qE "panic: test timed out after [0-9]|failureType: '?testTimeoutFailure'?" "$_out" 2>/dev/null; then
+    record_step TIMEOUT "$_rc" "$_from" "$_desc" "$@"
     printf 'TIMEOUT\t%s\t%s\t%s (test suite self-timed out)%s\n' "$_rc" "$SECONDS" "$_desc" "$_hint" > "$JOB_STATUS"
     exit 0
   fi
+  [ "$_rc" -eq 0 ] || record_step FAIL "$_rc" "$_from" "$_desc" "$@"
   return "$_rc"
+}
+
+# record_step <FAIL|TIMEOUT> <exit code> <offset> <description> <command...> records a step that did not pass, for the
+# summary's rerun lines and --compare-main (scripts/ci/check_fast_compare.py reads it): job.<n>.step.<m> in the log
+# directory, NUL-separated fields: the status, the exit code, the directory it ran in (relative to the repository), the
+# byte range of its output in job.<n>.steps.log (from <offset>, the log's size when the step started, to its size now),
+# the description, then the command. A job's steps run one after another, so a counter file numbers them; in_dir's
+# subshell would lose a variable.
+record_step() {
+  local _status=$1 _rc=$2 _from=$3 _desc=$4 _to=0 _n=0 _dir
+  local _out="$WORK/job.${JOB_I:-x}.steps.log" _count="$WORK/job.${JOB_I:-x}.nsteps"
+  shift 4
+  [ -f "$_out" ] && _to=$(wc -c < "$_out")
+  [ -f "$_count" ] && read -r _n < "$_count"
+  _n=$((_n + 1))
+  echo "$_n" > "$_count"
+  _dir=${PWD#"$ROOT"}; _dir=${_dir#/}
+  printf '%s\0' "$_status" "$_rc" "${_dir:-.}" "$((_from))" "$((_to))" "$_desc" "$@" > "$WORK/job.${JOB_I:-x}.step.$_n"
 }
 
 # slot_lines <step> passes a slot step's output through. The helper's lines about a wait come before the command's
@@ -453,13 +504,20 @@ job_sdk_ts() {
   in_dir sdk/ts step "$TIMEOUT_OTHER" "sdk/ts: bun test" bun test
 }
 
+# Every Go group runs through the partitioned runner, inside the same timeout (#12765). For a ./<dir>/... that covers
+# internal/assistant, whose serial run alone outgrew the budget, it runs that package's tests in go_partitions.py's
+# partitions beside the other packages, and for ./... both partitioned packages' as test-server.sh does; any other
+# group it execs exactly as given (internal/node/... too: its TestMain splits it). Without python3 (an --all run,
+# already failing for it) go test runs directly.
+GO_RUNNER=../scripts/test/go_test_partitioned.py  # from server/
 job_go() {  # $1 = a package dir (internal/foo, cmd/bar, plugins/baz) or ALL for ./...
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
   JOB_SLOT=go
-  local _pattern _label _inner
+  local _pattern _label _inner _go=(go)
   if [ "$1" = ALL ]; then _pattern=./...; _label="go test ./..."; else _pattern="./$1/..."; _label="go test ./$1/..."; fi
   _inner=$((TIMEOUT_GO_TEST - 10)); [ "$_inner" -lt 5 ] && _inner=5
-  in_dir server step "$TIMEOUT_GO_TEST" "$_label" go test -count=1 -timeout "${_inner}s" "$_pattern"
+  [ "$HAVE_PY" -eq 1 ] && _go=(python3 -B "$GO_RUNNER" go)
+  in_dir server step "$TIMEOUT_GO_TEST" "$_label" "${_go[@]}" test -count=1 -timeout "${_inner}s" "$_pattern"
 }
 
 # The server's repo-wide guards: tests that read other packages' source, go list output, the migrations or sdk/go, so
@@ -541,15 +599,20 @@ job_scripts_test() {  # $1 = scripts/<dir>/test_<name>.py, run from its director
 # last so the summary's log tail names them. Any failure makes the job a FAIL; only timeouts make it a TIMEOUT.
 job_scripts_all() {
   [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
-  local _t _rc _failed=() _timed_out=()
+  local _t _rc _failed=() _timed_out=() _out="$WORK/job.${JOB_I:-x}.steps.log" _from
   for _t in "${SCRIPT_TESTS[@]}"; do
     echo "+ $_t (timeout ${TIMEOUT_OTHER}s)"
-    ( cd "$(dirname "$_t")" && "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" python3 -B -m unittest -q "$(basename "$_t" .py)" ) 4>&- 2>&1
-    _rc=$?
+    # Into the job's steps log too, so a failed suite is recorded like a step (record_step) and gets its rerun line.
+    _from=0; [ -f "$_out" ] && _from=$(wc -c < "$_out")
+    ( cd "$(dirname "$_t")" && "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" python3 -B -m unittest -q "$(basename "$_t" .py)" ) \
+      4>&- 2>&1 | tee -a "$_out" 4>&-
+    _rc=${PIPESTATUS[0]}
     case "$_rc" in
       0) ;;
-      124|137) _timed_out+=("$_t") ;;
-      *) _failed+=("$_t") ;;
+      124|137) _timed_out+=("$_t")
+        ( cd "$(dirname "$_t")" && record_step TIMEOUT "$_rc" "$_from" "$_t" python3 -B -m unittest -q "$(basename "$_t" .py)" ) ;;
+      *) _failed+=("$_t")
+        ( cd "$(dirname "$_t")" && record_step FAIL "$_rc" "$_from" "$_t" python3 -B -m unittest -q "$(basename "$_t" .py)" ) ;;
     esac
   done
   echo "${#SCRIPT_TESTS[@]} suite(s): ${#_failed[@]} failed, ${#_timed_out[@]} timed out"
@@ -580,7 +643,8 @@ job_migration_freeze() {
 }
 
 # job_sleep_ratchet counts fixed time.Sleep calls in Go tests. In diff mode the base is the merge-base check-fast
-# already resolved (so --base agrees); --all resolves the default branch itself.
+# already resolved (so --base agrees), which also holds each changed file to its count there. --all is a full-tree run:
+# counts are held to the baseline only, and the ratchet resolves the default branch itself for its never-raise check.
 job_sleep_ratchet() {
   [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
   if [ "$ALL" -eq 1 ]; then
@@ -683,20 +747,13 @@ core_missing() {  # --all treats a missing core toolchain as a failure; diff mod
   fi
 }
 
-if [ "$ALL" -eq 1 ]; then
-  echo "check-fast: --all, running every local fast check (iOS/macOS and Postgres suites excluded)"
-elif [ -n "$CHANGED_FROM" ]; then
-  if [ "$CHANGED_FROM" = - ]; then CHANGED=$(sed '/^$/d' | sort -u); else CHANGED=$(sed '/^$/d' "$CHANGED_FROM" | sort -u); fi
-  if [ -z "$CHANGED" ]; then
-    echo "check-fast: no paths listed in $CHANGED_FROM; nothing to check."
-    exit 0
-  fi
-  [ "$EACH" -eq 1 ] || echo "check-fast: $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') listed file(s) from $CHANGED_FROM"
-else
-  # Without --base: the clone's default branch, from local refs only so the script works offline. origin/HEAD is
-  # set at clone time and can name a branch that is gone since, so it counts only if it resolves to a commit. Its
-  # symbolic target names the base in the output; an origin/HEAD that is a plain ref is used as it is. Full ref
-  # names: a local branch called origin/main would otherwise shadow the remote-tracking one.
+# resolve_base sets BASE_REF and MB, the merge-base the diff starts from (exit 2 when there is none).
+# Without --base: the clone's default branch, from local refs only so the script works offline. origin/HEAD is set at
+# clone time and can name a branch that is gone since, so it counts only if it resolves to a commit. Its symbolic
+# target names the base in the output; an origin/HEAD that is a plain ref is used as it is. Full ref names: a local
+# branch called origin/main would otherwise shadow the remote-tracking one.
+resolve_base() {
+  local _head _ref
   if [ -z "$BASE_REF" ]; then
     _head=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || _head=refs/remotes/origin/HEAD
     for _ref in "$_head" refs/remotes/origin/main refs/remotes/origin/master; do
@@ -715,13 +772,38 @@ else
     exit 2
   fi
   MB=$(git merge-base HEAD "$BASE_REF" 2>/dev/null) || { echo "check-fast: no merge-base with $BASE_REF" >&2; exit 2; }
-  # Committed since the merge-base, plus staged/unstaged/untracked work, so the script works before a commit too.
-  CHANGED=$({
+}
+
+# changed_files prints the paths changed since the merge-base: committed since then, plus staged/unstaged/untracked
+# work, so the script works before a commit too.
+changed_files() {
+  {
     git diff --name-only --no-renames -z "$MB" HEAD
     git diff --name-only --no-renames -z HEAD
     git diff --cached --name-only --no-renames -z
     git ls-files --others --exclude-standard -z
-  } | tr '\0' '\n' | sed '/^$/d' | sort -u)
+  } | tr '\0' '\n' | sed '/^$/d' | sort -u
+}
+
+COMPARE_CHANGED=""  # the change's paths, for --compare-main's EDITED verdicts
+if [ "$ALL" -eq 1 ]; then
+  echo "check-fast: --all, running every local fast check (iOS/macOS and Postgres suites excluded)"
+  # --all plans no diff, but --compare-main needs the merge base to rerun at and the change's files to attribute by.
+  if [ "$COMPARE" -gt 0 ]; then
+    resolve_base
+    COMPARE_CHANGED=$(changed_files)
+  fi
+elif [ -n "$CHANGED_FROM" ]; then
+  if [ "$CHANGED_FROM" = - ]; then CHANGED=$(sed '/^$/d' | sort -u); else CHANGED=$(sed '/^$/d' "$CHANGED_FROM" | sort -u); fi
+  if [ -z "$CHANGED" ]; then
+    echo "check-fast: no paths listed in $CHANGED_FROM; nothing to check."
+    exit 0
+  fi
+  [ "$EACH" -eq 1 ] || echo "check-fast: $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') listed file(s) from $CHANGED_FROM"
+else
+  resolve_base
+  CHANGED=$(changed_files)
+  COMPARE_CHANGED=$CHANGED
   if [ -z "$CHANGED" ]; then
     echo "check-fast: no changes since $(git rev-parse --short "$MB") ($BASE_REF); nothing to check."
     exit 0
@@ -1265,9 +1347,39 @@ launch_all
 
 # --- summary --------------------------------------------------------------
 
+# rerun_lines <job> prints, for each step of the job that failed or timed out, the command that reruns just what
+# failed in it: the failing Go tests of each package, the failing unittest ids, or the step's own command
+# (scripts/ci/check_fast_compare.py rerun, from the steps record_step wrote). Nothing without python3 or the helper.
+rerun_lines() {
+  [ "$HAVE_PY" -eq 1 ] && [ -f "$COMPARE_HELPER" ] || return 0
+  "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" python3 "$COMPARE_HELPER" rerun --work "$WORK" --job "$1" --root "$ROOT" \
+    2>/dev/null | sed 's/^/         rerun: /'
+}
+
+# compare_with_base reruns the failures at the merge base (and with --compare-tip at the base ref's tip) and prints
+# a verdict line for each, then one that counts them (scripts/ci/check_fast_compare.py compare). Each rerun has its
+# check's timeout; the checkouts are removed by their paths, by the helper or by on_signal.
+compare_with_base() {
+  echo
+  echo "== check-fast --compare-main =="
+  if [ "$HAVE_PY" -eq 0 ] || [ ! -f "$COMPARE_HELPER" ]; then
+    echo "check-fast --compare-main: needs python3 and $COMPARE_HELPER; nothing compared"
+    return 0
+  fi
+  printf '%s\n' "$COMPARE_CHANGED" > "$WORK/changed.txt"
+  local _tip=()
+  [ "$COMPARE" -eq 2 ] && _tip=(--tip "$(git rev-parse "${BASE_REF}^{commit}")")
+  # In the background and waited for: bash runs a trap only after the foreground command ends, so a signal during a
+  # long rerun would wait for it; wait returns at once and on_signal stops the reruns and removes the checkouts.
+  python3 "$COMPARE_HELPER" compare --work "$WORK" --root "$ROOT" --base "$MB" --base-ref "$BASE_REF" \
+    ${_tip[@]+"${_tip[@]}"} --changed "$WORK/changed.txt" --timeout-go "$TIMEOUT_GO_TEST" \
+    --timeout-other "$TIMEOUT_OTHER" --timeout-bin "$TIMEOUT_BIN" &
+  wait $!
+}
+
 echo
 echo "== check-fast summary =="
-N_PASS=0; N_FAIL=0; N_TIMEOUT=0; N_SKIP=0
+N_PASS=0; N_FAIL=0; N_TIMEOUT=0; N_SKIP=0; N_JOB_FAIL=0
 for _i in "${!JOB_NAME[@]}"; do
   _kind=""; _rc=""; _seconds=""; _detail=""  # don't inherit a previous job's values if this status file is missing
   IFS=$'\t' read -r _kind _rc _seconds _detail < "${JOB_STATUS[$_i]}"
@@ -1294,10 +1406,12 @@ for _i in "${!JOB_NAME[@]}"; do
     FAIL)
       echo "FAIL     ${JOB_NAME[$_i]} (${_seconds}s$_waited, $_detail); log: ${JOB_LOG[$_i]}"
       LC_ALL=C sed 's/^/         /' "${JOB_LOG[$_i]}" | tail -n 25
-      N_FAIL=$((N_FAIL+1)) ;;
+      rerun_lines "$_i"
+      N_FAIL=$((N_FAIL+1)); N_JOB_FAIL=$((N_JOB_FAIL+1)) ;;
     TIMEOUT)
       echo "TIMEOUT  ${JOB_NAME[$_i]} (${_seconds}s$_waited, $_detail); log: ${JOB_LOG[$_i]}"
       LC_ALL=C sed 's/^/         /' "${JOB_LOG[$_i]}" | tail -n 25
+      rerun_lines "$_i"
       N_TIMEOUT=$((N_TIMEOUT+1)) ;;
   esac
 done
@@ -1305,6 +1419,14 @@ for _msg in "${CORE_MISSING[@]:-}"; do
   [ -n "$_msg" ] && { echo "FAIL     core toolchain: $_msg"; N_FAIL=$((N_FAIL+1)); }
 done
 for _line in "${INFO[@]:-}"; do [ -n "$_line" ] && echo "$_line"; done
+if [ "$COMPARE" -gt 0 ]; then
+  if [ "$N_JOB_FAIL" -gt 0 ]; then
+    compare_with_base
+  else
+    echo
+    echo "check-fast --compare-main: no check failed; nothing to compare"
+  fi
+fi
 
 echo
 if [ "$N_FAIL" -gt 0 ] || [ "$CORE_FAIL" -eq 1 ]; then
