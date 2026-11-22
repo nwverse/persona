@@ -6,6 +6,13 @@ handles language when an if or else-if action tests .Language/.Lang, directly or
 template included with the same data. Existing omissions are recorded by filename
 and directory count; replacing an old omission with a new file is not allowed.
 There are no source exemptions. --update only removes resolved entries.
+
+Only a new omission fails. A resolved prompt still in the baseline passes with a notice: lowering
+the baseline is tidying anyone can do, with --update here or scripts/ci/lower_baselines.py for
+every count ratchet (docs/operations/testing.md, "Count ratchets"). With a base given (--base, else
+CI_BASE_SHA), a prompt the baseline still lists but the merge base already handles may not lose its
+language handling again (scripts/ci/ratchet_base.py). With neither, as on main, the baseline alone
+holds the prompts; the check that the baseline itself was not raised still reads origin/main.
 """
 import argparse
 import json
@@ -13,6 +20,10 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ratchet_base  # noqa: E402
 
 
 def _source_root():
@@ -36,7 +47,11 @@ INCLUDE = re.compile(r'^template\s+"([^"]+)"\s+\.$')
 
 
 def scan(root):
-    texts = {p.relative_to(root).as_posix(): p.read_text(encoding="utf-8") for p in root.rglob("*.md")}
+    return scan_texts({p.relative_to(root).as_posix(): p.read_text(encoding="utf-8") for p in root.rglob("*.md")})
+
+
+def scan_texts(texts):
+    """The omissions among templates given as {name relative to SOURCE: text}, by directory."""
     direct, includes = set(), {}
     for name, text in texts.items():
         actions = ACTION.findall(COMMENT.sub("", text))
@@ -114,27 +129,54 @@ def base_text(base, path):
     return shown.stdout
 
 
+def resolved(actual, baseline):
+    """Files the baseline lists that handle language now (or are gone): lowering it would drop them."""
+    return sorted(f for directory, files in baseline.items() for f in files if f not in actual.get(directory, []))
+
+
+def regained(actual, baseline, merge_base):
+    """Listed omissions the merge base had already resolved, which the change brings back."""
+    if merge_base is None or not any(path.startswith(SOURCE + "/") for path in merge_base.changed()):
+        return []  # with no prompt touched since the merge base, it has the same omissions
+    names = [name for name in merge_base.files(SOURCE) if name.endswith(".md")]
+    texts = merge_base.texts(names, errors="strict")
+    before = scan_texts({name[len(SOURCE) + 1:]: text for name, text in texts.items()})
+    return sorted(f for directory, files in actual.items() for f in files
+                  if f in baseline.get(directory, []) and f not in before.get(directory, []))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--update", action="store_true")
-    parser.add_argument("--base", default=os.environ.get("CI_BASE_SHA", "origin/main"))
+    parser.add_argument("--base", help="base ref (default: CI_BASE_SHA). The merge-base limit needs one; the "
+                                       "check that the baseline was not raised falls back to origin/main")
     args = parser.parse_args()
     path = ROOT / BASELINE
+    # Only a given base holds a changed prompt to the merge base: origin/main is as fresh as the last fetch, and
+    # main verification leaves it behind HEAD (scripts/ci/ratchet_base.py).
+    prior_ref = args.base if args.base is not None else os.environ.get("CI_BASE_SHA", "origin/main")
     try:
         baseline = decode_baseline(json.loads(path.read_text(encoding="utf-8")))
         actual = scan(ROOT / SOURCE)
         # Once the baseline exists upstream, editing its JSON cannot raise it.
-        if _git("cat-file", "-e", args.base).returncode:
-            raise ValueError("cannot read ratchet base " + args.base)
-        prior = base_text(args.base, BASELINE)
+        if _git("cat-file", "-e", prior_ref).returncode:
+            raise ValueError("cannot read ratchet base " + prior_ref)
+        prior = base_text(prior_ref, BASELINE)
         if prior is not None:
             lowered(baseline, decode_baseline(json.loads(prior)))
         lowered(actual, baseline)
+        back = regained(actual, baseline, ratchet_base.resolve(ROOT, args.base))
+        if back:
+            raise ValueError("prompts the merge base already localizes lost it again: " + ", ".join(back)
+                             + "; the baseline still lists them, but a count may not rise into that room")
         if args.update:
             path.write_text(json.dumps(encoded(actual), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         elif actual != baseline:
-            raise ValueError("resolved prompts remain in baseline; run --update to lower it")
-    except (OSError, ValueError) as error:
+            gone = resolved(actual, baseline)
+            print("prompt language ratchet: {0} resolved prompt(s) still in the baseline; lowering it is tidying "
+                  "anyone can do, not this change's job: python3 scripts/ci/lower_baselines.py, or python3 "
+                  "scripts/ci/prompt_language_ratchet.py --update: {1}".format(len(gone), ", ".join(gone)))
+    except (OSError, ValueError, UnicodeDecodeError, ratchet_base.BaseError) as error:
         print("FAIL prompt language ratchet:", error)
         return 1
     print("PASS prompt language ratchet:", sum(map(len, actual.values())), "remaining templates in", len(actual), "directories")
