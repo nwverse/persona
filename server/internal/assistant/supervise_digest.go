@@ -373,6 +373,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.restoreDigest(retry, at, prev)
 	}
 	s.clearSentTodoReady(moot)
+	s.clearSentPRMerged(moot)
+	s.clearSentParentCloseout(moot)
 	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either (task_turns.go)
 	s.discardFailedStartBatches(ctx, moot, now)
 	if len(entries) == 0 {
@@ -398,6 +400,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.agentDecisionRepliesTold(ctx, holds)
 		s.handoffResultsTold(ctx, holds)
 		s.todoReadyTold(ctx, holds)
+		s.prMergeWakeTold(ctx, holds)
+		s.parentCloseoutTold(ctx, holds)
 		s.turnsTold(ctx, holds) // said the same within the window: told
 		s.finishFailedStartBatches(ctx, to, nil, holds, now)
 		b.mu.Lock()
@@ -446,6 +450,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.agentDecisionRepliesTold(ctx, kept)
 		s.handoffResultsTold(ctx, kept)
 		s.todoReadyTold(ctx, kept)
+		s.prMergeWakeTold(ctx, kept)
+		s.parentCloseoutTold(ctx, kept)
 		s.turnsTold(ctx, holds) // and how a turn ended: kept went, the rest of them was said the same within the window
 		s.finishFailedStartBatches(ctx, to, kept, settled, now)
 	}()
@@ -678,8 +684,13 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 // digestEntryChecked is digestEntry, additionally reporting retry=true when delivery-time revalidation hit a
 // transient store failure so callers restore the signal instead of treating it as permanently moot.
 func (s *Service) digestEntryChecked(ctx context.Context, g superviseSignal, web string) (prompts.SuperviseEntry, bool, bool) {
-	if g.Kind == sigTodoReady {
+	switch g.Kind {
+	case sigTodoReady:
 		return s.todoReadyDigestEntry(ctx, g, web)
+	case sigPRMerged:
+		return s.prMergedDigestEntry(ctx, g, web)
+	case sigParentCloseout:
+		return s.parentCloseoutDigestEntry(ctx, g, web)
 	}
 	e, ok := s.digestEntry(ctx, g, web)
 	return e, ok, false
@@ -720,8 +731,15 @@ func (s *Service) todoReadyDigestEntry(ctx context.Context, g superviseSignal, w
 
 // digestEntry is signal g as the message lists it; false when it no longer holds.
 func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string) (prompts.SuperviseEntry, bool) {
-	if g.Kind == sigTodoReady {
+	switch g.Kind {
+	case sigTodoReady:
 		e, ok, _ := s.todoReadyDigestEntry(ctx, g, web)
+		return e, ok
+	case sigPRMerged:
+		e, ok, _ := s.prMergedDigestEntry(ctx, g, web)
+		return e, ok
+	case sigParentCloseout:
+		e, ok, _ := s.parentCloseoutDigestEntry(ctx, g, web)
 		return e, ok
 	}
 	t, ok := s.todoNow(g.Todo)
@@ -1061,7 +1079,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigInterrupted: 4, sigOrphaned: 4, sigTimedOut: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOrphaned: 4, sigTimedOut: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind == sigCheck && e.Report == checkDecidedReport: // the owner's answer

@@ -169,7 +169,11 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				s.tasks.reusing[t.ReservedTodoID] = true
 				s.tasks.mu.Unlock()
 			}
-			todo, err = s.createTaskTodoAs(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem)
+			if t.containerWorkspace() && len(t.Workspace.Container.SelectedRepoIDs) > 0 {
+				todo, err = s.createTaskTodoWithRepositories(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem, t.Workspace.Container.SelectedRepoIDs)
+			} else {
+				todo, err = s.createTaskTodoAs(ctx, t.ReservedTodoID, title, t.Prompt, p.Conversation, p.ID, t.Project, t.InboxItem)
+			}
 			if err != nil {
 				if t.InboxItem != "" {
 					s.releaseTakenTodo(t.ReservedTodoID)

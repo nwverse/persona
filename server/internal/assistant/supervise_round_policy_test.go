@@ -28,7 +28,7 @@ var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStu
 // backgroundSignals are the signals an existing background conversation can receive for explicitly addressed legacy
 // notices. Without that explicit legacy target, all of them stay with main for new assistant-dispatched work (#5732).
 var backgroundSignals = []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigAllStopped, sigInterrupted,
-	sigPRConflict, sigDraftPR, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable,
+	sigPRConflict, sigDraftPR, sigPRMerged, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable,
 	sigOwnerCannot, sigParkedDue, sigParkedSummary, sigParkDecided, sigInbox, sigOverdue, sigCheck}
 
 // roundConnectorTools are the round's tools that come with the Lark extension (lark_search) or the lark-cli connector
@@ -139,6 +139,8 @@ func roundMessage(lang string) string {
 			e.Detail = "the model service answered 529"
 		case sigDraftPR:
 			e.Detail = prompts.RenderDraftPR(prompts.DraftPR{Language: lang, URL: "https://github.com/example/repo/pull/1", Head: "abc123"})
+		case sigPRMerged:
+			e.Detail = prompts.RenderPRMergedWake(prompts.PRMergedWake{Language: lang, PRURL: "https://github.com/example/repo/pull/1"})
 		case sigReport:
 			e.Report, e.Said, e.Evidence, e.Step, e.Steps = "question", "Should it keep the old API?", []string{"https://example.com/log"}, 2, 3
 		case sigOrphaned:
