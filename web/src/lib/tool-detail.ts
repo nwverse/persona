@@ -56,6 +56,7 @@ export interface HandoffVariable {
 /** A hand-off card's variables, the Agent, the computer, where it runs and the start of what it is asked. */
 export function secretHandoffInput(input: Record<string, unknown> | undefined): {
   variables: HandoffVariable[];
+  store: boolean;
   agent: string;
   machine: string;
   cwd: string;
@@ -68,7 +69,7 @@ export function secretHandoffInput(input: Record<string, unknown> | undefined): 
     const name = s(o.name);
     return name ? [{ name, provider: s(o.provider_name) || s(o.provider), title: s(o.title) }] : [];
   });
-  return { variables, agent: s(input?.agent), machine: s(input?.machine_name), cwd: s(input?.cwd), prompt: s(input?.prompt) };
+  return { variables, store: input?.store_operation === "create" || input?.store_operation === "edit", agent: s(input?.agent), machine: s(input?.machine_name), cwd: s(input?.cwd), prompt: s(input?.prompt) };
 }
 
 /** A password card's computer, purpose and commands, the commands exactly as sent. */
