@@ -102,9 +102,14 @@ func (n *Node) promptChanged(id, pane, rev string, d *screen.Dialog) error {
 
 // sendOpts are the optional fields of session.send.
 type sendOpts struct {
-	ClientMsgID string `json:"client_msg_id"`
+	ClientMsgID    string `json:"client_msg_id"`
+	TaskID         string `json:"task_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	WorkspaceLabel string `json:"workspace_label"`
 	// ClearDraft is the draft the user saw in a refusal and chose to clear: cleared only if the box still shows it.
 	ClearDraft string `json:"clear_draft"`
+	// WaitForEffort says the sender can keep the message if the thinking effort is still pending.
+	WaitForEffort bool `json:"wait_for_effort"`
 	// DismissNotice: a notice that Enter only closes («Enter to continue», no options) is closed before the text is
 	// typed. Any other dialog is refused as before.
 	DismissNotice bool `json:"dismiss_notice"`
@@ -127,6 +132,9 @@ type sendOpts struct {
 	// human-input marker and drops any a caller sent). A Claude outside Persona's terminals takes it as the person's
 	// input through its tmux pane, or through Persona's plugin when it has no pane; every other message keeps its inbox.
 	OwnerInput bool `json:"owner_input"`
+	// CompactIfFull: the assistant's agent_send (#11137): a Claude Code or Codex Agent whose context is nearly full when
+	// the message would go in is compacted with its own /compact first (compact_before_send.go).
+	CompactIfFull bool `json:"compact_if_full"`
 	// readBox: a screen that cannot be read refuses (unreadBoxMessage) instead of passing for an empty box. After a
 	// command that may still sit in the box (ultracode.go), not knowing is not enough to type after it.
 	readBox bool
@@ -535,10 +543,10 @@ const (
 // notRunningRefusal refuses, with nothing typed, a send to a session that is not live when the machine's engine
 // cannot start sessions (no host.Launcher) or is Orca, instead of trying to resume it there: when the pane it was last
 // seen in is still there, its agent is not in front (suspended, in the background); otherwise it is gone. nil when the
-// engine can resume it: herdr, and Orca for a Claude session (its own <id>.jsonl; Codex, TRAEX and pi sessions are
+// engine can resume it: herdr, and Orca for a Claude session (its own <id>.jsonl; Codex, TRAE CLI and pi sessions are
 // not resumed in Orca).
 // orcaContinues: Orca can continue session id once its agent is gone — a Claude session (its own <id>.jsonl, not a
-// Codex or TRAEX rollout); Codex, TRAEX and pi sessions are not resumed in Orca (#5548). Send (notRunningRefusal) and
+// Codex or TRAE CLI rollout); Codex, TRAE CLI and pi sessions are not resumed in Orca (#5548). Send (notRunningRefusal) and
 // retire share it, so the task closer never closes an agent a message cannot bring back.
 func (n *Node) orcaContinues(id string) bool { return n.claudeTranscript(id, true) != "" }
 

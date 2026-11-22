@@ -22,9 +22,10 @@ import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { launcherTitle } from "../../lib/provider-names";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readSuperviseDefault, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
+  agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readMainDefault, mainDefault, readSuperviseDefault, sessionModelHost, useRevisionReread, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { turnErrorFix, type TurnFix } from "../../lib/readiness";
+import { launchModelForSession } from "../../lib/new-agent";
 import { getSession, hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
 import type { AssistantInfo, Session } from "../../lib/types";
@@ -142,7 +143,7 @@ export function ModelPill({
   );
   const shell = cx(
     // Cindy's bare toolbar pill: no frame at rest, the capsule shows on hover and while its panel is open
-    "flex h-[30px] max-w-[min(320px,100%)] min-w-[72px] shrink items-center rounded-full border border-transparent px-2.5 text-[13px] leading-none whitespace-nowrap transition-colors duration-150",
+    "flex h-[30px] max-w-[min(320px,100%)] min-w-[72px] shrink items-center rounded-full border border-transparent px-2.5 text-[13px] leading-normal whitespace-nowrap transition-colors duration-150",
     // narrow, it still takes the width its words need (a fixed width cut "Opus 5.5" to "Opus …" beside free room) and
     // shrinks, the name first, only when the row is short of room
     "@max-[520px]/composer:text-[12px] @max-[420px]/composer:min-w-[64px]",
@@ -191,12 +192,14 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
   const scope = agentCatalogScope();
   const mid = session.machine_id;
   const own = sessionLauncher(session);
+  const ownHost = sessionModelHost(session);
+  const launchModel = useStore((s) => launchModelForSession(s.launches, session));
   const switches = sessionSwitches(session);
-  const view = pillView(session, modelList(mid, own));
+  const view = pillView(session, modelList(mid, own, undefined, ownHost), launchModel);
   const opens = switches.model || switches.effort || view.engine === "codex";
   useEffect(() => {
-    if (opens) void readModels(mid, own, { first: true });
-  }, [opens, mid, own, scope]);
+    if (opens) void readModels(mid, own, { first: true, host: ownHost });
+  }, [opens, mid, own, ownHost, scope]);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const key = `${mid}/${session.session_id}`;
@@ -210,8 +213,8 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
   const shown = Boolean(anchor) && opens;
   // every list again behind the one shown, once per opening (while the panel's code loads, the first time)
   useEffect(() => {
-    if (shown) readForPanel(mid, own);
-  }, [shown, mid, own, scope]);
+    if (shown) readForPanel(mid, own, ownHost);
+  }, [shown, mid, own, ownHost, scope]);
 
   // a switch to another launcher that the next message carries out (#5035): its list names the model picked
   const target = session.pending_switch?.launcher;
@@ -240,7 +243,7 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
         workflow={workflow}
         buttonRef={button}
       />
-      {shown && anchor && <SessionModelPanel session={session} anchor={anchor} onClose={close} />}
+      {shown && anchor && <SessionModelPanel session={session} displayModel={launchModel} anchor={anchor} onClose={close} />}
     </>
   );
 });
@@ -281,19 +284,19 @@ export function useAssistantTurnFix(session: Session | undefined, on: boolean): 
  *  what it started with: lib/assistant-models.ts), opening the unified panel (scope "assistant"). `session` absent: the
  *  new-conversation page, whose pick goes with the start. Every Persona chat has one (#9248) and switches whatever its
  *  state: the hub applies a pick from the next message. */
-export const AssistantModelPill = memo(function AssistantModelPill({ session }: { session?: Session }) {
+export const AssistantModelPill = memo(function AssistantModelPill({ session, mainStart = false }: { session?: Session; mainStart?: boolean }) {
   const version = useModelLists();
   const scope = assistantCatalogScope();
   const assistant = useStore((s) => s.assistant);
   const kept = useStore((s) => hubHas(s.features, ASSISTANT_MODEL_PICK_FEATURE));
   const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
   const mid = session?.machine_id ?? assistant?.machine_id ?? "";
-  const isMain = Boolean(session && assistant?.main === session.session_id);
+  const isMain = mainStart || Boolean(session && assistant?.main === session.session_id);
   // Without a pick, what the next message runs on is a default: Main chat's for the main conversation, a leader and a
   // scheduled task's own conversation (origin "task"); the supervisor's own model purpose for the background supervisor.
   const supervisor = Boolean(session && isBackgroundSupervisor(assistant, session.session_id));
   const followsDefault = Boolean(session && followsDefaultOf(assistant, session));
-  const chat: AssistantChat = { session, isMain, followsDefault, kept, config: assistant?.launcher, ...(supervisor ? { def: superviseDefault(mid) } : {}) };
+  const chat: AssistantChat = { session, isMain, followsDefault, kept, config: assistant?.launcher, ...(isMain ? { def: mainDefault(mid) } : supervisor ? { def: superviseDefault(mid) } : {}) };
   const key = assistantPickKey(chat);
   // this page's picks (an older hub, the new-conversation page) draw it again
   const picked = usePickedLauncher(key);
@@ -305,17 +308,18 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   useEffect(() => {
     if (!mid) return;
     void readAssistantLaunchers(mid);
+    if (isMain) void readMainDefault(mid, { again: true });
     if (supervisor) void readSuperviseDefault(mid);
-  }, [mid, scope, supervisor]);
-  // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that bumps
+  }, [mid, scope, supervisor, isMain]);
+  // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that moves
   // this conversation's revision re-reads the picker, so the pill can't keep an old model the hub no longer resolves.
-  const lastRev = useRef<number | undefined>(session?.rev);
-  useEffect(() => {
-    if (!mid || session?.rev === undefined || session.rev === lastRev.current) return;
-    lastRev.current = session.rev;
+  // Once per turn: the revision moves with every write while the turn streams (useRevisionReread).
+  useRevisionReread(session, Boolean(mid), () => {
+    if (!mid) return;
     void readAssistantLaunchers(mid, { again: true });
+    if (isMain) void readMainDefault(mid, { again: true });
     if (supervisor) void readSuperviseDefault(mid, { again: true });
-  }, [mid, scope, session?.rev, supervisor]);
+  });
   // a pick of this page's that the list no longer offers (gone, or it can't run the assistant) goes back to the default,
   // its model and effort with it: on the new-conversation page they would otherwise go with the start
   useEffect(() => {
@@ -351,6 +355,7 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   useEffect(() => {
     if (!shown) return;
     void readModels(mid, setup.provider, { purpose: "assistant", again: true, first: true });
+    if (isMain) void readMainDefault(mid, { again: true });
     if (supervisor) void readSuperviseDefault(mid, { again: true });
     void readAssistantLaunchers(mid, { again: true }).then(() => {
       if (scope !== assistantCatalogScope()) return;

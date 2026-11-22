@@ -1,3 +1,4 @@
+import { assistantSwitchNeeded } from "./assistant-execution";
 // What a Persona chat's model pill says (#5033, docs/web/web.md "Model pill and model panel"; docs/assistant/model-config.md
 // "A conversation's own model"): the launcher, model and effort its next message runs on, and where that comes from.
 // A Persona chat switches models freely: its own pick is kept on the hub (`model_pick`, feature `assistant_model_pick`)
@@ -8,9 +9,9 @@
 import { agentId, sessionAgent } from "./agent-kind";
 import { explicitLauncherModel } from "./compatibility";
 import { conversationKey, launcherOffered, NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel } from "./assistant-chat";
-import { modelName, modelSupportsFast, type LauncherDefault } from "./launcher-models";
+import { modelSupportsFast, type LauncherDefault } from "./launcher-models";
 import { providerTitle } from "./provider-names";
-import { currentModelRow, modelLabel, type AssistantLaunchers, type ModelList, type PillView } from "./session-models";
+import { currentModelRow, pillModel, type AssistantLaunchers, type ModelList, type PillView } from "./session-models";
 import type { ModelPick, Session } from "./types";
 
 /** The hub keeps a Persona chat's pick (`model_pick`, PUT / DELETE …/conversations/{id}/model). */
@@ -82,14 +83,14 @@ const canonicalLauncher = (name: string) => name.startsWith("launcher.") ? name.
 export function mainChatAgentMismatch(c: AssistantChat, info: AssistantLaunchers | undefined): MainChatAgentMismatch | undefined {
   const s = c.session;
   if (!s || !c.isMain || !s.launcher || !info || assistantPick(c)) return undefined;
-  const configuredLauncher = info.def?.provider || c.config;
+  const configuredLauncher = (c.def === undefined ? info.def : c.def)?.provider || c.config;
   if (!configuredLauncher || canonicalLauncher(configuredLauncher) === canonicalLauncher(s.launcher)) return undefined;
   const configured = info.launchers.find((l) => l.name === configuredLauncher)
     ?? info.launchers.find((l) => canonicalLauncher(l.name) === canonicalLauncher(configuredLauncher));
   if (!configured) return undefined;
   const configuredAgent = agentId(configured.agent_type || configured.agent);
   const actualAgent = agentId(sessionAgent(s).agent);
-  if (configuredAgent === actualAgent) return undefined;
+  if (configuredAgent === actualAgent && !assistantSwitchNeeded(s, configured, configuredAgent)) return undefined;
   return { configuredLauncher, configuredAgent, actualLauncher: s.launcher, actualAgent };
 }
 
@@ -104,7 +105,7 @@ export function assistantSetup(c: AssistantChat, info: AssistantLaunchers | unde
   const def = c.def === undefined ? info?.def : c.def;
   if (!s || (c.followsDefault ?? c.isMain)) {
     const provider = def?.provider || c.config || s?.launcher || "claude";
-    return { provider, model: def?.model || (s?.launcher === provider ? s.model : undefined), effort: s?.effort ?? (def?.effort || undefined), ...(fast ? { fast: true } : {}), source: "default" };
+    return { provider, model: def?.model || (s?.launcher === provider ? s.model : undefined), effort: c.isMain ? def?.effort || s?.effort : s?.effort ?? (def?.effort || undefined), ...(fast ? { fast: true } : {}), source: "default" };
   }
   // a launcher the list no longer offers is not what the next message runs on: the hub moves the chat to the assistant's
   const own = launcherOffered(info?.launchers ?? null, s.launcher) ? s.launcher : undefined;
@@ -123,7 +124,7 @@ export function assistantPillView(c: AssistantChat, setup: AssistantSetup, info:
     loading: e.list === undefined && Boolean(e.loading),
     failed: e.list === undefined && Boolean(e.error),
   };
-  const model = row ? modelName(row) : id ? modelLabel(id) : undefined;
+  const model = pillModel(e.list?.models ?? [], setup.model, id);
   if (model) out.model = model;
   if (setup.effort) out.effort = setup.effort;
   if (setup.fast && (c.session || modelSupportsFast(row))) out.fast = true;

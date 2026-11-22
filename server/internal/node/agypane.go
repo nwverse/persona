@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
@@ -72,13 +73,27 @@ func agyNotice(id string) agyHistory {
 type agyWatch struct {
 	pane, history, conversation string
 	since                       int
-	file                        os.FileInfo
+	file                        *agyPaneFiles
+	stepHashes                  map[int][32]byte
+}
+
+type agyPaneFiles struct{ transcript, receipts os.FileInfo }
+
+func sameAgyFile(a, b os.FileInfo) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime() == b.ModTime()
+}
+
+func agyStepsHistory(conversation string) agyHistory {
+	return agyHistory{token: "agy-pane:" + conversation + ":steps:context-resources-v1:lazy-media:checkpoints:wakes"}
 }
 
 // agyRead loads the compact export for pages and live updates. The revision memo
 // distinguishes a rewrite of complete records from an append or partial write.
-func (n *Node) agyRead(root *os.Root, key, conversation string, previous os.FileInfo) (agyHistory, os.FileInfo, error) {
-	empty := agyHistory{token: "agy-pane:" + conversation + ":steps"}
+func (n *Node) agyRead(root *os.Root, key, conversation string, previous *agyPaneFiles) (agyHistory, *agyPaneFiles, error) {
+	empty := agyStepsHistory(conversation)
 	info, err := root.Stat(agyTranscriptPath)
 	if err != nil {
 		return empty, nil, err
@@ -86,9 +101,13 @@ func (n *Node) agyRead(root *os.Root, key, conversation string, previous os.File
 	if !info.Mode().IsRegular() {
 		return empty, nil, os.ErrNotExist
 	}
-	if previous != nil && os.SameFile(info, previous) && info.Size() == previous.Size() &&
-		info.ModTime() == previous.ModTime() && time.Since(info.ModTime()) > time.Second {
-		return agyHistory{}, info, nil
+	receiptsFile, _ := root.Lstat(agyWakeReceipts)
+	if receiptsFile != nil && !receiptsFile.Mode().IsRegular() {
+		receiptsFile = nil
+	}
+	files := &agyPaneFiles{transcript: info, receipts: receiptsFile}
+	if previous != nil && sameAgyFile(info, previous.transcript) && sameAgyFile(receiptsFile, previous.receipts) && time.Since(info.ModTime()) > time.Second {
+		return agyHistory{}, files, nil
 	}
 	raw, err := root.ReadFile(agyTranscriptPath)
 	if err != nil {
@@ -101,7 +120,7 @@ func (n *Node) agyRead(root *os.Root, key, conversation string, previous os.File
 		n.agyRevisions = newLRU[string, agyRevision](256)
 	}
 	if old, ok := n.agyRevisions.get(key); ok && old.branch == rev.branch {
-		if len(raw) < old.length || sha256.Sum256(raw[:old.length]) != old.hash {
+		if (len(raw) < old.length || sha256.Sum256(raw[:old.length]) != old.hash) && agyStepsRewritten(old.steps, rev.steps) {
 			rev.rewrite = fmt.Sprintf("%x", rev.hash[:10])
 		} else {
 			rev.rewrite = old.rewrite
@@ -110,12 +129,27 @@ func (n *Node) agyRead(root *os.Root, key, conversation string, previous os.File
 	n.agyRevisions.put(key, rev)
 	n.mu.Unlock()
 
-	h := mapAgySteps(steps, info.ModTime())
+	var receipts map[string]bool
+	if receiptsFile != nil {
+		if data, err := root.ReadFile(agyWakeReceipts); err == nil {
+			receipts = make(map[string]bool)
+			for row := range strings.SplitSeq(string(data), "\n") {
+				row = strings.TrimRight(row, "\r")
+				if row != "" {
+					receipts[row] = true
+				}
+			}
+		}
+	}
+	h := mapAgySteps(steps, info.ModTime(), receipts)
 	h.token = empty.token
 	if rev.branch != "" || rev.native != "" || rev.rewrite != "" {
 		h.token += ":" + rev.branch + ":" + rev.native + ":" + rev.rewrite
 	}
-	return h, info, nil
+	if h.observedWakeRevision != "" {
+		h.token += ":wake:" + h.observedWakeRevision
+	}
+	return h, files, nil
 }
 
 type agyPageParams struct {
@@ -162,11 +196,15 @@ func (h agyHistory) after(since int) (items []proto.Item, span transcript.Span, 
 	return agyLightItems(items), span, more
 }
 
+func agyUserInput(it proto.Item) bool {
+	return it.Role == "user" && (it.Kind == proto.KindText || (it.Kind == proto.KindImage && it.ToolUseID == ""))
+}
+
 func (h agyHistory) page(p agyPageParams) any {
 	if p.UserInputs {
 		index := proto.UserInputIndex{History: h.token, Inputs: []proto.UserInputPosition{}}
 		for _, it := range h.items {
-			if it.Role == "user" && it.Kind == proto.KindText {
+			if agyUserInput(it) && (len(index.Inputs) == 0 || index.Inputs[len(index.Inputs)-1].Seq != it.Seq) {
 				index.Inputs = append(index.Inputs, proto.UserInputPosition{ID: it.ID, Seq: it.Seq})
 			}
 		}
@@ -203,8 +241,10 @@ func (h agyHistory) page(p agyPageParams) any {
 	if p.Turns > 0 {
 		turns := min(p.Turns, 10)
 		start = max(0, len(items)-2000)
+		lastSeq := -1
 		for i := len(items) - 1; i >= start; i-- {
-			if items[i].Role == "user" && items[i].Kind == proto.KindText {
+			if agyUserInput(items[i]) && items[i].Seq != lastSeq {
+				lastSeq = items[i].Seq
 				turns--
 				if turns == 0 {
 					start = i
@@ -230,7 +270,9 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	case "session.unwatch":
 		n.unwatch(id)
 		return okResult(nil), nil, true
-	case "session.items", "session.item", "session.watch":
+	case "session.info":
+		return n.agyPaneSessionInfo(id, pane), nil, true
+	case "session.items", "session.item", "session.image", "session.watch":
 	default:
 		return nil, nil, false
 	}
@@ -249,7 +291,7 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	h := agyNotice(id)
 	conversation := n.agyConversation(id, pane)
 	if conversation != "" {
-		h = agyHistory{token: "agy-pane:" + conversation + ":steps"}
+		h = agyStepsHistory(conversation)
 		dir := n.agyDataRoot()
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
@@ -258,6 +300,15 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("read Antigravity transcript: %w", err), true
+		}
+		if method == "session.image" {
+			media, found := h.media[p.ItemID]
+			if found && n.agyConversation(id, pane) == conversation {
+				image, err := media.image(root)
+				if n.agyConversation(id, pane) == conversation {
+					return image, err, true
+				}
+			}
 		}
 		if method == "session.item" {
 			for _, it := range h.items {
@@ -283,7 +334,59 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	if method == "session.item" {
 		return nil, fmt.Errorf("no item"), true
 	}
+	if method == "session.image" {
+		return nil, fmt.Errorf("no image"), true
+	}
 	return h.page(p), nil, true
+}
+
+func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
+	info := map[string]any{
+		"session_id": id, "agent": agyAgent,
+		"context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0,
+		"usage_unknown": true,
+	}
+	if a, ok := n.agent(id); ok {
+		info["cwd"] = a.Cwd
+	}
+	if st, ok := n.state.get(id); ok {
+		if st.Launcher != "" {
+			info["launcher"] = st.Launcher
+		}
+		if st.Model != "" {
+			info["model"] = st.Model
+		}
+	}
+	if conversation := n.agyConversation(id, pane); conversation != "" {
+		if runtimeRow, _, ok := n.runtimes.rowOf(agyAgent + "-" + conversation); ok {
+			if runtimeRow.Model != "" {
+				info["model"] = runtimeRow.Model
+			}
+			if runtimeRow.PermissionMode != "" {
+				info["permission_mode"] = runtimeRow.PermissionMode
+			}
+			if runtimeRow.Effort != "" {
+				info["effort"] = runtimeRow.Effort
+			}
+			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokens > 0 {
+				info["context_tokens"] = int(runtimeRow.ContextTokens)
+				info["output_tokens"] = runtimeRow.OutputTokens
+				delete(info, "usage_unknown")
+			}
+		} else if u, ok := n.agyTranscriptMeta(conversation); ok {
+			if u.model != "" {
+				info["model"] = u.model
+			}
+			info["compactions"] = u.compactions
+			info["turns"] = u.turns
+			if u.hasUsage {
+				info["context_tokens"] = u.contextTokens
+				info["output_tokens"] = u.outputTokens
+				delete(info, "usage_unknown")
+			}
+		}
+	}
+	return info
 }
 
 func (n *Node) watchAgyPane(parent context.Context, id, pane string, since int) {
@@ -315,14 +418,14 @@ func (n *Node) pollAgyPane(w *watch) {
 	a := w.agy
 	h := agyNotice(w.id)
 	conversation := n.agyConversation(w.id, a.pane)
-	var info os.FileInfo
+	var info *agyPaneFiles
 	if conversation != "" {
-		h = agyHistory{token: "agy-pane:" + conversation + ":steps"}
+		h = agyStepsHistory(conversation)
 		dir := n.agyDataRoot()
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
 			defer root.Close()
-			var previous os.FileInfo
+			var previous *agyPaneFiles
 			if a.conversation == conversation {
 				previous = a.file
 			}
@@ -344,6 +447,35 @@ func (n *Node) pollAgyPane(w *watch) {
 	}
 	if reset {
 		since = 0
+		a.stepHashes = nil
+	} else if !initial && len(a.stepHashes) > 0 && len(h.stepHashes) > 0 {
+		// Push in-place updates for steps at or before `since` (such as a RUNNING step
+		// finishing with new content) without bumping the history token or resetting the watcher.
+		var updated []proto.Item
+		for _, it := range h.items {
+			if it.Seq > since {
+				break
+			}
+			curHash, ok := h.stepHashes[it.Seq]
+			if !ok {
+				continue
+			}
+			if prevHash, seen := a.stepHashes[it.Seq]; !seen || prevHash != curHash {
+				updated = append(updated, it)
+			}
+		}
+		if len(updated) > 0 {
+			if n.agyConversation(w.id, a.pane) != conversation {
+				return
+			}
+			if n.peer != nil {
+				span := transcript.Span{History: h.token, From: since, To: since}
+				err := n.peer.NotifyContext(w.ctx, "session.items", withSpan(map[string]any{"session_id": w.id, "items": agyLightItems(updated)}, span, true))
+				if err != nil {
+					return
+				}
+			}
+		}
 	}
 	for reset || since < h.seq {
 		items, span, more := h.after(since)
@@ -361,6 +493,17 @@ func (n *Node) pollAgyPane(w *watch) {
 		if !more {
 			break
 		}
+	}
+	if len(h.stepHashes) > 0 {
+		hashes := make(map[int][32]byte, len(h.stepHashes))
+		for seq, sum := range h.stepHashes {
+			if seq <= a.since {
+				hashes[seq] = sum
+			}
+		}
+		a.stepHashes = hashes
+	} else {
+		a.stepHashes = nil
 	}
 	a.history, a.file, a.conversation = h.token, info, conversation
 }

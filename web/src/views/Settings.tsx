@@ -9,6 +9,7 @@ import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState 
 import { api, enc, errorText } from "../lib/api";
 import { splitDevices } from "../lib/devices";
 import { ago } from "../lib/format";
+import { agentName, isTraeCli } from "../lib/agent-kind";
 import { install, useInstall, type InstallState } from "../lib/pwa";
 import { useStore } from "../lib/store";
 import { composing } from "../lib/send-history";
@@ -18,7 +19,7 @@ import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
-import { FontRows, RecentChatsRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { FontRows, RecentChatsRow, SidebarIconsRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
@@ -29,9 +30,11 @@ import { SavedPrompts } from "./settings/SavedPrompts";
 import { SourcesUI } from "./subscriptions/SourcesUI";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
+import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
 import { StartPageGroup } from "./settings/StartPage";
+import { AgentsDisplayRow } from "./settings/AgentsDisplayRow";
 import { AgentGroup } from "./settings/AgentGroup";
 import { AssistantSettings } from "./settings/AssistantSettings";
 import { PersonaPicker } from "./assistant/Persona";
@@ -119,6 +122,7 @@ interface DeviceToken {
   name: string;
   kind: string;
   role: string;
+  scopes?: string[];
   created_at?: string;
   last_seen?: string;
   /** Set once revoked: the hub keeps listing it (lib/devices.ts). */
@@ -359,7 +363,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
                 </section>
               </>}
-              {tab === "agents" && <AgentSections section={at.section} />}
+              {tab === "agents" && <>
+                <Group title={t("settings.agent_preferences")} anchor="agents-display"><AgentsDisplayRow /></Group>
+                <AgentSections section={at.section} />
+              </>}
               {tab === "channels" && (sub ? (twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><ChannelList openBeside={sub} onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
@@ -449,6 +456,7 @@ function AgentSections({ section }: { section: SettingsSection | null }) {
   };
   return (
     <>
+      <HiddenAgentDirs />
       {AGENT_KINDS.map((id) => {
         const shown = !closed.has(id);
         return (
@@ -648,6 +656,7 @@ function General({ onModel }: { onModel: () => void }) {
           <Switch on={replyMotion} onChange={setReplyMotionEnabled} label={t("settings.reply_motion")} />
         </Row>
         <RecentChatsRow />
+        <SidebarIconsRow />
       </Group>
 
       <DesktopSettings />
@@ -861,7 +870,8 @@ function Models() {
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!list || !q) return list ?? [];
-    return list.filter((l) => [l.name, l.display_name, l.model, l.small_model, l.base_url, ...(l.machines ?? []).map(name)].some((v) => v?.toLowerCase().includes(q)));
+    return list.filter((l) => [l.name, l.display_name, providerTitle(l), isTraeCli(l.name) ? "traecli" : undefined, l.model, l.small_model, l.base_url,
+      ...(l.machines ?? []).map(name)].some((v) => v?.toLowerCase().includes(q)));
   }, [list, query, machines, sync]);
   const managed = shown.filter((l) => managedProvider(l.source));
   const builtin = builtinRows(shown);
@@ -877,7 +887,7 @@ function Models() {
     <button key={l.name} type="button" onClick={() => setOpen(l.name)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          {l.display_name ? <span className="truncate text-[13px] font-medium text-ink">{l.display_name}</span> : <span className="truncate font-mono text-[13px] font-medium text-ink">{l.name}</span>}
+          <span className={cx("truncate text-[13px] font-medium text-ink", !l.display_name && providerTitle(l) === l.name && "font-mono")}>{providerTitle(l)}</span>
           {managedProvider(l.source) && <Pill tone="accent">Persona</Pill>}
           {managedProvider(l.source) && l.pi && <span title={t("settings.pi_too_title")}><Pill>{t("settings.pi_too")}</Pill></span>}
           {l.source === "agy" && <Pill>Antigravity Runtime</Pill>}
@@ -885,7 +895,7 @@ function Models() {
           {staleMark(l.stale)}
         </div>
         <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11.5px] text-ink-3">
-          {l.display_name && <span className="shrink-0 font-mono">{l.name}</span>}
+          {l.display_name && l.name !== "traex" && <span className="shrink-0 font-mono">{l.name}</span>}
           {l.model && <span className="truncate font-mono text-ink-2">{l.model}</span>}
           {host(l.base_url) && <span className="truncate">{host(l.base_url)}</span>}
         </div>
@@ -1110,7 +1120,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
       onClose={onClose}
       width={620}
       // a provider's display name with its startup ID after it (#5029); an rc alias, or one not read yet, by its ID
-      title={l && providerIdNote(l) ? <>{providerTitle(l)} <span className="font-mono text-[11.5px] font-normal text-ink-3">{providerIdNote(l)}</span></> : <span className="font-mono">{name}</span>}
+      title={l && providerIdNote(l) ? <>{providerTitle(l)} <span className="font-mono text-[11.5px] font-normal text-ink-3">{providerIdNote(l)}</span></> : <span className="font-mono">{name ? providerTitle(l ?? { name }) : name}</span>}
       footer={
         l && (
           <>
@@ -1293,7 +1303,7 @@ function KVRow({ k, v, mono, sub }: { k: React.ReactNode; v?: React.ReactNode; m
 function DetailBlock({ d, place }: { d: LauncherDetail; place?: string }) {
   const titled = (s: string) => (place ? `${s} · ${place}` : s);
   if (d.error) return <KV title={titled(t("settings.run"))}><p className="py-2 text-[12px] text-ink-3">{d.error}</p></KV>;
-  const agent = d.agent === "codex" ? "Codex" : d.agent === "traex" ? "TRAEX" : d.agent === "agy" ? "Antigravity" : "Claude Code";
+  const agent = d.agent === "codex" || isTraeCli(d.agent) ? agentName(d.agent) : d.agent === "agy" ? "Antigravity" : "Claude Code";
   return (
     <>
       <KV title={titled(t("settings.run"))}>
@@ -1360,6 +1370,7 @@ function Devices() {
     }
   };
   const kind: Record<string, string> = { phone: t("settings.kind_phone"), watch: t("settings.kind_watch"), other: t("settings.kind_cli"), web: t("settings.kind_web") };
+  const roles: Record<string, string> = { answer: t("settings.role_answer"), scoped: t("settings.role_scoped") };
   const { active, revoked } = splitDevices(data?.tokens ?? [], data?.current);
 
   // A revoked credential is shown greyed, with when it was revoked and no "Revoke" (iOS DeviceCredentials.swift).
@@ -1370,7 +1381,7 @@ function Devices() {
         <div className="flex items-center gap-2">
           <span className={cx("truncate text-[13px]", gone ? "text-ink-3" : "text-ink")}>{tok.name || tok.id}</span>
           {tok.id === data?.current && <Pill tone="green">{t("settings.this_browser")}</Pill>}
-          {tok.role !== "full" && <Pill>{tok.role === "answer" ? t("settings.role_answer") : tok.role}</Pill>}
+          {tok.role !== "full" && <Pill>{roles[tok.role] ?? tok.role}</Pill>}
         </div>
         <div className="mt-0.5 truncate text-[11.5px] text-ink-3">
           {kind[tok.kind] ?? tok.kind}
@@ -1378,6 +1389,9 @@ function Devices() {
           {!gone && tok.last_seen ? ` · ${t("settings.used_ago", { time: ago(tok.last_seen) })}` : ""}
           {tok.created_at ? ` · ${t("settings.added_ago", { time: ago(tok.created_at) })}` : ""}
         </div>
+        {tok.scopes?.length ? (
+          <div className="mt-0.5 break-words text-xs text-ink-3">{tok.scopes.join(" · ")}</div>
+        ) : null}
       </div>
       {!gone && tok.id !== data?.current && (
         <RowConfirm

@@ -1,6 +1,8 @@
 """check-fast.sh on the inputs of the server and web checks: the repository files server tests read select go test on
 the packages that read them, go and vitest run in a machine-wide slot (#10714), and the web check runs the vitest files
 that the paths web/src and its tests name and read select (#10619), down to scripts/ci/paths.py's scan of the real web/.
+The plan tests (#11026) cover --dry-run, --changed-from and --each, the CI lanes paths.py selects that check-fast runs
+no part of, and the runtime packages that read a changed fixture or schema.
 
 Split from test_check_fast.py (#11017), which tests how check-fast picks the scripts/ suites and stops on a signal, so
 each file stays well under the per-suite limit of scripts/ci/python-tests.py on a loaded machine. Each test builds a
@@ -25,17 +27,19 @@ try:
 except ImportError:  # Windows
     fcntl = None
 
-# The stubbed suites and the passing test the throwaway repositories share with test_check_fast.py.
-from test_check_fast import GUARD_SUITES, PASSING
+# The stubbed suites, the passing test and the copy of check-fast the throwaway repositories share with
+# test_check_fast.py.
+from test_check_fast import GUARD_SUITES, PASSING, copy_check_fast
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 FAKE_GO = '#!/bin/sh\nprintf "%s|%s\\n" "${PWD##*/}" "$*" >> "$FAKE_GO_LOG"\n'
-# The package lists of check-fast's two repo-wide guard calls: whole packages, and the named guard tests (-run) of two
-# packages whose other tests are slow or need Postgres.
-GUARD_PACKAGES = "./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins"
-GUARD_RUN_PACKAGES = "./internal/hub ./internal/assistant"
+# The package lists of check-fast's two repo-wide guard calls: whole packages, and the named guard and contract tests
+# (-run) of packages whose other tests are slow or need Postgres (#12842).
+GUARD_PACKAGES = "./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins ./internal/i18n ./internal/prompts"
+GUARD_RUN_PACKAGES = ("./internal/hub ./internal/assistant ./internal/update ./cmd/persona-hub ./cmd/persona-manager "
+                      "./cmd/persona-node")
 
 
 @unittest.skipUnless(shutil.which("timeout") or shutil.which("gtimeout"), "check-fast.sh needs GNU timeout")
@@ -46,7 +50,7 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.repo = Path(tempfile.mkdtemp(prefix="check-fast-test-"))
         self.addCleanup(shutil.rmtree, self.repo)
         (self.repo / "scripts/test").mkdir(parents=True)
-        shutil.copy(ROOT / "scripts/test/check-fast.sh", self.repo / "scripts/test/check-fast.sh")
+        copy_check_fast(self.repo)
         self.write("scripts/privacy_check.py", "print('clean')\n")
         self.write("scripts/test/test_extension_schema.py", "")
         self.write("scripts/test/pr_needs_issue_test.mjs", "")
@@ -152,10 +156,101 @@ class CheckFastServerInputsTests(unittest.TestCase):
         out, packages = self.check_fast()
         self.assertEqual(["./internal/wirereader/..."], packages, out)
 
+    def test_any_schema_family_runs_its_readers(self):
+        # internal/configuration reads schema/configuration, a family the reader rules once left out (#11026).
+        self.write("server/internal/configuration/configuration_test.go",
+                   'package configuration\n\nvar raw, _ = os.ReadFile("../../../schema/configuration/all-types.json")\n')
+        self.write("schema/configuration/all-types.json", "{}\n")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "reader")
+        self.git("tag", "-f", "base")
+        self.write("schema/configuration/all-types.json", '{"changed": true}\n')
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/configuration/..."], packages, out)
+
     def test_the_server_test_launcher_runs_its_reader(self):
         self.write("scripts/test/server_test_env.py", "# changed\n")
         out, packages = self.check_fast()
         self.assertEqual(["./internal/db/dbtest/..."], packages, out)
+
+    def test_a_client_source_runs_the_packages_that_name_it_whole(self):
+        # The Go contract tests read Swift and Kotlin sources by their whole path (internal/proto, #11026); a longer
+        # string that only mentions the path, such as a wire sample's "apple/Shared/Models.swift: Fold", reads nothing.
+        self.write("server/internal/contract/contract_test.go",
+                   'package contract\n\nvar models = read("apple/Shared/Models.swift")\n'
+                   'var calls = read("android/core/contracts/src/Calls.kt")\n')
+        self.write("server/internal/samples/samples_test.go",
+                   'package samples\n\nconst source = "apple/Shared/Models.swift: Fold"\n')
+        self.write("apple/Shared/Models.swift", "struct Fold {}\n")
+        self.write("apple/Shared/Other.swift", "struct Other {}\n")
+        self.write("android/core/contracts/src/Calls.kt", "class Calls\n")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "readers")
+        self.git("tag", "-f", "base")
+        self.write("apple/Shared/Other.swift", "struct Other { let id = 1 }\n")
+        out, packages = self.check_fast()
+        self.assertEqual([], packages, out)
+        self.write("apple/Shared/Models.swift", "struct Fold { let id = 1 }\n")
+        out, packages = self.check_fast()
+        self.assertEqual(["./internal/contract/..."], packages, out)
+        self.git("checkout", "-q", "--", "apple")
+        self.write("android/core/contracts/src/Calls.kt", "class Calls(val id: Int)\n")
+        # A plan only: the android checks it also queues need the real checkers.
+        run = subprocess.run(["bash", "scripts/test/check-fast.sh", "--dry-run", "--base", "base"], cwd=self.repo,
+                             env=self.env, capture_output=True, text=True, timeout=300)
+        self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+        self.assertIn("queued: server go test ./internal/contract/...", run.stdout)
+        self.assertIn("queued: android i18n", run.stdout)
+
+    def plan(self, listed, env=None):
+        """check-fast's plan for the listed paths: (exit code, output)."""
+        run = subprocess.run(["bash", "scripts/test/check-fast.sh", "--dry-run", "--changed-from", "-"], cwd=self.repo,
+                             env=env or self.env, input="".join(p + "\n" for p in listed), capture_output=True,
+                             text=True, timeout=300)
+        return run.returncode, run.stdout + run.stderr
+
+    def test_a_large_client_diff_still_runs_the_packages_that_name_its_files(self):
+        # One alternation of every changed client path once grew past what git grep compiles, and every Go reader of a
+        # large apple/ or android/ diff was dropped without a word (#11250).
+        self.write("server/internal/contract/contract_test.go",
+                   'package contract\n\nvar models = read("apple/Shared/Models.swift")\n')
+        self.write("server/internal/kotlin/kotlin_test.go",
+                   'package kotlin\n\nvar sources = []string{"x", "android/core/contracts/src/Calls.kt"}\n')
+        self.write("server/internal/samples/samples_test.go",
+                   'package samples\n\nconst source = "apple/Shared/Models.swift: Fold"\n'
+                   '// Not "apple/Persona/Commented.swift" either: a comment line.\n')
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "readers")
+        listed = [f"apple/Generated/Group{i // 100}/File{i}.swift" for i in range(4000)]
+        listed += [f"android/generated/src/main/kotlin/File{i}.kt" for i in range(1000)]
+        listed += ["apple/Shared/Models.swift", "android/core/contracts/src/Calls.kt", "apple/Persona/Commented.swift"]
+        code, out = self.plan(listed)
+        self.assertEqual(0, code, out[-2000:])
+        queued = sorted(line.strip() for line in out.splitlines() if line.startswith("  queued: server go test"))
+        self.assertEqual(["queued: server go test ./internal/contract/...",
+                          "queued: server go test ./internal/kotlin/..."], queued, out[-2000:])
+
+    def test_a_search_that_fails_stops_the_plan(self):
+        # A reader a failed search would have found is not run otherwise: check-fast stops and says so (#11250).
+        bin_dir = Path(tempfile.mkdtemp(prefix="check-fast-git-"))
+        self.addCleanup(shutil.rmtree, bin_dir)
+        git = shutil.which("git")
+        # A git whose grep fails as one that cannot compile its pattern does; everything else is the real git.
+        (bin_dir / "git").write_text('#!/bin/sh\n'
+                                     'if [ "$1" = grep ]; then echo "fatal: no grep today" >&2; exit 128; fi\n'
+                                     f'exec "{git}" "$@"\n')
+        (bin_dir / "git").chmod(0o755)
+        env = dict(self.env, PATH=f"{bin_dir}{os.pathsep}{self.env['PATH']}")
+        self.write("scripts/tools/helper.py", "")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "helper")
+        for path in ("apple/Shared/Models.swift", "docs/example-guide.md", "spec/fixtures/x.json",
+                     "scripts/tools/helper.py"):
+            with self.subTest(path=path):
+                code, out = self.plan([path], env=env)
+                self.assertEqual(2, code, out)
+                self.assertRegex(out, r"check-fast: searching .* failed \(git grep exit 128\): fatal: no grep today")
+                self.assertNotIn("dry run,", out)
 
     def test_an_sdk_ts_source_runs_the_trusted_adapter_check(self):
         # The trusted Deno adapter bundles sdk/ts/src (#4221): a change there runs denohost's tests, where
@@ -188,15 +283,10 @@ class CheckFastServerInputsTests(unittest.TestCase):
         calls = self.guard_calls()
         self.assertEqual(2, len(calls), out)
         self.assertEqual("server|test -count=1 " + GUARD_PACKAGES, calls[0])
-        match = re.fullmatch(r"server\|test -count=1 -run \^\(([\w|]+)\)\$ " + re.escape(GUARD_RUN_PACKAGES), calls[1])
+        match = re.fullmatch(r"server\|test -count=1 -run \^\(([\w|.*]+)\)\$ " + re.escape(GUARD_RUN_PACKAGES), calls[1])
         self.assertIsNotNone(match, calls[1])
-        # go test -run passes when a name matches nothing: every named guard must exist, and every package directory.
-        sources = "".join(path.read_text() for package in GUARD_RUN_PACKAGES.split()
-                          for path in (ROOT / "server" / package).glob("*_test.go"))
-        defined = set(re.findall(r"^func (Test\w+)\(t \*testing\.T\)", sources, re.M))
-        self.assertEqual(set(), set(match.group(1).split("|")) - defined)
-        for package in (GUARD_PACKAGES + " " + GUARD_RUN_PACKAGES).split():
-            self.assertTrue((ROOT / "server" / package).is_dir(), package)
+        # go test -run passes when a name matches nothing: test_check_fast_guards.py's CheckFastGoGuardListTests holds
+        # every entry to a func of these packages in this repository, and every package directory to its tests.
 
     def test_a_plugin_change_runs_its_own_tests_and_the_guards_not_a_build(self):
         self.write("server/plugins/wechat/x.go", "package wechat\n")
@@ -218,6 +308,38 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertEqual(["./internal/guide/conformance/..."], packages, out)
         self.assertEqual([], self.guard_calls(), out)
         self.assertNotIn("repo-wide guards", out)
+
+    def test_the_assistant_group_runs_in_its_partitions_and_node_runs_as_given(self):
+        # Every Go group goes through scripts/test/go_test_partitioned.py (#12765). ./internal/assistant/... covers a
+        # partitioned package: its tests run in go_partitions.py's three partitions beside its subpackages, each with
+        # the group's flags and timeout. internal/node splits itself in its TestMain, so its group runs as given.
+        (self.go_log.parent / "go").write_text(
+            FAKE_GO + 'case "$*" in\n'
+            '  "list ./internal/assistant/...") printf "example.com/server/internal/assistant\\n'
+            'example.com/server/internal/assistant/inbox\\n" ;;\n'
+            '  "test -list .* ./internal/assistant") printf "TestA\\nTestB\\nTestC\\nTestD\\n'
+            'ok  \\texample.com/server/internal/assistant\\t0.1s\\n" ;;\n'
+            'esac\n')
+        self.env.pop("GOFLAGS", None)
+        self.env["CHECK_FAST_TIMEOUT_GO_TEST"] = "300"
+        self.write("server/internal/assistant/x.go", "package assistant\n")
+        self.write("server/internal/node/x.go", "package node\n")
+        out, _ = self.check_fast()
+        self.assertIn("PASS     server go test ./internal/assistant/...", out)
+        self.assertIn("PASS     server go test ./internal/node/...", out)
+        calls = [call for call in self.go_calls() if call not in self.guard_calls() and "|build " not in call]
+        self.assertEqual(sorted([
+            "server|list ./internal/assistant/...",
+            "server|test -list .* ./internal/assistant",
+            "server|test -count=1 example.com/server/internal/assistant/inbox",
+            "server|test -count=1 -run ^(TestA|TestD)$ ./internal/assistant",
+            "server|test -count=1 -run ^(TestB)$ ./internal/assistant",
+            "server|test -count=1 -run ^(TestC)$ ./internal/assistant",
+            "server|test -count=1 ./internal/node/...",
+        ]), sorted(calls), out)
+        timeouts = {re.search(r" -timeout (\S+)", call).group(1)
+                    for call in self.go_log.read_text().splitlines() if call.startswith("server|test -count=1 ")}
+        self.assertEqual({"290s"}, timeouts)  # inside CHECK_FAST_TIMEOUT_GO_TEST's 300 s, as before
 
     def test_go_runs_with_trimpath_and_the_callers_flags(self):
         # Worktrees share compiled packages only under -trimpath (#10614): check-fast adds it with
@@ -261,10 +383,15 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("web/src/x.ts", "export {}\n")
         self.check_fast()
         calls = [line.split("|", 3) for line in self.go_log.read_text().splitlines()]
-        in_slot = {(where, args.split()[0]) for where, marker, grandparent, args in calls
-                   if re.fullmatch(r"(go|web):\d+", marker) and marker.split(":")[1] == grandparent}
-        self.assertEqual({("server", "test"), ("web", "test")}, in_slot, calls)
-        self.assertEqual(3, sum(1 for where, marker, _, _ in calls if where == "server" and marker.startswith("go:")))
+        tests = [call for call in calls if call[3].split()[0] == "test"]
+        # The touched package's go test, the two guard calls and vitest, each checked on its own: the package's call
+        # goes through scripts/test/go_test_partitioned.py, which must exec go for it to sit right under the slot
+        # (the guards call go directly, so a set of (dir, subcommand) pairs would pass without that exec).
+        self.assertEqual(["server", "server", "server", "web"], sorted(call[0] for call in tests), calls)
+        self.assertEqual(1, sum(1 for where, _, _, args in tests if args.endswith(" ./internal/foo/...")), calls)
+        for where, marker, grandparent, args in tests:
+            self.assertRegex(marker, r"^(go|web):\d+$", (where, args))
+            self.assertEqual(marker.split(":")[1], grandparent, (where, args))
         # npm ci, the node_modules check and the typecheck take no slot.
         self.assertEqual({"ci", "run check:deps", "run typecheck"},
                          {args for where, marker, _, args in calls if where == "web" and not marker}, calls)
@@ -461,7 +588,7 @@ class CheckFastWebInputsTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.repo)
         (self.repo / "scripts/test").mkdir(parents=True)
         (self.repo / "scripts/ci").mkdir(parents=True)
-        shutil.copy(ROOT / "scripts/test/check-fast.sh", self.repo / "scripts/test/check-fast.sh")
+        copy_check_fast(self.repo)
         shutil.copy(ROOT / "scripts/ci/paths.py", self.repo / "scripts/ci/paths.py")
         self.write("scripts/privacy_check.py", "print('clean')\n")
         self.write("scripts/test/test_extension_schema.py", "")
@@ -652,6 +779,123 @@ class CheckFastWebInputsTests(unittest.TestCase):
         out, npm_calls = self.check_fast()
         self.assertIn("queued: web\n", out)
         self.assertEqual(self.related("src/old.ts"), npm_calls, out)  # vitest related starts from the old path
+
+
+@unittest.skipUnless(shutil.which("timeout") or shutil.which("gtimeout"), "check-fast.sh needs GNU timeout")
+class CheckFastPlanTests(unittest.TestCase):
+    """--dry-run prints the plan and runs nothing; --changed-from plans listed paths, --each one at a time (#11026).
+    The plan also names the CI lanes it runs no part of (scripts/ci/paths.py --lanes-for), and runs the runtime
+    packages that read a changed fixture or schema."""
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp(prefix="check-fast-test-"))
+        self.addCleanup(shutil.rmtree, self.repo)
+        (self.repo / "scripts/test").mkdir(parents=True)
+        (self.repo / "scripts/ci").mkdir(parents=True)
+        copy_check_fast(self.repo)
+        shutil.copy(ROOT / "scripts/ci/paths.py", self.repo / "scripts/ci/paths.py")
+        self.write("scripts/privacy_check.py", "print('clean')\n")
+        self.write("server/go.mod", "module example.com/server\n")
+        self.write("server/internal/foo/foo.go", "package foo\n")
+        self.write("android/app/build.gradle.kts", "\n")
+        self.write("spec/fixtures/input-clip/cases.json", "[]\n")
+        self.write("spec/fixtures/other/cases.json", "[]\n")
+        self.write("schema/extension/examples/Manifest.x.json", "{}\n")
+        self.write("integrations/clip/package.json", "{}\n")
+        self.write("integrations/clip/test/clip.test.mjs",
+                   "// spec/fixtures/other/cases.json is named in a comment only\n"
+                   "const cases = new URL('../../../spec/fixtures/input-clip/cases.json', import.meta.url)\n")
+        self.write("sdk/ts/src/fixtures.ts", 'const dir = new URL("../../../schema/extension/examples/", import.meta.url);\n')
+        self.git("init", "-q")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "base")
+        self.git("tag", "base")
+        bin_dir = Path(tempfile.mkdtemp(prefix="check-fast-bin-"))
+        self.addCleanup(shutil.rmtree, bin_dir)
+        for name, text in (("node", FAKE_NODE), ("go", FAKE_GO), ("bun", "#!/bin/sh\n")):
+            (bin_dir / name).write_text(text)
+            (bin_dir / name).chmod(0o755)
+        self.go_log = bin_dir / "go.log"
+        self.env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "FAKE_GO_LOG": str(self.go_log)}
+
+    def write(self, path, text):
+        file = self.repo / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(text)
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True)
+
+    def check_fast(self, *args, stdin=None, code=0, cwd=None):
+        run = subprocess.run(["bash", str(self.repo / "scripts/test/check-fast.sh"), *args], cwd=cwd or self.repo,
+                             env=self.env, input=stdin, capture_output=True, text=True, timeout=300)
+        out = run.stdout + run.stderr
+        self.assertEqual(code, run.returncode, out)
+        return out
+
+    def test_a_dry_run_prints_the_plan_and_runs_nothing(self):
+        self.write("server/internal/foo/foo.go", "package foo // changed\n")
+        out = self.check_fast("--dry-run", "--base", "base")
+        self.assertIn("queued: server go test ./internal/foo/...", out)
+        self.assertIn("check-fast: dry run, 3 check(s) planned; nothing ran.", out)
+        self.assertNotIn("logs in", out)
+        self.assertFalse(self.go_log.exists(), out)
+
+    def test_listed_paths_are_planned_instead_of_the_diff(self):
+        self.write("list.txt", "server/internal/foo/foo.go\n\n")
+        (self.repo / "sub").mkdir()
+        out = self.check_fast("--dry-run", "--changed-from", "../list.txt", cwd=self.repo / "sub")  # from the caller
+        self.assertIn("1 listed file(s) from", out)
+        self.assertIn("queued: server go test ./internal/foo/...", out)
+        out = self.check_fast("--dry-run", "--changed-from", "-", stdin="android/app/build.gradle.kts\n")
+        self.assertIn("queued: android i18n", out)
+        self.assertNotIn("server go test", out)
+
+    def test_each_listed_path_is_planned_on_its_own(self):
+        out = self.check_fast("--dry-run", "--changed-from", "-", "--each",
+                              stdin="android/app/build.gradle.kts\nserver/internal/foo/foo.go\n")
+        android, server = out.split("== server/internal/foo/foo.go\n")
+        self.assertTrue(android.startswith("== android/app/build.gradle.kts\n"), out)
+        self.assertIn("queued: android i18n", android)
+        self.assertNotIn("server go test", android)
+        self.assertIn("queued: server go test ./internal/foo/...", server)
+        self.assertNotIn("android i18n", server)
+
+    def test_listed_paths_only_plan(self):
+        for args in (("--changed-from", "-"), ("--dry-run", "--all", "--changed-from", "-"),
+                     ("--dry-run", "--base", "base", "--changed-from", "-"), ("--dry-run", "--each")):
+            with self.subTest(args=args):
+                self.check_fast(*args, stdin="server/go.mod\n", code=2)
+        self.check_fast("--dry-run", "--changed-from", "missing.txt", code=2)
+
+    def test_the_ci_lanes_it_runs_no_part_of_are_named(self):
+        out = self.check_fast("--dry-run", "--changed-from", "-", stdin="android/app/build.gradle.kts\n")
+        self.assertIn("INFO  CI lanes this change selects that check-fast does not run: android (", out)
+        out = self.check_fast("--dry-run", "--changed-from", "-", stdin="server/internal/foo/foo.go\n")
+        self.assertNotIn("CI lanes this change selects", out)
+        # A shared fixture: CI's server, android, apple and runtimes lanes; check-fast runs the runtime package
+        # that reads it, so only the lanes it cannot run are named.
+        out = self.check_fast("--dry-run", "--changed-from", "-", stdin="spec/fixtures/input-clip/cases.json\n")
+        self.assertIn("does not run: server, android, apple (", out)
+
+    def test_each_path_names_the_ci_lanes_it_runs_no_part_of(self):
+        out = self.check_fast("--dry-run", "--changed-from", "-", "--each",
+                              stdin="android/app/build.gradle.kts\nserver/internal/foo/foo.go\n")
+        android, server = out.split("== server/internal/foo/foo.go\n")
+        self.assertIn("INFO  CI lanes this change selects that check-fast does not run: android (", android)
+        self.assertNotIn("CI lanes this change selects", server)
+
+    def test_a_runtime_package_that_reads_a_fixture_or_schema_runs(self):
+        out = self.check_fast("--dry-run", "--changed-from", "-", stdin="spec/fixtures/input-clip/cases.json\n")
+        self.assertIn("queued: integrations/clip", out)
+        self.assertNotIn("sdk/ts (bun)", out)
+        # Named in a comment only: not a reader.
+        out = self.check_fast("--dry-run", "--changed-from", "-", stdin="spec/fixtures/other/cases.json\n")
+        self.assertNotIn("integrations/clip", out)
+        out = self.check_fast("--dry-run", "--changed-from", "-",
+                              stdin="schema/extension/examples/Manifest.x.json\n")
+        self.assertIn("queued: sdk/ts (bun)", out)
+        self.assertNotIn("integrations/clip", out)
 
 
 class WebFileTests(unittest.TestCase):

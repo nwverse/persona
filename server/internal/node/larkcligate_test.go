@@ -137,11 +137,15 @@ func TestLarkCLIGate(t *testing.T) {
 }
 
 // Without a way to ask lark-cli (no lark.cli in the hub's config), every lark-cli command that is not one of its own
-// printing commands is confirmed.
+// printing commands or named as a read (#11193) is confirmed.
 func TestLarkCLIGateWithoutRisk(t *testing.T) {
-	v := classifyLark(`lark-cli im +chat-list`, nil, "", nil)
+	v := classifyLark(`lark-cli im +chat-create --name x`, nil, "", nil)
 	if len(v.calls) != 1 || larkDecision(proto.AssistantLark{}, v.calls[0]) != "confirm" {
 		t.Fatalf("unknown risk should be confirmed: %+v", v)
+	}
+	v = classifyLark(`lark-cli im +chat-list`, nil, "", nil)
+	if len(v.calls) != 1 || larkDecision(proto.AssistantLark{}, v.calls[0]) != "allow" {
+		t.Fatalf("a list shortcut only reads: %+v", v)
 	}
 	v = classifyLark(`lark-cli skills list`, nil, "", nil)
 	if len(v.calls) != 1 || larkDecision(proto.AssistantLark{}, v.calls[0]) != "allow" {
@@ -306,5 +310,25 @@ func TestAssistantEnvNamesTheLarkCLIProfile(t *testing.T) {
 		if profile != "" && got != profile || profile == "" && ok {
 			t.Fatalf("profile %q: %s=%q (set %v)", profile, larkProfileEnvName, got, ok)
 		}
+	}
+}
+
+// TestParseLoginPATH: only the marked line counts, the last one, and only its absolute directories. A shell that
+// printed no marked line is asked again later (nil), while a PATH of no directories is an answer.
+func TestParseLoginPATH(t *testing.T) {
+	for _, tc := range []struct{ name, out, want string }{
+		{"greeting before it", "welcome back\n__PERSONA_LOGIN_PATH__/usr/bin:/opt/tools/node/bin\n", "/usr/bin:/opt/tools/node/bin"},
+		{"the last line wins", "__PERSONA_LOGIN_PATH__/usr/bin\n__PERSONA_LOGIN_PATH__/opt/bin\n", "/opt/bin"},
+		{"relative and empty entries dropped", "__PERSONA_LOGIN_PATH__/usr/bin:relative::bin\n", "/usr/bin"},
+		{"an empty PATH is an answer", "__PERSONA_LOGIN_PATH__\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := strings.Join(parseLoginPATH([]byte(tc.out)), ":"); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if got := parseLoginPATH([]byte("no marker here\n")); got != nil {
+		t.Fatalf("no marked line: %q", got)
 	}
 }

@@ -29,7 +29,7 @@ vi.mock("../lib/session-models", async (importOriginal) => {
   const real = await importOriginal<typeof import("../lib/session-models")>();
   return { ...real, modelList: (mid: string, launcher: string) => fake.lists.get(`${mid}/${launcher}`) ?? {} };
 });
-vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => null }));
+vi.mock("./extensions/ExtensionSlots", () => ({ OverviewCards: () => null, OverviewArrangeButton: () => null }));
 
 const { Home } = await import("./Home");
 const { t } = await import("../i18n");
@@ -89,10 +89,12 @@ describe("a task card's agent line", () => {
     expect(line?.who).toBe("MacBook · 5.5");
   });
 
-  it("never shows a raw model id: one nobody names reads as the model pill reads it", () => {
-    const line = agentLine([todo("a", { agents: [on("s1")] })], [row("s1", { model: "acme/orbit-7", effort: "medium" })]);
-    expect(line?.who).toBe(`MacBook · orbit-7 · ${effort("medium")}`);
-    expect(line?.who).not.toContain("acme/");
+  it("keeps the gateway channel in an unnamed model label as the model pill does (#10125)", () => {
+    const work = [todo("a", { agents: [on("s1")] })];
+    for (const channel of ["acme", "relay"]) {
+      const line = agentLine(work, [row("s1", { model: `${channel}/orbit-7`, effort: "medium" })]);
+      expect(line?.who).toBe(`MacBook · ${channel}/orbit-7 · ${effort("medium")}`);
+    }
   });
 
   it("counts the agents as before while none of their rows is read", () => {
@@ -107,5 +109,68 @@ describe("a task card's agent line", () => {
     expect(line).toEqual({ who: `${t("todos.delivery_merged")} · MacBook · opus 5.5 · ${effort("high")}`, more: "+1", held: true });
     // a task with no agents keeps its delivery alone
     expect(agentLine([todo("b", { delivery: { state: "merged" } })], [])).toEqual({ who: t("todos.delivery_merged"), more: "", held: true });
+  });
+});
+
+/** The card's status pill: its word and class. */
+function statusPill(todos: Todo[], sessions: Session[], id: string): { label: string; className: string } | null {
+  Object.assign(fake, { todos, sessions, machines });
+  const html = renderToStaticMarkup(<Home onNewAgent={() => {}} onToggleSidebar={() => {}} />);
+  Object.assign(fake, { todos: [], sessions: [] });
+  const card = html.slice(html.indexOf(`data-task="${id}"`));
+  const m = /<span class="([^"]*)" data-testid="task-status">([^<]*)<\/span>/.exec(card);
+  return m ? { label: m[2]!, className: m[1]! } : null;
+}
+
+describe("a task card's status (#11090)", () => {
+  const waiting = (sid: string, wait: string) => row(sid, { work: { phase: "blocked", on: "external", line: wait, wait, wake_at: "2099-01-01T00:00:00Z" } });
+
+  it("a waiting task says what it waits on, neutral", () => {
+    const pill = statusPill([todo("a", { agents: [on("s1")], delivery: { state: "pr", unblock: "other" } })], [waiting("s1", "CI")], "a");
+    expect(pill?.label).toBe(t("lib-state-labels.waits_delivery"));
+    expect(pill?.className).toContain("text-ink-3");
+    expect(pill?.className).not.toContain("text-attention");
+  });
+
+  it("Waiting on you, in the attention color, for one held for the owner's OK", () => {
+    const pill = statusPill([todo("a", { agents: [on("s1")], delivery: { state: "merged", unblock: "user" } })], [waiting("s1", "deploy")], "a");
+    expect(pill).toEqual({ label: t("lib-state-labels.waits_owner"), className: expect.stringContaining("text-attention") });
+  });
+
+  it("other statuses keep their words and colors", () => {
+    const pill = statusPill([todo("a", { agents: [on("s1")] })], [row("s1", { state: "working", status: "working" })], "a");
+    expect(pill).toEqual({ label: t("lib-state-labels.working"), className: expect.stringContaining("text-orange") });
+  });
+});
+
+/** A task card's own classes and its markup from there on. */
+function card(todos: Todo[], id: string): { box: string[]; inner: string } {
+  Object.assign(fake, { todos, sessions: [], machines });
+  const html = renderToStaticMarkup(<Home onNewAgent={() => {}} onToggleSidebar={() => {}} />);
+  Object.assign(fake, { todos: [] });
+  const at = html.indexOf(`data-task="${id}"`);
+  return { box: /class="([^"]*)"/.exec(html.slice(html.lastIndexOf("<div ", at), at))![1]!.split(" "), inner: html.slice(at) };
+}
+const classOf = (html: string, tag: RegExp) => tag.exec(html)?.[1]?.split(" ") ?? [];
+const zOf = (classes: string[], prefix: string) => Number(/(\d+)\]?$/.exec(classes.find((c) => c.startsWith(prefix)) ?? "")?.[1] ?? NaN);
+
+describe("a task card on a touch screen (#11442)", () => {
+  it("opens from anywhere on it: the title link's overlay spans the card, the PR link above it", () => {
+    const { box, inner } = card([todo("a", { stage: "develop", pr_url: "https://example.com/pull/7", agents: [on("s1")] })], "a");
+    expect(box).toEqual(expect.arrayContaining(["pointer-coarse:relative", "pointer-coarse:isolate"]));
+    const title = classOf(inner, /<a href="\/todos\?id=a" class="([^"]*)"/);
+    expect(title).toEqual(expect.arrayContaining(["pointer-coarse:after:absolute", "pointer-coarse:after:inset-0"]));
+    // the stage bar's dots are positioned too: the overlay is above them, so a tap on a dot opens the task as well
+    expect(zOf(title, "pointer-coarse:after:z-")).toBeGreaterThan(0);
+    // the PR link keeps its own tap
+    const pr = classOf(inner, /<a href="https:\/\/example\.com\/pull\/7"[^>]* class="([^"]*)"/);
+    expect(pr).toContain("pointer-coarse:relative");
+    expect(zOf(pr, "pointer-coarse:z-")).toBeGreaterThan(zOf(title, "pointer-coarse:after:z-"));
+  });
+
+  it("is as it was under a mouse: only the title is the link", () => {
+    const { box, inner } = card([todo("a", { agents: [on("s1")] })], "a");
+    expect(box).not.toContain("relative");
+    expect(classOf(inner, /<a href="\/todos\?id=a" class="([^"]*)"/).some((c) => c.startsWith("after:"))).toBe(false);
   });
 });

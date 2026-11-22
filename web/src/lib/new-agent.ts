@@ -1,9 +1,11 @@
 import { t } from "../i18n";
+import { agentId } from "./agent-kind";
 import { isEcho, type Seen } from "./echo";
 import { ApiError, errorText, isAbort, isTransient, sessionPath } from "./api";
 import { parseUserText } from "./turns";
 import { imagePayload, quotePath, releaseAttachments, sendFile, type LocalAttachment } from "./attachments";
 import { uuid } from "./format";
+import { launchHasFirstTurn } from "./launch-handoff";
 import { apiOp } from "./ops";
 import { currentPlatform, modName, type Platform } from "./shortcuts";
 import { href, navigate } from "./router";
@@ -22,12 +24,19 @@ export interface AgentLaunch {
   cwd: string;
   launcher: string;
   agentType?: string;
+  /** Display-only effective target resolved at launch time (never sent to POST /sessions): keeps the sidebar Starting
+   *  placeholder icon, StartingAgent header, and newly opened session composer aligned with Follow model settings. */
+  displayLauncher?: string;
+  displayEngine?: string;
+  displayModel?: string;
   workSession?: boolean;
   /** Start with the first message when this harness takes it as part of creation. */
   inlinePrompt?: boolean;
   /** Picked in "New agent" for this start only (launcher-models.ts startPicks); none: the launcher's own. */
   model?: string;
   effort?: string;
+  /** Keep the launcher's native effort even when Model settings configures this launcher. */
+  launcherDefaultEffort?: boolean;
   /** Claude Code's permission mode for this start ("New agent"'s "Permission mode"); none: the launcher's own. */
   permissionMode?: string;
   /** The exact runtime workspace, scoped to machine and host; absent for an ordinary folder start. */
@@ -36,6 +45,8 @@ export interface AgentLaunch {
   host?: string;
   /** Turn ultracode on once Claude is up (#3428); only ever true: off is what a new Claude is (docs/protocol/protocol.md). */
   ultracode?: boolean;
+  /** Optional title source when the first message contains private project content. */
+  nameHint?: string;
   text: string;
   attachments: LocalAttachment[];
   todoId?: string;
@@ -58,10 +69,12 @@ export interface AgentLaunch {
   repeatOnly?: boolean;
   clearable?: string;
   draft?: string;
+  /** Epoch ms when a launch with an initial prompt entered handoff, keeping the session working until the hub reports working (#12380). */
+  handoffAt?: number;
 }
 
 /** `open: false` starts it without opening its conversation (Compare runs starts several and opens their page, #8916). */
-export function launchAgent(input: Pick<AgentLaunch, "machineId" | "cwd" | "workspaceId" | "launcher" | "agentType" | "workSession" | "inlinePrompt" | "model" | "effort" | "permissionMode" | "host" | "ultracode" | "text" | "attachments" | "todoId">, options: { open?: boolean } = {}) {
+export function launchAgent(input: Pick<AgentLaunch, "machineId" | "cwd" | "workspaceId" | "launcher" | "agentType" | "displayLauncher" | "displayEngine" | "displayModel" | "workSession" | "inlinePrompt" | "model" | "effort" | "launcherDefaultEffort" | "permissionMode" | "host" | "ultracode" | "text" | "nameHint" | "attachments" | "todoId">, options: { open?: boolean } = {}) {
   const launch: AgentLaunch = { ...input, id: `local-${uuid()}`, phase: "creating", uploaded: {}, ...launchOpIds() };
   putLaunch(launch);
   if (options.open !== false) navigate({ name: "session", mid: launch.machineId, sid: launch.id });
@@ -89,6 +102,35 @@ async function launchOp<T>(path: string, opId: string, signal: AbortSignal, json
   }
 }
 
+/** The engine mark ID for a starting placeholder in the sidebar; undefined falls back to the generic agent icon. */
+export function launchDisplayEngine(launch: Pick<AgentLaunch, "launcher" | "agentType" | "displayEngine" | "displayLauncher">): string | undefined {
+  if (launch.displayEngine) return agentId(launch.displayEngine);
+  if (launch.agentType) return agentId(launch.agentType);
+  const name = (launch.displayLauncher || launch.launcher).trim().toLowerCase();
+  if (!name) return undefined;
+  if (name === "claude" || name === "codex" || name === "agy" || name === "omp" || name === "traex") return name;
+  return undefined;
+}
+
+/**
+ * The advertised start model for a newly launched session before its first transcript turn reports `session.model`.
+ * Returns undefined as soon as the session reports its own model or if the launched launcher changed.
+ */
+export function launchModelForSession(
+  launches: Record<string, AgentLaunch> | undefined,
+  session: Pick<Session, "machine_id" | "session_id" | "launcher" | "model">,
+): string | undefined {
+  if (!launches || session.model) return undefined;
+  for (const launch of Object.values(launches)) {
+    if (launch.machineId !== session.machine_id || launch.session?.session_id !== session.session_id) continue;
+    const expectedLauncher = launch.launcher || launch.displayLauncher;
+    if (expectedLauncher && session.launcher && expectedLauncher !== session.launcher) continue;
+    const model = launch.model || launch.displayModel;
+    if (model) return model;
+  }
+  return undefined;
+}
+
 /** `user` (a user message, or an item the hub tied to a message) is the copy of a started conversation's first message. */
 export function acknowledgeLaunch(mid: string, sid: string, user: Seen) {
   for (const launch of Object.values(getState().launches)) {
@@ -110,6 +152,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
     launch = { ...launch, ...patch };
     if (getState().launches[id]) putLaunch(launch);
   };
+  const hasFirstTurn = launchHasFirstTurn(launch);
   update({ phase: launch.session ? "uploading" : "creating", error: undefined, uncertain: false, clearable: undefined, draft: undefined });
   try {
     const imageBytes = launch.attachments.filter((a) => a.mime.startsWith("image/")).reduce((total, a) => total + Math.ceil(a.file.size / 3) * 4, 0);
@@ -119,6 +162,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         machine_id: launch.machineId, cwd: launch.cwd, workspace_id: launch.workspaceId || undefined,
         launcher: launch.launcher || undefined, agent_type: launch.agentType, work_session: launch.workSession,
         model: launch.model || undefined, host: launch.host || undefined, todo_id: launch.todoId || undefined,
+        launcher_default_effort: launch.launcherDefaultEffort,
+        permission_mode: launch.permissionMode || undefined,
       };
       // A Codex (and a compatible CLI) takes its first message with the start. With none, a computer that can opens
       // Codex waiting for one (docs/integrations/codex.md "Starting without a first message"); an older one refuses.
@@ -126,7 +171,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         if (launch.attachments.length) throw new Error(t("lib-new-agent.launcher_no_attachments"));
         let r: { session: Session };
         try {
-          r = await launchOp<{ session: Session }>("/sessions", launch.startPromptOpId, controller.signal, { ...target, prompt: launch.text || undefined });
+          r = await launchOp<{ session: Session }>("/sessions", launch.startPromptOpId, controller.signal, { ...target, name_hint: launch.nameHint, prompt: launch.text || undefined });
         } catch (e) {
           if (!launch.text && e instanceof ApiError && (e.code === "codex_needs_prompt" || e.code === "work_prompt_required")) throw new Error(t("lib-new-agent.launcher_needs_text"));
           throw e;
@@ -140,8 +185,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       } else {
         try {
           const r = await launchOp<{ session: Session }>("/sessions", launch.startOpId, controller.signal, {
-            ...target, effort: launch.effort || undefined, permission_mode: launch.permissionMode || undefined,
-            ultracode: launch.ultracode === true ? true : undefined, async: true, name_hint: launch.text || undefined,
+            ...target, effort: launch.effort || undefined,
+            ultracode: launch.ultracode === true ? true : undefined, async: true, name_hint: launch.nameHint ?? (launch.text || undefined),
           });
           session = r.session;
         } catch (e) {
@@ -150,7 +195,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         }
       }
       if (!getState().launches[id]) return;
-      update({ session });
+      update({ session, ...(hasFirstTurn ? { handoffAt: Date.now() } : {}) });
       upsertSession(session);
     }
     if (!launch.outgoing) {
@@ -180,9 +225,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > 32 * 1024 * 1024) throw new Error(t("lib-new-agent.attachments_too_large_retry"));
       await launchOp(`${sessionPath(launch.machineId, launch.session!.session_id)}/messages`, launch.messageId, controller.signal, payload);
     }
-    update({ phase: "ready" });
     releaseAttachments(launch.attachments);
-    update({ attachments: [] });
+    update({ phase: "ready", attachments: [], ...(hasFirstTurn ? { handoffAt: Date.now() } : {}) });
     const local = { name: "session" as const, mid: launch.machineId, sid: launch.id };
     if (location.pathname === href(local)) navigate({ ...local, sid: launch.session!.session_id }, true);
   } catch (e) {
@@ -196,7 +240,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
     // the hub won't start it with ultracode here (an old node, a CLI or engine that can't take it): asking again would
     // get the same answer, so "Retry" starts it without, and the card says so (#3428)
     const noUltracode = creating && launch.ultracode === true && ultracodeRefused(e);
-    update({ phase: "failed", uncertain, repeatOnly: creating && (gap || launch.workSession === true), ...(gap ? {} : launchOpIds()),
+    update({ phase: "failed", handoffAt: undefined, uncertain, repeatOnly: creating && (gap || launch.workSession === true), ...(gap ? {} : launchOpIds()),
       ...(noUltracode ? { ultracode: undefined } : {}),
       error: noUltracode ? t("ultracode.start_refused", { error: ultracodeErrorText(e) }) : t(creating ? "lib-new-agent.start_failed" : sending ? "lib-new-agent.first_message_failed" : "lib-new-agent.attachments_failed", { error: errorText(e) }),
       clearable: e instanceof ApiError && e.code === "input_draft" && typeof e.body.clearable === "string" ? e.body.clearable : undefined,

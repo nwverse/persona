@@ -62,6 +62,7 @@ func TestAgyPaneTranscriptMapping(t *testing.T) {
 			{seq: 1, role: "assistant", kind: "tool_use", tool: "LS", input: `[1,2]`, pair: 3},
 			{seq: 1, role: "assistant", kind: "tool_use", tool: "Agent", input: `{"description":"subagent","prompt":""}`, pair: 4},
 			{seq: 2, role: "user", kind: "tool_result", text: "edited", pair: 1},
+			{seq: 2, role: "assistant", kind: "image", pair: 1},
 			{seq: 3, role: "user", kind: "tool_result", text: "multi-edited", pair: 2},
 			{seq: 4, role: "user", kind: "tool_result", text: "listed", pair: 3},
 			{seq: 5, role: "user", kind: "tool_result", text: "delegated", pair: 4},
@@ -125,6 +126,47 @@ func TestAgyUserText(t *testing.T) {
 	}
 }
 
+// Match the companion's projection using a synthetic native first USER_INPUT record.
+func TestAgyContextResourceHistory(t *testing.T) {
+	const user = "Please reply OK.\nKeep this second line."
+	const label = "Content of persona-context:///snapshot.txt:\n"
+	const context = "<persona-context>Attached context with /compact</persona-context>"
+	for _, tc := range []struct{ name, content, want string }{
+		{"native first request", "<USER_REQUEST>\n" + label + context + user + "\n</USER_REQUEST>\n<ADDITIONAL_METADATA>clock</ADDITIONAL_METADATA>", user},
+		{"unwrapped resource", label + context + user, user},
+		{"another Persona URI", "Content of persona-context:///other.txt:\r\n" + context + user, user},
+		{"successive resources", label + context + "\n" + label + context + user, user},
+		{"no prefix", user, user},
+		{"literal label", label + user, label + user},
+		{"other URI", "Content of file:///snapshot.txt:\n" + context + user, "Content of file:///snapshot.txt:\n" + user},
+		{"similar scheme", "Content of persona-context-extra:///snapshot.txt:\n" + context + user, "Content of persona-context-extra:///snapshot.txt:\n" + user},
+		{"quoted label", "Example:\n" + label + user, "Example:\n" + label + user},
+		{"incomplete envelope", label + "<persona-context>unfinished", label + "<persona-context>unfinished"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content, err := json.Marshal(tc.content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			file := agyTestFile(t, root, agyTestID, `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":`+string(content)+"}\n")
+			brain, err := agyBrain(root, agyTestID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer brain.Close()
+			var n Node
+			history, _, err := n.agyRead(brain, file, agyTestID, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(history.items) != 1 || history.items[0].Role != "user" || history.items[0].Text != tc.want {
+				t.Fatalf("history = %+v, want user text %q", history.items, tc.want)
+			}
+		})
+	}
+}
+
 // Array tool arguments are bounded like any other tool input (review on #10364).
 func TestAgyToolArrayArgsAreClipped(t *testing.T) {
 	big := `["` + strings.Repeat("x", 1<<20) + `"]`
@@ -166,7 +208,7 @@ func TestAgyParallelResultsOutOfOrderPairWithTheirOwnCalls(t *testing.T) {
 	if after.native == before.native {
 		t.Errorf("watchers must learn that earlier items changed: native stayed %q", after.native)
 	}
-	history := mapAgySteps(steps, time.Time{})
+	history := mapAgySteps(steps, time.Time{}, nil)
 	results := map[string]string{}
 	failed := map[string]bool{}
 	for _, it := range history.items {
@@ -212,7 +254,7 @@ func TestAgyCallWithoutResultDoesNotShiftLaterResults(t *testing.T) {
 		step(8, "GENERIC", `,"content":"third"`) +
 		step(9, "GENERIC", `,"content":"fourth"`)
 	steps, _ := parseAgySteps([]byte(fixture), agyTestID)
-	history := mapAgySteps(steps, time.Time{})
+	history := mapAgySteps(steps, time.Time{}, nil)
 	results := map[string]string{}
 	for _, it := range history.items {
 		if it.Kind == "tool_result" {
@@ -227,5 +269,63 @@ func TestAgyCallWithoutResultDoesNotShiftLaterResults(t *testing.T) {
 	}
 	if want := []string{"first", "", "second", "third", "fourth"}; !slices.Equal(got, want) {
 		t.Fatalf("results by call = %q, want %q", got, want)
+	}
+}
+
+func TestAgyInterruptedErrorNoteIsDropped(t *testing.T) {
+	const afterSystem = `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-01-01T00:00:00Z","content":"run task"}
+{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-01-01T00:00:01Z","content":"Working on it."}
+{"step_index":2,"type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-01-01T00:00:02Z","content":"background notice"}
+{"step_index":3,"type":"ERROR_MESSAGE","source":"SYSTEM","status":"DONE","created_at":"2026-01-01T00:00:03Z","error":"The stream was interrupted. Please continue the task you were working on."}
+`
+	steps, _ := parseAgySteps([]byte(afterSystem), agyTestID)
+	stopped := mapAgySteps(steps, time.Time{}, nil)
+	if stopped.seq != 4 {
+		t.Fatalf("stopped seq = %d, want 4", stopped.seq)
+	}
+	var stoppedTexts []string
+	for _, it := range stopped.items {
+		if it.Wake {
+			t.Fatalf("interrupted stop note must not trigger a wake notice: %+v", it)
+		}
+		stoppedTexts = append(stoppedTexts, it.Text)
+	}
+	if want := []string{"run task", "Working on it."}; !slices.Equal(stoppedTexts, want) {
+		t.Fatalf("stopped items = %q, want %q", stoppedTexts, want)
+	}
+
+	const fixture = `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-01-01T00:00:00Z","content":"run task"}
+{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-01-01T00:00:01Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"sleep 10"}}]}
+{"step_index":2,"type":"ERROR_MESSAGE","source":"SYSTEM","status":"DONE","created_at":"2026-01-01T00:00:02Z","content":"The stream was interrupted."}
+{"step_index":3,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-01-01T00:00:03Z","content":"try again"}
+{"step_index":4,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-01-01T00:00:04Z","tool_calls":[{"name":"view_file","args":{"AbsolutePath":"/tmp/a"}}]}
+{"step_index":5,"type":"GENERIC","status":"DONE","created_at":"2026-01-01T00:00:05Z","content":"file body"}
+{"step_index":6,"type":"ERROR_MESSAGE","source":"SYSTEM","status":"DONE","created_at":"2026-01-01T00:00:06Z","error":"The stream was interrupted: 503 unavailable"}
+`
+	steps, _ = parseAgySteps([]byte(fixture), agyTestID)
+	history := mapAgySteps(steps, time.Time{}, nil)
+	if history.seq != 7 {
+		t.Fatalf("seq = %d, want 7", history.seq)
+	}
+	var texts []string
+	var uses []string
+	results := map[string]string{}
+	for _, it := range history.items {
+		if it.Kind == "tool_use" {
+			uses = append(uses, it.ToolUseID)
+		}
+		if it.Kind == "tool_result" {
+			results[it.ToolUseID] = it.Text
+		}
+		if it.Kind == "text" {
+			texts = append(texts, it.Text)
+		}
+	}
+	wantTexts := []string{"run task", "try again", "API Error: The stream was interrupted: 503 unavailable"}
+	if !slices.Equal(texts, wantTexts) {
+		t.Fatalf("text items = %q, want %q", texts, wantTexts)
+	}
+	if len(uses) != 2 || results[uses[0]] != "" || results[uses[1]] != "file body" {
+		t.Fatalf("tool call pairing after interrupt = uses:%v results:%v", uses, results)
 	}
 }

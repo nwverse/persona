@@ -1,12 +1,12 @@
 package persona.feature.chat
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.res.stringResource
+import kotlinx.coroutines.launch
 import persona.core.contracts.Item
 import persona.core.contracts.Machine
 import persona.core.contracts.Session
@@ -36,18 +36,59 @@ internal fun ChatMessageActions(
     onDelete: (MessageTarget) -> Unit,
 ) {
     val resources = LocalResources.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val forwarding = LocalChatForwarding.current
-    var forwardDraft by remember(key) { mutableStateOf<ForwardDraft?>(null) }
-    val menuTitle = session?.displayTitle ?: stringResource(R.string.chat_screen_untitled)
+    val photoReader = LocalChatRowActions.current?.photos
+    val pick = messageMenu.forwardPick
+    val focus = LocalFocusManager.current
     MessageMenuSheet(messageMenu, messageMenuWrites(readOnly, session),
         onQuote = quoteTarget, onEdit = composer::edit,
-        onContext = onContext,
-        onForward = forwarding?.let { { target: MessageTarget -> forwardDraft = forwardDraftOf(target, key, session, machine, renderStyle, it) } },
+        onContext = onContext, onForward = forwarding?.let { pick::open },
         onNotice = onNotice, onFork = onFork, rewind = rewindMenu, onDelete = onDelete,
         share = shareCardSource(session, LocalPersonaName.current))
-    val forwardFrom = forwardDraft
-    if (forwardFrom != null && forwarding != null) ForwardSheet(forwardFrom, forwarding,
-        complete = { ForwardMessage.ref(forwardFrom.cut?.let { repository.fullText(key, it) } ?: forwardFrom.raw, forwardFrom.source, resources) },
-        onDismiss = { forwardDraft = null },
-        onPicked = { target, ref -> deliverForward(target, ref, key, forwarding, resources) })
+    val targets = pick.sheet ?: return
+    if (forwarding == null) return
+    val drafts = remember(targets, key, session, machine, renderStyle, forwarding) {
+        targets.map { forwardDraftOf(it, key, session, machine, renderStyle, forwarding) }
+    }
+    ForwardSheet(drafts, forwarding,
+        complete = {
+            val limit = ForwardMessage.limit(drafts.size)
+            // Read all clipped text before staging any photos: a failed read leaves the picker ready to retry.
+            val refs = drafts.map { draft ->
+                val raw = draft.cut?.let { repository.fullText(key, it) } ?: draft.raw
+                ForwardMessage.ref(raw, draft.source, resources, limit = limit)
+            }
+            val completed = mutableListOf<ForwardPlacement>()
+            try {
+                var remainingPhotos = MAX_COMPOSER_MEDIA
+                for ((index, draft) in drafts.withIndex()) {
+                    val paths = draft.photos.take(remainingPhotos)
+                    val restored = when {
+                        paths.isEmpty() -> RestoredPhotos()
+                        photoReader == null -> RestoredPhotos(lost = paths.size)
+                        else -> forwardedPhotos(context, paths, photoReader::payload)
+                    }
+                    remainingPhotos -= restored.attachments.size
+                    completed += ForwardPlacement(refs[index], restored.copy(lost = restored.lost + draft.photos.size - paths.size))
+                }
+                completed
+            } catch (failure: Throwable) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    completed.forEach { discardForwardedPhotos(context, it.photos) }
+                }
+                throw failure
+            }
+        },
+        onSelectMessages = if (pick.selected != null) null else ({
+            focus.clearFocus()
+            pick.start()
+        }),
+        onDismiss = pick::dismiss,
+        onPicked = { target, completed ->
+            pick.end()
+            deliverForward(target, completed, key, forwarding, resources,
+                onDuplicate = { handoff -> scope.launch { discardForwardedPhotos(context, handoff) } })
+        })
 }

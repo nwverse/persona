@@ -95,6 +95,7 @@ fun ChatLinkHost(
     var external by remember { mutableStateOf<String?>(null) }
     var opening by remember { mutableIntStateOf(0) }
     var closeRequest by remember { mutableIntStateOf(0) }
+    val linkMenu = remember { ChatLinkMenuState() }
     val uriHandler = remember { object : ManagerUriHandler {
         override fun openUri(uri: String) = openUri(uri, null)
         override fun openUri(uri: String, manager: String?) {
@@ -120,6 +121,8 @@ fun ChatLinkHost(
                     }
                 }
                 ChatLinkKind.App -> {
+                    // Route-table links keep their original URL so selecting another hub can be completed by the shell.
+                    if (hubLinks?.invoke(uri) == true) { if (url != null) closeRequest++; return }
                     val link = ChatLinks.appLink(uri)
                     val navigate = appLinks
                     if (link == null || navigate == null) unsupported = true
@@ -179,7 +182,11 @@ fun ChatLinkHost(
     // in layout and effects, and in composition only while a card is open; a BoxWithConstraints here composed the whole
     // conversation again on each of those frames.
     var hostHeight by remember { mutableIntStateOf(-1) }
-    CompositionLocalProvider(LocalUriHandler provides uriHandler, LocalChatLinkOpening provides opening) {
+    CompositionLocalProvider(
+        LocalUriHandler provides uriHandler,
+        LocalChatLinkOpening provides opening,
+        LocalChatLinkMenu provides linkMenu,
+    ) {
         Box(modifier.fillMaxSize().onGloballyPositioned { hostTop = it.positionInWindow().y }.onSizeChanged { hostHeight = it.height }) {
             // safeDrawing includes the keyboard: read it in a derived state, whose value (the top) does not move with it.
             val safeDrawing = WindowInsets.safeDrawing
@@ -420,6 +427,21 @@ fun ChatLinkHost(
                     }
                 }
             }
+        }
+        linkMenu.target?.let { menuTarget ->
+            val copy = rememberCopy()
+            val copied = stringResource(R.string.chat_link_copied)
+            val noBrowser = stringResource(R.string.chat_link_no_browser)
+            ChatLinkMenuOverlay(
+                target = menuTarget,
+                resources = resources,
+                ports = ports,
+                onDismiss = linkMenu::close,
+                onOpenInApp = { link -> uriHandler.openUri(link, manager) },
+                onOpenInBrowser = { link -> if (!openInSystemBrowser(context, link)) feedback?.notice(noBrowser) },
+                onCopy = { link -> copy(link, copied) },
+                onShare = { link -> shareLinkText(context, link) },
+            )
         }
         if (unsupported) JDialog(onDismiss = { unsupported = false }, title = stringResource(R.string.chat_link_unsupported_title),
             text = stringResource(R.string.chat_link_unsupported_text), confirm = stringResource(R.string.chat_link_ok) to { unsupported = false }, dismiss = null)

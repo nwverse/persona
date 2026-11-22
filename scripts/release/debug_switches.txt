@@ -24,6 +24,7 @@ newAssistant
 openAbout
 openAgent
 openAgentsFresh
+openAlarms
 openAllWork
 openAppearance
 openAssistant
@@ -94,6 +95,7 @@ openLauncherDetails
 openLauncherEditor
 openLauncherPage
 openLauncherPicker
+openLinkSwitch
 openLinkURL
 openLiveScreenSettings
 openLocalProxy
@@ -142,6 +144,7 @@ openPairSheet
 openPane
 openPeople
 openPeopleQuery
+openPermissionModes
 openPersona
 openPlugin
 openPluginMarket
@@ -246,6 +249,7 @@ showCloseoutSample
 showCompactChrome
 showComposerPhoto
 showConnection
+showConnectionAddresses
 showConnectionCycle
 showContexts
 showContinuityShadow
@@ -430,6 +434,7 @@ showTestNotification
 showTestNotificationIn
 showToasts
 showTodoHandoff
+showTodosV1
 showTokenPick
 showToolDetails
 showUnfoldLab

@@ -18,11 +18,13 @@ import (
 // user action it serves.
 var terminalClosers = map[string][]string{
 	"session.close": {
-		"forceArchiveConfirmation", // the user's force archive of an Agent blocked on a confirmation
-		"cleanAutoReview",          // a finished review's reviewer, an internal helper (#4754 decision 3)
-		"stopCancelledAgent",       // only a session with no terminal (session.stop answers no_terminal)
-		"retireArchived",           // the user's "Archive and close" for a runtime whose declared close needs no terminal
-		"closeMain",                // the user's Clear context (#5095): the main chat's own headless process, never a pane (session.stop refuses assistant conversations)
+		"forceArchiveConfirmation",   // the user's force archive of an Agent blocked on a confirmation
+		"cleanAutoReview",            // a finished review's reviewer, an internal helper (#4754 decision 3)
+		"stopCancelledAgent",         // only a session with no terminal (session.stop answers no_terminal)
+		"retireArchived",             // the user's "Archive and close" for a runtime whose declared close needs no terminal
+		"logicalSweep",               // only recorded assistant segment identities, never ordinary coding Agents
+		"advanceLogicalConversation", // retired assistant source, after the target accepted its first input
+		"closeMain",                  // the user's Clear context (#5095): the main chat's own headless process, never a pane (session.stop refuses assistant conversations)
 	},
 	"session.retire": {
 		"retireArchived",     // the user's "Archive and close" (close_terminal)
@@ -32,6 +34,7 @@ var terminalClosers = map[string][]string{
 	"tabs.close":  {},
 	"session.close_task_terminal": {
 		"finishTaskTerminal", // the owner opted in at dispatch and task_review accepted durable completion (#10201)
+		"tracksNodeWrite",    // classification only: compares method names and never calls a node
 	},
 }
 

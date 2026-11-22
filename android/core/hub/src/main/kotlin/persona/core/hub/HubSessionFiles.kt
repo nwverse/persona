@@ -35,15 +35,19 @@ class HubSessionFiles internal constructor(
     private val post: suspend (String, String) -> Response = { _, _ -> throw UnsupportedOperationException("post") },
     /** The hub's features from its last hello. */
     private val features: () -> Set<String> = { emptySet() },
-    /** A POST for files/rename, trash and restore: the hub gives the machine 2 minutes (a big folder on a slow disk). */
+    /** A POST for files/rename, move, trash and restore: the hub gives the machine 2 minutes. */
     private val editPost: suspend (String, String) -> Response = post,
+    /** File Range reads stay unbuffered until the response has proved its size and range. */
+    private val range: suspend (String, Map<String, String>) -> SessionLogTail =
+        { _, _ -> throw UnsupportedOperationException("log tail") },
 ) : SessionFiles {
     constructor(connection: OkHttpHubConnection, decoding: CoroutineDispatcher = Dispatchers.Default) :
         this({ path -> connection.request(path, "GET", null) }, decoding, { path -> connection.request(path, "GET", null, buffered = false) },
             { path, seconds -> connection.request(path, "GET", null, readTimeoutSeconds = seconds) },
             { path, body -> connection.request(path, "POST", body.toRequestBody(JSON), readTimeoutSeconds = 100) },
             { connection.serverFeatures.value },
-            { path, body -> connection.request(path, "POST", body.toRequestBody(JSON), readTimeoutSeconds = EDIT_TIMEOUT_SECONDS) })
+            { path, body -> connection.request(path, "POST", body.toRequestBody(JSON), readTimeoutSeconds = EDIT_TIMEOUT_SECONDS) },
+            { path, headers -> connection.consumeStream(path, headers, ::readSessionLogTail) })
 
     companion object {
         /** Past the hub's 2 minutes for file/convert (the node gives LibreOffice 90 s), as agent creation waits 130 s. */
@@ -93,6 +97,18 @@ class HubSessionFiles internal constructor(
     override suspend fun rename(machineId: String, cwd: String, path: String, name: String) =
         edit<SessionFilePath>(machineId, "rename", buildJsonObject { put("path", path); put("cwd", cwd); put("name", name) }).path
 
+    override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
+        edit<SessionMovedFiles>(machineId, "move", buildJsonObject {
+            putJsonArray("paths") { add(path) }
+            put("cwd", cwd)
+            put("dir", directory)
+            when (conflict) {
+                SessionMoveConflictPolicy.KeepBoth -> put("conflict", "keep")
+                SessionMoveConflictPolicy.Replace -> put("conflict", "replace")
+                null -> Unit
+            }
+        }).moved.singleOrNull() ?: throw HubFailure(HubError.Protocol, retryable = false)
+
     override suspend fun trash(machineId: String, cwd: String, paths: List<String>) =
         edit<SessionTrashedFiles>(machineId, "trash", buildJsonObject { putJsonArray("paths") { paths.forEach { add(it) } }; put("cwd", cwd) }).trashed
 
@@ -100,7 +116,7 @@ class HubSessionFiles internal constructor(
         edit<SessionRestoredFiles>(machineId, "restore", buildJsonObject { putJsonArray("trash_ids") { trashIds.forEach { add(it) } } })
             .restored.map { it.path }
 
-    /** `POST …/files/{rename,trash,restore}` with [body]; the hub passes on the node's answer, or its refusal, as it is. */
+    /** `POST …/files/{rename,move,trash,restore}` with [body]; the hub passes on the node's answer or refusal. */
     private suspend inline fun <reified T> edit(machineId: String, operation: String, body: JsonObject): T {
         require(machineId.isNotBlank())
         val path = HttpUrl.Builder().scheme("https").host("example.com")
@@ -173,6 +189,14 @@ class HubSessionFiles internal constructor(
                 }
             }
         }
+    }
+
+    override suspend fun readLogTail(machineId: String, cwd: String, path: String, manager: String?): SessionLogTail {
+        require(machineId.isNotBlank() && cwd.isNotBlank() && path.isNotBlank())
+        // An empty pin also overrides the caller's ambient manager. The HTTP client omits it on the wire.
+        val owner = manager?.takeUnless(String::isBlank).orEmpty()
+        val url = apiUrl(machineId, "file/download", cwd, "path" to path, ManagerQuery to owner)
+        return range(url, mapOf("Range" to "bytes=-$LOG_TAIL_BYTES", "Cache-Control" to "no-store"))
     }
 
     private fun apiUrl(machineId: String, operation: String, cwd: String, vararg query: Pair<String, String>): String {

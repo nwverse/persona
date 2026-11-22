@@ -4,7 +4,23 @@
 
 use serde::Deserialize;
 
-use crate::state::WorkState;
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct WorkState {
+    pub phase: String,
+    /// Current work summary searched by iOS's conversation, assistant and errors scopes.
+    #[serde(default)]
+    pub line: Option<String>,
+    #[serde(default)]
+    pub on: Option<String>,
+    #[serde(default)]
+    pub wait: Option<String>,
+    #[serde(default)]
+    pub wake_at: Option<String>,
+    #[serde(default)]
+    pub agent: Option<serde_json::Value>,
+    #[serde(default)]
+    pub just_finished: bool,
+}
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Session {
@@ -180,8 +196,8 @@ impl Session {
     pub fn agent_label(&self) -> String {
         if self.is_codex() {
             "Codex".to_owned()
-        } else if self.agent.as_deref() == Some("traex") {
-            "TRAEX".to_owned()
+        } else if matches!(self.agent.as_deref(), Some("traex" | "traecli" | "trae-cli")) {
+            "TRAE CLI".to_owned()
         } else if self.is_claude() {
             "Claude".to_owned()
         } else {

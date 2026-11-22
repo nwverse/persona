@@ -8,11 +8,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -203,8 +205,22 @@ func TestTheCodexAppLauncherIsOfferedWhereTheAppRuns(t *testing.T) {
 	if !added || list[1] != (proto.Launcher{Name: "codex-app", Source: "codex_app", Agent: "codex"}) {
 		t.Fatalf("list %+v", list)
 	}
-	if models, err := n.launcherModels(context.Background(), "codex-app", "", false); err != nil || models.Agent != "codex" || len(models.Models) != 0 || models.Locked == "" {
+	if models, err := n.launcherModels(context.Background(), "codex-app", "", false); err != nil || models.Agent != "codex" || len(models.Models) != 0 || models.Locked != "" {
 		t.Fatalf("models %+v %v", models, err)
+	}
+	cacheJSON := `{"models":[
+		{"slug":"acme/gpt-5-pro","display_name":"Acme gpt-5-pro","visibility":"list","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"}]},
+		{"slug":"beta/gpt-5-pro","display_name":"Beta gpt-5-pro","visibility":"list","default_reasoning_level":"high","supported_reasoning_levels":[{"effort":"high"},{"effort":"xhigh"}]},
+		{"slug":"hidden/internal","visibility":"hide"}
+	]}`
+	if err := os.WriteFile(filepath.Join(n.codexHome(), "models_cache.json"), []byte(cacheJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(n.codexHome(), "config.toml"), []byte("model = \"beta/gpt-5-pro\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if models, err := n.launcherModels(context.Background(), "codex-app", "", true); err != nil || models.Locked != "" || len(models.Models) != 2 || models.Models[0].ID != "acme/gpt-5-pro" || models.Models[0].Name != "Acme gpt-5-pro" || !models.Models[1].Default {
+		t.Fatalf("cached models %+v %v", models, err)
 	}
 	if !n.knownLauncher(context.Background(), "codex-app") {
 		t.Fatal("not known")
@@ -293,6 +309,48 @@ read l5
 	if strings.Contains(got, "turn/start") {
 		t.Error("a turn was started")
 	}
+}
+
+func TestCodexStdioCancellationStopsWrapperChild(t *testing.T) {
+	home := t.TempDir()
+	cli := filepath.Join(home, "codex")
+	// The wrapper waits for a child with inherited stdout. Closing the wrapper alone cannot unblock initialize.
+	script := `#!/bin/sh
+mkfifo "$CODEX_HOME/block"
+cat "$CODEX_HOME/block" &
+printf '%s\n' "$!" > "$CODEX_HOME/child"
+wait
+`
+	if err := os.WriteFile(cli, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() {
+		server, err := startCodexStdio(ctx, cli, home, home)
+		if server != nil {
+			server.close()
+		}
+		finished <- err
+	}()
+	var child int
+	waitFor(t, "wrapper child to start", func() bool {
+		b, _ := os.ReadFile(filepath.Join(home, "child"))
+		child, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		return child > 0
+	})
+	t.Cleanup(func() { _ = osproc.Kill(child) })
+	cancel()
+	select {
+	case err := <-finished:
+		if err == nil {
+			t.Fatal("initialize succeeded after cancellation")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("initialize stayed blocked on the wrapper child's stdout")
+	}
+	waitFor(t, "wrapper child to exit", func() bool { return !osproc.Alive(child) })
 }
 
 func TestCodexAppSlugIsTheTitlesASCIIWords(t *testing.T) {

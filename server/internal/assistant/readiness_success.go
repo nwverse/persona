@@ -18,7 +18,7 @@ type readinessSuccess struct {
 }
 
 func (s *Service) readinessModelScope(ctx context.Context, launcher string) (ModelBinding, string) {
-	binding, err := s.resolveModel(ctx, "assistant")
+	binding, err := s.resolveModel(ctx, purposeMain)
 	if err != nil || binding.Provider != launcherProvider(launcher) {
 		return ModelBinding{}, ""
 	}
@@ -61,7 +61,20 @@ func (s *Service) readinessReplySucceeded(ctx context.Context, machine, launcher
 		}
 		want = defaultModel
 	}
-	return sess.Model == want || aliases[want] == sess.Model || aliases[sess.Model] == want
+	if sess.Model == want || proto.SameLauncherModel(sess.Model, want) {
+		return true
+	}
+	// The alias and default relationships, comparing the same model under another spelling: a gateway may echo one
+	// routed under a prefix, or with/without the 1M marker (proto.SameLauncherModel).
+	for alias, resolved := range aliases {
+		if proto.SameLauncherModel(alias, sess.Model) && (resolved == want || proto.SameLauncherModel(resolved, want)) {
+			return true
+		}
+		if proto.SameLauncherModel(resolved, sess.Model) && (alias == want || proto.SameLauncherModel(alias, want)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Capture completion without requiring an open client to poll readiness before the process exits.
@@ -70,7 +83,7 @@ func (s *Service) rememberMainReadinessSuccess(ctx context.Context, machine stri
 	if machine != v.MachineID || sess.SessionID == "" || sess.SessionID != v.Main {
 		return
 	}
-	launcher := s.launcherNow(ctx)
+	launcher := s.mainLauncherNow(ctx)
 	binding, fingerprint := s.readinessModelScope(ctx, launcher)
 	if s.readinessReplySucceeded(ctx, machine, launcher, sess, binding, fingerprint, s.readinessRecordNow(ctx).Success) {
 		s.keepReadinessSuccess(ctx, readinessSuccess{Machine: machine, Launcher: launcher,

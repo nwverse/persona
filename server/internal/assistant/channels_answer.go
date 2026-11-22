@@ -41,8 +41,8 @@ func (s *Service) pendingIDs(ctx context.Context) map[string]bool {
 	return out
 }
 
-// checkChannelRun answers a run whose turn ended (channel.Run.Check and Decide).
-func (s *Service) checkChannelRun(id string) {
+// checkChannelRun answers a run whose turn ended (channel.Run.Check and Decide), reporting a completed unrelated end.
+func (s *Service) checkChannelRun(id string) (unrelated bool) {
 	r, prog := s.channelRunByID(id)
 	if r == nil || prog == nil {
 		return
@@ -156,7 +156,7 @@ func (s *Service) checkChannelRun(id string) {
 			res.Answer = i18n.T(look.Lang, "assistant-channels_runs.no_answer", i18n.Args{"reason": reason})
 		}
 	}
-	s.finishChannelRun(r, res)
+	return s.finishChannelRun(r, res)
 }
 
 // askAgain sends the conversation of a turn that ended without an answer (nothing, or a placeholder like "No
@@ -166,19 +166,22 @@ func (s *Service) askAgain(ctx context.Context, r *channel.Run, prog *chanLive, 
 	if r.TargetKind == channel.TargetAgent {
 		return false
 	}
-	l := s.botLang(ctx)
+	locale := s.hello(ctx).Locale
 	name := r.Channel
 	if r.Channel == channel.Feishu {
-		name = i18n.T(l, "assistant-channels_runs.feishu")
+		name = i18n.T(i18n.Lang(locale), "assistant-channels_runs.feishu")
 	} else if v, ok := s.pluginChannel(ctx, r.Channel); ok && v.Name != "" {
 		name = v.Name
 	}
-	text := prompts.RenderChannelAnswerAgain(prompts.ChannelAnswerAgain{Name: name})
+	text := prompts.RenderChannelAnswerAgain(prompts.ChannelAnswerAgain{Name: name, Language: answerLanguage(locale)})
 	_, body, _ := strings.Cut(text, "\n") // the first line is the context tag
 	id := channel.ClientMsgID(r.Channel, r.ID+"-again")
 	// The manager's own words, not the owner's: they preempt no background round (owner_preempt.go).
-	p, err := s.messageParams(ctx, SendParams{MachineID: r.MachineID, SessionID: r.SessionID,
-		Params: map[string]any{"session_id": r.SessionID, "text": text, "client_msg_id": id}}, false)
+	params := map[string]any{"session_id": r.SessionID, "text": text, "client_msg_id": id}
+	if r.Ext["public"] == "1" {
+		params["public"] = true
+	}
+	p, err := s.messageParams(ctx, SendParams{MachineID: r.MachineID, SessionID: r.SessionID, Params: params}, false)
 	if err == nil {
 		err = s.sendOnce(ctx, r.MachineID, p)
 	}
@@ -235,7 +238,8 @@ func (s *Service) readTurn(ctx context.Context, r *channel.Run) (channel.Reading
 // The run stays until its answer is handed to the hub: a sink that can't be reached now (the bus, the hub, a
 // plugin's program restarting) is tried again on the next look, for a while (channelAnswerTries), with the same
 // refs (a plugin sends a ref once).
-func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
+// It reports an unrelated end only after its cleanup completed; a pending retry still owns the turn.
+func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) (unrelated bool) {
 	c := &s.chans
 	c.mu.Lock()
 	prog := c.live[r.ID]
@@ -268,7 +272,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
 		res = recalledResult() // an answer read just before the recall does not go out
 	}
 	now := c.clock()
-	took := now.Sub(r.Started)
+	took := now.Sub(r.WaitFrom())
 	snap := *r
 	snap.Ext = cloneExt(r.Ext)
 	snap.Folded = slices.Clone(r.Folded)
@@ -309,7 +313,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
 		prog.steps, prog.live, prog.dirty = nil, "", false
 		prog.from, prog.upTo = 0, 0
 		prog.open, prog.calls, prog.read, prog.edited, prog.subs, prog.subsMore = nil, 0, nil, nil, nil, 0
-		prog.items, prog.cot = nil, cotProgress{}
+		prog.items, prog.cot, prog.native = nil, cotProgress{}, nil
 	} else {
 		prog.finished = true
 		delete(c.live, r.ID)
@@ -322,7 +326,10 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
 				delete(c.answered, k)
 			}
 		}
-		c.answered[[2]string{r.MachineID, r.SessionID}] = now
+		// An unrelated end closes an older wait; it did not answer the conversation's new turn.
+		if res.End != channel.EndUnrelated {
+			c.answered[[2]string{r.MachineID, r.SessionID}] = now
+		}
 	}
 	others := slices.ContainsFunc(c.st.Runs, func(o *channel.Run) bool { return o.Channel == r.Channel })
 	s.saveChannelStateLocked()
@@ -338,6 +345,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
 	if ts, ok := sink.(channelTyping); ok && !others {
 		ts.typing(ctx, false)
 	}
+	return res.End == channel.EndUnrelated
 }
 
 // channelAnswerTries is how long an answer that can't be handed over is tried again before the run gives up on it.
@@ -383,6 +391,12 @@ func (s *Service) channelAnswered(ctx context.Context, machine, session string) 
 	return ok && c.clock().Sub(at) < window
 }
 
+// transientRetryTurn is a failed turn the mechanical auto-continue loop will retry. Mirroring each attempt would
+// present transient retry state as a series of final answers; the chain's eventual non-transient turn mirrors as usual.
+func (s *Service) transientRetryTurn(ctx context.Context, sess proto.Session) bool {
+	return s.triageSwitches(ctx).transientOn() && turnErrorTransient(sess)
+}
+
 // channelTurnEnded: a conversation finished a turn (session.turn_ended). Its runs are checked at once rather than on
 // the next tick; a turn nobody asked for in a channel is mirrored to those that sync — not a quiet task's normal finish
 // (quietTaskTurn, #2396), whose news, if any, went out with notify_user.
@@ -407,10 +421,15 @@ func (s *Service) channelTurnEnded(ctx context.Context, machine, session string)
 		}
 	}
 	c.mu.Unlock()
+	unrelated := false
 	for _, id := range ids {
-		s.checkChannelRun(id)
+		if s.checkChannelRun(id) {
+			unrelated = true
+		}
 	}
-	if len(ids) == 0 && !s.quietTaskTurn(ctx, machine, session) && !s.channelAnswered(ctx, machine, session) {
+	// An old held wait can end during these checks. Reconsider the new turn only for that confirmed unrelated end;
+	// a remaining run or an answer actually sent still suppresses its mirrors through channelAnswered.
+	if (len(ids) == 0 || unrelated) && !s.quietTaskTurn(ctx, machine, session) && !s.channelAnswered(ctx, machine, session) {
 		s.feishuMirror(ctx, machine, session)
 		s.extensionMirror(ctx, machine, session)
 	}

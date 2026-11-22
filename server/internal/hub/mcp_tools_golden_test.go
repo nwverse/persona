@@ -7,23 +7,23 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/mcptoolgolden"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The MCP tools the hub offers, as they go over the wire (json.Marshal compacts the schemas; the golden is indented
-// for reading, which is a function of the same bytes). docs/assistant/prompts.md: regenerate with UPDATE_GOLDEN=1. The
-// connectors', Cua's and ego's are the manager's (extmgr's connector_tools goldens, its answer to
+// The MCP tools the hub offers, as they go over the wire (json.Marshal compacts the schemas; the goldens are indented
+// for reading, which is a function of the same bytes). One golden a tool, an index a list, and for the assistant's
+// variants only their difference from its list (mcptoolgolden, #11252), so a change to one tool rewrites one small
+// file. docs/assistant/prompts.md: regenerate with UPDATE_GOLDEN=1, which also deletes the goldens of removed tools.
+// The connectors', Cua's and ego's are the manager's (extmgr's connector_tools goldens, its answer to
 // extensions.hub_call connector_tools); the hub lists them with its own and the assistant's, in the same order.
 func TestGoldenMCPTools(t *testing.T) {
-	show := func(tools []proto.Tool) string {
+	checked := func(tools []proto.Tool) []proto.Tool {
 		assertNoEmptyToolEnums(t, tools)
 		assertToolSchemaTypes(t, tools)
-		b, err := json.MarshalIndent(tools, "", "  ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b) + "\n"
+		return tools
 	}
+	dir := mcptoolgolden.Dir
 	h := newTestHub(t)
 	// The manager answers as its golden says (extmgr TestGoldenConnectorTools), for the case at hand.
 	manager := func(name string) {
@@ -47,16 +47,29 @@ func TestGoldenMCPTools(t *testing.T) {
 	}
 	manager("assistant")
 	connectAssistant(t, h) // its tools are its to list (assistant.tools)
-	golden(t, "mcp_tools.assistant", show(h.mcpTools(true)))
-	golden(t, "mcp_tools.agent", show(h.mcpTools(false)))
+	assistantTools := checked(h.mcpTools(true))
+	mcptoolgolden.CheckList(t, dir, "assistant", assistantTools)
+	mcptoolgolden.CheckList(t, dir, "agent", checked(h.mcpTools(false)))
 	// With GitHub signed in: its read tools after the hub's own, for the assistant only.
 	manager("assistant_with_github")
-	golden(t, "mcp_tools.assistant_with_github", show(h.mcpTools(true)))
-	golden(t, "mcp_tools.agent", show(h.mcpTools(false)))
+	mcptoolgolden.CheckVariant(t, dir, "assistant_with_github", "assistant", assistantTools, checked(h.mcpTools(true)))
+	mcptoolgolden.CheckList(t, dir, "agent", checked(h.mcpTools(false)))
 	// With iMessage handed to Persona (the switch is on by default): its read tools too.
 	manager("assistant_with_imessage")
-	golden(t, "mcp_tools.assistant_with_imessage", show(h.mcpTools(true)))
-	golden(t, "mcp_tools.agent", show(h.mcpTools(false)))
+	mcptoolgolden.CheckVariant(t, dir, "assistant_with_imessage", "assistant", assistantTools, checked(h.mcpTools(true)))
+	mcptoolgolden.CheckList(t, dir, "agent", checked(h.mcpTools(false)))
+}
+
+// The whole-list goldens the per-tool files replaced (#11252). A branch written before the split that merges main can
+// keep or recreate them while the per-tool files stay stale (#11475), so their return fails here with the fix.
+func TestNoWholeListMCPToolGoldens(t *testing.T) {
+	old, err := filepath.Glob(filepath.Join("testdata", "prompts", "mcp_tools.*.golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range old {
+		t.Errorf("%s is a whole-list golden replaced by %s/<list>/<tool>.golden (#11252): delete it, then rerun UPDATE_GOLDEN=1 go test ./internal/hub -run TestGoldenMCPTools so the tool your branch changed is in its own file", f, mcptoolgolden.Dir)
+	}
 }
 
 func assertNoEmptyToolEnums(t *testing.T, tools []proto.Tool) {

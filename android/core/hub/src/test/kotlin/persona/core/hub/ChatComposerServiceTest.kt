@@ -9,6 +9,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Protocol
@@ -21,6 +22,33 @@ import org.junit.Test
 import java.io.File
 
 class ChatComposerServiceTest {
+    @Test fun heldReceiptDoesNotReportDeliveryOrStartAnotherSession() = runBlocking {
+        val scope = HubScope("test-hub", "generation")
+        val session = SessionKey("machine", "session")
+        var accepted = 0
+        var advertised: String? = null
+        var held: persona.core.contracts.HeldAgentMessage? = null
+        val transport = object : MessageTransport {
+            override val readyToSend = MutableStateFlow(true)
+            override val supportsClientOps = true
+            override suspend fun send(request: MessageRequest): MessageTransportResult = error("Composer owns sending")
+            override suspend fun onAccepted(session: SessionKey, reply: JsonObject?) { accepted++ }
+        }
+        val service = HttpChatComposerService(scope, transport, request = { _, _, headers ->
+            advertised = headers["X-Persona-Features"]
+            Response.Builder().request(Request.Builder().url("https://example.com/").build())
+                .protocol(Protocol.HTTP_1_1).code(202).message("Accepted").body(
+                    """{"delivered":"later","undelivered":{"id":"op","text":"Hello","computer":"Laptop","state":"waiting"}}""".toResponseBody()
+                ).build()
+        }, onHeld = { target, message -> assertEquals(session, target); held = message })
+        val result = service.send(MessageRequest(scope, session, "Hello", "op"))
+        assertEquals("Manager custody is not Agent delivery", 0, accepted)
+        assertEquals(MessageTransportResult.Held, result)
+        assertEquals("Laptop", held?.computer)
+        assertEquals(DeliveryState.Held, service.deliveries.value["op"]?.state)
+        assertTrue(advertised.orEmpty().split(',').contains("agent_message_hold"))
+    }
+
     @Test fun uploadsKnownLengthAndRetriesOnlyWithMatchingRefusalEvidence() = runBlocking {
         val scope = HubScope("test-hub", "generation")
         val session = SessionKey("machine", "session")
@@ -30,6 +58,7 @@ class ChatComposerServiceTest {
             override suspend fun send(request: MessageRequest): MessageTransportResult = error("Unexpected delegate send")
         }
         var attempts = 0
+        val provenance = mutableListOf<String?>()
         val retryResults = mutableListOf<Pair<DeliveryState, MessageTransportResult?>>()
         val service = HttpChatComposerService(scope, transport, request = { path, body, headers ->
             val buffer = Buffer()
@@ -44,6 +73,7 @@ class ChatComposerServiceTest {
                 assertEquals(headers["X-Persona-Op-Id"], fields["client_msg_id"]!!.jsonPrimitive.content)
                 assertEquals("消息", (fields["text"]!!.jsonPrimitive.content).zhAny())
                 if (headers["X-Persona-Op-Id"] == "overrides") {
+                    assertNull(fields["via"])
                     assertEquals("runtime", fields["launcher"]?.jsonPrimitive?.content)
                     assertEquals("model-id", fields["model"]?.jsonPrimitive?.content)
                     return@HttpChatComposerService Response.Builder()
@@ -51,6 +81,7 @@ class ChatComposerServiceTest {
                         .protocol(Protocol.HTTP_1_1).code(200).message("test").body("{}".toResponseBody()).build()
                 }
                 attempts++
+                provenance += fields["via"]?.jsonPrimitive?.content
                 // The retry goes under a new operation id: the hub would answer "operation" from its first try.
                 assertEquals(attempts == 1, headers["X-Persona-Op-Id"] == "operation")
                 if (attempts == 1) {
@@ -69,7 +100,7 @@ class ChatComposerServiceTest {
             file.writeText("abc")
             assertEquals("/tmp/test.txt", (service.upload(session, "test.txt", file)).zhAny())
         } finally { file.delete() }
-        service.send(MessageRequest(scope, session, "消息", "operation"))
+        service.send(MessageRequest(scope, session, "消息", "operation", via = MessageVia.Share))
         assertEquals("电脑草稿", (service.deliveries.value["operation"]!!.refusal!!.draft).zhAny())
         assertEquals(DeliveryState.Sent, service.retryRefused("operation", true).state)
         assertEquals(listOf(
@@ -82,7 +113,28 @@ class ChatComposerServiceTest {
         } catch (_: ComposerOperationException) { }
         assertEquals(MessageTransportResult.Accepted,
             service.send(MessageRequest(scope, session, "消息", "overrides", launcher = "runtime", model = "model-id")))
+        assertEquals(listOf(MessageVia.Share, MessageVia.Share), provenance)
         assertEquals(2, attempts)
+    }
+
+    @Test fun keptReplyIsNotAcceptedOrMarkedSent() = runBlocking {
+        val scope = HubScope("test-hub", "generation")
+        val session = SessionKey("machine", "session")
+        var accepted = 0
+        val transport = object : MessageTransport {
+            override val readyToSend = MutableStateFlow(true)
+            override val supportsClientOps = true
+            override suspend fun send(request: MessageRequest): MessageTransportResult = error("Unexpected delegate send")
+            override suspend fun onAccepted(session: SessionKey, reply: kotlinx.serialization.json.JsonObject?) { accepted++ }
+        }
+        val service = HttpChatComposerService(scope, transport, request = { _, _, _ ->
+            Response.Builder().request(Request.Builder().url("https://example.com/").build())
+                .protocol(Protocol.HTTP_1_1).code(202).message("kept")
+                .body("""{"delivered":"later","undelivered":{"id":"kept","text":"message","at":"2026-11-17T10:00:00Z","state":"waiting"}}""".toResponseBody()).build()
+        })
+        assertEquals(MessageTransportResult.Kept, service.send(MessageRequest(scope, session, "message", "kept")))
+        assertEquals(0, accepted)
+        assertNull(service.deliveries.value["kept"])
     }
 
     @Test fun clearAndSendGoesUnderANewOperationIdTheHubHasNotAnswered() = runBlocking {

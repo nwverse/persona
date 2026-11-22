@@ -311,7 +311,7 @@ struct UserBubble: View, Equatable {
         }
         .lookUpFiles(d.asked)
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .messageActionBar(id: item.id, text: shown, isUser: true, date: item.ts)
+        .messageActionBar(id: item.id, text: shown, isUser: true, date: item.ts, starItem: item)
     }
 }
 
@@ -368,7 +368,7 @@ struct PeerMessage: View {
             .padding(.trailing, Theme.Space.xxl)
             .chatPinned(pinKey)
             .messageLongPress(id: item.id) { card }
-            .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, from: from)
+            .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, from: from, starItem: item)
     }
 
     /// The message in its card (also what a long press lifts).
@@ -502,14 +502,22 @@ struct PendingBubble: View {
 /// offers Delete. Given up: why, with Retry and Delete. Shown on every device, from the chat's row.
 struct UndeliveredBubble: View {
     var message: UndeliveredMessage
+    var canManage: Bool
+    var retryDisabled = false
     var retry: () -> Void
     var discard: () -> Void
+    @State private var confirmingDelete = false
     @Environment(\.rowMemoScope) private var memoScope
     @Environment(\.chatPin) private var pin
+
+    private func requestDelete() {
+        if message.heldForComputer { confirmingDelete = true } else { discard() }
+    }
 
     var body: some View {
         let parsed = ContextRef.parse(message.text)
         let shown = AttachedFile.parse(parsed.rest).rest
+        let heldStatus = message.heldStatus
         let reason = message.error ?? String(localized: "The assistant could not start")
         VStack(alignment: .trailing, spacing: Theme.Space.sm) {
             let files = AttachedFile.parse(message.text).files
@@ -519,23 +527,31 @@ struct UndeliveredBubble: View {
                 Menu {
                     if message.canRetry {
                         Button(action: retry) { Label("Retry", systemImage: Theme.Icon.retry) }
+                            .disabled(retryDisabled)
                     }
-                    Button(role: .destructive, action: discard) { Label("Delete", systemImage: Theme.Icon.delete) }
+                    Button(role: .destructive, action: requestDelete) { Label("Delete", systemImage: Theme.Icon.delete) }
                 } label: {
-                    if message.gaveUp {
-                        ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
-                    } else {
-                        ThemedIcon(Theme.Icon.time).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
-                            .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
-                            .contentShape(.rect)
+                    Group {
+                        if message.gaveUp {
+                            ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
+                        } else {
+                            ThemedIcon(Theme.Icon.time).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
+                                .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
+                        }
                     }
+                    .frame(minWidth: message.heldForComputer ? Theme.Size.tapTarget : nil,
+                           minHeight: message.heldForComputer ? Theme.Size.tapTarget : nil)
+                    .contentShape(.rect)
                 }
-                .accessibilityLabel(message.deleteOnly == true ? Text(verbatim: reason) :
+                .disabled(!canManage)
+                .accessibilityLabel(heldStatus != nil || message.deleteOnly == true ? Text(verbatim: heldStatus ?? reason) :
                     message.gaveUp ? Text("Not delivered. Retry or delete.") : Text("Not delivered yet. It will be sent automatically."))
                 // The menu's items as actions too (VoiceOver's Actions rotor, the Runtime CLI), as on PendingBubble.
                 .accessibilityActions {
-                    if message.canRetry { Button("Retry", action: retry) }
-                    Button("Delete", action: discard)
+                    if canManage {
+                        if message.canRetry && !retryDisabled { Button("Retry", action: retry) }
+                        Button("Delete", action: requestDelete)
+                    }
                 }
                 let split = MessageComments.inBubble(shown)
                 let fold = BubbleFoldKey(id: "undelivered-" + message.id)
@@ -547,7 +563,9 @@ struct UndeliveredBubble: View {
                     }
             }
             Group {
-                if message.deleteOnly == true {
+                if let heldStatus {
+                    Text(verbatim: heldStatus).foregroundStyle(message.gaveUp ? Theme.danger : Theme.cautionText)
+                } else if message.deleteOnly == true {
                     Text(verbatim: reason).foregroundStyle(Theme.danger)
                 } else if message.gaveUp {
                     Text("Not delivered: \(reason)").foregroundStyle(Theme.danger)
@@ -564,7 +582,11 @@ struct UndeliveredBubble: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
         // Copy, and Delete, from the long-press bar as on a message only on this phone (#6427).
         .messageActionBar(id: "undelivered-" + message.id, text: shown, isUser: true, date: message.at, pending: true,
-                          delete: MessageBarDelete(title: String(localized: "Delete"), run: discard))
+                          delete: canManage ? MessageBarDelete(title: String(localized: "Delete"), run: requestDelete) : nil)
+        .alert("Delete this held message?", isPresented: $confirmingDelete) {
+            Button("Delete", role: .destructive, action: discard)
+            Button("Cancel", role: .cancel) {}
+        }
         .transition(.opacity)
     }
 }
@@ -741,7 +763,7 @@ struct AssistantText: View, Equatable {
         // A single line break is one, as in the terminal and Claude's web chat (#2088): not a space.
         .markdownSoftBreakMode(.lineBreak)
         .lookUpFiles(d.asked)
-        .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
+        .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, starItem: item)
         #if os(macOS)
         // Under an answer, while the pointer is over it: Copy, and Quote where the chat quotes (#2113). Not under an
         // agent's words between its steps (`quiet`).

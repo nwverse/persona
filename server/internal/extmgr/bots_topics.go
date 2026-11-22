@@ -59,8 +59,12 @@ type BotAISource struct {
 	ChatID    string    `json:"chat_id"`
 	MessageID string    `json:"message_id"`
 	At        time.Time `json:"at"`
-	// Replies is how many replies the bot has been let write under it (botSourceReplies at most).
+	// Replies is how many replies the bot has been let write under it (botSourceReplies at most, botReadReplies for
+	// a /read source).
 	Replies int `json:"replies,omitempty"`
+	// Kind is what the owner asked with: "" for "/ai" (#6146), botSourceRead for "/read" (#11803, bots_read.go), whose
+	// answer is cards under the message rather than one short line.
+	Kind string `json:"kind,omitempty"`
 }
 
 const (
@@ -141,7 +145,10 @@ var errNoTopicOwner = i18n.Err("hub-bots.topic_needs_owner")
 func (h *Manager) topicChatsPossible(ctx context.Context, appID *string) error {
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return err
+	}
 	owner, saved := b.set.Owner != nil, b.set.AppID
 	b.mu.Unlock()
 	if !owner {
@@ -159,7 +166,10 @@ func (h *Manager) topicChatsPossible(ctx context.Context, appID *string) error {
 func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bool, mentionEdits map[string]bool) error {
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return err
+	}
 	if b.set.Owner == nil {
 		nothing := len(want) == 0 && len(b.set.TopicChats) == 0 // read under the lock
 		b.mu.Unlock()
@@ -316,6 +326,9 @@ func (h *Manager) botGroupMessage(api *feishubot.Client, set FeishuBotSettings, 
 			return // the hub's own: it never goes to the assistant
 		}
 	}
+	if h.botReadGroup(api, set, ev, raw, since, pass) {
+		return // the owner's "@bot /read …", from any group (bots_read.go)
+	}
 	if !set.topicChat(msg.ChatID) {
 		h.botAIElsewhere(api, set, ev, raw, since, pass)
 		return
@@ -343,7 +356,7 @@ func (h *Manager) botAIElsewhere(api *feishubot.Client, set FeishuBotSettings, e
 	}
 	// Cheap first, from the text alone: what does not start with /ai (after the @s it starts with) is not asked about the
 	// bot at all, so a group's ordinary messages cost no call.
-	if _, ok := feishubot.AICommand(feishubot.StripLeadingMentions(content.Text, msg.Mentions, nil)); !ok {
+	if _, ok := feishubot.AICommand(content.StripLeadingMentions(msg.Mentions, nil)); !ok {
 		return
 	}
 	botID := h.botOpenID(api)
@@ -354,10 +367,10 @@ func (h *Manager) botAIElsewhere(api *feishubot.Client, set FeishuBotSettings, e
 	if !slices.ContainsFunc(msg.Mentions, isBot) {
 		return
 	}
-	if _, ok := feishubot.AICommand(feishubot.StripLeadingMentions(content.Text, msg.Mentions, isBot)); !ok {
+	if _, ok := feishubot.AICommand(content.StripLeadingMentions(msg.Mentions, isBot)); !ok {
 		return
 	}
-	h.takeAISource(msg.ChatID, msg.MessageID)
+	h.takeAISource(msg.ChatID, msg.MessageID, "")
 	h.audit(context.Background(), channel.Feishu, auditBotAITaken, botChatActor(set.Owner.OpenID), map[string]any{"chat_id": msg.ChatID})
 	h.handToAssistant(api, ev, raw, "", assistantwire.FeishuFromElsewhere, since, pass, false)
 }
@@ -395,7 +408,7 @@ func (h *Manager) useAISourceReply(messageID string, fullReply bool) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	src := b.set.aiSource(messageID, b.clock().UTC())
-	if b.set.Owner == nil || src == nil || src.Replies >= botSourceReplies || fullReply && !b.set.SourceReportFullReply {
+	if b.set.Owner == nil || src == nil || src.Replies >= src.repliesMax() || fullReply && !b.set.SourceReportFullReply {
 		return false
 	}
 	src.Replies++
@@ -405,7 +418,7 @@ func (h *Manager) useAISourceReply(messageID string, fullReply bool) bool {
 
 // takeAISource keeps the message as one the bot may reply to (the same message again changes nothing), dropping the
 // oldest past botAISourcesKeep and the ones older than botAISourcesKeepFor.
-func (h *Manager) takeAISource(chatID, messageID string) {
+func (h *Manager) takeAISource(chatID, messageID, kind string) {
 	b := &h.bots
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -414,7 +427,7 @@ func (h *Manager) takeAISource(chatID, messageID string) {
 	}
 	now := b.clock().UTC()
 	kept := slices.DeleteFunc(slices.Clone(b.set.AISources), func(s BotAISource) bool { return now.Sub(s.At) > botAISourcesKeepFor })
-	kept = append(kept, BotAISource{ChatID: chatID, MessageID: messageID, At: now})
+	kept = append(kept, BotAISource{ChatID: chatID, MessageID: messageID, At: now, Kind: kind})
 	if len(kept) > botAISourcesKeep {
 		kept = kept[len(kept)-botAISourcesKeep:]
 	}
@@ -436,7 +449,7 @@ func aiSourceReply(set FeishuBotSettings, chatID, replyTo, text string, now time
 		return "", false, nil
 	}
 	if chatID != "" && chatID != src.ChatID || !fullReply && utf8.RuneCountInString(text) > botSourceTextMax ||
-		fullReply && !set.SourceReportFullReply {
+		fullReply && (!set.SourceReportFullReply || src.Kind == botSourceRead) {
 		return "", true, errBotSourceReply
 	}
 	return src.ChatID, true, nil
@@ -532,22 +545,6 @@ func (h *Manager) messageChat(id string) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.msgChat.m[id]
-}
-
-// rememberHandedGroup notes a group message handed to the assistant: only a recall of one of these is passed on.
-func (h *Manager) rememberHandedGroup(id string) {
-	b := &h.bots
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.handedGroup.put(id, "")
-}
-
-func (h *Manager) handedGroupMessage(id string) bool {
-	b := &h.bots
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	_, ok := b.handedGroup.m[id]
-	return ok
 }
 
 var errBotReplyChat = &rpc.Error{Code: assistantwire.CodeChatDenied, Message: "feishu: a reply goes into the chat of the message it answers, and that chat is not one the bot may send into"}

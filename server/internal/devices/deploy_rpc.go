@@ -107,16 +107,22 @@ func (m *Machine) deploymentPhase(ctx context.Context, record *nodeDeployRecord,
 }
 
 func (m *Machine) startRPCDeployment(pkg nodePackage, saved *nodeDeployRecord) error {
+	_, err := m.startRPCDeploymentRun(pkg, saved)
+	return err
+}
+
+func (m *Machine) startRPCDeploymentRun(pkg nodePackage, saved *nodeDeployRecord) (*deployRun, error) {
 	m.mu.Lock()
 	if m.deploying {
+		run := m.deployRun
 		m.mu.Unlock()
-		return nil
+		return run, nil
 	}
 	if err := m.canDeployLocked(); err != nil {
 		m.mu.Unlock()
-		return err
+		return nil, err
 	}
-	m.deploying, m.deployErr, m.deployPhase = true, "", "waiting_idle"
+	run := m.beginDeployLocked("waiting_idle")
 	m.mu.Unlock()
 	record := nodeDeployRecord{Target: pkg.Version, State: "queued", Phase: "waiting_idle", At: time.Now().UTC(), Fallback: pkg.Fallback}
 	if saved != nil {
@@ -124,14 +130,15 @@ func (m *Machine) startRPCDeployment(pkg nodePackage, saved *nodeDeployRecord) e
 	}
 	ctx := m.d.deployContext()
 	if err := m.saveDeployRecord(ctx, record); err != nil {
+		err = explain(i18n.Err("devices-deploy.save_task_failed", i18n.Args{"err": err.Error()}), err)
 		m.mu.Lock()
-		m.deploying, m.deployPhase = false, ""
+		m.endDeployLocked(err)
 		m.mu.Unlock()
-		return explain(i18n.Err("devices-deploy.save_task_failed", i18n.Args{"err": err.Error()}), err)
+		return nil, err
 	}
 	m.d.changed()
 	go m.runRPCDeployment(ctx, pkg, record)
-	return nil
+	return run, nil
 }
 
 func (m *Machine) runRPCDeployment(ctx context.Context, pkg nodePackage, record nodeDeployRecord) {
@@ -164,7 +171,7 @@ func (m *Machine) runRPCDeployment(ctx context.Context, pkg nodePackage, record 
 		}
 	}
 	m.mu.Lock()
-	m.deploying, m.deployPhase = false, ""
+	m.endDeployLocked(err)
 	if err != nil && ctx.Err() == nil {
 		m.deployErr = err.Error()
 	}
@@ -452,7 +459,7 @@ func (m *Machine) nodeUpdateConnected(ctx context.Context, peer *rpc.Peer, info 
 		default:
 			pkg := nodePackage{Version: record.Target} // running it already: only confirmed
 			if info.Version != record.Target {
-				pkg, err = m.d.nodePackageFor(ctx, info.OS, info.Arch, nodeProgram(info))
+				pkg, err = m.d.nodePackageFor(ctx, info.OS, info.Arch, info.Program)
 				if err == nil && (pkg.Version != record.Target || pkg.Fallback && !record.Fallback) {
 					// The build found now is another one than the record's, or the same version now as a fallback (the
 					// hub moved to a version without a release of its own): what was queued for the hub's version

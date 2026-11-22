@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
-import type { Session } from "./types";
+import type { Interaction, Session } from "./types";
 import { makeSessionLookup, shownStatus, todoStatus, todoStatusLabel, type Todo } from "./todos";
 import { checkCount, checklist, reviewBadge, type Supervision } from "./supervision";
 import { finishedAt, FOLDED_SECTIONS, lastActivity, relatedKeys, SHELVE_AFTER_MS, supersededFailedStarts, todoBucket, TRIAGE_SECTIONS, triage, triageTodos, waitingForMerge } from "./todo-triage";
@@ -54,6 +54,25 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
   it("a decision for the owner is Waiting on you", () => {
     expect(at(todo("t", { agents: [agent("idle")], supervision: { supervisor: "c", state: "needs_user" } })).rule).toBe("owner_decides");
     expect(at(todo("t", { ask: { outcome: "decide", verdict: "v", asked_at: hoursAgo(1) } })).section).toBe("waiting");
+  });
+
+  it("a parked task's exact pending interaction is Waiting on you until that card resolves", () => {
+    const ix = { id: "ix-owner", machine_id: "m", session_id: "worker", kind: "question", created_at: hoursAgo(1) } as Interaction;
+    const td = todo("linked", {
+      agents: [{ ...agent("worker"), released_at: hoursAgo(0) }],
+      supervision: {
+        supervisor: "conv", state: "parked",
+        parked: { reason: "Owner permission", waiting_on: "external_event", until: hoursAgo(-4), count: 1,
+          evidence: { kind: "external_event", target: "Read-only permission", wake: "The owner answers", interaction_id: ix.id } },
+      },
+    });
+    const authoritative = { ...td, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0,
+      asks: [{ id: "run:worker", kind: "question", home: "run", interaction: ix.id }] } } as Todo;
+    expect(triage(authoritative, makeSessionLookup([session("worker", "idle")]), NOW)).toMatchObject({ section: "waiting", rule: "agent_asks" });
+    expect(triage(authoritative, makeSessionLookup([session("worker", "idle")], [ix]), NOW)).toMatchObject({ section: "waiting", rule: "agent_asks" });
+    // A stale owner-ask view must not survive the current pending list saying the card resolved.
+    expect(triage(authoritative, makeSessionLookup([session("worker", "idle")], []), NOW)).toMatchObject({ section: "parked", rule: "parked" });
+    expect(triage(td, makeSessionLookup([session("worker", "idle")]), NOW)).toMatchObject({ section: "parked", rule: "parked" });
   });
 
   it.each([false, true])("keeps a stopped parked task unfinished (seen: %s)", (seen) => {
@@ -352,6 +371,43 @@ describe("triageTodos", () => {
       { quiet: false },
     );
     expect([r.open, r.shelved, r.finished]).toEqual([1, 1, 2]);
+  });
+
+  it("keeps TriageGroup.key stable when live activity swaps which member leads (#12417)", () => {
+    const base = [
+      todo("task-3", { title: "Fix #412 login timeout (step 3)", plan_id: "plan-412", updated_at: hoursAgo(3), agents: [agent("s3")] }),
+      todo("task-5", { title: "Fix #412 login timeout (step 5)", plan_id: "plan-412", updated_at: hoursAgo(4), agents: [agent("s5")] }),
+      todo("task-1", { title: "Fix #412 login timeout (step 1)", plan_id: "plan-412", updated_at: hoursAgo(5), agents: [agent("s1")] }),
+    ];
+    const look1 = makeSessionLookup([
+      session("s3", "working", 1),
+      session("s5", "working", 2),
+      session("s1", "working", 3),
+    ]);
+    const r1 = triageTodos(base, look1, NOW);
+    expect(r1.sections.working).toHaveLength(1);
+    expect(r1.sections.working[0].lead.id).toBe("task-3");
+    expect(r1.sections.working[0].key).toBe("task-1");
+
+    // task-5 gets a newer activity tick and becomes lead
+    const look2 = makeSessionLookup([
+      session("s3", "working", 1),
+      session("s5", "working", 0.5),
+      session("s1", "working", 3),
+    ]);
+    const r2 = triageTodos(base, look2, NOW);
+    expect(r2.sections.working[0].lead.id).toBe("task-5");
+    expect(r2.sections.working[0].key).toBe("task-1");
+
+    // task-1 gets the newest activity tick and becomes lead
+    const look3 = makeSessionLookup([
+      session("s3", "working", 1),
+      session("s5", "working", 0.5),
+      session("s1", "working", 0.1),
+    ]);
+    const r3 = triageTodos(base, look3, NOW);
+    expect(r3.sections.working[0].lead.id).toBe("task-1");
+    expect(r3.sections.working[0].key).toBe("task-1");
   });
 
   it("related keys ignore case, spaces, punctuation and a PR link's trailing slash", () => {

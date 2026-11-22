@@ -912,6 +912,8 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - **Usage totals belong to the complete report scope** (#1567): bind accepted data and request status to the machine, range, model and launcher. Keep selector catalogs separately while another scope loads or fails; they are navigation options, not evidence of that scope's totals. Show current failures with retry, and label retained same-scope data as potentially stale. A scope cleanup alone does not order overlapping polls: ignore superseded success, error, unsupported and completion handlers even when transport cancellation arrives late. Exercise the actual component through the REST client with deferred synthetic fetch responses, including machine changes and empty launcher encoding.
 
 - **A `seen` the page only sends is lost without a word** (#6493): the web sent `{"type":"seen"}` on open and drew whatever the hub pushed next. `send` drops the message while the socket is still connecting (opening a chat link, a reload, a tab coming back after its socket went quiet), a half-open socket swallows it, and the next list still says Unread: the green dot stays after reading. Mark it seen locally at once and keep the mark until the hub's own rows say it was recorded (a later `seen_at`), with an HTTP retry after 5 s and a resend after hello (`lib/seen-outbox.ts`, the app's `SeenOutbox`). Hold the mark in the store's `set` so every way rows come in (pushes, paged-list pages, HTTP answers) is drawn seen, and hold it in `SessionRow` too: the paged sidebar draws the list's own rows, not the store's. The mock hub always takes the socket's `seen` and pushes back at once, so a plain mock run does not show this; rewrite or drop frames with `page.routeWebSocket` to check it.
+- **A mark the hub recorded still holds the lists that have not read since** (#12766): the page reads several lists of the same agents, each on its own hints and at most once in two seconds (the chat's lookup, the store's list, the sidebar's root list, a filtered list, the groups' counts). Letting a seen mark go as soon as the first of them showed `seen_at` recorded put the sidebar's row, still the one read before the look, back to green until its own list read: up to two seconds on a fleet whose working agents hint all the time. Keep the recorded mark for a while (`SEEN_SETTLE_MS`), held only against rows that still carry the old `seen_at`, and drop it at once when a row shows a new turn, work or a question. The plain mock hides it (every list reads at once): bump a working agent every 300 ms (`/mock/bump?what=last`) so each list reads on its own window.
+- **Correct a count only against the rows of the same read** (#12766): the hub's Unread counts still count an agent the page holds seen until a read after the record. Subtract a held agent only when it is among rows that came in the same answer as those counts (`sessions_page_counts`: the root list's or a filtered list's own page, published in one `SessionList` update since then; without the feature the hub's counts are left as they are); a separate counts read (a grouping while Lark-bot sessions are hidden) against another list's older rows took the agent off twice, one too few for up to two seconds, and one newer row against older counts put it back for a moment. Counts read on their own are read on every hint and follow the hub within one round trip.
 - **Do not compare the page's own `seen_at` with the hub's**: "Mark all as seen" writes a local `seen_at` into its copy, which would read as "recorded" and drop the mark before the hub ever had it. Remember the value written and ignore it.
 - **Mark a turn that ends while the chat is shown in the same update that brings it**: a React effect on the session's state runs after the green frame is drawn (and was the only path that re-marked). The store knows which chats are on screen (`viewSession`) and marks them inside `set` while the tab is visible.
 
@@ -1114,6 +1116,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 ## Composer Enter yields to the IME first (2026-11-05, #2733)
 
 - **Every composer `onKeyDown` handling Enter / Esc must start with `if (composing(e.nativeEvent)) return;`** (`lib/send-history.ts`, checks `isComposing || keyCode === 229`). Browsers still deliver Enter used to confirm Japanese conversion or commit English through Pinyin. Without a composition check, incomplete text creates to-dos, saves titles, or adds list items. Esc likewise cancels composition and closes the whole row. Test in jsdom with `new KeyboardEvent("keydown", { key: "Enter", isComposing: true })` (`views/ime-enter.test.tsx`).
+- **macOS Safari and WKWebView fire `compositionend` just before the committing Enter's `keydown`**, which then has `isComposing` false (#11237). A field whose Enter sends or picks a row tracks the composition itself: `useComposition` (`lib/ime.ts`) spreads `onCompositionStart` / `onCompositionEnd` on the field and `busy(e.nativeEvent)` also treats a key within `COMPOSITION_TAIL_MS` of the end as the input method's. Native capture listeners use `imeKey` with their own state. Menus that a typed `/` or `@` opens wait for the composition to end, and the chat composer is not collapsed to measure its height mid-composition. Test by dispatching `compositionstart` / `compositionend` and then a plain `keydown` Enter.
 
 ## Pushes are best-effort; pages need their own fallback (2026-11-05, #3139)
 
@@ -1360,6 +1363,10 @@ A workspace row has separate disclosure, selection and action controls. When mer
 
 The first screen also counts startup translations. Keep generic request-owner and uncertain-creation errors in the existing worktree catalog; load the advanced composer catalog with the composer. A pair of eager error labels should not make every advanced-field description part of the first screen.
 
+## Split a sidebar summary from a lazy message index (#12038)
+
+A compact index shared by the sidebar and every message can put the message menu's identity map and per-message subscriptions on the first screen even when its writes are lazy. Give the sidebar a small count/access store and let the lazy message controls own the full index. Do not remove read-only markers or duplicate request logic to save bytes. Measure the production bundle: merely moving translation keys or splitting type files may add bytes instead of reducing them.
+
 ## Archive refusals must roll back optimistic removal (#4277)
 
 A connected delta hub keeps its pushed session rows during REST refresh. Refresh cannot restore a row the page
@@ -1493,3 +1500,20 @@ Full UI retains a machine's xterm feed between surfaces. Reading font family onl
 ## Deep tree rows need space for their counts (#10477)
 
 A shrinking file name cannot protect an end count when the row itself has unbounded indentation padding. Put the indentation and icon inside the name's shrinkable, clipped region; keep the count outside it with no wrapping. Bound deep indentation to a share of that region so the file name still has room for an ellipsis. Measure bounds against the containing panel, not the viewport, and keep the requested width separate from its temporary fitted width. Verify deep rows at minimum width in a real browser: jsdom cannot detect a clipped minus sign.
+
+### A local preference moving to shared settings (#10241)
+
+A read-then-write migration can overwrite a choice another browser just saved.
+Use an insert-if-absent at the database's unique key, not a service mutex or an
+unconditional PUT after a GET. Return the current value even when migration loses.
+Keep the legacy key on read/write failure and guard delayed reads with a save and
+credential generation. Filtering must consume the acknowledged shared value in
+both complete and paged lists before grouping/counts; a quick filter must never
+turn the display preference back on as a side effect.
+
+## Live turn clock ownership stays on the live line (#12446)
+
+A foreground dock timer flag in `ChatContext` invalidates every historical exchange when a turn starts or ends,
+even through memoized rows. Carry it as a prop only on live transcript lines (including live children of an opened
+background round). Compare message-action renders for starting and ending separately against different history
+lengths, and retain the single-timer tests for Agent and Persona chats.

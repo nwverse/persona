@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -71,6 +72,10 @@ func (s *Service) FeishuMessage(ctx context.Context, p FeishuMessage) error {
 			s.feishuElsewhere(ev, st) // the owner's "@bot /ai …" from a group that is not opted in (feishu_elsewhere.go)
 			return
 		}
+		if p.From == FeishuFromRead {
+			s.feishuRead(ev, st) // the owner's "@bot /read …" from a group (feishu_read.go)
+			return
+		}
 		s.feishuMessage(ev, st, p.Action)
 	}()
 	return nil
@@ -99,20 +104,31 @@ func (s *Service) feishuMessage(ev feishubot.MessageEvent, st FeishuStatus, acti
 	if !content.Forward && len(content.Media) == 0 && noReplyCommand(content.Text) && s.chatNoReply(ctx, ev) {
 		return // "don't report back" for a to-do taken in this chat with no topic to say it in (todo_source.go)
 	}
-	if _, _, isCommand := parseBotCommand(content.Text); isCommand && !content.Forward && len(content.Media) == 0 {
+	var target botTarget
+	if cmd, _, isCommand := parseBotCommand(content.Text); isCommand && !content.Forward && len(content.Media) == 0 {
 		handled, rest := s.botCommand(ctx, st.Features, msg.MessageID, content.Text, msg.RootID, msg.ParentID)
 		if handled {
 			return
 		}
 		content.Text = rest
+		if cmd == "/new" || cmd == "/新对话" { // i18n-ignore: command alias typed by the user
+			// The first message explicitly starts a conversation, even when replying to an old card.
+			// Keep the reply metadata for quoted context, but do not answer or route by that card.
+			target = botTarget{Kind: targetPersona}
+		}
 	}
-	if !content.Forward && s.acceptReply(ctx, msg.MessageID, content.Text, len(content.Media) > 0, msg.ParentID, msg.RootID) {
-		return // about a "Please verify" card (acceptance_reply.go)
+	if target.Kind == "" {
+		if !content.Forward && s.acceptReply(ctx, msg.MessageID, content.Text, len(content.Media) > 0, msg.ParentID, msg.RootID) {
+			return // about a "Please verify" card (acceptance_reply.go)
+		}
+		if !content.Forward && len(content.Media) == 0 && s.botApproveOwnerAction(ctx, ev, content.Text, action) {
+			return // an exact direct reply to an owner-action proposal (owner_action_reply.go)
+		}
+		if !content.Forward && len(content.Media) == 0 && s.botAnswerQuestion(ctx, msg.MessageID, content.Text, action, msg.RootID, msg.ParentID) {
+			return // the answer to the card waiting in this topic (feishu_text_answer.go)
+		}
+		target = s.botTargetFor(msg.RootID, msg.ParentID)
 	}
-	if !content.Forward && len(content.Media) == 0 && s.botAnswerQuestion(ctx, msg.MessageID, content.Text, action, msg.RootID, msg.ParentID) {
-		return // the answer to the card waiting in this topic (feishu_text_answer.go)
-	}
-	target := s.botTargetFor(msg.RootID, msg.ParentID)
 	if err := botAllowed(s.botLang(ctx), st.Features, target); err != nil {
 		s.botNote(ctx, msg.MessageID, err.Error())
 		return
@@ -143,6 +159,7 @@ type resolvedTarget struct {
 	machineName string
 	session     proto.Session
 	label       string
+	secondary   string
 	main        bool
 	isNew       bool // no conversation yet: the message starts one
 }
@@ -161,7 +178,8 @@ func (s *Service) resolveBotTarget(ctx context.Context, t botTarget) (resolvedTa
 		if stoppedAgent(sess) { // read-only (#4754)
 			return resolvedTarget{}, errors.New(i18n.T(l, "assistant-feishu.agent_stopped"))
 		}
-		return resolvedTarget{machine: d.ID, machineName: d.Name, session: sess, label: agentLabel(sess) + " · " + d.Name}, nil
+		label, secondary := feishuSessionNames(sess, s.useHerdrTabName(ctx))
+		return resolvedTarget{machine: d.ID, machineName: d.Name, session: sess, label: label + " · " + d.Name, secondary: secondary}, nil
 	default:
 		cfg := s.settings(ctx)
 		d, ok := s.device(ctx, cfg.MachineID)
@@ -228,7 +246,9 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 			s.botUnreact(context.WithoutCancel(ctx), msg.MessageID, reaction)
 		}
 	}()
-	in := prompts.BotMessage{Persona: !t.agent(), Topic: topic != nil, Owner: s.owner(ctx), Text: content.Text}
+	hello := s.hello(ctx)
+	lang := i18n.Lang(hello.Locale)
+	in := prompts.BotMessage{Persona: !t.agent(), Topic: topic != nil, Owner: strings.TrimSpace(hello.Owner), Language: answerLanguage(hello.Locale), Text: content.Text}
 	if t.TodoID != "" && topic == nil {
 		todo, ok, err := s.todo(ctx, t.TodoID)
 		if err != nil {
@@ -238,9 +258,6 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 		}
 	}
 	to := topic.target()
-	s.fbot.mu.Lock()
-	_, ours := s.fbot.st.Threads[msg.ParentID]
-	s.fbot.mu.Unlock()
 	// The media to pass on: this message's own, then the pictures and files of the message it quotes (the owner
 	// replies to a picture to ask about it), each downloaded with the message it is in.
 	type botMedia struct {
@@ -252,15 +269,15 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 	for _, md := range content.Media {
 		media = append(media, botMedia{of: msg.MessageID, Media: md})
 	}
-	if msg.ParentID != "" && !ours && topic == nil {
+	if msg.ParentID != "" && topic == nil {
 		var quoted []feishubot.Media
-		in.Quote, quoted = s.botQuote(ctx, msg.ParentID)
+		in.Quote, quoted = s.botQuote(ctx, msg.ParentID, lang)
 		for _, md := range quoted {
 			media = append(media, botMedia{of: msg.ParentID, quoted: true, Media: md})
 		}
 	}
 	if content.Forward && topic == nil {
-		in.Forward = s.botForward(ctx, msg.MessageID)
+		in.Forward = s.botForward(ctx, msg.MessageID, lang)
 	}
 	var images []proto.Image
 	var tooLarge []string // files too large to pass on
@@ -270,28 +287,36 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 			var res struct {
 				Data     []byte `json:"data"`
 				MIME     string `json:"mime"`
+				Path     string `json:"path"`
+				Name     string `json:"name"`
 				TooLarge bool   `json:"too_large"`
 			}
-			if err := s.appCall(ctx, AppFeishu, FeishuResource, map[string]any{"message_id": bm.of, "key": md.Key, "kind": md.Kind}, &res); err != nil {
+			if err := s.appCall(ctx, AppFeishu, FeishuResource, map[string]any{"message_id": bm.of, "key": md.Key, "kind": md.Kind,
+				"machine_id": rt.machine, "as_file": len(images) >= botImagesMax}, &res); err != nil {
 				if bm.quoted {
 					s.logf("bots: the quoted message's image: %v", err)
 					continue
 				}
+				var coded *rpc.Error
+				if errors.As(err, &coded) && coded.Code == assistantwire.CodeFeishuSave {
+					return fmt.Errorf("%s%w", i18n.T(s.botLang(ctx), "assistant-feishu.save_file", i18n.Args{"machine": rt.machineName}), err)
+				}
 				return fmt.Errorf("%s%w", i18n.T(s.botLang(ctx), "assistant-feishu.download_image"), err)
+			}
+			if res.TooLarge || (res.Name != "" && res.Path == "") {
+				tooLarge = append(tooLarge, res.Name)
+				continue
+			}
+			if res.Path != "" {
+				in.Files = append(in.Files, res.Path)
+				continue
 			}
 			mime := res.MIME
 			if !strings.HasPrefix(mime, "image/") {
 				mime = "image/png"
 			}
-			if len(images) < botImagesMax && !res.TooLarge {
-				images = append(images, proto.Image{Mime: mime, Data: base64.StdEncoding.EncodeToString(res.Data)})
-				continue
-			}
-			// More pictures than a message takes, or one too big for the model: as a file.
-			md.Name = md.Key + map[string]string{"image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}[mime]
-			if !strings.Contains(md.Name, ".") {
-				md.Name += ".png"
-			}
+			images = append(images, proto.Image{Mime: mime, Data: base64.StdEncoding.EncodeToString(res.Data)})
+			continue
 		}
 		var saved struct {
 			Path     string `json:"path"`
@@ -330,13 +355,28 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 		}()
 	}
 
-	run := &channel.Run{ID: "fb_" + msg.MessageID, Channel: channel.Feishu, ReplyTo: msg.MessageID, Started: time.Now().UTC(), Label: rt.label,
-		Probe: botProbe(content.Text, in), Ext: map[string]string{}}
+	ext := map[string]string{}
+	if topic != nil {
+		ext["chat"], ext["thread"] = topic.Chat, topic.Thread
+	}
+	if err := s.startBotRun(ctx, rt, t, msg.MessageID, text, images, botProbe(content.Text, in), reaction, ext); err != nil {
+		return err
+	}
+	started = true
+	return nil
+}
+
+// startBotRun sends text (with its pictures) for the owner's message messageID into the target's conversation, or
+// starts one, and starts the run that answers it. ext are the run's channel values besides the reaction (where the
+// answer goes: runTo).
+func (s *Service) startBotRun(ctx context.Context, rt resolvedTarget, t botTarget, messageID, text string, images []proto.Image, probe, reaction string, ext map[string]string) error {
+	run := &channel.Run{ID: "fb_" + messageID, Channel: channel.Feishu, ReplyTo: messageID, Started: time.Now().UTC(), Label: rt.label,
+		Probe: probe, Ext: ext}
+	if run.Ext == nil {
+		run.Ext = map[string]string{}
+	}
 	if reaction != "" {
 		run.Ext["reaction"] = reaction
-	}
-	if topic != nil {
-		run.Ext["chat"], run.Ext["thread"] = topic.Chat, topic.Thread
 	}
 	if rt.isNew {
 		sess, err := s.Start(ctx, StartParams{Text: text, Images: images, Main: rt.main, Origin: OriginChannel, OriginRef: channel.Feishu})
@@ -354,7 +394,7 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 			run.TargetKind = targetPersona
 		}
 		run.Base = s.lastSeq(ctx, rt.machine, sid)
-		id := channel.ClientMsgID(channel.Feishu, msg.MessageID)
+		id := channel.ClientMsgID(channel.Feishu, messageID)
 		run.MsgIDs = []string{id}
 		p := map[string]any{"session_id": sid, "text": text, "client_msg_id": id}
 		if len(images) > 0 {
@@ -362,6 +402,7 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 		}
 		if !t.agent() {
 			s.UserSpoke(ctx, SessionRef{MachineID: rt.machine, SessionID: sid})
+			var err error
 			if p, err = s.SendParams(ctx, SendParams{MachineID: rt.machine, SessionID: sid, Params: p}); err != nil {
 				return err
 			}
@@ -370,7 +411,6 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 			return err
 		}
 	}
-	started = true
 	s.startChannelRun(run)
 	return nil
 }
@@ -389,28 +429,31 @@ func botProbe(text string, in prompts.BotMessage) string {
 }
 
 // botQuote is the message a message replies to, and the pictures and files in it.
-func (s *Service) botQuote(ctx context.Context, id string) (*prompts.BotQuote, []feishubot.Media) {
+func (s *Service) botQuote(ctx context.Context, id string, lang i18n.Lang) (*prompts.BotQuote, []feishubot.Media) {
 	items, err := s.botMessages(ctx, id)
 	if err != nil || len(items) == 0 {
 		return nil, nil
 	}
 	it := items[0]
+	if it.Deleted {
+		return nil, nil
+	}
 	c := feishubot.ParseContent(it.MsgType, it.Body.Content, it.MentionList())
 	who := "Persona"
 	if it.Sender.SenderType == "user" {
-		who = s.botName(ctx, it.Sender.ID)
+		who = s.botName(ctx, it.Sender.ID, lang)
 	}
 	if c.Text == "" {
 		c.Text = "[" + it.MsgType + "]"
 	}
-	return &prompts.BotQuote{Who: who, Text: clip(c.Text, 4000)}, c.Media
+	return &prompts.BotQuote{ID: id, Who: who, Text: clip(c.Text, 4000)}, c.Media
 }
 
 // botForward reads a merged forward: one line per message, oldest first.
-func (s *Service) botForward(ctx context.Context, id string) string {
+func (s *Service) botForward(ctx context.Context, id string, lang i18n.Lang) string {
 	items, err := s.botMessages(ctx, id)
 	if err != nil {
-		return "（读不到转发的内容：" + err.Error() + "）"
+		return i18n.T(lang, "assistant-feishu.forward_error", i18n.Args{"error": i18n.Verbatim(err.Error())})
 	}
 	loc := s.location(ctx)
 	var lines []string
@@ -423,28 +466,29 @@ func (s *Service) botForward(ctx context.Context, id string) string {
 		text := c.Text
 		if text == "" {
 			text = "[" + it.MsgType + "]"
-		}
-		for _, md := range c.Media {
-			if md.Kind == "image" && !strings.Contains(text, "[图片]") {
-				text += " [图片]"
+			if it.MsgType == "image" && len(c.Media) != 0 {
+				// A standalone image has no text. Rich posts already carry their own media placeholders.
+				text = i18n.T(lang, "assistant-feishu.forward_image")
 			}
 		}
-		who := "某人"
+		who := i18n.T(lang, "assistant-feishu.unknown_sender")
 		if it.Sender.SenderType == "user" {
-			who = s.botName(ctx, it.Sender.ID)
+			who = s.botName(ctx, it.Sender.ID, lang)
 		} else if it.Sender.SenderType == "app" {
-			who = "机器人"
+			who = i18n.T(lang, "assistant-feishu.bot_sender")
 		}
-		line := fmt.Sprintf("%s %s：%s", it.At().In(loc).Format("01-02 15:04"), who, text)
+		line := i18n.T(lang, "assistant-feishu.forward_line", i18n.Args{
+			"time": it.At().In(loc).Format("01-02 15:04"), "sender": i18n.Verbatim(who), "text": i18n.Verbatim(text),
+		})
 		n += len([]rune(line))
 		if n > 30000 {
-			lines = append(lines, "（后面的太长，略）")
+			lines = append(lines, i18n.T(lang, "assistant-feishu.forward_clipped"))
 			break
 		}
 		lines = append(lines, line)
 	}
 	if len(lines) == 0 {
-		return "（转发里没有能读的消息）"
+		return i18n.T(lang, "assistant-feishu.forward_empty")
 	}
 	return strings.Join(lines, "\n")
 }

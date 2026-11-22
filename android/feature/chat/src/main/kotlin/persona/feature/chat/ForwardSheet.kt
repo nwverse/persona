@@ -24,6 +24,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
+import persona.core.contracts.isTraeCliId
 import persona.core.designsystem.AgentMarkSpec
 import persona.core.designsystem.AgentRow
 import persona.core.designsystem.GroupPosition
@@ -53,23 +54,24 @@ internal const val FORWARD_SHEET_TAG = "forward-sheet"
  */
 @Composable
 internal fun ForwardSheet(
-    draft: ForwardDraft,
+    drafts: List<ForwardDraft>,
     forwarding: ChatForwarding,
-    complete: suspend () -> ChatLinkContext,
+    complete: suspend () -> List<ForwardPlacement>,
+    onSelectMessages: (() -> Unit)? = null,
     onDismiss: () -> Unit,
-    onPicked: (ForwardTarget, ChatLinkContext) -> Unit,
+    onPicked: (ForwardTarget, List<ForwardPlacement>) -> Unit,
 ) {
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
-    val from = draft.source.key
+    val from = drafts.first().source.key
     // What the app holds as the sheet opens (iOS reads the list once): rows do not move under the finger while it is open.
-    val held = remember(draft) {
+    val held = remember(drafts) {
         val persona = forwarding.personaGroupOf(from)
         ForwardHeld(forwarding.agents.value, forwarding.assistant.value.conversations.filterNot { it.archived }, forwarding.machines.value,
             forwarding.assistant.value.mainSession?.takeIf { persona }, persona)
     }
-    val memory = remember(draft) { forwarding.memory(from) }
-    var recents by remember(draft) { mutableStateOf(emptyList<SessionKey>()) }
+    val memory = remember(drafts) { forwarding.memory(from) }
+    var recents by remember(drafts) { mutableStateOf(emptyList<SessionKey>()) }
     LaunchedEffect(memory) {
         recents = try { memory?.targets()?.let(ForwardMemory::sessions).orEmpty() }
             catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { emptyList() }
@@ -77,7 +79,7 @@ internal fun ForwardSheet(
     var query by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf<ForwardTarget?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    val preview = remember(draft, resources) { ForwardMessage.ref(draft.raw, draft.source, resources) }
+    val previews = remember(drafts, resources) { drafts.map { ForwardMessage.ref(it.raw, it.source, resources, limit = ForwardMessage.limit(drafts.size)) } }
     val online: (String) -> Boolean = { id -> held.machines.firstOrNull { it.id == id }?.online == true }
     val sections = remember(held, recents, query) {
         ForwardTargets.sections(held.agents, held.conversations, from, recents, held.main, held.machines, query, online,
@@ -90,7 +92,7 @@ internal fun ForwardSheet(
         busy = target
         error = null
         scope.launch {
-            val ref = try { complete() } catch (cancelled: CancellationException) { throw cancelled }
+            val completed = try { complete() } catch (cancelled: CancellationException) { throw cancelled }
             catch (e: Exception) {
                 busy = null
                 error = resources.getString(R.string.chat_forward_failed, operationFeedback(e).text.resolve(resources))
@@ -100,17 +102,21 @@ internal fun ForwardSheet(
                 try { memory?.remember(stored) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
             }
             onDismiss()
-            onPicked(target, ref)
+            onPicked(target, completed)
         }
     }
 
     JSheet(onDismiss, Modifier.testTag(FORWARD_SHEET_TAG), title = stringResource(R.string.chat_forward_title), dismissible = busy == null) {
         JSearchField(query, { query = it }, stringResource(R.string.chat_forward_search), Modifier.fillMaxWidth())
         LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)) {
+            if (onSelectMessages != null && query.isBlank()) item("select") {
+                JRow(stringResource(R.string.chat_forward_select_messages), Modifier.testTag("forward-select-messages"),
+                    leadingIcon = PersonaIcons.success, enabled = busy == null, onClick = onSelectMessages)
+            }
             item("preview") {
                 val label = stringResource(R.string.chat_forward_preview)
                 Column(Modifier.padding(top = Tokens.Space.m, bottom = Tokens.Space.s).semantics { contentDescription = label }) {
-                    ChatContextCard(preview)
+                    ForwardComposerCards(previews)
                 }
             }
             if (query.isBlank()) {
@@ -179,7 +185,7 @@ private fun TargetRow(s: Session, position: GroupPosition, machine: String?, tit
     AgentRow(title, status, onClick = { if (enabled) onClick() }, Modifier.testTag("forward-session-${s.sessionId}"),
         position = position, statusText = if (s.assistant) null else status.localizedLabel,
         preview = if (s.assistant) persona else s.spaceName?.takeIf { it.isNotBlank() } ?: s.folderName,
-        agent = s.agentLabel.takeIf { !s.assistant && (s.isCodex || s.agent == "traex") },
+        agent = s.agentLabel.takeIf { !s.assistant && (s.isCodex || isTraeCliId(s.agent)) },
         facts = machine?.let { listOf(RowFact(it)) }.orEmpty(),
         agentMark = if (s.assistant) AgentMarkSpec(null, persona, null) else s.agentMark, muted = !enabled,
         end = if (busy) ({ JSpinner() }) else null)

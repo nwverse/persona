@@ -14,7 +14,7 @@ import (
 
 // NodeEvent takes a node's event before the hub does (devices.Options.Event); false: the hub does not get it (the
 // manager tells it what follows instead).
-func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool {
+func (s *Service) nodeEvent(machine, event string, params json.RawMessage) bool {
 	if event == "launchers.changed" {
 		s.launchersChanged(machine)
 		return false
@@ -105,7 +105,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 }
 
 // NodeRequest answers what of a node's requests is the manager's (devices.Options.Answer, with NodeAnswer's).
-func (s *Service) NodeRequest(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+func (s *Service) nodeRequest(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
 	if err := s.conversationParamsAvailable(ctx, machine, params); err != nil {
 		return nil, true, err
 	}
@@ -199,17 +199,22 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		return out, true, nil
 	case "mcp.call":
 		var p struct {
-			Name        string          `json:"name"`
-			Args        json.RawMessage `json:"args"`
-			SessionID   string          `json:"session_id"`
-			Origin      string          `json:"origin"` // the node's attested origin, including during assistant startup
-			Assistant   bool            `json:"assistant"`
-			Guest       bool            `json:"guest"`
-			WaitUpdates bool            `json:"wait_updates"`
-			CallID      json.RawMessage `json:"call_id"`
+			Name             string                 `json:"name"`
+			Args             json.RawMessage        `json:"args"`
+			SessionID        string                 `json:"session_id"`
+			Origin           string                 `json:"origin"` // the node's attested origin, including during assistant startup
+			Assistant        bool                   `json:"assistant"`
+			Guest            bool                   `json:"guest"`
+			WaitUpdates      bool                   `json:"wait_updates"`
+			CallID           json.RawMessage        `json:"call_id"`
+			SourcePermission proto.SourcePermission `json:"source_permission"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, true, err
+		}
+		ctx = devicewire.WithSourcePermission(ctx, proto.SourcePermission{})
+		if p.SourcePermission.Matches(p.SessionID, p.Name, p.Args) {
+			ctx = devicewire.WithSourcePermission(ctx, p.SourcePermission)
 		}
 		var callID string
 		_ = json.Unmarshal(p.CallID, &callID)
@@ -241,6 +246,8 @@ func (s *Service) FleetUp(ctx context.Context) {
 	s.fleet.sent, s.fleet.archived = nil, nil
 	s.fleet.sentMu.Unlock()
 	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
+	reviewInteractions, _ := s.sessionReviewInteractions(ctx)
+	s.askOnPhone(reviewInteractions)
 	for _, m := range s.fleetMachines() {
 		s.publishSessions(m.ID)
 	}

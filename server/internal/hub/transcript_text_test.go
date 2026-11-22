@@ -236,6 +236,38 @@ func TestLocalizedRuntimeBridgeLines(t *testing.T) {
 	}
 }
 
+func TestLocalizedAgyWakeNotice(t *testing.T) {
+	items := []proto.Item{
+		{Role: "system", Kind: proto.KindNotice, Text: transcript.BackgroundTaskUpdate, Wake: true},
+		{Role: "system", Kind: proto.KindNotice, Text: transcript.BackgroundTaskUpdate},
+	}
+	for lang, want := range map[i18n.Lang]string{
+		i18n.En: "A background task has an update", i18n.Ja: "バックグラウンドタスクに更新があります", i18n.ZhHans: transcript.BackgroundTaskUpdate,
+	} {
+		got := localizedItems(lang, items)
+		if got[0].Text != want || !got[0].Wake || got[1].Text != transcript.BackgroundTaskUpdate {
+			t.Errorf("%s: %+v", lang, got)
+		}
+	}
+}
+
+func TestLocalizedAgyAutoRefusalNotice(t *testing.T) {
+	const zh = "agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求"
+	items := []proto.Item{{Role: "system", Kind: proto.KindNotice, Text: zh}}
+	for lang, want := range map[i18n.Lang]string{
+		i18n.ZhHans: zh,
+		i18n.En:     "agy refused Auto mode; Persona is automatically approving permission requests instead",
+		i18n.Ja:     "agy が Auto モードを拒否したため、Persona が権限リクエストを自動承認します",
+	} {
+		if got := localizedItems(lang, items)[0].Text; got != want {
+			t.Errorf("%s: %q, want %q", lang, got, want)
+		}
+	}
+	if items[0].Text != zh {
+		t.Fatal("localization mutated the runtime's notice")
+	}
+}
+
 // The phone's Stop of a session outside Persona's terminals (transcript.StoppedFromPhone) reads in the app's language;
 // the user's own words from Persona stay as they are.
 func TestStoppedFromPhoneLocalized(t *testing.T) {

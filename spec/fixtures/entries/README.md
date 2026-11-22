@@ -21,3 +21,14 @@ a pending-review ledger; a generic blocked/external hint without a named wait is
 Runners: `web/src/lib/assistant-entries.test.ts`, `apple/PersonaTests/AssistantEntriesFixtureTests.swift`, and Android's
 `AssistantEntriesFixtureTest`. The new `spec/fixtures/todo-view` and `spec/fixtures/todo-counts` belong to #10226;
 these older fixtures do not claim the new projection, routes or client rollout have shipped.
+
+- Structure: `{"version": 1, "cases": [...]}`. `input` has `conversation`, `main` (the main conversation's id), `now`
+  (RFC 3339, for the 48-hour shelving line), and the hub's wire objects: `todos`, `sessions` (with `state` worked out),
+  `interactions` (pending cards), `plans` (by id) and `feed` (the conversation's items).
+- Row keys: `task:<todo id>`, `agent:<machine id>/<session id>`, `plan:<plan id>`, `message:<feed item id>`.
+- `expected.finished` and `expected.finished_new` are optional (absent means none). Finished rows are in no other
+  entry, and the entries' counts do not include them.
+- All data is made up.
+- Run: `cd web && npx vitest run src/lib/assistant-entries.test.ts`,
+  `cd android && ./gradlew :core:domain:test --tests '*AssistantEntriesFixtureTest*'` and, on Apple,
+  `AssistantEntriesFixtureTests` in `PersonaTests`.

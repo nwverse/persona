@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // secretary is an agent the main conversation did not hand out (a long-lived one the user opened), working on no todo.
@@ -239,6 +240,52 @@ func TestAgentSendTaskFailedSend(t *testing.T) {
 	}
 	if todo := onlyTodo(s); todo.DoneAt != nil || len(todo.Agents) != 1 || feedKinds(s, "conv1") != "task" {
 		t.Fatalf("unknown: %+v, feed %q", todo, feedKinds(s, "conv1"))
+	}
+}
+
+func TestAgentSendReportsUncertainDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		uncertain bool
+	}{
+		{"relayed deadline", relayedDeadline, true},
+		{"node failed after writing", nodeAfterWrite, true},
+		{"could not read the write receipt", nil, true},
+		{"node refused before writing", nodeRefused, false},
+		{"request never written", rpc.NotSent(context.DeadlineExceeded), false},
+	} {
+		for _, handoff := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/handoff=%t", tc.name, handoff), func(t *testing.T) {
+				s, f := newQuietService(t)
+				secretary(f)
+				failSends(f, tc.err)
+				if tc.err == nil {
+					f.answerNode(DeviceSessionSend, unreadableWriteReceipt)
+				}
+				args := map[string]any{"machine": "box", "session_id": "sec00001", "text": "Check the weekly figures"}
+				if handoff {
+					args["task"] = map[string]any{"title": "Weekly figures"}
+				}
+				_, err := runJSON(t, s, "conv1", "agent_send", args)
+				if err == nil || tc.err != nil && !errors.Is(err, tc.err) || strings.Contains(err.Error(), "check with agent_read before sending again") != tc.uncertain {
+					t.Errorf("agent_send returned %v; uncertain = %t", err, tc.uncertain)
+				}
+				if n := sessionSends(f); n != 1 {
+					t.Errorf("sent %d times", n)
+				}
+				_, kept := s.openTodoOfAgent("box", "sec00001")
+				if want := handoff && tc.uncertain; kept != want || (feedKinds(s, "conv1") == "task") != want {
+					t.Errorf("handoff kept = %v, feed = %q; want card = %v", kept, feedKinds(s, "conv1"), want)
+				}
+				if !tc.uncertain {
+					failSends(f, nil)
+					if _, err := runJSON(t, s, "conv1", "agent_send", args); err != nil || len(sentToAgent(f)) != 1 {
+						t.Errorf("retry after a definite refusal: %v; delivered = %v", err, sentToAgent(f))
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -526,11 +573,11 @@ func onlyOpen(t *testing.T, s *Service, sid string) Todo {
 	return todo
 }
 
-// A reply from the health space still asks on the phone before it goes (an empty task is no reason to refuse it):
+// A reply to an Agent in the same health space still asks on the phone before it goes (an empty task is no reason to refuse it):
 // declined, nothing is sent and the receipt says so; allowed, it goes, and neither makes a task or a feed line.
 func TestAgentSendEmptyTaskAsksBeforeItGoes(t *testing.T) {
 	f := healthHub()
-	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/src/app", Agent: "claude",
+	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/.persona/health/work", Agent: "claude",
 		Status: proto.StatusIdle, Title: "app"})
 	s := newTestService(t, f)
 	setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
@@ -634,7 +681,7 @@ func exitRefusal(sid string, todo Todo, text string) string {
 // From the health space the refusal comes before the phone is asked: no card, nothing sent.
 func TestAgentSendExitToAnotherConversationsAgentAsksNothing(t *testing.T) {
 	f := healthHub()
-	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/src/app", Agent: "claude",
+	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/.persona/health/work", Agent: "claude",
 		Status: proto.StatusIdle, Title: "app"})
 	s := newTestService(t, f)
 	setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
@@ -644,7 +691,7 @@ func TestAgentSendExitToAnotherConversationsAgentAsksNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.superviseTodo(ctx, todo.ID, "main-0000-0000", []string{"a chart"}, 30)
-	if err := s.linkTodoAgent(ctx, todo.ID, "server", "code-0000-0000", todo.Title, "/home/me/src/app", "claude"); err != nil {
+	if err := s.linkTodoAgent(ctx, todo.ID, "server", "code-0000-0000", todo.Title, "/home/me/.persona/health/work", "claude"); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
@@ -675,7 +722,7 @@ func TestAgentSendExitRecheckedAfterThePhone(t *testing.T) {
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			f := healthHub()
-			f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/src/app",
+			f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/.persona/health/work",
 				Agent: "claude", Status: proto.StatusIdle, Title: "app"})
 			s := newTestService(t, f)
 			setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
@@ -698,7 +745,7 @@ func TestAgentSendExitRecheckedAfterThePhone(t *testing.T) {
 				t.Fatal(err)
 			}
 			s.superviseTodo(ctx, todo.ID, "main-0000-0000", []string{"a chart"}, 30)
-			if err := s.linkTodoAgent(ctx, todo.ID, "server", "code-0000-0000", todo.Title, "/home/me/src/app", "claude"); err != nil {
+			if err := s.linkTodoAgent(ctx, todo.ID, "server", "code-0000-0000", todo.Title, "/home/me/.persona/health/work", "claude"); err != nil {
 				t.Fatal(err)
 			}
 			allow := true

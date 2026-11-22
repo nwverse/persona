@@ -131,7 +131,7 @@ nonisolated enum AssistantEntries {
             else if s?.waitsToBeWoken == true { waiting = true }
             else if st == .working || s?.starting == true { working = true }
         }
-        if interrupted { return .interrupted }
+        if interrupted, !working, !waiting, todo.supervision?.state != "parked" { return .interrupted }
         if limit { return .usageLimit }
         if unread { return .unread }
         if working { return .working }
@@ -178,7 +178,7 @@ nonisolated enum AssistantEntries {
         if let ask = openAsk(todo) { return !(todo.doneAt != nil && ask.outcome == "decide") }
         guard todo.doneAt == nil else { return false }
         let state = todo.supervision?.state
-        return state == "needs_user"
+        return state == "user_check" || state == "needs_user"
     }
 
     /// The task's row among the tasks in progress says its supervisor is reviewing it: nothing of it runs or asks, and
@@ -312,6 +312,7 @@ nonisolated enum AssistantEntries {
             // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
             let waits = status == .failed ? bucket == .open : todo.doneAt == nil && (status == .needsYou || status == .interrupted)
             let decision = awaitsDecision(todo, now: now)
+            let deliveryApproval = todo.doneAt == nil && todo.delivery?.waitsForOwner == true
             let work = execution(todo, lookup: lookup)
             let settled = todo.doneAt != nil || todo.acceptanceStands
             let external = work.waiting || externallyWaiting(todo, status: status, last: triage.last, now: now)
@@ -320,9 +321,12 @@ nonisolated enum AssistantEntries {
             let unattended = unfinished && work.unattendedSince > .distantPast
                 && now.timeIntervalSince(work.unattendedSince) > stoppedFollowupAfter
             if !asks.isEmpty { asking.append((row, asks.map { $0.createdAt ?? .distantPast }.min())); listed() }
-            else if waits || decision || unattended {
+            else if waits || decision || deliveryApproval || unattended {
                 // Only the review decision is put off or dismissed (Later / Don't handle); a live Agent question keeps its home.
-                if !(status != .needsYou && decision && decisionHidden(todo)) { deciding.append((row, rank(todo, status), when)) }
+                if deliveryApproval || !(status != .needsYou && decision && decisionHidden(todo)) {
+                    let needsStatus: Status = deliveryApproval && status != .interrupted ? .needsYou : status
+                    deciding.append((.task(id: todo.id, status: needsStatus, agents: active.count), rank(todo, status), when))
+                }
                 listed()
             }
             // Acceptance belongs to Just finished, not to a peer tray or an overdue owner decision (#10174).
@@ -870,6 +874,7 @@ struct AssistantActionBar: View {
                                  detail: activity.isActive && status == .waiting ? StateName.working.text : detail(todo, status: status, agents: agents),
                                  tint: tint(status), subtitle: subtitle(todo, status: status, lead: lead, activity: activity),
                                  subtitleTint: status == .failed || status == .interrupted ? Theme.danger : nil,
+                                 subtitleLines: APIErrorInfo.unrecoverable(lead?.turnError) ? nil : 1,
                                  trail: .open, activity: activity, stackDetail: true) {
                                 if open != .needsYou && (activity.isActive || status == .working) {
                                     WorkingIndicator().accessibilityIdentifier("action-tray.working-mark")
@@ -962,7 +967,10 @@ struct AssistantActionBar: View {
     private func detail(_ todo: TodoItem, status: AssistantEntries.Status, agents: Int) -> String {
         let resting = status == .followUp || status == .unread || status == .notStarted
         var parts: [String]
-        if status == .interrupted { parts = [String(localized: "Interrupted [Chat Layout]")] }
+        if status == .interrupted, APIErrorInfo.unrecoverable(store.leadSession(todo)?.turnError) {
+            parts = [String(localized: "Invalid conversation")]
+        }
+        else if status == .interrupted { parts = [String(localized: "Interrupted [Chat Layout]")] }
         else if status == .usageLimit { parts = [String(localized: "Usage Limit")] }
         else if resting || status == .waiting, todo.doneAt == nil {
             let lead = store.leadSession(todo)
@@ -1007,6 +1015,7 @@ struct AssistantActionBar: View {
             return t.isEmpty ? nil : t
         }
         if open == .needsYou, !AssistantEntries.awaitsDecision(todo, now: .now),
+           todo.delivery?.waitsForOwner != true,
            [.followUp, .unread, .notStarted, .waiting].contains(status) {
             return String(localized: "Persona has not followed up for over an hour")
         }
@@ -1026,7 +1035,7 @@ struct AssistantActionBar: View {
             // in plain words; the raw error is the task's details' (#8237)
             return store.startFailure(todo).map(StartFailureWords.rowLine)
         case .needsYou:
-            return TaskAsk.waitingLine(store.interactions(todo))
+            return TaskAsk.waitingLine(store.interactions(todo)) ?? (todo.delivery?.waitsForOwner == true ? one(todo.delivery?.gate) : nil)
         case .working, .waiting:
             return activity.isActive ? nil : one(TaskNow(lead: lead, working: status == .working)?.text)
         case .unread, .followUp:
@@ -1044,7 +1053,9 @@ struct AssistantActionBar: View {
     /// that failed, Continue for a turn the model service cut off (or a usage limit nothing continues by itself).
     @ViewBuilder private func actions(_ todo: TodoItem, status: AssistantEntries.Status, lead: Session?) -> some View {
         let retry = status == .failed && store.state(todo) == .failed
-        let resume = status == .interrupted || status == .usageLimit && lead.map { !$0.usageLimitContinues } == true
+        let invalid = lead?.turnErrorKind == "unrecoverable" || lead?.turnErrorCode == "compaction_sealed" ||
+            APIErrorInfo.unrecoverable(lead?.turnError)
+        let resume = !invalid && (status == .interrupted || status == .usageLimit && lead.map { !$0.usageLimitContinues } == true)
         if retry || resume || status == .failed {
             let busy = store.busyRetries.contains(todo.id)
             HStack(spacing: Theme.Space.s) {
@@ -1156,7 +1167,7 @@ struct AssistantActionBar: View {
     /// What follows a row's words on the right.
     private enum Trail { case none, open, folded, expanded }
 
-    private func line<Mark: View>(title: String, detail: String, tint: Color? = nil, subtitle: String? = nil, subtitleTint: Color? = nil,
+    private func line<Mark: View>(title: String, detail: String, tint: Color? = nil, subtitle: String? = nil, subtitleTint: Color? = nil, subtitleLines: Int? = 1,
                                   trail: Trail = .open, activity: AssistantTrayActivity = .init(), stackDetail: Bool = false,
                                   @ViewBuilder mark: () -> Mark) -> some View {
         HStack(spacing: Theme.Space.s) {
@@ -1175,7 +1186,7 @@ struct AssistantActionBar: View {
                         .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
                 }
                 if let subtitle {
-                    Text(subtitle).font(Theme.Font.caption).lineLimit(1)
+                    Text(subtitle).font(Theme.Font.caption).lineLimit(subtitleLines)
                         .foregroundStyle(subtitleTint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
                         .accessibilityIdentifier("action-tray.subtitle")
                 }

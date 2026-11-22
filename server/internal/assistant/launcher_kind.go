@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"time"
@@ -38,25 +39,32 @@ func (e *launcherOtherKind) rpcError(l i18n.Lang) *rpc.Error {
 	return &rpc.Error{Code: assistantwire.CodeLauncherOtherKind, Message: i18n.Localize(e.message(), l), Data: data}
 }
 
-// assistantKind is the conversation kind an agent name stands for: "claude", "codex", or "" (a runtime, or unknown),
+// assistantKind is the conversation kind an agent name stands for, or "" when unknown,
 // as the node tells a conversation's kind.
 func assistantKind(agent string) string {
 	switch agent {
-	case "claude", "codex":
+	case "claude", "codex", "agy", "pi", "opencode", "omp", "dsh", "grok", "gemini", "qwen", "kimi", "droid", "cursor", "traex":
 		return agent
 	}
 	return ""
 }
 
 // otherKindPick refuses launcher, picked for a message to conversation sid on machine, when it runs the other agent
-// kind. Anything unknown (a conversation the machine doesn't list, a launcher list that didn't come, a runtime) lets
+// kind. Anything unknown (a conversation the machine doesn't list or a launcher list that didn't come) lets
 // the message go as before: nothing is refused on a guess.
 func (s *Service) otherKindPick(ctx context.Context, machine, sid, launcher string) error {
 	c, known := s.session(ctx, machine, sid)
 	conv := assistantKind(c.Agent)
-	if !known || conv == "" {
+	if !known {
 		return nil
 	}
+	if conv == "" {
+		if c.SourceKind == proto.SourceRuntime {
+			return s.logicalAdapterPick(ctx, machine, c, launcher)
+		}
+		return nil
+	}
+	machine = s.logicalExecutionMachine(ctx, machine, sid)
 	var picked string
 	if proto.IsExternalLauncher(launcher) {
 		agent, err := s.externalLauncherAgent(ctx, machine, launcher)
@@ -67,8 +75,13 @@ func (s *Service) otherKindPick(ctx context.Context, machine, sid, launcher stri
 	} else {
 		picked = assistantKind(s.launcherAgent(ctx, machine, launcher))
 	}
-	if picked == "" || picked == conv {
-		return nil
+	if picked == "" {
+		// A runtime must attest its connection even when its display kind is
+		// unknown. Native aliases still retain the no-guessing behavior.
+		return s.logicalAdapterPick(ctx, machine, c, launcher)
+	}
+	if picked == conv {
+		return s.logicalAdapterPick(ctx, machine, c, launcher)
 	}
 	return &launcherOtherKind{conversationAgent: conv, launcher: launcher, launcherAgent: picked}
 }
@@ -80,7 +93,7 @@ func (s *Service) launcherAgent(ctx context.Context, machine, name string) strin
 		agent, _ := s.externalLauncherAgent(ctx, machine, name)
 		return agent
 	}
-	if name == "claude" || name == "codex" {
+	if assistantKind(name) != "" {
 		return name
 	}
 	if m, managed := s.managedNamed(ctx, name); managed {
@@ -94,7 +107,7 @@ func (s *Service) launcherAgent(ctx context.Context, machine, name string) strin
 	}
 	for _, l := range picker {
 		if l.Name == name {
-			return l.AgentType
+			return cmp.Or(l.AgentType, l.Agent)
 		}
 	}
 	return ""

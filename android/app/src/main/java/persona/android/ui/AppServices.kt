@@ -61,6 +61,8 @@ class ShellSession(
     val computers: ComputerPairing? = null,
     /** The selected hub group's suffix in the merged session list; null for the primary group and demo. */
     val knowledgeNamespace: String? = null,
+    /** Saved prompts use only the selected group's socket and transport. */
+    val savedPromptsConnection: OkHttpHubConnection? = null,
 ) {
     val agents = object : AgentsDependencies {
         override fun sessions() = this@ShellSession.sessions
@@ -156,7 +158,9 @@ class AppServices @Inject constructor(
                 val boundInteractions = object : InteractionCenter by interactions {
                     override suspend fun resolve(id: String, resolution: Resolution) { resolveOutcome(id, resolution) }
                     override suspend fun resolveOutcome(id: String, resolution: Resolution) =
-                        try { interactions.resolveOutcome(id, resolution) }
+                        resolveOutcome(id, resolution, handoffCard = false)
+                    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean) =
+                        try { interactions.resolveOutcome(id, resolution, handoffCard) }
                         catch (cancelled: CancellationException) { throw cancelled }
                         catch (error: Exception) { feedback.failure(error, true); throw error }
                 }
@@ -170,7 +174,8 @@ class AppServices @Inject constructor(
                     knowledgeConnection, shell.actions, phone, agentsWiring = agentsWiring, machines = machineManagement,
                     voice = voice, groups = hubGroups, tasks = tasksStore, hubUpdates = hubUpdates,
                     hubAddresses = { listOf(data.credentials.hubAddress) + data.credentials.candidateAddresses + socket.knownAddresses() },
-                    computers = computers, listAdapter = app.agentListAdapter, knowledgeNamespace = stacks.selected.value?.namespace)
+                    computers = computers, listAdapter = app.agentListAdapter, knowledgeNamespace = stacks.selected.value?.namespace,
+                    savedPromptsConnection = socket)
                 try {
                     coroutineScope {
                         launch {

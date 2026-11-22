@@ -149,6 +149,16 @@ type QuotaItem struct {
 	Hosts []string `json:"hosts,omitempty"`
 }
 
+// UsageItem is a contribution to usage: a gateway whose accounts' subscription usage the plugin turns into the usage
+// bars' accounts and windows (docs/extensions/extensions.md "Usage").
+type UsageItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Hosts are the gateways' host names it reads ("*.example.com" allowed); empty: it may be pointed at any launcher's
+	// gateway and answers unsupported for one that is not its.
+	Hosts []string `json:"hosts,omitempty"`
+}
+
 // AgentSourceItem is a contribution to agent_sources: a source of personal agents' sessions in the Agents tab, next
 // to the hub's own (docs/extensions/extensions.md "Personal Agent sources"). Its id is the source part of the sessions' ids
 // (<id>:<sessionKey>).
@@ -441,6 +451,24 @@ var Points = map[string]Point{
 		}
 		return q.ID, nil
 	}},
+	"usage": {Name: "usage", Namespace: "usage", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var u UsageItem
+		if err := strict(raw, &u); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(u.ID) {
+			return u.ID, fmt.Errorf("usage id %q: a-z0-9_-", u.ID)
+		}
+		if u.Name == "" {
+			return u.ID, errors.New("usage " + u.ID + ": no name")
+		}
+		for _, h := range u.Hosts {
+			if !hostPattern.MatchString(h) {
+				return u.ID, fmt.Errorf("usage %s: %q is not a host name", u.ID, h)
+			}
+		}
+		return u.ID, nil
+	}},
 	"agent_sources": {Name: "agent_sources", Namespace: "agentsrc", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
 		var a AgentSourceItem
 		if err := strict(raw, &a); err != nil {
@@ -610,6 +638,9 @@ var Points = map[string]Point{
 		}
 		if u.Icon != "" && (u.Placement != "nav_page" || !slices.Contains(UIIcons, u.Icon)) {
 			return u.ID, fmt.Errorf("ui %s: only a nav_page has an icon, one of %s", u.ID, strings.Join(UIIcons, ", "))
+		}
+		if u.IconColor != "" && (u.Placement != "nav_page" || !slices.Contains(wire.Colors, u.IconColor)) {
+			return u.ID, fmt.Errorf("ui %s: only a nav_page has an icon_color, one of %s", u.ID, strings.Join(wire.Colors, ", "))
 		}
 		if g := u.Group; g != nil && (u.Placement != "nav_page" || !uiGroupID.MatchString(g.ID) || g.Title == "" || utf8.RuneCountInString(g.Title) > 40) {
 			return u.ID, fmt.Errorf("ui %s: only a nav_page names a group, its id a-z0-9- (at most 32) and its title 1 to 40 characters", u.ID)

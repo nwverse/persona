@@ -118,6 +118,7 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 		{"names A: a naming preview", "POST", "/api/v1/assistant/workspace-naming/preview", `{"machine_id":"mb","layout":"root"}`, namesA},
 		{"names A by query: a naming preview", "POST", "/api/v1/assistant/workspace-naming/preview?manager=assistant", `{"machine_id":"mb","layout":"root"}`, nil},
 		{"names A: an inbox reply", "POST", "/api/v1/inbox/item-1/reply", `{"text":"x"}`, namesA},
+		{"names A: an inbox retry", "POST", "/api/v1/inbox/item-1/retry", "", namesA},
 		{"names A: the knowledge base", "GET", "/api/v1/kb/people", "", namesA},
 		{"names A: another extension's HTTP", "GET", "/api/v1/extensions/lark/things", "", namesA},
 		{"A's card choice", "POST", "/api/v1/interactions/ix_a/choose", `{"option":0,"rev":"old"}`, nil},
@@ -255,6 +256,58 @@ func TestTodoViewRoutesStayOnTheirManager(t *testing.T) {
 	}
 }
 
+// The literal self-refresh route has no object id to route by. The authenticated extension token alone chooses its
+// manager; explicitly naming another manager is not an alternate path to that manager's markets.
+func TestExtensionSelfMarketRefreshStaysOnTokenManager(t *testing.T) {
+	_, url, a, b := reachHub(t)
+	beforeA, beforeB := len(reached(a)), len(reached(b))
+	// guardManager answers RPCs but does not take an HTTP relay. Stop after the dispatch this test is about; the real
+	// manager's immediate 202 and its background read are covered in extmgr.
+	const path = "/api/v1/extensions/-/self/market/refresh"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url+path, strings.NewReader(""))
+	req.Header.Set("Authorization", "Bearer "+extTokenPrefix+"bx-token")
+	req.Header.Set("Content-Type", "application/json")
+	answered := make(chan error, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			err = resp.Body.Close()
+		}
+		answered <- err
+	}()
+	eventually(t, 5*time.Second, "the token manager's self refresh", func() bool { return len(reached(b)) > beforeB })
+	cancel()
+	select {
+	case <-answered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cancelled self refresh did not return")
+	}
+	if got := reached(a)[beforeA:]; len(got) != 0 {
+		t.Fatalf("the other manager received the self refresh: %v", got)
+	}
+	calls := reached(b)[beforeB:]
+	if len(calls) != 1 || !strings.HasPrefix(calls[0], extwire.MethodAccept+" ") {
+		t.Fatalf("the token owner's manager did not receive exactly one self refresh: %v", calls)
+	}
+	for _, tc := range []struct {
+		path   string
+		header map[string]string
+	}{
+		{"/api/v1/extensions/-/self/market/refresh", map[string]string{ManagerHeader: assistantwire.AssistantID}},
+		{"/api/v1/extensions/-/self/market/refresh?manager=" + assistantwire.AssistantID, nil},
+	} {
+		beforeA, beforeB = len(reached(a)), len(reached(b))
+		if code, out := extDo(t, url, http.MethodPost, tc.path, "", tc.header); code != http.StatusForbidden || !strings.Contains(out, codeOtherManager) {
+			t.Fatalf("naming the other manager: %d %s", code, out)
+		}
+		if len(reached(a)) != beforeA || len(reached(b)) != beforeB {
+			t.Fatalf("a refused manager selector reached a manager: A %v, B %v", reached(a)[beforeA:], reached(b)[beforeB:])
+		}
+	}
+}
+
 // Every route an extension's token can open (extwire.RouteScopes) is bounded to its manager one way or another; a new
 // one has to say how here. "path": its machine, session, card or conversation is in the path (extensionReach);
 // "manager": it goes to the extension's own manager (requestManager, byConversation, byTodo, mergeList), which is held to its
@@ -270,8 +323,8 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/inbox/merge": "manager", "POST /api/v1/inbox/merge/undo": "manager", "POST /api/v1/inbox/todo": "manager", "POST /api/v1/inbox/todo/undo": "manager",
 		"POST /api/v1/inbox/{id}/done": "manager", "POST /api/v1/inbox/{id}/draft": "manager", "POST /api/v1/inbox/{id}/reply": "manager",
 		"POST /api/v1/inbox/{id}/suggestion": "manager", "POST /api/v1/inbox/{id}/handoff": "manager", "POST /api/v1/inbox/{id}/doc/status": "manager",
-		"POST /api/v1/inbox/{id}/task-link/recheck": "manager",
-		"PUT /api/v1/inbox/{id}/parent":             "manager", "GET /api/v1/inbox/tree/{kind}/{id...}": "manager",
+		"POST /api/v1/inbox/{id}/task-link/recheck": "manager", "POST /api/v1/inbox/{id}/retry": "manager", // relayed like done (inboxRoutesRelayed)
+		"PUT /api/v1/inbox/{id}/parent": "manager", "GET /api/v1/inbox/tree/{kind}/{id...}": "manager",
 		"PUT /api/v1/inbox/{id}/folder": "manager", "GET /api/v1/inbox/folders": "manager", "PUT /api/v1/inbox/folders": "manager",
 		"POST /api/v1/inbox/mutes": "manager", "DELETE /api/v1/inbox/mutes/{id}": "manager", "POST /api/v1/inbox/policies": "manager",
 		"PATCH /api/v1/inbox/policies/{id}": "manager", "DELETE /api/v1/inbox/policies/{id}": "manager", "POST /api/v1/inbox/refresh": "manager",
@@ -309,9 +362,10 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/machines/{id}/usage":                  "path",
 		"GET /api/v1/machines/{mid}/stat":                  "path",
 		"POST /api/v1/notify":                              "body",    // machine_id, session_id: its manager's (ownsRef)
-		"GET /api/v1/push/intercepts":                      "manager", // only entries with its manager (lnRoutes, TestLnInterceptsHeldToManager)
+		"GET /api/v1/push/intercepts":                      "manager", // only entries with its manager (pushGradingRoutes, TestPushGradingInterceptsHeldToManager)
 		"GET /api/v1/push/ln-mode":                         "own",     // the hub-wide switch state, no manager's data in the answer
-		"GET /api/v1/push/stats/daily":                     "manager", // only its manager's counts (lnRoutes, TestPushDailyStatsHeldToManager)
+		"GET /api/v1/push/grading":                         "own",     // alias of the hub-wide switch state, same answer and authorization
+		"GET /api/v1/push/stats/daily":                     "manager", // only its manager's counts (pushGradingRoutes, TestPushDailyStatsHeldToManager)
 		"GET /api/v1/assistant":                            "manager",
 		"GET /api/v1/assistant/capabilities":               "manager",
 		"POST /api/v1/assistant/conversations":             "manager",
@@ -321,9 +375,12 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/assistant/leaders":                    "manager",
 		"GET /api/v1/assistant/dispatch-policy":            "manager",
 		"PUT /api/v1/assistant/dispatch-policy":            "manager",
+		"GET /api/v1/assistant/dispatch-guard":             "manager",
+		"PUT /api/v1/assistant/dispatch-guard":             "manager",
 		"GET /api/v1/assistant/worker-presets":             "manager",
 		"GET /api/v1/assistant/start-defaults":             "manager",
 		"PUT /api/v1/assistant/start-defaults":             "manager",
+		"POST /api/v1/assistant/start-defaults/preview":    "manager",
 		"GET /api/v1/todos":                                "manager", "GET /api/v1/todos/{id}/decisions": "manager",
 		"GET /api/v1/todos/{id}": "manager", "GET /api/v1/todos/places": "manager", // TestTodoViewRoutesStayOnTheirManager
 		"GET /api/v1/todos/{id}/timeline":                     "manager", // TestTodoViewRoutesStayOnTheirManager
@@ -339,11 +396,15 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}": "manager",
 		"POST /api/v1/assistant/workspace-naming/preview":              "manager",
 		"POST /api/v1/todos":                                           "manager", "PATCH /api/v1/todos/{id}": "manager",
+		"POST /api/v1/decisions":                            "manager",
+		"GET /api/v1/decisions/{id}":                        "manager",
+		"POST /api/v1/decisions/{id}/withdraw":              "manager",
 		"POST /api/v1/todos/{id}/decisions":                 "manager",
 		"PUT /api/v1/todos/{id}/agents/{mid}/{sid}":         "path",
 		"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}":      "path",
 		"PUT /api/v1/todos/{id}/spaces/{mid}/{space...}":    "path",
 		"DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}": "path",
+		"POST /api/v1/extensions/-/self/market/refresh":     "manager",
 		"/api/v1/extensions/{id}/":                          "manager",
 	}
 	for route := range extwire.RouteScopes {

@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, #930). The assistant hands the user a plan
@@ -42,7 +43,9 @@ type PlanTask struct {
 	WaitInputID string `json:"wait_input_id,omitempty"`
 	Title       string `json:"title"`
 	Prompt      string `json:"prompt"`
-	Machine     string `json:"machine"`
+	// Context supplies relevant facts the manager cannot resolve from the project.
+	Context string `json:"context,omitempty"`
+	Machine string `json:"machine"`
 	// InboxItem explicitly names the handed-off item this task is for, never the conversation's latest item.
 	InboxItem string `json:"inbox_item,omitempty"`
 	// InboxHandoff is the hub-owned operation validated when the plan was made.
@@ -60,13 +63,17 @@ type PlanTask struct {
 	Workspace         *TaskWorkspace         `json:"workspace,omitempty"`
 	WorkspaceResolved *TaskWorkspaceResolved `json:"workspace_resolved,omitempty"`
 	// Hub-owned identity for the default branch's preview, before a todo exists.
-	ReservedTodoID    string `json:"reserved_todo_id,omitempty"`
-	WorkspaceInferred bool   `json:"workspace_inferred,omitempty"`
-	Launcher          string `json:"launcher,omitempty"`
-	Model             string `json:"model,omitempty"`
-	Effort            string `json:"effort,omitempty"`
-	Tier              string `json:"tier,omitempty"`
-	Permission        string `json:"permission,omitempty"`
+	ReservedTodoID     string                 `json:"reserved_todo_id,omitempty"`
+	BackendStartDigest string                 `json:"backend_start_digest,omitempty"`
+	WorkspaceError     *taskworkspace.Problem `json:"workspace_error,omitempty"`
+	backendRequest     *taskworkspace.Request
+	WorkspaceInferred  bool   `json:"workspace_inferred,omitempty"`
+	Launcher           string `json:"launcher,omitempty"`
+	Model              string `json:"model,omitempty"`
+	Effort             string `json:"effort,omitempty"`
+	Speed              string `json:"speed,omitempty"`
+	Tier               string `json:"tier,omitempty"`
+	Permission         string `json:"permission,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`
@@ -94,10 +101,15 @@ type PlanTask struct {
 	// Reroute is set once a flexible task has been moved to another machine; nil while it runs where it was asked.
 	// Repeated moves keep the original FromMachine and refresh ToMachine and Reason (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`
-	// DoneWhen: what done means, criteria the supervisor checks before it accepts the work; ExpectMinutes: how long it
-	// should take (#3124, supervise.go). Both optional; the agent is told the criteria with its prompt.
-	DoneWhen      []string `json:"done_when,omitempty"`
-	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	// DoneWhen: what done means, criteria the supervisor checks before it accepts the work. ExpectMinutes is an optional
+	// override of the hub-selected estimate; EstimateSource records which automatic estimate the brief owns (#11685).
+	DoneWhen         []string              `json:"done_when,omitempty"`
+	ExpectMinutes    int                   `json:"expect_minutes,omitempty"`
+	EstimateSource   string                `json:"estimate_source,omitempty"`
+	EstimateEvidence *TaskEstimateEvidence `json:"estimate_evidence,omitempty"`
+	// EstimateCalibration is set only by task_plan and stored with the task.
+	// Direct owner starts and older plans have no calibration provenance.
+	EstimateCalibration bool `json:"estimate_calibration,omitempty"`
 	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
 	// the agent must not do. Continues: the to-do this task carries on in (a retry on another computer or a rework
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
@@ -118,9 +130,9 @@ type PlanTask struct {
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
-	// Role: "leader" makes the task's agent a task leader that may hand out workers beneath this task (task_leader.go,
-	// #3656); "" is an ordinary worker. Only a supervising conversation's task_plan sets it. Parent: the leader's task
-	// this task is a worker of; the hub's, never what a tool call or an edit says.
+	// Role: every new task declares "worker" or "leader". A leader may hand out workers beneath its task
+	// (task_leader.go, #3656); a role-less task in a legacy stored plan remains an ordinary worker. Parent: the
+	// leader's task this task is a worker of; the hub's, never what a tool call or an edit says.
 	Role   string `json:"role,omitempty"`
 	Parent string `json:"parent,omitempty"`
 	// PartOf and After: the request the task's to-do is a piece of and the pieces of it the to-do waits for
@@ -181,6 +193,8 @@ type PlanTask struct {
 	rememberKind bool
 	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
 	preservePermission bool
+	// A spawned session can inherit a known launcher default even when agent.new configures another model.
+	launcherDefaultModel bool
 	// planFirst: start defaults asked for the self-planning constraint in the prompt (start_defaults.go); never
 	// serialized, this try only.
 	planFirst bool
@@ -191,6 +205,9 @@ type PlanTask struct {
 	// startFilled: what the start-defaults policy filled in on this start try (start_defaults.go): the next try goes
 	// back to callerPick first, and the plan keeps the task's own value for exactly those. Never serialized.
 	startFilled startFill
+	// startedAgent is the kind this start's answer reported, or the explicitly resolved launcher kind when that answer omitted it.
+	// Kept only until the Agent is linked; never serialized.
+	startedAgent string
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
 	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).
@@ -210,6 +227,7 @@ func (t *PlanTask) normalizeReadonlyPermission(mode string) {
 
 // TaskPlan is a plan the assistant handed the user.
 type TaskPlan struct {
+	Space        string     `json:"space,omitempty"`
 	ID           string     `json:"id"`
 	Conversation string     `json:"conversation"`
 	Tasks        []PlanTask `json:"tasks"`
@@ -457,7 +475,7 @@ func (s *Service) patchPlanTask(ctx context.Context, planID string, i int, chang
 			return errPlanNotFound
 		}
 		if err == nil && row != nil {
-			s.event(ctx, map[string]any{"type": "task_plan", "plan": planFromRow(*row)})
+			s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, planFromRow(*row))})
 		}
 		return err
 	}
@@ -472,7 +490,7 @@ func (s *Service) patchPlanTask(ctx context.Context, planID string, i int, chang
 	if ok, err := s.movePlan(ctx, p, planStarted); err != nil || !ok {
 		return err
 	}
-	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
+	s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, p)})
 	return nil
 }
 
@@ -848,7 +866,7 @@ func (s *Service) taskRoutes() {
 			planErr(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"plan": p})
+		apierr.WriteJSON(w, map[string]any{"plan": s.planWithSpace(r.Context(), p)})
 	})
 	s.handle("POST /api/v1/task-plans/{id}/dismiss", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -860,7 +878,7 @@ func (s *Service) taskRoutes() {
 			planErr(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"plan": p})
+		apierr.WriteJSON(w, map[string]any{"plan": s.planWithSpace(r.Context(), p)})
 	})
 	s.handle("POST /api/v1/todos/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -909,6 +927,11 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, http.StatusBadRequest, errFeedCursor)
 			return
 		}
+		ext := r.Header.Get(RoleHeader) == roleExtension
+		if ext && s.feedHiddenFromExtension(r.Context(), r.PathValue("id")) { // feed_scope.go
+			apierr.Write(w, http.StatusNotFound, errNoSuchConversation)
+			return
+		}
 		var items []FeedItem
 		var nextCursor string
 		var err error
@@ -926,8 +949,28 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		plans := s.feedPlans(r.Context(), items)
+		var pendingIDs []string
+		// Main watches pending plans from every conversation of this manager. Extension
+		// tokens retain their existing conversation-only feed and visibility rules.
+		if !ext && r.PathValue("id") == s.settings(r.Context()).Main {
+			pending, readErr := s.mainPendingPlans(r.Context())
+			if readErr != nil {
+				apierr.Write(w, http.StatusServiceUnavailable, readErr)
+				return
+			}
+			pendingIDs = make([]string, 0, len(pending))
+			for _, p := range pending {
+				pendingIDs = append(pendingIDs, p.ID)
+				plans[p.ID] = p
+			}
+		}
+
+		var shown func(TaskCard) bool
+		if ext {
+			items, plans, shown = s.extensionFeed(r.Context(), items, plans)
+		}
 		for id, p := range plans {
-			plans[id] = s.planWithSuggestion(r.Context(), p, s.requestLang(r))
+			plans[id] = s.planWithSpace(r.Context(), s.planWithSuggestion(r.Context(), p, s.requestLang(r)))
 		}
 		if items == nil {
 			items = []FeedItem{}
@@ -951,7 +994,13 @@ func (s *Service) taskRoutes() {
 		if cardErr != nil {
 			s.logf("feed: task card projection: %v", cardErr)
 		}
+		if shown != nil && cards != nil {
+			cards = slices.DeleteFunc(cards, func(c TaskCard) bool { return !shown(c) })
+		}
 		out := map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks}
+		if pendingIDs != nil {
+			out["pending_plan_ids"] = pendingIDs
+		}
 		if paginated {
 			out["next_cursor"] = nextCursor
 		}
@@ -959,7 +1008,7 @@ func (s *Service) taskRoutes() {
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
-			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot send"))
+			writeTypedNothing(w, http.StatusForbidden, "", errors.New("read-only role cannot send"))
 			return
 		}
 		var in struct {
@@ -968,11 +1017,11 @@ func (s *Service) taskRoutes() {
 			AskedAt string `json:"asked_at"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+			writeTypedNothing(w, http.StatusBadRequest, "", err)
 			return
 		}
 		if strings.TrimSpace(in.Text) == "" || in.TodoID == "" {
-			apierr.Write(w, http.StatusBadRequest, errors.New("todo_id and text are required"))
+			writeTypedNothing(w, http.StatusBadRequest, "", errors.New("todo_id and text are required"))
 			return
 		}
 		var it FeedItem
@@ -982,8 +1031,12 @@ func (s *Service) taskRoutes() {
 		} else {
 			it, err = s.routeToTask(r.Context(), r.PathValue("id"), in.TodoID, in.Text)
 		}
-		if err != nil {
-			apierr.Write(w, http.StatusConflict, err)
+		if err != nil { // 409 with delivered: send_in_doubt for words that may be with the Agent (todo_write_outcome.go)
+			keys := routeInDoubtKeys
+			if in.AskedAt != "" { // words that answer a decision, which may still show when they could not be recorded
+				keys = answerInDoubtKeys
+			}
+			writeRouteError(w, err, keys)
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"item": it})

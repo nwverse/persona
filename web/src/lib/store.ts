@@ -1,3 +1,4 @@
+import { refreshAgentsDisplay, resetAgentsDisplay } from "./agents-display";
 import { forgetSentHistory } from "./send-history";
 import { availableConversation, clearConversationDeletions, conversationDeleted, conversationKeyDeleted, deletedConversation, hasDeletedConversations, rememberConversationDeleted } from "./conversation-deleted";
 import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
@@ -10,12 +11,13 @@ import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheS
 import { useRef, useSyncExternalStore } from "react";
 import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
 import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts, supportsPagedAgents } from "./runtime-list";
+import { isHeldLevel } from "./attention";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { SESSIONS_SIDE_FOLD_FEATURE, setSideFold } from "./side-fold";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
-import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, seenCopy, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
+import { dueMarks, heldRows, liveMarks, newMark, nextDue, seenCopy, settleMarks, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
 import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
 import { helloDeviceId } from "./device-id";
@@ -26,6 +28,7 @@ import { NO_PINS, pinsOf, type AgentPins } from "./pins";
 import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from "./types";
 import type { Resolution } from "./answered";
 import { answersIn, type DelegatedAnswer, type Reanswer } from "./delegate";
+import { nextLaunchExpiry, registerLaunchRowObserver, settledLaunches } from "./launch-handoff";
 import type { AgentLaunch } from "./new-agent";
 import { isSpacesSupported, makeSessionLookup, type SessionLookup, type Todo } from "./todos";
 import { releaseAttachments } from "./attachments";
@@ -65,6 +68,8 @@ export interface State {
   version: string;
   /** What the hub can do (hello `features`): terminal_stream, terminal_control… */
   features: string[];
+  /** Whether the hub's push grading switch is enabled (`hello.push_grading` / `push_grading` event). */
+  pushGrading: boolean;
   /** This hub's name and its interconnected group (docs/archive/operations/plan-hub-mesh.md 2.6); empty on older hubs. */
   hubName: string;
   mesh: MeshHub[];
@@ -108,6 +113,7 @@ let state: State = {
   link: { ...NO_LINK, networkUp: networkUp() },
   version: "",
   features: [],
+  pushGrading: false,
   hubName: "",
   mesh: [],
   machines: [],
@@ -170,31 +176,53 @@ function set(patch: Partial<State>) {
     if (patch.assistant?.conversations.every(availableConversation) === false) next.assistant = { ...patch.assistant, conversations: patch.assistant.conversations.filter(availableConversation) };
   }
   state = holdSeen(next, patch);
+  state = settleLaunchState(state, patch);
   if (viewed.size && ("sessions" in patch || "sessionSummaries" in patch || "assistant" in patch)) seeViewed(false);
   if (pushing) notifySoon();
   else notify();
 }
 
-/** Rows whose seen mark still waits for the hub are shown seen, whichever way they came in (a push, a page of the
- *  list, an HTTP answer); marks the hub's rows show recorded, or no longer about this turn, go (lib/seen-outbox.ts). */
+let handoffTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleLaunchExpiry(launches: Record<string, AgentLaunch>, now: number) {
+  clearTimeout(handoffTimer);
+  handoffTimer = undefined;
+  const delay = nextLaunchExpiry(launches, now);
+  if (delay === undefined) return;
+  handoffTimer = setTimeout(() => {
+    handoffTimer = undefined;
+    const rows = [...Object.values(state.sessions).flat(), ...state.sessionSummaries];
+    const next = settledLaunches(state.launches, rows, Date.now());
+    if (next !== state.launches) set({ launches: next });
+  }, delay + 10);
+}
+
+/** Settles ready launch handoffs once hub session rows confirm working / terminal state or the handoff window expires (#12380). */
+function settleLaunchState(next: State, patch: Partial<State>): State {
+  if (!Object.keys(next.launches).length || !("sessions" in patch || "sessionSummaries" in patch || "launches" in patch)) return next;
+  const now = Date.now();
+  const rows = [...Object.values(next.sessions).flat(), ...next.sessionSummaries];
+  const launches = settledLaunches(next.launches, rows, now);
+  scheduleLaunchExpiry(launches, now);
+  return launches === next.launches ? next : { ...next, launches };
+}
+
+registerLaunchRowObserver((rows) => {
+  if (!Object.keys(state.launches).length) return;
+  const launches = settledLaunches(state.launches, rows, Date.now());
+  if (launches !== state.launches) set({ launches });
+});
+
+/** Rows whose seen mark still holds them are shown seen, whichever way they came in (a push, a page of the list, an
+ *  HTTP answer). A mark the hub's rows show recorded settles (it holds only rows read before, for SEEN_SETTLE_MS: the
+ *  sidebar's own list may not have read since); one whose agent moved on (a new turn, work, a question) goes
+ *  (lib/seen-outbox.ts). */
 function holdSeen(next: State, patch: Partial<State>): State {
   if (!Object.keys(next.seen).length || !("sessions" in patch || "sessionSummaries" in patch || "assistant" in patch || "seen" in patch)) return next;
   const now = Date.now();
   let marks = liveMarks(next.seen, now);
-  const over: string[] = [];
-  const settle = (rows: Session[]) => {
-    for (const s of rows) {
-      const id = runtimeIdentity(s);
-      if (marks[id] && markOver(s, marks[id], now)) over.push(id);
-    }
-  };
-  Object.values(next.sessions).forEach(settle);
-  settle(next.sessionSummaries);
-  if (over.length) {
-    const kept: Record<string, SeenMark> = { ...marks };
-    for (const id of over) delete kept[id];
-    marks = kept;
-  }
+  for (const rows of Object.values(next.sessions)) marks = settleMarks(rows, marks, now);
+  marks = settleMarks(next.sessionSummaries, marks, now);
   const sessions: Record<string, Session[]> = {};
   let changed = false;
   for (const [mid, rows] of Object.entries(next.sessions)) {
@@ -233,6 +261,7 @@ onRuntimeChanges((upsert, remove) => {
   applyCompleteSessions(updates, remove);
   followConversations(upsert);
   keepTaskRows(upsert, remove.map(runtimeRemoval));
+  cardRowsChanged(upsert, remove.map(runtimeRemoval));
 });
 
 /** What a summary row (`waiting` present) says by leaving a field out: none (docs/protocol/protocol.md "Summary rows"). */
@@ -357,29 +386,130 @@ async function lookUpTaskAgents() {
   }
 }
 
-const cardRowsAsked = new Set<string>();
-let cardRowsFor: Interaction[] | null = null;
-/** A pending card whose session no list holds: a paging hub can leave both child and off-page root sessions out of
- *  the Agents list's pages. One exact lookup for its row (`sessions_lookup`) puts it among the row hints, so the
- *  card can be answered wherever it shows (the main chat's Needs you, the Inbox), not only on its parent's open page. */
-async function lookUpCardSessions() {
-  if (state.interactions === cardRowsFor || !state.features.includes(SESSIONS_LOOKUP_FEATURE)) return;
-  cardRowsFor = state.interactions;
-  const missing = new Set(state.interactions.filter((ix) => ix.session_id && !getSession(ix.machine_id, ix.session_id))
-    .map((ix) => runtimeIdentity({ machine_id: ix.machine_id, session_id: ix.session_id } as Session)));
-  for (const id of [...missing].filter((x) => !cardRowsAsked.has(x)).slice(0, 20)) {
-    cardRowsAsked.add(id);
-    const [mid, sid] = JSON.parse(id) as [string, string];
-    const params = new URLSearchParams({ summary: "1", limit: "1", machine_id: mid, session_id: sid });
-    try {
-      const page = await api<{ sessions?: Session[] }>(`/sessions?${params}`);
-      const row = page?.sessions?.[0];
-      if (row && runtimeIdentity(row) === id) {
-        rememberSessionRow(row);
-        notify(); // what reads getSession for the card (can it be answered) reads it again
-      }
-    } catch {
-      cardRowsAsked.delete(id); // asked again with the next change of the cards or connection
+/** The exact lookups of pending cards' sessions (#8584): the row the hub returned (none: it has no such session) and
+ *  whether a later list change has made it stale. The newest trusted visibility after the list's own rows. */
+const cardRows = new Map<string, { row?: Session; fresh: boolean }>();
+/** Failed lookups: tries so far and when the next may go (backoff); after CARD_LOOKUP_TRIES a card stays as it is. */
+const cardRetries = new Map<string, { tries: number; at: number }>();
+const cardInFlight = new Set<string>();
+/** How many list changes each card's session has had (upserts and removals): a lookup asked before the latest one
+ *  answers for an older row, so its answer is dropped (#8584). */
+const cardRowVersions = new Map<string, number>();
+const CARD_LOOKUPS_AT_ONCE = 4;
+const CARD_LOOKUP_TRIES = 4;
+const CARD_RETRY_MS = 1_000;
+let cardGeneration = 0;
+let cardRetryTimer: ReturnType<typeof setTimeout> | undefined;
+let cardRowsFor: [Interaction[], Session[]] | null = null;
+let listedFor: Session[] | null = null;
+let listedIndex = new Map<string, Session>();
+const cardIdentity = (mid: string, sid: string) => runtimeIdentity({ machine_id: mid, session_id: sid } as Session);
+function listedRows(): Map<string, Session> {
+  if (listedFor !== state.sessionSummaries) {
+    listedFor = state.sessionSummaries;
+    listedIndex = new Map(state.sessionSummaries.map((row) => [runtimeIdentity(row), row]));
+  }
+  return listedIndex;
+}
+
+/** The row that says whether a card's session is hidden (#8584). On a paging hub a chat detail kept from an opened chat
+ *  is not refreshed by summary deltas: the list's row decides, else the card's exact lookup, and only then any row. */
+export function cardSessionRow(mid: string, sid: string): Session | undefined {
+  if (state.features.includes(SESSIONS_LIST_FEATURE)) {
+    const id = cardIdentity(mid, sid);
+    const row = listedRows().get(id) ?? cardRows.get(id)?.row;
+    if (row) return row;
+  }
+  return getSession(mid, sid);
+}
+
+/** List changes say which off-page rows changed: a changed row is that session's newest word, a removed one (hidden,
+ *  ended or filtered out) is asked about again. A lookup still out for either answers for the row before the change:
+ *  its version moves, so that answer is dropped. A dropped answer is asked again only while the row is not fresh (a
+ *  removal), so each list change costs at most one more lookup. */
+function cardRowsChanged(upsert: Session[], remove: string[]) {
+  let changed = false;
+  const moved = (id: string) => { cardRowVersions.set(id, (cardRowVersions.get(id) ?? 0) + 1); cardRetries.delete(id); changed = true; };
+  for (const row of upsert) {
+    const id = runtimeIdentity(row);
+    if (cardRows.has(id) || cardInFlight.has(id)) { cardRows.set(id, { row, fresh: true }); moved(id); }
+  }
+  for (const id of remove) {
+    const known = cardRows.get(id);
+    if (known?.fresh) cardRows.set(id, { ...known, fresh: false });
+    if (known?.fresh || cardInFlight.has(id)) moved(id);
+  }
+  if (changed) lookUpCardSessions(true);
+}
+
+function forgetCardRows(stale: boolean) {
+  cardGeneration++;
+  cardInFlight.clear();
+  cardRetries.clear();
+  cardRowVersions.clear(); // the lookups out are dropped by cardGeneration already
+  clearTimeout(cardRetryTimer);
+  cardRetryTimer = undefined;
+  cardRowsFor = null;
+  if (!stale) cardRows.clear();
+  else for (const [id, known] of cardRows) cardRows.set(id, { ...known, fresh: false });
+}
+
+/** A pending card whose session no list holds: a paging hub can leave child, off-page and directory-hidden sessions out
+ *  of the Agents list's pages. An exact lookup for its row (`sessions_lookup`) puts it among the row hints, so the card
+ *  can be answered wherever it shows (the main chat's Needs you, the Inbox), and says whether its folder is hidden. Keeps
+ *  going, a few at a time, until every card's session is known; failures back off and stop after a few tries. */
+function lookUpCardSessions(force = false) {
+  if (!state.features.includes(SESSIONS_LOOKUP_FEATURE)) return;
+  if (!force && cardRowsFor?.[0] === state.interactions && cardRowsFor[1] === state.sessionSummaries) return;
+  cardRowsFor = [state.interactions, state.sessionSummaries];
+  const bounded = state.features.includes(SESSIONS_LIST_FEATURE);
+  const listed = listedRows();
+  const cards = new Map<string, [string, string]>();
+  for (const ix of state.interactions) if (ix.session_id) cards.set(cardIdentity(ix.machine_id, ix.session_id), [ix.machine_id, ix.session_id]);
+  // the answers for cards that are gone go with them
+  for (const id of cardRows.keys()) if (!cards.has(id)) cardRows.delete(id);
+  for (const id of cardRetries.keys()) if (!cards.has(id)) cardRetries.delete(id);
+  for (const id of cardRowVersions.keys()) if (!cards.has(id) && !cardInFlight.has(id)) cardRowVersions.delete(id);
+  const now = Date.now();
+  let nextRetry = Infinity;
+  for (const [id, [mid, sid]] of cards) {
+    if (cardInFlight.size >= CARD_LOOKUPS_AT_ONCE) break;
+    if (listed.has(id) || cardRows.get(id)?.fresh || cardInFlight.has(id)) continue;
+    if (!bounded && !cardRows.has(id) && getSession(mid, sid)) continue;
+    const retry = cardRetries.get(id);
+    if (retry && retry.tries >= CARD_LOOKUP_TRIES) continue;
+    if (retry && retry.at > now) { nextRetry = Math.min(nextRetry, retry.at); continue; }
+    void lookUpCardSession(id, mid, sid);
+  }
+  clearTimeout(cardRetryTimer);
+  cardRetryTimer = nextRetry === Infinity ? undefined : setTimeout(() => { cardRetryTimer = undefined; lookUpCardSessions(true); }, nextRetry - now);
+}
+
+async function lookUpCardSession(id: string, mid: string, sid: string) {
+  const generation = cardGeneration;
+  const version = cardRowVersions.get(id) ?? 0;
+  const current = () => generation === cardGeneration && version === (cardRowVersions.get(id) ?? 0);
+  cardInFlight.add(id);
+  const params = new URLSearchParams({ summary: "1", limit: "1", machine_id: mid, session_id: sid });
+  try {
+    const page = await api<{ sessions?: Session[] }>(`/sessions?${params}`);
+    if (!current()) return;
+    const found = page?.sessions?.[0];
+    const row = found && runtimeIdentity(found) === id ? found : undefined;
+    cardRows.set(id, { row, fresh: true });
+    cardRetries.delete(id);
+    if (row) {
+      rememberSessionRow(row);
+      notify(); // what reads the card's row (can it be answered, is its folder hidden) reads it again
+    }
+  } catch {
+    if (!current()) return;
+    const tries = (cardRetries.get(id)?.tries ?? 0) + 1;
+    cardRetries.set(id, { tries, at: Date.now() + CARD_RETRY_MS * 2 ** (tries - 1) });
+  } finally {
+    if (generation === cardGeneration) {
+      cardInFlight.delete(id);
+      lookUpCardSessions(true);
     }
   }
 }
@@ -468,7 +598,7 @@ export const subscribe = (l: () => void) => {
   };
 };
 // a child session's card may need its row looked up (lookUpCardSessions): checked as the cards change
-subscribe(() => void lookUpCardSessions());
+subscribe(() => lookUpCardSessions());
 
 export function useStore<T>(select: (s: State) => T): T {
   const last = useRef<{ v: T } | null>(null);
@@ -566,6 +696,8 @@ type SessionListener = {
   /** The hub's `revs` event: the transcript grew to this rev; the list's row keeps the rev it had (lib/stale-page.ts). */
   rev?: (rev: number) => void;
   reconnected?: () => void;
+  /** Contiguous cursor of a transcript that has already opened its socket watch. */
+  watchCursor?: () => number | undefined;
 };
 const sessionListeners = new Map<string, Set<SessionListener>>();
 const key = (mid: string, sid: string) => `${mid}/${sid}`;
@@ -632,6 +764,7 @@ let authenticatedSocket: WebSocket | null = null;
 let socketToken = "";
 let retry = 0;
 let retryTimer: number | undefined;
+let sidebarTimer: ReturnType<typeof setTimeout> | undefined;
 let lastMessage = 0;
 let lastPing = 0;
 let stopped = true;
@@ -671,12 +804,23 @@ export function sayHello() {
 
 export function connect() {
   setCompatibilityFeatures([]);
+  const cold = stopped && !state.loaded;
   stopped = false;
   clearTimeout(retryTimer);
   ws?.close();
   socketChanged(false);
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   socketToken = getToken();
+  if (cold && socketToken) {
+    const owner = credentialOwner();
+    // Give a fast hello the only read. If it takes longer, show the REST snapshots while waiting for the socket.
+    // The normal hello refresh still covers changes between these snapshots and the start of the event stream.
+    sidebarTimer = setTimeout(() => {
+      if (owner !== credentialOwner()) return;
+      void refreshAssistant().catch(() => {});
+      void refreshTodos();
+    }, 250);
+  }
   directionTreeAwaitsHello(true); // its hello reads the direction tree: the screens wait for that read
   const sock = new WebSocket(`${proto}//${location.host}${BASE}/api/v1/ws?${wsQuery(socketToken, cursor, [SESSIONS_LIST_FEATURE, SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_DELTA_FEATURE, SESSION_LIVE_FEATURE, "extension_ui_stream_v1", "persona_contracts_v1"])}`);
   ws = sock;
@@ -782,6 +926,7 @@ export function disconnect() {
   stopped = true;
   // a reconnect scheduled after a drop would otherwise fire connect(), which clears stopped (signed out: an empty token)
   clearTimeout(retryTimer);
+  clearTimeout(sidebarTimer);
   back();
   ws?.close();
   ws = null;
@@ -845,12 +990,13 @@ export function onHello(f: () => void): () => void {
 }
 
 // The assistant's live updates about the page itself rather than one conversation: only the shown manager's count.
-const PAGE_EVENTS = new Set(["assistant_schedule", "assistant_saved_prompts"]);
+const PAGE_EVENTS = new Set(["assistant_schedule", "assistant_saved_prompts", "assistant_starred"]);
 
 function onMessage(msg: Record<string, unknown>) {
   cursor = msg.type === "hello" ? afterHello(cursor, msg) : afterEvent(cursor, msg);
   switch (msg.type) {
     case "hello": {
+      clearTimeout(sidebarTimer);
       receiptOwner = msg.message_send_state === 1 ? credentialOwner() : undefined;
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
@@ -861,6 +1007,7 @@ function onMessage(msg: Record<string, unknown>) {
         link: { ...state.link, nextTry: 0, restarting: false, networkUp: true },
         version: String(msg.server_version ?? ""),
         features: Array.isArray(msg.features) ? (msg.features as string[]) : [],
+        pushGrading: msg.push_grading === true,
         hubName: typeof msg.hub_name === "string" ? msg.hub_name : "",
         mesh: Array.isArray(mesh) ? mesh : [],
       });
@@ -869,6 +1016,7 @@ function onMessage(msg: Record<string, unknown>) {
       // notifications off never got a live update after loading. Also: a hub that came back may serve a new web build
       // (lib/new-version.ts).
       helloHooks.forEach((f) => f());
+      void refreshAgentsDisplay();
       back();
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
       const rootsMode = state.features.includes(SESSIONS_HIERARCHY_FEATURE);
@@ -889,8 +1037,7 @@ function onMessage(msg: Record<string, unknown>) {
       setPersonalPageCounts(state.features.includes(AGENTS_PAGE_COUNTS_FEATURE));
       setAgentListMode(state.features.includes(SESSIONS_LIST_FEATURE));
       taskRowsAsked.clear();
-      cardRowsAsked.clear();
-      cardRowsFor = null;
+      forgetCardRows(true); // asked again on this connection; the answers stand until then
       void lookUpTaskAgents();
       // subscriptions are per connection: chats resubscribe from what they have either way
       sessionListeners.forEach((ls) => ls.forEach((l) => l.reconnected?.()));
@@ -934,6 +1081,7 @@ function onMessage(msg: Record<string, unknown>) {
       }
       break;
     case "sessions": {
+      void refreshAgentsDisplay();
       const mid = msg.machine_id as string;
       sessionsChanged(mid);
       // A delta hub's list has no Codex history (the page has that from GET /sessions): keep what it already has.
@@ -960,13 +1108,24 @@ function onMessage(msg: Record<string, unknown>) {
     }
     case "interaction": {
       const ix = msg.interaction as Interaction;
-      if (!endedHere.has(ix.id)) changeInteraction(ix.id, ix);
+      const prev = state.interactions.find((i) => i.id === ix.id);
+      if (!endedHere.has(ix.id)) {
+        changeInteraction(ix.id, ix);
+        refreshCountsForCard(prev, ix);
+      }
       break;
     }
-    case "interaction_resolved":
+    case "interaction_resolved": {
+      const id = msg.id as string;
+      const prev = state.interactions.find((i) => i.id === id);
       if (msg.answered_by === "assistant") answeredForUser(msg);
-      changeInteraction(msg.id as string, null);
-      cardWithdrawn(msg.id as string);
+      changeInteraction(id, null);
+      cardWithdrawn(id);
+      refreshCountsForCard(prev, undefined);
+      break;
+    }
+    case "push_grading":
+      set({ pushGrading: msg.enabled === true });
       break;
     case "interaction_reanswered":
       noteReanswer(msg.id as string, answersIn((msg.resolution as { answers?: unknown } | undefined)?.answers));
@@ -1247,6 +1406,20 @@ let ixRev = 0;
 const ixChanges = new Map<string, { rev: number; ix: Interaction | null }>();
 const IX_CHANGES_KEPT = 500;
 
+function refreshCountsForCard(prev: Interaction | undefined, next: Interaction | undefined) {
+  if (!isHeldLevel(prev?.push_level) && !isHeldLevel(next?.push_level)) return;
+  if (supportsPagedAgents(state.features)) {
+    const agentsList = runtimeAgents.getSnapshot();
+    if (agentsList.loaded || agentsList.loading || agentsList.error !== null) runtimeAgents.invalidate();
+  } else if (state.features.includes(SESSIONS_LIST_FEATURE)) {
+    runtimeSessions.invalidate();
+  }
+}
+
+export function setPushGrading(pushGrading: boolean) {
+  if (state.pushGrading !== pushGrading) set({ pushGrading });
+}
+
 function changeInteraction(id: string, ix: Interaction | null) {
   ixChanges.delete(id); // re-inserted: the oldest are dropped first
   ixChanges.set(id, { rev: ++ixRev, ix });
@@ -1372,10 +1545,11 @@ function numbered<T>(path: string) {
   return {
     ask() {
       const n = ++asked;
+      const owner = credentialOwner();
       const answer = api<T>(path);
       /** Whether this answer may be applied (no later request's answer is in place); if so it is the one in place now. */
       const fresh = () => {
-        if (n < applied) return false;
+        if (n < applied || owner !== credentialOwner()) return false;
         applied = n;
         return true;
       };
@@ -1406,6 +1580,7 @@ function sessionsChanged(mid: string) {
 }
 
 export async function refresh() {
+  void refreshAgentsDisplay();
   const gen = ++refreshes.asked;
   const machinesAt = machinesRev;
   const sessionsAt = sessionsRev;
@@ -1413,16 +1588,11 @@ export async function refresh() {
   // the answers count only if this page changes nothing while they are on their way, and had no change out when they left
   const mutesAt = mutesSaves.out ? -1 : mutesSaves.rev;
   const pinsAt = pinsSaves.out ? -1 : pinsSaves.rev;
-  const asked = todosAsked.ask();
   // The main conversation must not wait for the slowest sidebar request. refreshAssistant also guards
   // against an earlier login or manager's answer and invalidates a superseded cached main conversation.
   const assistantDone = refreshAssistant().catch(() => {});
-  // the todos go in as soon as they answer: By to-do (the default, #2812) waits for them, not for /sessions, which can
-  // take seconds on a busy hub while the socket has pushed the sessions already
-  const todosDone = asked.answer.then(
-    (res) => applyTodos({ status: "fulfilled", value: res }, asked.fresh),
-    (reason: unknown) => applyTodos({ status: "rejected", reason }, asked.fresh),
-  );
+  // By to-do (the default, #2812) can use the to-dos as soon as they answer.
+  const todosDone = refreshTodos();
   const [sessions, interactions, machines, mutes, pins] = await Promise.allSettled([
     state.features.includes(SESSIONS_LIST_FEATURE)
       ? runtimeSessions.load().then(() => null)
@@ -1709,6 +1879,7 @@ function resendSeen() {
 }
 
 export function reset() {
+  resetAgentsDisplay();
   disconnect();
   clearConversationDeletions();
   resetMessageFeedback();
@@ -1732,14 +1903,14 @@ export function reset() {
   resetAgents();
   rowHints.clear();
   taskRowsAsked.clear();
-  cardRowsAsked.clear();
-  cardRowsFor = null;
   listedFull.clear();
   runtimeSessions.reset();
   runtimeAgents.reset();
   clearMemoryPages();
   clearTimeout(seenTimer);
   seenTimer = undefined;
+  clearTimeout(handoffTimer);
+  handoffTimer = undefined;
   Object.values(state.launches).forEach((launch) => releaseAttachments(launch.attachments));
   set({
     machines: [],
@@ -1764,9 +1935,21 @@ export function reset() {
     todosError: null,
     spacesSupported: true,
     loaded: false,
+    features: [],
+    pushGrading: false,
     conn: "connecting",
     link: { ...NO_LINK, networkUp: networkUp() },
   });
+  // last: the list resets above tell subscribers while the old cards are still there, and a lookup started then
+  // belongs to the old login
+  forgetCardRows(false);
 }
 
-configureMessageFeedback({ getSession, send, onHubEvent, subscribe, receiptsAllowed: () => appSocketReady() && receiptOwner === credentialOwner() });
+configureMessageFeedback({ getSession, send, onHubEvent, subscribe,
+  watchCursor: (mid, sid) => {
+    if (appSocketReady()) for (const listener of sessionListeners.get(key(mid, sid)) ?? []) {
+      const cursor = listener.watchCursor?.();
+      if (cursor !== undefined) return cursor;
+    }
+  },
+  receiptsAllowed: () => appSocketReady() && receiptOwner === credentialOwner() });
