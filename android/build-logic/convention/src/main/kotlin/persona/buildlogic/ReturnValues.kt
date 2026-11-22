@@ -33,12 +33,14 @@ fun Project.configureReturnValueChecks() {
  * The modules where a dropped must-use result is still only a warning, each with the call sites it has left: an open
  * pull request rewrites those lines, so fixing them now would only make that pull request conflict.
  *
- * The list may only shrink. `scripts/test/test_android_return_values.py` fails when a module is added, and when a
- * listed site no longer drops its result (a site is a module-relative file and the text of the statement that drops
- * it). Drop a fixed site from here; a module with no sites left goes too, and from then on it compiles them as errors.
+ * The list may only shrink. `scripts/test/test_android_return_values.py` fails when a module or a site is added, and
+ * when a listed site's line no longer stands as written (a site is a module-relative file and the line that drops the
+ * result, indentation aside), however it changed: once the pull request rewrites the line, nothing is left to conflict
+ * with. Then fix the result where the line now is and drop its site; a module with no sites left goes too, and from
+ * then on it compiles them as errors.
  */
 private val stillWarnings: Map<String, List<String>> = mapOf(
-    // #11918 rewrites this statement (it takes the permission only for a draft).
+    // #11918 rewrites this line (it takes the permission only for a draft); #13128 promotes the module after it.
     ":feature:chat" to listOf(
         "src/main/kotlin/persona/feature/chat/ComposerAttachments.kt: " +
             "runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }",
