@@ -2231,6 +2231,9 @@ if os.environ.get("MOCK_RECENT") == "1":
 # /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
 # sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
+# Directions ended (unpinned) in this run, by POST …/end or /mock/direction_sessions?ended=: still known for filing
+# (409 direction_ended, their chats leader conversations), their single read has `ended_at`; …/make takes one back.
+ENDED_LEADERS = set()
 MOCK_DIRECTION_NAMES = {}
 # A direction's notes (#10086, assistant/direction_notes.go): the first leader has some, PUT …/directions/{id}/notes keeps them.
 MOCK_DIRECTION_NOTES = {}
@@ -28677,12 +28680,15 @@ class H(BaseHTTPRequestHandler):
             lead, op = p.split("/")[5], p.split("/")[6]
             if lead not in {c["session_id"] for c in ASSISTANT}: return self.send_json({"error": "not a Persona conversation"}, 409)
             if op == "make":
+                ENDED_LEADERS.discard(lead)
                 if lead not in MOCK_LEADERS:
                     MOCK_LEADERS.append(lead)
                     MOCK_DIRECTION_NAMES.setdefault(lead, next((c.get("title", "") for c in ASSISTANT if c["session_id"] == lead), ""))
                 return self.send_json({"leader": {"id": lead, "name": MOCK_DIRECTION_NAMES.get(lead, "")}})
             ended = lead in MOCK_LEADERS
-            if ended: MOCK_LEADERS.remove(lead)
+            if ended:
+                MOCK_LEADERS.remove(lead)
+                ENDED_LEADERS.add(lead)
             return self.send_json({"ended": ended})
         if p == "/api/v1/pins" and self.command == "PUT":  # the hub keeps them (the reply is what it kept)
             body = json.loads(self.last_body or b"{}")
