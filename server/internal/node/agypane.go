@@ -74,6 +74,7 @@ type agyWatch struct {
 	pane, history, conversation string
 	since                       int
 	file                        *agyPaneFiles
+	stepHashes                  map[int][32]byte
 }
 
 type agyPaneFiles struct{ transcript, receipts os.FileInfo }
@@ -119,7 +120,7 @@ func (n *Node) agyRead(root *os.Root, key, conversation string, previous *agyPan
 		n.agyRevisions = newLRU[string, agyRevision](256)
 	}
 	if old, ok := n.agyRevisions.get(key); ok && old.branch == rev.branch {
-		if len(raw) < old.length || sha256.Sum256(raw[:old.length]) != old.hash {
+		if (len(raw) < old.length || sha256.Sum256(raw[:old.length]) != old.hash) && agyStepsRewritten(old.steps, rev.steps) {
 			rev.rewrite = fmt.Sprintf("%x", rev.hash[:10])
 		} else {
 			rev.rewrite = old.rewrite
@@ -133,6 +134,7 @@ func (n *Node) agyRead(root *os.Root, key, conversation string, previous *agyPan
 		if data, err := root.ReadFile(agyWakeReceipts); err == nil {
 			receipts = make(map[string]bool)
 			for row := range strings.SplitSeq(string(data), "\n") {
+				row = strings.TrimRight(row, "\r")
 				if row != "" {
 					receipts[row] = true
 				}
@@ -268,6 +270,8 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	case "session.unwatch":
 		n.unwatch(id)
 		return okResult(nil), nil, true
+	case "session.info":
+		return n.agyPaneSessionInfo(id, pane), nil, true
 	case "session.items", "session.item", "session.image", "session.watch":
 	default:
 		return nil, nil, false
@@ -336,6 +340,55 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	return h.page(p), nil, true
 }
 
+func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
+	info := map[string]any{
+		"session_id": id, "agent": agyAgent,
+		"context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0,
+		"usage_unknown": true,
+	}
+	if a, ok := n.agent(id); ok {
+		info["cwd"] = a.Cwd
+	}
+	if st, ok := n.state.get(id); ok {
+		if st.Launcher != "" {
+			info["launcher"] = st.Launcher
+		}
+		if st.Model != "" {
+			info["model"] = st.Model
+		}
+	}
+	if conversation := n.agyConversation(id, pane); conversation != "" {
+		if runtimeRow, _, ok := n.runtimes.rowOf(agyAgent + "-" + conversation); ok {
+			if runtimeRow.Model != "" {
+				info["model"] = runtimeRow.Model
+			}
+			if runtimeRow.PermissionMode != "" {
+				info["permission_mode"] = runtimeRow.PermissionMode
+			}
+			if runtimeRow.Effort != "" {
+				info["effort"] = runtimeRow.Effort
+			}
+			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokens > 0 {
+				info["context_tokens"] = int(runtimeRow.ContextTokens)
+				info["output_tokens"] = runtimeRow.OutputTokens
+				delete(info, "usage_unknown")
+			}
+		} else if u, ok := n.agyTranscriptMeta(conversation); ok {
+			if u.model != "" {
+				info["model"] = u.model
+			}
+			info["compactions"] = u.compactions
+			info["turns"] = u.turns
+			if u.hasUsage {
+				info["context_tokens"] = u.contextTokens
+				info["output_tokens"] = u.outputTokens
+				delete(info, "usage_unknown")
+			}
+		}
+	}
+	return info
+}
+
 func (n *Node) watchAgyPane(parent context.Context, id, pane string, since int) {
 	n.mu.Lock()
 	if cur := n.watches[id]; cur != nil {
@@ -394,6 +447,35 @@ func (n *Node) pollAgyPane(w *watch) {
 	}
 	if reset {
 		since = 0
+		a.stepHashes = nil
+	} else if !initial && len(a.stepHashes) > 0 && len(h.stepHashes) > 0 {
+		// Push in-place updates for steps at or before `since` (such as a RUNNING step
+		// finishing with new content) without bumping the history token or resetting the watcher.
+		var updated []proto.Item
+		for _, it := range h.items {
+			if it.Seq > since {
+				break
+			}
+			curHash, ok := h.stepHashes[it.Seq]
+			if !ok {
+				continue
+			}
+			if prevHash, seen := a.stepHashes[it.Seq]; !seen || prevHash != curHash {
+				updated = append(updated, it)
+			}
+		}
+		if len(updated) > 0 {
+			if n.agyConversation(w.id, a.pane) != conversation {
+				return
+			}
+			if n.peer != nil {
+				span := transcript.Span{History: h.token, From: since, To: since}
+				err := n.peer.NotifyContext(w.ctx, "session.items", withSpan(map[string]any{"session_id": w.id, "items": agyLightItems(updated)}, span, true))
+				if err != nil {
+					return
+				}
+			}
+		}
 	}
 	for reset || since < h.seq {
 		items, span, more := h.after(since)
@@ -411,6 +493,17 @@ func (n *Node) pollAgyPane(w *watch) {
 		if !more {
 			break
 		}
+	}
+	if len(h.stepHashes) > 0 {
+		hashes := make(map[int][32]byte, len(h.stepHashes))
+		for seq, sum := range h.stepHashes {
+			if seq <= a.since {
+				hashes[seq] = sum
+			}
+		}
+		a.stepHashes = hashes
+	} else {
+		a.stepHashes = nil
 	}
 	a.history, a.file, a.conversation = h.token, info, conversation
 }

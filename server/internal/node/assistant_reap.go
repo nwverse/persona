@@ -198,7 +198,8 @@ func (n *Node) compactIdle(p *assistantProc) {
 	p.mu.Lock()
 	idle := !p.busy && !p.compacting && !p.manual
 	p.mu.Unlock()
-	if !same || !idle {
+	state, _ := n.state.get(p.id)
+	if !same || !idle || state.SegmentRetired {
 		return
 	}
 	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "/compact"}})

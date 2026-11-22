@@ -320,14 +320,46 @@ def _default_ref(root):
     return None
 
 
-def _blob(root, spec):
-    """Blob text, or None when that spec is absent. A present spec that cannot be shown is an error."""
+def _detail(result):
+    detail = (result.stderr or result.stdout).decode("utf-8", "replace").strip()
+    return ": " + detail if detail else ""
+
+
+def _blob(root, commit, path):
+    """The file's text at commit, or None when commit has no such file. A listed file that cannot be read is an error.
+
+    Whether the file is there comes from the tree, not from reading it: CI's guards checkout is blobless (#12753), so
+    the base's copy of a changed baseline is fetched on first read, and a failed fetch must not count as absence.
+    """
+    spec = "{0}:{1}".format(commit, path)
+    listed = _git(root, ["ls-tree", "-z", "--full-tree", commit, "--", path])
+    if listed.returncode != 0:
+        raise SleepError("sleep ratchet: git ls-tree {0} failed{1}".format(commit, _detail(listed)))
+    oid = None
+    for entry in listed.stdout.split(b"\0"):
+        meta, _, name = entry.partition(b"\t")
+        fields = meta.split()  # mode, type, object id
+        if len(fields) == 3 and name.decode("utf-8", "surrogateescape") == path:
+            if fields[1] != b"blob":
+                raise SleepError("sleep ratchet: {0} is not a file".format(spec))
+            oid = fields[2].decode()
+    if oid is None:
+        return None
+    result = _git(root, ["cat-file", "blob", oid])
+    if result.returncode != 0:
+        raise SleepError("sleep ratchet: cannot read {0}{1}".format(spec, _detail(result)))
+    return result.stdout.decode("utf-8", "backslashreplace")
+
+
+def _staged(root, path):
+    """The staged file's text, or None when the index has no such file. Staged blobs are local: git add wrote them,
+    or checkout fetched them."""
+    spec = ":" + path
     if _git(root, ["cat-file", "-e", spec]).returncode != 0:
         return None
     result = _git(root, ["show", spec])
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout).decode("utf-8", "replace").strip()
-        raise SleepError("sleep ratchet: git show {0} failed{1}".format(spec, ": " + detail if detail else ""))
+        raise SleepError("sleep ratchet: git show {0} failed{1}".format(spec, _detail(result)))
     return result.stdout.decode("utf-8", "backslashreplace")
 
 
@@ -354,7 +386,9 @@ def ancestor_baselines(root, base=None, env=None):
         return []
     env = os.environ if env is None else env
     found = []
-    head_text = _blob(root, "HEAD:" + BASELINE_REL)
+    head = _git(root, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+    head = head.stdout.decode().strip() if head.returncode == 0 else ""
+    head_text = _blob(root, "HEAD", BASELINE_REL) if head else None
     if head_text is not None:
         found.append(("HEAD", parse_baseline(head_text, "HEAD:" + BASELINE_REL)))
     explicit = base or env.get("CI_BASE_SHA")
@@ -367,10 +401,9 @@ def ancestor_baselines(root, base=None, env=None):
             raise SleepError(
                 "sleep ratchet: base {0} does not resolve; refusing to skip the never-raise check".format(explicit))
         return found
-    head = _git(root, ["rev-parse", "--verify", "--quiet", "HEAD"])
-    if head.returncode == 0 and head.stdout.decode().strip() == commit:
+    if head == commit:
         return found
-    text = _blob(root, commit + ":" + BASELINE_REL)
+    text = _blob(root, commit, BASELINE_REL)
     if text is None:
         return found
     found.append((commit[:12], parse_baseline(text, commit[:12] + ":" + BASELINE_REL)))
@@ -426,7 +459,7 @@ def check(root, baseline_path=None, base=None, env=None):
     if not _tracks_baseline(root, baseline_path):
         return found
     found.extend(_ancestor_violations(root, baseline, base, env))
-    indexed = _blob(root, ":" + BASELINE_REL) if _inside_git(root) else None
+    indexed = _staged(root, BASELINE_REL) if _inside_git(root) else None
     if indexed is not None:
         index_counts = parse_baseline(indexed, "index:" + BASELINE_REL)
         if index_counts != baseline:

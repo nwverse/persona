@@ -126,6 +126,11 @@ TABLE = (
         (("server/internal/proto/*", "server/internal/hub/*", "server/internal/extension/*",
           "schema/extension/manifest.schema.json"), ("scripts/test/test_doc_wire.py",)),
     ),
+    # AGENTS.md is CLAUDE.md through a symlink (#12723): the test reads how git records both, so either one's change
+    # runs it, on top of the doc suites above.
+    (
+        (("AGENTS.md", "CLAUDE.md"), ("scripts/test/test_agents_md.py",)),
+    ),
     # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
     (
         (("server/*", "web/src/*", "web/e2e/*", "scripts/*", "sdk/*", "apple/*", "android/*", "integrations/*",
@@ -172,7 +177,8 @@ TABLE = (
     # them. test_ci.py and test_check_fast_inputs.py run server.sh and check-fast.sh with go_trimpath.sh, which composes
     # their GOFLAGS; test_check_fast_inputs.py runs check-fast.sh with heavy_slot.py too, and test_android_sh.py runs
     # android.sh with it (#11250). check-fast.sh's tests are three files (#11017): its own name picks
-    # test_check_fast.py, and the other two, which import its fixtures, come along.
+    # test_check_fast.py, and the other two, which import its fixtures, come along. They copy check_fast_compare.py,
+    # which names a failure's rerun and compares it with the merge base (#12733), into their temp repositories too.
     (
         (("scripts/hooks/*",), ("scripts/test/test_privacy_check.py", "scripts/test/test_check_deno_adapter_sh.py")),
         (("scripts/gen/deno_adapter.sh",), ("scripts/test/test_check_deno_adapter_sh.py",)),
@@ -186,6 +192,9 @@ TABLE = (
         (("scripts/heavy_slot.py",), ("scripts/test/test_check_fast_inputs.py", "scripts/test/test_android_sh.py")),
         (("scripts/check-fast.sh", "scripts/test/check-fast.sh", "scripts/test/test_check_fast.py"),
          ("scripts/test/test_check_fast_guards.py", "scripts/test/test_check_fast_inputs.py")),
+        (("scripts/ci/check_fast_compare.py",),
+         ("scripts/test/test_check_fast.py", "scripts/test/test_check_fast_guards.py",
+          "scripts/test/test_check_fast_inputs.py")),
     ),
     # test_heavy_slot.py reads CI's lanes, the operations scripts (the watchers among them), their example configs and
     # services, and both watcher skills: one that names a script taking a slot must set PERSONA_HEAVY_SLOTS=0
