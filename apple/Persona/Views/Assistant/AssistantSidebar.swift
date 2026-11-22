@@ -503,7 +503,7 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
             // Within 45° of horizontal: steeper is the page's own scrolling.
             guard abs(dx) > abs(dy) else { return refused("direction") }
             // The To Decide pager's card pages sideways itself (#12831, `SwipePageMark`): a drag on it is the pager's.
-            if false, SwipePageMark.covers(start, in: view) { return refused("a pager's swipe") }
+            if SwipePageMark.covers(start, in: view) { return refused("a pager's swipe") }
             if Self.pushed(at: start, in: view, beyond: firstPages ? 2 : 1) {
                 #if DEBUG
                 ShellTrace.shared.note("pan refused: pushed")
