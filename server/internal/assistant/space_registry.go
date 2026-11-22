@@ -17,7 +17,10 @@ import (
 // usage decision that replaces SpacePolicy); until then every space other than the main one, registered or not, gets
 // the strictest policy: the health space's, as "when unsure, treat it as health" always did.
 
-// SpacePolicy is how a space's information may be used, one switch a use.
+// SpacePolicy is how a space's information may be used, one switch a use. The switches are temporary: they give
+// every privacy decision one place to read, and are to be replaced by a decision on the information's categories and
+// the scene it is used in. Collection is meant to be unrestricted, so the extensions the user owns (the memory
+// extension among them) are to read every space then.
 type SpacePolicy struct {
 	// Redact: pushes, the lock screen, Lark and the plugin channels say only that there is news.
 	Redact bool
