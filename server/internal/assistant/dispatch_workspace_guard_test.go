@@ -17,7 +17,7 @@ func TestDispatchRefusesAssistantWorkspace(t *testing.T) {
 			t.Run(tool+cwd, func(t *testing.T) {
 				s, f := newTaskService(t)
 				f.devices = []Device{{ID: "box", Home: "/home/me", DataDir: "/state", Online: true, Reachable: true}}
-				args := map[string]any{"title": "Inspect project", "prompt": "Inspect the source", "machine": "box", "cwd": cwd, "worktree": map[string]string{"branch": "fix/example"}}
+				args := map[string]any{"role": "worker", "title": "Inspect project", "prompt": "Inspect the source", "machine": "box", "cwd": cwd, "worktree": map[string]string{"branch": "fix/example"}}
 				var input any = args
 				if tool == "task_plan" {
 					input = map[string]any{"tasks": []any{args}}
