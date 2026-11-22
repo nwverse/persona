@@ -737,6 +737,7 @@ func TestStopButtonOnATopicsProgressCard(t *testing.T) {
 	e.deliver(topicEvent("om_t1", "开始"))
 	ctx := context.Background()
 	r := e.s.channelRuns(channel.Feishu)[0]
+	waitFor(t, "the progress card's watched run", func() bool { _, p := e.s.channelRunByID(r.ID); return p != nil })
 	feishuSink{e.s}.progress(ctx, &r, time.Second, []string{"读文件"}, "")
 	var card string
 	for _, p := range e.f.appParams(AppFeishu, FeishuPost) {
