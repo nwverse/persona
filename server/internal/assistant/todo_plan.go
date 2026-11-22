@@ -313,13 +313,17 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// still has the agents that were working on it.
 		s.goRecordTaskOutcome(cur, *row.DoneAt)
 		s.askTodoClosed(context.WithoutCancel(ctx), id, row.Title) // a question's to-do closed unanswered (ask_todo.go)
-		if row.StartError == "" && row.DoneBy != db.DoneByCancelled {
+		maySatisfyAfter := row.StartError == "" && row.DoneBy != db.DoneByCancelled
+		s.onTodoWorkspaceReleased(ctx, cur, maySatisfyAfter)
+		if maySatisfyAfter {
 			s.evaluateTodoAfterDependents(ctx, id)
+			s.evaluateParentCloseoutForChild(ctx, id)
 		}
 	}
 	if reopening && row.DoneAt == nil && (cur.DoneAt != nil || e.RestartWork ||
 		row.ReopenedAt != nil && (cur.ReopenedAt == nil || !row.ReopenedAt.Equal(*cur.ReopenedAt))) {
 		s.resetTodoReadyWake(ctx, id)
+		s.resetParentCloseoutWake(ctx, id)
 	}
 	return out, nil
 }
@@ -337,6 +341,7 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 		return err
 	}
 	s.askTodoClosed(context.WithoutCancel(ctx), id, cur.Title) // a question's to-do deleted unanswered (ask_todo.go)
+	s.onTodoWorkspaceReleased(ctx, cur, false)
 	return nil
 }
 
@@ -452,16 +457,18 @@ func (s *Service) remind(ctx context.Context, id string, at, now time.Time) {
 		SessionID: set.Main, Title: channelTitle, Body: channelBody, Level: assistantwire.LevelP0,
 		RelatedKey: "todo-remind:" + id + "@" + at.UTC().Format(time.RFC3339)})
 	// Only the Feishu copy gets the full notes, to-do deep link and reply context. Ordinary phone and other-channel
-	// copies keep their existing short text; a health task's content stays behind the generic notice on every copy.
+	// copies keep their existing short text; the content of a task from a space that redacts stays behind the generic
+	// notice on every copy.
 	go s.feishuTodoReminder(set.MachineID, set.Main, larkTitle, larkBody, todo)
 	go s.channelPush(set.MachineID, set.Main, channelTitle, channelBody)
 	s.logf("todo %s: reminded (due %s)", id, at.Format(time.RFC3339))
 }
 
-// reminderChannelText applies the health space's outbound rule to phone and channel copies; ordinary text is unchanged.
+// reminderChannelText applies the outbound rule of a space that redacts to phone and channel copies; ordinary text is
+// unchanged.
 func (s *Service) reminderChannelText(ctx context.Context, t Todo, title, body string) (string, string) {
-	if s.todoInHealth(ctx, t) {
-		return healthNotice(s.lang(ctx))
+	if s.todoPolicy(ctx, t).Redact {
+		return spaceNotice(s.lang(ctx))
 	}
 	return title, body
 }

@@ -268,10 +268,12 @@ class ConnectorInboxAvatarTest {
                 }
             }
         }
+        rule.waitUntil(5_000) { refs.toSet().size == 2 }
         rule.waitUntil(5_000) {
             rule.onAllNodesWithText("N", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() &&
                 rule.onAllNodesWithText("A", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
         }
+        rule.waitForIdle()
         assertEquals(setOf(
             "/api/v1/avatars/telegram/normal?size=152",
             "/api/v1/avatars/telegram/action?size=168",

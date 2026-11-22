@@ -611,7 +611,7 @@ checks are evidence for that review, never a result or acceptance by themselves.
   Web to-do rows add "At PR · Blocked on '…' · Needs your approval" while open and `state` is `pr` / `merged` / `off`; Android to-do rows (when the Agent is neither working nor waiting for you) and details show the same line (`Todo.hold` in `core:domain`); iOS / Mac do not render it yet (optional field, old clients unaffected).
 - **The delivery hold follows the current wait**: the to-do and briefing combine the recorded delivery with current supervision and forge observations. An external park supplies its reason and puts the next step with someone else. A pending owner decision supplies its question. An answer, rework review or acceptance supersedes the previous approval, and a requested owner check remains available on its verification card. A ready PR resolves its draft approval, and a merge advances a PR hold to the deployment stage of work still to do. An independent owner decision stays actionable. The deploy check still uses the recorded delivery as evidence.
   Reopening a task leaves its previous decision in review history. A new judgment can renew the same approval after rework.
-- **Batch user approvals**: assistant live snapshot lists delivery blockers after each task; open tasks with `unblock = user` get a separate "Waiting for user approval to go live" group (oldest ten).
+- **Batch user approvals**: assistant live snapshot lists delivery blockers after each task; open tasks with `unblock = user` get a separate "Waiting for user approval to go live" group (oldest ten). On a supervised task an owner hold no review followed reads `unblock = supervisor` and is not in that group (#13191, `docs/assistant/agent-work.md` "Closeout").
   Assistant CLAUDE.md tells it to present these together in one message; after user approves in one reply, use `agent_send` to notify the corresponding Agents separately, rather than asking anew for every item.
 
 ## Spot-check reviews
@@ -1726,6 +1726,24 @@ repository paths. The named machine must match. Set `backend.host` to select
 an enabled engine on that computer. The Manager prepares a missing checkout,
 persists the all-ready result, claims the workspace and checks that the to-do
 and operation still permit a start. A retry reuses the same ready checkout.
+
+To dispatch directly into a multi-repository `container` workspace from
+`task_plan`, pass `"workspace":{"container":{"selected_repo_ids":["repo_web","repo_api"]}}`
+(with optional `operation_id` and `host`, and no `cwd` required). Plan creation
+and card preview stay metadata-only: the Manager validates the saved repository
+IDs (from the repository catalog or already bound to `todo_id`) and resolves the
+container root and per-repository subdirectories via `workspace.naming.resolve`
+without writing to disk. When the plan starts, a new to-do atomically binds the
+selected repositories (`CreateTodoWithRepositories`), an existing `todo_id`
+merges any newly selected catalog repositories while preserving its existing
+associations and links, and admission reuses `ensureBackendWorkspacePlan` and
+`PrepareBackendWorkspace` (`workspacenaming` and `task_workspaces`) to save the
+immutable `container` naming plan, prepare all selected repositories, acquire
+the launch use lock and start the session at the container root. Pass
+`"workspace":{"container":{"operation_id":"op_example"}}` with `todo_id` to
+launch directly into an existing saved or prepared `container` workspace (a
+non-container `root` plan is rejected). Legacy `new`, `existing` and `none`
+single-repository policies and defaults are unchanged.
 
 For an owner starting a to-do directly, including one created by hand, use
 `POST /api/v1/todos/{id}/backend-workspace/start`. Send `operation_id`,

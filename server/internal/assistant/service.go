@@ -62,6 +62,7 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	compactRecovery  compactRecoveryCache
 	logical          logicalDeviceState
 	a2aWake          chan struct{}
 	a2aLogicalWrites chan struct{}
@@ -212,6 +213,7 @@ type Service struct {
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	convSpaces           convSpaceBook          // conversation_space.go
+	trackReg             trackRegistry          // track_registry.go
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
 	conversationWrites   sync.RWMutex
@@ -675,7 +677,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: nodeMethod(method, params), Params: raw}
-	res, err := s.callDevice(ctx, p)
+	cctx, cancel, bounded := toolNodeContext(ctx, method) // a model's tool waits for a silent node only so long (tool_node_wait.go)
+	res, err := s.callDevice(cctx, p)
+	if bounded && err != nil && ctx.Err() == nil && errors.Is(context.Cause(cctx), errNodeSilent) {
+		err = s.nodeSilent(device, method, err)
+	}
+	cancel()
 	// Not taken: refused before anything was typed, or it never reached the computer (relay_refusal.go).
 	taken = err == nil || !sendNotTaken(err)
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {

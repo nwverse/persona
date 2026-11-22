@@ -1544,6 +1544,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, p.Host, p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		if err := n.guardAgentDirectory(ctx, p.Cwd); err != nil {
+			return nil, err
+		}
+		if p.ResumeSessionID == "" {
+			p.TaskInstructions = agentPlatformInstructions(runtime.GOOS, p.TaskInstructions)
+		}
 		speed, err := n.prepareSessionStartSpeed(ctx, p.Speed, p.Launcher, p.Host, p.ResumeSessionID)
 		if err != nil {
 			return nil, err
@@ -2201,14 +2207,24 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err := json.Unmarshal(params, &in); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
 		}
+		if in.Cwd != "" {
+			if err := n.guardAgentDirectory(ctx, in.Cwd); err != nil {
+				return nil, err
+			}
+		}
 		if in.Composer {
 			return n.worktreeComposerPrepare(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID)
 		}
-		return n.worktreePrepareBranch(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd, in.Branch)
+		return n.worktreePrepareBranch(worktreeComposerContext(ctx, params), in)
 	case methodWorktreeCreate: // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
 		var in worktreeCreateParams
 		if err := json.Unmarshal(params, &in); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		if in.ForAgent {
+			if err := n.guardAgentDirectory(ctx, in.Cwd); err != nil {
+				return nil, err
+			}
 		}
 		if in.Composer {
 			return n.worktreeCompose(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, params)
@@ -2708,9 +2724,16 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			CLIs map[string]string `json:"clis"`
 			// PluginSkills are the hub's plugins' skills (nil from a hub without plugins: those kept stay).
 			PluginSkills []assistantskills.PluginSkill `json:"plugin_skills"`
+			// DenyDirs are the directories (relative to HOME, as Dir) of the tracks the assistant's other
+			// conversations' Read and Edit are denied, each with its track's slug (nodeproto.DenyDirs, healthdeny.go);
+			// nil from a manager that does not send them: the list kept stays.
+			DenyDirs []denyDir `json:"deny_dirs"`
 		}
 		if err := json.Unmarshal(params, &a); err != nil || a.Dir == "" || strings.Contains(a.Dir, "..") {
 			return nil, fmt.Errorf("bad assistant dir")
+		}
+		if a.DenyDirs != nil {
+			n.setDenyDirs(a.Dir, a.DenyDirs)
 		}
 		dir, err := n.preparedDir(a.Dir)
 		if err != nil {

@@ -58,6 +58,7 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 | `"new"` | Create a checkout through the machine's existing herdr/Orca workspace engine |
 | `{"new":{"branch":"task/fix-login"}}` | Create through that engine, with an explicit branch |
 | `{"existing":"/code/app"}` | Reuse an existing directory (`~/…` is expanded on the selected machine) |
+| `{"existing":"/code/app","queue":true}` | Reuse an existing directory, queueing FIFO behind an occupying task instead of failing |
 | `{"existing":"ws_…"}` | Select a workspace from that machine's catalog; node-local and board-qualified IDs are accepted |
 | `"none"` | Create no workspace; run at `cwd` (the default for read-only/non-Git tasks) |
 
@@ -72,16 +73,18 @@ A repository nobody has committed to (no ref names a commit) has nothing to chec
 with code `worktree_no_commits` (#5548): an inferred `new` then uses the free directory as `existing`, and an occupied one
 is refused with a message naming the task that holds it; an explicit `new` fails saying the repository has no commits.
 An explicit `workspace` overrides inference. When a caller knows a particular checkout, it should name it with `existing`.
+When an explicit `existing` workspace is occupied by another open task and the caller either sets `workspace.queue: true` or names that occupying task in `after`, the hub parks the task in a durable workspace queue (`TaskQueue` with key `workspace_occupied`) instead of failing into a start-error card (#13142). When the occupying task completes, is accepted/cancelled, or otherwise releases the workspace, the hub deterministically dequeues and auto-starts the next FIFO waiter on that `(machine, workspace)` whose `after` prerequisites are satisfied, without polling timers. Without `queue: true` or a matching `after` prerequisite, occupancy still refuses immediately naming the occupying task.
 For an explicit `new.branch`, admission first asks the node whether that branch already has a checkout in the same repository.
 It reuses that checkout only after a successful clean-tree check, complete live-Agent inventory, and the hub's unfinished-task
 ownership check. Dirty, occupied, changed or unverifiable checkouts are refused with their path and known owner; nothing is forced.
 Older nodes omit branch lookup and keep the existing creation/refusal behavior.
 An unnamed `new` asks the same about its own `task/<todo id>` (#10365): a plan that continues a to-do, or reuses its ID, gets that
 branch and checkout path again, and the checkout an earlier failed start or Agent of the same to-do left is reused when the node
-finds it clean, idle and inside the checkouts folder (`in_checkouts`), saved as `reused`. A leftover it cannot take (dirty, in use,
-unverifiable, outside the checkouts folder, or a folder that is no checkout of the branch, `worktree_path_taken`) refuses the start
-with its path and the next step, workspace `{"existing": "<path>"}` to continue there or removing it; any other failure of the lookup
-falls back to creating the checkout as before, so a brand-new to-do is unchanged. Nothing is cleaned up automatically.
+finds it idle and inside the checkouts folder (`in_checkouts`), with no tracked or staged changes. The new start records it as `reused`
+and keeps untracked drafts in place. Tracked or staged changes block the start and show up to three changed paths with recovery steps.
+Commit or stash the changes and retry, or choose a different branch in a new workspace. Other unusable leftovers still refuse with
+their path and next step. An unavailable branch lookup still falls back to normal checkout creation. Agents keep temporary files and
+drafts outside repository checkouts, for example in the operating system's temporary directory.
 Since the node names the directory an Agent starts in by a linked home's own spelling (`workspace.resolve` with `terminal`,
 #10365), while a claim or an Agent from before, or from an older node, has the resolved one (`home_real`), the hub compares
 task directories with the two spellings folded (`taskDirKey` in `server/internal/assistant/tasks_workspace.go`): a directory
@@ -222,7 +225,7 @@ rule below. Native clients keep their existing two-entry presentation until they
   keeps them in Needs you (without the Agent's cards). Before, each task listing the Agent showed and counted the same
   approval. The shared cases (`spec/fixtures/entries`) pin it; the whole-client Needs you rule is #5974's.
 
-An open task whose delivery is held for the owner appears in **Needs you** with the reason for the hold.
+An open task whose delivery is held for the owner appears in **Needs you** with the reason for the hold. Only a hold whose `unblock` is `user` does: on a supervised task an owner hold no review followed comes as `supervisor` and stays with the tasks in progress as its supervisor's review until the supervisor opens a decision (#13191, `docs/assistant/agent-work.md` "Closeout"). The web row says "Finished, waiting for your OK to ship" and offers **Open task**.
 A structured decision already shown for the task keeps its controls. A wait assigned to CI, a reviewer or an Agent
 continues to use the normal task placement.
 

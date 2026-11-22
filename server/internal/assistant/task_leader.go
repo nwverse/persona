@@ -488,6 +488,8 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		s.restoreDigest(retry, at, prev)
 	}
 	s.clearSentTodoReady(moot)
+	s.clearSentPRMerged(moot)
+	s.clearSentParentCloseout(moot)
 	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either
 	if len(entries) == 0 {
 		s.ackSupervisePending(batch)
@@ -513,6 +515,8 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	if len(entries) == 0 {
 		s.ackSupervisePending(batch)
 		s.todoReadyTold(ctx, holds)
+		s.prMergeWakeTold(ctx, holds)
+		s.parentCloseoutTold(ctx, holds)
 		s.turnsTold(ctx, holds) // already covered by the deduplication history
 		return false
 	}
@@ -553,6 +557,8 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	s.parkedDueTold(ctx, kept)
 	s.estimateDueTold(ctx, kept)
 	s.todoReadyTold(ctx, holds)
+	s.prMergeWakeTold(ctx, holds)
+	s.parentCloseoutTold(ctx, holds)
 	s.turnsTold(ctx, holds) // kept went, the rest was said the same within the deduplication window
 	return true
 }
@@ -622,6 +628,8 @@ func (s *Service) leaderDelivered(ctx context.Context, lead TodoAgent, entries [
 	s.parkedDueTold(ctx, sent)
 	s.estimateDueTold(ctx, sent)
 	s.todoReadyTold(ctx, receipts)
+	s.prMergeWakeTold(ctx, receipts)
+	s.parentCloseoutTold(ctx, receipts)
 	s.turnsTold(ctx, receipts)
 	s.logf("supervise: %d signal(s) to task leader %s after confirmation", len(sent), short(lead.SessionID))
 }

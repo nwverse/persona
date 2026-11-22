@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Claude Code's permission modes do not come from a runtime's optional capability list (#13233). `proto.Launcher.PermissionModes` is defined for non-Claude agents; applying a partial list to a Claude-compatible custom launcher drops an inherited bypass choice and silently returns the conversation to the profile's settings. Resolve the backend first: Claude accepts `proto.PermissionModes`, while a non-Claude runtime's declared list stays authoritative. Cover the manager's start params and a non-Claude control. Existing nonempty assistant profiles are not reseeded, so their `permissions.defaultMode` and unrelated settings survive node upgrades; pin that boundary with a real temporary profile rather than rewriting it to make a test pass.
+
 - A command that returns text to the message pipeline must keep its explicit destination (#12700). In the official bot DM, resetting `current` for `/new <first message>` was insufficient: pending-card handlers could consume the text, and parent/root bindings could restore an old target. Carry the fresh Persona target past those handlers while retaining reply metadata for quoted context. Test through `FeishuMessage` with old Persona/Agent bindings, an answerable card and duplicate delivery; keep bare `/new` and ordinary replies as controls.
 
 - A launcher name does not identify an execution backend (#12791). Scheduled Assistant conversations must pass
@@ -188,7 +190,7 @@
 
 - A shared completion value does not imply the same handling-chain explanation (#1908). Mutes retain `done_by=read` for compatibility, but must say they were muted, not read elsewhere. Cover existing items, new connector-item admission and grouped events in every hub language, and keep an ordinary-read control.
 
-- Health notification redaction must cover every notification route (#1914). `notify_user` passes through `runTool`, but `phone_notify` goes directly through `mcpCall` to the phone. Apply the existing caller-space check and `healthNotice` before phone dispatch, and assert the forwarded title and body in tests. Device notification-preview settings and a prompt recommendation cannot enforce the space boundary. Keep explicitly requested, phone-confirmed reminders separate from generic notices.
+- Health notification redaction must cover every notification route (#1914). `notify_user` passes through `runTool`, but `phone_notify` goes directly through `mcpCall` to the phone. Apply the existing caller-space check and `spaceNotice` before phone dispatch, and assert the forwarded title and body in tests. Device notification-preview settings and a prompt recommendation cannot enforce the space boundary. Keep explicitly requested, phone-confirmed reminders separate from generic notices.
 
 - A PR's check-run endpoint alone is not the complete CI result: commit statuses are separate, and both must be paged. Check the PR head again after reading and reject incomplete or inconsistent pages. The node's older PR reader cannot attest complete rollups and can classify a rerun by its old conclusion; only nodes explicitly marking a complete, status-aware result can be used for a CI wake. Test a failing check alongside a pending one, a changing head, and rate limits.
 
