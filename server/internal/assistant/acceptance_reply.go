@@ -35,7 +35,7 @@ func (s *Service) conclusionQuestion(ctx context.Context, ev *feishubot.MessageE
 	if !ask.Conclusion || text == "" {
 		return false
 	}
-	if !strings.ContainsAny(text, "?？") {
+	if !strings.ContainsAny(text, "?？") { // i18n-ignore: question marks in the owner's reply, never shown
 		if passWords.MatchString(text) && (!decideAsk(&ask) || ask.Recommend != "") {
 			return false
 		}

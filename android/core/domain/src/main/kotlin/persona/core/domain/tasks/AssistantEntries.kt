@@ -187,7 +187,12 @@ fun assistantEntries(
             }
         } else allStatus
         val asks = own.flatMap { asksOf[GroupKeys.rawKey(it.key)].orEmpty() }
-        val bucket = todo.bucket(lookup, now, restored[todo.id] ?: 0L, superseded = todo.id in superseded)
+        val placed = todo.triage(lookup, now, restored[todo.id] ?: 0L, superseded = todo.id in superseded)
+        val bucket = when {
+            todo.countsAsOpen(placed) -> TodoBucket.Open
+            placed.section == TriageSection.Shelved -> TodoBucket.Shelved
+            else -> TodoBucket.Closed
+        }
         // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
         val waits = if (status == TriageStatus.Failed) bucket == TodoBucket.Open
             else !todo.isDone && (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted)
@@ -212,7 +217,6 @@ fun assistantEntries(
             else -> {
                 // finished work a conversation handed out, for a day after it finished, seen or not (#10922); a failed
                 // start a related to-do finished is history, not news
-                val placed = todo.triage(lookup, now, restored[todo.id] ?: 0L, superseded = todo.id in superseded)
                 val ended = todo.finishedAt(placed)
                 if ((placed.section == TriageSection.JustDone || placed.section == TriageSection.Done) &&
                     status != TriageStatus.Failed && !todo.origin.isNullOrBlank() && ended > 0 && now - ended < JUST_DONE_MS) {

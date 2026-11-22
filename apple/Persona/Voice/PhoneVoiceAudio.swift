@@ -183,9 +183,12 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
     private var generation = 0
     /// The loudness of the voice's buffers still queued, in order: the first is the one playing.
     private var queued: [Float] = []
-    /// The voice held back until enough of it has gathered (#4430), and the wait that plays it anyway.
+    /// The voice held back until enough of it has gathered (#4430), and the wait that plays it anyway (set for `holdDue`).
     private var playout = VoicePlayout<Piece>(rate: VoiceFrame.defaultOutputRate)
     private var holdTimer: Task<Void, Never>?
+    private var holdDue: TimeInterval?
+    /// How often the voice ran dry mid-reply this call (#12922), for the log's last line.
+    private var stalls = 0
     private var activated = false
     private var observers: [NSObjectProtocol] = []
     /// The engine's configuration-change observer: a rebuilt engine gets its own.
@@ -427,6 +430,12 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         generation += 1
         dropHeld()
         queued = []
+        if stalls > 0 {
+            let times = stalls, lead = Int(playout.leadNow * 1000)
+            Self.log.notice("voice: ran dry mid-reply \(times, privacy: .public) times this call; the lead reached \(lead, privacy: .public) ms")
+        }
+        stalls = 0
+        playout = VoicePlayout(rate: format.outputRate)
         if activated {
             activated = false
             let session = AVAudioSession.sharedInstance()
@@ -499,7 +508,8 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         self.player = player
         self.playFormat = playFormat
         self.pump = pump
-        playout = VoicePlayout(rate: format.outputRate)
+        // A new player for the same call: the link is the one the voice stalled on, so the raised lead stays (#12922).
+        playout = VoicePlayout(rate: format.outputRate, level: playout.level)
     }
 
     /// Takes the engine apart and puts it together again for the input as it is now (a new route or new rates). What
@@ -578,24 +588,32 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { channel.update(from: $0.baseAddress!, count: samples.count) }
         guard voice else { return enqueue(buffer, level: nil, on: player) }
-        let ready = playout.add(Piece(buffer: buffer, level: VoicePCM.rms(samples)), frames: samples.count, playing: !queued.isEmpty)
-        if playout.isHolding {
-            waitForLead()
-        } else {
-            holdTimer?.cancel()
-            holdTimer = nil
+        let stalled = playout.stalls
+        let ready = playout.add(Piece(buffer: buffer, level: VoicePCM.rms(samples)), frames: samples.count, playing: !queued.isEmpty,
+                                at: ProcessInfo.processInfo.systemUptime)
+        if playout.stalls > stalled {
+            stalls += 1
+            let gap = Int(playout.lastGap * 1000), lead = Int(playout.leadNow * 1000)
+            Self.log.notice("voice: ran dry mid-reply for \(gap, privacy: .public) ms; gathering \(lead, privacy: .public) ms before playing")
         }
+        holdUntilDue()
         for piece in ready { enqueue(piece.buffer, level: piece.level, on: player) }
     }
 
-    /// Plays what is held once the first of it has waited `VoicePlayout.wait`, lead or not.
-    private func waitForLead() {
-        guard holdTimer == nil else { return }
+    /// Plays what is held when `VoicePlayout.due` comes, lead or not; nothing held, no wait.
+    private func holdUntilDue() {
+        let due = playout.due
+        guard due != holdDue else { return }
+        holdTimer?.cancel()
+        holdTimer = nil
+        holdDue = due
+        guard let due else { return }
         let generation = generation
         holdTimer = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(VoicePlayout<Piece>.wait))
+            try? await Task.sleep(for: .seconds(max(0, due - ProcessInfo.processInfo.systemUptime)))
             guard !Task.isCancelled, let self else { return }
             holdTimer = nil
+            holdDue = nil
             guard generation == self.generation, let player, engine?.isRunning == true else { return playout.clear() }
             for piece in playout.release() { enqueue(piece.buffer, level: piece.level, on: player) }
         }
@@ -604,6 +622,7 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
     private func dropHeld() {
         holdTimer?.cancel()
         holdTimer = nil
+        holdDue = nil
         playout.clear()
     }
 
@@ -631,6 +650,7 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         if let next = queued.first {
             events?(.outputLevel(next))
         } else {
+            playout.ranDry(at: ProcessInfo.processInfo.systemUptime)
             events?(.outputLevel(0))
             events?(.playing(false))
         }
