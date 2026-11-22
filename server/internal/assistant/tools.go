@@ -1012,6 +1012,9 @@ func sendUnknown(err error) bool {
 	if err == nil || errors.Is(err, rpc.ErrNotSent) {
 		return false
 	}
+	if _, ok := errors.AsType[*nodeSilentError](err); ok {
+		return true // the request went out and no answer came back in time (tool_node_wait.go)
+	}
 	switch nodeDelivered(err) {
 	case "none":
 		return false
