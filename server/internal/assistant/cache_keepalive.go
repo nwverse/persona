@@ -36,7 +36,9 @@ func (s *Service) putCacheKeepalive(ctx context.Context, machine, id string, mai
 		if archived, known := s.archivedSet(); !known || archived[id] != "" {
 			return
 		}
-		if c, ok := s.session(ctx, machine, id); !ok || !c.Assistant || c.IsSubagent || c.ParentSessionID != "" || c.ParentThreadID != "" || c.Archived || c.IsDeleted() {
+		// Eligibility must not add an RPC to every send or background read. The
+		// registry attests the role; retained inventory can additionally revoke it.
+		if c, ok := s.nodeSession(machine, id); ok && (!c.Assistant || c.IsSubagent || c.ParentSessionID != "" || c.ParentThreadID != "" || c.Archived || c.IsDeleted()) {
 			return
 		}
 	}

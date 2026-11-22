@@ -38,15 +38,6 @@ func TestCacheKeepaliveOnlyMainAndRegisteredLeads(t *testing.T) {
 			}
 		})
 	}
-	// Even a stale/corrupt lead registry cannot authorize a background/worker/child row.
-	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"background", "worker", "child"} })
-	for _, id := range []string{"background", "worker", "child"} {
-		p := map[string]any{}
-		s.putCacheKeepalive(ctx, "server", id, false, p)
-		if p["cache_keepalive"] != nil {
-			t.Fatalf("excluded row %s retained authority", id)
-		}
-	}
 	// A removed or archived lead loses authority even while its node retains a snapshot.
 	setSettings(t, s, func(v *Settings) { v.Leaders = nil })
 	p := map[string]any{}
@@ -88,5 +79,36 @@ func TestCacheKeepaliveSettingsDefaultsValidationAndPartialPUT(t *testing.T) {
 	}
 	if p := cacheKeepaliveOf(s.settings(ctx)); p.Enabled || p.IntervalMinutes != 30 || p.MaxRequests != 12 {
 		t.Fatalf("partial reset %+v", p)
+	}
+}
+
+func TestCacheKeepaliveEligibilityDoesNotReadTheNode(t *testing.T) {
+	f := newFakeHub().withMachine()
+	s := newTestService(t, f)
+	d := newFleetDevs()
+	d.add("server", "Computer")
+	d.setSessions("server", []proto.Session{
+		{SessionID: "main", Assistant: true}, {SessionID: "lead", Assistant: true},
+		{SessionID: "worker"}, {SessionID: "child", Assistant: true, IsSubagent: true},
+		{SessionID: "archived", Assistant: true, Archived: true}, {SessionID: "background", Assistant: true},
+	})
+	s.devs = d
+	setSettings(t, s, func(v *Settings) {
+		v.Main = "main"
+		v.Leaders = []string{"lead", "worker", "child", "archived", "background"}
+		v.BackgroundSupervisor = "background"
+	})
+	for _, id := range []string{"main", "lead", "worker", "child", "archived", "background"} {
+		p := map[string]any{}
+		s.putCacheKeepalive(context.Background(), "server", id, id == "main", p)
+		if (p["cache_keepalive"] != nil) != (id == "main" || id == "lead") {
+			t.Fatalf("wrong policy for %s", id)
+		}
+	}
+	if got := len(d.callsTo("server", DeviceSessionGet)); got != 0 {
+		t.Fatalf("eligibility read session.get %d times", got)
+	}
+	if got := len(d.callsTo("server", DeviceSessionsList)); got != 0 {
+		t.Fatalf("eligibility read sessions.list %d times", got)
 	}
 }
