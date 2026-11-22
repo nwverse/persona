@@ -335,14 +335,14 @@ quiet tasks' agents or in muted spaces leave, and the switcher counts such a ses
 the written rule (the needs-you fixture, and `docs/protocol/protocol.md` ("Agent directory visibility") for hidden
 sessions), applied under D1, with a self-check. *Conflict:* `ShellCounts.kt` and `HubManagers.kt` 0;
 `Root.kt` (#11660d, #5969d) is not touched. *Gate:* steps 3 to 7b, D1, D10 (mixed support) and D13 (a missing view),
-and the Kotlin domain kit with the client domain guard (section 6.2). *Rollback:* revert, or turn off the hub feature.
-*Done:* ShellCountsTest, with a paged case (a wait with no card
+and the Inbox plan's step A4, which brings the Kotlin domain kit after the client domain guard and #13024 (section
+6.2). *Rollback:* revert, or turn off the hub feature. *Done:* ShellCountsTest, with a paged case (a wait with no card
 outside the window: counted from the view, not by the fallback), a hidden case (a directory-hidden session's card: left
 out by the view, counted by the fallback) and a switcher case (a Persona conversation's card counts with a view and
 without), AgentsNeedsYouFixtureTest (the marked case at today's value, the view-path case at the fixture's) and the
 surfaces replay pass; `scripts/app/android.sh shots` in three styles, light and dark, shows today's numbers where the
 list is complete and no hide rule matches a waiting session. *Revised 2026-11-22 in #10613:* it also waits for the
-domain kit its reducer is built on.
+Inbox step that brings the domain kit its reducer is built on.
 
 **9. iOS reads `agents_needs_you`.** *Change:* the tab badge and the switcher's agents share read the view, and the
 Home Agents widget's number, for the whole hub (D2), as is the app icon's; the switcher adds its
@@ -630,9 +630,10 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   draws D17's number on the Dock, the taskbar, the tab title and the favicon, and carries D3's Link part, since
   `spec/fixtures/attention` and its web replay change there anyway, so the fixture is rewritten once (else step 11
   carries it). Each step waits for its platform's domain kit and checks, which the Inbox plan's client steps bring
-  (`docs/plans/plan-inbox-vertical-slice.md`, section 3.3): Android for :core:domainkit, which comes with
-  :core:inbox:domain, and the client domain guard; iOS for PersonaDomainKit (Inbox I1, after the same guard); the web
-  and desktop for web/src/domain-kit and its lint rules (Inbox W1).
+  (`docs/plans/plan-inbox-vertical-slice.md`, sections 3.3 and 4): Android for :core:domainkit, which Inbox A4 creates
+  with :core:inbox:domain after A2, the client domain guard and #13024 (an unused result is a compile error in every
+  Android module); iOS for PersonaDomainKit (Inbox I1, after the same guard); the web and desktop for web/src/domain-kit
+  and its lint rules (Inbox W1).
   *Revised 2026-11-22 in #10613:* domain modules with adapters in place of one small pure reducer, after their
   platform's domain kit.
 - **Step 11:** D4's headline, with Lock Screen screenshots of a sessionless item.
