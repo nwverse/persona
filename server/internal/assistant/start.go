@@ -422,6 +422,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
+	if p.GuestTools == nil {
+		s.putCacheKeepalive(ctx, machine, "", main, params)
+	}
 	if main && p.Space == "" && p.GuestTools == nil {
 		cfg := s.settings(ctx)
 		ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
@@ -1215,6 +1218,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 		params = map[string]any{}
 	}
 	delete(params, "external")
+	delete(params, "cache_keepalive") // only the manager may attest a refresh role, including on early returns
 	if launcher, _ := params["launcher"].(string); proto.IsExternalLauncher(launcher) {
 		return nil, false, badRequest(i18n.Err("external-adapter.scope_required"), s.appLang(ctx, p.Lang))
 	}
@@ -1302,6 +1306,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	if p["is_main"] == true {
 		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
+	s.putCacheKeepalive(ctx, machine, sid, p["is_main"] == true, p)
 	putMainCompactWindow(cfg, p)
 	if handled, err := s.logicalSendModel(ctx, machine, sid, p); handled {
 		return err

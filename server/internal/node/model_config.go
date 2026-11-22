@@ -37,8 +37,9 @@ type modelExecution struct {
 	// Runtime preserves an external request's raw value for admission only. Ordinary conversations always use the CLI.
 	Runtime string `json:"-"`
 	// StartupContext belongs to the current external send only and is cleared before recording a process model.
-	StartupContext context.Context `json:"-"`
-	IsMain         bool            `json:",omitempty"`
+	StartupContext context.Context               `json:"-"`
+	CacheKeepalive *assistantwire.CacheKeepalive `json:",omitempty"`
+	IsMain         bool                          `json:",omitempty"`
 	// FollowsSetting: a leader/background supervisor conversation the manager sends with the main chat's model
 	// setting (#7824). With IsMain it identifies conversations that must keep their configured model;
 	// worker Agent conversations have neither flag.
@@ -231,23 +232,24 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 // hub and an unavailable answer all leave a pre-upgrade record unknown and must not start it with ordinary tools.
 func (n *Node) assistantModelDecision(ctx context.Context, id string) (string, modelExecution, bool) {
 	var res struct {
-		Launcher                string                   `json:"launcher"`
-		Model                   string                   `json:"model"`
-		Effort                  string                   `json:"effort"`
-		ModelFingerprint        string                   `json:"model_fingerprint"`
-		Runtime                 string                   `json:"runtime"`
-		IsMain                  bool                     `json:"is_main"`
-		MainCompact             int                      `json:"main_compact_window"`
-		External                *proto.ExternalExecution `json:"external"`
-		Origin                  string                   `json:"origin"`
-		OriginKnown             bool                     `json:"origin_known"`
-		SupervisionInstructions *string                  `json:"supervision_instructions"`
-		ClaudeInteractive       bool                     `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
+		Launcher                string                        `json:"launcher"`
+		Model                   string                        `json:"model"`
+		Effort                  string                        `json:"effort"`
+		ModelFingerprint        string                        `json:"model_fingerprint"`
+		Runtime                 string                        `json:"runtime"`
+		CacheKeepalive          *assistantwire.CacheKeepalive `json:"cache_keepalive"`
+		IsMain                  bool                          `json:"is_main"`
+		MainCompact             int                           `json:"main_compact_window"`
+		External                *proto.ExternalExecution      `json:"external"`
+		Origin                  string                        `json:"origin"`
+		OriginKnown             bool                          `json:"origin_known"`
+		SupervisionInstructions *string                       `json:"supervision_instructions"`
+		ClaudeInteractive       bool                          `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}, false
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, CacheKeepalive: res.CacheKeepalive, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
 }
 
 // strictProtectedExecution identifies owner-facing conversations without changing worker/task retry policy.
