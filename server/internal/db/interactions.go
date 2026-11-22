@@ -62,10 +62,10 @@ type ApprovedSetting struct {
 
 // FinishSettingInteraction claims a live card and commits its outcome and setting together.
 // A competing answer or an expired card changes nothing. A stale setting ends the card as failed.
-func (d *DB) FinishSettingInteraction(ctx context.Context, id, status string, answer proto.Resolution, change *ApprovedSetting) (finished bool, err error) {
+func (d *DB) FinishSettingInteraction(ctx context.Context, id, status string, answer proto.Resolution, change *ApprovedSetting) (outcome string, err error) {
 	raw, err := json.Marshal(answer)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	err = pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE interactions SET status = $2, resolution = $3, resolved_at = now()
@@ -73,7 +73,7 @@ func (d *DB) FinishSettingInteraction(ctx context.Context, id, status string, an
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		finished = true
+		outcome = status
 		if change == nil {
 			return nil
 		}
@@ -99,10 +99,14 @@ func (d *DB) FinishSettingInteraction(ctx context.Context, id, status string, an
 		if err != nil || updated {
 			return err
 		}
+		outcome = "failed"
 		_, err = tx.Exec(ctx, `UPDATE interactions SET status = 'failed', resolution = NULL WHERE id = $1`, id)
 		return err
 	})
-	return finished && err == nil, err
+	if err != nil {
+		return "", err
+	}
+	return outcome, nil
 }
 
 // LateAnswer records on expired card id an answer that came after it expired (proto.Resolution.Late): answers (by

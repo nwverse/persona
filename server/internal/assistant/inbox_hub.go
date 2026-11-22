@@ -90,6 +90,10 @@ func (s *Service) inboxMailBody(ctx context.Context, ref assistantwire.InboxMail
 	return m, err
 }
 
+type inboxExpectedSenderKey struct{}
+
+var errInboxSenderChanged = i18n.Err("assistant-outbound.scope_changed")
+
 // connectorReply sends a reply (or a document's status moves) through connector source at the hub, once per sendID
 // ("": no such guard; inboxSent).
 func (s *Service) connectorReply(ctx context.Context, source string, r connector.InboxReply, sendID string) (bool, error) {
@@ -101,6 +105,9 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 			return false, err
 		}
 		params["sender_identity"] = identity
+	}
+	if expected, _ := ctx.Value(inboxExpectedSenderKey{}).(string); expected != "" && params["sender_identity"] != expected {
+		return false, errInboxSenderChanged
 	}
 	approval, automatic := ctx.Value(outboundApprovalKey{}).(outboundApproval)
 	if automatic && params["sender_identity"] != approval.Identity {

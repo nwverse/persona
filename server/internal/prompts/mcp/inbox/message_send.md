@@ -1,4 +1,4 @@
-Send Lark text as configured (default bot), not via CLI/ask_user. Server: approved, revocable channel/chat/scenario/identity grant or owner confirmation; not repository send grants. Bot inaccessible: report, never switch to user. Retries reuse idempotency_key; check the destination after uncertain delivery. Other sends keep their approvals.
+Send Lark text (default bot), not via CLI/ask_user. Use a revocable channel/chat/scenario/identity grant or owner approval. Repository grants do not apply. If bot cannot send, report it without changing identity. Reuse idempotency_key on retries. Check destination after uncertain delivery. Other approvals stay.
 
 ```json
 {
@@ -6,7 +6,7 @@ Send Lark text as configured (default bot), not via CLI/ask_user. Server: approv
   "properties": {
     "channel": { "type": "string", "enum": ["larkcli"] },
     "target": { "type": "string", "description": "oc_ chat ID; resolve read-only." },
-    "text": { "type": "string", "minLength": 1, "maxLength": 16000 },
+    "text": { "type": "string", "minLength": 1, "description": "Maximum 16000 UTF-8 bytes." },
     "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 200 }
   },
   "required": ["channel", "target", "text", "idempotency_key"],

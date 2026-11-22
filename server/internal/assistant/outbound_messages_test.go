@@ -353,6 +353,31 @@ func TestOutboundAssistantToolUsesGrantAndSendOnce(t *testing.T) {
 	}
 }
 
+func TestOutboundToolRejectsTextOverUTF8ByteLimit(t *testing.T) {
+	h, st, c, _ := outboundTestHub(t)
+	putMessageGrant(t, st, "assistant_message")
+	args := map[string]string{
+		"channel": "larkcli", "target": "oc_example_group", "text": strings.Repeat("界", 5334), "idempotency_key": "oversize",
+	}
+	_, err := h.toolMessageSend(t.Context(), "server", "s1", standingJSON(t, args))
+	if err == nil || !strings.Contains(err.Error(), "16000 bytes") || len(c.got) != 0 || len(st.audit) != 0 {
+		t.Fatalf("oversize text must fail before audit or transport: %v", err)
+	}
+}
+
+func TestOutboundManualInboxSenderMismatchPreventsTransport(t *testing.T) {
+	h, _, c, it := outboundTestHub(t)
+	path := "/api/v1/inbox/" + it.ID + "/reply"
+	w := serve(h.Service, "POST", path, `{"text":"Synthetic manual reply","expected_sender_identity":"user"}`)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "outbound_sender_changed") || len(c.got) != 0 {
+		t.Fatalf("mismatched sender must fail before transport: %d %s", w.Code, w.Body)
+	}
+	w = serve(h.Service, "POST", path, `{"text":"Synthetic manual reply","expected_sender_identity":"bot"}`)
+	if w.Code != 200 || len(c.got) != 1 || c.identities[0] != "bot" {
+		t.Fatalf("matching sender must be passed to transport: %d %s", w.Code, w.Body)
+	}
+}
+
 func TestOutboundAuditCapsTextWithoutTruncatingTransport(t *testing.T) {
 	for _, tc := range []struct {
 		name string

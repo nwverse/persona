@@ -54,6 +54,9 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   // with nothing to show yet it drafts as it opens (below): busy from the first frame, so the text is not offered before it
   const [loading, setLoading] = useState(() => !unsentReplies.has(key) && !agentText);
   const [error, setError] = useState("");
+  const larkCLI = item.source === "larkcli" && !!item.connector?.can_reply;
+  const [sender, setSender] = useState<"bot" | "user">();
+  const [checkingSender, setCheckingSender] = useState(larkCLI);
   // unticked proposed changes are kept with the text: the item's draft card shows and sends the same
   const dropped = useDroppedChanges(key);
   const proposed = agentText ? item.agent?.changes ?? [] : [];
@@ -94,6 +97,30 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
+  useEffect(() => {
+    if (!larkCLI) return;
+    let request: AbortController | undefined;
+    const refresh = async () => {
+      request?.abort();
+      const controller = request = new AbortController();
+      setCheckingSender(true);
+      try {
+        const { identity } = await api<{ identity?: string }>("/assistant/outbound-messages", { headers: itemRequest({ manager: item.manager }), signal: controller.signal });
+        if (!controller.signal.aborted) setSender(identity === "bot" || identity === "user" ? identity : undefined);
+      } catch {
+        if (!controller.signal.aborted) setSender(undefined);
+      } finally {
+        if (!controller.signal.aborted) setCheckingSender(false);
+      }
+    };
+    void refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      request?.abort();
+      window.removeEventListener("focus", refresh);
+    };
+  }, [item.manager, larkCLI]);
+
   // "Edit" is for changing the words: once they are in, the caret waits at their end (audit item 16). The dialog itself
   // takes the focus first (ui/atoms Dialog), which keeps a phone's keyboard down: a touch screen alone still taps in.
   useEffect(() => {
@@ -115,10 +142,10 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   };
 
   const send = () => {
-    void sendReply(item, text.trim(), kept);
+    void sendReply(item, text.trim(), kept, sender);
     onClose();
   };
-  const canSend = !loading && (text.trim().length > 0 || kept.length > 0);
+  const canSend = !loading && !checkingSender && (text.trim().length > 0 || kept.length > 0);
 
   return (
     <Dialog
@@ -171,7 +198,9 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
           })}
         </div>
       )}
-      {item.connector?.reply_to && <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{t("inbox-inboxdialogs.reply_goes", { how: item.connector.reply_to })}</p>}
+      {larkCLI ? (
+        <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{t(sender === "bot" ? "inbox-inboxdialogs.lark_sender_bot" : sender === "user" ? "inbox-inboxdialogs.lark_sender_user" : "inbox-inboxdialogs.lark_sender_default", { chat: item.title })}</p>
+      ) : item.connector?.reply_to && <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{t("inbox-inboxdialogs.reply_goes", { how: item.connector.reply_to })}</p>}
       <div className="relative">
         <textarea
           ref={box}

@@ -49,6 +49,8 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 		}
 		if err := s.resolveApproved(r.Context(), id, res, approver); err != nil {
 			switch {
+			case errors.Is(err, errOutboundSettingsChanged):
+				apierr.WriteCode(w, http.StatusConflict, "outbound_settings_changed", err)
 			case errors.Is(err, errOutboundOwnerAnswer):
 				apierr.Write(w, http.StatusForbidden, err)
 			case errors.Is(err, errHandoffElsewhere):

@@ -20,6 +20,8 @@ import (
 const outboundSettingsCardPrefix = "ix_outbound_settings_"
 const outboundSettingsCardTTL = 24 * time.Hour
 
+var errOutboundSettingsChanged = i18n.Err("assistant-outbound.settings_changed")
+
 var errOutboundOwnerAnswer = i18n.Err("assistant-standing_authorizations.full_access")
 
 type outboundSettingsProposal struct {
@@ -30,7 +32,7 @@ type outboundSettingsProposal struct {
 }
 
 type outboundSettingsStore interface {
-	FinishSettingInteraction(context.Context, string, string, proto.Resolution, *db.ApprovedSetting) (bool, error)
+	FinishSettingInteraction(context.Context, string, string, proto.Resolution, *db.ApprovedSetting) (string, error)
 }
 
 func outboundSettingsCard(ix proto.Interaction) bool {
@@ -65,7 +67,7 @@ func (s *Service) outboundMessageRoutes() {
 		s.fleet.mu.Lock()
 		var latest proto.Interaction
 		for _, p := range s.fleet.interactions {
-			if outboundSettingsCard(p.ix) && time.Now().Before(p.ix.ExpiresAt) && p.ix.CreatedAt.After(latest.CreatedAt) {
+			if !p.claimed && outboundSettingsCard(p.ix) && time.Now().Before(p.ix.ExpiresAt) && p.ix.CreatedAt.After(latest.CreatedAt) {
 				latest = p.ix
 			}
 		}
@@ -213,7 +215,7 @@ func (s *Service) resolveOutboundSettingsCard(ctx context.Context, id string, r 
 			}
 			after, err := proposal.standingChange(before, time.Now())
 			if errors.Is(err, errStandingConflict) {
-				status, answer = "failed", proto.Resolution{Dismiss: true}
+				status = "failed"
 			} else if err != nil {
 				return err
 			} else {
@@ -221,14 +223,17 @@ func (s *Service) resolveOutboundSettingsCard(ctx context.Context, id string, r 
 			}
 		}
 	}
-	finished, err := st.FinishSettingInteraction(ctx, id, status, answer, change)
+	outcome, err := st.FinishSettingInteraction(ctx, id, status, answer, change)
 	if err != nil {
 		return err
 	}
-	if !finished {
+	if outcome == "" {
 		return errNotPending
 	}
 	s.finishInteraction(id)
+	if outcome == "failed" {
+		return errOutboundSettingsChanged
+	}
 	return nil
 }
 

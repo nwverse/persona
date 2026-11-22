@@ -119,12 +119,15 @@ func TestOutboundSettingsDeclineAndStaleApproval(t *testing.T) {
 	scope := postOutboundSettingsCard(t, s, outboundScopeRequest)
 	other := postOutboundSettingsCard(t, s, strings.ReplaceAll(outboundScopeRequest, "oc_example_group", "oc_other"))
 	identity := postOutboundSettingsCard(t, s, `{"identity":"user"}`)
-	for _, tc := range []struct{ id, answer, want string }{
-		{scope.ID, `{"allow":true}`, "approved"},
-		{other.ID, `{"allow":true}`, "failed"},
-		{identity.ID, `{"allow":false}`, "declined"},
+	for _, tc := range []struct {
+		id, answer, want string
+		code             int
+	}{
+		{scope.ID, `{"allow":true}`, "approved", http.StatusOK},
+		{other.ID, `{"allow":true}`, "failed", http.StatusConflict},
+		{identity.ID, `{"allow":false}`, "declined", http.StatusOK},
 	} {
-		if w := answerOutboundSettingsCard(s, tc.id, true, tc.answer); w.Code != http.StatusOK {
+		if w := answerOutboundSettingsCard(s, tc.id, true, tc.answer); w.Code != tc.code || tc.code == http.StatusConflict && !strings.Contains(w.Body.String(), "outbound_settings_changed") {
 			t.Fatalf("answer %s: %d %s", tc.want, w.Code, w.Body)
 		}
 		if w := serve(s, "GET", outboundSettingsPath+"?approval="+tc.id, ""); !strings.Contains(w.Body.String(), `"status":"`+tc.want+`"`) {
@@ -144,5 +147,36 @@ func TestOutboundSettingsDeclineAndStaleApproval(t *testing.T) {
 	}
 	if sender, err := s.outboundIdentity(t.Context()); err != nil || sender != "user" {
 		t.Fatalf("approved identity was not applied: %q %v", sender, err)
+	}
+}
+
+func TestOutboundSettingsOnlyAdvertisesAnswerableCards(t *testing.T) {
+	database := taskRecoveryDatabase(t)
+	s, _ := newTaskServiceOn(t, database)
+	first := postOutboundSettingsCard(t, s, outboundScopeRequest)
+	latest := postOutboundSettingsCard(t, s, `{"identity":"user"}`)
+	s.fleet.mu.Lock()
+	s.fleet.interactions[latest.ID].claimed = true
+	s.fleet.mu.Unlock()
+	w := serve(s, "GET", outboundSettingsPath, "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), first.ID) || strings.Contains(w.Body.String(), latest.ID) {
+		t.Fatalf("should return only the answerable card: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestOutboundSettingsConcurrentIdentityChangeReturnsConflict(t *testing.T) {
+	database := taskRecoveryDatabase(t)
+	s, _ := newTaskServiceOn(t, database)
+	card := postOutboundSettingsCard(t, s, `{"identity":"user"}`)
+	if err := s.store().PutSetting(t.Context(), outboundIdentityKey, "user"); err != nil {
+		t.Fatal(err)
+	}
+	w := answerOutboundSettingsCard(s, card.ID, true, `{"allow":true}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "outbound_settings_changed") {
+		t.Fatalf("stale database write: %d %s", w.Code, w.Body)
+	}
+	w = serve(s, "GET", outboundSettingsPath+"?approval="+card.ID, "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"failed"`) {
+		t.Fatalf("conflict receipt: %d %s", w.Code, w.Body)
 	}
 }
