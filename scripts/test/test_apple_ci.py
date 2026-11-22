@@ -210,7 +210,9 @@ class AppleCIPreparationTests(unittest.TestCase):
         wire = script[script.index('  # The wire layer every app target links,'):script.index("  ci_run 'PersonaKit unit tests'")]
         self.assertIn("ci_run 'PersonaWire unit tests'", wire)
         for lane in ('ios', 'ios-focused', 'ios-regressions'):
-            current = script.replace(wire, '')
+            current = script.replace('      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \\\n      --derived-data "$output/ios-tests" &',
+                                     '      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &')
+            current = current.replace(wire, '')
             current = current.replace(' || [ "$LANE" = ios-ipad-diagnostic ]', '').replace('|ios-ipad-diagnostic', '')
             current = current.replace('      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; diagnostics="$9"; lane="${10}"; shift 10',
                                       '      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8')

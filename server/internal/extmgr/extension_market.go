@@ -2,11 +2,14 @@ package extmgr
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -242,7 +245,11 @@ func (h *Manager) market(rec extension.MarketRecord) (*extension.Market, error) 
 	if err != nil {
 		return nil, err
 	}
-	mk := &extension.Market{Spec: spec, TrustedKey: rec.SigningKey, Client: h.marketClient(), GitHubAPI: h.extensions.markets.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
+	client, err := h.marketClient()
+	if err != nil {
+		return nil, err
+	}
+	mk := &extension.Market{Spec: spec, TrustedKey: rec.SigningKey, Client: client, GitHubAPI: h.extensions.markets.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
 	if extension.IsOfficialMarket(rec.Spec) {
 		mk.TrustedKey = extension.Official.SigningKey
 	}
@@ -353,15 +360,39 @@ func (h *Manager) packageCache() string { return filepath.Join(h.extensions.root
 
 // marketClient is how the hub reads markets. extension_market.proxy sends all of them through its HTTP or SOCKS5
 // proxy. Without one, GitHub's hosts use github.proxy when set (#3277), and everything else follows HTTPS_PROXY.
-// Tests set their own client.
-func (h *Manager) marketClient() *http.Client {
+// extension_market.ca_file appends private roots to this client's system pool, never to another client. Tests set
+// their own client. An invalid configured CA file fails instead of silently using the system-only pool.
+func (h *Manager) marketClient() (*http.Client, error) {
 	ms := h.marketsState()
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	if ms.client != nil {
-		return ms.client
+		return ms.client, nil
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
+	if h.cfg != nil && h.cfg.ExtensionMarket.CAFile != "" {
+		caFile := h.cfg.ExtensionMarket.CAFile
+		pemBytes, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %w", caFile, err)
+		}
+		roots, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("extension_market.ca_file: load system roots: %w", err)
+		}
+		if roots == nil {
+			return nil, errors.New("extension_market.ca_file: load system roots: no system certificate pool")
+		}
+		if !roots.AppendCertsFromPEM(pemBytes) {
+			return nil, fmt.Errorf("extension_market.ca_file: parse %q: no PEM certificates found", caFile)
+		}
+		tlsConfig := &tls.Config{}
+		if t.TLSClientConfig != nil {
+			tlsConfig = t.TLSClientConfig.Clone()
+		}
+		tlsConfig.RootCAs = roots
+		t.TLSClientConfig = tlsConfig
+	}
 	var upstream *url.URL
 	var upstreamErr error
 	if h.cfg != nil {
@@ -388,7 +419,7 @@ func (h *Manager) marketClient() *http.Client {
 		}
 	}
 	ms.client = &http.Client{Transport: t}
-	return ms.client
+	return ms.client, nil
 }
 
 // envProxy is where marketClient sends hosts other than GitHub's: the environment's proxy. A variable so tests do
