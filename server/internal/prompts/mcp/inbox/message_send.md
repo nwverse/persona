@@ -1,4 +1,4 @@
-Send Lark text (default bot), not via CLI/ask_user. Use a revocable channel/chat/scenario/identity grant or owner approval. Repository grants do not apply. If bot cannot send, report it without changing identity. Reuse idempotency_key on retries. Check destination after uncertain delivery. Other approvals stay.
+Send Lark text (default bot), not via CLI/ask_user. Use a revocable channel/chat/scenario/identity grant or owner approval. Repository grants do not apply. If bot cannot send, report it without changing identity. Reuse idempotency_key on retries. Check destination after uncertain delivery. Other approvals stay.{{template "shared/mcp_language" .}}
 
 ```json
 {
