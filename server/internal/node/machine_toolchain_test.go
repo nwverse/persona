@@ -16,15 +16,15 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-type toolchainDirEntry struct {
+type fakeToolchainDirEntry struct {
 	name string
 	dir  bool
 }
 
-func (f toolchainDirEntry) Name() string               { return f.name }
-func (f toolchainDirEntry) IsDir() bool                { return f.dir }
-func (f toolchainDirEntry) Type() os.FileMode          { return os.ModeDir }
-func (f toolchainDirEntry) Info() (os.FileInfo, error) { return fakeFileInfo{name: f.name, dir: f.dir}, nil }
+func (f fakeToolchainDirEntry) Name() string               { return f.name }
+func (f fakeToolchainDirEntry) IsDir() bool                { return f.dir }
+func (f fakeToolchainDirEntry) Type() os.FileMode          { return os.ModeDir }
+func (f fakeToolchainDirEntry) Info() (os.FileInfo, error) { return fakeFileInfo{name: f.name, dir: f.dir}, nil }
 
 type fakeFileInfo struct {
 	name string
@@ -114,13 +114,13 @@ func TestMachineToolchainProbeCoreAgentsDockerGHHardwareAndRedaction(t *testing.
 			switch p {
 			case filepath.Join(home, ".nvm", "versions", "node"):
 				return []os.DirEntry{
-					toolchainDirEntry{name: "v20.11.0", dir: true},
-					toolchainDirEntry{name: "v22.14.0", dir: true},
+					fakeToolchainDirEntry{name: "v20.11.0", dir: true},
+					fakeToolchainDirEntry{name: "v22.14.0", dir: true},
 				}, nil
 			case "/sys/class/power_supply":
 				return []os.DirEntry{
-					toolchainDirEntry{name: "BAT0", dir: true},
-					toolchainDirEntry{name: "AC", dir: true},
+					fakeToolchainDirEntry{name: "BAT0", dir: true},
+					fakeToolchainDirEntry{name: "AC", dir: true},
 				}, nil
 			default:
 				return nil, os.ErrNotExist
