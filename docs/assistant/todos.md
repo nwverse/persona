@@ -372,7 +372,7 @@ Clients calculate to-do runtime state live from linked active Agents; it is not 
 | :--- | :--- | :--- |
 | 0 | Didn't Start | Agent for a task created from chat failed to launch; assistant ends the to-do (`done_at` + `start_error`, #1077); client shows failure/removal, not active. It still waits on the owner: the To-dos SOP counts it open while rule 1 keeps it in Waiting on you, and so do the assistant's snapshot (marked "（没开起来）" in its open index) and `todo_get` (#10365). A supervised task whose new tab is kept by its computer (`shell_waiting`, `agent_start_stalled`) is first remedied, still "starting" to clients ("Remedying a start" below) |
 | 1 | Done | User marked done, or assistant judged a dispatched task complete (`done_at != null`; client shows **Auto-completed** for `done_by = "auto"`) |
-| 1.5 | Timed out | `supervision.state == "timed_out"`: an unattended stalled terminal Agent was stopped after `max(60 minutes, expect_minutes × 3)` without supervisor action or real progress. The to-do stays open and retains the original session and workspace; **Continue** resumes that session through `POST /api/v1/todos/{id}/retry`, and a new turn clears the timeout. Runtime-owned sessions do not get this state (#4784; `docs/assistant/unified-entry.md` "Supervision") |
+| 1.5 | Timed out | `supervision.state == "timed_out"`: an unattended stalled terminal Agent was stopped after `max(60 minutes, expect_minutes × 3)` without supervisor action or real progress. The to-do stays open and retains the original session and workspace; **Continue** resumes that session through `POST /api/v1/todos/{id}/retry`, and a new turn clears the timeout. An unrecoverable conversation keeps its invalid-conversation refusal instead of resuming. Runtime-owned sessions do not get this state (#4784; `docs/assistant/unified-entry.md` "Supervision") |
 | 2 | Needs You | A linked active Agent is `needs_you` (waiting for question, plan approval or authorization) |
 | 2.5 | Interrupted | A linked active Agent is stopped (`unread` / `idle`) with `turn_error`, no other participant is working or waiting to resume, and the task is not parked: a model-service failure interrupted the turn, or the hub reports a task turn with no output (`turn_error_kind` `no_output`, or `stopped` when Persona's Stop interrupted it, #10187, "Automatic completion" below), unfinished (#10399). **Continue** is only for recoverable errors or these silent turns. Account-sealed compaction marks the conversation invalid and directs the owner to a new conversation; it gets no retry. Closed tasks remain Done. A subscription usage limit is not this (the next row) |
 | 2.6 | Usage limit | A linked active Agent is stopped with `turn_error_kind` `usage_limit`, and the reset is not known or not more than 10 minutes past. Not red and not Interrupted: "Usage limit · resumes <time>" when the CLI or the hub will continue it, "Usage limit · resets <time>" when nothing will. An older hub that does not send the kind stays Interrupted |
@@ -606,9 +606,11 @@ records each criterion as it did for the supervisor's review.
 - **A supervisor's `accepted` is held to the active delivery gate** (#6428, #12034, `assistant/supervise_review_delivery.go`): under `merged` (default), `task_review accepted` refuses while any linked PR is unmerged or any linked repository issue is still open (guiding the supervisor to `park` until merge/closure); under `live` (`done_needs_delivery: true`), it additionally requires the PR to be contained in the running hub (not merged, merged but not in the running hub, not named by its deployed-commits file, or check failing; where the running hub cannot be checked against, the PR still has to be merged, and PR-only criteria do not override `live`). Under `off`, no delivery gate runs. `outcome: cannot` and tasks with no linked PR or issue are never held.
 - **Post-closure PR follow-up** (#12371, `assistant/pr_followup.go`, table `todo_pr_followups`): when a to-do is accepted while its own delivery PR(s) (`pr_url` and the stage-tracked `prs`, not every repository link) are still open — possible under the `off` gate, a PR-only/draft-only scope, or a PR that merges after acceptance — the close path records one lightweight follow-up subscription per PR instead of leaving it unwatched. The to-do is never reopened and no synthetic task is created. The deploy minute pass (`sweepPRFollowups`, riding the same pass as `sweepPRStatuses`) polls these subscriptions independently of the to-do's `DoneAt`: a **merged/closed** PR sends one closing notice to the original supervisor conversation (`supervision.supervisor`, falling back to the to-do's `origin`) and deletes the subscription; a new **merge conflict** or a **changes-requested review on the current head** sends one notice per head (`notified_conflict_head` / `notified_review_head` dedupe, so an old head's review never re-wakes anyone). These are `pr_followup` relay records, not acceptance signals and not a reopen, consistent with #9289's evidence-driven model and #8373's boundary that a PR-terminal wake does not imply the criteria are done. When GitHub is unconnected or the PR's host has no code host that can read it, the subscription records nothing and stays for a later pass rather than pretending to poll. A non-terminal subscription silent for more than 24 hours surfaces in the daily briefing (`brief_body.pr_followups`, an optional field older clients ignore).
 - **A bare `accepted` is refused when the result does not settle the task** (#12026, `assistant/supervise_accept_guard.go`): nothing is written and the error names the fix when the review's note/reason/checks or the Agent's last reply show a closeout whose status is not done, a blocker only the owner can clear (missing owner-only information), or an inconclusive / ineffective / partly-done result. The supervisor must instead send `needs_user` (`why_owner: only_owner_knows` for missing owner information), `accepted` with `user_check: true` so the to-do stays in Needs you until the owner passes it (the intended path for read-only research and evaluations), or hand out a linked follow-up to-do first. `user_check` and `outcome: cannot` are deliberate closures the guard lets through; a question written only in chat text never reaches Needs you.
+- **`task_scope` cannot extend a card-less review wait** (#12648, `assistant/task_scope_guard.go`): when a finished task has sat in `pending_review` past the settle window with no card the owner can answer — no open acceptance/conclusion ask, no pending worker interaction and no worker still working — an estimate extension or any other scope change is refused before the brief is written. The hub cannot tell an owner wait from a review the supervisor is merely late on, so the refusal states only that (minutes waited, no owner card) and names the whole review vocabulary: `accepted`/`rework`/`cancelled` when no owner input is needed, `needs_user` or `accepted`+`user_check` when the owner truly must act. It only fires after the same ten-minute settle the watch uses, so a card on its way is not mistaken for a silent wait; a going-on task, one inside the settle window, and a parked task (its own owner-action admission) are unaffected.
 - **To-do shows the blocker**: judgment results except `not_done` are recorded in to-do `delivery` (`{"state", "gate", "unblock", "at"}`, settings `assistant.todo_stages` alongside stage strip, no new table); delivery replaces unconfirmed reply-keyword guesses (PR → review, merged → merge, off by default/live → deploy), but never rolls stored progress back or caps a deployment confirmed by the deploy gate. Explicit verification is recorded only after an acceptance is saved; a supervisor's `accepted` alone does not verify a high-priority task still awaiting its owner. All stage writes are forward-only except an explicit review withdrawing verification (`unverified`) from `verify`; rework, `cannot` and a requested user check do not count as verification.
   Web to-do rows add "At PR · Blocked on '…' · Needs your approval" while open and `state` is `pr` / `merged` / `off`; Android to-do rows (when the Agent is neither working nor waiting for you) and details show the same line (`Todo.hold` in `core:domain`); iOS / Mac do not render it yet (optional field, old clients unaffected).
 - **The delivery hold follows the current wait**: the to-do and briefing combine the recorded delivery with current supervision and forge observations. An external park supplies its reason and puts the next step with someone else. A pending owner decision supplies its question. An answer, rework review or acceptance supersedes the previous approval, and a requested owner check remains available on its verification card. A ready PR resolves its draft approval, and a merge advances a PR hold to the deployment stage of work still to do. An independent owner decision stays actionable. The deploy check still uses the recorded delivery as evidence.
+  Reopening a task leaves its previous decision in review history. A new judgment can renew the same approval after rework.
 - **Batch user approvals**: assistant live snapshot lists delivery blockers after each task; open tasks with `unblock = user` get a separate "Waiting for user approval to go live" group (oldest ten).
   Assistant CLAUDE.md tells it to present these together in one message; after user approves in one reply, use `agent_send` to notify the corresponding Agents separately, rather than asking anew for every item.
 
@@ -930,6 +932,82 @@ The existing ready `merge_review` path still gates terminal wakes on the task's 
 - **Contact and provenance**: show a last request only when its contact is complete, `status: "sent"`, its URL is a non-root HTTP(S) source without credentials, and `sent_at` is no later than now (`sentWaitContact` in `web/src/lib/task-wait.ts`; display projection `taskWait` in `web/src/lib/task-wait-info.ts`). Review evidence also requires `ready: true` and a PR/MR object URL. `recorded_by` identifies the recording conversation, not the contact or sender. Evidence is the supervisor's source-backed account; the hub does not fetch or independently verify that source. A legacy park with no evidence has unknown contact, source and wake; an implicit PR wait keeps its known PR link but has unknown contact, wake and start time. Do not invent missing values. Only waits that can record a sent request say when none is recorded (`person_reply`, `merge_review`, a legacy park, an implicit PR wait); `external_event` and `date` evidence never carries a contact, so their display shows the target, source, wake and fallback time with no request line (#10527). A target that describes a prompt to the owner is shown as written: it is not read as a sent request, a pending owner decision or consent. Only the optional, hub-verified `interaction_id` on `external_event` evidence links an existing owner request. While that exact card remains pending, the web shows it once under Needs you through its normal interaction route, not as a contact receipt or a second decision card; explicit defer and its schedule stay on the interaction. After resolution, or when no valid link was recorded, the task keeps its ordinary external-event presentation and fallback (`web/src/lib/assistant-entries.ts`, `web/src/lib/todos.ts`, and the manager's `todo/projection`).
 - **Due and reminder draft**: a passed `until` or a valid last contact older than 24 hours (`person_reply`) or 72 hours (`merge_review`) reads as due for follow-up. Only the last-contact threshold enables the editable reminder draft; Copy copies it locally and Open channel follows the recorded contact. Successful copy dismisses the editor; failed copying or an edit made while clipboard permission is pending keeps the draft. No external message is sent, no event is watched, no park is automatically ended, and no round is incremented. A minute clock refreshes displayed age/due text only. At `until`, `parked_due` is for the supervisor and the task remains parked until the supervisor acts.
 
+### Automatic closeout admission
+
+(#9914, `assistant/park_closeout.go`.) Before routing an idle, stalled, orphaned or all-stopped
+signal, the manager can park one reachable, stopped current Agent from its final external-wait closeout.
+A `done`, `not_done` or `blocked` turn may still wait on external delivery: read its `waiting`
+line, or the current delivery line's gate when delivery is held and `unblock` is `other`.
+A legacy delivery line without a structured closeout can supply the same explicit gate; a malformed
+closeout cannot fall back to it. A PR URL without an external blocker is insufficient.
+The wait must satisfy the same `readPark` admission as `task_review parked`.
+This changes neither acceptance nor deployment, and needs no new feature switch.
+Missing or conflicting evidence, owner decisions, working/queued/errored Agents, interactions,
+independent reviews, multi-Agent ambiguity and existing scheduled wakes retain ordinary supervision.
+
+- A dated wait may name an RFC 3339 timestamp, or an ISO calendar date in the hub's time zone
+  (midnight at that date). The existing one-minute to 30-day deadline bounds apply.
+- A deployment/release/natural-event wait may name its exact HTTP(S) source in `waiting`, or name
+  the object's final path component and supply that URL as a `build` or `url` artifact.
+  An unrelated artifact or a PR link alone is insufficient for a deployment object.
+  Unbound "wait for a system message" stays idle.
+- An explicit upstream merge/review wait can name one exact PR/MR in the last closeout's
+  `waiting` field or artifacts. For example, a maintainer re-review wait need not repeat its
+  `artifact: pr` URL in `waiting`. A link found only outside that closeout is not binding evidence;
+  legacy delivery-only replies still use their final reply. Admit it only when it is bound to the task and has fresh, open, non-draft,
+  non-conflicting facts with a known head, no requested changes and no failing checks.
+  Multiple distinct PR links remain ambiguous. This is a passive `external_event` object,
+  not a claim that a reviewer was contacted; it creates no contact or supervisor-inspection receipt.
+  The wait must positively name an outside actor, such as upstream, a maintainer or a reviewer.
+  Generic "pending" or "waiting for review" alone does not establish that dependency.
+  First-person unfinished review or merge work stays actionable even beside a valid PR or receipt.
+- For a sent person/review request, or an external object that cannot be identified from that text,
+  the final closeout may add one `park: {"waiting_on":"...","until":"...","evidence":{...}}` line.
+  This uses the evidence fields above, not a new receipt format; `waiting` must name the evidence
+  target. Sent contact fields cannot be inferred from a PR URL. A review also requires an existing,
+  fresh, open, non-draft, non-conflicting task PR observation without requested changes.
+  Alternatively, the exact source and the same wait kind can reuse the last review's inspected
+  evidence: "waiting for upstream review" need not repeat an already recorded reviewer's name.
+  Declared contact evidence is still a source-referenced account, not an independently fetched
+  provider receipt. The review's `by` is `closeout`; its evidence never claims a supervisor inspection.
+- Automatic passive PR waits reuse the existing exact-source terminal-PR and dated
+  changes-request observers, including their freshness, retry, replacement and multi-PR gates.
+  They wake review, never accept the task. This binding requires automatic provenance:
+  manually recorded external-event PR waits remain in the independently owned #9775 scope.
+  Existing named-person reply, owner-decision and deadline observers still apply. Other deployment/event
+  sources get the existing deadline fallback, not a new generic event watcher; ordinary PR comments
+  without a supported status transition likewise retain the deadline fallback.
+- The unchanged dependency and stopped-turn identity persist in the existing review JSON.
+  The first two distinct stopped turns can park silently; the third unchanged attempt goes to
+  the supervisor instead. Replaying a stopped turn spends no attempt; merely running the Agent
+  again does not reset this automatic streak. A new source/contact/date or an intervening manual
+  review starts a new streak. Rewording a wait about the same source does not reset it.
+- On startup, the supervision sweep also reconciles open tasks whose sole current Agent stopped
+  before this manager started, even if their idle receipt was already told. Each ready task is
+  inspected once per manager start, at most four per supervision sweep, through the same admission and safety gates. Missing session
+  inventory, work state or fresh facts for the wait's bound PR defer inspection until available.
+  Unrelated task PRs do not gate a deployment/date wait or a different evidenced PR. A repeated
+  startup never spends another unchanged attempt for the same durable stopped-turn identity.
+- At the first supervision sweep at or after 09:00 hub-local time, starting the next calendar day,
+  still-current, unexpired automatic parks enter one ordinary batched digest per supervisor.
+  The summary is informational and does not ask to resume unchanged work. Existing effective
+  supervisor routing, queueing and durable deduplication apply; a task is listed at most once per
+  supervisor/calendar day, including after a restart or replacement park. Failed sends remain
+  retryable. Task-bound summary fingerprints are pruned on closure, including older summary
+  receipts whose exact key still identifies the task. Expired parks use the actionable `parked_due` path instead.
+
+For example, `waiting: deployment rollout-42` with
+`artifact: build https://example.org/deployments/rollout-42` records that deployment object and the
+default 24-hour deadline. A complete review wait can instead supply:
+
+```text
+waiting: reviewer-a responds to the requested review
+park: {"waiting_on":"someone_else","until":"3d","evidence":{"kind":"merge_review","target":"reviewer-a","url":"https://github.com/example/project/pull/42","wake":"The requested review or merge changes","ready":true,"contact":{"channel":"project discussion","url":"https://example.org/messages/request-42","sender":"requester-a","sent_at":"2026-11-17T08:00:00Z","request":"Please review the ready change","status":"sent"}}}
+```
+
+The example is a schema illustration, not evidence of a real sent request. The source must be
+checkable and the request must actually have been sent; drafts and unknown sends cannot justify silence.
+
 ## Decision deadlines
 
 (#3127, `assistant/decision_deadline.go`.) A decision that waits for the owner can carry a recommended default and a deadline, so work does not stop just because nobody answered. Without a deadline nothing changes.
@@ -1060,8 +1138,9 @@ them.
   outcome; prompts `server/internal/prompts/todo/lessons.md`, `lessons_input.md`). It reads the title, the owner's
   request, goal and criteria from the brief, the scope changes, each review of the stretch (verdict, round, note, the
   criteria not met with what was found), the owner's answers, how each criterion ended, the estimate against the time
-  taken, the newest Agent's last reply (2,000 characters), and the project's 12 newest lessons. The supervisor's
-  instructions and `task_review` are unchanged.
+  taken, the newest Agent's last reply (2,000 characters), and the primary project's 12 newest live lessons and 12
+  newest deletion records, each with its ID. It receives the deletions in a separate list and skips lessons it recognizes
+  as repeating one, even in different words. The supervisor's instructions and `task_review` are unchanged.
 - **What it answers**: at most 3 lessons, each `{kind, text, same_as}`. `kind` is `repeated_mistake`, `missing_context`,
   `wasted_step` or `improvement`, and `text` is one sentence of at most 200 characters in the owner's language that says
   what to do next time. `same_as` names a lesson of the project the new one repeats. Nothing is invented, and an empty
@@ -1079,10 +1158,13 @@ them.
   named, else one with the same letters and digits, `kb.LessonKey`) is taught again: a record that supersedes it, with
   `seen` up, the to-do added to its sources and its text kept (the owner may have corrected it). A to-do already among
   its sources does not count again, and a completion is learned from once (its record IDs start with a key of the to-do
-  and its completion time). A deleted lesson leaves a `lesson_retired` tombstone that keeps its text, and a lesson with
-  that text is never learned again. All writes go through `kb.Engine.UpdateProjectLessons`, which decides from the
-  lessons as they are under the store's lock, so a merge, an edit and a delete never supersede the same version twice. A
-  lessons read goes through at most the last 8 MiB of the file.
+  and its completion time). A deleted lesson leaves a `lesson_retired` tombstone that keeps its text. For each project,
+  the write rejects a lesson when its `same_as` names a tombstone or a linked version, or its normalized text matches
+  any readable version of a deleted lesson. A lessons read scans the last 8 MiB of the file. If a linked version is
+  missing or outside that range, its ID is still checked and the chain ends there. Rewordings without a deleted ID
+  depend on the model recognizing the deletion. All writes go through `kb.Engine.UpdateProjectLessons`, which decides
+  from the lessons as they are under the store's lock, so a merge, an edit and a delete never supersede the same
+  version twice.
 - **Handed to new Agents**: every new Agent of the project gets, after the project's own block (`todo/project.md` or
   `todo/project_memory.md`, both unchanged), a block of its own (`server/internal/prompts/todo/project_lessons.md`). It
   holds the fresh lessons, the most repeated first and then the most recently taught. At most 2 of one kind, 5 in all and

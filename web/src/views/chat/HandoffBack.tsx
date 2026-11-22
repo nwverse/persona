@@ -2,9 +2,9 @@
 // or from inside another page (a to-do, a knowledge project, a meeting, #12055): "Came from <conversation or page> ·
 // click to return", with ✕ to put it away. Returning goes back in the history, so the conversation's chat is where it was
 // left (lib/handoff.ts).
-import { type HandoffFrom } from "../../lib/handoff";
+import { handoffFrom } from "../../lib/handoff";
 import { sessionTitle } from "../../lib/format";
-import { navigate, parse, type Route } from "../../lib/router";
+import { navigate, parse, useRoute, type Route } from "../../lib/router";
 import { useStore, type State } from "../../lib/store";
 import { IconButton } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -62,8 +62,12 @@ export function BackStrip({ label, dismissLabel, onBack, onDismiss, inbox = fals
   );
 }
 
-export function HandoffBack({ from, onDismiss }: { from: HandoffFrom; onDismiss: () => void }) {
-  const title = useStore((s) => fromTitle(s, from.path));
+export function HandoffBack({ onDismiss }: { onDismiss: () => void }) {
+  // The origin can be replaced at the same address when the open Agent is reselected as a root (#12055).
+  useRoute();
+  const from = handoffFrom();
+  const title = useStore((s) => from ? fromTitle(s, from.path) : undefined);
+  if (!from) return null;
   // the entry before this one is the conversation or page (the card or row pushed this one); a page opened on its own has
   // none to go to
   const back = () => (history.length > 1 ? history.back() : navigate(from.path));

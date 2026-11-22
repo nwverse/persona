@@ -478,6 +478,8 @@ nonisolated enum Theme {
     /// inbox's Select, #2059; the web uses the same 45%).
     enum Fade {
         static let unavailable: Double = 0.45
+        /// The page-colored chip on a transcript divider, as the web's bg-page/50.
+        static let dividerBackground: Double = 0.5
         /// An offline assistant's row in the switcher's list: the whole row, still pickable (the web and Android use 55%).
         static let offline: Double = 0.55
     }

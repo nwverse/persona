@@ -21,10 +21,12 @@ type fakeToolchainDirEntry struct {
 	dir  bool
 }
 
-func (f fakeToolchainDirEntry) Name() string               { return f.name }
-func (f fakeToolchainDirEntry) IsDir() bool                { return f.dir }
-func (f fakeToolchainDirEntry) Type() os.FileMode          { return os.ModeDir }
-func (f fakeToolchainDirEntry) Info() (os.FileInfo, error) { return fakeFileInfo{name: f.name, dir: f.dir}, nil }
+func (f fakeToolchainDirEntry) Name() string      { return f.name }
+func (f fakeToolchainDirEntry) IsDir() bool       { return f.dir }
+func (f fakeToolchainDirEntry) Type() os.FileMode { return os.ModeDir }
+func (f fakeToolchainDirEntry) Info() (os.FileInfo, error) {
+	return fakeFileInfo{name: f.name, dir: f.dir}, nil
+}
 
 type fakeFileInfo struct {
 	name string

@@ -93,6 +93,9 @@ type Options struct {
 	HiddenAgentDirsChanged func(machine string)
 	// Location is the user's time zone ("today" of the token usage); nil: the machine's.
 	Location func() *time.Location
+	// UpdateHandoffGrace bounds how long a node update waits for natural idle before refusing new headless turns.
+	// Nil uses the shared default; zero preserves the indefinite natural-idle wait.
+	UpdateHandoffGrace func() time.Duration
 	// PromptLanguage is the owner language for newly generated node-side prompt wrappers.
 	// Nil retains legacy Chinese; it is display policy, never an authority input.
 	PromptLanguage func() string

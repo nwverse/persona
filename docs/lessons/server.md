@@ -2001,6 +2001,11 @@ For future safety-driven delete/reject decisions, don't rely on error-swallowing
 - Before taking rows out of a list, find every reader of the list, not only the lookups by id: grep the field and every accessor that returns it (`m.sessions`, `keptSessions`, `sessionList`). The hub's lists never showed archived rows, but `Machine.session` (sending, deleting, pins) and the watch-state prune found them, and scans read them too: a port an archived agent listens on allowed `/ports/{port}/connect` and previews (`portAllowed`), the manager's `sessions.list`, the update's busy check, space names, the node's revs and the unknown state while the manager is away. The first version kept only the lookups and narrowed port access without meaning to (review of #6877). Keep the rows apart in the order told and give the scans an accessor for both (`keptWhole`); prove it by comparing each reader against a hub given the whole list, and check the test fails without the change.
 - A cache of derived data needs a key that changes with everything it was derived from. The archive's sorted row index depends on the record set (never changed in place, so its identity is the key) and on which of the node's rows have a record: a session the node lists again moves from the archive's rows into the node's, with no record written. A test that only writes records would pass with a key that misses the second.
 
+## Archive generations outlive close RPCs (2026-11-21, #7789)
+
+- `time.Now` alone is not an archive version: it can tie or move backwards, and deleting a provisional record loses the high-water mark a later archive needs after a restart. Allocate the next marker from the persisted one under the archive gate. An applicable force-close rollback leaves a restored generation; a stale rollback is a no-op, not another write that could fence out a newer close.
+- A close RPC runs outside the archive gate. Carry the generation captured by the archive write into completion, and check it under the gate before writing `ClosedAt` or requesting native archiving. Skip a stale completion's publish; an applicable completion publishes with the archive read marker captured under that gate, so a re-archive between check and publish is not visible as activity to the old close. Publishing a cached blocked row without that fence can automatically restore the newer re-archive even when its record was left untouched. Metadata-write errors are different: preserve the committed archive's normal publish and recheck the generation before the immediate native retry.
+
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 
 At about 30 KB/s from hub to a computer, its link repeatedly disconnected with "no pong within 5s", failing every message. Ping doesn't jump the queue: it follows bytes already given to TCP,
@@ -2185,6 +2190,20 @@ Redeploy installed the old node (or failed its self-check), and the mismatch cou
 another version renames those unlabelled builds to `.prev`, so the lookup falls through to the release of the hub's version.
 Whenever a file's meaning is "the build of whatever version the hub runs now", whatever changes the hub's version without changing that file
 must relabel it or move it.
+
+## A node update left the Windows build behind, and it passed for the new version (2026-11-22, #12958)
+
+The same mistake came back with node updates on: the update replaced only the platforms in the release's `files`, and releases up to v0.9.1
+list no Windows `personad`, so `bin/nodes/personad-windows-amd64.exe` stayed the old build without a `.version`. Every Redeploy to a Windows
+computer then failed with "node executable self-check version or platform mismatch"; `deploy.sh`, which builds only Linux and macOS, left it
+behind the same way. Switching a hub before replacing `bin/nodes` made the new hub push the old builds, labelled as its version, to every
+computer that reconnected.
+Now a node update sets aside unlabelled builds before the release's go in, `deploy.sh` builds the Windows node programs, and the manager takes
+an unlabelled local build for the hub's version only when the version string is in the file: the node's self-check compares the version the
+build was linked with, so the string's absence proves the build is another one (its presence proves nothing). Lookups are looked up again when
+a local build changes, so a build put in place after the switch is used at once.
+Fixing one path that changes the hub's version is not enough: check every writer of the directory (self-update with and without node updates,
+deploy scripts, hand switches), and give the reader a check that does not trust any of them.
 
 ## Generic plans make "empty means no filter" lose indexes (2026-11-06, #4907)
 
