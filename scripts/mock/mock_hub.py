@@ -19033,6 +19033,32 @@ def paged_sessions(query):
     return result, 200
 
 
+# MOCK_PAGE_COUNTS=1 (`sessions_page_counts`, #4858): a page read with with_counts=1 also carries what counts=1 with the
+# same filters answers now, as the hub's does, so the page's rows and its counts come in one answer. Without it a page
+# and its counts are two reads, as on a hub without the feature.
+PAGE_COUNTS = os.environ.get("MOCK_PAGE_COUNTS") == "1"
+_paged_sessions_alone = paged_sessions
+
+
+def paged_sessions(query):
+    if not (PAGE_COUNTS and query.get("with_counts", [""])[0] == "1"):
+        return _paged_sessions_alone(query)
+    page_query = {k: v for k, v in query.items() if k != "with_counts"}
+    page, status = _paged_sessions_alone(page_query)
+    if status != 200:
+        return page, status
+    counts_query = {k: v for k, v in page_query.items() if k not in ("since", "cursor", "limit", "summary")}
+    counts, _ = _paged_sessions_alone({**counts_query, "counts": ["1"]})
+    return {**page, "counts": counts}, 200
+
+
+_features_without_page_counts = features
+
+
+def features():
+    return _features_without_page_counts() + (["sessions_page_counts"] if PAGE_COUNTS else [])
+
+
 def find_items(sid):
     items = ITEMS.get(sid, [])
     if GAP and sid == SESSIONS[0]["session_id"] and not GAP_STATE["grown"]:
@@ -29299,7 +29325,8 @@ class H(BaseHTTPRequestHandler):
         send({"type": "hello", "server_version": SERVER_VERSION, "client_id": observation["id"], "channel": "release",
               "build": 202611021500, "protocol": 1, "min_app_build": 0,
               **identity(), "endpoints": list(ENDPOINTS), **mesh_hello(),
-              "features": features() + (["sessions_delta"] if delta else []), **restart_hello(self.path)})
+              "features": features() + (["sessions_delta"] if delta else []), **restart_hello(self.path),
+              **send_state_hello()})
         restart_replay(send, self.path)  # a resumed hello: what this socket missed, right after it
 
         def close_going_away(reason=b"hub restarting"):
@@ -29308,8 +29335,10 @@ class H(BaseHTTPRequestHandler):
                 self.wfile.write(bytes([0x88, len(body)]) + body); self.wfile.flush()
             self.connection.shutdown(socket.SHUT_RDWR)
 
-        # ?features=managers: the roster event (hub/managers.go); the rest of ?features= keeps its old meaning here
-        client = {"send": send, "features": {"managers"} if "managers" in asked else set(), "close": close_going_away}
+        # ?features=managers: the roster event (hub/managers.go); the rest of ?features= keeps its old meaning here,
+        # and stays in asked for the opt-in events a hub sends on either declaration (todo_view_mock.py)
+        client = {"send": send, "features": {"managers"} if "managers" in asked else set(), "asked": set(asked),
+                  "close": close_going_away}
         ws_token = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         if not ws_token:
             ws_token = (parse_qs(urlparse(self.path).query).get("token") or [""])[0]
@@ -30008,6 +30037,12 @@ def restart_backlog():
     if not RESTART_MODE: return
     wait = RESTART["gap_until"] - time.time()
     if wait > 0: time.sleep(wait)
+
+
+def send_state_hello():
+    """The hello's send receipt markers (message_send_state, todo_send_state): none, as from a hub before them, unless
+    MOCK_TODO_VIEW sends the receipts (todo_view_mock.py)."""
+    return {}
 
 
 def restart_hello(path):

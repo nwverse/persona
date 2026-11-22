@@ -17,7 +17,7 @@ func (s *Service) IntakeMailboxes(ctx context.Context, accountID string) ([]stri
 		return nil, err
 	}
 	var folders []string
-	err = s.withConn(ctx, a, func(c *imapclient.Client) error {
+	err = s.withConn(ctx, a, "intake mailboxes", func(c *imapclient.Client) error {
 		rows, err := c.List("", "*", listOptions(c.Caps(), nil)).Collect()
 		if err != nil {
 			return err
