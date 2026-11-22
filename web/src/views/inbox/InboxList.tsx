@@ -37,6 +37,7 @@ import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
 import { UnreadNotice } from "./UnreadNotice";
 import { EventMark } from "./InboxEvent";
+import { todoForwardLabel } from "./InboxTaskLinks";
 import { canMerge, mergeItems } from "../../lib/inbox-actions";
 import { openTodoDialog } from "./InboxTodoDialog";
 import { FolderBar, FolderLine, FolderSettingsDialog, openFolderDialog, useFoldersShown } from "./InboxFolders";
@@ -885,6 +886,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
             <span className={cx("truncate text-[13.5px] group-focus-within:pr-11 group-hover:pr-11", done ? "text-ink-2" : "font-semibold text-ink")}>{translated?.subject || it.title}</span>
             {translated && <span role="img" aria-label={t("inbox-inboxlist.translated")} title={t("inbox-inboxlist.translated")} className="shrink-0 text-ink-3"><Icon name="translate" size={12} /></span>}
             {label && <Tag urgent={labelIsUrgent(it)}>{label}</Tag>}
+            {it.todo_forward && <Tag urgent={it.todo_forward.status === "fallback" || it.todo_forward.status === "failed"}><span data-inbox-forward-badge={it.todo_forward.status}>{todoForwardLabel(it.todo_forward.status)}</span></Tag>}
             <span className="flex-1" />
             <span className={cx("shrink-0 text-[11.5px] text-ink-3 tabular-nums group-focus-within:invisible group-hover:invisible", TOUCH_DONE_ROOM)}>{shortTime(it.updated_at)}</span>
           </span>

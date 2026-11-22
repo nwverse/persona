@@ -90,6 +90,7 @@ whose comments say the rules follow the Lark bot), and Siri (in the App). `/agen
 | `max_text` | Character count; 0 is unlimited | The hub splits the answer accordingly, never in the middle of a code block (`channel.Split`) |
 | `asks` | `none` / `text` / `buttons` | Agent questions and approvals: for `text`, the hub renders text and reads the user's next message as an answer (`channel.AskText`, `channel.ReadAnswer`; rules in "Questions and approvals"); for `buttons`, the channel draws them itself (Lark cards), and the hub tells it what to ask and when to withdraw |
 | `push` | Boolean | Whether it can proactively send to the user (rather than reply to a message): pushes, sync, and questions all need it |
+| `reply_only` | Boolean | Only replies to incoming messages or triggers and cannot send unsolicited proactive messages without `reply_to` (cannot be combined with `push`); `POST /api/v1/channels/{id}/test` checks connectivity instead of calling `channel.send` |
 | `typing` | Boolean | Whether it has "typing": the hub calls it every 5 seconds during a turn |
 | `progress` | Boolean | Whether it can send a message and edit it later (progress card): if a turn isn't done after 5 seconds, the hub sends progress, edits at most every 3 seconds, and writes the answer into the same message |
 | `threads` | Boolean | Lark bot: replying to a bot message sends to the chat bound to that message (`/agents`). Extension channel: a message carrying `thread` goes to that thread's own chat ("Message flow" step 5, #11939) |
@@ -297,7 +298,7 @@ Other languages follow the protocol above, one JSON line per message (`docs/exte
 | PUT | `/api/v1/channels/{id}` | `{enabled?, target?, features?: {id: bool}}`, changes only supplied fields; returns `View`. `target.kind` is `main` / `new` / `conversation` (with `machine_id`, `session_id`; must be an assistant chat) |
 | POST | `/api/v1/channels/{id}/bind` | `{step?, values?}` → `connector.Prompt` (the step-by-step login in `docs/extensions/connectors.md`: fields, QR scan `qr`, pairing code `pair_code`). Empty `step` starts over. Extension channels forward to their connector; Lark bot: one step for App ID / Secret if no credentials, then a pairing code once they exist. A step's `Prompt` may carry `link` + `link_text`: the page shows a button that opens the provider's console (the Lark bot's credentials step links to the developer console, and after the credentials verify, the bot's scopes, events, long-connection mode and publish are configured through the platform's server API — `docs/extensions/bots.md` "What to do on the Open Platform") |
 | DELETE | `/api/v1/channels/{id}/binding` | Unbind: connector logout for extension channels; unpair for the Lark bot. Clears runs and pending questions together, as signing out of the channel's connector does |
-| POST | `/api/v1/channels/{id}/test` | Send a test message to **the owner themselves** (only the bound person) |
+| POST | `/api/v1/channels/{id}/test` | Send a test message to **the owner themselves** (only the bound person) → `{"ok": true}`, or for a `reply_only` channel verify connectivity without calling `channel.send` → `{"ok": true, "reply_only": true, "note": "…"}`. Returns `409 not_connected` when offline/disabled, `409 cannot_send` when the channel reports `cannot_send`, and `502` on upstream send failures |
 
 Read-only devices can only GET. These APIs exist only when `/health` and hello's `features` include `channels`. Since 2026-11-04, except for `POST …/bind`, these routes belong to the assistant (`assistantwire.Routes`, forwarded unchanged by hub):
 if the assistant is disconnected, return `503 assistant_offline`; fields are unchanged. For the transport half (channel list and states, switches, unbinding, test messages), it asks hub (`channels.list`, `channels.enable`, `channels.unbind`, `feishu.configure`, `feishu.test`).
@@ -314,7 +315,7 @@ if the assistant is disconnected, return `503 assistant_offline`; fields are unc
   - Binding: when unbound, a "Bind" button follows `bind` steps (QR code displayed with "Save QR Code"; pairing code displays 6 digits and waits for the other side to send it; fields use a form). Once bound, shows the account and "Unbind" (confirmation first).
   - "Send Messages To": main chat / new chat (starts on the next message) / select a chat (recent assistant chats).
   - Feature switches: drawn from `features`.
-  - "Send Test Message" (only to yourself).
+  - "Send Test Message" (only to yourself), or "Check Connection" for `reply_only` channels (checks readiness without sending a proactive message).
   - With `settings_url` (Lark bot), an extra "More Settings" row opens the old page.
 - **Connector page**: existing WeChat connector and Lark bot entries in Settings › Connectors remain; a top explanation says it's a chat channel and links to "Settings › Channels". Apple says "Set it up in Settings › Channels". Binding on the channel page and login on the connector page use the same API; either works identically.
 - **Chat page**: a small "From WeChat" line below channel-origin user messages (channel icon + name, secondary color); no marker for App-origin messages.

@@ -975,7 +975,11 @@ personad tool task_spawn '{"title":"Check the regression","prompt":"Inspect the 
   `tool <name>` and one JSON object: `todo_decisions` with `{}`, `todo_decision_add`, `report_to_supervisor`. It says
   the entry is not a general one: tools that are not the Agent's own are refused. A task leader's note adds `tool task_plan` / `tool task_review`
   beside the MCP names; a worker is never told it can plan. An Agent with the Persona MCP, or whose executable could
-  not be verified, gets the text it got before.
+  not be verified, gets the text it got before. Wherever an entry is offered, MCP or terminal, the note opens with
+  the handoff's terms (#12995): it hands only a separate part of the assignment to a new session, never all of it,
+  and the caller does the rest; that session works in the caller's directory with its permissions and reports to the
+  supervisor, not to the caller, so the caller leaves the files it changes alone and does not poll it, read its
+  transcript or wait for it. An Agent with no verified entry is told to continue the work itself, as before.
 - **Runtime new-conversation tools are different**: a standalone Codex `create_thread` can be recorded as
   `thread_source: user` with no parent. Persona cannot securely infer its task from a matching directory, title or
   returned thread ID. Use `task_spawn` for supervised handoffs; ask the supervisor for unrelated work rather than

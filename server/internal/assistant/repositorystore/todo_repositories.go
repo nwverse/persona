@@ -46,6 +46,37 @@ func (d *Store) TodoRepositories(ctx context.Context, id string) (repository.Tas
 	return decodeTodoRepositories(id, revision, raw)
 }
 
+// ListTodoRepositories loads saved repository associations for the named to-dos in one query.
+func (d *Store) ListTodoRepositories(ctx context.Context, ids []string) (map[string][]repository.TaskRepository, error) {
+	out := make(map[string][]repository.TaskRepository, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := d.Transaction(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT todo_id, repositories FROM todo_repository_sets WHERE todo_id = ANY($1)`, ids)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var todoID string
+			var raw []byte
+			if err := rows.Scan(&todoID, &raw); err != nil {
+				return err
+			}
+			set, err := decodeTodoRepositories(todoID, 0, raw)
+			if err != nil {
+				return err
+			}
+			if len(set.Repositories) > 0 {
+				out[todoID] = set.Repositories
+			}
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // ReadTodoRepositoriesTx locks the Todo, including an empty association set. Preparation
 // consumers can read this value and persist their own selected snapshot in the same
 // transaction. It never seals business associations or changes legacy execution paths.

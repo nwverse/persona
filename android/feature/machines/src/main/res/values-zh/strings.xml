@@ -269,4 +269,9 @@
     <string name="machines_link_switch_why_unknown">出了点问题。</string>
     <string name="machines_link_switch_why_unavailable">这台电脑暂时不能切换到 Persona Link。</string>
     <string name="machines_manager_offline">它的助手「%1$s」离线，助手回来后这台电脑会恢复在线。</string>
+    <string name="machines_tokens_today_title">今日文本用量</string>
+    <string name="machines_tokens_total">合计</string>
+    <string name="machines_tokens_now">现在</string>
+    <string name="machines_tokens_cache_hit_rate">缓存命中率</string>
+    <string name="machines_tokens_per_minute">%1$s/分</string>
 </resources>
