@@ -131,10 +131,11 @@ final class QuestionDockTests: XCTestCase {
 
             // A sideways swipe goes back one.
             let card = dock.staticTexts["interaction-no-skip"].firstMatch
-            // Left to right across the card, on screen: a phone's card is as wide as the screen.
+            // Left to right from a quarter of the card, on screen: from its left edge the phone's own edge swipe (Back, the
+            // drawer) takes it.
             let width = app.windows.firstMatch.frame.maxX
-            let from = card.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 8, dy: 0))
-            let to = from.withOffset(CGVector(dx: min(card.frame.width, width - card.frame.minX - 24), dy: 0))
+            let from = card.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
+            let to = from.withOffset(CGVector(dx: min(card.frame.width * 0.6, width - card.frame.midX), dy: 0))
             from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .default, thenHoldForDuration: 0)
             // XCUITest's drags never reach the app on the open iPhone Duo simulator (as in QuestionCardFoldTests).
             let swiped = { self.expectPosition("3 / 5", "swiped back (\(look))") }
