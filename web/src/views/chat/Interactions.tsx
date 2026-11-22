@@ -758,7 +758,7 @@ function SecretHandoffCard({ ix }: { ix: Interaction }) {
   return (
     <Card
       kicker={t("chat-interactions.permission_kicker")}
-      title={store ? ix.tool_title || ix.summary : t("chat-interactions.secret_handoff_title")}
+      title={store ? ix.tool_title || ix.summary || t("chat-interactions.secret_handoff_title") : t("chat-interactions.secret_handoff_title")}
       cardKeys={keys}
       tapGuard={tapGuard}
       footer={
