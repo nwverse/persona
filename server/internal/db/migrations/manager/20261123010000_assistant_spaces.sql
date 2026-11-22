@@ -1,6 +1,7 @@
 -- The assistant's spaces (#13104, docs/assistant/health.md): named places the assistant's conversations run in, each
--- with a directory of its own. The main space ('') is not a row. The health space is the built-in row; its directory
--- name is the manager's (identity.HealthDirName), which the manager supplies, so dir_name here is informational for it.
+-- with a directory of its own. The main space ('') is not a row, and neither is the built-in health space: the manager
+-- supplies it (health template, default categories {health}, its own health directory), so a new manager database
+-- stays empty for the move of a manager's data into its own database (db.CopyTables refuses a target with data).
 -- A space organizes (a directory, conversations, rules); it holds no privacy level. How information may be used is
 -- decided per category and use by the manager.
 --   default_categories: the information categories everything produced in the space carries at least (health,
@@ -23,7 +24,3 @@ CREATE TABLE IF NOT EXISTS assistant_spaces (
     archived_at      timestamptz,
     revision         bigint NOT NULL DEFAULT 1
 );
-
-INSERT INTO assistant_spaces (slug, default_categories, template, dir_name, builtin)
-VALUES ('health', '{health}', 'health', 'health', true)
-ON CONFLICT (slug) DO NOTHING;

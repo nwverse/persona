@@ -78,20 +78,23 @@ func TestConversationSpaces(t *testing.T) {
 	}
 }
 
-// The registry (#13104): the migration registers the health space, built-in, with the health template and the health category by default.
-func TestSpacesRegistersHealth(t *testing.T) {
+// The registry (#13104): empty on a new database (the manager supplies the built-in health space), and a row reads
+// back with its default categories.
+func TestSpacesRegistry(t *testing.T) {
 	d, ctx := open(t), context.Background()
-	list, err := d.Spaces(ctx)
-	if err != nil {
+	if list, err := d.Spaces(ctx); err != nil || len(list) != 0 {
+		t.Fatalf("a new registry = %+v, %v; want empty", list, err)
+	}
+	if _, err := d.pool.Exec(ctx, `INSERT INTO assistant_spaces (slug, title, default_categories) VALUES ('qa-finance', 'QA', '{finance}')`); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range list {
-		if s.Slug == "health" {
-			if !s.Builtin || s.Template != "health" || s.ArchivedAt != nil || len(s.DefaultCategories) != 1 || s.DefaultCategories[0] != "health" {
-				t.Fatalf("health = %+v", s)
-			}
-			return
-		}
+	t.Cleanup(func() { _, _ = d.pool.Exec(context.Background(), `DELETE FROM assistant_spaces`) })
+	list, err := d.Spaces(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("spaces = %+v, %v", list, err)
 	}
-	t.Fatalf("no health row in %+v", list)
+	if s := list[0]; s.Slug != "qa-finance" || s.Title != "QA" || s.Template != "space" || s.Builtin || s.ArchivedAt != nil ||
+		len(s.DefaultCategories) != 1 || s.DefaultCategories[0] != "finance" {
+		t.Fatalf("qa-finance = %+v", s)
+	}
 }
