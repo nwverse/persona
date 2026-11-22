@@ -24,15 +24,21 @@ def main():
         directory = Path(tmp)
         # Non-root container users can traverse the binary's bind mount.
         directory.chmod(0o755)
-        binary = directory / "sandbox.test"
         container = directory.name
         try:
             run(["docker", "build", "--target", "sandbox-runtime", "--iidfile", str(directory / "image"), "."],
                 120, cwd=ROOT)
             image = (directory / "image").read_text().strip()
-            run(["go", "test", "-c", "-o", str(binary), "./internal/extension/sandbox"],
-                180, cwd=ROOT / "server", env={**os.environ, "CGO_ENABLED": "0"})
-            binary.chmod(0o755)
+            checks = {
+                "sandbox": ["TestLinuxSandboxForReal"],
+                "extmgr": ["TestExtensionSandbox", "TestExtensionSandboxMissing", "TestExtensionSandboxMissingOfficialExemption"],
+            }
+            for package in checks:
+                binary = directory / (package + ".test")
+                source = "./internal/extension/sandbox" if package == "sandbox" else "./internal/extmgr"
+                run(["go", "test", "-c", "-o", str(binary), source],
+                    180, cwd=ROOT / "server", env={**os.environ, "CGO_ENABLED": "0"})
+                binary.chmod(0o755)
             result = run(["docker", "run", "--rm", "--name", container, "--network=none", "--cap-drop=ALL", "--user=1000:1000",
                           "--security-opt=no-new-privileges:true",
                           "--security-opt=seccomp=" + str(ROOT / "deploy/docker/extension-seccomp.json"),
@@ -42,10 +48,15 @@ def main():
                           'test "$(id -u)" != 0; '
                           'test ! -u /usr/bin/bwrap; '
                           'grep -q "^CapEff:[[:space:]]*0000000000000000$" /proc/self/status; '
-                          'exec /probe/sandbox.test -test.run=^TestLinuxSandboxForReal$ -test.v -test.timeout=45s'],
-                         60, capture_output=True, text=True)
-            if "--- PASS: TestLinuxSandboxForReal" not in result.stdout or "--- SKIP:" in result.stdout:
-                raise RuntimeError("real container isolation did not run successfully")
+                          '/probe/sandbox.test -test.run=^TestLinuxSandboxForReal$ -test.v -test.timeout=45s; '
+                          '/probe/extmgr.test -test.run="^TestExtensionSandbox(Missing|MissingOfficialExemption)?$" -test.v -test.timeout=60s'],
+                         120, capture_output=True, text=True)
+            for tests in checks.values():
+                for test in tests:
+                    if "--- PASS: " + test + " (" not in result.stdout:
+                        raise RuntimeError("real container isolation did not pass " + test)
+            if "--- SKIP:" in result.stdout:
+                raise RuntimeError("real container isolation skipped a required check")
             print("Extension container isolation: PASS (non-root, no capabilities, real filesystem/network isolation)")
         finally:
             subprocess.run(["docker", "rm", "-f", container], timeout=30, check=False, capture_output=True)

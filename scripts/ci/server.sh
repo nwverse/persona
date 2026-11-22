@@ -24,7 +24,7 @@ fi
 if [ "$lane" = build ]; then exit 0; fi
 
 if [ "$lane" = all ] || [ "$lane" = other ]; then
-  ci_run 'Non-root extension container isolation' 240 python3 scripts/ci/extension-container.py
+  ci_run 'Non-root extension container isolation' 420 python3 scripts/ci/extension-container.py
 fi
 
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/persona-ci-db.XXXXXX")"

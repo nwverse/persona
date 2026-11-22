@@ -171,8 +171,8 @@ privileged mode. Without the needed host support, required extensions remain sto
 
 `server-other` CI runs the real extension filesystem/network isolation test as the
 non-root image user in a disposable container built from the same runtime stage,
-with all outer capabilities dropped and the supplied security options. A skipped
-isolation test fails that check. This does not require a running hub or real state.
+with all outer capabilities dropped and the supplied security options. It also requires the manager tests for refusal, `active=true` and the official
+exemption to pass inside that container. A skipped isolation test fails that check. This does not require a running hub or real state.
 
 ## Environment variables (override hub.json, not written back to the file)
 
