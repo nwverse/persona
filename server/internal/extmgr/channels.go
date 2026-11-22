@@ -483,7 +483,8 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 	if step == "credentials" && values != nil {
 		id, secret, domain := strings.TrimSpace(values["app_id"]), strings.TrimSpace(values["app_secret"]), strings.TrimSpace(values["domain"])
 		on := true
-		if err := h.updateBot(ctx, &on, &id, &secret, &domain, nil); err != nil {
+		receipt, err := h.updateBotWithReceipt(ctx, &on, &id, &secret, &domain, nil)
+		if err != nil {
 			if feishubot.CredentialRejected(err) {
 				h.logf("bots: credentials rejected by the platform: %v", err)
 				return credentials(i18n.T(l, "hub-channels.credentials_rejected")), nil
@@ -493,7 +494,9 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 		// Best-effort: with the credentials just verified, set the scopes, events and the long-connection mode
 		// and submit the publish, so the console's manual steps are done (docs/extensions/bots.md). Its outcome
 		// is a sentence on the next step, never a failure of the bind.
-		h.configureBotForPairing(ctx, id, secret, domain)
+		if err := h.configureBotForPairing(ctx, receipt); err != nil {
+			return credentials(i18n.Localize(err, l)), nil
+		}
 		step = ""
 	}
 	v := h.botView(ctx)
@@ -523,9 +526,14 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 	p := b.set.Pairing
 	issued := false
 	if p == nil || !b.clock().Before(p.Expires) || step == "" && values != nil {
+		previous := p
 		p = &botPairing{Code: botPairCode(), Expires: b.clock().Add(botPairFor)}
 		b.set.Pairing = p
-		h.saveBotSettingsLocked()
+		if err := h.saveBotSettingsLocked(); err != nil {
+			b.set.Pairing = previous
+			b.mu.Unlock()
+			return connector.Prompt{}, errBotSettingsSave
+		}
 		issued = true
 	}
 	code := p.Code
@@ -576,8 +584,7 @@ func feishuConfigureNote(l i18n.Lang, rep feishubot.ConfigureReport, domain, app
 // unbindChannel undoes the binding: a plugin channel's connector signs out, the Feishu bot forgets its owner.
 func (h *Manager) unbindChannel(ctx context.Context, id string) error {
 	if id == channel.Feishu {
-		h.unpairBot(ctx)
-		return nil
+		return h.unpairBot(ctx)
 	}
 	lang := h.botLang(ctx)
 	pc, ok := h.extensionChannel(id)

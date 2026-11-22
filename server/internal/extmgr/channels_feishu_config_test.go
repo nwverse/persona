@@ -3,6 +3,7 @@ package extmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -23,12 +25,16 @@ func (f configureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 type configureStore struct {
 	*botStore
-	writes atomic.Int64
+	writes      atomic.Int64
+	rejectWrite atomic.Int64
 }
 
 func (s *configureStore) PutSetting(ctx context.Context, key string, value any) error {
 	if key == botSettingsKey {
-		s.writes.Add(1)
+		n := s.writes.Add(1)
+		if s.rejectWrite.Load() == n {
+			return errors.New("raw-sensitive-store-detail")
+		}
 	}
 	return s.botStore.PutSetting(ctx, key, value)
 }
@@ -331,8 +337,11 @@ func TestFeishuConfigureDiagnosticIgnoresLateResult(t *testing.T) {
 			}
 			w.bind(t, "pair")
 			finished := make(chan struct{})
+			w.h.bots.mu.Lock()
+			receipt := w.h.botConfigureReceiptLocked()
+			w.h.bots.mu.Unlock()
 			go func() {
-				w.h.configureBotForPairing(context.Background(), "cli_example", "fake-secret", "feishu")
+				w.h.configureBotForPairing(context.Background(), receipt)
 				close(finished)
 			}()
 			select {
@@ -403,6 +412,232 @@ func TestFeishuConfigureDiagnosticUsesCommitTimeCredentials(t *testing.T) {
 			p := w.bind(t, "pair")
 			if p["hint"] != i18n.T(i18n.ZhHans, "hub-channels.pair_hint") {
 				t.Fatalf("replacement diagnostic crossed credential generations: %v", p)
+			}
+			configurePoll(t, w, st, f)
+		})
+	}
+}
+
+// configureSaveHost pauses the actual post-save report, before the credentials handler can start configuring.
+type configureSaveHost struct {
+	Host
+	once             atomic.Bool
+	entered, release chan struct{}
+}
+
+func (h *configureSaveHost) Notify(event string, value any) error {
+	if event == extwire.EventReport && h.once.CompareAndSwap(false, true) {
+		close(h.entered)
+		select {
+		case <-h.release:
+		case <-time.After(15 * time.Second):
+			return errors.New("report barrier timed out")
+		}
+	}
+	return h.Host.Notify(event, value)
+}
+
+func configureAwait(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(15 * time.Second):
+		t.Fatal(what)
+	}
+}
+
+func TestFeishuConfigureCommittedReceiptThroughRoute(t *testing.T) {
+	for _, bodies := range [][]string{
+		{`{"app_id":"cli_example","app_secret":"fake-secret","domain":"feishu"}`},
+		{`{"app_id":"cli_other","app_secret":"other-secret","domain":"feishu"}`, `{"app_id":"cli_example","app_secret":"fake-secret","domain":"feishu"}`},
+	} {
+		t.Run(fmt.Sprint(len(bodies)), func(t *testing.T) {
+			w, st, f := configureWorld(t, 230002)
+			gate := &configureSaveHost{Host: w.h.opts.Hub, entered: make(chan struct{}), release: make(chan struct{})}
+			var once sync.Once
+			t.Cleanup(func() { once.Do(func() { close(gate.release) }) })
+			w.h.opts.Hub = gate
+			finished := make(chan struct{})
+			go func() { defer close(finished); configureCredentials(t, w, "cli_example", "fake-secret", "feishu") }()
+			configureAwait(t, gate.entered, "credentials did not reach post-save report")
+			for _, body := range bodies {
+				status, out := w.do(t, "PUT", "/api/v1/bots/feishu", body)
+				if status != 200 {
+					t.Fatalf("intervening save: %d %v", status, out)
+				}
+			}
+			f.mu.Lock()
+			before := f.requests
+			f.mu.Unlock()
+			once.Do(func() { close(gate.release) })
+			configureAwait(t, finished, "old credentials request did not finish")
+			f.mu.Lock()
+			after := f.requests
+			f.mu.Unlock()
+			p := w.bind(t, "pair")
+			if p["hint"] != i18n.T(i18n.ZhHans, "hub-channels.pair_hint") || before != after {
+				t.Fatalf("old request adopted newer commit: hint=%v HTTP=%d -> %d", p, before, after)
+			}
+			configurePoll(t, w, st, f)
+		})
+	}
+}
+
+func TestFeishuConfigurePairedThenUnpairedThroughRoutes(t *testing.T) {
+	w, st, f := configureWorld(t, 230002)
+	withAssistant(w.h)
+	status, out := w.do(t, "PUT", "/api/v1/bots/feishu", `{"enabled":true,"app_id":"cli_example","app_secret":"fake-secret","domain":"feishu"}`)
+	if status != 200 {
+		t.Fatalf("setup: %d %v", status, out)
+	}
+	original := w.bind(t, "pair")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	f.mu.Lock()
+	f.beforeConfig = func() {
+		close(entered)
+		select {
+		case <-release:
+		case <-time.After(15 * time.Second):
+			t.Error("configuration barrier timed out")
+		}
+	}
+	f.mu.Unlock()
+	finished := make(chan struct{})
+	go func() { defer close(finished); configureCredentials(t, w, "cli_example", "fake-secret", "feishu") }()
+	configureAwait(t, entered, "configuration not reached")
+	// Install the fake transport client as the running bot; redemption still enters the real botEvent handler.
+	w.h.bots.mu.Lock()
+	w.h.bots.api = feishubot.New("cli_example", "fake-secret", "feishu")
+	w.h.bots.mu.Unlock()
+	if _, err := w.h.botEvent(context.Background(), botMessageEvent("om_configure_pair_cycle", "ou_owner", "text", textContent(original["user_code"].(string)), nil)); err != nil {
+		t.Fatal(err)
+	}
+	w.h.bots.mu.Lock()
+	line := w.h.bots.line
+	w.h.bots.mu.Unlock()
+	configureAwait(t, line, "pair event not finished")
+	if status, out := w.do(t, "GET", "/api/v1/bots/feishu", ""); status != 200 || out["owner"] == nil {
+		t.Fatalf("not paired: %d %v", status, out)
+	}
+	if status, out := w.do(t, "DELETE", "/api/v1/bots/feishu/owner", ""); status != 200 || out["owner"] != nil {
+		t.Fatalf("not unpaired: %d %v", status, out)
+	}
+	once.Do(func() { close(release) })
+	configureAwait(t, finished, "configuration did not finish")
+	p := w.bind(t, "pair")
+	if p["hint"] != i18n.T(i18n.ZhHans, "hub-channels.pair_hint") {
+		t.Fatalf("late outcome resurrected after real pair/unpair: %v", p)
+	}
+	configurePoll(t, w, st, f)
+}
+
+func TestFeishuConfigureWriteFailureBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		write int64
+	}{{"credentials", 1}, {"diagnostic", 2}, {"code", 3}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, st, _ := configureWorld(t, 230002)
+			st.rejectWrite.Store(tc.write)
+			status, out := w.do(t, "POST", "/api/v1/channels/feishu/bind", `{"step":"credentials","values":{"app_id":"cli_example","app_secret":"fake-secret","domain":"feishu"}}`)
+			if status == 200 && out["step"] == "pair" && out["error"] == nil {
+				t.Fatalf("failed write acknowledged as durable pairing prompt: %v", out)
+			}
+			if strings.Contains(fmt.Sprint(out), "raw-sensitive") {
+				t.Fatalf("store error exposed: %v", out)
+			}
+			var saved FeishuBotSettings
+			_, _ = st.Setting(context.Background(), botSettingsKey, &saved)
+			w.h.bots.mu.Lock()
+			live := w.h.bots.set.copy()
+			w.h.bots.mu.Unlock()
+			a, _ := json.Marshal(live)
+			b, _ := json.Marshal(saved)
+			if tc.name != "credentials" && string(a) != string(b) {
+				t.Fatalf("failed write left live state ahead of durable state: live=%s saved=%s", a, b)
+			}
+			if tc.name == "credentials" && (live.AppID != "" || saved.AppID != "") {
+				t.Fatal("failed credentials commit survived")
+			}
+		})
+	}
+}
+
+func TestFeishuConfigureFailedCorrectionRetainsDurableOutcome(t *testing.T) {
+	w, st, f := configureWorld(t, 230002)
+	first := configureCredentials(t, w, "cli_example", "fake-secret", "feishu")
+	f.mu.Lock()
+	f.code = 0
+	f.mu.Unlock()
+	st.rejectWrite.Store(st.writes.Load() + 2) // Credentials commit succeeds; only the new outcome fails.
+	out := configureCredentials(t, w, "cli_example", "fake-secret", "feishu")
+	if out["step"] != "credentials" || out["error"] == nil || strings.Contains(fmt.Sprint(out), "raw-sensitive") {
+		t.Fatalf("missing safe failure receipt: %v", out)
+	}
+	p := configurePoll(t, w, st, f)
+	if p["hint"] != first["hint"] || p["user_code"] != first["user_code"] {
+		t.Fatalf("failed correction replaced durable outcome: %v", p)
+	}
+	var saved FeishuBotSettings
+	_, _ = st.Setting(context.Background(), botSettingsKey, &saved)
+	if saved.Configure == nil || saved.Configure.Issue != feishubot.IssuePatchScope {
+		t.Fatal("previous outcome not durable")
+	}
+	st.rejectWrite.Store(0)
+	corrected := configureCredentials(t, w, "cli_example", "fake-secret", "feishu")
+	if !strings.Contains(fmt.Sprint(corrected["hint"]), i18n.T(i18n.ZhHans, "hub-channels.auto_configured")) {
+		t.Fatalf("explicit correction retry: %v", corrected)
+	}
+	configurePoll(t, w, st, f)
+}
+
+func TestFeishuConfigureUnpairFailurePreservesOwner(t *testing.T) {
+	w, st, f := configureWorld(t, 230002)
+	withAssistant(w.h)
+	p := configureCredentials(t, w, "cli_example", "fake-secret", "feishu")
+	w.h.botPair(feishubot.New("cli_example", "fake-secret", "feishu"), "ou_owner", "oc_owner", p["user_code"].(string))
+	var unpaired atomic.Int64
+	w.h.opts.AssistantEvent = func(_ string, _ json.RawMessage) { unpaired.Add(1) }
+	st.rejectWrite.Store(st.writes.Load() + 1)
+	status, out := w.do(t, "DELETE", "/api/v1/bots/feishu/owner", "")
+	if status != http.StatusServiceUnavailable || strings.Contains(fmt.Sprint(out), "raw-sensitive") {
+		t.Fatalf("failed unpair response: %d %v", status, out)
+	}
+	if p := configurePoll(t, w, st, f); p["done"] != true {
+		t.Fatalf("failed unpair forgot owner: %v", p)
+	}
+	if unpaired.Load() != 0 {
+		t.Fatal("failed unpair notified success")
+	}
+	st.rejectWrite.Store(0)
+	if status, out = w.do(t, "DELETE", "/api/v1/bots/feishu/owner", ""); status != 200 {
+		t.Fatalf("unpair retry: %d %v", status, out)
+	}
+	if unpaired.Load() != 1 {
+		t.Fatal("committed unpair did not notify")
+	}
+	p = w.bind(t, "pair")
+	if p["hint"] != i18n.T(i18n.ZhHans, "hub-channels.pair_hint") {
+		t.Fatalf("successful unpair kept guidance: %v", p)
+	}
+}
+
+func TestFeishuConfigureSaveFailureLocalizedAndRetryable(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		t.Run(string(lang), func(t *testing.T) {
+			w, st, f := configureWorld(t, 230002)
+			w.h.opts.Lang = func() i18n.Lang { return lang }
+			st.rejectWrite.Store(1)
+			out := configureCredentials(t, w, "cli_example", "fake-secret", "feishu")
+			if out["error"] != i18n.T(lang, "hub-bots.settings_save_failed") {
+				t.Fatalf("failure not localized: %v", out)
+			}
+			st.rejectWrite.Store(0)
+			out = configureCredentials(t, w, "cli_example", "fake-secret", "feishu")
+			if out["step"] != "pair" || out["error"] != nil {
+				t.Fatalf("credentials retry: %v", out)
 			}
 			configurePoll(t, w, st, f)
 		})
