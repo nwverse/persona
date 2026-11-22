@@ -93,7 +93,7 @@ The hub in the image is on the `docker` channel: it never replaces its own binar
 
 To be clear first: **the NAS is only the hub; the AI doesn't work on the NAS**. The image has no Claude Code, so the assistant and Agents all run on another computer of yours. After installing the hub you still need to add a computer (step 5 below); until then the App can pair and browse, but the main chat can't start.
 
-1. On the NAS, create a directory (e.g. `/volume1/docker/persona`) with a `data` subdirectory inside, both created with the NAS's file manager: if `data/` belongs to you, the hub's files belong to you (if Docker creates `data/` itself, it belongs to root, and then all files belong to 1000; see the table below). Put `deploy/docker/compose.yaml` and `deploy/docker/.env.example` in the directory, rename the latter to `.env`, and fill in two lines:
+1. On the NAS, create a directory (e.g. `/volume1/docker/persona`) with a `data` subdirectory inside, both created with the NAS's file manager: if `data/` belongs to you, the hub's files belong to you (if Docker creates `data/` itself, it belongs to root, and then all files belong to 1000; see the table below). Put `deploy/docker/compose.yaml`, `deploy/docker/extension-seccomp.json` and `deploy/docker/.env.example` in the directory, rename the latter to `.env`, and fill in two lines:
    - `PERSONA_IMAGE`: the image, `ghcr.io/<owner>/persona:latest` (see "Image" above; for a private image, `docker login ghcr.io` first). An older `.env` that has only the image's former variable keeps working. With neither, `docker compose` stops with `service "hub" has neither an image nor a build context specified`.
    - `PERSONA_PUBLIC_URL`: how the phone reaches this NAS, usually `http://<NAS LAN address>:18660`.
 2. Run `docker compose up -d` in that directory.
@@ -143,6 +143,36 @@ docker compose exec hub personad hub tailcat-key          # on the NAS: the publ
 
 Add the address to `machines` in `data/hub.json` (`{"id":"laptop","name":"Laptop","kind":"tailcat","tailcat_addr":"tc…"}`),
 then `docker compose restart hub`.
+
+## Extension sandboxes
+
+The image includes non-setuid bubblewrap. Process extensions that require isolation
+must pass its namespace and mount probe before starting. If that fails, the extension
+stays stopped and its details and `personad extension show` explain why.
+
+Keep `extension-seccomp.json` beside `compose.yaml` when installing or upgrading.
+The hub's Compose service adds **no capabilities** and does not use privileged mode.
+It sets `no-new-privileges`, permits bubblewrap's `clone`, `unshare`, `setns`, `mount`,
+`umount2`, `pivot_root` and `sethostname` calls in a profile derived from Docker's
+standard seccomp allowlist, and otherwise retains that allowlist. These calls still
+need kernel permission: the non-root hub can mount only after creating its own user
+namespace, where it receives namespace-local capabilities, never host `CAP_SYS_ADMIN`.
+`clone3` retains Docker's fallback behavior. This is a wider syscall surface than the
+standard Docker profile, so use the supplied profile only for the hub.
+
+Docker's default AppArmor policy denies mounts even inside a nested user namespace.
+The supplied service selects `apparmor=unconfined` for this reason; SELinux and host
+kernel restrictions still apply. Hosts must allow unprivileged user namespaces
+(`user.max_user_namespaces` must be nonzero, and on hosts with
+`kernel.unprivileged_userns_clone`, it must be enabled). An administrator managing
+AppArmor may instead supply a reviewed profile permitting nested user namespace and
+mount setup. Do not work around a denied probe by adding host `SYS_ADMIN` or enabling
+privileged mode. Without the needed host support, required extensions remain stopped.
+
+`server-other` CI runs the real extension filesystem/network isolation test as the
+non-root image user in a disposable container built from the same runtime stage,
+with all outer capabilities dropped and the supplied security options. A skipped
+isolation test fails that check. This does not require a running hub or real state.
 
 ## Environment variables (override hub.json, not written back to the file)
 

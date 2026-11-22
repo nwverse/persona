@@ -1,5 +1,12 @@
 # Third-party notices
 
+## Container seccomp profile
+
+`deploy/docker/extension-seccomp.json` derives from `moby/profiles` at
+`9ee3204f0d0cfa19ca2c6a7b0fcf5a2b353954ae` (Apache-2.0), with additional
+namespace and mount setup rules for non-root bubblewrap. Its license is in
+`deploy/docker/MOBY-LICENSE`.
+
 ## Password login WebAssembly client
 
 `web/public/pake/client.wasm` uses `github.com/bytemare/opaque` v0.18.0 (MIT),
