@@ -246,7 +246,9 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
   WS messages have no acknowledgment and are silently dropped on a half-open connection (#1588), so the App keeps reads the hub hasn't recorded yet in `SeenOutbox`: it counts as recorded only when a list from the hub has this session's
   `seen_at` later than the mark. Meanwhile it still shows as Seen and is resent on reconnect; it stops waiting if the session does another turn, starts working or needs you, disappears from the list,
   or still isn't recorded after 10 minutes.
-- Rule: herdr `done` and `seen_at` earlier than the session's last update time (the transcript's modification time, i.e. when the turn ended) → `unread`, otherwise `idle`.
+  Once a list shows it recorded, the mark still holds the rows of other lists that have not read since (the web: 15 seconds), so a row does not turn Unread again until its own list reads;
+  a count read with such a row leaves it out of Unread too (`web/src/lib/seen-outbox.ts`).
+- Rule: herdr `done` and `seen_at` earlier than the session's last update time (the transcript's newest timed line, i.e. when the turn ended; Claude Code's untimed trailing metadata does not count, #5967) → `unread`, otherwise `idle`.
   So if it does another turn after you looked, it becomes Unread again.
 
 ### Ordering

@@ -200,6 +200,7 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			s.Capabilities.PluginInput = false // this pane, not the plugin, carries the owner's input
 			s.Capabilities.Model = proto.Bool(true)
 			s.Capabilities.Modes = proto.CanModes(true)
+			s.Capabilities.QueueEdit, s.Capabilities.QueueSendNow = proto.Bool(true), proto.Bool(true) // its queue's keys go here
 			s.Efforts = slices.Clone(proto.EffortLevels)
 			s.ReadOnlyReason = ""
 			livePanes[pane] = true // its dialog read is kept while the claude lives (forgetDialogs)
@@ -256,19 +257,23 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 
 // outsideCapabilities: read always; send when its peer inbox is one the node can use, with a reason when not. Never
 // modes: the peer inbox carries messages only, and the session has no pane to drive the TUI's pickers in (setModes).
+// Nor the queue's edit or send-now: Claude Code's queue is on its own screen, and both are keys only a pane takes
+// (queue.go); the apps would otherwise offer them to any Claude Code (#12789).
 func outsideCapabilities(c claudeProc) (*proto.SessionCapabilities, string) {
+	caps := &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false), QueueEdit: proto.Bool(false), QueueSendNow: proto.Bool(false)}
 	p, has := peerOf(c)
 	switch {
 	case has && peerReachable(p):
+		caps.Send = true
 		// A turn it runs, or a question it waits on, stops at a message of priority now (interruptOutside).
-		stoppable := c.Status == "busy" || c.Status == "waiting"
-		return &proto.SessionCapabilities{Read: true, Send: true, Interrupt: stoppable, Modes: proto.CanModes(false)}, ""
+		caps.Interrupt = c.Status == "busy" || c.Status == "waiting"
+		return caps, ""
 	case c.Kind == "bg":
-		return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, claudeBgReadOnly
+		return caps, claudeBgReadOnly
 	case !has:
-		return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, proto.ReadOnlyClaudeNoInbox
+		return caps, proto.ReadOnlyClaudeNoInbox
 	}
-	return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, proto.ReadOnlyClaudeInbox
+	return caps, proto.ReadOnlyClaudeInbox
 }
 
 // outsidePane is the tmux pane an outside claude runs in, "" when it runs in none (#2562): Claude Code writes the pane
@@ -368,12 +373,19 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 		}
 	}
 	// The owner's own message goes in as their input through Persona's plugin when the session has it (ccplugin.go),
-	// whether idle or queued behind a running turn; otherwise, and when the plugin does not take it, through the inbox.
+	// whether idle, queued behind a running turn or behind a dialog; otherwise, and when the plugin does not take it,
+	// through the inbox.
 	if owner := ownerDeliveryOf(ctx); owner != nil && forced == "" && priority == peerNext {
 		if ok, why := n.ccPluginSend(ctx, c, id, text); ok {
 			log.Printf("send %s: claude %d (%s) took it as the user's input through Persona's plugin", id, c.pid, c.Entrypoint)
-			if c.Status == "busy" {
-				markSendQueued(ctx)
+			if c.Status == "busy" || c.Status == "waiting" {
+				markSendQueued(ctx) // it runs when the turn ends
+			}
+			// Behind a permission prompt or a plan to approve, it runs only once that is answered at the computer.
+			if now, ok := n.outsideClaude(id); ok && claudeBgStatus[now.Status] == proto.StatusBlocked {
+				if w, ok := ctx.Value(computerWaitKey{}).(*bool); ok {
+					*w = true
+				}
 			}
 			owner.as, owner.reason = deliveredUserInput, ""
 			return true, nil
@@ -650,4 +662,4 @@ var enginePaneEnvs = []string{herdrPaneEnv, herdrSessionEnv, herdrSocketEnv, her
 const tmuxEnv = "TMUX"
 
 // paneEnvKeys are the variables read from a process's environment: the engines' pane variables, and the tmux server.
-var paneEnvKeys = append(append([]string{}, enginePaneEnvs...), tmuxEnv)
+var paneEnvKeys = append(append([]string{}, enginePaneEnvs...), tmuxEnv, "CODEX_THREAD_ID")

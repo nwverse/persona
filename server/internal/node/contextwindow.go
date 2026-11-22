@@ -353,9 +353,22 @@ func (n *Node) applyLauncherContextWindow(s *proto.Session) {
 		req = *s.RequestedModel
 	}
 	var w int
-	if req != "" && req != s.Model {
+	switch {
+	case s.Agent == agyAgent:
+		var candidates []string
+		if req != "" && req != s.Model {
+			candidates = agyModelCandidates(s.Model, req)
+		} else {
+			candidates = agyModelCandidates(s.Model)
+		}
+		if len(candidates) > 0 {
+			w = launcherContextWindow(l, candidates[0], candidates[1:]...)
+		} else if l.MaxContext > 0 {
+			w = l.MaxContext
+		}
+	case req != "" && req != s.Model:
 		w = launcherContextWindow(l, s.Model, req)
-	} else {
+	default:
 		w = launcherContextWindow(l, s.Model)
 	}
 	if w > 0 {

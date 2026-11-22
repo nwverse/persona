@@ -2,15 +2,13 @@
 
 Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
-## Progress-card actions need current ownership (#12702)
+## Bot HTTP rejections with JSON bodies
 
-A refused final edit can leave a progress card's Stop button visible after the answer is posted separately.
-The button's conversation identifiers say where it was created, not which turn it still owns. Compare the callback's
-actual message ID with the current watched Feishu run's `Ext["card"]`, then recheck the same run and live objects,
-card, recall and answer/finish state under the lifecycle locks after target resolution. Historical thread routing,
-stored runs awaiting watcher restoration, and runs awaiting final-answer delivery cannot authorize a stop. Keep
-successful-press deduplication with the live progress state and leave failed delivery retryable. Typed `/stop` remains
-a conversation-level request; assistant-side locking cannot provide a node-side atomic turn-generation precondition.
+A gateway can reject a bot request with valid JSON that omits Feishu's `code`, or even contains `code: 0` (#12643).
+An integer's zero value is not evidence of HTTP success. After existing transient-status and business-code handling,
+reject remaining non-2xx responses before decoding output or returning nil for an operation without output. Report
+the operation and HTTP status without copying gateway details into the error; test through a real client and a local
+fake gateway after a successful token exchange, including idempotency-aware retries and normal 2xx controls.
 
 ## Lark system events are not new conversation requests
 
@@ -130,15 +128,31 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 
 ## Lark Open Platform bots (`docs/extensions/bots.md`)
 
+- A retry retains the original authority and privacy decision (#12609). Bind a reminder to the first ready owner's pairing generation and enforce it at the actual private-chat route, using the same snapshot for identity validation and recipient selection; checking status only in the assistant leaves a re-pairing gap. Health masking is sticky, unknown sources are hidden, and a bot attempt pins that route even if a companion appears later. The provider's one-hour UUID rule is at-most-once delivery, not a promise to return an old message ID: a fake that returns one tests only that fixture's receipt behavior. Treat definitive pre-transport refusal, no attempt and unknown acceptance as different outcomes.
+- A claimed to-do reminder and delivery of each channel copy are separate outcomes (#12609). Retrying the whole reminder would repeat the phone notification; recover only the failed Feishu copy with the existing finite retry policy. Key every card by the original reminder occurrence and index, so replaying a long reminder also covers an accepted continuation whose receipt was lost. Treat unknown status as temporary without sending, and stop on a confirmed disabled channel, refusal or obsolete reminder. Process-local retries do not survive restart; the durable reminder claim remains consumed.
+- A settings setter must return a failed write before reporting success or recording an audit. Restore only its own previous field while holding the same settings lock; this preserves an unset default and other successful saves. A fake store must reject the intended write, since one settings request can make several separate commits (#12666).
+- Inbound rich-text `code_block.text` can itself be a Markdown document (#12667). When flattening it for the bot's model context, use a backtick wrapper longer than every run in the body; a fixed three-backtick wrapper lets a literal fence become a closing delimiter and can turn following post nodes into code. Verify synthetic events through the public event/content parsers and check the resulting Markdown AST, alongside exact ordinary-output and adjacent-media controls. This is separate from escaping or folding outbound answer cards.
+
 - With card JSON 2.0, **one unknown extra field rejects the whole card** (1.0 ignores it): 2.0 has no `action` module and no `note` (lay buttons out horizontally with `column_set` + `flex_mode: flow`,
   small text with `div` + `text_size: notation`), and button callbacks go in `behaviors`; a new card returned from a card callback must also be 2.0, otherwise you get 200830. Before writing, check every field against the 2.0 component docs.
 - 1.0's Markdown doesn't support headings, tables or quotes, so a model answer dropped straight in shows raw symbols; use 2.0. Cards treat things like `<at>` and `<font>` as their own tags: escape `<` in the body first.
 - The docs for card link buttons only mention http(s) and AppLink; don't put a custom scheme (`persona://`) there, or the whole card may be rejected.
 - Long-connection events must be acknowledged within 3 seconds, or Lark redelivers the same event: do the processing in the background and de-duplicate by message_id.
 - A message sent to a chat that's busy queues behind the current turn: the end of that turn isn't its answer; find this message in the transcript and take the answer after it (`botRun.Probe`).
+- Redacting a health reminder means checking the whole outgoing card, including summary, header, fallback and button behaviors: a detail URL still identifies the private to-do when its visible title and notes are generic (#12694). Exercise the production reminder entry with a public example base and synthetic IDs, and keep ordinary navigation and reply-context controls. Gate reminder navigation with its existing privacy decision; shared URL and button helpers also serve explicitly requested navigation.
 
 - The Lark gateway's 201 receipt for a file send may contain only `fileKey/name/size`; `messageId` is optional, so don't report a sent file as failed because of it and invite a resend. In image JSON, the slashes in base64 may also all be escaped; the HTTP body limit must cover this legal encoding, while the actual image size is still limited to 7.5 MiB after decoding.
 - Unsent attachments are user data: put the private copies made after picking in Application Support, excluded from backup; not in tmp/uploads or tmp/lark-drafts, which clearing the cache deletes.
+
+## Progress-card actions need current ownership (#12702)
+
+A refused final edit can leave a progress card's Stop button visible after the answer is posted separately.
+The button's conversation identifiers say where it was created, not which turn it still owns. Compare the callback's
+actual message ID with the current watched Feishu run's `Ext["card"]`, then recheck the same run and live objects,
+card, recall and answer/finish state under the lifecycle locks after target resolution. Historical thread routing,
+stored runs awaiting watcher restoration, and runs awaiting final-answer delivery cannot authorize a stop. Keep
+successful-press deduplication with the live progress state and leave failed delivery retryable. Typed `/stop` remains
+a conversation-level request; assistant-side locking cannot provide a node-side atomic turn-generation precondition.
 
 ## Paged refresh of all chats (#530 review)
 
@@ -156,6 +170,13 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 
 - Temporary picked copies in Application Support aren't cleaned up automatically by the system; after the process restarts, clean up old UUID directories first, then start new picks. Cleanup runs only once and shares a lock with picking, and must not delete copies the current process just created or the separate persistent media directory.
 - The timeout for streaming uploads includes the phone's upload time, so give the phone and the hub the same budget based on file size; the Lark gateway's pending / failed local messages must not become ordinary sent bubbles even after they're removed from the local outbox.
+
+## Feishu bot token refresh after transient retries
+
+Track the one forced tenant-token refresh separately from the request attempt index: a retryable 503 or 429 can precede
+an expired-token rejection. The refresh still consumes the existing attempt budget and must stop after one refresh;
+an expiry on the final attempt returns that expiry. A confirmed auth rejection permits replay of a UUID-less POST,
+while a transport/read failure or server error still stops it. Keep the original payload and UUID across keyed retries.
 
 ## Message Tweaks and account settings
 

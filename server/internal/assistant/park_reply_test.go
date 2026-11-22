@@ -22,7 +22,7 @@ func personReplyParkArgs(now time.Time) map[string]any {
 	return map[string]any{
 		"verdict": "parked", "reason": "Waiting for the named reviewer to reply", "waiting_on": "someone_else", "until": "3d",
 		"evidence": map[string]any{
-			"kind": "person_reply", "target": "ou_peer", "wake": "The named reviewer replies in the topic",
+			"kind": "person_reply", "next_actor": "external", "target": "ou_peer", "wake": "The named reviewer replies in the topic",
 			"contact": map[string]any{"channel": "Feishu topic", "url": personReplyContactURL, "sender": "task supervisor",
 				"sent_at": sent.Format(time.RFC3339), "request": "Please reply with the requested decision.", "status": "sent"},
 			"reply": map[string]any{"source": "larkcli", "brand": "feishu", "app_id": "cli_example", "account_open_id": "ou_owner",

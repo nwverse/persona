@@ -202,6 +202,10 @@ struct SettingsView: View {
                 settingsLink(.storage, "Storage", Theme.Icon.storage, id: "settings-storage", value: storage?.storageText ?? "")
                 #if os(iOS)
                 settingsLink(.health, "Health", Theme.Icon.health, id: "settings-health")
+                // The alarms and timers Persona set (#12805): AlarmKit's, iOS 26 and later, as the alarm tools.
+                if AlarmsAccess.isSupported {
+                    settingsLink(.alarms, "Alarms and Timers", Theme.Icon.alarmClock, id: "settings-alarms")
+                }
                 NavigationLink(value: SettingsPage.phoneData) {
                     SettingsRow(title: ConnectorText.device, symbol: Theme.Icon.thisDevice, tint: Theme.accent)
                 }
@@ -368,6 +372,11 @@ struct SettingsView: View {
             p.append(SettingsPage.liveScreen)
             #endif
         }
+        else if d.string(forKey: "openAlarms") != nil { // Settings › Alarms and Timers on made-up data (#12805)
+            #if os(iOS)
+            p.append(SettingsPage.alarms)
+            #endif
+        }
         else if d.bool(forKey: "openMeetingSettings") { // Settings › Meetings (#2981)
             #if os(iOS)
             p.append(SettingsPage.meetings)
@@ -419,6 +428,8 @@ enum SettingsPage: Hashable {
     case meetings
     /// Settings › Live Screen (#6396, #6398): the live screen's route and its quality on mobile data.
     case liveScreen
+    /// Settings › Alarms and Timers (#12805): the alarms and timers Persona set through AlarmKit.
+    case alarms
     #endif
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, agy, devices, phoneData, mail, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Connectors › This iPhone › iPhone Control: the guided setup (#8199).
@@ -582,6 +593,7 @@ private struct SettingsDestinations: ViewModifier {
         case .health: WorkoutReportSettingsView()
         case .meetings: MeetingSettingsView()
         case .liveScreen: LiveScreenSettingsView()
+        case .alarms: AlarmsPage()
         #endif
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()
