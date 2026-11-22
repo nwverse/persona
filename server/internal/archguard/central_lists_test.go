@@ -57,6 +57,14 @@ var centralLists = []centralList{
 		seam: "give a new prompt's types and Render function a file of their own, prompts/assistant_<topic>.go, " +
 			"as assistant_answer_again.go does",
 	},
+	{
+		id:     "node_handle_method",
+		source: "internal/node/node.go",
+		what:   "label of Node.handleMethod for a method that is not bound to a session",
+		names:  handleMethodLabels, // central_lists_node_test.go
+		seam: "register the method from an init() in its domain's own file, func init() { nodeRPC(name, (*Node).x) } " +
+			"(node/node_methods.go), as sessions_history.go does",
+	},
 }
 
 func (l centralList) file() string { return "testdata/central_lists/" + l.id + ".txt" }
