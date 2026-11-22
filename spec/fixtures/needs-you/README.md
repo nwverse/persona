@@ -15,7 +15,7 @@ badge. These cases pin what that number counts, so the places and the clients ag
 | Working, finished (Awaiting reply included), idle and offline sessions without a card are not rows. | `other_states_do_not_need_the_user` |
 | A child the hub folds under its parent (`folded_under`) and a side session (`folded_as: "side"`) are no rows of their own: their cards sit under the parent's row, which waits through the children rollup or the sides it holds. One row, counted once. | `a_childs_card_counts_under_its_parent`, `a_side_counts_under_its_parent` |
 | A session an Agent-folder hide rule matches (`hidden_by_directory`, `docs/protocol/protocol.md` ("Agent directory visibility")) is no row, and its cards count nowhere. | `a_directory_hidden_card_counts_nowhere` |
-| A card of any kind makes its session wait: an MCP server's form (`elicitation`) does, and so does a question the assistant is still deciding whether it may answer for the user (`delegating`). Whether such a question should wait until it is handed to the user is D11 of `docs/plans/plan-derived-counts.md` ("6. Open decisions for maintainers"). | `an_elicitation_makes_its_session_wait`, `a_delegating_card_counts` |
+| A card of any kind makes its session wait: an MCP server's form (`elicitation`) does, and so does a question the assistant is still deciding whether it may answer for the user (`delegating`). D11 of `docs/plans/plan-derived-counts.md` ("6. Decisions") decided that such a question counts only once it is handed to the user, except a parsed terminal question routed to a task's supervisor, which keeps counting until that case is confirmed; the cases change to it before step 5 (its section 6.2). | `an_elicitation_makes_its_session_wait`, `a_delegating_card_counts` |
 
 - Structure: `{"version": 1, "cases": [...]}`. `input` has the hub's wire objects, `sessions` and `interactions` (the
   pending cards), with `mutes` as the hub's pins give them (`sessions`, `spaces`, `allowed`, each `<machine>/<name>`)
@@ -51,7 +51,7 @@ counting fails a case is not changed to follow it here, since that would change 
 `known_differences.<client>` instead:
 
 - `decision`: the decision that settles it, from the plan's
-  `docs/plans/plan-derived-counts.md` ("6. Open decisions for maintainers"); `why`, in a sentence; `source`, the code
+  `docs/plans/plan-derived-counts.md` ("6. Decisions"); `why`, in a sentence; `source`, the code
   that counts so.
 - `replace`: today's values for the keys of `expected` it replaces (`rows`, `badge_rows`, `badge`).
 
