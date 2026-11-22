@@ -59,6 +59,9 @@ func fallbackMirror() rq.Mirror {
 	return rq.Mirror{Target: os.Getenv("PERSONA_GATE_SSH_TARGET"), Port: port, Identity: os.Getenv("PERSONA_GATE_SSH_IDENTITY")}
 }
 func gateCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	// Bound the whole invocation as well as each RPC when the manager stays unreachable.
+	ctx, stop := context.WithTimeout(ctx, 3*time.Hour)
+	defer stop()
 	if len(args) == 1 {
 		args = strings.Fields(args[0])
 	}
@@ -164,7 +167,19 @@ func gateCommand(ctx context.Context, args []string, stdin io.Reader, stdout, st
 	lastQueuedRenew := time.Now()
 	for joined || lease.State == "queued" {
 		if !gatePause(ctx, 2*time.Second) {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				fmt.Fprintln(stderr, "RESOURCE_STATUS=timeout")
+				return 75
+			}
 			return 130
+		}
+		until := lease.HoldUntil
+		if lease.State == "queued" {
+			until = lease.WaitUntil
+		}
+		if !until.IsZero() && !time.Now().Before(until) {
+			fmt.Fprintln(stderr, "RESOURCE_STATUS=timeout")
+			return 75
 		}
 		if !joined && time.Since(lastQueuedRenew) >= 20*time.Second {
 			var renewed rq.Reply
