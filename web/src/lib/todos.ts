@@ -470,6 +470,9 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
       break;
     }
     if (usageLimitAgent(s)) hasLimit = true;
+    else if (interruptedAgent(s) && (s?.turn_error_kind === "unrecoverable" || s?.turn_error_code === "compaction_sealed" ||
+      unrecoverableError(s?.turn_error))) hasInterrupted = true;
+    else if (active.length > 1 && st !== "working" && s && agentWaits(s)) hasWaiting = true;
     else if (interruptedAgent(s)) hasInterrupted = true;
     else if (st === "unread") hasUnread = true;
     else if (s && agentWaits(s)) hasWaiting = true;

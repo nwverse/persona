@@ -64,6 +64,7 @@ DOMAINS = [
     "starred_mock",  # Starred messages (/api/v1/assistant/starred…), MOCK_STARRED
     "page_counts_mock",  # A paged session read with its counts, MOCK_PAGE_COUNTS
     "task_skip_mock",  # One scheduled occurrence, MOCK_SKIP_OCCURRENCE
+    "direction_sessions_mock",  # Move To… and one direction's page (#11516), MOCK_DIRECTION_SESSIONS
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")

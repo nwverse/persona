@@ -139,7 +139,7 @@ func TestTransientContinueAllowsHerdrIdleOnlyForOpenTaskAgents(t *testing.T) {
 			if tc.openTask {
 				putTodo(s, Todo{ID: "todo-worker", Agents: []TodoAgent{{MachineID: "box", SessionID: "s1"}}})
 			}
-			c := apiErrorTurn("s1", "API Error: 503 no eligible upstream")
+			c := apiErrorTurn("s1", "API Error: 503 Service Unavailable")
 			f.setSessions("box", c)
 			triage(t, s, "s1")
 			if e := entryOf(t, s, "s1"); e.WakeAt == nil || e.Work.On != proto.WaitTransient {
@@ -230,7 +230,7 @@ func TestTransientCapAndReset(t *testing.T) {
 func TestTransientContinueYieldsToTheUser(t *testing.T) {
 	s, f := transientService(t)
 	ctx := context.Background()
-	f.setSessions("box", apiErrorTurn("s1", "API Error: 503 no eligible upstream"))
+	f.setSessions("box", apiErrorTurn("s1", "API Error: 503 Service Unavailable"))
 	triage(t, s, "s1")
 	if entryOf(t, s, "s1").WakeAt == nil {
 		t.Fatal("not scheduled")

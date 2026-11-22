@@ -4,6 +4,7 @@
   "skip_next_invalid": "Enter a valid occurrence time.",
   "skip_next_owner": "Skipped by you",
   "execution_context_unavailable": "Cannot verify the task conversation’s execution context. Reconnect its agent and try again.",
+  "task_execution_wait_timeout": "task_execution_wait_timeout: The selected computer did not support this task’s execution options before the wait expired. Nothing was sent.",
   "followup": "Follow-up",
   "morning": "Morning brief",
   "evening": "Evening review",

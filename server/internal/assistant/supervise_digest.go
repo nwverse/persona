@@ -561,7 +561,8 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 // digestEntry is signal g as the message lists it; false when it no longer holds.
 func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string) (prompts.SuperviseEntry, bool) {
 	t, ok := s.todoNow(g.Todo)
-	if !ok || t.DoneAt != nil && g.Kind != sigFailed {
+	acceptedFeedback := g.Kind == sigInbox && g.Inbox != nil && g.Inbox.AfterAcceptance
+	if !ok || t.DoneAt != nil && g.Kind != sigFailed && !acceptedFeedback {
 		return prompts.SuperviseEntry{}, false
 	}
 	v := t.Supervision
@@ -711,7 +712,8 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // answered, or asked again, meanwhile
 		}
 	case sigInbox:
-		if g.Inbox == nil || !s.inboxSignalHolds(t) || !s.inboxSignalsOn(ctx) {
+		if g.Inbox == nil || !s.inboxSignalsOn(ctx) || !s.inboxSignalHolds(t) &&
+			(!acceptedFeedback || !s.acceptedFeedbackHolds(t, g.Inbox) || s.agentSupervised(t)) {
 			return prompts.SuperviseEntry{}, false // waits for the owner's decision, or the switch went off, meanwhile
 		}
 		if g.Inbox.ToAgent == "unhandled" && !s.taskInboxUnhandled(ctx, g.Key) {

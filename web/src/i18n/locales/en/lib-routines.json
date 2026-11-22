@@ -51,6 +51,7 @@
   "follow_up_new_chat": "Follow-up · New chat",
   "run_manual": "Run manually",
   "run_on_time": "On time",
+  "run_legacy_fallback": "Used legacy task execution",
   "late_seconds_one": "{count}s late",
   "late_seconds_other": "{count}s late",
   "late_minutes_one": "{count} min late",
