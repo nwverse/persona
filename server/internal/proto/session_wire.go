@@ -138,6 +138,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.boolean(`"effort_change_failed":`, s.EffortChangeFailed, true)
 	w.boolean(`"context_restart_recommended":`, s.ContextRestartRecommended, true)
 	w.boolean(`"off_launcher":`, s.OffLauncher, true)
+	w.boolean(`"botmux_external_trigger":`, s.BotmuxExternalTrigger, true)
 	if s.Ultracode != nil {
 		w.boolean(`"ultracode":`, *s.Ultracode, false)
 	}

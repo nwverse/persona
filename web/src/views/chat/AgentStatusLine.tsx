@@ -43,7 +43,8 @@ export function AgentStatusLine({ session, source }: { session: Session; source?
   const accounts = useUsageWindows();
   const now = useNow(30_000, accounts.length > 0);
   const quota = sessionQuota(accounts, session, now);
-  if (!place && !hasContext && !quota && !source) return null;
+  const externalTrigger = Boolean(session.botmux_external_trigger);
+  if (!place && !hasContext && !quota && !source && !externalTrigger) return null;
 
   const placeLabel = place && [place.folder || place.name, place.branch].filter(Boolean).join(" · ");
   const placeContent = place && (
@@ -93,6 +94,11 @@ export function AgentStatusLine({ session, source }: { session: Session; source?
           </a>
         )}
       </div>
+      {externalTrigger && (
+        <div role="status" data-testid="botmux-external-trigger-note" className="truncate pt-0.5 text-submeta text-ink-3">
+          {t("chat-botmux.external_trigger_notice")}
+        </div>
+      )}
     </div>
   );
 }
