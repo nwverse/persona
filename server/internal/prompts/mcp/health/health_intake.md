@@ -1,0 +1,18 @@
+Log, list or delete Persona water (ml) and protein (g) records, only in Health chats. Log needs kind and amount; estimates need ask_user confirmation first. Each log creates a new ID: do not repeat uncertain writes. List returns every entry with its ID, daily totals and goals for days including today (default 7). Delete needs an entry ID and is repeatable. Results include today's totals.{{template "shared/mcp_language" .}}
+
+```json
+{
+  "type": "object",
+  "required": ["action"],
+  "properties": {
+    "action": {"type": "string", "enum": ["log", "list", "delete"]},
+    "kind": {"type": "string", "enum": ["water", "protein"]},
+    "amount": {"type": "number", "description": "Log: water 1–3000 ml; protein >0–200 g; at most one decimal."},
+    "at": {"type": "string", "description": "Log: RFC3339; default now."},
+    "note": {"type": "string", "description": "Log: food and portion; max 4096 UTF-8 bytes, no NUL."},
+    "days": {"type": "integer", "minimum": 1, "maximum": 366},
+    "id": {"type": "string", "description": "Delete: entry UUID from list or log."}
+  },
+  "additionalProperties": false
+}
+```

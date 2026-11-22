@@ -35,7 +35,7 @@ Sources:
   `identity.HealthDir`, `identity.SpaceHealth`, `identity.SpaceOf` are in `server/internal/identity/paths.go`; `IsAssistantDir` also holds for the health directory,
   so health chats, like assistant chats, are "assistant chats" (`assistant: true`) and use the same tools, authorization and questions.
 - **CLAUDE.md**: the Health space has its own `server/internal/prompts/assistant/health_claude_md.md` (golden: `server/internal/assistant/testdata/prompts/health_claude_md.golden`):
-  talk only about health; read data with `phone_health_summary`, record data with `phone_health_write_sample` (confirmed on the phone); do not write to the knowledge base or send health content to other chats; when the user wants to share with someone (doctor, coach, family), help send it, with the send confirmed on the phone;
+  talk only about health; read system data with `phone_health_summary`; log Persona water and protein with `health_intake`, and other data such as weight and sleep with `phone_health_write_sample` (confirmed on the phone); do not write to the knowledge base or send health content to other chats; when the user wants to share with someone (doctor, coach, family), help send it, with the send confirmed on the phone;
   no diagnosis, no prescribing; on danger signs, tell the user to seek medical care first; when discussing numbers, attach a chart card by default ("Charts" below). Connector and plugin skills are installed the same way as in the assistant directory, but the instructions plugins give the assistant (`plugins.Instructions`) are not added to the health CLAUDE.md: those were written for the main chat's work scenarios, and v1 deliberately leaves them out.
 - **Memory**: Claude Code's auto memory is per working directory (`~/.claude/projects/<encoded dir>/memory/`). Only health chats read and write the health directory's memory; it is not in the main chat's context, and vice versa.
 - **Files** (#3282): the main chat's Claude can read files on the computer with Read / Bash; separate directories do not mean unreadable. So the main chat (not the Health space's assistant chat) starts with deny rules:
@@ -160,6 +160,7 @@ The `conversation*` tools in a chat only see chats in the same space (`server/in
 - Calls not made from a chat (no caller session id) count as the assistant's own space.
 
 - `kb_update` from a health chat fails outright: health information does not go into the knowledge base (`assistant/tools.go` `runTool`). Knowledge base reads (`kb_search` etc.) work as usual.
+- `health_intake` logs, lists and deletes only in a known Health conversation. `runTool` checks `agentCallerSpace` using the caller's machine and session, including Health subdirectories; main-space and unknown callers are refused before storage access. Health chats on another computer work too. The tool appears in both spaces' discovery lists, but discovery grants no access.
 - Scheduled follow-ups and scheduled tasks created in a health chat (`schedule_followup`, `schedule_routine`) record their space (`Task.space`); when one fires and needs a new chat, it opens in the Health space.
   The space owns the task's working directory: a nonempty task `cwd` is rejected when saving and before dispatch,
   including an older stored override. Clear it to restore the canonical Health directory. Launcher, model, effort
@@ -278,6 +279,10 @@ in the pages, settings or scheduling, and none of these routes grants an extensi
 Health chats or memory.
 
 ## Dietary intake and resting energy
+
+`health_intake` is authoritative for Persona's own water and protein records (see "Water and protein" above). Its `list` action returns every active record, with IDs, for 1–366 days including today (default 7), plus daily totals and goals; `delete` accepts a returned ID and repeated deletion succeeds. Each `log` generates a new server UUID, so an uncertain write must be checked with `list` before logging again. Explicit ml or protein grams can be logged directly; photos and other estimates first need an `ask_user` confirmation, with food and portion saved in the note. Repeatedly confirmed foods, or an explicit request to remember one, belong in Health memory; "the usual" still gets a confirmation card. Water reminders are configured on the water detail page.
+
+When Apple Health synchronization is enabled, its protein total already includes the samples Persona wrote. Never add Persona's protein total to the Apple Health total: they overlap. Persona's own progress uses its intake records; the phone summary describes the system total from all available sources.
 
 The Health space uses `phone_health_summary` for system health data, including dietary intake written by apps such as 薄荷健康. Its requested metrics are:
 
