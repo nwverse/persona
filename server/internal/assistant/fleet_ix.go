@@ -485,7 +485,7 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 	s.fleet.mu.Lock()
 	if p.prepared != nil {
 		s.fleet.mu.Unlock()
-		return s.awaitPrepared(ctx, p)
+		return s.awaitPrepared(ctx, p, false)
 	}
 	if p.resolved == nil {
 		p.resolved = make(chan struct{})
