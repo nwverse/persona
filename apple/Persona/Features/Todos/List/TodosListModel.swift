@@ -27,10 +27,13 @@ struct TodosListDeps {
 nonisolated struct TodoCapture: Equatable, Identifiable, Sendable {
     /// The day it is due on, all day unless the owner gives it a time in the sheet; nil asks for no date.
     var day: Date?
+    /// The moment on `day` it is due at: the sheet starts with All Day off (an hour tapped on Upcoming's calendar, a
+    /// refused to-do that had one).
+    var at: Date?
     /// The knowledge-base project it is made in, by slug.
     var project: String?
 
-    var id: String { "\(day?.timeIntervalSince1970 ?? -1)|\(project ?? "")" }
+    var id: String { "\(day?.timeIntervalSince1970 ?? -1)|\(at?.timeIntervalSince1970 ?? -1)|\(project ?? "")" }
 }
 
 /// The V1 To-dos list (#10465; docs/design/proposals/todos-redesign.md 3.3, 3.4; DESIGN_SYSTEM 3.4 "To-dos list"): the
@@ -76,6 +79,8 @@ final class TodosListModel {
             var grouped: Bool
             /// The place shown is a project, whose title names it: line 3 leaves the project out of every row.
             var inProject: Bool
+            /// The place shown is Upcoming, whose day headings name each row's day: a row says only its time.
+            var underDay: Bool
             var projects: [TodoProject]
             /// The owner's write on it still on the device (`TodoOutbox`): a tick waiting out its Undo, a new to-do.
             var pending: TodoRowWrite?
@@ -128,6 +133,9 @@ final class TodosListModel {
     private(set) var outsideNeeds = 0
     /// Today's "3 coming up this week".
     private(set) var comingUp = 0
+    /// Upcoming's to-dos as its list holds them, for its calendar (⋯ › Show as Calendar): worked out with the place's
+    /// numbers, once per change, and set only when they change (P4, P5).
+    private(set) var upcomingItems: [TodoItem] = []
     /// The folds the owner opened (Can wait, Someday, Done today): this list's, not kept.
     private(set) var unfolded: Set<String> = []
     private(set) var layout = TodosListLayout.Output.empty
@@ -178,6 +186,13 @@ final class TodosListModel {
         /// The store's numbers: an answer given here moves a place's too.
         var counts = TodoCounts()
         static let empty = Snapshot()
+
+        /// The same rows, saying the same, whatever the numbers: nothing to lay out again.
+        func sameRows(_ other: Snapshot) -> Bool {
+            var numbered = other
+            numbered.counts = counts
+            return numbered == self
+        }
     }
 
     init(deps: Deps) {
@@ -210,8 +225,16 @@ final class TodosListModel {
         guard let placed = placeCounts, !searching else { return false }
         return TodosFilter.hiddenNeeds(choice, needsYou: placed.needsYou) == 0
     }
-    /// The title's subtitle (iOS 26 and later) while a choice hides what needs the owner and is not set aside.
-    var subtitle: String { searching || calm ? "" : TodosFilter.subtitle(choice, needsYou: hiddenNeeds) }
+    /// The title's subtitle (iOS 26 and later) once the guard line has scrolled away: what that line said, so what needs
+    /// the owner stays in sight. A choice hiding it says its name and how many ("In Progress · 3 need you"); in a place,
+    /// what needs the owner outside it says the line's own words ("2 more need you, not in Today"), since the choice
+    /// does not hide those. Nothing while nothing is hidden or a search sets the place and the choice aside.
+    func subtitle(place name: String) -> String {
+        guard !searching else { return "" }
+        guard let placed = placeCounts else { return calm ? "" : TodosFilter.subtitle(choice, needsYou: hiddenNeeds) }
+        guard outsideNeeds > 0 else { return TodosFilter.subtitle(choice, needsYou: placed.needsYou) }
+        return TodosFilter.guardWords(hiddenNeeds, elsewhere: hiddenElsewhere, place: name)
+    }
     /// Nothing to list under the current choice or search.
     var isEmpty: Bool { layout.groups.allSatisfy { $0.keys.isEmpty && $0.folds.isEmpty && $0.tail == nil } }
     /// A place other than All To-dos with nothing in it says so in its own words (`TodoPlaceEmptyState`); under another
@@ -357,10 +380,10 @@ final class TodosListModel {
 
     /// Where New To-Do starts in the place shown (proposal 3.3, "Capture default"): in All To-dos, nowhere in
     /// particular; on Today, due today; on Upcoming, on a day its sheet asks for, tomorrow unless a day heading's + gave
-    /// `day`; in a project, in it.
-    func capture(on day: Date? = nil) -> TodoCapture {
+    /// `day` (or an empty slot of its calendar `day` and, for an hour, `time`); in a project, in it.
+    func capture(on day: Date? = nil, at time: Date? = nil) -> TodoCapture {
         let calendar = deps.calendar()
-        if let day { return TodoCapture(day: calendar.startOfDay(for: day), project: place.project) }
+        if let day { return TodoCapture(day: calendar.startOfDay(for: day), at: time, project: place.project) }
         let today = calendar.startOfDay(for: deps.now())
         switch place.id {
         case TodoPlaceKind.allValue: return TodoCapture()
@@ -468,6 +491,13 @@ final class TodosListModel {
     var draft: TodoOutbox.Draft? { deps.outbox.draft }
     func tookDraft() { deps.outbox.tookDraft() }
 
+    /// Where a new to-do the hub turned down starts again (its toast's Edit): due when it was due, wherever the list
+    /// is now (`TodoOutbox.refusal`).
+    func capture(_ draft: TodoOutbox.Draft) -> TodoCapture {
+        let due = TodoItem(id: "", title: draft.title, dueAt: draft.dueAt, dueDate: draft.dueDate)
+        return TodoCapture(day: TodosPlaces.dueDay(due, deps.calendar()), at: draft.dueAt)
+    }
+
     /// The list's line while the hub is out of reach, with when the hub last answered a read of it.
     var offlineLine: String { TodoOfflineLine.text(readAt: deps.store.readAt, now: deps.now(), calendar: deps.calendar()) }
 
@@ -519,8 +549,12 @@ final class TodosListModel {
         let next = current()
         guard next != snapshot || clock else { return }
         if next != snapshot {
+            // Only the store's numbers moved (an answer given here, the hub's counts): a place's numbers follow, and
+            // nothing is laid out again, since no row moved or says anything else (P5).
+            let numbersOnly = !clock && next.sameRows(snapshot)
             snapshot = next
             if ready != next.ready { ready = next.ready }
+            if numbersOnly { return recountPlace() }
         }
         recountPlace()
         guard hold.wait() else { return landAll(force: clock, animated: true) }
@@ -548,7 +582,10 @@ final class TodosListModel {
     /// While held, the rows that come to need the owner land at once, alone (DESIGN_SYSTEM 3.4; `Hold`: critical changes
     /// land "at once, alone, and the rest goes on waiting"): onto the list as drawn, saying what they say now.
     private func landNeeds() {
-        let needs = snapshot.filed.filter { row in
+        // The place's rows only (all of them while searching): one outside it is never drawn here, so it never lands.
+        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let rows = searching ? snapshot.filed : placeRows(snapshot.filed, items: snapshot.items, at: now)
+        let needs = rows.filter { row in
             row.section == TodoListSection.needsYou && layout.sections[TodosListLayout.key(row)] != TodoListSection.needsYou
         }
         guard !needs.isEmpty else { return }
@@ -638,17 +675,19 @@ final class TodosListModel {
         return rows
     }
 
-    /// A place's numbers and Today's "coming up", from the store's rows as they are now.
+    /// A place's numbers, Today's "coming up" and Upcoming's calendar's to-dos, from the store's rows as they are now.
     private func recountPlace() {
         let calendar = deps.calendar()
         let at = now == .distantPast ? deps.now() : now
-        let counts = place.isAll ? nil
-            : deps.store.countsSource.counts(of: placeRows(snapshot.filed, items: snapshot.items, at: at))
+        let rows = place.isAll ? nil : placeRows(snapshot.filed, items: snapshot.items, at: at)
+        let counts = rows.map { deps.store.countsSource.counts(of: $0) }
         if counts != placeCounts { placeCounts = counts }
         let outside = counts.map { max(0, snapshot.counts.needsYou - $0.needsYou) } ?? 0
         if outside != outsideNeeds { outsideNeeds = outside }
         let coming = place == .today ? TodosPlaces.comingUp(snapshot.filed, items: snapshot.items, now: at, calendar: calendar) : 0
         if coming != comingUp { comingUp = coming }
+        let upcoming = place == .upcoming ? (rows ?? []).compactMap { snapshot.items[$0.id] } : []
+        if upcoming != upcomingItems { upcomingItems = upcoming }
     }
 
     /// Whether the rows are filed under their projects' headings (line 3 then leaves the project out): ⋯'s Group by
@@ -680,13 +719,16 @@ final class TodosListModel {
     private func updateCells(force: Bool, held: Bool, grouped: Bool) {
         let calendar = deps.calendar()
         let projects = snapshot.projects
-        // A project's place names its project in its title: line 3 leaves it out (not while searching, which lists any).
-        let inProject = place.project != nil && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // A project's place names its project in its title: line 3 leaves it out; Upcoming's headings name the days
+        // (neither while searching, which lists any to-do under the sections).
+        let placed = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let inProject = place.project != nil && placed
+        let underDay = place == .upcoming && placed
         for filed in snapshot.filed {
             guard let item = snapshot.items[filed.id] else { continue }
             let key = TodosListLayout.key(filed)
             let inputs = Row.Inputs(item: item, view: snapshot.views[filed.id], filed: filed, grouped: grouped, inProject: inProject,
-                                    projects: projects,
+                                    underDay: underDay, projects: projects,
                                     pending: snapshot.writes[filed.id].map {
                                         TodoRowWrite(write: $0.write, waits: $0.waits && !$0.answered, unsure: $0.unsure)
                                     })
@@ -698,7 +740,7 @@ final class TodosListModel {
                 continue
             }
             let content = TodoRowContentLogic.content(filed, item: item, view: inputs.view, byProject: grouped,
-                                                      inProject: inProject, now: now, calendar: calendar,
+                                                      inProject: inProject, underItsDay: underDay, now: now, calendar: calendar,
                                                       projectName: { TodoProjectLogic.name($0, in: projects) },
                                                       pending: inputs.pending)
             if let cell = cells[key] {

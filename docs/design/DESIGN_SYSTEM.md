@@ -892,7 +892,8 @@ The web Agent conversation header's **Session overview** list button toggles a p
   Just finished; then Someday folded, and under All the to-dos closed today folded as Done today. A row without a view
   (an older manager's) is filed by the app's frozen rules. Inside a section the rows follow the hub's rank, then the
   assistant, then the id; ⋯ › Sort By orders them otherwise and never moves a section.
-  - **Nothing under the title.** The title ("All To-dos"; the menu of places once they come) and, at its trailing end,
+  - **Nothing under the title.** The title (the place's name, a menu of the places, 3.5 "To-dos places"; "All To-dos"
+    without them) and, at its trailing end,
     one ⋯ in the primary ink: on iOS 27 (built with its SDK) the bar's own overflow menu, "More", where items that no
     longer fit the bars go too, as the HIG asks; before it, a menu of the page's. The list starts under them, with no
     strip, band or field of its own.
@@ -1016,7 +1017,8 @@ The web Agent conversation header's **Session overview** list button toggles a p
   - **New To-Do** is the foot toolbar's +. Its sheet
     (a title, notes with the mic, Add) closes at once: the new to-do is first in To do, its line "Saving…", until the
     hub has it, with "Added · Undo". One the hub turns down is said in a toast whose **Edit** opens the sheet again
-    with what was typed. In a place other than All To-dos the sheet starts the to-do there (3.5, "To-dos places").
+    with what was typed and when it was due; one turned down for its project (gone meanwhile) comes back without it,
+    the toast saying so. In a place other than All To-dos the sheet starts the to-do there (3.5, "To-dos places").
   - **Writes wait on the device** (`TodoOutbox`): kept on disk with their op id from the tap, sent when their window ends
     (a reopen, Remove from Someday and a new to-do at once; Remove from Someday inside Someday's own window takes it
     back and sends nothing), every one at once when the app leaves the foreground, and again after the hub answers a
@@ -1131,24 +1133,32 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   3.3; the V1 frames `iphone/list~drawer`, `~menu`, `~today`, `~kyoto`): the drawer's and the sidebar's To-dos row is All
   To-dos and folds open the places under it: Today, Upcoming, a gap of `Theme.Space.m`, up to five knowledge-base
   projects with open to-dos, each with its part of N (`CountBadge(.needs)`, hidden at 0, said as "1 needs you"), then
-  All Projects…, a sheet of every project, those with nothing open too, each with its part of N in blue and how many
+  All Projects…, a sheet of every project, those with nothing open too (the knowledge base's long-running ones first,
+  then by name), each with its part of N in blue and how many
   to-dos are open in it in a plain secondary number (`TodoCounts.open`, counted on the device from its rows: not
-  closed, not in Someday, a step with its parent); the sidebar's project rows keep N alone. The sidebar stays two
+  closed, not in Someday, a step with its parent), drawn before N so N keeps the row's end as on the sidebar's rows,
+  which keep N alone; its rows are section cards, as the list's, in every style. The sidebar stays two
   levels deep, with no Projects heading. The places are the sidebar's own rows (`plainAction`, `BUISidebarRow` in BeautifulUI) set in by the
   symbol column, their symbols where To-dos' words start (BeautifulUI's row sets itself in by its own measures,
   `indent`). The projects go by name; with more than five those with a part of N are chosen first, so one that needs
   the owner is never behind All Projects…, and rows trade places only on a rename. The chevron beside To-dos folds them
   (`sidebar.fold.todos`, kept on the device), spoken as To-dos as a Pinned direction's chevron says its direction; they
-  start unfolded and never fold by themselves, so the rows under them never jump. In BeautifulUI the chevron lies over
-  the row's end, so the row keeps its siblings' height and one shade spans both. With several assistants only the
-  current one's projects are listed. A project's part of N is counted from its rows, as its place's own bar counts them.
+  start unfolded and never fold by themselves, so the rows under them never jump; Reduce Motion folds them without
+  the slide. In BeautifulUI the chevron lies over the row's end, so the row keeps its siblings' height and one shade
+  spans both; its target is then the row's height by 44 pt wide, as tall as every BeautifulUI sidebar row's target
+  (32 pt at the default size, the style's density, as its 30-32 pt chips, HIG_AUDIT HIG-020), since its rows sit
+  2-3 pt apart and a taller target would take the ends of Inbox and Today. With several assistants only the current one's projects are listed. A project's part of N is counted from
+  its rows, as its place's Filter and Needs you header count them; a step filed in another project than its open
+  parent counts with its parent, as the hub rolls it up. Today's symbol is the outlined sun (`Theme.Icon.todoToday`),
+  as the sidebar's places are outlines; the filled one is the conversation's Today card.
   A hub that never listed `todo_places` in this run shows To-dos alone, as before; a hello that stops listing it (a
   manager reconnecting) takes nothing away. Who it serves: anyone who keeps to-dos for different parts of life, who
   reaches today's or one project's to-dos in one tap, with no filter to learn.
   - **The title menu** is the HIG's second way to the same places: the list's title is the place's name with the
     system's title menu (`toolbarTitleMenu`, "All To-dos ⌄"), the place shown ticked and each project's part of N in
-    words under its name ("1 needs you": a menu item draws no badge). A pick there changes the list where it is. Without
-    places the title is plain, with no menu.
+    words under its name ("1 needs you": a menu item draws no badge); a project picked in All Projects… that it does not
+    list is listed ticked above All Projects…. A pick there changes the list where it is. Without places the title is
+    plain, with no menu.
   - **A pick in the sidebar** opens To-dos on that place at its root, never animated: on a phone under the open drawer,
     at regular width as a root swap. What To-dos kept pushed belonged to the place before and is dropped
     (`ShellPlaces.enter(fresh:)`, `SidebarPageRoots.select(fresh:)`). The To-dos row itself is All To-dos where To-dos
@@ -1164,28 +1174,33 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
     which is one project, Group by Project is greyed with why in its heading ("Kyoto trip is one project").
   - **What a place holds** (filtered on the device): Today, open to-dos due today, overdue or reminding today; Upcoming,
     open dated to-dos by day (Overdue, Today, Tomorrow, then the date), each day's heading in the list's heading type
-    with its count and a + that makes a to-do due that day, no Filter and no sort (the days are its grouping and its
-    order), its ⋯ holding Show as Calendar alone (the to-dos calendar of the same to-dos, coloured by the hub's view,
-    with no "without a due date" line and no Show Done); a project, its to-dos, line 3 leaving its name out of every
-    row. A step whose parent the place holds counts with its parent; one whose parent it leaves out (a dated step of an
-    undated to-do) is a row there. Search To-dos sets the place aside as it sets the choice aside: while the field has
+    with its count and a + that makes a to-do due that day ("New To-Do Due Tomorrow"), the headings scrolling away with
+    their cards as every inset grouped heading does (none pins), a row under its day saying only its time ("Due 15:00",
+    nothing for all day) and an overdue one its day, no Filter and no sort (the days are its grouping and its order),
+    its ⋯ holding Show as Calendar alone (the to-dos calendar of the same to-dos, coloured by the hub's view, with no
+    "without a due date" line and no Show Done, an empty slot opening New To-Do at that day and hour); a project, its
+    to-dos, line 3 leaving its name out of every row. A step whose parent the place holds counts with its parent; one
+    whose parent Today or Upcoming leaves out (a dated step of an undated to-do) is a row there. Search To-dos sets the place aside as it sets the choice aside: while the field has
     words the list is every open to-do that matches, whatever the place (places pick where, search finds any to-do).
   - **What needs the owner elsewhere** (3.4 "Sessions that need the user"): the list's one guard line, its first line
     over the first card (`TodosGuardLine`), in every place but All To-dos also counts what needs the owner outside the
     place, and names the place when nothing it counts is the place's own: "● 2 more need you, not in Today · Show All".
     Under a choice in a project's place the one line counts both, what the choice hides and what is outside ("● 3 more
     need you · Show All"), never a place's line and a choice's. Its Show All opens All To-dos. Upcoming's calendar keeps
-    the same line above it.
+    the same line above it. On iOS 26 and later, once the line has scrolled away, the title's subtitle says what it said
+    ("2 more need you, not in Today"; "In Progress · 1 need you" where the choice hides only the place's own).
   - **New To-Do starts in the place it is made in** (proposal 3.3, "Capture default"): All To-dos, nowhere in
-    particular; Today, due today; Upcoming, on a date its sheet asks for (tomorrow, or the day whose heading's + was
-    tapped); a project, in it (its + spoken "New To-Do in Kyoto trip"). The foot toolbar's + (3.4) and a day heading's +
-    open the same sheet, which says the default ("In Kyoto trip" under the title, or a Due row with All Day that the
-    owner can change) and sends it in the one write that makes the to-do. The new row is listed in the place at once
-    ("Saving…"), counted there, and stays once the hub has it.
-  - **Empty states**: Today, "Nothing for today." with "3 coming up this week ›" (Upcoming's next seven days) as a link
-    to Upcoming (`EmptyStateView`'s link look, 3.9), since the foot's + is the page's one prominent action; Upcoming,
-    "Nothing scheduled."; a project with nothing open (closed to-dos only, too), "Nothing open in Kyoto trip.", the
-    foot's + starting a to-do in it, with no second New To-Do in the empty state.
+    particular; Today, due today; Upcoming, on a date its sheet asks for (tomorrow, the day whose heading's + was
+    tapped, or the day and hour of an empty slot on its calendar, All Day off); a project, in it. Its + says where
+    ("New To-Do in Kyoto trip", "New To-Do Due Today"). The foot toolbar's + (3.4), a day heading's + and an empty slot
+    on Upcoming's calendar open the same sheet, which says the default ("In Kyoto trip" under the title, or a Due row
+    with All Day that the owner can change) and sends it in the one write that makes the to-do. The new row is listed in
+    the place at once ("Saving…"), counted there, and stays once the hub has it.
+  - **Empty states**: Today, "Nothing for today.", "To-dos due today or overdue show up here.", with "3 coming up this
+    week ›" (Upcoming's next seven days) as a link to Upcoming (`EmptyStateView`'s link look, 3.9), since the foot's +
+    is the page's one prominent action; Upcoming, "Nothing scheduled."; a project with nothing open (closed to-dos
+    only, too), "Nothing open in Kyoto trip.", the foot's + starting a to-do in it, with no second New To-Do in the
+    empty state.
 - A page's top-leading button follows how the page was reached, not what it is (#8603, `docs/design/sidebar-navigation.md` section 6): a page picked in a sidebar or list is a root and shows the button that opens the sidebar (the main conversation's `Theme.Icon.sidebar`, "Show Sidebar"; the persona's face in a phone's drawer; under side bars the side column's first item, where a sub-page has Back, #11636), never a ‹; a page opened from inside another shows ‹, which goes back to it. The same Agent's chat is a root picked in the sidebar and a drill-down opened from a waiting Agent on the main conversation or in Inbox, a task's card, a Brief card, a to-do, a knowledge project or a meeting (#9971, #12006): it never moves the sidebar's selection.
 - **A direction's page from the sidebar** (#11516, the one exception to a sidebar pick being a root): All › at the end of a direction's open row puts its leader conversation in front as the current place with the page already pushed over it, without animation, and then the drawer closes; on the iPad the same happens in the detail column. The page is that conversation's own drill-down (its title menu's first item, **Tasks and Chats**, pushes the same page with the usual animation), so it shows ‹, and ‹ and the edge swipe go back to the conversation, never to the drawer. The conversation starts afresh under it: the page is the only page over it, whatever that conversation was left with (in the Sidebar layout, the iPad's default, the conversation root gives back no kept path), and on the phone the shell's Assistant page is put in front first, as for the drawer's other picks. Why not a root: a root would have ☰ and nowhere for ‹ to go, and the page is about the conversation the owner follows that matter from; going back to it is the next thing they do. The sidebar's selection moves to that conversation, as any conversation pick does.
 - **A presented page leaves at its top-leading corner** (#9653, the owner 11-17): a sheet, a full-screen cover or a self-drawn layer over a page puts its way out at the top leading edge, an ✕ (`SheetClose`, 3.6); a pushed page keeps its ‹ there. The trailing edge holds only the page's own actions: its ⋯ menu and its confirming action. An edit sheet's ✕ leaves without saving and its ✓ saves, as iOS 26's Calendar and Reminders lay it out; Save, a Done that saves and Add become that ✓, and a verb that says more (Send, Connect, Install, Commit) stays a word in the same place. A page that only shows things has no Done: its ✕ closes it. Not covered: a question sheet whose Cancel sits under its answer in the content (Close and Delete Agent, consent sheets), the system's own sheets (share, camera, document scanner), and a medium-detent peek with a drag indicator and no bar. Web and desktop dialogs keep their ✕ at the top trailing corner, the convention there; Android follows in #9661.
@@ -1643,7 +1658,7 @@ the picker is hidden and an image-less create is never sent. All controls use th
 copy. The assistant manager owns persistence and handoff; the Web client does not invent a temporary upload or a local
 machine path.
 
-`EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. Where the page already has its prominent action (a foot toolbar's +) and the empty state's action only leads to another place that holds what this one lacks, the action takes the link look (`actionLook: .link`): the accent's words and ›, one line, a finger's height, never a second filled button (#10465, To-dos' Today: "3 coming up this week ›"); BeautifulUI draws its own secondary button for either. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; Android `JAssistantOffline`, a `JEmptyState` whose `leading` slot holds `JManagerAvatar`; `docs/assistant/managers.md` "Clients").
+`EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. Where the page already has its prominent action (a foot toolbar's +) and the empty state's action only leads to another place that holds what this one lacks, the action takes the link look (`actionLook: .link`): the accent's words and ›, one line, a finger's height, never a second filled button (#10465, To-dos' Today: "3 coming up this week ›"; iOS, hubs with `todo_view`, from #10465's switch-on); BeautifulUI draws its own secondary button for either. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; Android `JAssistantOffline`, a `JEmptyState` whose `leading` slot holds `JManagerAvatar`; `docs/assistant/managers.md` "Clients").
 
 ### 3.10 Loading and error states
 

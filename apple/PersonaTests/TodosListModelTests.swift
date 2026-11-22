@@ -293,16 +293,17 @@ struct TodosListModelTests {
         list.start()
         await store.refresh(api: hub.client)
         try await waitForListTest { list.groups.count == 3 }
-        #expect(list.hiddenNeeds == 0 && list.subtitle == "", "All hides nothing")
+        #expect(list.hiddenNeeds == 0 && list.subtitle(place: "All To-dos") == "", "All hides nothing")
         list.choice = .inProgress
         #expect(list.groups.map(\.id) == [TodoListSection.working])
         #expect(list.hiddenNeeds == 1, "the guard line: 1 more needs you")
-        #expect(list.subtitle.hasPrefix(TodosChoice.inProgress.title) && list.subtitle.contains("1"), "\(list.subtitle)")
+        let subtitle = list.subtitle(place: "All To-dos")
+        #expect(subtitle.hasPrefix(TodosChoice.inProgress.title) && subtitle.contains("1"), "\(subtitle)")
         list.choice = .needsYou
         #expect(list.hiddenNeeds == 0 && list.groups.map(\.id) == [TodoListSection.needsYou])
         list.choice = .todo
         list.query = "passport"
-        #expect(list.searching && list.hiddenNeeds == 0 && list.subtitle == "", "a search sets the choice aside")
+        #expect(list.searching && list.hiddenNeeds == 0 && list.subtitle(place: "All To-dos") == "", "a search sets the choice aside")
         #expect(list.groups.map(\.id) == [TodoListSection.todo] && list.groups[0].keys == ["/t"])
         list.query = "kyoto"
         #expect(list.isEmpty, "nothing open matches")

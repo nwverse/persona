@@ -160,11 +160,11 @@ final class TodoOutbox {
                  refused: { entry, message in
                      Haptics.error()
                      // A new to-do the hub turned down: what was typed comes back in its sheet (Edit).
-                     var edit: Toast.Action?
-                     if case .create(let title, let notes, _, _, _) = entry.write {
-                         edit = Toast.Action(title: String(localized: "Edit")) { TodoOutbox.shared.edit(title: title, notes: notes) }
+                     let said = TodoOutbox.refusal(entry.write, message: message)
+                     let edit = said.draft.map { draft in
+                         Toast.Action(title: String(localized: "Edit")) { TodoOutbox.shared.edit(draft) }
                      }
-                     AppModel.shared.toast = Toast(message, style: .error, action: edit)
+                     AppModel.shared.toast = Toast(said.message, style: .error, action: edit)
                  },
                  standing: { id in
                      let store = TodoStore.shared
@@ -183,10 +183,24 @@ final class TodoOutbox {
     private(set) var entries: [Entry] = []
     /// Taken back while being sent: drawn as taken back at once; once the hub has it, its reverse goes.
     private(set) var takenBack: Set<UUID> = []
-    /// What a new to-do the hub turned down said: back in New To-Do's sheet (the toast's Edit).
+    /// What a new to-do the hub turned down said: back in New To-Do's sheet (the toast's Edit), due when it was due (a
+    /// day, or a moment), wherever the list is now (#10465).
     nonisolated struct Draft: Equatable, Sendable {
         var title: String
         var notes: String?
+        var dueAt: Date?
+        var dueDate: String?
+    }
+
+    /// What the owner is told of a write the hub turned down and, for a new to-do, what its sheet opens with again (the
+    /// toast's Edit). The hub takes the title and date of a new to-do as the app sends them, so one made in a project
+    /// that it turns down was turned down for the project (gone or renamed meanwhile): its sheet opens without it, and
+    /// the toast says so, or every Add would be turned down the same way. Its project can be set again from its row.
+    nonisolated static func refusal(_ write: Write, message: String) -> (message: String, draft: Draft?) {
+        guard case .create(let title, let notes, let dueAt, let dueDate, let project) = write else { return (message, nil) }
+        let draft = Draft(title: title, notes: notes, dueAt: dueAt, dueDate: dueDate)
+        guard project != nil else { return (message, draft) }
+        return (String(localized: "Couldn't put “\(title)” in its project. Edit adds it without one. [To-dos Toast]"), draft)
     }
 
     /// A new to-do the hub turned down, whose words go back into New To-Do (the toast's Edit).
@@ -356,7 +370,7 @@ final class TodoOutbox {
     }
 
     /// New To-Do reopened with what a refused one said (the toast's Edit); the sheet takes it (`tookDraft`).
-    func edit(title: String, notes: String?) { draft = Draft(title: title, notes: notes) }
+    func edit(_ draft: Draft) { self.draft = draft }
     func tookDraft() { draft = nil }
 
     /// The hub answered read `read` of the list, which has landed: the writes it shows are let go, a new to-do nobody

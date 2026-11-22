@@ -15901,25 +15901,25 @@
         }
       }
     },
-    "New To-Do on %@ [To-dos Places]" : {
+    "New To-Do Due %@ [To-dos Places]" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "New To-Do on %1$@"
+            "value" : "New To-Do Due %1$@"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ が期限の新規ToDo"
+            "value" : "%1$@が期限の新規ToDo"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新建 %1$@ 到期的待办"
+            "value" : "新建%1$@到期的待办"
           }
         }
       }
@@ -59849,6 +59849,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没能保存你的选择：%1$@"
+          }
+        }
+      }
+    },
+    "Couldn't put “%@” in its project. Edit adds it without one. [To-dos Toast]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't put “%@” in its project. Edit adds it without one."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」をプロジェクトに入れられませんでした。編集からプロジェクトなしで追加できます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能把「%@」放进它的项目。点「编辑」可不带项目添加。"
           }
         }
       }

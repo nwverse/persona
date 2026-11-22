@@ -54,6 +54,12 @@ nonisolated enum TodoUpcomingLayout {
         return day.formatted(style)
     }
 
+    /// New To-Do's name where it starts due on a day ("New To-Do Due Tomorrow"): a day heading's +, and the foot's + on
+    /// Today and Upcoming.
+    static func newTodo(due day: String) -> String {
+        String(localized: "New To-Do Due \(day) [To-dos Places]")
+    }
+
     /// The day a heading stands for, for its +; nil for Overdue.
     static func day(_ group: String, calendar: Calendar) -> Date? {
         guard group.hasPrefix(dayPrefix) else { return nil }
@@ -112,7 +118,7 @@ struct TodoUpcomingHeader: View {
                         .tapTargetOutset(.all)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(String(localized: "New To-Do on \(title) [To-dos Places]"))
+                .accessibilityLabel(TodoUpcomingLayout.newTodo(due: title))
                 .accessibilityIdentifier("todos.upcoming.add." + group.id)
             }
         }
@@ -135,7 +141,7 @@ struct TodoPlaceEmptyState: View {
     var body: some View {
         switch place.id {
         case TodoPlaceKind.today:
-            EmptyStateView(symbol: Theme.Icon.today, title: String(localized: "Nothing for today. [To-dos Places]"),
+            EmptyStateView(symbol: Theme.Icon.todoToday, title: String(localized: "Nothing for today. [To-dos Places]"),
                            message: String(localized: "To-dos due today or overdue show up here. [To-dos Places]"),
                            action: comingUp > 0
                                ? (String(localized: "\(comingUp) coming up this week [To-dos Places]"), { show(.upcoming) }) : nil,
@@ -152,41 +158,37 @@ struct TodoPlaceEmptyState: View {
 
 /// Upcoming as a calendar (⋯ › Show as Calendar; proposal 3.3): today's to-dos calendar (`TodoCalendarView`, Day, Week,
 /// Month, drag to reschedule) under its List | Calendar bar, drawing what Upcoming's list holds (open dated to-dos, not
-/// Someday: no "without a due date" to go to, no Show Done), each coloured by the hub's view rather than by its
-/// sessions; what needs the owner elsewhere stays one line above it, the list's guard line.
+/// Someday: no "without a due date" to go to, no Show Done; `TodosListModel.upcomingItems`, worked out once per change),
+/// each coloured by the hub's view rather than by its sessions; what needs the owner elsewhere stays one line above it,
+/// the list's guard line. An empty slot opens the list's New To-Do at that day and hour (`add`), saved on the device
+/// first as the foot's + saves it, never the calendar's own sheet, which waits for the hub.
 struct TodoUpcomingCalendar: View {
     @Binding var asCalendar: Bool
     var model: TodosListModel
     /// The place's name, for its guard line.
     var place: String
     var showAll: () -> Void
+    /// New To-Do from an empty slot: its day, and its hour in Day and Week.
+    var add: (TodoCalendarSlot) -> Void
     var open: (String) -> Void
     @StoredValue("todos.calendar.mode") private var mode = TodoCalendarMode.week
     @State private var anchor = Date.now
-    private let store = TodoStore.shared
-
-    /// Upcoming's to-dos, as its list holds them.
-    private var todos: [TodoItem] {
-        let items = store.byID
-        return TodosPlaces.rows(store.countsSource.filed, in: .upcoming, items: items, now: .now, calendar: TodoCalendar.userCalendar)
-            .compactMap { items[$0.id] }
-    }
 
     var body: some View {
         VStack(spacing: Theme.Space.flush) {
             TodosModeBar(view: Binding(get: { asCalendar ? .calendar : .list }, set: { asCalendar = $0 == .calendar }), mode: $mode,
                          options: false)
             if model.hiddenNeeds > 0 {
-                TodosGuardLine(text: TodosGuardLine.words(model.hiddenNeeds, elsewhere: model.hiddenElsewhere, place: place)) {
+                TodosGuardLine(text: TodosFilter.guardWords(model.hiddenNeeds, elsewhere: model.hiddenElsewhere, place: place)) {
                     Haptics.tap()
                     showAll()
                 }
                 .padding(.horizontal, Theme.Space.page)
             }
-            TodoCalendarView(todos: todos, mode: $mode, anchor: $anchor, open: open, showList: { asCalendar = false },
+            TodoCalendarView(todos: model.upcomingItems, mode: $mode, anchor: $anchor, open: open, showList: { asCalendar = false },
                              state: { item in
                                  TodoUpcomingLayout.calendarState(TodoStore.shared.views[item.id], fallback: item.isDone ? .done : .notStarted)
-                             })
+                             }, add: add)
         }
     }
 }

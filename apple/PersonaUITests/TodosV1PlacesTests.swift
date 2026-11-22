@@ -234,6 +234,38 @@ final class TodosV1PlacesTests: XCTestCase {
         XCTAssertTrue(element("todos.guard").exists, "still Today, with what needs the owner elsewhere")
     }
 
+    /// An hour tapped on Upcoming's calendar opens the list's New To-Do (saved on the device first, as the foot's +),
+    /// due that day at that time, All Day off; never the calendar's own sheet, which waits for the hub.
+    @MainActor func testAnHourOnUpcomingsCalendarStartsANewToDoThen() throws {
+        try launch(try hub, ["-openTodoPlace", "upcoming", "-todos.v1.upcomingCalendar", "YES", "-todos.calendar.mode", "day"])
+        XCTAssertTrue(element("todo.calendar.strip").waitForExistence(timeout: 60), "no calendar day:\n\(app.debugDescription)")
+        hourOnTheCalendar().tap() // the mock's dated to-dos are all day: every hour is empty
+        XCTAssertTrue(element("todos.new.title").waitForExistence(timeout: 10), "no New To-Do:\n\(app.debugDescription)")
+        XCTAssertTrue(element("todos.new.due").exists, "due on the day tapped")
+        XCTAssertEqual(element("todos.new.allDay").value as? String, "0", "at the hour tapped, not all day")
+        XCTAssertFalse(element("todo.calendar.newTitle").exists, "not the calendar's own sheet")
+    }
+
+    /// An hour on the calendar's day, below its strip and its all-day row: by its column when the column is an element.
+    @MainActor private func hourOnTheCalendar() -> XCUICoordinate {
+        let hours = element("todo.calendar.axis")
+        return hours.exists ? hours.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            : app.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.7))
+    }
+
+    /// A project picked in All Projects… that the title menu does not list (the mock's Garden, nothing open in it) is
+    /// listed there all the same, so the menu ticks the place shown.
+    @MainActor func testTheTitleMenuListsAProjectPickedInAllProjects() throws {
+        try launch(try hub, ["-openTodoPlace", "project:garden"])
+        XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
+        let title = titleMenu()
+        XCTAssertTrue(title.waitForExistence(timeout: 20), "no title menu:\n\(app.debugDescription)")
+        _ = app.navigationBars.staticTexts["Garden"].waitForExistence(timeout: 20) // the knowledge base's projects read
+        title.tap()
+        let garden = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Garden'")).firstMatch
+        XCTAssertTrue(garden.waitForExistence(timeout: 10), "Garden is not in the title menu:\n\(app.debugDescription)")
+    }
+
     // MARK: Frames
 
     /// The app again with `args`, on its list or Upcoming's calendar.
@@ -270,9 +302,11 @@ final class TodosV1PlacesTests: XCTestCase {
 
     /// The frames this step draws, for the review (no checks beyond reaching them): `~drawer`, `~menu`, `~today` (the
     /// mock has nothing due today: its empty state), `~kyoto`, a project with nothing open (`~kyoto-empty`, the mock's
-    /// Garden), a project under a choice with its one guard line (`~kyoto-filter`), ⋯ in a project and on Upcoming,
-    /// Upcoming as a list, scrolled under the bar (where it is longer than the screen, as at the largest text size) and
-    /// as a calendar, New To-Do's sheet on Today and in a project, and All Projects… with each project's counts.
+    /// Garden) and its title menu (`~menu-garden`), a project under a choice with its one guard line (`~kyoto-filter`),
+    /// ⋯ in a project and on Upcoming, Upcoming as a list, scrolled under the bar (where it is longer than the screen, as
+    /// at the largest text size: its headings scroll away with their cards) and as a calendar, New To-Do's sheet on
+    /// Today, in a project, on Upcoming, from a day heading's + and from an hour on Upcoming's calendar, and All
+    /// Projects… with each project's counts.
     @MainActor func testFrames() throws {
         guard env["PERSONA_TODOS_FRAMES"] == "1", let hub = env["PERSONA_TODOS_HUB"], let dir = env["PERSONA_SHOTS"] else {
             throw XCTSkip("PERSONA_TODOS_FRAMES=1 with PERSONA_TODOS_HUB and PERSONA_SHOTS")
@@ -286,11 +320,15 @@ final class TodosV1PlacesTests: XCTestCase {
         let frames = Set((env["PERSONA_TODOS_FRAMES_ONLY"] ?? "").split(separator: ",").map(String.init))
         let wants = { (frame: String) in frames.isEmpty || frames.contains(frame) }
         let suffix = env["PERSONA_TODOS_SUFFIX"].map { "-" + $0 } ?? ""
-        let device = UIDevice.current.userInterfaceIdiom == .pad ? "ipad11-landscape-closed" : "iphone-list"
+        let pad = UIDevice.current.userInterfaceIdiom == .pad
+        let device = pad ? "ipad11-landscape-closed" : "iphone-list"
         let shot = { (frame: String) in
-            sleep(2) // the bar's reveal and the rows' marks settle
-            let png = XCUIScreen.main.screenshot().pngRepresentation
-            try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(device)\(frame)\(suffix)-\(scheme).png"))
+            sleep(2) // the bars' reveal and the rows' marks settle
+            let screen = XCUIScreen.main.screenshot()
+            // An iPad on its side gives the portrait buffer with an orientation tag: drawn upright here, untagged, so
+            // every viewer shows it as the screen was.
+            let png = pad ? Self.upright(screen.image) : screen.pngRepresentation
+            try? png?.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(device)\(frame)\(suffix)-\(scheme).png"))
         }
         if UIDevice.current.userInterfaceIdiom == .pad { return try padFrames(hub, extra, wants: wants, shot: shot) }
         let relaunch = { (args: [String]) in try self.relaunch(hub, extra + args) }
@@ -312,6 +350,13 @@ final class TodosV1PlacesTests: XCTestCase {
                                ("~upcoming", "upcoming")] where wants(frame) {
             try relaunch(["-openTodoPlace", place, "-todos.v1.upcomingCalendar", "NO"])
             shot(frame)
+        }
+        if wants("~menu-garden") {
+            try relaunch(["-openTodoPlace", "project:garden"])
+            _ = app.navigationBars.staticTexts["Garden"].waitForExistence(timeout: 10)
+            titleMenu().tap()
+            _ = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Garden'")).firstMatch.waitForExistence(timeout: 5)
+            shot("~menu-garden")
         }
         if wants("~kyoto-filter") {
             try relaunch(["-openTodoPlace", "project:kyoto"])
@@ -338,14 +383,30 @@ final class TodosV1PlacesTests: XCTestCase {
             _ = element("todo.calendar.title").waitForExistence(timeout: 10)
             shot("~upcoming-calendar")
         }
-        // New To-Do in a place: the sheet says where the to-do starts (Today's Due row, the project under the title).
-        for (frame, place) in [("~new-today", "today"), ("~new-kyoto", "project:kyoto")] where wants(frame) {
-            try relaunch(["-openTodoPlace", place, "-todos.v1.upcomingCalendar", "NO"])
-            element("todos.new").tap()
-            _ = element("todos.new.title").waitForExistence(timeout: 10)
-            let tip = app.buttons["Continue"]
+        // New To-Do in a place: the sheet says where the to-do starts (Today's Due row, the project under the title,
+        // Upcoming's tomorrow, a day heading's day, the calendar's hour).
+        let newSheet = { (frame: String) in
+            _ = self.element("todos.new.title").waitForExistence(timeout: 10)
+            let tip = self.app.buttons["Continue"]
             if tip.waitForExistence(timeout: 2) { tip.tap() }
             shot(frame)
+        }
+        for (frame, place) in [("~new-today", "today"), ("~new-kyoto", "project:kyoto"), ("~new-upcoming", "upcoming")]
+            where wants(frame) {
+            try relaunch(["-openTodoPlace", place, "-todos.v1.upcomingCalendar", "NO"])
+            element("todos.new").tap()
+            newSheet(frame)
+        }
+        if wants("~new-day") {
+            try relaunch(["-openTodoPlace", "upcoming", "-todos.v1.upcomingCalendar", "NO"])
+            let days = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'todos.upcoming.add.day:'"))
+            if days.element(boundBy: 1).waitForExistence(timeout: 10) { days.element(boundBy: 1).tap() }
+            newSheet("~new-day")
+        }
+        if wants("~new-slot") {
+            try relaunch(["-openTodoPlace", "upcoming", "-todos.v1.upcomingCalendar", "YES", "-todos.calendar.mode", "day"])
+            if element("todo.calendar.strip").waitForExistence(timeout: 10) { hourOnTheCalendar().tap() }
+            newSheet("~new-slot")
         }
         if wants("~all-projects") {
             try relaunch(["-openTodoPlace", "all"])
@@ -354,6 +415,13 @@ final class TodosV1PlacesTests: XCTestCase {
             _ = element("todos.places.project.project:kyoto").waitForExistence(timeout: 10)
             shot("~all-projects")
         }
+    }
+
+    /// `image` drawn with its orientation applied, at its scale, as a PNG with no orientation tag.
+    @MainActor private static func upright(_ image: UIImage) -> Data? {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        return UIGraphicsImageRenderer(size: image.size, format: format).image { _ in image.draw(at: .zero) }.pngData()
     }
 
     /// Today's To-dos with the gate off, as `main` draws them (plan 2.6.1: before = after): its calendar, which takes

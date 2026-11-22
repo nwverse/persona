@@ -215,7 +215,7 @@ private struct TodoProjectMenu: View {
 /// to the hub with its op id when it can (`TodosListModel.create`). `draft`: what a new to-do the hub turned down said.
 /// Made in a place (`capture`, proposal 3.3 "Capture default"), it says where it starts: its project under the title
 /// ("In Kyoto trip"), or its due date, which the owner can change and give a time (Today's today, Upcoming's tomorrow or
-/// the day whose + was tapped).
+/// the day whose + was tapped; an hour tapped on Upcoming's calendar starts with that time, All Day off).
 struct TodoNewSheet: View {
     var capture: TodoCapture
     /// The project's name, for `capture`'s project.
@@ -225,7 +225,7 @@ struct TodoNewSheet: View {
     @State private var title: String
     @State private var notes: String
     @State private var due: Date
-    @State private var allDay = true
+    @State private var allDay: Bool
     /// The notes' mic, made as the sheet appears (P3: a `@State` initial value does nothing).
     @State private var dictation: Dictation?
     @FocusState private var focused: Bool
@@ -237,9 +237,11 @@ struct TodoNewSheet: View {
         self.add = add
         _title = State(initialValue: draft?.title ?? "")
         _notes = State(initialValue: draft?.notes ?? "")
-        // The time it gets if All Day is turned off: the calendar's for a new to-do (`TodoQuickAddSheet`).
+        // The time it gets if All Day is turned off: the calendar's for a new to-do (`TodoQuickAddSheet`), or the one given.
         let day = capture.day ?? .distantFuture
-        _due = State(initialValue: TodoCalendar.userCalendar.date(bySettingHour: TodoCalendar.morning + 1, minute: 0, second: 0, of: day) ?? day)
+        _allDay = State(initialValue: capture.at == nil)
+        _due = State(initialValue: capture.at
+            ?? TodoCalendar.userCalendar.date(bySettingHour: TodoCalendar.morning + 1, minute: 0, second: 0, of: day) ?? day)
     }
 
     private var ready: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }

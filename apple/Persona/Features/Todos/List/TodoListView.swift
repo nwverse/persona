@@ -70,7 +70,8 @@ struct TodoListView: View {
         Group {
             // A search lists what matches as a list, whatever the place draws.
             if model.place == .upcoming && upcomingCalendar && !model.searching {
-                TodoUpcomingCalendar(asCalendar: $upcomingCalendar, model: model, place: title, showAll: { places.show(.all) }) {
+                TodoUpcomingCalendar(asCalendar: $upcomingCalendar, model: model, place: title, showAll: { places.show(.all) },
+                                     add: { creating = model.capture(on: $0.day, at: $0.time) }) {
                     pushedTodo = TodoDetailRoute(id: $0)
                 }
             } else {
@@ -93,7 +94,7 @@ struct TodoListView: View {
         }
         .detailTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .modifier(TodosSubtitle(model: model, lines: lines))
+        .modifier(TodosSubtitle(model: model, lines: lines, place: title))
         .modifier(TodosViewOptions(model: model, place: title, asCalendar: $upcomingCalendar))
         .pageSearchable(text: $model.query, placement: Self.searchPlacement, prompt: String(localized: "Search To-dos [To-dos Search]"))
         // The search narrows the list or gives it back: it no longer rests where a scroll left it.
@@ -105,7 +106,7 @@ struct TodoListView: View {
         }
         .sheet(item: $creating) { capture in
             // A new to-do the hub turned down comes back with what it said (its toast's Edit).
-            TodoNewSheet(draft: model.draft, capture: capture, projectName: capture.project == nil ? nil : title) {
+            TodoNewSheet(draft: model.draft, capture: capture, projectName: capture.project.map { places.title(.project($0)) }) {
                 model.create(title: $0, notes: $1, due: $2, project: capture.project)
             }
             .onAppear { model.tookDraft() }
@@ -117,7 +118,7 @@ struct TodoListView: View {
                 chatSearch = nil
             }
         }
-        .onChange(of: model.draft) { _, draft in if draft != nil { creating = model.capture() } }
+        .onChange(of: model.draft) { _, draft in if let draft { creating = model.capture(draft) } }
         // The arrangement is kept on this device, as ⋯ left it.
         .onChange(of: model.sort) { _, s in sort = s }
         .onChange(of: model.byProject) { _, on in byProject = on }
@@ -402,11 +403,19 @@ private struct TodosFootBar: ViewModifier {
     var place: String
     @Binding var creating: TodoCapture?
 
-    /// + in the place shown: the to-do starts there (`TodosListModel.capture`).
+    /// + in the place shown: the to-do starts there (`TodosListModel.capture`), and its name says where.
     private func newButton(prominent: Bool) -> TodosNewButton {
-        TodosNewButton(title: model.place.project == nil ? String(localized: "New To-Do [To-dos Actions]")
-                                                       : String(localized: "New To-Do in \(place) [To-dos Places]"),
-                       prominent: prominent) { creating = model.capture() }
+        TodosNewButton(title: Self.newTitle(model.place, place: place), prominent: prominent) { creating = model.capture() }
+    }
+
+    /// "New To-Do in Kyoto trip", "New To-Do Due Today", "New To-Do Due Tomorrow"; in All To-dos, "New To-Do".
+    private static func newTitle(_ shown: TodoPlaceRef, place: String) -> String {
+        switch shown.id {
+        case TodoPlaceKind.today: TodoUpcomingLayout.newTodo(due: String(localized: "Today [To-dos Due]"))
+        case TodoPlaceKind.upcoming: TodoUpcomingLayout.newTodo(due: String(localized: "Tomorrow [To-dos Due]"))
+        default: shown.project == nil ? String(localized: "New To-Do [To-dos Actions]")
+            : String(localized: "New To-Do in \(place) [To-dos Places]")
+        }
     }
 
     private var filters: Bool { model.filters }
@@ -573,14 +582,16 @@ private struct TodosNewButton: View {
 }
 
 /// The title's subtitle (iOS 26 and later; iOS 18 names the choice in its toolbar all the while): once the guard line has
-/// scrolled away, the choice and what needs the owner outside it, so N stays in sight. Its own modifier, so N changing
-/// redraws the title, not the list (P5).
+/// scrolled away, what it said (`TodosListModel.subtitle`), so N stays in sight, in a place too. Its own modifier, so N
+/// changing redraws the title, not the list (P5).
 private struct TodosSubtitle: ViewModifier {
     var model: TodosListModel
     var lines: TodosTopLinesSight
+    /// The place's name, for what needs the owner outside it.
+    var place: String
 
     func body(content: Content) -> some View {
-        content.navigationSubtitleWhenSupported(lines.guardGone ? model.subtitle : "")
+        content.navigationSubtitleWhenSupported(lines.guardGone ? model.subtitle(place: place) : "")
     }
 }
 
@@ -802,7 +813,7 @@ private struct TodosTopLines: View {
                                                   trailing: Theme.Space.flush))
                 }
                 if hidden > 0 {
-                    TodosGuardLine(text: TodosGuardLine.words(hidden, elsewhere: model.hiddenElsewhere, place: place)) {
+                    TodosGuardLine(text: TodosFilter.guardWords(hidden, elsewhere: model.hiddenElsewhere, place: place)) {
                         Haptics.tap()
                         if model.place.isAll { model.choice = .all } else { showAll() }
                     }
@@ -839,13 +850,6 @@ private struct TodosTopLines: View {
 struct TodosGuardLine: View {
     var text: String
     var showAll: () -> Void
-
-    /// The line's words for `hidden` to-dos that need the owner: naming the place when all of them are outside it
-    /// (`elsewhere`), the choice hiding none of its own.
-    static func words(_ hidden: Int, elsewhere: Bool, place: String) -> String {
-        elsewhere ? String(localized: "\(hidden) more need you, not in \(place) [To-dos Places]")
-            : String(localized: "\(hidden) more need you [To-dos Filter]")
-    }
 
     var body: some View {
         Button(action: showAll) {

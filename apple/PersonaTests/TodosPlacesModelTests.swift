@@ -126,6 +126,22 @@ struct TodosPlacesModelTests {
         #expect(TodosPlaces.rows(rows, in: .all, items: [:], now: Self.now, calendar: Self.calendar).count == 4)
     }
 
+    /// A step filed in another project than its open parent goes with its parent, wherever the parent is: the project's
+    /// place, its part of N (the sidebar's and the title menu's, as the hub rolls it up) and All Projects…' open count
+    /// say the same.
+    @Test func aStepInAnotherProjectCountsWithItsParent() {
+        let rows = [Self.filed("plan"),
+                    Self.filed("ryokan", TodoListSection.needsYou, project: "kyoto", partOf: "plan"),
+                    Self.filed("app", project: "weather"),
+                    Self.filed("icon", TodoListSection.needsYou, project: "kyoto", partOf: "app"),
+                    Self.filed("visa", TodoListSection.needsYou, project: "kyoto")]
+        let kyoto = TodosPlaces.rows(rows, in: .project("kyoto"), items: [:], now: Self.now, calendar: Self.calendar)
+        #expect(kyoto.map(\.id) == ["visa"], "the steps go with their parents")
+        #expect(TodoCountsFallback.counts(kyoto).needsYou == 1, "the place's Needs you")
+        #expect(TodoCountsFallback.needsYouByProject(rows)["kyoto"] == 1, "its part of N")
+        #expect(TodosPlaces.openCounts(rows, projects: ["kyoto", "weather"]) == ["kyoto": 1, "weather": 1])
+    }
+
     /// "3 coming up this week": open to-dos due in the seven days after today, whatever day of the week today is.
     @Test func comingUpIsTheNextSevenDays() {
         let items = Dictionary(uniqueKeysWithValues: [(-1), 0, 1, 2, 7, 8].map { n in
@@ -382,9 +398,12 @@ struct TodosPlacesModelTests {
         #expect(list.needsYou == 1, "the place's part of N")
         #expect(list.placeCounts?.inProgress == 1 && list.filters, "the Filter counts the place's rows")
         #expect(list.hiddenNeeds == 1 && list.hiddenElsewhere, "Kyoto trip's to-do needs the owner too")
+        // The title's subtitle, once the line has scrolled away, says what the line said.
+        #expect(list.subtitle(place: "Weather App") == TodosFilter.guardWords(1, elsewhere: true, place: "Weather App"))
         list.choice = .inProgress
         #expect(list.hiddenNeeds == 2 && !list.hiddenElsewhere, "one line: the place's own and Kyoto trip's")
-        #expect(!list.subtitle.isEmpty)
+        #expect(list.subtitle(place: "Weather App") == TodosFilter.guardWords(2, elsewhere: false, place: "Weather App"),
+                "not the choice's: it does not hide Kyoto trip's")
 
         list.choice = .needsYou
         places.show(.today)
@@ -392,10 +411,11 @@ struct TodosPlacesModelTests {
         #expect(list.choice == .all, "another place lands on All")
         #expect(list.isEmpty && list.hiddenNeeds == 2 && list.hiddenElsewhere)
         #expect(!list.filters, "Today draws no Filter")
+        #expect(list.subtitle(place: "Today") == TodosFilter.guardWords(2, elsewhere: true, place: "Today"))
 
         places.show(.all) // Show All
         list.place = places.current
-        #expect(list.hiddenNeeds == 0 && list.groups.count == 3)
+        #expect(list.hiddenNeeds == 0 && list.groups.count == 3 && list.subtitle(place: "All To-dos").isEmpty)
     }
 
     /// A hello that stops listing `todo_places` (a manager reconnecting after the hub restarted) takes nothing away: the
@@ -459,8 +479,14 @@ struct TodosPlacesModelTests {
         list.place = .upcoming
         #expect(list.capture() == TodoCapture(day: Self.calendar.date(byAdding: .day, value: 1, to: today)))
         #expect(list.capture(on: friday.addingTimeInterval(3600)) == TodoCapture(day: friday), "the heading's day")
+        let ten = Self.calendar.date(bySettingHour: 10, minute: 0, second: 0, of: friday)!
+        #expect(list.capture(on: friday, at: ten) == TodoCapture(day: friday, at: ten), "an hour on its calendar")
         list.place = .project("kyoto")
         #expect(list.capture() == TodoCapture(project: "kyoto"))
+        // One the hub turned down starts again due when it was due, wherever the list is now (its toast's Edit).
+        #expect(list.capture(TodoOutbox.Draft(title: "Visa", dueAt: ten)) == TodoCapture(day: friday, at: ten))
+        #expect(list.capture(TodoOutbox.Draft(title: "Visa", dueDate: Self.day(2))) == TodoCapture(day: friday))
+        #expect(list.capture(TodoOutbox.Draft(title: "Visa")) == TodoCapture())
     }
 
     /// A to-do made in Today or in a project is listed there at once ("Saving…"), sent with its due date or its project
@@ -505,6 +531,63 @@ struct TodosPlacesModelTests {
             #expect(list.groups.flatMap(\.keys).contains("/" + new.id), "\(new.place.id): the hub's row, still there")
             #expect(!list.groups.flatMap(\.keys).contains(drawn))
         }
+    }
+
+    /// A to-do made on Upcoming at an hour (All Day off, or an hour tapped on its calendar) is sent due at that moment
+    /// (`due_at`, RFC 3339, with no `due_date`) and listed under its day at once, saying its time, where an all-day row
+    /// under its day says none.
+    @Test func aToDoMadeAtAnHourIsSentDueThenAndListedUnderItsDay() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: Self.list)
+        hub.on("GET", "/api/v1/todos/places", json: Self.placesJSON)
+        let (store, outbox) = await storeWithOutbox(hub)
+        defer { store.forget() }
+        let list = listModel(store, hub: hub, outbox: outbox)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForPlacesTest { list.ready && list.hasRows }
+        list.place = .upcoming
+        #expect(list.row("/t11")?.content.trailing == nil, "all day, under its day's heading")
+        let release = PlacesTestRelease()
+        defer { release.go() }
+        hub.onAsync("POST", "/api/v1/todos") { _ in
+            await release.wait()
+            return Data(#"{"todo":{"id":"n1","title":"Call the plumber","due_at":"2026-11-19T10:00:00Z"}}"#.utf8)
+        }
+        let tomorrow = Self.calendar.date(byAdding: .day, value: 1, to: Self.calendar.startOfDay(for: Self.now))!
+        let ten = Self.calendar.date(bySettingHour: 10, minute: 0, second: 0, of: tomorrow)!
+        #expect(list.create(title: "Call the plumber", notes: nil, due: .at(ten)))
+        let day = "day:" + Self.day(1)
+        try await waitForPlacesTest { list.groups.first { $0.id == day }?.keys.count == 1 }
+        let key = try #require(list.groups.first { $0.id == day }?.keys.first)
+        #expect(list.row(key)?.content.saving == true && list.row(key)?.content.trailing != nil, "at once, saying its time")
+        try await waitForPlacesTest { hub.sent("POST", "/api/v1/todos").count == 1 }
+        let body = try created(hub)
+        #expect(body["due_at"] as? String == "2026-11-19T10:00:00Z" && body["due_date"] == nil, "\(body)")
+    }
+
+    /// An answer given here to a to-do outside the place moves only the numbers: the place's guard line follows at once,
+    /// and the list drawn stays as it is.
+    @Test func anAnswerElsewhereMovesThePlacesLineAlone() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list([
+            TodoViewJSON.row("t01", extra: #""project":"kyoto""#, view: TodoViewJSON.view(TodoListSection.needsYou, asks: ["a1"])),
+            TodoViewJSON.row("t02", extra: #""project":"weather","due_date":"\#(Self.day(0))""#,
+                             view: TodoViewJSON.view(TodoListSection.needsYou, rank: 1, asks: ["a2"])),
+        ], counts: TodoViewJSON.counts(needsYou: 2, inProgress: 0, open: 2, sections: [TodoListSection.needsYou: 2])))
+        hub.on("GET", "/api/v1/todos/places", json: Self.placesJSON)
+        let store = store(hub)
+        defer { store.forget() }
+        let list = listModel(store, hub: hub)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForPlacesTest { list.ready && list.hasRows }
+        list.place = .today
+        #expect(list.groups.flatMap(\.keys) == ["/t02"] && list.hiddenNeeds == 1)
+        let drawn = list.groups
+        store.countsSource.answered("a1", of: "t01")
+        try await waitForPlacesTest { list.hiddenNeeds == 0 }
+        #expect(list.groups == drawn && list.needsYou == 1)
     }
 
     /// The list's writes inside a place move its rows, its numbers, the sidebar's part of N and the notice at once, each

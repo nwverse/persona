@@ -66,7 +66,8 @@ nonisolated enum TodosPlaces {
     /// stops listing `todo_places` mid-run takes none away (`TodoStore` reads them on).
     static func effective(_ place: TodoPlaceRef, places: [TodoPlace], projects: [TodoProject] = []) -> TodoPlaceRef {
         guard !place.isAll else { return place }
-        guard !entries(places).isEmpty else { return .all }
+        // `entries` is empty exactly when the hub lists neither Today nor Upcoming; asked without sorting the projects.
+        guard places.contains(where: { $0.kind == TodoPlaceKind.today || $0.kind == TodoPlaceKind.upcoming }) else { return .all }
         if let slug = place.project {
             return places.contains(where: { $0.id == place.id }) || projects.contains(where: { $0.slug == slug }) ? place : .all
         }
@@ -100,11 +101,14 @@ nonisolated enum TodosPlaces {
     static func groupsByProject(_ place: TodoPlaceRef) -> Bool { place.isAll || place == .today }
 
     /// Each project's open to-dos (`TodoCounts.open`: not closed, not in Someday, a step its parent carries counted with
-    /// its parent), counted on the device from the rows its place holds: All Projects… draws them neutral beside each
-    /// project's part of N. The hub sends a place's N alone.
+    /// its parent, wherever the parent is), counted on the device from the rows its place holds: All Projects… draws them
+    /// neutral beside each project's part of N, which is counted by the same rule. The hub sends a place's N alone.
     static func openCounts(_ rows: [TodoFiled], projects: [String]) -> [String: Int] {
+        let carried = TodoCountsFallback.carried(rows)
         var byProject: [String: [TodoFiled]] = [:]
-        for row in rows { if let slug = row.project, !slug.isEmpty { byProject[slug, default: []].append(row) } }
+        for row in rows where !carried.contains(row.id) {
+            if let slug = row.project, !slug.isEmpty { byProject[slug, default: []].append(row) }
+        }
         var out: [String: Int] = [:]
         for slug in projects { out[slug] = TodoCountsFallback.counts(byProject[slug] ?? []).open }
         return out
@@ -115,7 +119,7 @@ nonisolated enum TodosPlaces {
     /// Whether `row` belongs in `place` (proposal 3.3; plan S2-4: the places filter the one list on the device).
     /// - Today: open, and due today, overdue, or reminding today.
     /// - Upcoming: open with a due date, Someday left out.
-    /// - A project: its rows, closed ones too (the bar's Done).
+    /// - A project: its rows, closed ones too (the Filter's Done).
     static func holds(_ place: TodoPlaceRef, _ row: TodoFiled, item: TodoItem?, now: Date, calendar: Calendar) -> Bool {
         switch place.id {
         case TodoPlaceKind.allValue: return true
@@ -142,12 +146,14 @@ nonisolated enum TodosPlaces {
 
     /// The rows of `rows` that `place` holds, in the order given. A step whose parent the place holds too is left out,
     /// as the list leaves it out (its parent carries it); one whose parent the place leaves out (a dated step of an
-    /// undated to-do, on Today or Upcoming) is a row of its own there.
+    /// undated to-do, on Today or Upcoming) is a row of its own there. A project's place rolls a step up to its open
+    /// parent wherever the parent is, as its part of N, the hub's and the sidebar's, counts it (another project's parent
+    /// carries it there), so the place and every number about it agree (DESIGN_SYSTEM 4.8).
     static func rows(_ rows: [TodoFiled], in place: TodoPlaceRef, items: [String: TodoItem], now: Date, calendar: Calendar)
         -> [TodoFiled] {
         guard !place.isAll else { return rows }
         let held = rows.filter { holds(place, $0, item: items[$0.id], now: now, calendar: calendar) }
-        let carried = TodoCountsFallback.carried(held)
+        let carried = TodoCountsFallback.carried(place.project != nil ? rows : held)
         return carried.isEmpty ? held : held.filter { !carried.contains($0.id) }
     }
 
@@ -177,6 +183,9 @@ final class TodosPlacesModel {
     }
 
     @ObservationIgnored private let deps: Deps
+    /// The last entries worked out and what from: the sidebar's rows, the title menu and the page's follower each read
+    /// them in their bodies, and the projects are sorted by name only when the places or the projects change (P4).
+    @ObservationIgnored private var entriesMemo: (places: [TodoPlace], knowsProjects: Bool, entries: TodosPlaces.Entries)?
 
     init(deps: Deps) {
         self.deps = deps
@@ -184,7 +193,14 @@ final class TodosPlacesModel {
 
     /// The hub's places as the store counts them.
     var places: [TodoPlace] { deps.store.countsSource.places }
-    var entries: TodosPlaces.Entries { TodosPlaces.entries(places, knowsProjects: !deps.projects().isEmpty) }
+    var entries: TodosPlaces.Entries {
+        let places = places
+        let knows = !deps.projects().isEmpty
+        if let m = entriesMemo, m.knowsProjects == knows, m.places == places { return m.entries }
+        let entries = TodosPlaces.entries(places, knowsProjects: knows)
+        entriesMemo = (places, knows, entries)
+        return entries
+    }
     /// The place shown: the owner's pick, or All To-dos once the hub lists no places.
     var current: TodoPlaceRef {
         TodosPlaces.effective(TodoPlaceRef(id: deps.workspace.place), places: places, projects: deps.projects())
@@ -203,7 +219,7 @@ final class TodosPlacesModel {
     }
 
     /// Each of `projects`' open to-dos, by slug (All Projects…, `TodosPlaces.openCounts`): from the current assistant's
-    /// rows as filed, the ones the list draws.
+    /// rows as filed, the ones the list draws. Worked out by the sheet when it opens and when the rows change.
     func openCounts(_ projects: [TodoPlace]) -> [String: Int] {
         TodosPlaces.openCounts(deps.store.countsSource.filed, projects: projects.compactMap(\.project))
     }

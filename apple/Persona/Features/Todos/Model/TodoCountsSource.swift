@@ -3,11 +3,13 @@ import Observation
 import PersonaWire
 
 /// Every To-dos number in one place (#10465, docs/apple/ios.md "Filing and counts"; DESIGN_SYSTEM 4.8, "every place
-/// that collects requests shows the same number"): the To-dos row in the drawer and sidebar, the folded Pages tally, the section bar, the Needs
-/// you header, the places and the to-do's page all read these, so an answer anywhere moves every number in one update.
+/// that collects requests shows the same number"): the To-dos row in the drawer and sidebar, the folded Pages tally, the
+/// Filter's counts, the Needs you header, the places and the to-do's page all read these, so an answer anywhere moves
+/// every number in one update.
 ///
-/// - One manager: the hub's `counts` and places as sent, each project's part of N counted from the rows as filed (as
-///   its place's own bar counts them, so the two never disagree, a failed read of the places included).
+/// - One manager: the hub's `counts` as sent; the hub's places, each project's part of N counted from the rows as filed
+///   (as its place's Filter and Needs you header count them, so they never disagree, a failed read of the places
+///   included).
 /// - Several managers, or a hub that sends no counts: counted from the current assistant's rows as filed
 ///   (`TodoFiling`, `TodoCountsFallback`), since the hub adds every manager's up while the pages list the current
 ///   assistant's; only its own project places are shown, each with its part of N counted the same way.
@@ -166,7 +168,7 @@ final class TodoCountsSource {
     }
 
     /// The counts of `rows`, part of `filed` (a place's, #10465), by the rules a hub without counts is counted by, less
-    /// the answers given here: a place's bar and its Needs you header.
+    /// the answers given here: a place's Filter counts and its Needs you header.
     func counts(of rows: [TodoFiled]) -> TodoCounts {
         var c = TodoCountsFallback.counts(rows)
         lessAnswered(&c, rows)

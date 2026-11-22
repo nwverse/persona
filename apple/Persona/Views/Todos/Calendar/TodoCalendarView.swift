@@ -174,6 +174,9 @@ struct TodoCalendarView: View {
     /// Where each to-do stands, for its colour: given by the V1 list from the hub's view (#10465, Upcoming's calendar);
     /// nil works it out from its Agents' sessions, as the to-dos page always has.
     var state: ((TodoItem) -> TaskState)? = nil
+    /// A tap on an empty slot: given by the V1 list, whose New To-Do saves on the device first (#10465); nil opens the
+    /// calendar's own sheet (`TodoQuickAddSheet`), as the to-dos page always has.
+    var add: ((TodoCalendarSlot) -> Void)? = nil
 
     @StoredValue("todos.calendar.showDone") private var showDone = true
     @State private var adding: TodoCalendarSlot?
@@ -251,6 +254,11 @@ struct TodoCalendarView: View {
         return source.entries(in: range, calendar: calendar, now: .now)
     }
 
+    /// What an empty slot's tap does: the caller's New To-Do, else the calendar's own sheet.
+    private func addAt(_ slot: TodoCalendarSlot) {
+        if let add { add(slot) } else { adding = slot }
+    }
+
     /// Each to-do's state from its Agents' sessions (every session read, so only without `state`).
     private var sessionState: (TodoItem) -> TaskState {
         let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
@@ -266,14 +274,14 @@ struct TodoCalendarView: View {
                     .padding(.top, Theme.Space.s)
                 TodoCalendarTimeline(
                     days: [calendar.startOfDay(for: anchor)], entries: TodoCalendar.on(anchor, entries, calendar: calendar),
-                    narrow: false, showsDayHeader: false, open: openEntry, pickDay: { go(to: $0) }, add: { adding = $0 },
+                    narrow: false, showsDayHeader: false, open: openEntry, pickDay: { go(to: $0) }, add: addAt,
                     moves: moves)
             }
             .id(TodoCalendar.range(.week, anchor: anchor, calendar: calendar).start)
         case .week:
             TodoCalendarTimeline(
                 days: TodoCalendar.days(.week, anchor: anchor, calendar: calendar), entries: entries,
-                narrow: !wide, showsDayHeader: true, open: openEntry, pickDay: { show(.day, $0) }, add: { adding = $0 },
+                narrow: !wide, showsDayHeader: true, open: openEntry, pickDay: { show(.day, $0) }, add: addAt,
                 moves: moves)
                 .padding(.top, Theme.Space.s)
                 .id(TodoCalendar.range(.week, anchor: anchor, calendar: calendar).start)

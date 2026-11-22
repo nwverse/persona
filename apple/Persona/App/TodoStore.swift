@@ -88,6 +88,11 @@ final class TodoStore {
     /// reconnecting, as `TodosV1` keeps the view), so the place the owner picked never widens under them; only a 404 or
     /// 405, or another hub, takes them away (plan S2-1).
     @ObservationIgnored private var placesListed = false
+    /// The client the places route answered "not there" (404, 405): asked again only once the hello lists `todo_places`
+    /// anew, or for another hub or assistant, not on every read of the list (a 304 included).
+    @ObservationIgnored private var placesRefused: APIClient?
+    /// Whether the last hello read listed `todo_places`: one that lists it again asks the route again.
+    @ObservationIgnored private var placesFeature = false
     /// Counts again each `Timing.rulesTick` while a row is filed by the app's own rules, which read the clock.
     @ObservationIgnored private var rulesClock: Task<Void, Never>?
     /// The scene is in front: the timer runs only then (P9).
@@ -325,6 +330,8 @@ final class TodoStore {
         counts = nil
         places = nil
         placesListed = false
+        placesRefused = nil
+        placesFeature = false
         readAt = nil
         readAtKept = nil
         viewsRead = false
@@ -461,10 +468,14 @@ final class TodoStore {
 
     /// The places, read with the list while V1 is on and the hub has listed them in this run: again only when the list
     /// changed (a 304 changes none of its numbers). A hub or manager without the route ("not there"), or a hub that has
-    /// not listed them, has none (All only); any other failure keeps the last until the next read.
+    /// not listed them, has none (All only), and is not asked again until its hello lists them anew; any other failure
+    /// keeps the last until the next read.
     private func readPlaces(_ api: APIClient, listChanged: Bool, generation requested: Int) async {
         guard v1.isOn() else { return }
-        if v1.features().places { placesListed = true }
+        let listed = v1.features().places
+        if listed, !placesFeature { placesRefused = nil }
+        placesFeature = listed
+        if listed { placesListed = true }
         guard placesListed else {
             guard places != nil else { return }
             places = nil
@@ -472,13 +483,15 @@ final class TodoStore {
             recount()
             return
         }
-        guard listChanged || places == nil else { return }
+        guard !api.sameSettingsScope(as: placesRefused), listChanged || places == nil else { return }
         do {
             let read = try await api.todoPlaces()
             guard generation == requested, !Task.isCancelled, read != places else { return }
             places = read
         } catch let error where TodoNotThere.matches(error) {
-            guard generation == requested, places != nil else { return }
+            guard generation == requested else { return }
+            placesRefused = api
+            guard places != nil else { return }
             places = nil
         } catch {
             return

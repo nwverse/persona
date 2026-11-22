@@ -17,6 +17,10 @@ public struct BUISidebarRow<Trailing: View>: View {
     var trailing: Trailing
     @Environment(\.buiTheme) private var theme
 
+    /// The symbol's square and the gap after it, at the type scale: where the label starts, and one step of `indent`.
+    private static func symbolSide(_ scale: CGFloat) -> CGFloat { 20 * scale }
+    private static var gap: CGFloat { 8 } // a generic type has no static stored properties
+
     public init(_ label: String, symbol: String? = nil, detail: String? = nil, isActive: Bool = false, indent: Int = 0,
                 action: @escaping () -> Void, @ViewBuilder trailing: () -> Trailing) {
         self.label = label
@@ -31,7 +35,7 @@ public struct BUISidebarRow<Trailing: View>: View {
     public var body: some View {
         if indent > 0 {
             // The symbol's column and the gap after it, as the row draws them below.
-            row.padding(.leading, CGFloat(indent) * (20 * theme.typeScale + 8))
+            row.padding(.leading, CGFloat(indent) * (Self.symbolSide(theme.typeScale) + Self.gap))
         } else {
             row
         }
@@ -39,12 +43,12 @@ public struct BUISidebarRow<Trailing: View>: View {
 
     private var row: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: Self.gap) {
                 if let symbol {
                     Image(systemName: symbol)
                         .font(.system(size: 15 * theme.typeScale * 0.9, weight: .medium))
                         .foregroundStyle(isActive ? theme.colors.ink : theme.colors.ink2)
-                        .frame(width: 20 * theme.typeScale, height: 20 * theme.typeScale)
+                        .frame(width: Self.symbolSide(theme.typeScale), height: Self.symbolSide(theme.typeScale))
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label)

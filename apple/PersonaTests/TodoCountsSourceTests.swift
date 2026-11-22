@@ -60,7 +60,7 @@ struct TodoCountsSourceTests {
     }
 
     /// One manager: the numbers are the hub's as sent, its places too, All carrying N; a project's part is its rows',
-    /// as its place's own bar says it.
+    /// as its place's Filter and Needs you header say it.
     @Test func oneManagerShowsTheHubsNumbers() async throws {
         let hub = Self.hub()
         // The hub's counts differ from what the rows would give: they are the ones shown.

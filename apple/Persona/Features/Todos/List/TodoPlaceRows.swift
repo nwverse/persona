@@ -26,7 +26,9 @@ struct TodoPlaceRowItem: Identifiable {
 /// Without the hub's places, To-dos alone, as before. A view of its own that reads the places and the place shown, so
 /// they redraw these rows and not the sidebar (P5); the sidebar draws each row as it draws every place to go (`head`,
 /// `row`). With several assistants only the current one's projects are listed, their parts counted from its rows
-/// (`TodoCountsSource`).
+/// (`TodoCountsSource`). The knowledge base's projects are read here too, for the current assistant once the hub's places
+/// have come (the hub answered), so All Projects… (the way to a project with nothing open) is there from the start, not
+/// once To-dos has been opened.
 struct TodoPlaceRows<Head: View, Row: View>: View {
     /// To-dos is the page beside the sidebar: the place it shows is shaded.
     var shown: Bool
@@ -58,6 +60,9 @@ struct TodoPlaceRows<Head: View, Row: View>: View {
                 ForEach(shownRows) { item in row(item) }
             }
         }
+        .task(id: ProjectsRead(switches: AppModel.shared.assistantSwitches, placed: !entries.isEmpty)) {
+            await TodoProjects.shared.load(AppModel.shared.api?.currentAssistantSettings())
+        }
         .sheet(isPresented: $allProjects, onDismiss: {
             guard let place = picked else { return }
             picked = nil
@@ -75,7 +80,7 @@ struct TodoPlaceRows<Head: View, Row: View>: View {
         var out = entries.fixed.map { place in
             let ref = TodoPlaceRef(id: place.id)
             return TodoPlaceRowItem(id: place.id, title: places.title(ref),
-                                    symbol: place.kind == TodoPlaceKind.today ? Theme.Icon.today : Theme.Icon.calendarView,
+                                    symbol: place.kind == TodoPlaceKind.today ? Theme.Icon.todoToday : Theme.Icon.calendarView,
                                     selected: shown && current == ref, run: { go(ref) })
         }
         for (n, place) in entries.projects.enumerated() {
@@ -95,6 +100,12 @@ struct TodoPlaceRows<Head: View, Row: View>: View {
     private func go(_ place: TodoPlaceRef) {
         places.open(place)
         open()
+    }
+
+    /// When the knowledge base's projects are read: for each assistant made current, and as the places come.
+    private struct ProjectsRead: Equatable {
+        var switches: Int
+        var placed: Bool
     }
 }
 
@@ -119,7 +130,7 @@ struct TodoPlacesFold: View {
 
     var body: some View {
         Button {
-            withAnimation(Theme.Motion.state) { folded.toggle() }
+            withAnimation(Theme.Motion.reduced ? nil : Theme.Motion.state) { folded.toggle() }
         } label: {
             if over {
                 glyph

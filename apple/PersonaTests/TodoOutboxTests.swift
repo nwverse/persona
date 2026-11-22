@@ -458,6 +458,21 @@ struct TodoOutboxTests {
         #expect(TodoOutbox.Entry(id: UUID(), hub: "g", todo: "new-1", manager: nil, write: day, made: at, due: at).newItem?.dueDate
             == "2026-11-18")
     }
+
+    /// A new to-do the hub turned down comes back in its sheet (the toast's Edit) due when it was due, a moment or a
+    /// day. One made in a project was turned down for its project (the hub takes the title and date as the app sends
+    /// them): it comes back without it, and the toast says so, or every Add would be turned down again.
+    @Test func aRefusedNewToDoComesBackDueAsItWasWithoutTheProjectItWasRefusedFor() {
+        let at = Date(timeIntervalSince1970: 1_795_090_000)
+        let inProject = TodoOutbox.refusal(.create(title: "Book the ryokan", notes: "Two nights", dueAt: at, project: "kyoto"),
+                                           message: "no knowledge-base project \"kyoto\"")
+        #expect(inProject.draft == TodoOutbox.Draft(title: "Book the ryokan", notes: "Two nights", dueAt: at))
+        #expect(inProject.message.contains("Book the ryokan") && !inProject.message.contains("knowledge-base"), "\(inProject.message)")
+        let dated = TodoOutbox.refusal(.create(title: "Renew passport", notes: nil, dueDate: "2026-11-20"), message: "refused")
+        #expect(dated.draft == TodoOutbox.Draft(title: "Renew passport", dueDate: "2026-11-20") && dated.message == "refused")
+        let tick = TodoOutbox.refusal(.done(true), message: "This to-do is closed")
+        #expect(tick.draft == nil && tick.message == "This to-do is closed")
+    }
 }
 
 /// Waits (up to 5 s) for something the outbox does.
