@@ -29,8 +29,18 @@ nonisolated struct ExtensionSceneBounds: Equatable, Sendable {
         return max(0.25, 0.5 * sqrt(dx * dx + dy * dy + dh * dh))
     }
 
-    var baseHalfExtent: Double {
-        radius * Theme.Scene.fitMargin
+    /// Half the plan's diagonal: the farthest the floor reaches sideways from the middle, whichever way it is turned.
+    var planHalfDiagonal: Double {
+        max(0.25, 0.5 * sqrt((maxX - minX) * (maxX - minX) + (maxY - minY) * (maxY - minY)))
+    }
+
+    /// The half height, in metres, of a view that holds the whole model at this pitch and viewport shape, for every
+    /// yaw: turning the model never changes its size on screen, and a flat home fills the frame instead of the
+    /// sphere around it.
+    func fitHalfHeight(pitchRadians phi: Double, aspect: Double) -> Double {
+        let halfU = planHalfDiagonal
+        let halfV = planHalfDiagonal * abs(sin(phi)) + 0.5 * (maxH - minH) * abs(cos(phi))
+        return max(halfV, halfU / max(aspect, 0.1)) * Theme.Scene.fitMargin
     }
 
     static let fallback = ExtensionSceneBounds(minX: -0.5, maxX: 0.5, minY: -0.5, maxY: 0.5, minH: 0, maxH: 1)
@@ -129,7 +139,7 @@ nonisolated struct ExtensionSceneProjection: Equatable, Sendable {
         let safeW = max(Double(viewport.width), 1)
         let safeH = max(Double(viewport.height), 1)
         let aspect = safeW / safeH
-        orthographicScale = (bounds.baseHalfExtent / max(cam.zoom, 0.05)) / max(min(aspect, 1.0), 0.1)
+        orthographicScale = bounds.fitHalfHeight(pitchRadians: phi, aspect: aspect) / max(cam.zoom, 0.05)
 
         let distance = max(bounds.radius * 3.0, 8.0)
         cameraPosition = target + out * distance

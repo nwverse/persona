@@ -698,6 +698,8 @@ nonisolated enum Theme {
         static let scenePageMinHeight: CGFloat = 280
         static let scenePageMaxHeight: CGFloat = 640
         static let scenePreviewHeight: CGFloat = 200
+        /// What a page's scene adds to the model's own height: room for pins above it and the control bar below.
+        static let scenePageChrome: CGFloat = 120
         static let sceneZoomStep: Double = 1.25
         static let sceneWheelZoomSensitivity: Double = 0.0025
         static let sceneOrbitSensitivity: Double = 0.45
@@ -711,6 +713,7 @@ nonisolated enum Theme {
         static let scenePinStateGap: CGFloat = 6
         static let scenePinTextMaxWidth: CGFloat = 180
         static let scenePinWideCharWidth: CGFloat = 13.5
+        static let sceneLabelHeight: CGFloat = 22
     }
 
     /// UI version 11's 3D `scene` component (#12544): calm architectural material defaults when a shape omits `color`,
@@ -726,7 +729,7 @@ nonisolated enum Theme {
         static let maxZoom: Double = 4.0
         /// Pins draw above the model, nearer ones over farther ones: a pin's layer is this less its depth.
         static let pinLayerBase: Double = 10_000
-        static let fitMargin: Double = 1.12
+        static let fitMargin: Double = 1.1
         static let accessibilityYawStep: Double = 30
         static let accessibilityPitchStep: Double = 15
         static let matteHex: UInt32 = 0xECE7DE
@@ -745,9 +748,10 @@ nonisolated enum Theme {
         static let darkKeyIntensity: CGFloat = 260
         static let lightFillIntensity: CGFloat = 140
         static let darkFillIntensity: CGFloat = 110
-        static let lampIntensity: CGFloat = 220
-        static let lampAttenuationStart: CGFloat = 0.25
-        static let lampAttenuationEnd: CGFloat = 3.8
+        // A lit lamp warms its corner of the room without washing light walls out to white.
+        static let lampIntensity: CGFloat = 90
+        static let lampAttenuationStart: CGFloat = 0.1
+        static let lampAttenuationEnd: CGFloat = 2.4
         static let maxOmniLights: Int = 8
         static let glassOpacity: CGFloat = 0.42
         static var ground: Color { StyleSpec.current.usesGlass ? Theme.groupedCard : Theme.card }

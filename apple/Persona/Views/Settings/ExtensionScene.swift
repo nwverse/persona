@@ -34,6 +34,7 @@ struct ExtensionScene: View {
     @State private var fullScreen = false
     @State private var deferredLink: LinkTarget?
     @State private var deferredAction: (() -> Void)?
+    @State private var pageWidth: CGFloat = 0
     @FocusState private var coverFocused: Bool
 
     var body: some View {
@@ -155,10 +156,19 @@ struct ExtensionScene: View {
                         .stroke(Theme.cardStroke, lineWidth: Theme.Size.hairline)
                 )
                 .padding(.horizontal, cardInset == nil ? Theme.Space.page : Theme.Space.flush)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
                 .containerRelativeFrame(.vertical) { visible, _ in
                     let scale = Theme.sizeScale(typeSize)
-                    return min(max(visible * Theme.Size.scenePageShare,
-                                   Theme.Size.scenePageMinHeight * scale), Theme.Size.scenePageMaxHeight * scale)
+                    var height = visible * Theme.Size.scenePageShare
+                    // A flat home leaves the card's top and bottom empty: as tall as the model needs at the width
+                    // the card has, at the pitch it opens at (tilting never resizes the card), with room for pins
+                    // above and the control bar below.
+                    if let bounds = model?.prepared?.bounds, pageWidth > 0 {
+                        let phi = ExtensionSceneCameraState.resolved(scene.camera).pitch * .pi / 180
+                        let ratio = bounds.fitHalfHeight(pitchRadians: phi, aspect: .infinity) / bounds.planHalfDiagonal
+                        height = min(height, pageWidth * ratio / Theme.Scene.fitMargin + Theme.Size.scenePageChrome * scale)
+                    }
+                    return min(max(height, Theme.Size.scenePageMinHeight * scale), Theme.Size.scenePageMaxHeight * scale)
                 }
                 .accessibilityIdentifier("extension-scene")
             }
@@ -260,7 +270,7 @@ private struct ExtensionSceneStillPreview: View {
                 } else if let asyncImage {
                     Image(uiImage: asyncImage).resizable().scaledToFill()
                 }
-                ExtensionSceneLabelsLayer(labels: scene.labels ?? [], projection: projection)
+                ExtensionSceneLabelsLayer(labels: scene.labels ?? [], projection: projection, scale: 1, avoid: [])
                 ExtensionScenePreviewDotsLayer(pins: scene.pins ?? [], projection: projection)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -378,7 +388,8 @@ private struct ExtensionSceneCanvas: View {
                         }
                     )
 
-                    ExtensionSceneLabelsLayer(labels: labels, projection: projection)
+                    ExtensionSceneLabelsLayer(labels: labels, projection: projection, scale: scale,
+                                              avoid: placements.values.map(\.rect))
 
                     ZStack(alignment: .topLeading) {
                         ForEach(Array(pins.enumerated()), id: \.element.id) { index, pin in
@@ -467,6 +478,7 @@ private struct ExtensionSceneCanvas: View {
         var point: CGPoint
         var depth: Double
         var collapsed: Bool
+        var rect: CGRect
     }
 
     /// Front-to-back screen-space collision pass: frontmost pins keep their full label+state pill, while tightly
@@ -502,12 +514,12 @@ private struct ExtensionSceneCanvas: View {
                          width: compactWidth, height: pillHeight)
                 : candidate
             occupied.append(chosenRect)
-            out[item.pin.id] = PinPlacement(point: item.point, depth: item.depth, collapsed: collides)
+            out[item.pin.id] = PinPlacement(point: item.point, depth: item.depth, collapsed: collides, rect: chosenRect)
         }
         return out
     }
 
-    private static func estimatedTextWidth(_ text: String) -> CGFloat {
+    fileprivate static func estimatedTextWidth(_ text: String) -> CGFloat {
         var total: CGFloat = 0
         for scalar in text.unicodeScalars {
             total += scalar.value >= 0x2E80 ? Theme.Size.scenePinWideCharWidth : Theme.Size.scenePinCharWidth
@@ -553,25 +565,57 @@ private struct ExtensionSceneSummaryAccessibility: View {
     }
 }
 
-private struct ExtensionSceneLabelsLayer: View {
+/// Room labels on the floor. Device pins come first: a label that would cover a pin (or another label) moves just
+/// below it, else just above it, and is left out when neither is clear (VoiceOver still reads every room).
+struct ExtensionSceneLabelsLayer: View {
     var labels: [ExtensionSceneLabel]
     var projection: ExtensionSceneProjection
+    var scale: CGFloat
+    var avoid: [CGRect]
+
+    struct Placed {
+        var text: String
+        var point: CGPoint
+        var depth: Double
+    }
+
+    static func place(_ labels: [ExtensionSceneLabel], projection: ExtensionSceneProjection, scale: CGFloat,
+                      avoid: [CGRect]) -> [Placed] {
+        var occupied = avoid
+        var out: [Placed] = []
+        let height = Theme.Size.sceneLabelHeight * scale
+        for label in labels where !label.text.isEmpty && label.at.count >= 2 {
+            let projected = projection.project(planX: label.at[0], planY: label.at[1], height: label.height ?? 0.02)
+            let width = (ExtensionSceneCanvas.estimatedTextWidth(label.text) + 2 * Theme.Space.s) * scale
+            let rect = { (point: CGPoint) in
+                CGRect(x: point.x - width * 0.5, y: point.y - height * 0.5, width: width, height: height)
+            }
+            var candidates = [projected.point]
+            if let hit = occupied.first(where: { $0.intersects(rect(projected.point)) }) {
+                // just below what is in the way, then just above it
+                candidates.append(CGPoint(x: projected.point.x, y: hit.maxY + height * 0.5 + Theme.Space.xxs))
+                candidates.append(CGPoint(x: projected.point.x, y: hit.minY - height * 0.5 - Theme.Space.xxs))
+            }
+            if let point = candidates.first(where: { c in !occupied.contains { $0.intersects(rect(c)) } }) {
+                occupied.append(rect(point))
+                out.append(Placed(text: label.text, point: point, depth: projected.depth))
+            }
+        }
+        return out
+    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
-                if !label.text.isEmpty, label.at.count >= 2 {
-                    let projected = projection.project(planX: label.at[0], planY: label.at[1], height: label.height ?? 0.02)
-                    Text(label.text)
-                        .font(Theme.Font.labelStrong)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .padding(.horizontal, Theme.Space.s)
-                        .padding(.vertical, Theme.Space.xxs)
-                        .modifier(ExtensionSceneOpaquePill())
-                        .position(projected.point)
-                        .zIndex(-projected.depth - 100)
-                }
+            ForEach(Array(Self.place(labels, projection: projection, scale: scale, avoid: avoid).enumerated()), id: \.offset) { _, placed in
+                Text(placed.text)
+                    .font(Theme.Font.labelStrong)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, Theme.Space.s)
+                    .padding(.vertical, Theme.Space.xxs)
+                    .modifier(ExtensionSceneOpaquePill())
+                    .position(placed.point)
+                    .zIndex(-placed.depth - 100)
             }
         }
         .allowsHitTesting(false)

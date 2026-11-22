@@ -121,6 +121,64 @@ struct ExtensionSceneModelTests {
         #expect(ceilingPt.y < floorPt.y)
     }
 
+    @Test func framingFitsTheProjectedModelAndHoldsItsSizeWhileTurning() {
+        // A flat home, 8 x 6 m and 2.4 m high, in a wide card.
+        let bounds = ExtensionSceneBounds(minX: -4, maxX: 4, minY: -3, maxY: 3, minH: 0, maxH: 2.4)
+        let viewport = CGSize(width: 360, height: 280)
+        let scales = [0.0, 45.0, 90.0, 225.0].map { yaw in
+            ExtensionSceneProjection(bounds: bounds, camera: ExtensionSceneCameraState(yaw: yaw, pitch: 35, zoom: 1),
+                                     viewport: viewport).orthographicScale
+        }
+        // turning never changes its size on screen
+        #expect(scales.allSatisfy { abs($0 - scales[0]) < 1e-9 })
+        // tighter than the sphere around it (radius 5.14 m with the margin)
+        #expect(scales[0] < bounds.radius * Theme.Scene.fitMargin * 0.9)
+        // and every corner of the model is still inside the view, from every side
+        for yaw in stride(from: 0.0, to: 360.0, by: 15.0) {
+            let proj = ExtensionSceneProjection(bounds: bounds, camera: ExtensionSceneCameraState(yaw: yaw, pitch: 35, zoom: 1),
+                                                viewport: viewport)
+            for x in [bounds.minX, bounds.maxX] {
+                for y in [bounds.minY, bounds.maxY] {
+                    for h in [bounds.minH, bounds.maxH] {
+                        let p = proj.project(planX: x, planY: y, height: h).point
+                        #expect(p.x >= 0 && p.x <= viewport.width && p.y >= 0 && p.y <= viewport.height,
+                                "corner (\(x), \(y), \(h)) at yaw \(yaw) projects to \(p)")
+                    }
+                }
+            }
+        }
+        // zooming in still scales the view
+        let zoomed = ExtensionSceneProjection(bounds: bounds, camera: ExtensionSceneCameraState(yaw: 0, pitch: 35, zoom: 2),
+                                              viewport: viewport)
+        #expect(abs(zoomed.orthographicScale - scales[0] / 2) < 1e-9)
+    }
+
+    @Test func roomLabelsMoveOffPinsOrStayOut() {
+        let bounds = ExtensionSceneBounds(minX: -4, maxX: 4, minY: -3, maxY: 3, minH: 0, maxH: 2.4)
+        let proj = ExtensionSceneProjection(bounds: bounds, camera: ExtensionSceneCameraState(), viewport: CGSize(width: 360, height: 280))
+        let spot = proj.project(planX: 0, planY: 0, height: 0.02).point
+        let label = ExtensionSceneLabel(text: "Living room", at: [0, 0], height: 0.02)
+        let height = Theme.Size.sceneLabelHeight
+
+        // nothing in the way: drawn where it stands
+        let free = ExtensionSceneLabelsLayer.place([label], projection: proj, scale: 1, avoid: [])
+        #expect(free.count == 1 && free[0].point == spot)
+
+        // a pin over it: just below the pin
+        let pin = CGRect(x: spot.x - 60, y: spot.y - 16, width: 120, height: 32)
+        let moved = ExtensionSceneLabelsLayer.place([label], projection: proj, scale: 1, avoid: [pin])
+        #expect(moved.count == 1 && abs(moved[0].point.y - (pin.maxY + height * 0.5 + Theme.Space.xxs)) < 1e-9)
+
+        // the room below and above the pin taken too: left out
+        let around = [pin, pin.offsetBy(dx: 0, dy: pin.height), pin.offsetBy(dx: 0, dy: -pin.height)]
+        #expect(ExtensionSceneLabelsLayer.place([label], projection: proj, scale: 1, avoid: around).isEmpty)
+
+        // two labels on the same spot: the second moves rather than covering the first
+        let twice = ExtensionSceneLabelsLayer.place([label, ExtensionSceneLabel(text: "Hall", at: [0, 0], height: 0.02)],
+                                                    projection: proj, scale: 1, avoid: [])
+        #expect(twice.count == 2 && twice[0].point != twice[1].point)
+    }
+
     @Test func geometryBuilderBatchesMixedShapesIntoAtMostSixMaterialGroups() {
         let prepared = ExtensionSceneGeometryBuilder.build(Self.sampleShapes())
         #expect(prepared.batches.count == 6 && prepared.batches.count <= 6)
