@@ -502,13 +502,13 @@ func TestExtensionSandboxMissing(t *testing.T) {
 }
 
 func TestExtensionSandboxMissingOfficialExemption(t *testing.T) {
+	h, _ := extensionTestHub(t)
 	old := sandboxProbe
 	sandboxProbe = func() sandbox.Support {
 		t.Fatal("an exempt extension must not depend on sandbox support")
 		return sandbox.Support{}
 	}
 	t.Cleanup(func() { sandboxProbe = old })
-	h, _ := extensionTestHub(t)
 	ps := h.extensions
 	ps.sandboxes.noDefault = false
 	ms := h.marketsState()

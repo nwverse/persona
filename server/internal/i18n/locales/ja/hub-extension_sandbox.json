@@ -1,5 +1,4 @@
 {
-  "unavailable": "サンドボックスがありません：{why}",
   "not_applicable": "サンドボックスがあるのは、ハブにインストールされハブがプログラムを実行する拡張機能だけです",
   "no_database": "このハブにはデータベースがありません",
   "owner_only": "拡張機能のサンドボックスはハブのマシン上（personad extension sandbox …）かハブの管理画面でのみ変更できます",
