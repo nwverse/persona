@@ -62,6 +62,7 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	compactRecovery  compactRecoveryCache
 	logical          logicalDeviceState
 	a2aWake          chan struct{}
 	a2aLogicalWrites chan struct{}
@@ -558,6 +559,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 			if origin != "" {
 				p["origin"] = origin
+			}
+			if err := s.putInboxPermissionMode(ctx, device, id, p, origin, originKnown); err != nil {
+				return beforeNodeWrite(method, err)
 			}
 			if !originKnown || (origin != "" && origin != OriginTask) || p["is_main"] == true {
 				delete(p, devicewire.LegacyTaskExecution)

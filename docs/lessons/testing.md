@@ -1,5 +1,9 @@
 # Lessons: testing and validation
 
+- A manager route's response contract is also asserted by hub relay tests (#13234). When making a closed plan's
+  dismiss response idempotent, update both the manager's route test and the hub's end-to-end plan lifecycle test;
+  verify the returned state and persisted state, rather than only replacing the expected HTTP status.
+
 - Execute release collection steps against the actual build-directory layout (#11684). The installer is rendered at
   `build-publish/install.sh`, while archives and indexes live in `build-publish/bin/`. A receipt that only hashes files
   that happened to be copied cannot detect an omitted installer. Stop on failed copies, require bootstrap files before

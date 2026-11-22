@@ -225,7 +225,7 @@ rule below. Native clients keep their existing two-entry presentation until they
   keeps them in Needs you (without the Agent's cards). Before, each task listing the Agent showed and counted the same
   approval. The shared cases (`spec/fixtures/entries`) pin it; the whole-client Needs you rule is #5974's.
 
-An open task whose delivery is held for the owner appears in **Needs you** with the reason for the hold.
+An open task whose delivery is held for the owner appears in **Needs you** with the reason for the hold. Only a hold whose `unblock` is `user` does: on a supervised task an owner hold no review followed comes as `supervisor` and stays with the tasks in progress as its supervisor's review until the supervisor opens a decision (#13191, `docs/assistant/agent-work.md` "Closeout"). The web row says "Finished, waiting for your OK to ship" and offers **Open task**.
 A structured decision already shown for the task keeps its controls. A wait assigned to CI, a reviewer or an Agent
 continues to use the normal task placement.
 
@@ -1263,6 +1263,11 @@ A direction carries **notes** the owner writes for it: its rules, the readings t
 content, not memory: memory stays one for every conversation (#9440), and a lesson the owner wants a direction to keep
 goes into its notes. What accepted tasks teach by themselves (with "Learn from finished tasks" on) is kept apart, in the
 direction's project, and never written into the notes (`docs/assistant/todos.md` "Lessons from accepted tasks").
+
+On the web, the same settings group has **Direction and new-chat permissions**, a link to the existing
+`default_permission_mode` control. Directions and new assistant conversations share that default; changing it affects
+new conversations, not a running chat's saved mode. Settings search indexes both the Direction notes and permission
+labels, so either name reaches the control.
 
 The assistant uses the same record through `persona_settings`: `list` exposes each current direction as
 `direction.<id>.prompt` with its name, and `get` returns the complete notes to any assistant conversation. Only the main

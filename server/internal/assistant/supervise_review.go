@@ -360,7 +360,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b.mu.Lock()
 	b.init()
 	var keys []string
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigAllStopped, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigAllStopped, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigParkedDue} {
 		key := t.ID + "|" + k
 		delete(b.pending, key) // reviewed: what waited is answered
 		keys = append(keys, key)

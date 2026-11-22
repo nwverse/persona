@@ -176,7 +176,7 @@ func (n *Node) compactAssistantProc(ctx context.Context, p *assistantProc) error
 	if p.agent == "codex" {
 		err = p.cx.compact(ctx)
 	} else {
-		line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "/compact"}})
+		line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": n.assistantCompactCommand(id)}})
 		err = p.write(line)
 	}
 	if err != nil {
@@ -387,4 +387,23 @@ func clipHandoff(s string, max int) string {
 		return s
 	}
 	return string(r[:max]) + "…"
+}
+
+// assistantCompactCommand supplies configured instructions for explicit and idle Claude compactions. Automatic
+// compaction reads the same instructions from the manager-generated CLAUDE.md.
+func (n *Node) assistantCompactCommand(id string) string {
+	instructions := n.assistantCompactInstructions(id)
+	if instructions == "" {
+		return "/compact"
+	}
+	return "/compact " + instructions
+}
+func (n *Node) assistantCompactInstructions(id string) string {
+	if n.peer != nil {
+		if instructions := n.assistantContext(id).CompactInstructions; instructions != "" {
+			return instructions
+		}
+	}
+	st, _ := n.state.get(id)
+	return st.CompactInstructions
 }
