@@ -1,11 +1,12 @@
 # Plan: the counts people see, computed once in the managers and relayed by the hub (#11679)
 
-**Status: decided 2026-11-22 in #10613 (section 6); steps 1 to 4 have landed.** It is the Stage C item "Derived counts
-computed on the hub and shipped as generated view types" of #10613. #5974 owns what each count means; this plan covers
-where each count is computed and how it reaches the clients. Each step becomes its own issue and PR. A step that changes
-a number people see is marked **visible**, applies a named decision (section 6) and carries the principles self-check.
-**Who it serves:** everyone: Assistant users see one number for each name on every screen and device, Agents users can
-trust that badge, list and Lock Screen agree, and nothing new is drawn.
+**Status: decided 2026-11-22 in #10613 (section 6; one case of D11 awaits the owner's confirmation); steps 1 to 4 have
+landed.** It is the Stage C item "Derived counts computed on the hub and shipped as generated view types" of #10613.
+#5974 owns what each count means; this plan covers where each count is computed and how it reaches the clients. Each
+step becomes its own issue and PR. A step that changes a number people see is marked **visible**, applies a named
+decision (section 6) and carries the principles self-check. **Who it serves:** everyone: Assistant users see one number
+for each name on every screen and device, Agents users can trust that badge, list and Lock Screen agree, and nothing new
+is drawn.
 
 **How the facts were taken:** read on `origin/main` at e4308ecc23 (2026-11-20); nothing was built or run. Open-PR
 overlaps are from the 171 PRs open that day; GitHub lists at most 100 files per PR and 23 reach that cap, so overlaps
@@ -399,7 +400,8 @@ decision.
 ## 6. Decisions
 
 Decided 2026-11-22 in #10613: the owner approved the recommended answers to D1 to D16 and to two questions the review
-added, D17 and D18. Each is recorded here in short; the evidence and the options weighed are in #10613. D1, D6 to D9,
+added, D17 and D18, except one case of D11 whose evidence was wrong: routed terminal questions, which stay counted until
+the owner confirms it. Each is recorded here in short; the evidence and the options weighed are in #10613. D1, D6 to D9,
 D11 and D16 settle what a count includes, the questions #5974 and the To-dos proposals hold; the others are this plan's
 own: which count each surface draws, its scope, and how views travel and are drawn. The ones that change what people see
 are also in `docs/design/DECISIONS.md` (11-22). A decision is reopened only by a new line here that says what changed.
@@ -470,17 +472,22 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   after a disconnect, is not absence (D13). An assistant's surface depends on its own manager, a whole-hub surface on
   every manager, each hub on its own. The kill switch is the manager's capability: reverting step 7a sends every client
   to the fallback.
-- **D11** Delegating and supervisor-held cards. *Decided 2026-11-22 in #10613:* held: listed and answerable under
-  Assistant is looking (D6), and left out of every count until first handed to the owner, as
-  `docs/design/DESIGN_SYSTEM.md` 4.8 ("A question the assistant sees first"),
+- **D11** Delegating and supervisor-held cards. *Decided 2026-11-22 in #10613, routed terminal questions excepted:*
+  held: listed and answerable under Assistant is looking (D6), and left out of every count until first handed to the
+  owner, as `docs/design/DESIGN_SYSTEM.md` 4.8 ("A question the assistant sees first"),
   `docs/assistant/unified-entry.md` ("Asks go to the supervisor first") and north-star's `supervisor_held` already treat
-  them. The state path follows: a session whose only pending cards are held, or whose needs_you comes only from a
-  terminal dialog with a held screen card, is not counted; agentState itself does not change. Default installs see it
-  too: a parsed terminal question from an agent of a supervised task goes to its supervising conversation with or
-  without leaders. Re-checked on `origin/main` on 2026-11-22: since #11195 such a question stays with its supervisor
-  until an explicit `ask_escalate` (askTick skips terminal questions), rather than moving up after `askHoldFor` (5
-  minutes) as #10613's evidence said, so it can stay out of every count for as long as it is held; it stays listed and
-  answerable.
+  them. The state path follows: a session whose only pending cards are held is not counted; agentState itself does not
+  change. *Unconfirmed: routed terminal questions.* A parsed terminal question from an agent of a supervised task goes
+  to its supervising conversation with or without leaders (askLadder in `server/internal/assistant/ask_route.go`), so
+  default installs see it. The owner approved D11 on #10613's evidence that such a question moves up to the owner after
+  `askHoldFor` (5 minutes). That evidence was wrong when it was taken: since #11254, already on main at e4308ecc23 where
+  #10613 read its facts, askTick skips terminal questions, so one stays with its supervisor until an explicit
+  `ask_escalate`, with no time limit. Held, it would leave a supervised task's blocked terminal Agent on no badge
+  anywhere for as long as that lasts, where iOS and Android count it today. Until the owner confirms this case in
+  #10613, a routed terminal question (a `delegating` card of kind `screen`) is not a held card for any count, and
+  neither is the terminal dialog behind it: the fixture PR before step 5 pins it counted, and step 5 gives it no held
+  Why. A confirmation, or a decided bound on the hold, is a new line here; the state path then also leaves out a session
+  whose needs_you comes only from a terminal dialog with a held screen card.
 - **D12** Numbers outside the running app. *Decided 2026-11-22 in #10613:* never a plain `aps.badge` (the relay's alert
   template carries none, and one push group's badge would overwrite the others' share); Android sets no notification
   number; the watch reads no views (`answerReads` unchanged; the phone fills WatchSummary from views at step 9). Numbers
@@ -532,8 +539,9 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
 ### 6.2 What the decisions change in the steps
 
 - **Before step 5**, one PR: the needs-you fixture records the decided definitions: `expected.header` equals the badge's
-  rows (D6), held cards count nowhere (D11), and a `mirror_of` copy counts nowhere once #12645 lands (D1). Its README
-  allows a decided definition change, which each fallback's replay keeps at today's value behind a mark.
+  rows (D6), held cards count nowhere while a routed terminal question still counts, in a case of its own (D11), and a
+  `mirror_of` copy counts nowhere once #12645 lands (D1). Its README allows a decided definition change, which each
+  fallback's replay keeps at today's value behind a mark.
 - **Client fixes before views**, each its own PR, with the UI self-check in light and dark where it is drawn:
   - Android, after #12645 or rebased on it: it reads `hidden_by_directory` into its Session contract and drops those
     sessions where sessions enter its lists, before grouping and counts (D1). That removes the fixture's one
@@ -553,14 +561,14 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   returning an `assistantwire.SessionRef` (the zero ref for a nil session); liveCounts, cardStands and Link's counts
   predicate move too. AgentsNeedsYou returns a Tally record (the zero Tally is empty) of Row records: an ID (the
   fixture's `agent:<machine>/<session>` or `card:<id>`), a Why, and the caller's Needer. Why is a closed type with held,
-  muted and quiet values, and Why.Counted() says whether a row counts (D11). It folds on its own, keying every session
-  and card by `folded_under`, children and sides alike (foldSidesIn folds only sides, so
-  `a_childs_card_counts_under_its_parent` would get the worker's key), and a card is a row of its own only when its
-  `session_id` is empty, since quiet agents' cards survive visiblePendingCards. The quiet and directory-hidden exclusion
-  predicate is exported and applied by the fixture replay; fleetInputsInto adopts it only after #10564, #10593, #10599
-  and #10920 close, since they rewrite its quiet line. foldSidesIn and workingSince stay until step 11. archguard gets a
-  names-only movedClusters row and no contracts.txt entry; the benchmark of 60 agents and 12 cards keeps its allocations
-  (12 allocs/op in #10613's scratch run).
+  muted and quiet values, and Why.Counted() says whether a row counts (D11); a routed terminal question gets no held
+  value until D11's unconfirmed case is decided. It folds on its own, keying every session and card by `folded_under`,
+  children and sides alike (foldSidesIn folds only sides, so `a_childs_card_counts_under_its_parent` would get the
+  worker's key), and a card is a row of its own only when its `session_id` is empty, since quiet agents' cards survive
+  visiblePendingCards. The quiet and directory-hidden exclusion predicate is exported and applied by the fixture replay;
+  fleetInputsInto adopts it only after #10564, #10593, #10599 and #10920 close, since they rewrite its quiet line.
+  foldSidesIn and workingSince stay until step 11. archguard gets a names-only movedClusters row and no contracts.txt
+  entry; the benchmark of 60 agents and 12 cards keeps its allocations (12 allocs/op in #10613's scratch run).
 - **Step 6** has no `surfaces` map (D5) and an optional top-level `totals` (D12); `held` carries the muted and held
   reasons (D11). Quiet rows reach the view only at section 3.2's cost, so until then a client draws them from its own
   list. docs/protocol/counts.md records each refinement with the manager build that applies it (D18).
