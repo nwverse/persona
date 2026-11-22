@@ -316,3 +316,16 @@ func TestTerminalResumeOptionTargetsOnlyItsBoundAgent(t *testing.T) {
 		t.Fatal("released Agent")
 	}
 }
+
+func TestNeedsUserRejectsTerminalControlAsDecision(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	waitsForReview(t, s, f, todo.ID, "The owner can choose the next step.")
+	args := rolloutDecision()
+	const manual = "Resume the Agent on its terminal page"
+	args["recommend"] = manual
+	args["options"] = []DecisionOption{{Label: manual, LeadsTo: "Open the terminal"}, {Label: "Replace", LeadsTo: "Start a new Agent"}}
+	got, err := reviewErr(s, todo.ID, args)
+	if err == nil || !strings.Contains(err.Error(), "terminal page") {
+		t.Fatalf("unexecutable decision accepted: %s, %v", got, err)
+	}
+}

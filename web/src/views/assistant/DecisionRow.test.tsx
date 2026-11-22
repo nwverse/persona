@@ -148,6 +148,15 @@ describe("a decision in the Needs you tray", () => {
     expect(posts).toHaveLength(0);
   });
 
+  it("offers a separate terminal link alongside a replacement decision", async () => {
+    ask = { ...decision, resume_terminal: { machine_id: "demo", session_id: "worker" } };
+    await mount();
+    const open = [...row().querySelectorAll("button")].find((button) => button.textContent === t("assistant-decisionrow.open_terminal"))!;
+    act(() => open.click());
+    expect(opened()).toMatch(/\/s\/demo\/worker\b.*view=term/);
+    expect(posts).toHaveLength(0);
+  });
+
   it("shows the question, the background, what each option leads to and the default, with the recommended option first", async () => {
     await mount();
     expect(row().querySelector("[data-decision-row]")).not.toBeNull();
