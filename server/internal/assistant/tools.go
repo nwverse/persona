@@ -625,6 +625,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
+		if assistantWorkspace(am, a.Cwd) {
+			return "", i18n.Err("rpc-errors.agent_assistant_workspace")
+		}
 		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed), permission: a.PermissionMode} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
