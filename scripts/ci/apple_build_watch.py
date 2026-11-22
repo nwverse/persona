@@ -94,7 +94,7 @@ def swift_frontend_identity(command):
 def duration(value):
     # Darwin ps emits [[dd-]hh:]mm:ss[.fraction]. Bound every field before
     # conversion so hostile counters cannot overflow the diagnostic collector.
-    match = re.fullmatch(r"(?:(\d{1,18})-)?(?:(\d{1,18}):)?(\d{1,18}):(\d{1,18}(?:\.\d{1,18})?)", value)
+    match = re.fullmatch(r"(?:([0-9]{1,18})-)?(?:([0-9]{1,18}):)?([0-9]{1,18}):([0-9]{1,18}(?:\.[0-9]{1,18})?)", value)
     if match is None:
         return None
     try:

@@ -167,6 +167,7 @@ class CompilerResourceTests(unittest.TestCase):
             "1-2-03:04", "00::01", "00:01:02:03",
             "00:1_2", "00:+1", "00:-1", "00:01.", "00:.01",
             "1.5:02", "01:2.5:03", "00:NaN", "00:Infinity",
+            "00:０１", "０１:02", "٠١:02", "00:٠٢", "１-00:00",
         ):
             with self.subTest(value=value):
                 self.assertIsNone(watch.duration(value))
