@@ -110,9 +110,9 @@ def main() -> int:
             actual = output / "AboutBuildRow.kt"
             if not actual.is_file() or actual.read_bytes() != GENERATED.read_bytes():
                 source_lock.fail("Generated Build Kotlin is stale or missing; run generate and review the diff")
-            first = GENERATED.read_bytes()
+            first = actual.read_bytes()
             run(cli, "generate", output, work / "schema-validation-only")
-            if GENERATED.read_bytes() != first:
+            if actual.read_bytes() != first:
                 source_lock.fail("Pinned Build generation is not deterministic")
             validate_consumer_lock()
         print(f"Refract About Build {args.mode}: PASSED ({lock['commit']}); test-only, no runtime")

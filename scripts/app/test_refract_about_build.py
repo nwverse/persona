@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 import tempfile
 from pathlib import Path
@@ -44,6 +46,34 @@ class AboutBuildConsumerTest(unittest.TestCase):
                 self.assertEqual(build.main(), 0)
         self.assertEqual(2, sum("--version" not in command for command in calls))
         self.assertEqual(build.GENERATED.read_bytes(), original)
+
+    def test_check_rejects_different_second_fresh_output(self):
+        original = build.GENERATED.read_bytes()
+        with tempfile.TemporaryDirectory() as temporary:
+            cli = Path(temporary) / "refract"
+            cli.touch()
+            generated_outputs = []
+
+            def generate(command, **kwargs):
+                if "--version" in command:
+                    return mock.Mock(returncode=0, stdout=f"refract 0.1.0 ({build.EXPECTED['commit']})\n")
+                output = Path(command[command.index("--android-out") + 1]) / "AboutBuildRow.kt"
+                output.parent.mkdir(parents=True, exist_ok=True)
+                fresh = original if not generated_outputs else original + b"// nondeterministic second invocation\n"
+                output.write_bytes(fresh)
+                generated_outputs.append(fresh)
+                return mock.Mock(returncode=0)
+
+            stderr = io.StringIO()
+            with mock.patch.object(build, "validate_consumer_lock", return_value=dict(build.EXPECTED)), \
+                    mock.patch.object(build.subprocess, "run", side_effect=generate), \
+                    mock.patch.object(build.sys, "argv", ["refract_about_build.py", "check", "--cli", str(cli)]), \
+                    contextlib.redirect_stderr(stderr):
+                self.assertEqual(build.main(), 1)
+        self.assertEqual(len(generated_outputs), 2)
+        self.assertNotEqual(generated_outputs[0], generated_outputs[1])
+        self.assertEqual(build.GENERATED.read_bytes(), original)
+        self.assertIn("Pinned Build generation is not deterministic", stderr.getvalue())
 
 
 if __name__ == "__main__":
