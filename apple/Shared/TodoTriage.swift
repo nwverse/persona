@@ -91,6 +91,12 @@ nonisolated struct TodoTriageResult: Sendable {
 }
 
 nonisolated enum TodoTriageLogic {
+    /// Legacy raw sealed-compaction detection shared with the app and watch, which do not link PersonaKit.
+    private static func unrecoverableLegacy(_ text: String?) -> Bool {
+        let s = (text ?? "").lowercased()
+        return s.contains("compacted natively") && s.contains("compaction is sealed") && s.contains("to that account")
+    }
+
     /// No activity for this long, nothing of it running: shelved.
     static let shelveAfter: TimeInterval = 48 * 3600
     /// Finished this recently, and not seen since: Just finished; earlier, Done. Seeing it (Got It, or opening it,
@@ -108,7 +114,7 @@ nonisolated enum TodoTriageLogic {
         if todo.doneAt != nil { return .done }
         let active = todo.activeAgents
         if active.isEmpty { return .notStarted }
-        var interrupted = false, limit = false, unread = false, working = false
+        var interrupted = false, limit = false, unread = false, working = false, waiting = false
         for a in active {
             if let e = a.startError, !e.isEmpty { continue } // a failed start counts as stopped
             let s = lookup?(a.machineID, a.sessionID)
@@ -117,11 +123,16 @@ nonisolated enum TodoTriageLogic {
             let stopped = st == .unread || st == .idle
             let error = !(s?.turnError ?? "").isEmpty
             if error, s?.turnErrorKind == "usage_limit", stopped { limit = true }
+            else if error, stopped, (s?.turnErrorKind == "unrecoverable" || s?.turnErrorCode == "compaction_sealed" ||
+                unrecoverableLegacy(s?.turnError)) {
+                interrupted = true
+            }
+            else if st == .working || s?.starting == true { working = true }
+            else if active.count > 1, st != .working, s?.waitsToBeWoken == true { waiting = true }
             else if error, stopped { interrupted = true }
             else if st == .unread { unread = true }
-            else if st == .working || s?.starting == true { working = true }
         }
-        if interrupted { return .interrupted }
+        if interrupted, !working, !waiting, todo.supervision?.state != "parked" { return .interrupted }
         if limit { return .usageLimit }
         if unread { return .unread }
         if working { return .working }

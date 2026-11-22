@@ -203,7 +203,7 @@ and knowledge base (moved from hub 2026-11-04: engine, loops, files in the data 
 | Method | Parameters → result | How hub answers (`assistantLink` in `hub/assistant_link.go`) |
 | --- | --- | --- |
 | `manager.hello` | `{id, host?, os?, arch?, deploy?, version?, capabilities}` → `{assistant:{machine_id, machines, standby?}, done_delay_ms, persona_view?, html_views?, models?, notify?, locale?, mutes?, legacy_config?}` (`owner`, `owner_notes` empty; `legacy_config` only to a built-in manager the hub did not start, [managers.md](managers.md) ("Configuration")) | What the hub knows that the assistant needs: `machines` are the computers this manager owns, `assistant.machine_id` the hub's default machine (its own, else the first, `defaultAssistantMachine`) when this manager owns it, else its first own one (`placedFor`; don't use a stored assistant machine absent from the list), `standby` is `isMember` (member hub in a linked group; primary runs scheduled tasks), `done_delay_ms` is hub.json notify completion delay (how long a task Agent must stop to count as stopped) and `notify` its push timings; `persona_view` and `html_views` are always true, for a manager from before #5509 that still reads them (the cards are always on; a current manager reads neither); `models.launchers` come from this manager's machines' `machines[].launchers`. `capabilities` names `config.own`: the assistant reads its own sections from its `manager.json` (`docs/operations/config.md` ("manager.json")) and lays them over the answer, as the defaults for its settings: `assistant.owner`, `assistant.notes`, `assistant.machine` (used when it is one of this manager's machines), `assistant.launcher`; `kb` (knowledge storage, `docs/assistant/knowledge.md` ("Who owns what")); `agents` (triage limits and initial switches, `docs/assistant/agent-work.md`); the models `ai`, `inbox.triage_ai` / `judge_ai`, `kb.ai`, `inbox.agent.machine` (legacy model baseline, `docs/assistant/model-config.md` ("Who owns models")); `hook_timeout_minutes`. An older hub still sends these from its hub.json, and a section of `manager.json` replaces them. The assistant remembers answers; changes send `manager.updated`, and every answer has it read its `manager.json` again |
-| `device.call` | `{device, method, params}` → that computer's result | node methods (`session.items`, `session.rename`, `session.send`, `session.start`, `session.retire`, `todo.sync_session_tokens`, `assistant.prepare`, `assistant.send`, `assistant.warm`, `assistant.memory`, `assistant.compact`, `assistant.handoff`, `launchers.list`, `launchers.probe`) forwarded unchanged to its node (`Machine.call`). hub answers `devices.list` and `interactions.list` (`device` is `*`: machines' id, name, kind, ssh alias, home, data directory, online state; phone online / what Agents await, `machinesNow`, `phoneClient`, `pendingInteractions`), `sessions.list` is the App's session list (`decorated`) plus `muted` (sessions with push disabled, which triage won't open cards for); `session.get` is node's listed entry (`Machine.session`). Missing machine returns `assistant.ErrNoDevice` |
+| `device.call` | `{device, method, params}` → that computer's result | node methods (`session.items`, `session.rename`, `session.send`, `session.start`, `session.retire`, `todo.sync_session_tokens`, `assistant.prepare`, `assistant.send`, `assistant.warm`, `assistant.memory`, `assistant.compact`, `assistant.handoff`, `launchers.list`, `launchers.probe`) forwarded unchanged to its node (`Machine.call`). hub answers `devices.list` (`device` is `*`: machines' id, name, kind, ssh alias, home, data directory, online state; phone online, `machinesNow`, `phoneClient`) and `interactions.list` (`device` is `*` for all of the manager's pending cards, or a machine id for that machine's plus machineless global cards; answered in-process by `localFleetDeviceCall` when the manager owns the fleet, else by the hub from `pendingInteractions`, never forwarded to a node), `sessions.list` is the App's session list (`decorated`) plus `muted` (sessions with push disabled, which triage won't open cards for); `session.get` is node's listed entry (`Machine.session`). Missing machine returns `assistant.ErrNoDevice` |
 | `app.call` | `{app_id, method, params, timeout_ms?}` → application result (`timeout_ms`: assistant wait, also stopped by hub when due, e.g. a model call) | `interactions` (queue in the manager since 2026-11-05, answered directly in-process, `assistant/fleet_routes.go`; `interactions.owner_action` still belongs to hub, redeeming owner actions before channel answers): `interactions.get {interaction_id}` → `{interaction, ok}` (`ok` is false when no longer waiting, `status` is historical resolved / dismissed / expired / cancelled, empty if nonexistent); `interactions.answer {machine_id, session_id, interaction_id, answers}` → `{ok, status}` (answer still-pending questions for that session from `answers`, recorded as assistant answers; `ok` is false if no longer waiting; errors for non-question or wrong session). `connectors`: `connectors.snapshots` (live signed-in connector state: waiting chats, today's meetings, for snapshots and Today cards, `connectorSnapshots`), `connectors.signed_in` (enabled, signed-in connectors, CLIs, manager.json lark-cli configuration); knowledge sources (2026-11-04, `kbSourcesCall` in `extmgr/kb_sources.go`, types from `internal/kb`, `internal/connector`): `connectors.archives {}` → `{archives:[{id, poll_ms?, sources?, media?, history?, history_anchors?}], items:[id]}` (connectors to read now: signed in, knowledge ingestion on, with docs / meetings / calendars), `connectors.changes {id, cursor, limit}` → `{batches, next, more?}`, `connectors.archive_media {id, ref}` → `{media:{mime, data}}` (up to 20 MB), `connectors.items {id}` → `{items}`, `connectors.doc_title {id, url}` → `{title}`; importing older history, read-only, for a connector declaring it (`docs/protocol/connector-protocol.md` "History"): `connectors.history_chats {id}` → `{chats}`, `connectors.history {id, query}` → `{messages?, older?, newer?, more?, unreadable?, pace?}`, `connectors.history_anchors {id, query}` → `{anchors?, next?, more?, pace?}`. `plugins`: `plugins.assistant` (instructions and machine-specific skills; already-installed skills include only name and summary), `plugins.skills_need` (node reports missing skills, include files next time); model-config plugin calls (2026-11-05, `hub/assistant_models.go`, removed when plugin management moved into a manager): `plugins.presets` → `{presets}` (provider presets), `plugins.voice` → `{plugins:[{id, name, models, default, error?}]}`, `plugins.need_triage` → `{names}` (enabled plugins needing information filtering). `settings`: `settings.list` (hub-owned settings readable / writable through `persona_settings`). `inbox` (hub sources, `inboxAppCall` in hub `inbox.go`; items belong to assistant): `inbox.collect {round}` (pull-to-refresh: hub reads sources immediately, delivers via `inbox.collected`, then answers), `inbox.kick` (request a round soon), `inbox.config` → `{rules, agent_rules, agent, lark_account, translate, extensions}` (triage / AI twin config, `lark.account`, requested translation languages, plugin connectors; assistant computes the translation-model fingerprint); `inbox.mail_body {account_id, uid, mailbox, readable?}` → `{from, to, cc, date, subject, text}` (full mail, no read marking; `readable` preserves paragraphs / links for HTML-only translation); `inbox.mail_flags {account_id, mailbox, uids}` → `{seen, unseen}` (which of at most 200 mails are still in the mailbox, read or not; one in neither is gone; nothing is marked; the Inbox's mail off the latest page, #5993); `inbox.reply_mail {account_id, uid, mailbox, text, send_id}` → `{already?}` (reply using the receiving account); `inbox.reply {source, reply, send_id}` → `{already?}` (connector / Lark plugin replies or doc-status changes, "Can't reply" if connector absent). The same `send_id` sends only once (App-shared `sent_messages`; the records do not expire); repeats return `already`, interrupted partial sends return `assistant_in_doubt` and aren't resent. `inbox.settle {source, threads}` → `{over}`, `inbox.group_tool {source, call}` → `{result}` (avatars removed, truncated to 8 KB; connector `unknown_method` preserved), `inbox.group_fallback {source, fallback}`, `inbox.group_append {source, append, append_id}` → `{thing}` (repeated `append_id` uses the plugin's previous answer without another write). `app.tool {name, arguments, machine_id, session_id}` → `{content, is_error}`: only settings `persona_settings` remains, handling hub-owned settings (triage rules, muted config directories, mail); assistant-owned entries live in `assistant/settings_tool.go` |
 | `notify.request` | `{notification:{id, kind:"assistant", title, body, subtitle, device_id, session_id, asked?}}` → `{ok, devices?, kept?, held?, reason?}` (where it went: `docs/protocol/protocol.md` "Bus"; `notify_user` tells the model whether a device took it) | Push, same per-device settings as Agents (`notifyDone`); `asked` means `notify_user` explicitly requested it, so this chat's turn won't also push "completion" (`notified`). The assistant sends to the Lark bot and plugin channels itself (`channelsPushed` in `assistant/channels_handler.go`); the hub does not |
 | `inbox.changed` | `{items:[{id, source, kind, title}]}`, one-way | Items changed and were saved (up to 50 per report): hub sends plugins `inbox.changed` and App `{"type":"inbox"}` (even without items, for triage-state changes). Runs outside the bus read loop (slow plugins don't block other assistant messages); if backlog exceeds 256, skip plugin delivery for that batch but still push to the App |
@@ -1249,6 +1249,19 @@ directory, changes permissions, or writes assistant instructions into it. Automa
 also stays confined to prepared assistant directories; project-owned skill files are preserved. An empty path uses the prepared assistant
 space as before. The task records the physical directory used, so a changed symlink target requires a fresh chat.
 A node must announce `task_execution`; unsupported nodes refuse the new execution request with `node_outdated`.
+For a scheduled run this is a definite pre-delivery refusal, so the same marshaled request waits for the update instead of
+repeating model preparation or conversation bookkeeping. The default bound is 600 seconds, configurable as
+`assistant.task_execution_wait_seconds` (0–3600) in `manager.json`. Zero records the refusal immediately. A successful update releases exactly one send with
+every required option unchanged. If the bound expires, the run records `task_execution_wait_timeout` as a definite
+not-sent deadline and does not arm the ordinary one-off retry; there is no late queued attempt. Uncertain delivery keeps
+its existing no-replay classification.
+
+Only an attested inherited ordinary task may use the old-node omission. Setting
+`assistant.task_execution_legacy_fallback: false` disables it and makes those tasks wait too. Explicit computer,
+directory, launcher, model, effort, Health and strict-snapshot choices never qualify. Actual omission adds
+`compatibility_fallback: "legacy_task_execution"` to the run's history; `execution.legacy_compatible` alone means only
+that the task was eligible, not that the fallback happened. The web history appends **Used legacy task execution** to
+the run's ordinary outcome and timing detail.
 
 The scheduler and **Run now** share `runTask` and the frozen resolved binding. A reusable conversation must match its
 computer, launcher/agent, model/effort/runtime fingerprint and physical directory. The fingerprint includes the execution
@@ -2734,3 +2747,65 @@ Terminal switch records discard their handoff summary. Deleting the logical chat
 cascades to receipts, segments, inputs and switch context. Physical device aliases
 are locked together during first adoption, preventing concurrent managers from
 creating two logical roots for the same physical chat.
+
+## Idle cache keepalive (#12786)
+
+Settings > Assistant > Keep idle chats ready is on by default. Only the main
+conversation and ids registered in `assistant.leaders` may refresh a provider
+cache. Background supervision, ordinary conversations, workers and subagents are
+excluded. Native Claude-family launchers are supported; Codex and other runtimes
+are not supported yet. The default interval is 55 minutes (1–55), with at most 24
+consecutive requests (1–144). Genuine input resets the count. Turning the switch
+off stops refreshes without breaking an already proxied conversation.
+
+The node resolves the launcher's original endpoint using its existing configuration
+resolution, then places a loopback `ANTHROPIC_BASE_URL` in that process's environment
+and final settings env. Policy or launcher settings that override it simply bypass
+the proxy and cannot produce refreshes. A Persona-managed launcher's `personad launch`
+puts the provider's own `ANTHROPIC_BASE_URL` back into the process environment, so on
+such a launcher only the settings env names the proxy; check the start's settings file
+(`launcher-settings/assistant-compact-<id>.json`) or the node's loopback listeners, not
+the process environment, to see whether a conversation is proxied.
+
+The proxy is mounted only when a process starts, so the role must come with whatever
+starts it. The manager attests it on every send it makes into an existing conversation
+(`assistant.send`, `session.send`, `session.send_once`, A2A delivery): the owner's
+messages, relays, a leader's supervision digests and Inbox continuations alike. Any
+value a caller put there is replaced. A cold compaction restart reads the current role
+from `assistant.model`. A process started without the role (by an older manager)
+runs unproxied until its next start. Ordinary API requests and streamed replies
+are forwarded without changing payload bytes. Provider errors are returned as-is;
+transport failures return a generic 502 without logging upstream error text.
+
+Only a successful request with a reported cache read/write and exclusively one-hour
+cache declarations can be retained. Mixed TTL requests
+are skipped to avoid rewriting an expired five-minute history behind a cache hit on
+the system prefix.
+The provider response's message id must also appear on the CLI's root `message_start`;
+a child Agent's `parent_tool_use_id` never confirms a snapshot. This prevents warming
+an inherited subagent request. Request bodies and necessary headers stay in memory,
+never in a transcript or log. Idle CLI release does not discard the snapshot; explicit
+close, archive, compaction, role removal, or changed model/launcher does. Before
+refreshing, the node rechecks the manager's current role, policy and execution.
+Missing authorization stops refreshes. Compaction requires a subsequent genuine input
+to rearm capture. A restarted node starts empty.
+
+Refreshes replay the captured bytes with only top-level `max_tokens` and `stream`
+changed, preserving whitespace and every tools/system/messages/thinking/cache_control
+byte. No prompt is sent to the CLI, no output is executed, and no conversation,
+notification or supervision event is emitted. Disabled or adaptive thinking uses
+`max_tokens: 1`. Manual thinking keeps the exact budget and uses `budget_tokens + 1`:
+a 32,768-token budget can therefore spend up to **32,769 output tokens per refresh**,
+or **786,456 across 24 refreshes**. This is an upper bound, not an observed charge.
+Unknown or unsupported request shapes are skipped. No retry is made after a refresh
+error or a response without a positive cache read; a genuine request must rearm it.
+
+Refresh requests carry `X-Persona-Request-Kind: cache-keepalive`. The node log contains
+only `cache_keepalive`, session id, UTC time, and cache-read/cache-creation/output token
+counts. The TTL clock starts at provider request start. Expired snapshots are never
+refreshed. Linux fake-upstream tests prove transport and isolation; actual provider
+cache hits require post-deployment gateway usage evidence and are not inferred from
+those tests. No gateway changes or deployment are part of this feature.
+
+Provider references: [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+and [manual thinking constraints](https://platform.claude.com/docs/en/build-with-claude/extended-thinking).

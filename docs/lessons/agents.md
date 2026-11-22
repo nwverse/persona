@@ -1,5 +1,10 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Detached approvals and hub-owned device methods (#12918)
+
+- When a prepared or detachable `PreToolUse` approval releases its hook with `approval.WaitingText` or `approval.ClarifyingText`, Claude Code writes that message into the transcript as an ordinary `tool_result` carrying the original `tool_use_id`. Transcript reconciliation for terminal-answered permissions (`syncPlanInteractions`) must skip `p.prepared != nil` and non-final approval tool results, or the retained 24-hour card is dismissed as `answered_by=terminal` a second later.
+- Methods in `assistantwire.HubDeviceMethods` (`interactions.list`, `sessions.list`, `session.get`) never exist on nodes. Answer them in both `localFleetDeviceCall` and `hub.deviceCallFrom` for concrete machine IDs as well as `DeviceAll`, and never mask a missing manager/hub branch by injecting `f.nodes[DeviceInteractionsList]` in tests.
+
 ## A one-start speed must not become a resume default (#11141)
 
 - Codex's per-start `service_tier` belongs only in the initial argv; validate it against the selected model's catalog rather than trusting Codex to refuse an unadvertised tier.
@@ -14,6 +19,10 @@
   the linked task's current participants, parking and close state, and keep the same cases on every client.
 - Error detection also runs on every ordinary session's last answer. Compare a case-insensitive prefix without
   lowercasing whole answers; an extra allocation per row broke the 8,200-session list's allocation budget.
+- A wire kind/code must drive the invalid label and full subtitle too, not only hide Continue: raw-text-only row checks
+  otherwise show an opaque error as an ordinary interruption. Apply the working/waiting replacement guard to each
+  client's separate To-dos triage as well as the Assistant tray, and recheck permanent refusal in the timed-out resume
+  path before it sends `session.start`.
 - For mock screenshots, combine `MOCK_TASKS=1 MOCK_TASKS_CUT=1 MOCK_TASKS_INVALID=1` with the mock hub. This is UI
   evidence only, not deployment or proof that a real account-sealed conversation has disappeared from Needs you.
 - Keep permanent compaction errors separate from retryable tool-search refusals when merging error handling.
@@ -371,6 +380,8 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - Codex app-server `thread/loaded/list` isn't all chats (2026-11-05, #2118, 0.166): TUI creates `ephemeral: true` threads for small background tasks in the shared managed daemon
   (`threadSource: "thread_title"`, title generation), without `path` / rollout; they stay loaded and `active` after finishing. Ignoring `ephemeral` produces a row of untitled "Working" Codex entries from the same directory and second on the Agents page.
   Skip `ephemeral` before listing sessions; they also don't support `includeTurns` (returns -32600).
+  Remember the answer too (#12517): an app-server-compatible daemon kept 600 to 740 finished helper threads loaded, and reading every one on each 5 s refresh made about 100 reads a second
+  and used up the refresh's 20 s before the real threads were read. Nor read a long list in its own order, or count a read the refresh's time cut short as read: either way the same threads are cut on every refresh.
 - Use the exported `codex app-server` protocol (`codex app-server generate-ts --out <dir>`). Experimental APIs (`thread/backgroundTerminals/*`, `process/*`)
   require `--experimental` to export and `capabilities.experimentalApi: true` in `initialize` to use. Other Codex assistant pitfalls are in `assistant.md`.
   Codex assistant rollout begins with tens of KB of instructions (AGENTS.md, snapshot), with the first user message after 70 KB: scanning only the first 32 KB for a title fails (`readQuickMeta`).
@@ -1580,3 +1591,12 @@ therefore activate its suffix-command parser and append a command to an unrelate
 ACP embedded text resource, keeping the user's own text in its separate text block. Separate text blocks alone are
 insufficient: ACP expands each one. Preserve explicit standalone native commands, and test the captured ACP payload
 for both a new conversation and later messages with command names in the snapshot.
+
+
+## Embedded context has a native transcript envelope (#12813)
+
+Moving auxiliary input out of ACP text blocks protects it from command expansion, but Antigravity serializes the
+embedded resource back into native `USER_INPUT.content` with a `Content of persona-context:///snapshot.txt:` label.
+Removing only the snapshot XML leaves that label visible. Check the native export before blaming replay, and clean
+both the companion and pane history projections. Require the complete leading Persona resource envelope so ordinary
+labels and other URI schemes survive; keep embedded-resource transport intact and version the history format.

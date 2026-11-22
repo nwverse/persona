@@ -24,6 +24,25 @@ List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.r
 Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply and then Just finished right after Unread on Android.
 iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs you → Unread → Working → Seen → Unknown → Not running.
 
+### Needs you that is not counted
+
+D6 and D11 of `docs/plans/plan-derived-counts.md` ("6. Decisions") decided this; `spec/fixtures/needs-you` pins the
+counts. Each client draws the groups in its own D6 change; until then its fixture replay keeps today's numbers behind
+marks.
+
+- **What the count leaves out**: the Agents count (the tab's badge, and the Needs you section's header and filter)
+  leaves out a muted agent, a quiet task's agent and a session whose only pending cards are held. A held card is a
+  `delegating` one: the assistant is still deciding whether it may answer it, or it waits with its task's supervisor,
+  until it is first handed to the owner. A parsed terminal question routed to a supervisor (kind `screen`) still
+  counts, and so does the terminal dialog behind it, until the owner confirms that case of D11.
+- **The state does not change**: a session whose only cards are held stays `needs_you` (`agentState` in
+  `server/internal/assistant/fleet.go` marks a session with any pending card so). The counts leave it out; the state
+  does not.
+- **How such a row reads**: it stays listed in the Needs you section, answerable, in an uncounted group named for why:
+  Muted, or Assistant is looking (quiet tasks' agents and held cards). Its state word stays Needs you, since it still
+  waits for a person. The group's name says why the number leaves it out, so no other state word is added for it. Any
+  other mark, such as a muted agent's look, stays as it is elsewhere.
+
 ### Awaiting your reply (#5096)
 
 "Seen" only says the user looked; it does not say whether the agent still waits on them. A turn that stops on a question
@@ -246,7 +265,9 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
   WS messages have no acknowledgment and are silently dropped on a half-open connection (#1588), so the App keeps reads the hub hasn't recorded yet in `SeenOutbox`: it counts as recorded only when a list from the hub has this session's
   `seen_at` later than the mark. Meanwhile it still shows as Seen and is resent on reconnect; it stops waiting if the session does another turn, starts working or needs you, disappears from the list,
   or still isn't recorded after 10 minutes.
-- Rule: herdr `done` and `seen_at` earlier than the session's last update time (the transcript's modification time, i.e. when the turn ended) → `unread`, otherwise `idle`.
+  Once a list shows it recorded, the mark still holds the rows of other lists that have not read since (the web: 15 seconds), so a row does not turn Unread again until its own list reads;
+  a count read with such a row leaves it out of Unread too (`web/src/lib/seen-outbox.ts`).
+- Rule: herdr `done` and `seen_at` earlier than the session's last update time (the transcript's newest timed line, i.e. when the turn ended; Claude Code's untimed trailing metadata does not count, #5967) → `unread`, otherwise `idle`.
   So if it does another turn after you looked, it becomes Unread again.
 
 ### Ordering

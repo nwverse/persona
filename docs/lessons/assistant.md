@@ -1,7 +1,21 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A command that returns text to the message pipeline must keep its explicit destination (#12700). In the official bot DM, resetting `current` for `/new <first message>` was insufficient: pending-card handlers could consume the text, and parent/root bindings could restore an old target. Carry the fresh Persona target past those handlers while retaining reply metadata for quoted context. Test through `FeishuMessage` with old Persona/Agent bindings, an answerable card and duplicate delivery; keep bare `/new` and ordinary replies as controls.
+
+- A launcher name does not identify an execution backend (#12791). Scheduled Assistant conversations must pass
+  `purpose: assistant` to model discovery and argument-forwarding checks, just as ordinary Assistant messages do.
+  On an exclusive Agent engine, a same-named provider can advertise different models and thinking levels from the
+  shell CLI that actually runs the conversation. Keep their cache partitions separate; do not lower a saved effort
+  to match the wrong catalog. Test the due-run, retry, workout admission and task-edit paths with conflicting
+  catalogs. A structured, deterministic pre-dispatch configuration refusal retains one failure/fallback notice and
+  must not arm an unchanged automatic retry. Similar provider prose and unavailable discovery remain retryable or
+  unknown; retry log counts alone do not establish how many requests reached a model.
+
+- Tool-result images use the user role in transcripts (#12573). A held channel run must check an image's `ToolUseID` before treating it as owner input; otherwise reading a screenshot silently discards the continuation answer. Apply that distinction in the shared classifier used by polling and live session items, and retain the unrelated-turn guard for actual owner text and photos, even after a wake or tool image.
+
 - The node process's PATH is not the assistant's shell PATH (#12483, 2026-11-21). A node started by a service manager has a minimal PATH, while the assistant's Bash runs through the user's login shell, whose PATH restores version-manager directories. `trustedPATH` then saw every `export PATH="<version manager>/bin:$PATH"; lark-cli …` as replacing the executable and asked for a whole-command card, one per call, even for `--help` reads. Ask the login shell for its PATH once (a marked line, cached; retried after a failed ask) and trust those directories; a directory outside that set and every write still ask. Tests seed the Node's login-shell directories instead of starting a shell.
 
+- Threaded extension input needs ordering at admission, before its receipt returns (#12616). Independent receive goroutines can both see an unbound thread and start separate conversations, or restore a binding after a later `/new`. Claim seen, capture the binding generation and reserve the position in one critical section before persisting the receipt; roll the claim and reservation back together if persistence fails. Keep commands, route lookup, start/send and binding ordered without holding the shared state mutex across RPCs. Include the generation in the queue key so rebinding does not wait for an old RPC, and carry that accepted generation through the guarded thread/default binding writes and run creation. A late old response may complete its node request but cannot restore channel state. Keep other keys and unthreaded input independent and remove drained entries. Exercise the public `ChannelReceive` entry: calling the forwarding helper directly does not verify admission.
 - `--allowedTools` and `--disallowedTools` govern approval, not a reliable tool-visibility boundary (#11736). Per-conversation MCP narrowing must filter the actual `sessionMCPTools` response and repeat the same decision at the assistant's call entry (`guardRefusal`). Changing only launch flags can leave stale clients or direct calls with the old tool set; hiding a tool is not a substitute for call admission.
 
 - Automatic-continuation triage and channel mirrors observe the same finished turn concurrently (#11848). The retry wake timestamp is not yet durable when the first mirror runs; gate Feishu and extension mirrors on the session's transient classification and the transient-retry switch instead. Cover several transient attempts, the later terminal error, and delivery with retry disabled.
@@ -481,6 +495,16 @@ card but never reached the supervisor, and a retry that failed with the first tr
 A new signal kind whose key names one event, rather than moving with every turn, belongs in `keyIsNews`; test it with
 the agent's words unchanged, which is the case that hides the drop (the task's agent is usually stopped while it waits).
 
+## New closeout admission needs startup reconciliation (#9914)
+
+Screening a new idle signal does not revisit a stop whose receipt was already told before rollout.
+Reconcile old stopped tasks from the existing supervision sweep, before producing new idle signals,
+with the same current-turn, owner, queue, scheduled-wake and source-freshness checks. Bound transcript
+reads per sweep and remember completed inspections; do not consume an inspection while inventory
+or PR facts are missing, or when the ledger write fails. Persist the stopped-turn identity so a
+restart neither spends another automatic attempt nor hides an already-delivered wake.
+Bind a passive review wait to its final closeout's PR/MR artifact, not a link in an earlier closeout.
+
 ## A card the chat waits on must be in the chat (#4883)
 
 A Persona conversation's first Bash waited three and a half minutes for approval while its card was only inside the
@@ -675,6 +699,10 @@ panic can leave wrong is given back with `defer`; a random walk over the events 
 checks the orders a stress test meets only by chance; and a status that says "at its limit" needs a number in the log
 that can say otherwise: the requests out, the cap, and how long the longest has been out, since none outlives its
 caller's deadline.
+
+## Channel image downloads reuse the bytes already read (#12654)
+
+An inline-size check must not discard a resource that its file fallback immediately needs (#12654). The official Feishu bot read a 4 MiB image twice: the 3 MiB inline decision used the 50 MiB downloader, then saving fetched it again. Decide inline versus file inside the same download lifecycle and upload the existing bytes; pass the image-count decision into that call too. Keep the file ceiling on both routes, distinguish download and upload failures, and turn only the size sentinel into the existing skipped-file result so accompanying words survive. Count actual response-body reads and uploads at the production transport entry, and separately test the asynchronous message entry.
 
 ## A send whose answer came too late may have gone in (2026-11-12)
 

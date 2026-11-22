@@ -863,6 +863,44 @@ exit 65
         result, calls = self.run_preparation(FULL_STATUS="7")
         self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
         self.assertEqual(len(calls), 3)
+        self.assertTrue((self.output / "ios-unit.log").is_file())
+
+    def test_failed_test_batch_retains_console_and_readiness_scope(self):
+        source = SCRIPT.read_text()
+        helpers = source[source.index('cleanup_device() {'):source.index('trap cleanup EXIT')] + '\ntrap cleanup EXIT\n'
+        helpers += source[source.index('test_batch() {'):source.index('\nif [ "$LANE" = all ]')]
+        shell = '''set -euo pipefail
+CI_ROOT="$1"
+OUTPUT="$2"
+DIAGNOSTICS="$3"
+SIM=""
+SIM_NAME="unused phone"
+SIM_STARTED=0
+REGULAR_SIM=""
+REGULAR_SIM_NAME="unused regular"
+REGULAR_SIM_STARTED=0
+ci_run() { shift 2; "$@"; }
+''' + helpers + '''
+test_batch ios-unit 'iOS offline unit and design/token tests' 1800 \
+  bash -c 'printf "synthetic test failure\\n"; exit 65'
+'''
+        for name in ('simulator-readiness.log', 'ios-readiness.xcresult/tests.json',
+                     'diagnostics/live-readiness/observer.status.txt'):
+            path = self.output / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name)
+        for lane in ('ios', 'ios-regressions'):
+            with self.subTest(lane=lane):
+                artifacts = self.root / ('artifacts-' + lane)
+                env = dict(os.environ, PATH=str(self.fixture.bin) + os.pathsep + os.environ['PATH'], LANE=lane)
+                result = subprocess.run(['bash', '-c', shell, '--', str(ROOT), str(self.output), str(artifacts)],
+                                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 65, result.stdout + result.stderr)
+                self.assertEqual((artifacts / 'ios-unit.log').read_text(), 'synthetic test failure\n')
+                self.assertTrue((artifacts / 'simulator-readiness.log').is_file())
+                self.assertTrue((artifacts / 'ios-readiness.xcresult/tests.json').is_file())
+                self.assertTrue((artifacts / 'live-readiness/observer.status.txt').is_file())
+                self.assertFalse((artifacts / 'regular-readiness.log').exists())
 
 
 if __name__ == "__main__":

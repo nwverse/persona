@@ -3019,7 +3019,7 @@
     },
     {
       "name": "invalid_conversation_unfinished",
-      "description": "An account-sealed conversation is not a new owner interruption after replacement, parking, or closing.",
+      "description": "An account-sealed conversation remains an owner interruption even with stale transient retry work.",
       "source": [
         "issue #10399"
       ],
@@ -3055,7 +3055,12 @@
             "updated_at": "2026-11-18T09:00:00Z",
             "turn_error": "This conversation was compacted natively by <account>: the compaction is sealed (encrypted) to that account and can't go to it now",
             "turn_error_kind": "unrecoverable",
-            "turn_error_code": "compaction_sealed"
+            "turn_error_code": "compaction_sealed",
+            "work": {
+              "phase": "blocked",
+              "on": "transient",
+              "wait": "Stale retry"
+            }
           }
         ],
         "interactions": [],
@@ -3135,6 +3140,85 @@
           "task:t-invalid"
         ],
         "shelved": []
+      }
+    },
+    {
+      "name": "invalid_conversation_waiting_replacement",
+      "description": "A replacement waiting on transient work with its own recoverable turn_error keeps an old sealed interruption out of Needs you.",
+      "source": [
+        "issue #10399"
+      ],
+      "derived": true,
+      "input": {
+        "conversation": "main-chat",
+        "main": "main-chat",
+        "now": "2026-11-18T09:00:00Z",
+        "todos": [
+          {
+            "id": "t-invalid",
+            "title": "Fix the build",
+            "origin": "main-chat",
+            "created_at": "2026-11-18T08:00:00Z",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "agents": [
+              {
+                "machine_id": "box",
+                "session_id": "old",
+                "linked_at": "2026-11-18T08:00:00Z"
+              },
+              {
+                "machine_id": "box",
+                "session_id": "new",
+                "linked_at": "2026-11-18T08:30:00Z"
+              }
+            ]
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "box",
+            "session_id": "old",
+            "title": "Previous attempt",
+            "cwd": "/code/app",
+            "status": "done",
+            "state": "unread",
+            "updated_at": "2026-11-18T08:59:00Z",
+            "turn_error": "opaque account transition 7A99",
+            "turn_error_kind": "unrecoverable",
+            "turn_error_code": "compaction_sealed"
+          },
+          {
+            "machine_id": "box",
+            "session_id": "new",
+            "title": "Current attempt",
+            "cwd": "/code/app",
+            "status": "idle",
+            "state": "idle",
+            "updated_at": "2026-11-18T09:00:00Z",
+            "turn_error": "API Error: 503 Service Unavailable",
+            "turn_error_kind": "transient",
+            "waiting": true,
+            "background_tasks_count": 0,
+            "work": {
+              "phase": "blocked",
+              "on": "transient",
+              "wait": "Retrying after a transient failure"
+            }
+          }
+        ],
+        "interactions": [],
+        "plans": {},
+        "feed": []
+      },
+      "expected": {
+        "needs_you": [],
+        "running": [
+          "task:t-invalid"
+        ],
+        "shelved": [],
+        "activity": {
+          "task:t-invalid": null
+        }
       }
     },
     {

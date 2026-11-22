@@ -206,8 +206,14 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertNotIn("ci_run 'Collect regular iPad diagnostic evidence'", script)
         original_script = subprocess.run(['git', 'show', 'af32ff9d9459e4faafbba63cd93b3901bd487534:scripts/ci/apple.sh'], cwd=ROOT,
                                          check=True, capture_output=True, text=True).stdout
+        # The packages lane's PersonaWire tests came later (#12734) and are pinned on their own.
+        wire = script[script.index('  # The wire layer every app target links,'):script.index("  ci_run 'PersonaKit unit tests'")]
+        self.assertIn("ci_run 'PersonaWire unit tests'", wire)
         for lane in ('ios', 'ios-focused', 'ios-regressions'):
-            current = script.replace(' || [ "$LANE" = ios-ipad-diagnostic ]', '').replace('|ios-ipad-diagnostic', '')
+            current = script.replace('      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \\\n      --derived-data "$output/ios-tests" &',
+                                     '      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &')
+            current = current.replace(wire, '')
+            current = current.replace(' || [ "$LANE" = ios-ipad-diagnostic ]', '').replace('|ios-ipad-diagnostic', '')
             current = current.replace('      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; diagnostics="$9"; lane="${10}"; shift 10',
                                       '      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8')
             current = current.replace('      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "$DIAGNOSTICS" "$LANE" "${IOS_COMMON[@]}" \\',
@@ -215,6 +221,7 @@ class AppleCIPreparationTests(unittest.TestCase):
             current = current.replace('        if [ "$lane" = ios-ipad-diagnostic ]; then\n          timeout --kill-after=5s 180s python3 "$ci_root/scripts/ci/apple_diagnostics.py" \\\n            "$output" "$diagnostics" --scope regular || true\n        fi\n', '')
             current = current.replace('    local scope=all\n    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      scope=regular\n    fi\n', '')
             current = current.replace('      "$OUTPUT" "$DIAGNOSTICS" --scope "$scope"', '      "$OUTPUT" "$DIAGNOSTICS"')
+            current = current.replace('  else\n    # pipefail keeps the bounded command\'s failure status. The existing failure\n    # collector retains this allowlisted console log with its xcresult.\n    ci_run "$@" 2>&1 | tee "$OUTPUT/$name.log"\n  fi\n}', '  else\n    ci_run "$@"\n  fi\n}')
             current = current.replace('    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      # A deliberate app-host diagnostic stops after its own strict probe and\n      # observer cleanup; it neither runs nor substitutes for the visual suite.\n      exit 0\n    fi\n', '')
             self.assertEqual(current, original_script)
 
@@ -378,6 +385,20 @@ class AppleCIPreparationTests(unittest.TestCase):
                     self.assertEqual((output / 'native-ssh-trace.log').read_text(), 'synthetic SSH trace\n')
                     self.assertEqual('ssh-lane-continued' in result.stdout, status == 0)
                     self.assertIn('PASS' if status == 0 else 'FAIL', result.stdout)
+
+    def test_persona_wire_tests_run_with_warnings_as_errors(self):
+        # #12734: -warnings-as-errors on a swift test line also applies to the package's dependencies, so the wire
+        # layer the app targets and later packages build on runs its own tests that way in the packages lane.
+        script = SCRIPT.read_text()
+        packages = script.split('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then\n', 1)[1].split('\nfi', 1)[0]
+        commands = [line.strip() for line in packages.splitlines() if "ci_run 'PersonaWire " in line]
+        self.assertEqual(commands, [
+            "ci_run 'PersonaWire unit tests' 300 xcrun swift test --package-path \"$SOURCE/apple/Packages/PersonaWire\" "
+            "--scratch-path \"$SPM/PersonaWire\" -Xswiftc -warnings-as-errors"])
+        sources = ROOT / 'apple/Packages/PersonaWire/Sources/PersonaWire'
+        importing = sorted(f.name for f in sources.glob('*.swift')
+                           if re.search(r'^\s*import\s+PersonaWire\b', f.read_text(encoding='utf-8'), re.M))
+        self.assertEqual(importing, [], 'a file inside PersonaWire imports its own module, a warning (an error in CI)')
 
     def test_existing_integration_exclusions_use_exact_swift_testing_selectors(self):
         script = SCRIPT.read_text()

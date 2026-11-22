@@ -139,6 +139,28 @@ func TestTriageDueByUsesUTCWithoutAUserZone(t *testing.T) {
 }
 
 // Dismissed agents are not the apps' (formatTodo leaves them out): one still asking does not make the to-do wait.
+func TestTriageTransientReplacementWithTurnErrorOutranksOldInterruption(t *testing.T) {
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	td := Todo{ID: "t", CreatedAt: now.Add(-time.Hour), UpdatedAt: now, Agents: []TodoAgent{
+		{MachineID: "m", SessionID: "old"}, {MachineID: "m", SessionID: "replacement"},
+	}}
+	old := proto.Session{MachineID: "m", SessionID: "old", State: proto.StateIdle, Status: proto.StatusDone,
+		TurnError: "Context unavailable", TurnErrorKind: proto.TurnErrorUnrecoverable}
+	replacement := proto.Session{MachineID: "m", SessionID: "replacement", State: proto.StateIdle, Status: proto.StatusIdle,
+		TurnError: "API Error: 503 Service Unavailable", TurnErrorKind: proto.TurnErrorTransient,
+		Work: &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient}}
+	staleInvalid := old
+	staleInvalid.Work = &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient}
+	invalidOnly := td
+	invalidOnly.Agents = td.Agents[:1]
+	if got := triageStatus(invalidOnly, lookupOf([]proto.Session{staleInvalid}), now); got != "interrupted" {
+		t.Fatalf("permanent error with stale transient work: got %q, want interrupted", got)
+	}
+	if got := triageStatus(td, lookupOf([]proto.Session{old, replacement}), now); got != "waiting" {
+		t.Fatalf("transient replacement with its own recoverable error: got %q, want waiting", got)
+	}
+}
+
 func TestTriageLeavesDismissedAgentsOut(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	gone := now.Add(-time.Hour)

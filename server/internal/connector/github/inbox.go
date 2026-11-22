@@ -476,16 +476,17 @@ func (c *Connector) describe(ctx context.Context, n notification, me string) (co
 	}
 	repo, number := m[1], m[2]
 	var it struct {
-		Title     string `json:"title"`
-		State     string `json:"state"`
-		User      user   `json:"user"`
-		Body      string `json:"body"`
-		HTMLURL   string `json:"html_url"`
-		Comments  int    `json:"comments"`
-		Merged    bool   `json:"merged"`
-		Locked    bool   `json:"locked"`
-		Reviewers []user `json:"requested_reviewers"`
-		Teams     []struct {
+		Title          string `json:"title"`
+		State          string `json:"state"`
+		User           user   `json:"user"`
+		Body           string `json:"body"`
+		HTMLURL        string `json:"html_url"`
+		Comments       int    `json:"comments"`
+		ReviewComments int    `json:"review_comments"`
+		Merged         bool   `json:"merged"`
+		Locked         bool   `json:"locked"`
+		Reviewers      []user `json:"requested_reviewers"`
+		Teams          []struct {
 			Slug string `json:"slug"`
 		} `json:"requested_teams"`
 	}
@@ -551,6 +552,20 @@ func (c *Connector) describe(ctx context.Context, n notification, me string) (co
 			}
 			moves = append(moves, message)
 		}
+		// A review can consist entirely of comments on lines. They live on the pull request's comments endpoint.
+		if it.ReviewComments > 0 {
+			var lines []remark
+			path := fmt.Sprintf("/repos/%s/pulls/%s/comments?sort=created&direction=desc&per_page=100", repo, number)
+			if _, err := c.Get(ctx, path, &lines); err != nil {
+				return t, err
+			}
+			for _, cm := range lines {
+				if text := strings.TrimSpace(cm.Body); text != "" && !cm.CreatedAt.IsZero() {
+					message := move{id: fmt.Sprintf("review-comment:%d", cm.ID), who: who(cm.User), text: text, at: cm.CreatedAt, bot: isBot(cm.User)}
+					moves, messages = append(moves, message), append(messages, message)
+				}
+			}
+		}
 	}
 	sort.SliceStable(moves, func(i, j int) bool { return moves[i].at.Before(moves[j].at) })
 
@@ -596,6 +611,9 @@ func (c *Connector) describe(ctx context.Context, n notification, me string) (co
 	state := it.State
 	if it.Merged {
 		state = "merged"
+	}
+	if pr {
+		t.ThreadState = state
 	}
 	fmt.Fprintf(&b, "GitHub %s %s：%s\n状态：%s · 作者 %s", what, ref, it.Title, state, it.User)
 	if rv := logins(it.Reviewers); rv != "" {

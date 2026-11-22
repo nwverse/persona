@@ -500,7 +500,7 @@ never grants supervision. Inventory is descriptive; the execution path checks ag
 | --- | --- |
 | Claude Code / Messages | Node-owned appended system instructions |
 | Codex app-server | Node-owned developer instructions |
-| Antigravity CLI | Isolated worker policy directory; fake runtime tests only |
+| Antigravity CLI | Isolated worker policy directory in each Assistant conversation's own process; checked against agy 1.5.14 (#12883) |
 | OpenCode ACP companion | Isolated worker; pinned-version startup verification of process instructions, preferring ACP append when advertised |
 | OpenCode plugin | No isolated instruction channel; supervision refused |
 | DSH / Grok | No verified separate channel; supervision refused |
@@ -530,6 +530,13 @@ Handle approvals there as well. The desktop and CLI companions can run together.
 with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop RPC is private and version dependent.
 
 ### Antigravity CLI
+
+Assistant context remains an ACP embedded text resource followed by the user's separate text block (#12435).
+Antigravity exports that resource as a leading `Content of persona-context:///snapshot.txt:` line and context XML
+inside `USER_INPUT.content`. Both the companion and pane history readers remove the complete leading Persona resource
+envelope before projecting user text (#12813). Bare labels, other URI schemes and ordinary quoted text retain their
+existing behavior. History format versions invalidate cached items from before this cleanup; native exports and ACP
+payloads are unchanged.
 
 The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
 input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
@@ -640,7 +647,7 @@ and those left out with their description and arguments (#10756).
 
 Implementation: `integrations/antigravity/lib/runtime.js`, `integrations/antigravity/lib/acp.js` and `integrations/antigravity/lib/policy.js`.
 
-For assistant supervision (`caps.supervision_policy`, #11173), the companion stores each supervised session's policy in an isolated directory `<agyDir>/persona-supervision/<rawId>` outside `~/.persona/assistant` and attaches it to that session alone through ACP `additionalDirectories` (verified against `initialize`'s `agentCapabilities.sessionCapabilities.additionalDirectories`). `agy` loads both `AGENTS.md` and `GEMINI.md` from `additionalDirectories` directly into `<user_rules>` on every turn (24,000-byte per-file cap), so policies above 24,000 bytes split cleanly across `AGENTS.md` and `GEMINI.md` up to 48,000 bytes, while shared `~/.persona/assistant/AGENTS.md` and concurrent ordinary chats stay untouched. Policy updates and demotions (`""`) synchronize atomically and reload the session via `session/resume`; busy role changes are refused with `busy`; missing ACP `additionalDirectories` support, unwritable directories or oversized policies fail closed with `assistant_supervision_runtime` before any prompt runs; and `session.close` removes the session's policy directory.
+For assistant supervision (`caps.supervision_policy`, #11173), the companion stores each supervised session's policy in an isolated directory `<agyDir>/persona-supervision/<rawId>` outside `~/.persona/assistant` and attaches it to that session through ACP `additionalDirectories` (verified against `initialize`'s `agentCapabilities.sessionCapabilities.additionalDirectories`). `agy` loads both `AGENTS.md` and `GEMINI.md` from `additionalDirectories` directly into `<user_rules>` on every turn (24,000-byte per-file cap), so policies above 24,000 bytes split cleanly across `AGENTS.md` and `GEMINI.md` up to 48,000 bytes, while shared `~/.persona/assistant/AGENTS.md` and concurrent ordinary chats stay untouched. A directory once attached stays visible to the later sessions of the same `agy` process too (agy 1.5.14, #12883). So the isolation rests on each Assistant conversation running in its own ACP process (`acpFor`) while ordinary Agents share another, and a policy directory is never attached on the shared process. Policy updates and demotions (`""`) synchronize atomically and reload the session via `session/resume`. `agy` reads the rules again on every turn: a rewritten file applies from the next turn, and a directory removed and left out of the resume no longer applies (agy 1.5.14, #12883); busy role changes are refused with `busy`; missing ACP `additionalDirectories` support, unwritable directories or oversized policies fail closed with `assistant_supervision_runtime` before any prompt runs; and `session.close` removes the session's policy directory.
 
 Live text belongs to the ACP prompt currently executing. Queued prompts acquire the stream when they start, with an
 empty boundary. A tool call ends the current text message, so the next message replaces its words in the live slot.

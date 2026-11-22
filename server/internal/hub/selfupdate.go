@@ -573,8 +573,9 @@ func (u *updater) rollback(p update.Pending, reason string) error {
 }
 
 // updateNodes puts the release's node binaries where "Redeploy" takes them (the manager's, internal/devices deploy.go)
-// and has the manager redeploy each connected machine whose node is not this build, one at a time. With node updates
-// off, the hub moved on from version from alone: the builds of that version it leaves in bin/nodes go aside.
+// and has the manager redeploy each connected machine whose node is not this build, one at a time. The builds of
+// version from that carry no version file go aside first, whether node updates are on or off: only the release's own
+// builds may pass for the hub's version (#1825; a platform the release does not carry, #12958).
 func (u *updater) updateNodes(ctx context.Context, staged, from string, development ...*update.DevelopmentCandidate) error {
 	dir := identity.NodeBinaryDir()
 	info, err := os.Lstat(dir)
@@ -597,6 +598,17 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string, developm
 			}
 		}
 		return nil
+	}
+	if !dev && !managed && from != "" && from != u.h.version {
+		// The release replaces the builds of the platforms it carries; one it does not carry (a Windows build next to
+		// a release published without one, a build left by hand) would otherwise stay unlabelled and pass for this
+		// hub's version, and Redeploy would send it to fail the node's self-check. Set aside first, the release's
+		// builds go in below, and the manager fetches the rest from the release of the hub's version.
+		if moved, err := setAsideOldNodes(dir); err != nil {
+			u.h.logf("update: set aside the node builds of %s: %v", from, err)
+		} else if len(moved) > 0 {
+			u.h.logf("update: node builds of %s set aside before the release's go in: %s", from, strings.Join(moved, ", "))
+		}
 	}
 	if dev && from != "" && from != u.h.version {
 		if development[0].BackupID != "" {

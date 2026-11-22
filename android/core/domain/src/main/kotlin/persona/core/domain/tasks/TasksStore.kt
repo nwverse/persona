@@ -25,6 +25,7 @@ import persona.core.contracts.AssistantViewEvent
 import persona.core.contracts.FeedItem
 import persona.core.contracts.FeedResponse
 import persona.core.contracts.Session
+import persona.core.contracts.SessionKey
 import persona.core.contracts.PlanTask
 import persona.core.contracts.RuleSuggestion
 import persona.core.contracts.RuleSuggestionMade
@@ -634,21 +635,40 @@ class TasksStore(
 
     /** The task's agents among [sessions], and its state. */
     fun agentsOf(todo: Todo, sessions: List<Session>): List<Session> =
-        todo.activeAgents.filter { it.dismissedAt == null && it.machineId.isNotBlank() && it.sessionId.isNotBlank() }.map { a ->
-            val listed = sessions.firstOrNull { it.key == a.key }
-            val exact = agentSessions.value[a.key]
-            listOfNotNull(listed, exact).maxByOrNull { it.rev ?: 0L } ?: Session(
-                machineId = a.machineId, sessionId = a.sessionId, title = a.title.orEmpty(), cwd = a.cwd.orEmpty(),
-                agent = a.agent, state = "offline", status = "offline", startError = a.startError,
-            )
+        agentsOf(todo, sessions.associateBy { it.key })
+
+    fun agentsOf(todo: Todo, sessionsByKey: Map<SessionKey, Session>): List<Session> {
+        val exactMap = agentSessions.value
+        return todo.activeAgents.filter { it.dismissedAt == null && it.machineId.isNotBlank() && it.sessionId.isNotBlank() }.map { a ->
+            val listed = sessionsByKey[a.key]
+            val exact = exactMap[a.key]
+            when {
+                listed != null && exact != null -> if ((exact.rev ?: 0L) > (listed.rev ?: 0L)) exact else listed
+                listed != null -> listed
+                exact != null -> exact
+                else -> Session(
+                    machineId = a.machineId, sessionId = a.sessionId, title = a.title.orEmpty(), cwd = a.cwd.orEmpty(),
+                    agent = a.agent, state = "offline", status = "offline", startError = a.startError,
+                )
+            }
         }
+    }
 
     fun stateOf(todo: Todo, sessions: List<Session>): TaskState =
-        agentsOf(todo, sessions).let { a -> TaskState.of(todo, a.map { it.agentState }, a.any { it.interrupted }) }
+        stateOfAgents(todo, agentsOf(todo, sessions))
+
+    fun stateOfAgents(todo: Todo, agents: List<Session>): TaskState {
+        val waiting = agents.size > 1 && agents.any { it.waitsWithoutBackground() && Interruption.of(it)?.invalid != true }
+        val interrupted = agents.any { it.interrupted && (agents.size == 1 || Interruption.of(it)?.invalid == true || !it.waitsWithoutBackground()) }
+        return TaskState.of(todo, agents.map { it.agentState }, interrupted, waiting)
+    }
 
     /** The agent to open first: the one waiting for the user, then one cut off (#1516), then working, then the latest. */
     fun lead(todo: Todo, sessions: List<Session>): Session? =
-        agentsOf(todo, sessions).minWithOrNull(compareBy<Session>({ it.agentState != AgentState.NeedsYou }, { !it.interrupted },
+        leadOfAgents(agentsOf(todo, sessions))
+
+    fun leadOfAgents(agents: List<Session>): Session? =
+        agents.minWithOrNull(compareBy<Session>({ it.agentState != AgentState.NeedsYou }, { !it.interrupted },
             { it.agentState.priority }).thenByDescending { it.updatedAt.orEmpty() })
 
     /** [edits] is "Edit": the plan's tasks as the user changed them, by index (null: as planned). */

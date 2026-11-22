@@ -104,8 +104,7 @@ export function createPiHost(deps, options = {}) {
     supervisionPolicy: Boolean(web),
     ...(listDisk ? {
       launcher: 'pi-web', launcherModel: agent,
-      // A display label is not a model argument. This adapter currently keeps
-      // the model chosen inside pi; choosing its default sends no model/effort.
+      // pi keeps its own model: the display label is not a model argument, so no model/effort is sent.
       launchers: [{ name: 'pi-web', agent, model: agent, models: [{ id: 'default', name: agent, default: true }], permission_modes: ['default', 'bypassPermissions'] }],
     } : {}),
     socketPath: options.socketPath,
@@ -403,7 +402,8 @@ export function createPiHost(deps, options = {}) {
       await refreshDisk(true)
       const path = await diskPath(id)
       const running = live.get(id)
-      if (!running && !path) throw new RpcError('The prepared pi session is not yet available', 'assistant_supervision_runtime')
+      // No prompt went to pi-web before recording the assistant: the switch rolls back.
+      if (!running && !path) throw new RpcError('The prepared pi session is not yet available', 'assistant_supervision_runtime', { delivered: 'none' })
       recordAssistant(running?.ctx.sessionManager || deps.SessionManager.open(path), params)
       if (prompt) await send({ ...params, session_id: id, text: prompt })
     }

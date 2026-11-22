@@ -14,6 +14,9 @@ import type { LauncherModels, PickerTier } from "../lib/launcher-models";
 import { Toasts } from "../ui/atoms";
 import { t } from "../i18n";
 
+// no decoder in jsdom: a picture within the limits goes as it is, as lib/image-scale.ts sends one (#12973)
+vi.mock("../lib/image-scale", () => ({ fitPicture: async (b: Blob) => ({ mime: b.type, data: "AQID" }) }));
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const before = { ...getState() };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -287,6 +290,8 @@ describe("New Agent preparation ownership", () => {
     expect(launch.attachments[0].url).not.toBe(original);
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(launch.attachments[0].url);
     await tick();
+    // the scaler (lib/image-scale.ts) is a lazy chunk that loads in real time
+    await act(async () => void (await vi.waitFor(() => expect(messages().length).toBeGreaterThan(0))));
     expect(messages()[0].body).toMatchObject({ text: "Submitted task", images: [{ mime: "image/png" }] });
     await click("Reopen start");
     expect(document.querySelector('img[alt="later.png"]')).not.toBeNull();

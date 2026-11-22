@@ -41,6 +41,7 @@ import (
 )
 
 type Node struct {
+	cacheWarm     *assistantCachePool
 	segmentStarts segmentStarts
 	runtimeUsage  runtimeUsageReports
 
@@ -162,6 +163,7 @@ type Node struct {
 	listPush     listPush // the list pushes sends ask for, one build at a time (notifySessionsSoon)
 	watches      map[string]*watch
 	agyRevisions *lru[string, agyRevision]
+	agyMetas     *lru[string, agyMetaEntry]
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
@@ -403,6 +405,8 @@ type Node struct {
 	// phones: Phone Screen (#9314, phonescreen.go): on a Mac, the one live screen whose phone shows a window on a virtual
 	// display, through Persona Input. nil elsewhere: screen.phone answers unavailable.
 	phones *phoneScreens
+	// toolchain caches on-demand read-only development toolchain probes (machine_toolchain.go).
+	toolchain toolchainState
 }
 
 func New(version string) (*Node, error) {
@@ -766,6 +770,11 @@ func (n *Node) hubSupportsPersonaContracts() bool { return n.hubPersonaContracts
 
 func (n *Node) handle(ctx context.Context, method string, params json.RawMessage) (result any, resultErr error) {
 	if n.reload != nil {
+		if method == "assistant.send" || method == "assistant.warm" {
+			if err := n.reload.enterHeadless(); err != nil {
+				return nil, err
+			}
+		}
 		done, err := n.reload.enter()
 		if err != nil {
 			return nil, err // explicitly not started: the manager can retry on the replacement
@@ -822,12 +831,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	if method == "session.send" || method == "codex.answer" {
 		ctx = promptLanguageContext(ctx, params)
 	}
-	if method == "sessions.history" {
-		return n.handleSessionsHistory(ctx, method, params)
+	if r, err, ok := nodeMethods.answer(n, ctx, methodName(method), params); ok { // registered from its domain's file (node_methods.go)
+		return r, err
 	}
 	switch method {
-	case "workspace.naming.resolve":
-		return n.resolveWorkspaceNaming(ctx, params)
 	case "session.share_projection":
 		return n.shareProjection(ctx, params)
 	case devicewire.MethodCloseTaskTerminal:
@@ -842,53 +849,23 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return n.peer != nil && n.peer.Call(ctx, devicewire.MethodAuthorizeTaskTerminal, a, &out) == nil && out.Authorized
 		})
 		return map[string]string{"status": status}, nil
-	case "node.doctor": // the machine page's "What this computer can do": node doctor's report, read-only unless {"fix":true} (doctor_rpc.go)
-		return n.doctor(ctx, params, false)
-	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
-		return n.doctor(ctx, params, true)
-	case proto.MethodMachineNetwork: // on-demand read-only network & proxy diagnostics (machine_network.go)
-		return n.machineNetwork(ctx, params)
-	case proto.MethodRoutineCheck:
-		return routineCheck(ctx, params)
-	case proto.MethodSecretRun: // the password card's commands (secretrun.go); its params never reach the decoding below
-		return n.secretRun(ctx, params)
-	case proto.MethodSecretStage: // a hand-off's values, kept for its start's ticket (secretenv.go); the same
-		return n.secretStageCall(params)
-	case proto.MethodModelHTTP: // an API connection's request sent through this computer (modelhttp.go); the same
-		return modelHTTP(ctx, params)
-	case proto.MethodModelRun: // an API purpose's request answered by a launcher here (modelrun.go); the same
-		return n.modelRun(ctx, params)
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
-	}
-	switch method { // sharing the clipboard with the phone (clipshare/)
-	case methodClipboardGet:
-		return clipshare.Get(ctx)
-	case methodClipboardSet:
-		return clipshare.Set(ctx, params)
 	}
 	switch method { // the machine page's diagnosis and cache cleanup (machdiag/)
 	case proto.MethodMachineDiagnose:
 		return machdiag.Diagnose(ctx, params)
 	case proto.MethodMachineCleanup:
 		return machdiag.Cleanup(ctx, params)
-	}
-	switch method { // listening port inspector and process management (machine_procs.go)
-	case proto.MethodMachinePorts:
-		return n.machinePorts(ctx, params)
-	case proto.MethodMachineProcesses:
-		return n.machineProcesses(ctx, params)
-	case proto.MethodMachineProcessKill:
-		return n.machineProcessKill(ctx, params)
-	}
-	switch method { // the machine page's services and containers (machine_services.go)
-	case proto.MethodMachineServices:
-		return n.machineServices(ctx, params)
-	case proto.MethodMachineServiceLogs:
-		return n.machineServiceLogs(ctx, params)
-	case proto.MethodMachineServiceAction:
-		return n.machineServiceAction(ctx, params)
+	case proto.MethodMachineStorage:
+		return n.machineStorage(ctx, params)
+	case proto.MethodMachineStorageHotspots:
+		return n.machineStorageHotspots(ctx, params)
+	case proto.MethodMachineStorageCleanup:
+		return n.machineStorageCleanup(ctx, params)
+	case proto.MethodMachineToolchain:
+		return n.machineToolchain(ctx, params)
 	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
 		return n.codexTakeoverCall(ctx, method, params)
@@ -901,6 +878,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		TaskTerminalToken       string        `json:"task_terminal_token"`
 		Cwd                     string        `json:"cwd"`
 		Launcher                string        `json:"launcher"`
+		RequireLauncher         bool          `json:"require_launcher"`
 		AgentType               string        `json:"agent_type"`
 		Model                   string        `json:"model"`
 		ModelFingerprint        string        `json:"model_fingerprint"`
@@ -971,6 +949,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		FollowsSetting   bool                          `json:"follows_setting"`
 		Interject        bool                          `json:"interject_background"`
 		Public           bool                          `json:"public"` // a public mention turn: no owner live snapshot on this input
+		CacheKeepalive   *assistantwire.CacheKeepalive `json:"cache_keepalive"`
 		IdleCompaction   *assistantwire.IdleCompaction `json:"idle_compaction"`
 		MessageSource    *proto.MessageSource          `json:"message_source"`
 		ClientMsgID      string                        `json:"client_msg_id"`
@@ -1491,7 +1470,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err := n.runnableLauncher(ctx, p.Name, p.Configured); err != nil {
 			return nil, err
 		}
-		agent, err := n.launcherModelCheck(withStartHost(ctx, p.Host), p.Name, p.Model) // for a start in that host (#8140)
+		agent, err := n.launcherModelCheck(withLauncherPurpose(withStartHost(ctx, p.Host), p.Purpose), p.Name, p.Model)
 		return map[string]any{"agent": agent}, err
 	case "launchers.zshrc": // the hub importing this machine's claude aliases as providers (zshrc.go)
 		return n.zshrcLaunchers()
@@ -1539,6 +1518,13 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		_ = json.Unmarshal(params, &a)
 		return n.resolveWorkspace(p.Path, a.Terminal)
 	case "sessions.list":
+		var handoff struct {
+			UpdateHandoff *bool `json:"update_handoff"`
+		}
+		_ = json.Unmarshal(params, &handoff)
+		if handoff.UpdateHandoff != nil {
+			n.reload.SetHeadlessPaused(*handoff.UpdateHandoff)
+		}
 		n.configured()          // a hub that lists without engine.use keeps herdr (engine.go)
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
@@ -1700,7 +1686,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			tab = *p.TabName
 		}
 		rp := runtimeStartParams{Cwd: p.Cwd, Prompt: taskFallback(taskFallback(p.Prompt, p.TaskInstructions), p.TaskAttachments), Launcher: p.Launcher, Model: p.Model, PermissionMode: p.PermissionMode,
-			Effort: p.Effort, WorkspaceID: p.WorkspaceID, Resume: p.ResumeSessionID, AgentType: p.AgentType, ClientMsgID: p.ClientMsgID, Images: runtimeImages}
+			Effort: p.Effort, WorkspaceID: p.WorkspaceID, Resume: p.ResumeSessionID, AgentType: p.AgentType, ClientMsgID: p.ClientMsgID, Images: runtimeImages, RequireLauncher: p.RequireLauncher}
 		if p.ResumeSessionID == "" && runtimeIDRe.MatchString(p.SessionID) {
 			// The id the hub named for a new session goes to a runtime too (Paseo gives its session that id, #8130), so
 			// a start whose answer never comes back is found by it there as in a terminal (the start below).
@@ -1853,7 +1839,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		sctx = withClientMsgID(sctx, opts.ClientMsgID) // a runtime's message goes under it (assistant_runtime.go)
 		sctx = withSupervisionDelivery(sctx, p.MessageSource)
 		send := func() (string, error) {
-			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{Strict: p.TaskExecution, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, (modelExecution{Strict: p.TaskExecution, PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, CacheKeepalive: p.CacheKeepalive, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 		}
 		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
 			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
@@ -1980,7 +1966,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 			return n.sendWithEcho(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, p.MessageSource, nil, func() error { // echo.go
 				if n.isAssistantSession(p.SessionID) {
-					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
+					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, CacheKeepalive: p.CacheKeepalive, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 					return err
 				}
 				if opts.CompactIfFull { // compact_before_send.go (#11137)
@@ -2750,7 +2736,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return map[string]any{"sent": true}, nil
 	case "workspace.close":
 		return n.closeTaskSpace(ctx, p.TaskID, p.WorkspaceID)
+	case "assistant.cache_clear":
+		n.forgetCacheWarm(p.SessionID)
+		return ok(nil)
 	case "session.close":
+		n.forgetCacheWarm(p.SessionID)
 		var closeParams struct {
 			Force bool `json:"force"`
 		}
@@ -2777,6 +2767,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		defer unlock()
 		return ok(n.close(ctx, p.SessionID))
 	case "session.archive", "session.unarchive": // the tool's own archive (archive.go); a runtime's answers above
+		if method == "session.archive" {
+			n.forgetCacheWarm(p.SessionID)
+		}
 		return n.nativeArchive(ctx, p.SessionID, method == "session.archive")
 	}
 	return nil, fmt.Errorf("unknown method %s", method)
