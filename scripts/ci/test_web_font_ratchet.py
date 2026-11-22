@@ -218,6 +218,17 @@ class CheckoutTests(unittest.TestCase):
         found = [violation for violation in ratchet.check(ROOT) if violation.startswith(targets)]
         self.assertEqual(found, [])
 
+    def test_usage_bars_and_popover_use_named_font_tokens(self):
+        targets = (
+            "web/src/views/UsageBars.tsx",
+            "web/src/views/UsagePopover.tsx",
+        )
+        counts = ratchet.scan(ROOT)
+        self.assertEqual({path: counts.get(path, 0) for path in targets}, {path: 0 for path in targets})
+        prefixes = tuple(path + ":" for path in targets)
+        found = [violation for violation in ratchet.check(ROOT) if violation.startswith(prefixes)]
+        self.assertEqual(found, [])
+
     def test_this_checkout_is_at_its_baseline(self):
         self.assertEqual(ratchet.check(ROOT), [])
 
