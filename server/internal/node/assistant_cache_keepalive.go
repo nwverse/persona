@@ -13,6 +13,7 @@ type assistantCacheEntry struct {
 	proxy     *cachewarm.Proxy
 	launcher  string
 	execution modelExecution
+	stamp     string
 	checking  bool
 }
 type assistantCachePool struct {
@@ -36,10 +37,10 @@ func (n *Node) cacheWarmPool() *assistantCachePool {
 	}
 	return n.cacheWarm
 }
-func (b *assistantCachePool) put(id string, p *cachewarm.Proxy, launcher string, e modelExecution) {
+func (b *assistantCachePool) put(id string, p *cachewarm.Proxy, launcher string, e modelExecution, stamp string) {
 	b.mu.Lock()
 	old := b.entries[id]
-	b.entries[id] = &assistantCacheEntry{proxy: p, launcher: launcher, execution: e}
+	b.entries[id] = &assistantCacheEntry{proxy: p, launcher: launcher, execution: e, stamp: stamp}
 	b.mu.Unlock()
 	if old != nil {
 		old.proxy.Close()
@@ -104,11 +105,19 @@ func (n *Node) sweepCacheWarm(ctx context.Context, now time.Time) {
 		}
 		e.checking = true
 		go func(id string, e *assistantCacheEntry) {
-			defer func() { b.mu.Lock(); e.checking = false; b.mu.Unlock() }()
+			defer func() {
+				b.mu.Lock()
+				e.checking = false
+				if b.entries[id] == e && e.proxy.Discarded() {
+					delete(b.entries, id)
+					e.proxy.Close()
+				}
+				b.mu.Unlock()
+			}()
 			check, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			launcher, current, known := n.assistantModelDecision(check, id)
-			if !known || launcher != e.launcher || current.Model != e.execution.Model || current.Effort != e.execution.Effort || current.Fingerprint != e.execution.Fingerprint {
+			if n.executionFingerprint(e.launcher, modelExecution{}) != e.stamp || !known || launcher != e.launcher || current.Model != e.execution.Model || current.Effort != e.execution.Effort || current.Fingerprint != e.execution.Fingerprint {
 				e.proxy.Forget()
 				return
 			}

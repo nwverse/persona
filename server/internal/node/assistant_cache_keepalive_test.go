@@ -38,17 +38,20 @@ for line in raw.splitlines():
  if line.startswith('data: '):
   e=json.loads(line[6:])
   if e.get('type')=='message_start':
-   print(json.dumps({'type':'stream_event','parent_tool_use_id':None,'event':e}),flush=True)
+   print(json.dumps({'type':'stream_event','parent_tool_use_id':('tool_child' if os.environ.get('CACHE_FIXTURE_CHILD') else None),'event':e}),flush=True)
 `
 
 func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 	for _, tc := range []struct {
 		name                     string
 		allow, managed, override bool
-	}{{"main", true, false, false}, {"lead", true, true, false}, {"background", false, false, false}, {"worker", false, false, false}, {"child", false, false, false}, {"override", true, false, true}} {
+	}{{"main", true, false, false}, {"lead", true, true, false}, {"background", false, false, false}, {"worker", false, false, false}, {"child", false, false, false}, {"override", true, false, true}, {"inherited-child", true, false, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := cliTest(t)
 			t.Setenv("CACHE_FIXTURE_BODY", cacheFixtureBody)
+			if tc.name == "inherited-child" {
+				t.Setenv("CACHE_FIXTURE_CHILD", "1")
+			}
 			writeFile(t, filepath.Join(f.dir, "cache-wire.py"), cacheWirePython)
 			script := strings.Replace(fakeCLI, `*'"type":"user"'*)`, `*'"type":"user"'*)`+"\n      python3 \"$CLI_FAKE_DIR/cache-wire.py\" \"$@\"", 1)
 			writeScript(t, filepath.Join(os.Getenv("HOME"), "bin", "claude"), "#!/bin/sh\n"+script, 0o700)
@@ -103,12 +106,19 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 			}
 			cliWait(t, "fake provider request", func() bool { return requests.Load() == 1 })
 			f.idle(t, p.id)
+			var barrier any
+			if err := f.n.peer.Call(context.Background(), "assistant.lark", map[string]any{}, &barrier); err != nil {
+				t.Fatal(err)
+			}
+			f.fh.mu.Lock()
+			deltas, interactions := len(f.fh.deltas), len(f.fh.asked)
+			f.fh.mu.Unlock()
 			before := f.file("stdin.jsonl")
 			if p.cacheProxy != nil {
 				p.cacheProxy.Tick(context.Background(), time.Now().Add(55*time.Minute), policy, true)
 			}
 			want := int32(0)
-			if tc.allow && !tc.override {
+			if tc.allow && !tc.override && tc.name != "inherited-child" {
 				want = 1
 			}
 			if marked.Load() != want {
@@ -116,6 +126,33 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 			}
 			if f.file("stdin.jsonl") != before {
 				t.Fatal("keepalive wrote a conversation input")
+			}
+			if err := f.n.peer.Call(context.Background(), "assistant.lark", map[string]any{}, &barrier); err != nil {
+				t.Fatal(err)
+			}
+			f.fh.mu.Lock()
+			afterDeltas, afterInteractions := len(f.fh.deltas), len(f.fh.asked)
+			f.fh.mu.Unlock()
+			if afterDeltas != deltas || afterInteractions != interactions {
+				t.Fatal("refresh emitted UI output or interactions")
+			}
+			if want == 1 {
+				f.fh.mu.Lock()
+				f.fh.model = map[string]any{"launcher": launcher, "model": e.Model, "model_fingerprint": e.Fingerprint, "cache_keepalive": policy}
+				f.fh.mu.Unlock()
+				f.n.sweepCacheWarm(context.Background(), time.Now().Add(110*time.Minute))
+				waitCacheCheck(t, f.n, p.id)
+				if marked.Load() != 2 {
+					t.Fatal("authorized reaper did not refresh")
+				}
+				f.fh.mu.Lock()
+				delete(f.fh.model, "cache_keepalive")
+				f.fh.mu.Unlock()
+				f.n.sweepCacheWarm(context.Background(), time.Now().Add(165*time.Minute))
+				waitCacheCheck(t, f.n, p.id)
+				if marked.Load() != 2 {
+					t.Fatal("removed role kept refreshing")
+				}
 			}
 			if strings.Contains(f.log.String(), "fixture-key") || strings.Contains(f.log.String(), "fixture prompt") {
 				t.Fatal("private log")
@@ -127,6 +164,13 @@ func TestAssistantCacheProxyExcludesUnsupportedAndSpare(t *testing.T) {
 	f := cliTest(t)
 	c := assistantCompaction{endpoint: "https://api.example.com", endpointKnown: true}
 	on := &assistantwire.CacheKeepalive{Enabled: true, IntervalMinutes: 55, MaxRequests: 24}
+	f.n.setManaged([]proto.ManagedLauncher{{Name: "codex-provider", Agent: "codex"}, {Name: "other-provider", Agent: "agy"}})
+	for _, launcher := range []string{"codex-provider", "other-provider"} {
+		if p := f.n.startCacheWarm("example", launcher, c, modelExecution{CacheKeepalive: on}, false); p != nil {
+			p.Close()
+			t.Fatal("non-Claude launcher mounted a proxy")
+		}
+	}
 	for _, e := range []modelExecution{{IsMain: true}, {FollowsSetting: true}, {CacheKeepalive: on, Strict: true}} {
 		if p := f.n.startCacheWarm("example", "claude", c, e, false); p != nil {
 			p.Close()
@@ -141,4 +185,10 @@ func TestAssistantCacheProxyExcludesUnsupportedAndSpare(t *testing.T) {
 		p.Close()
 		t.Fatal("external runtime mounted proxy")
 	}
+}
+
+func waitCacheCheck(t *testing.T, n *Node, id string) {
+	t.Helper()
+	b := n.cacheWarmPool()
+	cliWait(t, "cache policy check", func() bool { b.mu.Lock(); defer b.mu.Unlock(); e := b.entries[id]; return e == nil || !e.checking })
 }

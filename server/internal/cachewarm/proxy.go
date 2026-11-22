@@ -52,6 +52,7 @@ type Proxy struct {
 	blocked    bool
 	cancel     context.CancelFunc
 	checking   bool
+	released   bool
 }
 
 func New(session, upstream string, logf func(string, ...any)) (*Proxy, error) {
@@ -113,8 +114,22 @@ func (p *Proxy) forgetLocked() {
 		p.cancel = nil
 	}
 }
-func (p *Proxy) Close()         { p.Forget(); _ = p.server.Close(); p.client.CloseIdleConnections() }
-func (p *Proxy) CloseListener() { _ = p.server.Close() }
+func (p *Proxy) Close() { p.Forget(); _ = p.server.Close(); p.client.CloseIdleConnections() }
+func (p *Proxy) CloseListener() {
+	p.mu.Lock()
+	p.released = true
+	p.pending = map[string]*captured{}
+	p.confirmed = map[string]bool{}
+	p.mu.Unlock()
+	_ = p.server.Close()
+}
+
+// Discarded lets the node retire a released process's empty proxy and transport.
+func (p *Proxy) Discarded() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.released && p.last == nil && p.active == 0 && !p.checking
+}
 
 // Input invalidates a pre-input snapshot before Claude can compact or prepare the
 // next provider request. Only a subsequent confirmed root request rearms it.
@@ -169,7 +184,7 @@ func (p *Proxy) candidate(id string, c *captured) {
 		p.commitLocked(c)
 		return
 	}
-	if len(p.pending) >= 8 {
+	if len(p.pending) >= 1 {
 		p.pending = map[string]*captured{}
 	}
 	p.pending[id] = c
@@ -187,7 +202,12 @@ func (p *Proxy) Tick(ctx context.Context, now time.Time, policy *assistantwire.C
 		return
 	}
 	c := p.last
-	if !idle || p.blocked || p.checking || p.active != 0 || c == nil || p.attempts >= policy.MaxRequests || now.Before(p.next.Add(time.Duration(policy.IntervalMinutes)*time.Minute)) {
+	if p.attempts >= policy.MaxRequests {
+		p.forgetLocked()
+		p.mu.Unlock()
+		return
+	}
+	if !idle || p.blocked || p.checking || p.active != 0 || c == nil || now.Before(p.next.Add(time.Duration(policy.IntervalMinutes)*time.Minute)) {
 		p.mu.Unlock()
 		return
 	}

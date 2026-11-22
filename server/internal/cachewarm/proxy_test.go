@@ -179,6 +179,7 @@ func TestCapResetAndSwitchOff(t *testing.T) {
 	if u.count() != 25 {
 		t.Fatalf("want real + 24 refreshes, got %d", u.count())
 	}
+	p.Input()
 	normal(t, p, warmBody, true)
 	p.Tick(context.Background(), lastAt(p).Add(55*time.Minute), policy(), true)
 	if u.count() != 27 {

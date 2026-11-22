@@ -30,7 +30,7 @@ func (s *Service) putCacheKeepalive(ctx context.Context, machine, id string, mai
 		return
 	}
 	if id != "" {
-		if s.isArchived(id) {
+		if archived, known := s.archivedSet(); !known || archived[id] != "" {
 			return
 		}
 		if c, ok := s.session(ctx, machine, id); !ok || c.Archived || c.IsDeleted() {
@@ -38,4 +38,12 @@ func (s *Service) putCacheKeepalive(ctx context.Context, machine, id string, mai
 		}
 	}
 	p["cache_keepalive"] = cacheKeepaliveOf(v)
+}
+
+func (s *Service) cacheKeepaliveRefs(ctx context.Context, v Settings) []SessionRef {
+	refs := s.leadSessions(ctx, v)
+	if v.Main != "" {
+		refs = append(refs, SessionRef{MachineID: v.mainRouteMachine(), SessionID: v.Main})
+	}
+	return refs
 }

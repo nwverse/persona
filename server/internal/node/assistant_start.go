@@ -540,7 +540,7 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 		round: round.anchor != "", toolSet: round.toolSet, toolSearch: toolSearch, endpoint: compaction.endpoint, tui: tui, tuiNote: tuiNote}
 	startedCacheProxy = true
 	if cacheProxy != nil {
-		n.cacheWarmPool().put(id, cacheProxy, launcher, processExecution)
+		n.cacheWarmPool().put(id, cacheProxy, launcher, processExecution, n.executionFingerprint(launcher, modelExecution{}))
 	}
 	if tui {
 		p.mode, p.effort = tuiMode, tuiEffort // its start flags: nothing to set by control request (syncAssistantModes)

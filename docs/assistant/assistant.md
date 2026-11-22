@@ -2752,7 +2752,9 @@ the proxy and cannot produce refreshes. Ordinary API requests and streamed repli
 are forwarded without changing payload bytes. Provider errors are returned as-is;
 transport failures return a generic 502 without logging upstream error text.
 
-Only a successful request with an explicit one-hour cache declaration can be retained.
+Only a successful request with exclusively one-hour cache declarations can be retained. Mixed TTL requests
+are skipped to avoid rewriting an expired five-minute history behind a cache hit on
+the system prefix.
 The provider response's message id must also appear on the CLI's root `message_start`;
 a child Agent's `parent_tool_use_id` never confirms a snapshot. This prevents warming
 an inherited subagent request. Request bodies and necessary headers stay in memory,

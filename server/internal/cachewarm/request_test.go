@@ -23,7 +23,7 @@ func TestReplayThinkingAndOnlyTwoFieldsChange(t *testing.T) {
 	}
 }
 func TestReplayRejectsUnsupportedRequests(t *testing.T) {
-	for _, body := range []string{`{}`, strings.ReplaceAll(warmBody, `"1h"`, `"5m"`), strings.Replace(warmBody, `"type":"disabled"`, `"type":"unknown"`, 1), strings.Replace(warmBody, `"type":"disabled"`, `"type":"enabled","budget_tokens":0`, 1), warmBody + `{}`, strings.Replace(warmBody, `"max_tokens" : 1024`, `"max_tokens":12,"max_tokens":13`, 1)} {
+	for _, body := range []string{`{}`, strings.ReplaceAll(warmBody, `"1h"`, `"5m"`), strings.Replace(warmBody, `"type":"disabled"`, `"type":"unknown"`, 1), strings.Replace(warmBody, `"type":"disabled"`, `"type":"enabled","budget_tokens":0`, 1), warmBody + `{}`, strings.Replace(warmBody, `"role":"user",`, `"role":"user","cache_control":{"type":"ephemeral"},`, 1), strings.Replace(warmBody, `"max_tokens" : 1024`, `"max_tokens":12,"max_tokens":13`, 1)} {
 		if _, _, err := Replay([]byte(body)); err == nil {
 			t.Fatal("accepted unsupported replay")
 		}

@@ -99,39 +99,39 @@ func Replay(body []byte) ([]byte, int, error) {
 }
 
 func hourCache(req map[string]json.RawMessage) bool {
-	var has func(any) bool
-	has = func(v any) bool {
+	hour, short := false, false
+	check := func(v any) {
+		if cc, ok := v.(map[string]any); ok && cc["type"] == "ephemeral" {
+			if cc["ttl"] == "1h" {
+				hour = true
+			} else {
+				short = true
+			}
+		}
+	}
+	var walk func(any)
+	walk = func(v any) {
 		switch x := v.(type) {
 		case map[string]any:
-			if cc, ok := x["cache_control"].(map[string]any); ok && cc["type"] == "ephemeral" && cc["ttl"] == "1h" {
-				return true
-			}
-			// Only provider block structure; never recurse into tool schemas or metadata.
+			check(x["cache_control"])
+			// Only provider block structure; never tool schemas or arbitrary metadata.
 			if c, ok := x["content"]; ok {
-				return has(c)
+				walk(c)
 			}
 		case []any:
 			for _, v := range x {
-				if has(v) {
-					return true
-				}
+				walk(v)
 			}
 		}
-		return false
 	}
-	if raw := req["cache_control"]; len(raw) > 0 {
-		var cc map[string]any
-		_ = json.Unmarshal(raw, &cc)
-		if cc["type"] == "ephemeral" && cc["ttl"] == "1h" {
-			return true
-		}
-	}
+	var cc any
+	_ = json.Unmarshal(req["cache_control"], &cc)
+	check(cc)
 	for _, key := range []string{"system", "tools", "messages"} {
 		var v any
 		_ = json.Unmarshal(req[key], &v)
-		if has(v) {
-			return true
-		}
+		walk(v)
 	}
-	return false
+	// Mixed TTLs could read the system prefix yet rewrite a large expired history.
+	return hour && !short
 }
