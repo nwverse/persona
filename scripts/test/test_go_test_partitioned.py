@@ -3,6 +3,7 @@ go_partitions' partitions (#5594, #7644, #12765)."""
 import io
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -557,6 +558,32 @@ class SubtreeIntegrationTests(unittest.TestCase):
         self.assertIn("--- FAIL: TestBroken", result.stdout)
         self.assertRegex(result.stdout, r"(?m)^FAIL\texample\.com/subtreefixture/internal/assistant\t")
         self.assertRegex(result.stdout, r"(?m)^ok  \texample\.com/subtreefixture/internal/assistant/inbox\t")
+
+
+@unittest.skipIf(os.name == "nt", "the runner's exec and a shell go that kills itself need POSIX")
+class ExecTests(unittest.TestCase):
+    """A command the runner does not split replaces the runner (os.execvp), so check-fast's timeout and heavy slot wrap
+    go itself: a go killed by SIGKILL (the OOM killer) still reads as killed, which check-fast's TIMEOUT rule for 137
+    relies on. Run as a child instead, go's death would become python's exit status 247 and that rule a FAIL."""
+
+    def test_a_command_run_as_given_is_the_callers_child_and_keeps_its_signal_status(self):
+        temporary = tempfile.TemporaryDirectory(prefix="go-test-partitioned-exec-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        pid_file = root / "go.pid"
+        go = root / "bin/go"
+        go.parent.mkdir()
+        go.write_text('#!/bin/sh\nprintf "%%s\\n" "$$" > "%s"\nkill -KILL "$$"\n' % pid_file)
+        go.chmod(0o755)
+        env = dict(os.environ, PATH="%s%s%s" % (go.parent, os.pathsep, os.environ.get("PATH", "")))
+        env.pop("GOFLAGS", None)
+        # ./internal/foo is no package the runner splits: plan() returns it as given without running go list.
+        process = subprocess.Popen([sys.executable, "-I", str(Path(gtp.__file__).resolve()), "go", "test", "-count=1",
+                                    "./internal/foo"], cwd=root, env=env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
+        out, _ = process.communicate(timeout=60)
+        self.assertEqual(-signal.SIGKILL, process.returncode, out)
+        self.assertEqual(str(process.pid), pid_file.read_text().strip(), out)  # go is the process the caller started
 
 
 class RunTests(unittest.TestCase):

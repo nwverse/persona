@@ -387,10 +387,15 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("web/src/x.ts", "export {}\n")
         self.check_fast()
         calls = [line.split("|", 3) for line in self.go_log.read_text().splitlines()]
-        in_slot = {(where, args.split()[0]) for where, marker, grandparent, args in calls
-                   if re.fullmatch(r"(go|web):\d+", marker) and marker.split(":")[1] == grandparent}
-        self.assertEqual({("server", "test"), ("web", "test")}, in_slot, calls)
-        self.assertEqual(3, sum(1 for where, marker, _, _ in calls if where == "server" and marker.startswith("go:")))
+        tests = [call for call in calls if call[3].split()[0] == "test"]
+        # The touched package's go test, the two guard calls and vitest, each checked on its own: the package's call
+        # goes through scripts/test/go_test_partitioned.py, which must exec go for it to sit right under the slot
+        # (the guards call go directly, so a set of (dir, subcommand) pairs would pass without that exec).
+        self.assertEqual(["server", "server", "server", "web"], sorted(call[0] for call in tests), calls)
+        self.assertEqual(1, sum(1 for where, _, _, args in tests if args.endswith(" ./internal/foo/...")), calls)
+        for where, marker, grandparent, args in tests:
+            self.assertRegex(marker, r"^(go|web):\d+$", (where, args))
+            self.assertEqual(marker.split(":")[1], grandparent, (where, args))
         # npm ci, the node_modules check and the typecheck take no slot.
         self.assertEqual({"ci", "run check:deps", "run typecheck"},
                          {args for where, marker, _, args in calls if where == "web" and not marker}, calls)
