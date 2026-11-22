@@ -264,8 +264,8 @@ func TestMCPServerReadOnlyToolsAndSafetyBoundaries(t *testing.T) {
 		`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"machine_ops_processes","arguments":{"sort":"uptime","orphan_only":true,"limit":10}}}`,
 		`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"machine_ops_services","arguments":{}}}`,
 		`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"machine_ops_service_logs","arguments":{"kind":"docker","id":"web-1","lines":50}}}`,
-		// Strict unknown field rejection (prevents SSRF target injection on network).
-		`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"machine_ops_network","arguments":{"target":"http://169.254.169.254"}}}`,
+		// Strict unknown field rejection (prevents caller-supplied SSRF probe targets on network).
+		`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"machine_ops_network","arguments":{"target":"https://metadata.example.invalid"}}}`,
 		// Mutating & human-only file tools are never exposed and always refused.
 		`{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"machine_ops_storage_cleanup","arguments":{"targets":["go-build"]}}}`,
 		`{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"machine_ops_process_kill","arguments":{"pid":123}}}`,
