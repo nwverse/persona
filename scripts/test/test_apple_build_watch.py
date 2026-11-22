@@ -371,6 +371,28 @@ class CompilerResourceTests(unittest.TestCase):
                     self.assertEqual(record["swift_frontend_lifetimes"]["status"], "truncated")
                     self.assertEqual(record["swift_frontend_lifetimes"]["records"], [])
 
+    def test_empty_lstart_retries_once_and_preserves_second_errors(self):
+        for collector in ("legacy", "stream"):
+            with self.subTest(collector=collector):
+                calls = []
+                def empty_then_oserror(command, **kwargs):
+                    calls.append(command)
+                    if len(calls) == 1:
+                        if collector == "legacy":
+                            return subprocess.CompletedProcess(command, 0, "", "")
+                        return self.pipe_fixture("")(command, **kwargs)
+                    raise OSError("second collector failed")
+                if collector == "legacy":
+                    parsed = watch.processes(empty_then_oserror)
+                else:
+                    parsed = watch.processes(popen=empty_then_oserror)
+                self.assertEqual(len(calls), 2)
+                self.assertNotIn("lstart=", calls[1])
+                self.assertEqual(parsed["unavailable"], "OSError")
+                self.assertEqual(parsed["process_start_status"], "uncertain")
+                self.assertEqual(parsed["largest"], [])
+                self.assertEqual(parsed["frontend_candidates"], [])
+
     def test_incomplete_no_start_listing_is_explicitly_unavailable(self):
         incomplete = "incomplete row"
         parsed = watch.processes(popen=self.pipe_fixture(f"print({incomplete!r})"))
@@ -518,6 +540,19 @@ class CompilerResourceTests(unittest.TestCase):
         self.assertEqual(record["last_identity"]["primary_source"], "Second.swift")
         self.assertEqual(record["identity_changes"], 1)
         self.assertEqual(len(history), 1)
+
+    def test_known_unknown_known_start_does_not_backfill_or_merge_lifetimes(self):
+        history = {}
+        start = "Sun Nov 22 10:00:00 2026"
+        watch.track_frontends(history, [self.frontend(start=start, cpu=1.0)], 100.0)
+        watch.track_frontends(history, [self.frontend(start=None, cpu=2.0)], 115.0)
+        watch.track_frontends(history, [self.frontend(start=start, cpu=3.0)], 130.0)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[(42, None)]["continuity"], "uncertain")
+        self.assertEqual(history[(42, None)]["sample_count"], 1)
+        self.assertIsNone(history[(42, None)]["process_start"])
+        self.assertEqual(history[(42, start)]["sample_count"], 2)
+        self.assertEqual(history[(42, start)]["last_cpu_seconds"], 3.0)
 
     def test_duplicate_pid_in_one_sample_preserves_the_first_observation(self):
         history = {}

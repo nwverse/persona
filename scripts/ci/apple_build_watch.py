@@ -317,7 +317,7 @@ def stream_processes(popen):
     def usable(result):
         if result.get("exit") != 0 or result["invalid_compiler_durations"]:
             return False
-        return not result["saw_output"] or result["valid_rows"] == result["output_lines"]
+        return result["valid_rows"] == result["output_lines"] and result["saw_output"]
 
     def unavailable(result):
         reason = result.get("unavailable", "invalid-process-output")
@@ -352,7 +352,7 @@ def processes(runner=subprocess.run, *, popen=None):
     rows, invalid_durations, valid_rows = (_process_rows_with_status(result.get("stdout", ""), True)
                                           if with_start else ([], False, 0))
     unavailable = result.get("unavailable")
-    if with_start and result.get("stdout", "").strip() and (valid_rows != output_lines or invalid_durations):
+    if with_start and (valid_rows != output_lines or invalid_durations or not result.get("stdout", "").strip()):
         rows = []
         if invalid_durations:
             unavailable = "invalid-process-duration"
