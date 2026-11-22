@@ -71,7 +71,10 @@ export const SubagentCard = memo(function SubagentCard({ step, status, mid, sid,
   const end = running ? undefined : subagentEnded(result, meta);
   const tookMs = start !== undefined && end !== undefined && end > start ? end - start : null;
   const took = start !== undefined && end !== undefined && end >= start ? workDuration(end - start) : "";
-  const stepItems = useMemo(() => (reportsList ? [use, result, ...reportsList] : [use, result]), [use, result, reportsList]);
+  const stepItems = useMemo(
+    () => Array.from(new Map([use, result, ...(reportsList ?? [])].filter((it): it is Item => Boolean(it)).map((it) => [it.id, it])).values()),
+    [use, result, reportsList],
+  );
   // the Persona chat's own calls: what ran it is Persona itself, not a tool its reader works with
   const m = subagentMeta(meta, took, lineStyle === "assistant" ? undefined : (harness ?? agentName("claude")));
   const parts = [

@@ -5,9 +5,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
+import { buildTaskIndex } from "../../lib/tasks";
 import type { Item } from "../../lib/types";
 import type { ToolStep } from "../../lib/work-groups";
 import { ActionRow } from "./ActionRow";
+import { ChatContext } from "./chat-context";
 import { forgetExpanded } from "./expanded";
 import { SubagentCard } from "./SubagentCard";
 import { ThinkingRow } from "./ThinkingRow";
@@ -245,5 +247,51 @@ describe("L3 per-step attribution on expanded step cards (#13054)", () => {
     expect(bar).not.toBeNull();
     expect(bar.querySelector("[data-step-tokens]")?.textContent).toContain("12.0k tok");
     expect(bar.querySelector("[data-step-duration]")?.textContent).toContain("35s");
+  });
+
+  it("deduplicates synchronous subagent result present in both step.result and tasks.reports (id-less usage counted once)", async () => {
+    const use: Item = {
+      id: "ag-sync#0",
+      seq: 1,
+      role: "assistant",
+      kind: "tool_use",
+      tool_name: "Agent",
+      tool_use_id: "c-ag-sync",
+      tool_input: { description: "Sync check", prompt: "Inspect files" },
+      ts: atMs(0),
+      usage: [{ model: "claude-opus-4-5", in: 500, out: 100 }],
+    };
+    const result: Item = {
+      id: "ag-sync-r#0",
+      seq: 2,
+      role: "user",
+      kind: "tool_result",
+      tool_use_id: "c-ag-sync",
+      text: "Sync inspection complete",
+      ts: atMs(12_000),
+      // Id-less usage on a synchronous result that buildTaskIndex also places in tasks.reports
+      usage: [{ model: "claude-sonnet-4-5", in: 1000, out: 400, cache_read: 2000 }],
+    };
+    const tasks = buildTaskIndex([use, result]);
+    expect(tasks.reports.get("c-ag-sync")).toEqual([result]);
+
+    const step: ToolStep = { kind: "tool", id: use.id, use, result, images: [] };
+    await act(async () => {
+      root.render(
+        <ChatContext.Provider value={{ tasks, subagents: [], scope: "" }}>
+          <SubagentCard step={step} status="completed" mid="m1" sid="s1" />
+        </ChatContext.Provider>,
+      );
+    });
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>("button")!.click();
+    });
+    const bar = host.querySelector<HTMLElement>("[data-step-telemetry]")!;
+    expect(bar).not.toBeNull();
+    // 600 (use) + 3400 (result counted once, NOT 600 + 6800 = 7400) = 4.0k tok
+    expect(bar.querySelector("[data-step-tokens]")?.textContent).toContain("4.0k tok");
+    expect(bar.querySelector("[data-step-tokens]")?.getAttribute("title")).toContain("Input 1.5k · Output 500");
+    expect(bar.querySelector("[data-step-tokens]")?.getAttribute("title")).toContain("Cache read 2.0k");
+    expect(bar.querySelector("[data-step-duration]")?.textContent).toContain("12s");
   });
 });
