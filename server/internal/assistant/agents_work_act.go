@@ -17,6 +17,12 @@ import (
 
 // ---- acting ----
 
+// accountExhaustionRetryAllowed applies the separate, opt-in budget for an
+// exhausted upstream account pool. retries counts continuations already sent.
+func accountExhaustionRetryAllowed(c proto.Session, retries, limit int) bool {
+	return !modelretry.AccountExhausted(c.TurnError) || retries < max(limit, 0)
+}
+
 // actOn decides what the manager does about e's work state and records it on e (wake_at, a card). It sends nothing:
 // the tick does, after checking again.
 func (s *Service) actOn(ctx context.Context, v *workView, machine string, c proto.Session, e *db.SessionWork) {
@@ -37,6 +43,11 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 	switch w.On {
 	case proto.WaitTransient:
 		if !sw.transientOn() {
+			w.Line = clip(oneLine(workT(l, "model_error", i18n.Args{"error": w.Wait})), 60)
+			return
+		}
+		if !accountExhaustionRetryAllowed(c, e.Retries, cfg.AccountExhaustionMaxRetries) {
+			e.WakeAt, w.WakeAt = nil, nil
 			w.Line = clip(oneLine(workT(l, "model_error", i18n.Args{"error": w.Wait})), 60)
 			return
 		}

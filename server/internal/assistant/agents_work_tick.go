@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -240,6 +241,12 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 	sw := s.triageSwitches(ctx)
 	if e.Work.On == proto.WaitTransient && !turnErrorTransient(c) {
 		e.WakeAt, e.Work.WakeAt = nil, nil
+		s.putWork(ctx, e)
+		return
+	}
+	if e.Work.On == proto.WaitTransient && !accountExhaustionRetryAllowed(c, e.Retries, s.triageCfg(ctx).AccountExhaustionMaxRetries) {
+		e.WakeAt, e.Work.WakeAt = nil, nil
+		e.Work.Line = clip(oneLine(workT(s.lang(ctx), "model_error", i18n.Args{"error": c.TurnError})), 60)
 		s.putWork(ctx, e)
 		return
 	}

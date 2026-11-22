@@ -163,6 +163,10 @@ type TriageConfig struct {
 	// RetryBaseSeconds: the first "Continue" after a transient error waits this long, each next one twice as long as
 	// the one before (a rate limit four times as long). Default 15.
 	RetryBaseSeconds int `json:"retry_base_seconds,omitempty"`
+	// AccountExhaustionMaxRetries bounds automatic continuations when the provider says no upstream account is
+	// available. Zero (the default) disables them; a positive value opts into that many consecutive attempts.
+	// Ordinary transient failures are not limited by this setting.
+	AccountExhaustionMaxRetries int `json:"account_exhaustion_max_retries,omitempty"`
 	// MaxWakes: wakes for one wait before asking the user. Default 6.
 	MaxWakes int `json:"max_wakes,omitempty"`
 	// SettleSeconds: how long a stopped session stays stopped before its turn is triaged. Default 15.
