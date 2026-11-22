@@ -33,6 +33,7 @@ export class Tokens {
   static readonly body: number = 17;
   static readonly meta: number = 14;
   static readonly title: number = 20;
+  static readonly signInNumber: number = 64;
   static readonly markdownHeading1: number = 32;
   static readonly markdownHeading2: number = 28;
   static readonly markdownHeading3: number = 24;

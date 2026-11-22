@@ -49,7 +49,7 @@ export interface ClientViewLease {
 export class ClientModel {
   readonly ssh: SshTunnel = new SshTunnel();
   private static pairingEpochs: Map<string, number> = new Map();
-  pairingRevision(): number { return ClientModel.pairingEpochs.get(this.profile.id) || 0; }
+  pairingRevision(profileId: string = this.profile.id): number { return ClientModel.pairingEpochs.get(profileId) || 0; }
   private retirePairing(id: string): void { ClientModel.pairingEpochs.set(id, (ClientModel.pairingEpochs.get(id) || 0) + 1); }
   retireHubConnections(id: string): void {
     const root = this.directoryParent || this;

@@ -4739,6 +4739,202 @@
     {
       "name": "agent_delivery_waiting",
       "value": "Waiting for {computer}."
+    },
+    {
+      "name": "browser_qr_access",
+      "value": "This browser will have full access to your Hub. Continue only if you started this sign-in."
+    },
+    {
+      "name": "browser_qr_ask",
+      "value": "Allow this browser to sign in?"
+    },
+    {
+      "name": "browser_qr_cancel",
+      "value": "Cancel sign-in"
+    },
+    {
+      "name": "browser_qr_checking",
+      "value": "Checking the sign-in request…"
+    },
+    {
+      "name": "browser_qr_denied",
+      "value": "Sign-in declined"
+    },
+    {
+      "name": "browser_qr_done",
+      "value": "Done"
+    },
+    {
+      "name": "browser_qr_ended",
+      "value": "This request has ended."
+    },
+    {
+      "name": "browser_qr_enter",
+      "value": "Enter this number in your browser"
+    },
+    {
+      "name": "browser_qr_expired",
+      "value": "This code has expired"
+    },
+    {
+      "name": "browser_qr_failed",
+      "value": "Couldn’t verify this sign-in"
+    },
+    {
+      "name": "browser_qr_internet",
+      "value": "Internet"
+    },
+    {
+      "name": "browser_qr_invalid",
+      "value": "Unrecognized sign-in code"
+    },
+    {
+      "name": "browser_qr_lan",
+      "value": "Local network"
+    },
+    {
+      "name": "browser_qr_manage",
+      "value": "You can revoke this browser’s access at any time in Devices."
+    },
+    {
+      "name": "browser_qr_number",
+      "value": "Keep this number to yourself. An incorrect entry cancels this sign-in."
+    },
+    {
+      "name": "browser_qr_other_hub",
+      "value": "This code belongs to another Hub"
+    },
+    {
+      "name": "browser_qr_refresh",
+      "value": "Refresh the QR code in your browser and scan again."
+    },
+    {
+      "name": "browser_qr_remote_access",
+      "value": "This request came from the internet. Allow full access to your Hub only if you started this sign-in."
+    },
+    {
+      "name": "browser_qr_scan",
+      "value": "Scan browser sign-in code"
+    },
+    {
+      "name": "browser_qr_scan_web",
+      "value": "Open the Persona sign-in page in your browser and scan its QR code."
+    },
+    {
+      "name": "browser_qr_success",
+      "value": "Browser signed in"
+    },
+    {
+      "name": "browser_qr_switch",
+      "value": "Switch to the Hub shown in your browser, then scan again."
+    },
+    {
+      "name": "browser_qr_title",
+      "value": "Browser sign-in"
+    },
+    {
+      "name": "browser_qr_unknown",
+      "value": "Unknown network"
+    },
+    {
+      "name": "browser_qr_voided",
+      "value": "The number didn’t match"
+    },
+    {
+      "name": "browser_qr_waiting",
+      "value": "Waiting for the browser…"
+    },
+    {
+      "name": "device_kind_browser",
+      "value": "Browser"
+    },
+    {
+      "name": "device_kind_link",
+      "value": "Computer link"
+    },
+    {
+      "name": "device_kind_other",
+      "value": "Other device"
+    },
+    {
+      "name": "device_kind_phone",
+      "value": "Phone"
+    },
+    {
+      "name": "device_kind_watch",
+      "value": "Watch"
+    },
+    {
+      "name": "devices",
+      "value": "Devices"
+    },
+    {
+      "name": "devices_added",
+      "value": "Added"
+    },
+    {
+      "name": "devices_demo",
+      "value": "Pair with a Hub to see signed-in devices."
+    },
+    {
+      "name": "devices_empty",
+      "value": "No signed-in devices."
+    },
+    {
+      "name": "devices_last_used",
+      "value": "Last used"
+    },
+    {
+      "name": "devices_load_failed",
+      "value": "Could not load the device list. Refresh to try again."
+    },
+    {
+      "name": "devices_no_history",
+      "value": "No revoked devices."
+    },
+    {
+      "name": "devices_no_match",
+      "value": "No matching devices."
+    },
+    {
+      "name": "devices_revoke",
+      "value": "Revoke"
+    },
+    {
+      "name": "devices_revoke_failed",
+      "value": "The device still has access. Refresh and try again."
+    },
+    {
+      "name": "devices_revoke_note",
+      "value": "This device will lose access to the Hub. Pair it again to reconnect."
+    },
+    {
+      "name": "devices_revoke_self",
+      "value": "This phone will disconnect from the Hub and must be paired again."
+    },
+    {
+      "name": "devices_revoke_unpair",
+      "value": "Revoke and unpair"
+    },
+    {
+      "name": "devices_revoked",
+      "value": "Revoked"
+    },
+    {
+      "name": "devices_revoked_at",
+      "value": "Revoked"
+    },
+    {
+      "name": "devices_search",
+      "value": "Search by name or device type"
+    },
+    {
+      "name": "devices_signed_in",
+      "value": "Signed in"
+    },
+    {
+      "name": "devices_this",
+      "value": "This device"
     }
   ]
 }

@@ -4739,6 +4739,202 @@
     {
       "name": "agent_delivery_waiting",
       "value": "正在等待 {computer}。"
+    },
+    {
+      "name": "browser_qr_access",
+      "value": "允许后，这个浏览器可以完整访问你的 Hub。请确认是你本人发起的登录。"
+    },
+    {
+      "name": "browser_qr_ask",
+      "value": "允许这个浏览器登录吗？"
+    },
+    {
+      "name": "browser_qr_cancel",
+      "value": "取消登录"
+    },
+    {
+      "name": "browser_qr_checking",
+      "value": "正在核对登录请求…"
+    },
+    {
+      "name": "browser_qr_denied",
+      "value": "已拒绝本次登录"
+    },
+    {
+      "name": "browser_qr_done",
+      "value": "完成"
+    },
+    {
+      "name": "browser_qr_ended",
+      "value": "请求已结束"
+    },
+    {
+      "name": "browser_qr_enter",
+      "value": "在浏览器中输入这两位数"
+    },
+    {
+      "name": "browser_qr_expired",
+      "value": "二维码已过期"
+    },
+    {
+      "name": "browser_qr_failed",
+      "value": "无法核对本次登录"
+    },
+    {
+      "name": "browser_qr_internet",
+      "value": "互联网"
+    },
+    {
+      "name": "browser_qr_invalid",
+      "value": "无法识别这个登录码"
+    },
+    {
+      "name": "browser_qr_lan",
+      "value": "局域网"
+    },
+    {
+      "name": "browser_qr_manage",
+      "value": "你可以随时在「设备」中单独撤销这个浏览器的访问权限。"
+    },
+    {
+      "name": "browser_qr_number",
+      "value": "请勿把数字告诉他人。只有一次输入机会，输错会取消本次登录。"
+    },
+    {
+      "name": "browser_qr_other_hub",
+      "value": "这是另一个 Hub 的登录码"
+    },
+    {
+      "name": "browser_qr_refresh",
+      "value": "请在浏览器刷新二维码，再重新扫描。"
+    },
+    {
+      "name": "browser_qr_remote_access",
+      "value": "此请求来自互联网。请确认是你本人发起的登录，再允许浏览器完整访问你的 Hub。"
+    },
+    {
+      "name": "browser_qr_scan",
+      "value": "扫描网页登录码"
+    },
+    {
+      "name": "browser_qr_scan_web",
+      "value": "请打开浏览器中的 Persona 登录页，扫描页面上的二维码。"
+    },
+    {
+      "name": "browser_qr_success",
+      "value": "浏览器已登录"
+    },
+    {
+      "name": "browser_qr_switch",
+      "value": "请先切换到浏览器正在登录的 Hub，再重新扫码。"
+    },
+    {
+      "name": "browser_qr_title",
+      "value": "网页登录"
+    },
+    {
+      "name": "browser_qr_unknown",
+      "value": "未知网络"
+    },
+    {
+      "name": "browser_qr_voided",
+      "value": "数字不匹配，登录已取消"
+    },
+    {
+      "name": "browser_qr_waiting",
+      "value": "等待浏览器输入…"
+    },
+    {
+      "name": "device_kind_browser",
+      "value": "浏览器"
+    },
+    {
+      "name": "device_kind_link",
+      "value": "电脑连接"
+    },
+    {
+      "name": "device_kind_other",
+      "value": "其他设备"
+    },
+    {
+      "name": "device_kind_phone",
+      "value": "手机"
+    },
+    {
+      "name": "device_kind_watch",
+      "value": "手表"
+    },
+    {
+      "name": "devices",
+      "value": "设备"
+    },
+    {
+      "name": "devices_added",
+      "value": "添加时间"
+    },
+    {
+      "name": "devices_demo",
+      "value": "连接真实 Hub 后即可查看已登录设备。"
+    },
+    {
+      "name": "devices_empty",
+      "value": "暂无已登录设备。"
+    },
+    {
+      "name": "devices_last_used",
+      "value": "最近使用"
+    },
+    {
+      "name": "devices_load_failed",
+      "value": "未能加载设备列表，请刷新重试。"
+    },
+    {
+      "name": "devices_no_history",
+      "value": "暂无已撤销设备。"
+    },
+    {
+      "name": "devices_no_match",
+      "value": "没有匹配的设备。"
+    },
+    {
+      "name": "devices_revoke",
+      "value": "撤销"
+    },
+    {
+      "name": "devices_revoke_failed",
+      "value": "该设备仍有访问权限，请刷新后重试。"
+    },
+    {
+      "name": "devices_revoke_note",
+      "value": "这台设备将失去访问当前 Hub 的权限。重新配对后才能再次连接。"
+    },
+    {
+      "name": "devices_revoke_self",
+      "value": "本机将与当前 Hub 断开连接，需要重新配对。"
+    },
+    {
+      "name": "devices_revoke_unpair",
+      "value": "撤销并取消配对"
+    },
+    {
+      "name": "devices_revoked",
+      "value": "已撤销"
+    },
+    {
+      "name": "devices_revoked_at",
+      "value": "撤销时间"
+    },
+    {
+      "name": "devices_search",
+      "value": "搜索设备名称或类型"
+    },
+    {
+      "name": "devices_signed_in",
+      "value": "已登录"
+    },
+    {
+      "name": "devices_this",
+      "value": "本机"
     }
   ]
 }

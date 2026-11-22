@@ -35,6 +35,7 @@ import { AgentListPage } from '../components/AgentListPage';
 import { InteractionHistoryPage } from '../components/InteractionHistoryPage';
 import { InboxWorkspacePage } from '../components/InboxWorkspacePage';
 import { ResourcePage } from '../components/ResourcePage';
+import { SignedInDevicesPage } from '../components/SignedInDevicesPage';
 import { SettingsPage } from '../components/SettingsPage';
 import { SshSettingsPage } from '../components/SshSettingsPage';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
@@ -497,7 +498,7 @@ struct Index {
     this.spacesShown = false;
     if (kind === 'persona') { this.selectPeer(0); this.openMain(); }
     else if (kind === 'settings') this.openSettingsRoot();
-    else if (kind === 'devices') this.openSettings('machines');
+    else if (kind === 'machines' || kind === 'devices') this.openSettings(kind);
     else if (kind === 'applications') this.openApplications();
     else if (kind === 'hub') this.openSheet('hub');
     else if (kind === 'collapse') this.collapsed = true;
@@ -508,6 +509,7 @@ struct Index {
     if (kind === 'todo') return Symbols.check;
     if (kind === 'knowledge') return Symbols.document;
     if (kind === 'health') return Symbols.health;
+    if (kind === 'machines') return Symbols.machine;
     if (kind === 'devices') return Symbols.device;
     if (kind === 'settings') return Symbols.gear;
     if (kind === 'applications') return Symbols.apps;
@@ -519,7 +521,7 @@ struct Index {
     if (kind === 'todo') return Colors.positive;
     if (kind === 'knowledge') return Colors.ai;
     if (kind === 'health') return Colors.teal;
-    if (kind === 'devices') return Colors.working;
+    if (kind === 'machines') return Colors.working;
     return Colors.secondary;
   }
   private spaceTitle(kind: string): string {
@@ -527,7 +529,6 @@ struct Index {
     if (kind === 'persona') return tr('main_chat');
     if (kind === 'todo') return tr('todos');
     if (kind === 'health') return tr('health_home_title');
-    if (kind === 'devices') return tr('machines');
     return tr(kind);
   }
   @Builder spaceRow(kind: string) {
@@ -550,6 +551,7 @@ struct Index {
         this.spaceRow('knowledge')
         this.spaceRow('health')
         if (this.applications.visible) this.spaceRow('applications')
+        this.spaceRow('machines')
         this.spaceRow('devices')
         this.spaceRow('settings')
         this.spaceRow('hub')
@@ -669,6 +671,7 @@ struct Index {
       this.spaceRow('knowledge')
       this.spaceRow('health')
       if (this.applications.visible) this.spaceRow('applications')
+      this.spaceRow('machines')
       this.spaceRow('devices')
       this.spaceRow('settings')
       }.backgroundColor(Colors.canvas)
@@ -684,7 +687,10 @@ struct Index {
       if (name === 'resources') return param;
       if (['todo', 'knowledge', 'inbox'].includes(name)) return name;
       if (name === 'settings_root') return 'settings';
-      if (name === 'settings') return this.settingsKind(param) === 'machines' ? 'devices' : 'settings';
+      if (name === 'settings') {
+        const page = this.settingsKind(param);
+        return page === 'machines' || page === 'devices' ? page : 'settings';
+      }
       if (name === 'applications' || name === 'extension' && !!Wire.text(this.routeRow(param).data(), 'navigation_extension')) return 'applications';
       if (['conversation', 'session', 'assistant', 'tools', 'history'].includes(name)) return 'chat';
     }
@@ -709,7 +715,7 @@ struct Index {
   }
   @Builder settingsList() {
     List() {
-      ForEach(['assistant', 'memory', 'machines', 'managers', 'launchers', 'engine', 'models', 'schedules', 'extensions', 'connectors', 'channels', 'translation', 'triage', 'ledger', 'phone', 'ssh', 'appearance', 'notifications', 'hub_update', 'node_update', 'privacy', 'diagnostics'], (page: string) => {
+      ForEach(['assistant', 'memory', 'machines', 'devices', 'managers', 'launchers', 'engine', 'models', 'schedules', 'extensions', 'connectors', 'channels', 'translation', 'triage', 'ledger', 'phone', 'ssh', 'appearance', 'notifications', 'hub_update', 'node_update', 'privacy', 'diagnostics'], (page: string) => {
         ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr(this.settingsLabel(page)) }) }) }.selectable(true).selected(!!this.activeChild && (this.shownName === 'extension' ? page === 'extensions' : this.shownName === 'settings' && this.settingsFamily(this.settingsKind(this.shownParam)) === page)).onClick(() => this.openSettings(page)).id('settings.' + page)
       }, (page: string) => page)
     }.width('100%').height('100%').padding({ bottom: Tokens.listTail })
@@ -862,6 +868,12 @@ struct Index {
     if (this.mainDestination(name, param) && !this.wide()) this.peerTitle(true)
     else Text(this.destinationTitleText(name, param)).height(this.headerHeight()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
       .padding({ left: this.destinationBackHidden(name, param) ? Tokens.page : 0 })
+      .margin({ start: LengthMetrics.vp(this.deviceTitleGap(name, param)) })
+  }
+  private deviceTitleGap(name: string, param: Object): number {
+    if (name !== 'settings' || this.destinationBackHidden(name, param)) return 0;
+    const page = this.settingsKind(param);
+    return page === 'devices' || page === 'machines' ? Tokens.inset : 0;
   }
   private destinationBackHidden(name: string, param: Object): boolean {
     if (this.mainDestination(name, param) || name === 'session' && Wire.bool(this.routeRow(param).data(), 'navigation_root') && this.wide() && this.model.section === 1) return true;
@@ -932,6 +944,8 @@ struct Index {
         if (!NavigationContext.from(name, param as string).scoped || this.targetReady(name, param)) AdminWorkspacePage({ model: this.settingsModel(param), page: this.settingsKind(param), row: NavigationContext.from(name, param as string).scoped ? NavigationContext.from(name, param as string).row : undefined, active: this.activeChild === this.childKey(name, param), refreshRevision: this.adminRefreshRevision,
           onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onOpenMachine: (row: ResourceRow) => { if (this.activeChild === this.childKey(name, param)) this.openSettingsDetail('machines', row); } })
         else this.targetLoading(name, param)
+      } else if (name === 'settings' && this.settingsKind(param) === 'devices') {
+        SignedInDevicesPage({ model: this.model, active: this.activeChild === this.childKey(name, param) })
       } else if (name === 'settings' && this.settingsKind(param) === 'ssh') {
         SshSettingsPage({ tunnel: this.settingsModel(param).ssh, active: this.activeChild === this.childKey(name, param),
           onSaved: (): void => { const owner = this.settingsModel(param); if (this.activeChild === this.childKey(name, param)) owner.selectProfile(owner.profile, true); } })
