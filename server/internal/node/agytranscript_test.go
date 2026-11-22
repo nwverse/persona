@@ -283,7 +283,7 @@ func TestAgyAssistantTextNormalizesLocalFileLinks(t *testing.T) {
 		{"image", "![chart](file:///work/repo/chart.png)", "![chart](/work/repo/chart.png)"},
 		{"windows_drive", "[win](file:///C:/work/notes.md#L5)", "[win](C:/work/notes.md#L5)"},
 		{"windows_encoded_colon", "[win](file:///c%3A/work/notes.md)", "[win](c:/work/notes.md)"},
-		{"ref_def", `[ref]: file:///work/repo/notes.md "Ref"`, `[ref]: /work/repo/notes.md "Ref"`},
+		{"ref_def", `[ref]: file:///work/repo/notes.txt "Ref"`, `[ref]: /work/repo/notes.txt "Ref"`},
 		{"list_continuation", "- item\n    [notes](file:///work/notes.md)", "- item\n    [notes](/work/notes.md)"},
 		{"inline_code", "Use `[notes](file:///work/notes.md)` literally.", "Use `[notes](file:///work/notes.md)` literally."},
 		{"fenced_code", "```md\n[notes](file:///work/notes.md)\n```\n[live](file:///work/live.md)", "```md\n[notes](file:///work/notes.md)\n```\n[live](/work/live.md)"},
