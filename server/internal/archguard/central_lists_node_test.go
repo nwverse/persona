@@ -21,6 +21,19 @@ import (
 // handleMethod takes no new label for one. The labels the node's method table refuses stay where they are and are not
 // frozen: session-bound methods, delivery aliases, and the methods under a prefix with a dispatcher of its own.
 
+// The row is appended from this file, as a domain's entries are, so that the rows of other lists' freezes, added to the
+// literal in central_lists_test.go, never meet it in one hunk.
+func init() {
+	centralLists = append(centralLists, centralList{
+		id:     "node_handle_method",
+		source: "internal/node/node.go",
+		what:   "label of Node.handleMethod for a method that is not bound to a session",
+		names:  handleMethodLabels,
+		seam: "register the method from an init() in its domain's own file, func init() { nodeRPC(name, (*Node).x) } " +
+			"(node/node_methods.go), as sessions_history.go does",
+	})
+}
+
 // handleMethodLabels reads the dispatch's method labels in a node.go (nodeDispatch) by their source text: the cases of each
 // switch on method, what method is compared with (method == x), and the prefixes it routes on (strings.HasPrefix and
 // the like, as `prefix "plugin.node."`). It leaves out the labels the method table refuses (nodeRefusals); a label whose

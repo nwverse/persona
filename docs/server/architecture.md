@@ -219,10 +219,10 @@ A central list with a seam takes no new name. `server/internal/archguard/central
   freeze is on names, not lines. These files hold names, never counts (they are not count ratchets,
   `docs/operations/testing.md` "Count ratchets").
 - **Frozen today**:
-  - the `assistantwire.Routes` literal, by each entry's source text (`"GET /api/v1/todos"`, `"GET " + StarredImportPath`);
-  - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`;
   - the labels of `Node.handleMethod` for the methods the node's method table may hold, by their source text
-    (`"node.info"`, `proto.MethodMachineToolchain`), and the prefixes it routes on as `prefix "plugin.node."`.
+    (`"node.info"`, `proto.MethodMachineToolchain`), and the prefixes it routes on as `prefix "plugin.node."`;
+  - the `assistantwire.Routes` literal, by each entry's source text (`"GET /api/v1/todos"`, `"GET " + StarredImportPath`);
+  - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`.
 
   Each later seam's PR adds its own list's row. That PR shows a planted entry failing and a registered one passing.
 - **Pending names**: `python3 scripts/test/name_freezes.py pending` lists the names that open PRs add, read from their
