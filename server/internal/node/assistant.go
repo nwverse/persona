@@ -481,7 +481,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			keepCurrent = p != nil && p.alive()
 			n.mu.Unlock()
 		}
-		mode = inboxPermissionMode(requested.InboxPermissionMode, mode, keepCurrent)
+		current := ""
+		if keepCurrent {
+			// The incoming generic mode is caller-controlled, not evidence of what this process runs. Read the live
+			// conversation's actual mode so neither an old nor a current manager can elevate it through that field.
+			current, _ = n.modesOf(id)
+			current = cmp.Or(current, st.AppMode, proto.ModeDefault)
+		}
+		mode = inboxPermissionMode(requested.InboxPermissionMode, current, keepCurrent)
 	}
 	if err := checkFileReferenceAudience(ctx, text, origin, guest != nil, public); err != nil {
 		return "", err

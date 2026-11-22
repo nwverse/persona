@@ -333,6 +333,56 @@ func TestInboxStartUsesAttestedOwnPermissionMode(t *testing.T) {
 	}
 }
 
+// A live default process must ignore the generic caller mode whether an older manager omits the dedicated field or a
+// current manager explicitly keeps default. The generic bypass must neither replace the process nor become its next mode.
+func TestInboxLiveProcessIgnoresGenericCallerMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, own string
+	}{
+		{name: "older manager omits dedicated mode"},
+		{name: "current manager keeps default", own: proto.ModeDefault},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := cliTestBash(t)
+			raw, err := nodeCall(t, f.n, "assistant.send", map[string]any{
+				"text": "Start default", "cwd": t.TempDir(), "launcher": "claude", "origin": originInbox, "origin_known": true,
+				"permission_mode": proto.ModeDefault, "inbox_permission_mode": proto.ModeDefault,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var started struct {
+				SessionID string `json:"session_id"`
+			}
+			if err := json.Unmarshal(raw, &started); err != nil || started.SessionID == "" {
+				t.Fatalf("start result=%s err=%v", raw, err)
+			}
+			f.idle(t, started.SessionID)
+			running := f.proc(started.SessionID)
+			if running == nil {
+				t.Fatal("default Inbox process is not live")
+			}
+			params := map[string]any{
+				"session_id": started.SessionID, "text": "Caller tries to elevate", "origin": originInbox, "origin_known": true,
+				"permission_mode": proto.ModeBypass,
+			}
+			if tc.own != "" {
+				params["inbox_permission_mode"] = tc.own
+			}
+			if _, err := nodeCall(t, f.n, "assistant.send", params); err != nil {
+				t.Fatal(err)
+			}
+			f.idle(t, started.SessionID)
+			if f.proc(started.SessionID) != running {
+				t.Fatal("generic caller bypass replaced the live default Inbox process")
+			}
+			if mode, _ := f.n.modesOf(started.SessionID); mode != proto.ModeDefault {
+				t.Fatalf("live Inbox mode=%q after generic caller bypass, want default", mode)
+			}
+		})
+	}
+}
+
 // The same launch contract covers built-in tools: the Inbox-only bare Read completes, while network, shell and file
 // mutations still reach the permission prompt. The fake CLI records prompts rather than contacting a hub.
 func TestInboxClaudeBuiltInReadAndMutationPermissionReplay(t *testing.T) {
