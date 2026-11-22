@@ -176,6 +176,47 @@ func TestPreparedSnapshotWaiters150RoundsNeverHangOriginal(t *testing.T) {
 	}
 }
 
+func TestUnansweredPreparedSnapshotsDoNotOwnItsLifecycle(t *testing.T) {
+	ft := newFleetTest(t)
+	preparedTestConversation(ft)
+	id := "ix_unanswered_snapshot_lifecycle"
+	var applies atomic.Int32
+	done := startPreparedTest(t, ft, id, "", func(context.Context, proto.Resolution) (string, error) {
+		applies.Add(1)
+		return "setting applied", nil
+	})
+	ix, ok := ft.s.pendingIx(id)
+	if !ok {
+		t.Fatal("the unanswered prepared card did not stay pending")
+	}
+	ft.s.askOnPhone([]proto.Interaction{ix})
+	ft.s.fleet.askMu.Lock()
+	waiter := ft.s.fleet.asked[id]
+	ft.s.fleet.askMu.Unlock()
+	if waiter != nil {
+		t.Fatal("an unanswered prepared card spawned another snapshot waiter")
+	}
+	ft.s.askOnPhone(nil)
+
+	if err := ft.s.clarify(context.Background(), id, "Why?", "owner-"+id, nil); err != nil {
+		t.Fatalf("the snapshot watcher cancelled the original prepared card: %v", err)
+	}
+	if got := awaitPreparedTest(t, done); got.err != nil || !got.out.Clarifying {
+		t.Fatalf("original prepared call = %+v, %v, want clarification", got.out, got.err)
+	}
+	allow := true
+	if err := ft.s.resolve(id, proto.Resolution{Allow: &allow}); err != nil {
+		t.Fatal(err)
+	}
+	if got := applies.Load(); got != 1 {
+		t.Fatalf("owner Allow applied %d times, want exactly once", got)
+	}
+	ft.waitPending(0)
+	if result := waitApprovalResult(t, ft, id); !strings.Contains(result, "setting applied") {
+		t.Fatalf("terminal result = %q, want the applied result", result)
+	}
+}
+
 func TestClarifiedSnapshotsDoNotRestartWaiters(t *testing.T) {
 	ft := newFleetTest(t)
 	preparedTestConversation(ft)
