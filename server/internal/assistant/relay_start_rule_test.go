@@ -53,6 +53,18 @@ func (d *dispatchPolicyHarness) handOver(t *testing.T) {
 	d.f.setItems(received(t, d.f, d.mainID))
 }
 
+// startedPlanOf keeps a started plan of conversation conv with one writable task in cwd on box: a kind the owner
+// let that conversation start.
+func (d *dispatchPolicyHarness) startedPlanOf(t *testing.T, conv, cwd string) {
+	t.Helper()
+	now := time.Now().UTC()
+	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: conv, State: planStarted, CreatedAt: now, UpdatedAt: now,
+		Tasks: []PlanTask{{Title: "Earlier work", Prompt: "earlier", Machine: "box", Cwd: cwd}}}
+	if err := d.s.savePlan(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // taskReport is the item a task's report leaves in a conversation: Persona's own input, not the owner's.
 func taskReport() proto.Item {
 	return proto.Item{ID: "n1", Seq: 3, Role: "user", Kind: proto.KindText, Text: "🔔 task done: the export audit",
@@ -116,6 +128,16 @@ func TestALeadAHandoverWentIntoWaitsForStart(t *testing.T) {
 		{"read-only, after a hand-over", "lead", (*dispatchPolicyHarness).handOver,
 			map[string]any{"readonly": true, "permission": "plan", "goal": "find why the export drops it"}, false, true},
 		{"a trusted kind, after a hand-over", "lead", (*dispatchPolicyHarness).handOver, nil, true, true},
+		// The lead's own ground (#12953): a kind a started plan of this lead ran starts; a place new to it still waits.
+		{"a kind the lead already started, after a hand-over", "lead", func(d *dispatchPolicyHarness, t *testing.T) {
+			d.startedPlanOf(t, d.leaderID, "/code/app")
+			d.handOver(t)
+		}, nil, false, true},
+		{"a place new to the lead, after a hand-over", "lead", func(d *dispatchPolicyHarness, t *testing.T) {
+			d.startedPlanOf(t, d.leaderID, "/code/other")
+			d.startedPlanOf(t, d.mainID, "/code/app") // another conversation's ground is not the lead's
+			d.handOver(t)
+		}, nil, false, false},
 		{"an unquoted message to a lead", "lead", func(d *dispatchPolicyHarness, t *testing.T) {
 			d.send(t, d.mainID, d.leaderID, `"text":"please fix the export"`)
 			d.f.setItems(received(t, d.f, d.mainID))

@@ -17,6 +17,13 @@ import (
 // a lead. Only task_plan reads it: agent_start, agent_send with resume and the lead's own tools are unchanged, and so is
 // everything that is no such hand-over (an unquoted message, an answer, a hand-over still queued and never tried, a
 // conversation that is no lead, the main conversation). Read-only tasks and kinds the owner trusts start as before.
+//
+// The hold does not reach the lead's own ground (#12953): a task of a kind (trustKey: the machine, the repository or
+// exact folder, reading or writing) that a started plan of this same lead already ran keeps user_requested, since the
+// owner already let this lead do that kind of work there, and a lead that got the words by mistake can start it only
+// where it was let work before. Work in a place new to the lead still waits for the owner's Start, which is what the
+// hold is for; so a lead takes the owner's words over and dispatches its usual work itself, without the owner or the
+// main conversation starting it.
 
 // holdForHandover: message msg is about to be sent into conversation to (deliverRelay). When it is a hand-over of the
 // owner's quoted words, still kept, and to is a direction's lead, the lead waits from now, saved before the send
@@ -117,4 +124,24 @@ func (s *Service) handoverKept(id string) bool {
 	}
 	e, ok := b.m[id]
 	return ok && time.Since(e.At) <= handoverMemory
+}
+
+// heldOutsideOwnKinds takes user_requested off the tasks of a plan from held lead lead (handedOver) that are of no kind
+// a started plan of that lead ran (trustKey, or trustFolderKey from before the repository was known): those wait for
+// the owner's Start; the rest keep it and start as the lead's own work does.
+func (s *Service) heldOutsideOwnKinds(ctx context.Context, lead string, tasks []PlanTask) {
+	own := map[string]bool{}
+	for _, p := range s.conversationPlans(ctx, lead) {
+		if p.State != planStarted {
+			continue
+		}
+		for _, t := range p.Tasks {
+			own[trustKey(t)], own[trustFolderKey(t)] = true, true
+		}
+	}
+	for i := range tasks {
+		if t := tasks[i]; t.UserRequested && !own[trustKey(t)] && !own[trustFolderKey(t)] {
+			tasks[i].UserRequested = false
+		}
+	}
 }

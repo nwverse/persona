@@ -293,26 +293,7 @@ func (s *Service) leaderPlans(ctx context.Context, main string, leads []string, 
 
 // openPlans are conversation's plans made since then that still wait for Start and have tasks, oldest first.
 func (s *Service) openPlans(ctx context.Context, conversation string, since time.Time) []*TaskPlan {
-	var all []*TaskPlan
-	if st := s.store(); st == nil {
-		s.tasks.mu.Lock()
-		for _, p := range s.tasks.plans {
-			if p.Conversation == conversation {
-				cp := *p
-				cp.Tasks = slices.Clone(p.Tasks)
-				all = append(all, &cp)
-			}
-		}
-		s.tasks.mu.Unlock()
-	} else {
-		rows, err := st.TaskPlans(ctx, conversation)
-		if err != nil {
-			return nil
-		}
-		for _, r := range rows {
-			all = append(all, planFromRow(r))
-		}
-	}
+	all := s.conversationPlans(ctx, conversation)
 	var out []*TaskPlan
 	for _, p := range all {
 		if p.State == planOpen && len(p.Tasks) > 0 && p.CreatedAt.After(since) {
@@ -420,4 +401,29 @@ func leaderReportText(l i18n.Lang, kind string, t Todo, note, section string) st
 		return i18n.T(l, "assistant-reports.leader_stuck_waiting", i18n.Args{"task": task})
 	}
 	return i18n.T(l, "assistant-reports.leader_stuck_stopped", i18n.Args{"task": task})
+}
+
+// conversationPlans are every plan conversation made, as kept (none when they cannot be read).
+func (s *Service) conversationPlans(ctx context.Context, conversation string) []*TaskPlan {
+	var all []*TaskPlan
+	if st := s.store(); st == nil {
+		s.tasks.mu.Lock()
+		for _, p := range s.tasks.plans {
+			if p.Conversation == conversation {
+				cp := *p
+				cp.Tasks = slices.Clone(p.Tasks)
+				all = append(all, &cp)
+			}
+		}
+		s.tasks.mu.Unlock()
+	} else {
+		rows, err := st.TaskPlans(ctx, conversation)
+		if err != nil {
+			return nil
+		}
+		for _, r := range rows {
+			all = append(all, planFromRow(r))
+		}
+	}
+	return all
 }

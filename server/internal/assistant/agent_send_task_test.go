@@ -513,7 +513,7 @@ func TestAgentSendTaskWithAnyFieldIsAHandOff(t *testing.T) {
 	for i, task := range handOffTasks {
 		free := fmt.Sprintf("free%04d", i)
 		for _, c := range []struct{ self, sid, err string }{
-			{"conv2", free, "only the main conversation hands out tasks: send it without task"},
+			{"conv2", free, "only the main conversation and a direction's lead hand out tasks: send it without task"},
 			{"conv1", "peer0001", fmt.Sprintf("peer0001 works for task %q (%s) of another conversation: it stays that conversation's; "+
 				"nothing was sent (send it without task to only send it)", theirs.Title, theirs.ID)},
 			{"conv1", "user0001", fmt.Sprintf("user0001 is on the user's own todo %q (%s): it stays theirs; nothing was sent "+
