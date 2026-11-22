@@ -2734,3 +2734,53 @@ Terminal switch records discard their handoff summary. Deleting the logical chat
 cascades to receipts, segments, inputs and switch context. Physical device aliases
 are locked together during first adoption, preventing concurrent managers from
 creating two logical roots for the same physical chat.
+
+## Idle cache keepalive (#12786)
+
+Settings > Assistant > Keep idle chats ready is on by default. Only the main
+conversation and ids registered in `assistant.leaders` may refresh a provider
+cache. Background supervision, ordinary conversations, workers and subagents are
+excluded. Native Claude-family launchers are supported; Codex and other runtimes
+are not supported yet. The default interval is 55 minutes (1–55), with at most 24
+consecutive requests (1–144). Genuine input resets the count. Turning the switch
+off stops refreshes without breaking an already proxied conversation.
+
+The node resolves the launcher's original endpoint using its existing configuration
+resolution, then places a loopback `ANTHROPIC_BASE_URL` in that process's environment
+and final settings env. Policy or launcher settings that override it simply bypass
+the proxy and cannot produce refreshes. Ordinary API requests and streamed replies
+are forwarded without changing payload bytes. Provider errors are returned as-is;
+transport failures return a generic 502 without logging upstream error text.
+
+Only a successful request with a reported cache read/write and exclusively one-hour
+cache declarations can be retained. Mixed TTL requests
+are skipped to avoid rewriting an expired five-minute history behind a cache hit on
+the system prefix.
+The provider response's message id must also appear on the CLI's root `message_start`;
+a child Agent's `parent_tool_use_id` never confirms a snapshot. This prevents warming
+an inherited subagent request. Request bodies and necessary headers stay in memory,
+never in a transcript or log. Idle CLI release does not discard the snapshot; explicit
+close, archive, compaction, role removal, or changed model/launcher does. Before
+refreshing, the node rechecks the manager's current role, policy and execution.
+Missing authorization stops refreshes. Compaction requires a subsequent genuine input
+to rearm capture. A restarted node starts empty.
+
+Refreshes replay the captured bytes with only top-level `max_tokens` and `stream`
+changed, preserving whitespace and every tools/system/messages/thinking/cache_control
+byte. No prompt is sent to the CLI, no output is executed, and no conversation,
+notification or supervision event is emitted. Disabled or adaptive thinking uses
+`max_tokens: 1`. Manual thinking keeps the exact budget and uses `budget_tokens + 1`:
+a 32,768-token budget can therefore spend up to **32,769 output tokens per refresh**,
+or **786,456 across 24 refreshes**. This is an upper bound, not an observed charge.
+Unknown or unsupported request shapes are skipped. No retry is made after a refresh
+error or a response without a positive cache read; a genuine request must rearm it.
+
+Refresh requests carry `X-Persona-Request-Kind: cache-keepalive`. The node log contains
+only `cache_keepalive`, session id, UTC time, and cache-read/cache-creation/output token
+counts. The TTL clock starts at provider request start. Expired snapshots are never
+refreshed. Linux fake-upstream tests prove transport and isolation; actual provider
+cache hits require post-deployment gateway usage evidence and are not inferred from
+those tests. No gateway changes or deployment are part of this feature.
+
+Provider references: [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+and [manual thinking constraints](https://platform.claude.com/docs/en/build-with-claude/extended-thinking).

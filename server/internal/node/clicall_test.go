@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -415,6 +416,9 @@ func TestCLICallAgentToolsGoAsThePaneAgent(t *testing.T) {
 	n.mu.Unlock()
 	ask := mcpRelay(t, n, hub)
 	for _, name := range callerTools {
+		if assistantwire.IsA2ATool(name) {
+			continue // bound to the calling process, not to the pane a request names (TestCLICallAgentToolsRefuseUnknownCallers)
+		}
 		got := ask(map[string]any{"kind": "cli.call", "name": name, "args": map[string]any{"tasks": []any{}}, "pane": "w1:p1",
 			"session_id": "forged", "assistant": true})
 		if got["name"] != name || got["session_id"] != "sess-live" || got["assistant"] != false || got["guest"] != false {
@@ -468,6 +472,13 @@ func TestCLICallAgentToolsRefuseUnknownCallers(t *testing.T) {
 		refused(name+" from no pane", sockRequest{Name: name, SessionID: "forged", Assistant: true}, notAssistant)
 		// An unknown thread never falls back to the pane a shared Codex daemon may have inherited.
 		refused(name+" from an unknown Codex thread", sockRequest{Name: name, Pane: "w1:p1", CodexThreadID: "20000000-0000-0000-0000-000000000002"}, notAssistant)
+	}
+	// An A2A tool reads or writes the caller's own mailbox, so the node binds it to the process that calls (a2aCaller),
+	// never to the pane or session a request names: here no process is known, though the pane runs a live Agent (#12706).
+	for _, name := range assistantwire.A2AToolNames {
+		refused(name+" naming an Agent's pane", sockRequest{Name: name, Pane: "w1:p1"}, "A2A requires a verified local session")
+		refused(name+" naming an Agent's session", sockRequest{Name: name, Pane: "w1:p1", SessionID: "sess-live"}, "A2A requires a verified local session")
+		refused(name+" naming a known Codex thread", sockRequest{Name: name, CodexThreadID: thread}, "A2A requires a verified local session")
 	}
 	refused("task_spawn from an unknown pane", sockRequest{Name: "task_spawn", Pane: "w9:p9"},
 		"task_spawn is not available: no Agent session is known for this pane or Codex thread")
