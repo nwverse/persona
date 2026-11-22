@@ -151,6 +151,88 @@ import Testing
         #expect(whole?["only_conclusions"] == nil && whole?["board"] == false)
     }
 
+    private static func readStatus(_ on: Bool) -> String {
+        newerStatus.replacingOccurrences(of: "\"board\":false}", with: "\"board\":false,\"read_group\":\(on)}")
+    }
+
+    @Test func readGroupCapabilityAndValueComeFromTheHub() async throws {
+        for on in [false, true] {
+            let hub = FakeHub()
+            hub.on("GET", "/api/v1/bots/feishu", json: Self.readStatus(on))
+            let m = model(hub)
+            await m.load()
+            #expect(m.hubKnowsReadGroup && m.features.readGroup == on)
+            let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(m.features)) as? [String: Bool]
+            #expect(encoded?["read_group"] == on)
+        }
+    }
+
+    @Test func anOlderHubHidesReadGroupAndDoesNotReceiveIt() async throws {
+        for json in [Self.status, Self.newerStatus] {
+            let hub = FakeHub()
+            hub.on("GET", "/api/v1/bots/feishu", json: json)
+            var body: [String: Any] = [:]
+            hub.on("PUT", "/api/v1/bots/feishu") { req in
+                body = try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any] ?? [:]
+                return Data(json.utf8)
+            }
+            let m = model(hub)
+            #expect(!m.hubKnowsReadGroup && !m.features.readGroup)
+            await m.load()
+            #expect(!m.hubKnowsReadGroup && !m.features.readGroup)
+            let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(m.features)) as? [String: Bool]
+            #expect(encoded?["read_group"] == nil)
+            await m.set(\.pushes, true)
+            #expect((body["features"] as? [String: Bool])?["read_group"] == nil)
+        }
+    }
+
+    @Test func readGroupSavesOnlyItselfAndAdoptsTheResponse() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/bots/feishu", json: Self.readStatus(false))
+        var bodies: [[String: Any]] = []
+        var hubRead = false
+        hub.on("PUT", "/api/v1/bots/feishu") { req in
+            let body = try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any] ?? [:]
+            bodies.append(body)
+            hubRead = (body["features"] as? [String: Bool])?["read_group"] ?? hubRead
+            // Another client changed pushes after this page loaded: adopt its current value too.
+            return Data(Self.readStatus(hubRead).replacingOccurrences(of: "\"pushes\":false", with: "\"pushes\":true").utf8)
+        }
+        let m = model(hub)
+        await m.load()
+        let owner = m.status?.owner
+        for on in [true, false] {
+            await m.set(\.readGroup, on)
+            #expect(bodies.last?.count == 1)
+            #expect(bodies.last?["features"] as? [String: Bool] == ["read_group": on])
+            #expect(m.features.readGroup == on && m.features.pushes && m.error == nil && !m.saving)
+            #expect(m.status?.owner == owner && m.appID == "cli_a" && m.appSecret.isEmpty)
+        }
+        hubRead = true // read_group changed on another client before the next local edit
+        await m.set(\.reports, false)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["reports": false])
+        #expect(m.features.readGroup)
+    }
+
+    @Test func readGroupUsesTheAcknowledgedValueAndPreservesFailureState() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/bots/feishu", json: Self.readStatus(false))
+        hub.on("PUT", "/api/v1/bots/feishu", json: Self.readStatus(false))
+        let m = model(hub)
+        await m.load()
+        await m.set(\.readGroup, true)
+        #expect(!m.features.readGroup) // no optimistic value overrides the hub's answer
+        m.appID = "cli_draft"
+        m.appSecret = "draft-secret"
+        let before = m.status
+        hub.on("PUT", "/api/v1/bots/feishu") { _ in throw APIError(status: 400, message: "Synthetic save failure") }
+        await m.set(\.readGroup, true)
+        #expect(m.status == before && m.hubKnowsReadGroup && !m.features.readGroup)
+        #expect(m.appID == "cli_draft" && m.appSecret == "draft-secret")
+        #expect(m.error?.contains("Synthetic save failure") == true && !m.saving)
+    }
+
     /// A hub with the board but not the nudge setting: the board switch shows, the picker does not.
     @Test func aHubWithTheBoardButNotTheNudgeShowsOnlyTheBoard() async throws {
         let hub = FakeHub()

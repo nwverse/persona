@@ -50,19 +50,26 @@ nonisolated struct FeishuBotStatus: Codable, Hashable, Sendable {
         /// a hub from before replaces the whole object, so an edit has to carry every switch to it.
         var hubMergesFeatures: Bool = false
 
+        /// /read reads a group as the owner. Off unless the hub says so; older hubs omit it.
+        var readGroup: Bool = false
+        var hubKnowsReadGroup: Bool = false
+
         enum CodingKeys: String, CodingKey {
+            case readGroup = "read_group"
             case main, cards, pushes, sync, agents, reports, board
             case allCards = "all_cards"
             case onlyConclusions = "only_conclusions"
         }
 
         init(main: Bool, cards: Bool, allCards: Bool, pushes: Bool, sync: Bool, agents: Bool, reports: Bool = true, board: Bool? = nil,
-             onlyConclusions: Bool? = nil) {
+             onlyConclusions: Bool? = nil, readGroup: Bool? = nil) {
             (self.main, self.cards, self.allCards, self.pushes, self.sync, self.agents, self.reports) = (main, cards, allCards, pushes, sync, agents, reports)
             self.board = board ?? false
             hubKnowsBoard = board != nil
             self.onlyConclusions = onlyConclusions ?? false
             hubKnowsOnlyConclusions = onlyConclusions != nil
+            self.readGroup = readGroup ?? false
+            hubKnowsReadGroup = readGroup != nil
         }
 
         init(from decoder: Decoder) throws {
@@ -82,6 +89,9 @@ nonisolated struct FeishuBotStatus: Codable, Hashable, Sendable {
             let onlyConclusions = try c.decodeIfPresent(Bool.self, forKey: .onlyConclusions)
             self.onlyConclusions = onlyConclusions ?? false
             hubKnowsOnlyConclusions = onlyConclusions != nil
+            let readGroup = try c.decodeIfPresent(Bool.self, forKey: .readGroup)
+            self.readGroup = readGroup ?? false
+            hubKnowsReadGroup = readGroup != nil
         }
 
         func encode(to encoder: Encoder) throws {
@@ -95,6 +105,7 @@ nonisolated struct FeishuBotStatus: Codable, Hashable, Sendable {
             try c.encode(reports, forKey: .reports)
             if hubKnowsBoard { try c.encode(board, forKey: .board) } // the hub merges what it is sent over what it has
             if hubKnowsOnlyConclusions { try c.encode(onlyConclusions, forKey: .onlyConclusions) }
+            if hubKnowsReadGroup { try c.encode(readGroup, forKey: .readGroup) }
         }
 
         /// The wire name of a switch.
@@ -107,6 +118,7 @@ nonisolated struct FeishuBotStatus: Codable, Hashable, Sendable {
             if key == \.agents { return "agents" }
             if key == \.reports { return "reports" }
             if key == \.onlyConclusions { return "only_conclusions" }
+            if key == \.readGroup { return "read_group" }
             return "board"
         }
 
@@ -235,6 +247,9 @@ extension APIClient {
 
     /// Whether the hub has the "only conclusions" switch.
     var hubKnowsOnlyConclusions: Bool { status?.features.hubKnowsOnlyConclusions == true }
+
+    /// Whether the hub has the /read opt-in.
+    var hubKnowsReadGroup: Bool { status?.features.hubKnowsReadGroup == true }
 
     /// The delays to pick from, with the one in force among them.
     var nudgeChoices: [Int] {
