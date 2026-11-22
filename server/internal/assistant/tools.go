@@ -70,7 +70,7 @@ func toolsNamed(names []string) []proto.Tool {
 }
 
 // Tool runs one of the assistant's MCP tools for the conversation call.SessionID on machine call.MachineID.
-func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
+func (s *Service) tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	if err := s.conversationAvailable(ctx, call.MachineID, call.SessionID); err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
@@ -980,7 +980,8 @@ type completedNodeWriteError struct{ error }
 func (e *completedNodeWriteError) Unwrap() error { return e.error }
 
 func tracksNodeWrite(method string) bool {
-	return method == DeviceSessionSend || method == DeviceSessionStart || method == devicewire.MethodCloseTaskTerminal
+	return method == DeviceSessionSend || method == DeviceSessionStart || method == devicewire.MethodCloseTaskTerminal ||
+		method == "session.a2a.send" || method == "session.a2a.wake"
 }
 
 func beforeNodeWrite(method string, err error) error {

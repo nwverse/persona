@@ -20,6 +20,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AssistantManagementTest {
+    @Test fun mainAssistantCatalogReadsOwnPurposeWithoutReplacingEligibility() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            val shared = """{"launchers":[{"name":"claude"}],"default":{"provider":"claude","model":"shared","effort":"low"}}"""
+            for ((own, expected) in listOf(
+                MockResponse().setBody("""{"launchers":[{"name":"not-eligible"}],"default":{"provider":"claude","model":"main","effort":"high"}}""") to "main",
+                MockResponse().setBody("""{"launchers":[]}""") to "shared",
+                MockResponse().setResponseCode(404).setBody("""{"error":"unknown purpose"}""") to "shared",
+            )) {
+                server.enqueue(MockResponse().setBody(shared))
+                server.enqueue(own)
+                val result = api.mainAssistantLauncherList("box", refresh = true)
+                assertEquals(listOf("claude"), result.launchers.map { it.name })
+                assertEquals(expected, result.default?.model)
+                assertEquals("assistant", server.takeRequest().requestUrl?.queryParameter("purpose"))
+                assertEquals("assistant.main", server.takeRequest().requestUrl?.queryParameter("purpose"))
+            }
+            server.enqueue(MockResponse().setBody(shared))
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"temporarily unavailable"}"""))
+            val failure = runCatching { api.mainAssistantLauncherList("box") }.exceptionOrNull() as HubFailure
+            assertEquals(503, failure.status)
+        }
+    }
+
     /** "Push when done" travels both ways; a task without it never sends it, so a hub without `task_push` is not sent it. */
     @Test fun taskPushIsReadAndSentOnlyWhenSet() = runBlocking {
         MockWebServer().use { server ->

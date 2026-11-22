@@ -528,6 +528,20 @@ Measured with `claude plugin … --json` in throwaway `CLAUDE_CONFIG_DIR`s while
 - Its Code sessions use `~/.claude` (the node already starts desktop sessions without `CLAUDE_CONFIG_DIR`, `node/claudedesktop_new.go`), and a
   user-scope plugin installed from the CLI loads there; inside the app `/plugin` is not available, only **+ › Plugins**.
 
+## A plugin update reaches only sessions that start again; the inbox can lose a message silently (2026-11-22)
+
+- `claude plugin update` answers "Restart to apply changes": a running session keeps the plugin code it loaded, and an
+  SDK session (the desktop app's) refuses `/reload-plugins` even from the plugin's own `$.command.run` ("isn't
+  available over a remote connection"). A plugin feature the node relies on (busy delivery, `busy_input`) therefore
+  arrives per session, as each is opened again: the node reads the capabilities each plugin advertises on its poll,
+  never the installed version, and the app tells the owner to reopen a session whose plugin is older
+  (`relay_reason: "plugin_outdated"`).
+- Claude Code's peer inbox gives its sender no answer unless the sender has an inbox of its own: a held message leaves
+  a "Held peer message" notice in the transcript, but a dropped or refused one leaves nothing (seen on 2.1.330: twelve
+  messages in a row taken during one long turn, the thirteenth never written anywhere). Never treat an inbox write as a
+  delivery, and prefer the plugin's `$.prompt.submit({ asUser: true })` for the owner's words whenever the session's
+  plugin can take them, busy or not (`docs/integrations/claude-integration.md` "Owner input through the Persona plugin").
+
 ## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
 
 Deleting a meeting room stopped its `claude -p` and removed the transcript at once; a moment later the file was back
@@ -1566,3 +1580,12 @@ therefore activate its suffix-command parser and append a command to an unrelate
 ACP embedded text resource, keeping the user's own text in its separate text block. Separate text blocks alone are
 insufficient: ACP expands each one. Preserve explicit standalone native commands, and test the captured ACP payload
 for both a new conversation and later messages with command names in the snapshot.
+
+
+## Embedded context has a native transcript envelope (#12813)
+
+Moving auxiliary input out of ACP text blocks protects it from command expansion, but Antigravity serializes the
+embedded resource back into native `USER_INPUT.content` with a `Content of persona-context:///snapshot.txt:` label.
+Removing only the snapshot XML leaves that label visible. Check the native export before blaming replay, and clean
+both the companion and pane history projections. Require the complete leading Persona resource envelope so ordinary
+labels and other URI schemes survive; keep embedded-resource transport intact and version the history format.

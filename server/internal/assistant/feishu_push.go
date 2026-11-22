@@ -88,7 +88,8 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 			}
 			ac.card.Tag(i18n.T(l, kind), feishubot.Neutral)
 		}
-		if i == len(cards)-1 && session != "" {
+		// A generic health notice must not identify the private to-do through its navigation metadata.
+		if i == len(cards)-1 && session != "" && !private {
 			if todo != nil {
 				web := todoLink(strings.TrimRight(st.PublicURL, "/"), todo.ID)
 				ac.card.AppendToLinks(s.openLinkButton(ctx, web))
