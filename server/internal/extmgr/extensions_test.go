@@ -125,6 +125,10 @@ func TestMain(m *testing.M) {
 		serveUsageExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "lark_images" {
+		serveLarkImageFixture()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "messaging" {
 		serveMessagingExtensionForTest()
 		return
