@@ -564,6 +564,7 @@ func TestAutomaticReversibleSettingLeavesOutcomeUnknownWhenMarkingFails(t *testi
 }
 
 func TestAutomaticReversibleSettingMarksJustMeHistoryPrivate(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	s, st := newReversibleSettingService(t, true)
 	s.justMeSent("server", "conv1")
 	s.justMeStarted("server", "conv1", true, false)

@@ -105,6 +105,8 @@ The parts (the hub, the managers, the node on each computer, extensions) talk on
 | `repositorywire` | A task's requested refs, repository layouts and the preparation snapshot a manager hands to a node, with the alias and ref rules both apply; `assistant/repository` aliases them |
 | `nodeproto` | The node protocol handshake: the protocol version and capability names a node announces (`docs/protocol/protocol.md` "Node handshake") |
 | `proto`, `rpc`, `relayproto` | The client API and node protocol types, the JSON-RPC framing, the push relay |
+| `githubwire` | What the extension manager and the GitHub connector module pass (manager.json's `github` section, the token source, the CI-check snapshot the assistant reads) and the `Connector` the manager drives (`docs/architecture/core-and-modules.md` "Provider seams") |
+| `imessagewire` | What the extension manager, the node and the iMessage connector module pass (manager.json's `imessage` section, the `Caller` to a Mac's node and its errors) and the `Remote` the manager drives and the node's `connector.*` handler (`docs/architecture/core-and-modules.md` "Provider seams") |
 | `mailwire` | What the extension manager and the mail module pass (accounts, messages, sends) and the `Service` the manager reaches mail through (`docs/architecture/core-and-modules.md` "Provider seams") |
 | `modapi` | The feature-module contract: a module's manifest, its registration and the `Host` it reaches the core through (`docs/architecture/core-and-modules.md`) |
 | `sdk/go/wire` (the SDK's module) | The extension protocol's types generated from its schema (an error report the bus carries, say), shared with extensions written against the SDK |

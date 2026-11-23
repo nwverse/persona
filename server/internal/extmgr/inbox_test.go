@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/connector/github"
+	"github.com/nwverse/persona/server/internal/githubwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/mailwire"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -754,9 +754,9 @@ func TestAIConfigOver(t *testing.T) {
 }
 
 // newGitHubForTest is the GitHub connector with repositories its options still mute (as before they moved).
-func newGitHubForTest(t *testing.T, muted []string) *github.Connector {
+func newGitHubForTest(t *testing.T, muted []string) githubwire.Connector {
 	t.Helper()
-	return github.New(github.Config{Inbox: github.InboxOptions{MutedRepos: muted}}, "Mac", nil)
+	return newTestGitHub(t, githubwire.Config{Inbox: githubwire.InboxOptions{MutedRepos: muted}}, "Mac", nil)
 }
 
 // replyMail records what it was asked to send.

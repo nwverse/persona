@@ -12,6 +12,11 @@ include:
   - path: watch-and-share.yml
   - path: lean-dev-build.yml
     enable: ${PERSONA_LEAN_DEV_BUILD}
+  # Feature modules in directories of their own (modules.yml), then the switch that leaves them all out
+  # (modules-core-only.yml, PERSONA_CORE_ONLY=YES). Before every include that adds sources of its own (siri-calls.yml).
+  - path: modules.yml
+  - path: modules-core-only.yml
+    enable: ${PERSONA_CORE_ONLY}
   - path: carplay-voice-entitlements.yml
     enable: ${PERSONA_CARPLAY_VOICE}
   - path: health-background-delivery-entitlements.yml
