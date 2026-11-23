@@ -1071,6 +1071,9 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	s.progressReported(machine, session, len(evidence), step, now) // evidence or a later step is progress (supervise_progress.go)
 	g := superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps, SourcePermission: devicewire.SourcePermissionFrom(ctx)}
+	if kind != upReportProgress && s.reportsMidTurn(ctx, machine, session) {
+		g.NotBefore = now.Add(reportStopHold) // it waits for its Agent's stop, to go out with it (releaseReportsLocked)
+	}
 	if !s.deliverReportingReport(ctx, t, g) {
 		s.signal(g)
 	}
@@ -1099,6 +1102,16 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	}
 	return "Sent to your supervisor: it reads it within minutes and answers you by message. Don't wait idle for it if there is " +
 		"other work in the task; stop when you cannot go on.", nil
+}
+
+// reportsMidTurn: the Agent that reports is in the middle of a turn, so the turn's end signal follows its report
+// (reportStopHold). One that is not working, or not known, has no stop coming: its report goes out as it always did.
+func (s *Service) reportsMidTurn(ctx context.Context, machine, session string) bool {
+	if machine == "" || session == "" || s.noReportHold {
+		return false
+	}
+	c, ok := s.session(ctx, machine, session)
+	return ok && c.State == proto.StateWorking
 }
 
 // deliverReportingReport sends g to an active reporting conversation through the same notice path as its quiet tasks:

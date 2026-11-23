@@ -871,7 +871,7 @@ func (f *fakeHub) NotifyRequest(_ context.Context, p NotifyRequest) (NotifyResul
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch p.Notification.Kind {
-	case NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyInput, assistantwire.NotifyReply, assistantwire.NotifyDecide:
+	case NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyInput, assistantwire.NotifyReply, assistantwire.NotifyDecide, assistantwire.NotifyHealthWater:
 	default:
 		return NotifyResult{}, fmt.Errorf("kind %q", p.Notification.Kind)
 	}
@@ -1376,6 +1376,8 @@ func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	// And about what a supervisor does with its tasks, told to the main conversation: the background supervisor that
 	// takes them by default is supervise_background_test.go's, which turns this off.
 	s.noBackground = true
+	// And with each report told at once, not held for its Agent's stop (reportStopHold): supervise_slim_test.go's.
+	s.noReportHold = true
 	// And with no information tagging (info_tag.go), as before it: its tests turn it on (f.infoTagModel).
 	s.noInfoTag = !f.infoTagModel
 	if f.settings != nil {

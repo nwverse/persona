@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -257,8 +258,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	// wrong lead, so until the owner writes there, "the user asked for this" is no Start for writable work it plans
 	// outside the kinds the owner already let this lead start (heldOutsideOwnKinds, #12953).
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.handedOver(sessionID) {
-		s.heldOutsideOwnKinds(ctx, sessionID, a.Tasks)
+		s.heldOutsideOwnKinds(ctx, machine, sessionID, a.Tasks)
 	}
+	// Direction leads orchestrate on the owner's behalf: their plans start at once unless a
+	// task needs the owner (a request gate, a track that confirms every hand-off). Not while a lead's hand-over is unconfirmed
+	// (#11699) or in a scheduled round, where "the user asked for this" is only the model's word.
+	orchestrates := scope == nil && s.isLeader(ctx, sessionID) && !s.handedOver(sessionID) &&
+		!s.inScheduledTurn(ctx, machine, sessionID)
 	// A plan from a conversation hands its prompts to agents outside it (scene 3): what it says, titles first (they are
 	// what its push shows), decides once whether it waits for "Start" and what its push says (health.go). A leader's
 	// workers (scope) need no decision.
@@ -275,6 +281,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		space, _ = s.selfSpace(ctx, sessionID)
 		u := s.exitUse(ctx, out.String(), sessionID, space)
 		policy = policyOf(u)
+		if orchestrates && !s.trackPolicy(ctx, space).ConfirmOutbound {
+			// A direction lead hands work to Agents on the owner's own computers as the owner's
+			// delegate: what the words say is not asked about again (the owner confirmed the work when it reached them).
+			// A track whose own rules confirm every hand-off (health) still asks; no sensitive memory rides along untapped.
+			policy.ConfirmOutbound = false
+		}
 		// The categories that made the plan wait for "Start" are the sensitive memory entries its starts may carry once
 		// the owner tapped it (memory_handoff.go): the text the owner confirms is the one tagged, never another.
 		if policy.ConfirmOutbound && u.Known {
@@ -337,12 +349,27 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
+	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, and an ordinary
+	// conversation's writable work where the owner has not let such work start by itself.
+	needsOwner := policy.ConfirmOutbound || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" })
 	var autoStartReasons []string
-	if !policy.ConfirmOutbound && !slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" }) {
+	if !needsOwner && !orchestrates {
 		autoStartReasons = s.planAutoStartReasons(ctx, p.Tasks, granted)
 	}
-	if autoStartReasons == nil {
+	if needsOwner || (!orchestrates && autoStartReasons == nil) {
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, s.planWithSuggestion(ctx, p, s.lang(ctx)))})
+		var b strings.Builder
+		fmt.Fprintf(&b, "Plan %s needs the user's Start on its card; nothing has started through this call.\n", p.ID)
+		for _, t := range p.Tasks {
+			fmt.Fprintf(&b, "- %s: waiting for the user to tap Start\n", t.Title)
+		}
+		b.WriteString("After the user taps Start, check the task cards or context snapshot for the outcome.")
+		b.WriteString(dups)
+		b.WriteString(taskPlanEstimateNotes(p.Tasks))
+		if _, talking := s.ownersPresent(time.Now())[sessionID]; talking {
+			// The owner is talking in this very conversation: the card is in front of them, a push would only repeat it.
+			return b.String(), nil
+		}
 		// A card below the answer is easy to miss: push it as well.
 		titles := make([]string, 0, len(p.Tasks))
 		for _, t := range p.Tasks {
@@ -362,19 +389,11 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if policy.Redact {
 			title, body = s.redactedNotice(ctx, l, space)
 		}
-		s.push(ctx, Notification{Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
+		s.push(withCard(ctx, cardPlanWaiting), Notification{CardID: p.ID, Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
 		if lead != "" || s.isLeader(ctx, sessionID) {
 			s.lreports.plansDue.Store(true)
 			s.directionsSoon() // a leader's plan waiting for Start is a decision for the owner (leader_reports.go)
 		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "Plan %s needs the user's Start on its card; nothing has started through this call.\n", p.ID)
-		for _, t := range p.Tasks {
-			fmt.Fprintf(&b, "- %s: waiting for the user to tap Start\n", t.Title)
-		}
-		b.WriteString("After the user taps Start, check the task cards or context snapshot for the outcome.")
-		b.WriteString(dups)
-		b.WriteString(taskPlanEstimateNotes(p.Tasks))
 		return b.String(), nil
 	}
 	started, err := s.startPlan(ctx, p.ID, nil, false)
@@ -385,7 +404,10 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	supervisor := ""
 	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (plan %s):\n", len(started.Tasks), started.ID)
 	for i, t := range started.Tasks {
-		reason := autoStartReasons[i]
+		reason := "delegated by the direction lead"
+		if !orchestrates {
+			reason = autoStartReasons[i]
+		}
 		if t.Error != "" {
 			fmt.Fprintf(&b, "- %s: automatic dispatch failed (%s) on %s: %s\n", t.Title, reason, t.Machine, t.Error)
 		} else {
@@ -527,4 +549,14 @@ func (t *PlanTask) checkRole(byLeader bool) error {
 		return errors.New(`a task leader plans workers only: role must be "worker"`)
 	}
 	return nil
+}
+
+// planPushOver takes a plan card's push back once the card is decided anywhere (Start, Don't start, a withdrawal):
+// the hub withdraws the push it sent with the plan's id as its card (Notification.CardID) from the devices it went to,
+// as it does an answered interaction's (#4349), and the apps drop the card. A plan that was never pushed costs a no-op.
+func (s *Service) planPushOver(id string) {
+	if s.hub == nil {
+		return
+	}
+	s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
 }

@@ -29,9 +29,12 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun FullTextReader(text: String, onDismiss: () -> Unit, title: String = stringResource(R.string.chat_reader_full_text), plain: Boolean = false) {
     val frozen = remember { text }
-    val snapshot by produceState<ReaderSnapshot?>(null) {
-        value = withContext(Dispatchers.Default) { ReaderSnapshot(frozen) }
-    }
+    val snapshot by remember {
+        kotlinx.coroutines.flow.flow {
+            val ready = withContext(Dispatchers.Default) { ReaderSnapshot(frozen) }
+            emit(ready)
+        }
+    }.collectAsState(initial = null)
     val copyText = rememberCopy()
     JFullScreen(onDismiss) {
         Box(Modifier.fillMaxSize().hardwareShortcutDismiss(onDismiss)) {
