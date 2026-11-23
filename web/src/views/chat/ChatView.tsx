@@ -57,7 +57,7 @@ import { Icon } from "../../ui/icons";
 import { StoppedAgentLine } from "./StoppedAgentLine";
 const TakeoverAction = lazy(() => import("./TakeoverAction"));
 import { scrollBehavior } from "../../ui/stream/motion";
-import { segmentChanges, shiftAbove } from "./offscreen";
+import { segmentChanges, shiftAbove, type SizeChange } from "./offscreen";
 import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands, openPickerCommand } from "../../lib/composer-commands";
@@ -191,6 +191,9 @@ const BackgroundActivity = lazyDialog(() => import("./BackgroundActivity").then(
 
 const NO_FEED: FeedItem[] = [];
 const NO_DISPLAY_LINES: DisplayLine[] = [];
+// Below this many exchanges the ordinary immediate mount is cheaper than observing rows. Past it, completed off-screen
+// bodies mount a viewport at a time (SegmentView); their sections, estimates and live / final-two rules stay as they were.
+const CHAT_WINDOW_MIN_SEGMENTS = 40;
 // A worker's card as its own conversation shows it (#5180): without the fold that makes it "From worker" on its lead's page.
 // One copy per card object, so a push that leaves the card alone leaves its copy alone too.
 const ownCopies = new WeakMap<Interaction, Interaction>();
@@ -1110,39 +1113,49 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the view moves by as much, so what is on screen stays (offscreen.ts).
   const heights = useRef(new WeakMap<Element, number>());
   const resized = useRef<ResizeObserver | null>(null);
+  const compensate = useCallback((changes: SizeChange[]) => {
+    const sc = scroller.current;
+    if (!sc) return;
+    if (gliding.current) return;
+    const viewTop = sc.getBoundingClientRect().top;
+    const l = landing.current;
+    if (l && (l.row instanceof Range ? l.row.startContainer : l.row).isConnected) {
+      const off = l.row.getBoundingClientRect().top - viewTop - l.at;
+      if (Math.abs(off) >= 0.5) {
+        sc.scrollTop += off;
+        holdLanding(1200);
+      }
+      return;
+    }
+    const a = anchor.current;
+    if (a && a.el.isConnected) {
+      const r = a.el.getBoundingClientRect();
+      const next = anchoredScroll(a, {
+        scrollTop: sc.scrollTop, scrollHeight: sc.scrollHeight, clientHeight: sc.clientHeight,
+        viewTop: sc.getBoundingClientRect().top, edgeAt: r.top, elTop: r.top,
+      });
+      if (Math.abs(next.scrollTop - sc.scrollTop) >= 0.5) sc.scrollTop = next.scrollTop;
+      clearTimeout(a.quiet);
+      a.quiet = window.setTimeout(() => (anchor.current = null), 600);
+      return;
+    }
+    if (atEnd.current) sc.scrollTop = sc.scrollHeight;
+    else {
+      const shift = shiftAbove(changes, viewTop);
+      if (shift) sc.scrollTop += shift;
+    }
+  }, [holdLanding]);
   const sizes = useCallback(() => (resized.current ??= new ResizeObserver((entries) => {
-      const sc = scroller.current;
-      if (!sc) return;
-      const changes = segmentChanges(entries, heights.current);
-      if (gliding.current) return;
-      const viewTop = sc.getBoundingClientRect().top;
-      const l = landing.current;
-      if (l && (l.row instanceof Range ? l.row.startContainer : l.row).isConnected) {
-        const off = l.row.getBoundingClientRect().top - viewTop - l.at;
-        if (Math.abs(off) >= 0.5) {
-          sc.scrollTop += off;
-          holdLanding(1200);
-        }
-        return;
-      }
-      const a = anchor.current;
-      if (a && a.el.isConnected) {
-        const r = a.el.getBoundingClientRect();
-        const next = anchoredScroll(a, {
-          scrollTop: sc.scrollTop, scrollHeight: sc.scrollHeight, clientHeight: sc.clientHeight,
-          viewTop: sc.getBoundingClientRect().top, edgeAt: r.top, elTop: r.top,
-        });
-        if (Math.abs(next.scrollTop - sc.scrollTop) >= 0.5) sc.scrollTop = next.scrollTop;
-        clearTimeout(a.quiet);
-        a.quiet = window.setTimeout(() => (anchor.current = null), 600);
-        return;
-      }
-      if (atEnd.current) sc.scrollTop = sc.scrollHeight;
-      else {
-        const shift = shiftAbove(changes, viewTop);
-        if (shift) sc.scrollTop += shift;
-      }
-    })), [holdLanding]);
+      if (!scroller.current) return;
+      compensate(segmentChanges(entries, heights.current));
+    })), [compensate]);
+  // A windowed body mounts from IntersectionObserver, later in the frame than content-visibility's own layout. Give
+  // the same compensation its old and new heights now, and advance the observer's baseline so it cannot apply them twice.
+  const windowDrawn = useCallback((section: HTMLElement, was: number) => {
+    const rect = section.getBoundingClientRect();
+    heights.current.set(section, rect.height);
+    compensate([{ top: rect.top, was, now: rect.height }]);
+  }, [compensate]);
   useEffect(() => {
     const view = scroller.current;
     const el = view?.firstElementChild;
@@ -1881,8 +1894,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // elapsed timer (and empty non-expandable live row) so only one Working… timer ticks on screen (#12380).
   const dockTurnClock = Boolean(session && dockBarShown && runningWorking && !backgroundOnly && !wait && !subtasks && !command);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, harness, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin, opened_by: openingBy, manager: openingManager } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded }),
-    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, harness, openingId, openingOrigin, openingBy, openingManager, closeoutSegment, places, embedded],
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, harness, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin, opened_by: openingBy, manager: openingManager } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded, windowHistory: segs.length >= CHAT_WINDOW_MIN_SEGMENTS, windowDrawn }),
+    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, harness, openingId, openingOrigin, openingBy, openingManager, closeoutSegment, places, embedded, segs.length, windowDrawn],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
   // rows that hold it open, search-reveal.ts), lit for HIT_MS, and "Back to where you were" ──

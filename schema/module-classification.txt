@@ -122,6 +122,7 @@ go server/internal/extension/serve core
 go server/internal/extension/sourcevalidate core
 go server/internal/extension/uistream core
 go server/internal/extmgr core
+go server/internal/extmgr/mailport core
 go server/internal/extmgr/storage core
 go server/internal/extwire core
 go server/internal/fleetsoak core
@@ -143,6 +144,7 @@ go server/internal/lcuconfirm core
 go server/internal/link core
 go server/internal/linktray core
 go server/internal/machineops core
+go server/internal/mailwire core
 go server/internal/manager core
 go server/internal/managercli core
 go server/internal/managerconf core
@@ -235,7 +237,6 @@ go server/internal/lark lark
 go server/internal/larkcli lark
 go server/internal/feishubot lark
 go server/internal/connector/larkcli lark
-go server/internal/mail mail
 go server/internal/office office
 go server/internal/screen screen-share
 go server/internal/screenlink screen-share

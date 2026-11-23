@@ -59,7 +59,7 @@ not loaded. Each of those parts of the contract holds from the PR that serves it
 classifies every unit as `core` or a module id: each Go package directory under `server/` and `sdk/go/`, each Apple
 directory `apple/<name>`, `apple/Persona/<name>` and `apple/Packages/<name>`, each Gradle project
 `android/settings.gradle.kts` includes, and each directory under `web/src` one and two levels deep. A unit that is a
-module's future home gets the module id even while it still lives in a core path (`server/internal/mail` is `mail`), so
+module's future home gets the module id even while it still lives in a core path (`server/internal/lark` is `lark`), so
 the list shows how far each module is from its own directory.
 
 One line per unit, `<kind> <unit> <core|module id>`, with `module <id>` lines declaring the ids (#13430 section 2 plus
@@ -146,6 +146,21 @@ extension, exactly as before the extension existed (`TestNoVolcWithoutItsModule`
 with the kernel yet; its `module.json` declares no slot. `scripts/ci/server.sh build` builds and tests the binaries,
 `builtinext`, the modules, the guards, the extension host's tests of them and the manager's end-to-end meeting
 transcription tests with `persona_core_only`, `persona_without_volc` and `persona_without_voice`.
+
+Mail (`server/internal/modules/mail`, #13936) is the other kind: a service the extension manager runs in process
+(the `/api/v1/mail/` routes, the `mail_*` tools and the mail connector, the Inbox's mail, the `mail.accounts` setting).
+The manager reaches it through the contract `server/internal/mailwire` (the values both sides pass and the `Service`
+interface; the module aliases them) and the port `server/internal/extmgr/mailport`: the module's file in
+`server/internal/modules/all` provides `mail.Open` there in its `init`, and the manager opens mail with it when it runs.
+The port is a package of its own so the composition root need not import `extmgr`. With the module left out
+(`persona_without_mail`, `persona_core_only`) nothing is provided and the manager runs as with a mail service that
+failed to open: the mail routes answer 404, no `mail_*` tool or mail connector is offered, `persona_settings` has no
+`mail.accounts`, and everything else runs (`TestManagerWithoutMail`). The module registers nothing with the kernel and
+its `module.json` declares no slot; the run-time switch (the `modules` row) does not cover it until the kernel serves
+`hub_routes` and `mcp_tools` (#13844). Its prompts (`server/internal/prompts/mcp/mail`) and locales (`mail-*`) stay in
+the core's trees until `prompt_sections` and `i18n_namespaces` are served. `scripts/ci/server.sh build` builds and
+tests the core, the modules, the guards and the manager's mail, inbox, connector and settings tests with
+`persona_core_only` and with `persona_without_mail`.
 
 ### Guards
 
