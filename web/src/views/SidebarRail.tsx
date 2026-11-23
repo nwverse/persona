@@ -82,10 +82,7 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
         key={k}
         href={href(to)}
         // Main Chat opens the page its conversation kept, as the sidebar's row does (#13164)
-        onClick={(e) => {
-          go(to, k === "persona" ? () => pickMainChat(active) : undefined)(e);
-          if (e.defaultPrevented) after?.();
-        }}
+        onClick={(e) => { go(to, k === "persona" ? () => pickMainChat(active) : undefined)(e); if (e.defaultPrevented) after?.(); }}
         aria-label={label}
         title={title ?? label}
         aria-current={active ? "page" : undefined}

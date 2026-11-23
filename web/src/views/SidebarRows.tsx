@@ -64,6 +64,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
   // words left unsent in the main conversation's box, once you are not in it (#5568)
   const draft = draftLine(useLeftDraft(main ? `${main.machine_id}/${main.session_id}` : null));
   const open = (e: React.MouseEvent) => {
+    // set to Full page, picked from another place it opens the page the conversation kept over it (#13164)
     go(to, () => pickMainChat(active))(e);
     if (e.defaultPrevented && main && pending > 0) requestDirectWaiting(main.session_id);
   };
@@ -71,7 +72,6 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
     <a
       ref={ref}
       href={href(to)}
-      // set to Full page, picked from another place it opens the page the conversation kept over it (#13164)
       onClick={open}
       {...(onMenu ? contextMenuProps((at, el) => onMenu(el, at)) : {})}
       onMouseEnter={() => hover("persona")}
