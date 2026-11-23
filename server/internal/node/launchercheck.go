@@ -11,6 +11,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/herdr"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -86,6 +88,13 @@ func (n *Node) launcherCheckWith(ctx context.Context, name string, o launcherChe
 		// The runtime may own authentication independently. This onboarding guard applies to the shell probe only.
 		if ready, known := n.claudeOnboardingReady(ctx); known && !ready {
 			return proto.LauncherCheck{Agent: agent, Error: claudeOnboardingNotReadyMsg}
+		}
+	}
+	if agent == agyAgent {
+		// A start of it here opens a herdr pane, which stays unreadable without herdr's Antigravity hook and is refused
+		// (agyhook.go, #13445), whatever `agy -p` answers: said at once, without spending a request.
+		if launch, err := n.launcherFor(n.startKind(ctx)); err == nil && n.agyHook(ctx, launch, "") == herdr.IntegrationNotInstalled {
+			return proto.LauncherCheck{Agent: agent, Error: agyIntegrationMissingText(i18n.Default)}
 		}
 	}
 	// The flag that keeps the run off the disk goes between before and after: a transcript per check, a hundred a day on

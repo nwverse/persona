@@ -240,7 +240,7 @@ func (b *cliBackoff) reset() {
 func fallback(err error) bool {
 	var he *Error
 	if errors.As(err, &he) {
-		return he.Code == "invalid_request" && strings.Contains(he.Message, "unknown variant")
+		return UnknownMethod(err)
 	}
 	return errors.Is(err, errNoSocket)
 }

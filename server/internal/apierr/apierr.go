@@ -291,6 +291,7 @@ var rpcFailureKeys = map[string]string{
 	"agent_speed_model":                  "rpc-errors.agent_speed_model",
 	"agent_speed_invalid":                "rpc-errors.agent_speed_invalid",
 	"readonly_unsupported":               "rpc-errors.readonly_unsupported",
+	proto.CodeAgyIntegrationMissing:      "rpc-errors.agy_integration_missing", // an agy start herdr could not make readable (node/agyhook.go)
 	"assistant_supervision_runtime":      "rpc-errors.assistant_supervision_runtime",
 	"assistant_supervision_account":      "rpc-errors.assistant_supervision_account",
 	// a start whose engine runs only its own launchers and has none of the launcher's kind (#8140); the engine's own

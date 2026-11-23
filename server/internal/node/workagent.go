@@ -122,6 +122,15 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 	}
 	if kind == agyAgent {
 		mode = agyStartMode(mode)
+		// A pane whose conversation herdr's Antigravity hook never reports stays unreadable: refused before any tab
+		// opens (agyhook.go, #13445).
+		where := ws
+		if c := adoptedPane(ctx); c != nil {
+			where = c.Pane.ID
+		}
+		if err := n.checkAgyPane(ctx, launch, where); err != nil {
+			return nil, err
+		}
 	} else {
 		effort, mode = "", ""
 	}

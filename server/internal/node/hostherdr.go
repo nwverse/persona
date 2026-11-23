@@ -326,6 +326,20 @@ func (h *herdrHost) serverVersion(ctx context.Context, pane host.PaneRef) string
 	return t.c.ServerVersion(ctx)
 }
 
+// integrations is herdr.Client.Integrations of the server that id (a workspace, tab or pane; "" the own server)
+// lives in, with that server's socket: the key an answer of its may be remembered under (agyhook.go).
+func (h *herdrHost) integrations(ctx context.Context, id string) ([]herdr.Integration, string, error) {
+	t, err := h.target(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+	if t.c == nil {
+		return nil, "", errNoSuchSession
+	}
+	list, err := t.c.Integrations(ctx)
+	return list, t.c.Socket, err
+}
+
 // has runs `herdr <args> --help` once: whether this herdr knows the command.
 func (h *herdrHost) has(cache *struct {
 	once sync.Once

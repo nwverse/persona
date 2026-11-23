@@ -119,7 +119,8 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 Windows: herdr has native Windows support since 0.9.5; except live terminal, capabilities match above. Orca works too. See [windows.md](../operations/windows.md), "herdr."
 
 Antigravity CLI panes can show chat history after the hook installed by `herdr integration install antigravity-cli`
-reports the pane's conversation ID. Persona reads that conversation's local `transcript.jsonl` from the node's Antigravity data
+reports the pane's conversation ID. Without the hook Persona does not start agy in herdr (`agy_integration_missing`,
+`docs/integrations/launchers.md` "Work agents"). Persona reads that conversation's local `transcript.jsonl` from the node's Antigravity data
 directory and uses the reported ID to restore Persona-started panes with `agy --conversation`. Until herdr
 reports a usable ID, the pane remains accessible through the terminal and can still receive prompts.
 
@@ -469,11 +470,11 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
 New computers often lack herdr (#2847); previously Start only said "herdr not installed," requiring someone to log in and install it. Node now installs it (`node/herdrinstall.go`):
 
 - **What**: official herdr release binary for OS / CPU (linux / macos × x86_64 / aarch64), **version pinned** to match other computers
-  (currently 0.8.0, not `latest.json`). Verify hardcoded sha256 before installing to `~/.local/bin/herdr` (no sudo, on node PATH).
+  (currently 0.9.5, not `latest.json`). Verify hardcoded sha256 before installing to `~/.local/bin/herdr` (no sudo, on node PATH).
   Write temporary file and rename only after verification, avoiding partial binaries on interruption. Windows / other architectures have no package and require manual install. Version upgrades update the version and all four sha256s.
 - **When**: always install on user Start. Node-initiated starts (startup, before create / continue) install only if `machines[].herdr_autoinstall: true` in hub.json;
   omitted preserves "Not installed." One install at a time; concurrent requests share it.
-- **Slow downloads**: background download up to 15 minutes; Start waits at most 15 seconds. If ready, start and return `running`; otherwise return "Installing herdr 0.8.0… It will start automatically when ready"
+- **Slow downloads**: background download up to 15 minutes; Start waits at most 15 seconds. If ready, start and return `running`; otherwise return "Installing herdr 0.9.5… It will start automatically when ready"
   (client shows original text after "Not started:"). Node starts server when done; next Agents poll sees running and removes notice.
   `herdr.server.status` / `GET /api/v1/machines/{mid}/herdr` add `installing`, `install_error` (last failure); client can show Installing, not wired yet.
 - **Install failure**: GitHub unreachable, timeout, HTTP error, checksum mismatch all give a localized reason. Network failures say "A proxy may be needed: set node HTTPS_PROXY and restart it"

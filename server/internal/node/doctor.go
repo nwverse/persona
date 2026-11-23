@@ -77,6 +77,9 @@ type DoctorOptions struct {
 	NodeSock, RuntimeSock, HerdrSock string
 	// ClaudeConfigDir is where the user's own Claude Code settings are (read, never written).
 	ClaudeConfigDir string
+	// AgyConfigDir is agy's config directory, where herdr installs its Antigravity hook (agyHookDir); "" leaves the
+	// agy-herdr line out.
+	AgyConfigDir string
 	// ClaudeVersion asks claude's version ("" when unknown); ClaudeProbe, when set, is asked instead and also says
 	// whether the shell found no claude at all (claudeProbe), so a version that could not be read this time is not
 	// reported as Claude Code missing.
@@ -120,6 +123,7 @@ func DefaultDoctorOptions() (DoctorOptions, error) {
 		Dir: dir, Bin: bin,
 		NodeSock: nodeclient.SocketPath(), RuntimeSock: RuntimeSocketPath(), HerdrSock: herdr.SocketPath(),
 		ClaudeConfigDir: claudeDirOf(home), ClaudeVersion: claudeVersion, ClaudeProbe: claudeProbe,
+		AgyConfigDir: agyHookDir(home),
 	}
 	opts.withLaunchd(home)
 	// Under the node's agent (a claude the node started runs the doctor) a reload would stop the doctor too: under
@@ -399,6 +403,9 @@ func doctorChecks(ctx context.Context, opts DoctorOptions) DoctorReport {
 	add(checkCommandPathsIn(opts.Dir, opts.Lang))
 	add(checkClaudeVersionIn(ctx, opts.claudeProbe(), opts.Lang))
 	add(checkHerdrIn(ctx, opts.HerdrSock, opts.Lang))
+	if c, ok := checkAgyHerdrIn(ctx, opts.HerdrSock, opts.AgyConfigDir, opts.Lang); ok { // agy with herdr only (agyhook.go)
+		add(c)
+	}
 	add(checkGlobalPermissionHooksIn(opts.ClaudeConfigDir, opts.Dir, opts.Lang))
 	add(checkAgentSandboxIn(opts.Dir, opts.Lang))
 	if opts.LaunchAgent != "" {

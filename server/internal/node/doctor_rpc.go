@@ -26,6 +26,7 @@ func (n *Node) doctorOptions() DoctorOptions {
 		Dir: n.dir, Bin: n.bin,
 		NodeSock: nodeclient.SocketPath(), RuntimeSock: RuntimeSocketPath(),
 		ClaudeConfigDir: claudeDirOf(n.home), ClaudeVersion: claudeVersion, ClaudeProbe: claudeProbe,
+		AgyConfigDir: agyHookDir(n.home),
 	}
 	if def, err := DefaultDoctorOptions(); err == nil {
 		opts.HerdrSock = def.HerdrSock

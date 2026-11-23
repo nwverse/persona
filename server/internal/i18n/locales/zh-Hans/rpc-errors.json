@@ -2,6 +2,7 @@
   "task_instructions_resume": "这个启动器无法在仅恢复会话时保留任务约定。请发送一条继续消息，或选回原来的启动器。本次没有启动或发送任何内容。",
   "skill_unavailable": "所选技能已不可用或执行环境已变化，请移除后重新选择。消息未发送。",
   "readonly_unsupported": "此启动方式无法应用只读模式。请选择支持只读且没有冲突权限参数的终端启动器。",
+  "agy_integration_missing": "那台电脑上的 herdr 没装 Antigravity 集成，Persona 读不到 agy 在终端里的对话，所以没有在 herdr 里启动它，什么都没发出去。在那台电脑上运行 `herdr integration install antigravity-cli` 后再启动。",
   "launcher_kind_missing": "那台电脑的引擎里没有能跑这类 Agent 的 provider，没有启动，也没有改用别的。选它的一个 provider，或在它的设置里打开一个。",
   "timeout": "请求超时：电脑可能正忙或网络不稳。请先确认刚才的操作是否已生效，稍后再试。",
   "unreachable": "和这台电脑的连接断了。请重新连接，确认刚才的操作是否已生效，然后再试。",

@@ -2,6 +2,7 @@
   "task_instructions_resume": "This launcher cannot restore the task's instructions with a bare Resume. Send a continuation message or choose the original launcher. Nothing was started or sent.",
   "skill_unavailable": "This skill is unavailable or the execution environment changed. Remove it and select it again. Nothing was sent.",
   "readonly_unsupported": "Cannot apply read-only mode on this launch path. Choose a compatible terminal launcher without conflicting permission options.",
+  "agy_integration_missing": "herdr’s Antigravity integration isn’t installed on that computer, so Persona couldn’t read an agy terminal there and didn’t start one. Nothing was sent. Run `herdr integration install antigravity-cli` on that computer, then start again.",
   "launcher_kind_missing": "The engine on that computer has no provider for this kind of agent, so nothing was started and nothing else runs in its place. Pick one of its providers, or turn one on in its settings.",
   "timeout": "The request timed out. The computer may be busy or the network unstable. Check whether it went through, then try again later.",
   "unreachable": "The connection to this computer dropped. Reconnect it, check whether your last action went through, then try again.",

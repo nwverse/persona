@@ -36,15 +36,17 @@ var herdrRelease = struct {
 	URL     func(version, target string) string
 	SHA256  map[string]string // target (linux-x86_64, macos-aarch64, …) → hex sha256
 }{
-	Version: "0.8.0",
+	// 0.9.5: the herdr the docs describe (agy's states, tab.create's environment, the JSON integration API the agy start
+	// asks, agyhook.go). The digests are the release's, each checked against its downloaded binary.
+	Version: "0.9.5",
 	URL: func(version, target string) string {
 		return "https://github.com/herdrdev/herdr/releases/download/v" + version + "/herdr-" + target
 	},
 	SHA256: map[string]string{
-		"linux-x86_64":  "b872ea7e40fa2cb17e857ac9b62b1bf26db7b403c622f5d2f3f5b35f6e9acd28",
-		"linux-aarch64": "f647ac66468d9efbc642fe534fb284468f0aea60641606fc008dfc0d82a3ca87",
-		"macos-x86_64":  "77cb5afd6c8fcaaaf3bc28e474ec01c209331ad08094e20d7f8aa9b0bb78d649",
-		"macos-aarch64": "d53a9f93fccfdfcc55632927bf51002f5add0aa7990bcdf508ffbd84ac658178",
+		"linux-x86_64":  "14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d",
+		"linux-aarch64": "17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c",
+		"macos-x86_64":  "5fb0a908ec7f6745e3e245738b06bfad56c46391c391ab3c0955fbead01f1369",
+		"macos-aarch64": "fb77c2232a05a8035421382c894392f4174e4e38a18e48af3dd0290157c3a7e2",
 	},
 }
 

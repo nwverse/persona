@@ -558,6 +558,10 @@ const (
 	// would act on when an engine types the directory (Orca's `cd`, node/hostorca_launch.go). Nothing ran; a refusal of
 	// the request, not the launcher's fault.
 	CodeDirectoryUntypable = "directory_untypable"
+	// CodeAgyIntegrationMissing: an agy start would open a herdr pane, and herdr's Antigravity integration, the hook
+	// that reports the pane's conversation, is not installed there (node/agyhook.go, #13445): the pane would stay
+	// unreadable. Nothing ran; a start without a terminal (the Antigravity companion) still can.
+	CodeAgyIntegrationMissing = "agy_integration_missing"
 )
 
 // Codes session.modes refuses with (node/modes.go), the text in the request's language (apierr.Call). 409.

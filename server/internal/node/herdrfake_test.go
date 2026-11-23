@@ -141,7 +141,11 @@ func (f *fakeHerdr) serveConn(c net.Conn) {
 		}
 		result = map[string]any{"read": map[string]any{"text": text}}
 	}
-	if req.Method != "ping" { // the server's version (herdr.Client.ServerVersion): a read, not something the node did
+	if h == nil && req.Method == "integration.list" { // a herdr with its Antigravity hook installed (agyhook.go)
+		result = herdrIntegrations(herdr.IntegrationCurrent)
+	}
+	// ping (herdr.Client.ServerVersion) and integration.list (agyhook.go) are reads, not something the node did.
+	if req.Method != "ping" && req.Method != "integration.list" {
 		f.log = append(f.log, call)
 	}
 	hooks := slices.Clone(f.hooks)
@@ -181,6 +185,14 @@ func (f *fakeHerdr) handle(method string, fn func(p map[string]any) any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.on[method] = fn
+}
+
+// herdrIntegrations is integration.list's answer of a herdr whose Antigravity integration is in state (and agy found).
+func herdrIntegrations(state string) map[string]any {
+	return map[string]any{"type": "integration_list", "integrations": []any{
+		map[string]any{"target": "codex", "label": "codex", "command": "codex", "available": true, "state": herdr.IntegrationCurrent},
+		map[string]any{"target": herdr.AntigravityIntegration, "label": "antigravity-cli", "command": "agy", "available": true, "state": state},
+	}}
 }
 
 // reply answers method with a fixed result.
