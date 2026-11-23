@@ -75,6 +75,20 @@ func restartCardlessClaim(t *testing.T, store Store) (*Service, *fakeHub) {
 	return s, f
 }
 
+// restartCardlessClaimWithManualDigest stops timer scheduling before the
+// initial settings publish loads the to-dos and restores the durable outbox.
+func restartCardlessClaimWithManualDigest(t *testing.T, store *cardlessClaimStore) *Service {
+	t.Helper()
+	f := newFakeHub().withMachine()
+	f.settings = &Settings{Main: "conv1", Timezone: "Asia/Shanghai"}
+	f.known["conv1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusIdle, State: "idle"})
+	s := New(Options{Hub: f, Store: func() Store { return store }, Logf: testLogf(t)})
+	stopSupervisionTimers(s)
+	return withSettings(t, f, s)
+}
+
 // cardlessRuns holds, for each manager runCardlessManager started, what cancels its run context.
 var cardlessRuns sync.Map
 
@@ -506,9 +520,7 @@ func TestCardlessClaimOutboxFailureRetriesAfterRestart(t *testing.T) {
 	store.mu.Lock()
 	store.failOutbox = false
 	store.mu.Unlock()
-	again, againHub := restartedOn(t, store)
-	stopSupervisionTimers(again)
-	againHub.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusIdle, State: "idle"})
+	again := restartCardlessClaimWithManualDigest(t, store)
 	again.superviseWatch(context.Background(), now.Add(time.Minute))
 	if !slices.Contains(pendingKinds(again, todo.ID), sigCardlessWait) {
 		t.Fatalf("the failed outbox write permanently spent the review round across restart: ledger=%+v pending=%+v", todoNow(again, todo.ID).Supervision, storedSupervisePending(t, again))
@@ -534,8 +546,7 @@ func TestCardlessClaimMarkerFailureKeepsRecoveryRecord(t *testing.T) {
 	store.mu.Lock()
 	store.failMarker = false
 	store.mu.Unlock()
-	again, _ := restartedOn(t, store)
-	stopSupervisionTimers(again)
+	again := restartCardlessClaimWithManualDigest(t, store)
 	if err := again.ensureTodosLoaded(context.Background()); err != nil {
 		t.Fatal(err)
 	}
