@@ -42,7 +42,7 @@ var hardcodedDirs = []string{
 	"internal/mail",
 	"internal/quota",
 	"internal/update",
-	"internal/voice",
+	"internal/modules/voice",
 	"internal/workspaceboard",
 	"plugins",
 }

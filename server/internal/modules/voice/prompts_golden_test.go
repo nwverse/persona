@@ -475,4 +475,4 @@ const spokenSample = "## 结果\n\n修好了 **登录页** 的测试，改了两
 	"```go\nfunc ok() bool {\n\treturn true\n}\n```\n\n| 用例 | 结果 |\n| --- | --- |\n| 登录 | 通过 |\n| 登出 | 通过 |\n\n" +
 	"提交 a0781ebb8，详情见 [PR](https://example.com/pull/1) 和 https://example.com/ci/42。运行 `npm test` 全部通过，见 ![截图](shot.png)。\n" +
 	"1. 下一步：`if err := run(ctx, \"--all\"); err != nil { return err }`\n> 引用的一句\n\n---\n日期 2026/11/06，比例 3/4，and/or。\n" +
-	"- [`runs.go`](server/internal/voice/runs.go)：跟踪一轮；[Login.tsx:42](src/Login.tsx#L42)；见 [`abc1234`](https://example.com/commit/abc1234)。"
+	"- [`runs.go`](server/internal/modules/voice/runs.go)：跟踪一轮；[Login.tsx:42](src/Login.tsx#L42)；见 [`abc1234`](https://example.com/commit/abc1234)。"
