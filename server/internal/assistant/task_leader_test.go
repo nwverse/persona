@@ -788,7 +788,7 @@ func TestWorkerSignalsGoToTheLeaderAndTheJudgeDoesNotCloseIt(t *testing.T) {
 			proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status, State: state, LastText: text,
 				PendingInteractions: pending, UpdatedAt: time.Now()})
 		if status == proto.StatusWorking {
-			s.taskWorking(ctx, "box", worker)
+			s.taskWorking(ctx, "box", worker, startRow{})
 		} else {
 			s.taskTurnEnded(ctx, "box", worker)
 		}
@@ -1145,7 +1145,7 @@ func TestJudgeDoesNotCloseALeadersWorkerThatPassedItsCheck(t *testing.T) {
 	f.mu.Unlock()
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusIdle},
 		proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
-	s.taskWorking(ctx, "box", worker)
+	s.taskWorking(ctx, "box", worker, startRow{})
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusIdle},
 		proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone, State: proto.StateUnread,
 			LastText: "做完了，证据见 PR\n交付：已上线并实测；卡点：无；谁来解：无", UpdatedAt: time.Now()})
@@ -2002,7 +2002,7 @@ func TestLeaderRetryDeliveredIsNotRedeliveredAfterRestart(t *testing.T) {
 	f.setSessions("box",
 		proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle},
 		proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
-	s.taskWorking(ctx, "box", worker)
+	s.taskWorking(ctx, "box", worker, startRow{})
 	f.mu.Lock()
 	f.failSend = &rpc.Error{Code: "peer_unconfirmed", Message: "not taken", Data: json.RawMessage(`{"delivered":"unknown"}`)}
 	f.mu.Unlock()
