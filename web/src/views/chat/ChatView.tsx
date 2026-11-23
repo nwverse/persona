@@ -55,6 +55,7 @@ import { BackgroundStallHint } from "../../ui/BackgroundStallHint";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { StoppedAgentLine } from "./StoppedAgentLine";
+import { CodexReadOnlyLine } from "./CodexReadOnlyLine";
 const TakeoverAction = lazy(() => import("./TakeoverAction"));
 import { scrollBehavior } from "../../ui/stream/motion";
 import { segmentChanges, shiftAbove, type SizeChange } from "./offscreen";
@@ -571,6 +572,33 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const canCompose = sessionCan(session, "send");
   // a stopped Agent (#4754): a read-only line with Terminal and Resume where the composer goes
   const stoppedLine = composerSlot(session, { assistant: Boolean(assistant), offline: Boolean(offlineLine) }) === "stopped";
+  // a read-only Codex session with explicit takeover/continuation: replaces the disabled composer (and merges with
+  // StoppedAgentLine when an exited Codex thread also carries `terminal`) so takeover lives in one footer bar
+  const isCodexSession = Boolean(session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server"));
+  const codexReadOnlyLine = Boolean(!assistant && !stoppedLine && !offlineLine && isCodexSession && !canCompose && session?.capabilities?.takeover);
+  const codexStoppedTakeover = Boolean(stoppedLine && isCodexSession && session?.capabilities?.takeover);
+  const codexFooterTakeover = codexReadOnlyLine || codexStoppedTakeover;
+  // One TakeoverAction controller lives in CodexReadOnlyLine across Chat <-> Terminal switches so an active
+  // confirmation dialog never unmounts; Terminal view exposes Take over + Continue via the Header ⋯ menu (no narrow-bar clipping).
+  const codexFooterVisible = codexFooterTakeover && (!switchable || view === "chat");
+  const [takeoverPending, setTakeoverPending] = useState(false);
+  const [takeOverRequested, setTakeOverRequested] = useState(false);
+  const [continueTakeoverRequested, setContinueTakeoverRequested] = useState(false);
+  useEffect(() => {
+    setTakeoverPending(false);
+    setTakeOverRequested(false);
+    setContinueTakeoverRequested(false);
+  }, [draftKey]);
+  useEffect(() => {
+    if (!codexFooterTakeover) {
+      setTakeOverRequested(false);
+      setContinueTakeoverRequested(false);
+    }
+  }, [codexFooterTakeover]);
+  const triggerTakeOver = useCallback(() => setTakeOverRequested(true), []);
+  const consumeTakeOver = useCallback(() => setTakeOverRequested(false), []);
+  const triggerContinueTakeover = useCallback(() => setContinueTakeoverRequested(true), []);
+  const consumeContinueTakeover = useCallback(() => setContinueTakeoverRequested(false), []);
   // one function while this chat stays put: the header takes it, and must not draw again for every pushed item
   const openTerminal = useCallback(
     () => (switchable ? setView("term") : navigate({ name: "session", mid, sid, view: "term" })),
@@ -2412,6 +2440,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         team={team}
         sides={sideControl}
         panel={chrome}
+        hideTakeoverButtons={codexFooterTakeover || takeoverPending}
+        onTakeOver={codexFooterTakeover && !codexFooterVisible && session?.capabilities?.takeover?.can_resume ? triggerTakeOver : undefined}
+        onContinueTakeover={codexFooterTakeover ? triggerContinueTakeover : undefined}
+        takeoverBusy={takeoverPending}
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
       {!embedded && banner}
@@ -2667,9 +2699,21 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {picker && pickParts.Bar && <pickParts.Bar pick={picker} chat={forwardFrom} onEnd={endPick} />}
         {/* kept while a call is on (its draft, attachments and quotes stay), the bar in its place */}
         <div ref={composerBox} className="shrink-0" hidden={takeover || Boolean(picker)}>
-        {stoppedLine ? (
+        {session && (codexFooterTakeover || takeoverPending) && (
+          <CodexReadOnlyLine
+            session={session}
+            visible={codexFooterTakeover}
+            stopped={codexStoppedTakeover ? { mid, sid, onTerminal: openTerminal } : undefined}
+            takeOverRequested={takeOverRequested}
+            onTakeOverConsumed={consumeTakeOver}
+            continueRequested={continueTakeoverRequested}
+            onContinueConsumed={consumeContinueTakeover}
+            onPendingChange={setTakeoverPending}
+          />
+        )}
+        {stoppedLine && !codexStoppedTakeover ? (
           <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} />
-        ) : (
+        ) : !codexFooterTakeover && (
         <Composer
           draftKey={draftKey}
           placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
@@ -2702,7 +2746,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           top={short ? undefined : queue}
         />
         )}
-        {!stoppedLine && session && (
+        {!stoppedLine && !codexReadOnlyLine && session && (
           <Suspense fallback={null}>
             <AgentStatusLine
               key={draftKey}
@@ -2935,6 +2979,10 @@ export const Header = memo(function Header({
   sides,
   panel: chrome,
   direction = false,
+  hideTakeoverButtons = false,
+  onTakeOver,
+  onContinueTakeover,
+  takeoverBusy = false,
 }: {
   session?: Session;
   starting?: boolean;
@@ -2976,6 +3024,14 @@ export const Header = memo(function Header({
   /** A session with side sessions (#7944): how many, whether its Side sessions panel is open, whether one needs you. */
   sides?: { count: number; open: boolean; needs: boolean; onToggle: () => void };
   panel?: PanelChrome;
+  /** True when the footer CodexReadOnlyLine owns the single TakeoverAction controller, avoiding duplicate top-bar buttons. */
+  hideTakeoverButtons?: boolean;
+  /** Starts "Take over" from the top-bar ⋯ menu when Terminal view hides the footer bar (avoids narrow-header clipping). */
+  onTakeOver?: () => void;
+  /** Starts "Continue in a new session" from the top-bar ⋯ menu via the shared TakeoverAction controller. */
+  onContinueTakeover?: () => void;
+  /** Disables top-bar ⋯ takeover items while a takeover request or confirmation dialog is active. */
+  takeoverBusy?: boolean;
 }) {
   const preferTab = useHerdrTabName();
   const primaryTab = session && !assistant && !direction ? sessionDisplayTab(session, preferTab) : "";
@@ -3066,6 +3122,15 @@ export const Header = memo(function Header({
     void import("../../lib/compare-runs").then((m) => { if (live) setCompareOf(() => m.compareMenu); }, () => {});
     return () => { live = false; };
   }, [assistant]);
+  const [takeoverLabelsOf, setTakeoverLabelsOf] = useState<null | (() => { takeOver: string; continueNew: string })>(null);
+  const hasTakeoverMenu = Boolean(onTakeOver || onContinueTakeover);
+  useEffect(() => {
+    if (!hasTakeoverMenu) return;
+    let live = true;
+    void import("./TakeoverAction").then((m) => { if (live) setTakeoverLabelsOf(() => m.takeoverMenuLabels); }, () => {});
+    return () => { live = false; };
+  }, [hasTakeoverMenu]);
+  const takeoverLabels = hasTakeoverMenu && takeoverLabelsOf ? takeoverLabelsOf() : null;
   const compare = session && compareOf ? compareOf(session) : undefined;
   const othersNeed = others.some((s) => stateOf(s) === "needs_you");
   // the Agent's background work (#5421): the button shows while there is some, the loop mark while a /loop drives it
@@ -3145,6 +3210,12 @@ export const Header = memo(function Header({
         ...(jumpTerminal ? [{ key: "terminal", label: t("chat-chatview.terminal"), icon: "terminal" as const, onSelect: openTerminalPage }] : []),
         ...(resumeOffer !== "hidden"
           ? [{ key: "resume-terminal", label: t("chat-chatview.resume_in_terminal"), icon: "play" as const, disabled: resumeOffer === "no_engine", detail: resumeOffer === "no_engine" ? t("chat-chatview.resume_no_engine", { computer: machineName }) : undefined, onSelect: resumeHere }]
+          : []),
+        ...(onTakeOver && takeoverLabels
+          ? [{ key: "takeover", label: takeoverLabels.takeOver, icon: "terminal" as const, disabled: takeoverBusy, onSelect: onTakeOver }]
+          : []),
+        ...(onContinueTakeover && takeoverLabels
+          ? [{ key: "takeover-continue", label: takeoverLabels.continueNew, icon: "compose" as const, disabled: takeoverBusy, onSelect: onContinueTakeover }]
           : []),
         ...(showFiles ? [{ key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles }, { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit }, ...(reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : [])] : []),
         ...tasksItem,
@@ -3296,7 +3367,7 @@ export const Header = memo(function Header({
       {assistant && !chrome && session?.space !== "health" && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
       {tasks && <IconButton icon="todo" label={t("sidepanel.conversation_tasks")} active={tasks.open} onClick={tasks.onToggle} className="hidden sm:flex" />}
       {!chrome && actions}
-      {!assistant && session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server") &&
+      {!assistant && !hideTakeoverButtons && session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server") &&
         <Suspense fallback={null}><TakeoverAction key={`${session.machine_id}:${session.session_id}`} session={session} /></Suspense>}
       {Boolean(topCenter) && more("end")}
       {chrome?.page && <IconButton icon="chat" label={t("chat-chatview.open_agent_page")} onClick={openAgentPage} />}

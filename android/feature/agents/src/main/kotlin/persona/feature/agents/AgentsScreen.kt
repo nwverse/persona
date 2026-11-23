@@ -48,6 +48,12 @@ import persona.core.domain.answer.askingLine
 import persona.core.domain.showsStarCard
 import persona.core.domain.showsStarPill
 import persona.core.navigation.*
+import persona.feature.chat.ChatSourceNote
+import persona.feature.chat.CodexTakeoverBusyPill
+import persona.feature.chat.CodexTakeoverClient
+import persona.feature.chat.CodexTakeoverDialogs
+import persona.feature.chat.codexTakeoverMenuActions
+import persona.feature.chat.rememberCodexTakeoverCoordinator
 import kotlinx.coroutines.delay
 import java.time.Instant
 
@@ -300,6 +306,19 @@ internal fun AgentsScreen(
     /** Whether a request can be answered now: through its own group's connection when there are several groups. */
     fun reachable(request: Interaction) = groups.stateFor(request.machineId, connection) == ConnectionState.Online
     fun open(session: SessionKey) { navigator.navigate(ChatRoute(session.machineId, session.sessionId)) }
+    val takeoverOps = model.operationsApi ?: LocalAgentsOperations.current?.operations
+    val takeoverClient = remember(takeoverOps) { takeoverOps?.let(CodexTakeoverClient::of) }
+    val takeoverCoordinator = rememberCodexTakeoverCoordinator(
+        client = takeoverClient,
+        sessions = model.sessions,
+        onOpenSession = null,
+        fallbackToast = toast,
+        onCompleted = { _, adopted ->
+            historyMachine = null
+            historySession = null
+            open(adopted.key)
+        },
+    )
     fun connectionSettings() { navigator.navigate(ConnectionSettingsRoute) }
     // The title while the hub is out of reach opens why, since when and "Retry now" in place (iOS ConnectionTitle).
     val haptics = persona.core.designsystem.rememberHaptics()
@@ -331,18 +350,24 @@ internal fun AgentsScreen(
                 icon = PhIcons.Archive, enabled = archiveState.busy == null && !archiveState.loading && !operations.busy) { archiveTarget = row.session } else null
         val forkOnline = groups.stateFor(row.session.machineId, connection) == ConnectionState.Online &&
             page.machines.firstOrNull { it.id == row.session.machineId }?.online != false
+        val takeoverActions = if (takeoverClient != null && !row.session.archived) {
+            codexTakeoverMenuActions(row.session, takeoverCoordinator, enabled = !operations.busy && forkOnline)
+        } else emptyList()
         val forkAction: (() -> Unit)? = if (row.session.canFork && !row.session.archived && model.hasOperations) ({
             model.fork(row.session) { forked -> open(forked) }
         }) else null
-        if (!row.session.isLive) listOfNotNull(
-            JAction(stringResource(R.string.agents_action_open_read_only), onClick = { openRow(row) }),
+        if (!row.session.isLive) buildList {
+            add(JAction(stringResource(R.string.agents_action_open_read_only), onClick = { openRow(row) }))
+            addAll(takeoverActions)
             forkAction?.let {
-                JAction(stringResource(persona.feature.chat.R.string.chat_menu_fork), PersonaIcons.forkChat,
-                    enabled = !operations.busy && forkOnline, onClick = it)
-            },
-            archiveAction,
-            JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !operations.busy) { operationDialog = AgentOperationDialog.Delete(row.session) }
-                .takeIf { row.session.canDelete })
+                add(JAction(stringResource(persona.feature.chat.R.string.chat_menu_fork), PersonaIcons.forkChat,
+                    enabled = !operations.busy && forkOnline, onClick = it))
+            }
+            archiveAction?.let(::add)
+            if (row.session.canDelete) add(JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !operations.busy) {
+                operationDialog = AgentOperationDialog.Delete(row.session)
+            })
+        }
         else AgentSessionMenuItems(row, row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row), operations.busy,
             onOpen = { openRow(row) }, onPin = { model.pin(row) }, onMute = { model.mute(row) },
             onRead = { model.markRead(listOf(row)) }, onRename = { operationDialog = AgentOperationDialog.Rename(row.session) },
@@ -356,6 +381,7 @@ internal fun AgentsScreen(
             onAttach = if (row.session.canAttach) ({ model.attach(row.session) }) else null,
             onFork = forkAction,
             forkOnline = forkOnline,
+            takeoverActions = takeoverActions,
             onInterrupt = { model.interrupt(row.session) },
             onLinkTodo = { pickingTodoForSession = row.session },
             onUnlinkTodo = row.session.todo?.let { todo -> { model.unlinkTodo(todo.id, row.session) } },
@@ -961,8 +987,15 @@ internal fun AgentsScreen(
             },
             content = listContent,
         )
-        if (sidebar == null) AgentsFeedNote(feed, latestPage, Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
-            .padding(horizontal = Tokens.Space.page).padding(bottom = Tokens.Space.l))
+        Column(
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+                .padding(horizontal = Tokens.Space.page, vertical = Tokens.Space.l),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+        ) {
+            if (takeoverClient != null) CodexTakeoverBusyPill(takeoverCoordinator, page.sessions)
+            if (sidebar == null) AgentsFeedNote(feed, latestPage)
+        }
         persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
     }
     }
@@ -1035,30 +1068,83 @@ internal fun AgentsScreen(
             it.machineId == historyMachine && it.sessionId == historySession
         }
         JFullScreen({ historyMachine = null; historySession = null }) {
-            persona.feature.chat.ChatDestination(ChatRoute(requireNotNull(historyMachine), requireNotNull(historySession)), navigator,
-                historyReadOnly = true, onHistoryBack = { historyMachine = null; historySession = null },
-                historyFooter = {
-                    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        creation?.error?.let { Text(it.resolve(), style = PersonaTheme.type.caption) }
-                        // A Codex history thread or a runtime's session is not resumed in a terminal from the phone.
-                        val sourced = target?.takeIf { it.hasSource }
-                        if (sourced != null) Text(sourced.readOnlyNotice.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-                        else JButton(stringResource(if (creation?.pending?.request?.resumeSessionId == historySession) R.string.agents_history_check_resume else R.string.agents_history_resume),
-                            loading = creation?.starting == true,
-                            enabled = creationModel != null && creation?.initialized == true && creation.starting != true &&
-                                target != null && (creation.pending != null ||
-                                (connection == ConnectionState.Online && page.machines.any { it.id == target.machineId && it.online })),
-                            onClick = { target?.let {
-                                if (it.isLive && creation?.pending == null) {
-                                    historyMachine = null
-                                    historySession = null
-                                    open(it.key)
-                                } else creationModel?.resume(it)
-                            } }, modifier = Modifier.fillMaxWidth())
+            // Host feedback, toasts and takeover dialogs inside JFullScreen's own window so failure/retry feedback
+            // is visible above the preview instead of hidden behind it (Super Rule 5).
+            val historyToast = persona.core.designsystem.rememberToastState()
+            val historyToastScope = rememberCoroutineScope()
+            val historyRes = agentResources()
+            val historyFeedback = remember(historyToast, historyToastScope, historyRes) {
+                object : AppFeedback {
+                    override fun failure(error: Throwable, operation: Boolean): Boolean {
+                        if (!operation) return true
+                        val text = persona.core.designsystem.operationFeedback(error).text.resolve(historyRes)
+                        historyToastScope.launch { historyToast.show(FeedbackNotice(text, style = FeedbackStyle.Error)) }
+                        return true
                     }
-                })
+                    override fun notice(message: String): Boolean = notice(message, FeedbackStyle.Info)
+                    override fun notice(message: String, style: FeedbackStyle): Boolean {
+                        if (style == FeedbackStyle.Success && feedback?.notice(message, style) == true) return true
+                        historyToastScope.launch { historyToast.show(FeedbackNotice(message, style = style)) }
+                        return true
+                    }
+                    override fun notice(message: String, action: FeedbackAction): Boolean = notice(message, action, FeedbackStyle.Info)
+                    override fun notice(message: String, action: FeedbackAction, style: FeedbackStyle): Boolean {
+                        historyToastScope.launch { historyToast.show(FeedbackNotice(message, action = action, style = style)) }
+                        return true
+                    }
+                }
+            }
+            CompositionLocalProvider(LocalAppFeedback provides historyFeedback) {
+                val historyTakeoverCoordinator = rememberCodexTakeoverCoordinator(
+                    client = takeoverClient,
+                    sessions = model.sessions,
+                    onOpenSession = null,
+                    fallbackToast = historyToast,
+                    successFeedback = feedback,
+                    onCompleted = { _, adopted ->
+                        historyMachine = null
+                        historySession = null
+                        open(adopted.key)
+                    },
+                )
+                Box(Modifier.fillMaxSize()) {
+                    persona.feature.chat.ChatDestination(ChatRoute(requireNotNull(historyMachine), requireNotNull(historySession)), navigator,
+                        historyReadOnly = true, onHistoryBack = { historyMachine = null; historySession = null },
+                        historyFooter = {
+                            if (target != null && target.canContinueCodex && takeoverClient != null) {
+                                val targetHubOnline = groups.stateFor(target.machineId, connection) == ConnectionState.Online
+                                ChatSourceNote(
+                                    session = target,
+                                    modifier = Modifier.navigationBarsPadding(),
+                                    takeover = historyTakeoverCoordinator,
+                                    takeoverEnabled = targetHubOnline && page.machines.any { it.id == target.machineId && it.online },
+                                )
+                            } else Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                                creation?.error?.let { Text(it.resolve(), style = PersonaTheme.type.caption) }
+                                // A Codex history thread or a runtime's session is not resumed in a terminal from the phone.
+                                val sourced = target?.takeIf { it.hasSource }
+                                if (sourced != null) Text(sourced.readOnlyNotice.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                                else JButton(stringResource(if (creation?.pending?.request?.resumeSessionId == historySession) R.string.agents_history_check_resume else R.string.agents_history_resume),
+                                    loading = creation?.starting == true,
+                                    enabled = creationModel != null && creation?.initialized == true && creation.starting != true &&
+                                        target != null && (creation.pending != null ||
+                                        (groups.stateFor(target.machineId, connection) == ConnectionState.Online && page.machines.any { it.id == target.machineId && it.online })),
+                                    onClick = { target?.let {
+                                        if (it.isLive && creation?.pending == null) {
+                                            historyMachine = null
+                                            historySession = null
+                                            open(it.key)
+                                        } else creationModel?.resume(it)
+                                    } }, modifier = Modifier.fillMaxWidth())
+                            }
+                        })
+                    if (takeoverClient != null) CodexTakeoverDialogs(historyTakeoverCoordinator)
+                    persona.core.designsystem.JToastHost(historyToast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
+                }
+            }
         }
     }
+    if (takeoverClient != null) CodexTakeoverDialogs(takeoverCoordinator)
     operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId], creationModel?.service,
         page.machines.firstOrNull { m -> m.id == it.session.machineId }) { operationDialog = null } }
     pickingTodoForSession?.let { targetSession ->
@@ -1395,6 +1481,8 @@ internal fun AgentSessionMenuItems(
     onAttach: (() -> Unit)? = null,
     onFork: (() -> Unit)? = null,
     forkOnline: Boolean = true,
+    /** Explicit Codex takeover / continuation actions, placed as a group right after terminal items. */
+    takeoverActions: List<JAction> = emptyList(),
     /** Stops its turn; offered while it works or needs you and can be interrupted (iOS `AgentRowMenu`). */
     onInterrupt: (() -> Unit)? = null,
     onLinkTodo: (() -> Unit)? = null,
@@ -1435,6 +1523,7 @@ internal fun AgentSessionMenuItems(
         if (row.unseen) add(JAction(stringResource(R.string.agents_action_mark_read), PhIcons.Check, onClick = onRead))
         // Only a session in a terminal resumes there; a Codex thread by its own thread id.
         session.resumeCommand()?.let { command -> add(JAction(stringResource(R.string.agents_action_copy_resume), onClick = { copy(command, null) })) }
+        if (takeoverActions.isNotEmpty()) addAll(takeoverActions)
         add(JAction(stringResource(R.string.agents_action_copy_directory), enabled = session.cwd.isNotBlank(), onClick = { copy(session.cwd, null) }))
         add(JAction(stringResource(R.string.agents_action_open_session), onClick = onOpen))
         // Its pane quits, or a runtime's session ends where its node says it can (#6294).
