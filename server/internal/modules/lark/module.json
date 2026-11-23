@@ -3,5 +3,6 @@
   "id": "lark",
   "api": 1,
   "origin": "builtin",
-  "title": "Feishu / Lark"
+  "title": "Feishu / Lark",
+  "feature": "module.lark"
 }
