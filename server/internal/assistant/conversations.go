@@ -954,6 +954,7 @@ func relayDeliveryText(msg relayMsg) string {
 // notice starts.
 func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 	if msg.Tool == superviseTool {
+		s.askRelayDelivered(to, msg)
 		return
 	}
 	if msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool {
@@ -1105,6 +1106,9 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 	}
 	for _, id := range due {
 		go func(id string) {
+			// A transfer must finish before a supervision drain selects its routing state.
+			s.supervise.routingMu.RLock()
+			defer s.supervise.routingMu.RUnlock()
 			b.mu.Lock()
 			q := b.st.Queue[id]
 			if len(q) == 0 {
