@@ -288,9 +288,79 @@ type turnsState struct {
 	// the marks is still one moment's.
 	jmu     sync.Mutex
 	judging map[string]int
+	// out: a done judgment of the task is being made (autoFinishTask), under jmu. A look that takes the same turn up
+	// again waits for it rather than ask the model alongside it (turnAgain, #13711); it is gone once the judgment
+	// lands, fails or times out, so a turn is never left marked as being judged.
+	out map[string]*judgmentOut
 	// closed: the sessions whose transcript showed their turn closed, at the row it was read at: an unknown status
 	// there is a stopped agent (rowsProven).
 	closed map[SessionRef]turnLook
+}
+
+// judgmentOut counts the done judgments of a task being made; done closes when the last one ends.
+type judgmentOut struct {
+	n    int
+	done chan struct{}
+}
+
+// judgingTurn marks a done judgment of todo as being made and answers what ends the mark (autoFinishTask).
+func (s *Service) judgingTurn(todo string) (end func()) {
+	b := &s.tasks.turns
+	b.jmu.Lock()
+	defer b.jmu.Unlock()
+	if b.out == nil {
+		b.out = map[string]*judgmentOut{}
+	}
+	o := b.out[todo]
+	if o == nil {
+		o = &judgmentOut{done: make(chan struct{})}
+		b.out[todo] = o
+	}
+	o.n++
+	return func() {
+		b.jmu.Lock()
+		defer b.jmu.Unlock()
+		if o.n--; o.n == 0 {
+			close(o.done)
+			if b.out[todo] == o {
+				delete(b.out, todo)
+			}
+		}
+	}
+}
+
+// judgmentOutDone is what closes when the done judgments of todo being made now have ended; nil when none is.
+func (b *turnsState) judgmentOutDone(todo string) <-chan struct{} {
+	b.jmu.Lock()
+	defer b.jmu.Unlock()
+	if o := b.out[todo]; o != nil {
+		return o.done
+	}
+	return nil
+}
+
+// startRow is the row of a session that showed its turn starting: its transcript's size and its time (Rev and
+// UpdatedAt of proto.Session). Zero: not known (the hub's own turn start).
+type startRow struct {
+	Rev int64
+	At  time.Time
+}
+
+// startBeforeTakenTurn: the start row of session machine/session is older than the row the ledger took todo's turn up
+// at, both by its transcript's size and by its time. The list told that start before that turn ended, and the handling
+// of the list came after the end was taken up (a sweep can read a session before its queued list events are handled):
+// it is the start of the turn taken up, not a new one (#13711). Rev is the transcript's size, which only a rewrite of
+// the transcript makes smaller; a newer time then still shows a real new start. Anything not known answers false.
+func (s *Service) startBeforeTakenTurn(todo, machine, session string, row startRow) bool {
+	if row.Rev == 0 || row.At.IsZero() {
+		return false
+	}
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	e, ok := b.doc.Turns[todo]
+	return ok && e.State != turnBefore && e.Machine == machine && e.Session == session && e.Rev != 0 && !e.Seen.IsZero() &&
+		row.Rev < e.Rev && !row.At.After(e.Seen)
 }
 
 // settling: the end of a turn of todo is being handled right now (taskJudging). Callable with the task lock or the
@@ -709,7 +779,27 @@ func (s *Service) turnAgain(ctx context.Context, t Todo, e taskTurn, last proto.
 	}
 	j := e.Judged
 	if j == nil {
-		if e.JudgeFailures > 0 {
+		failures := e.JudgeFailures
+		if done := s.tasks.turns.judgmentOutDone(t.ID); done != nil {
+			// A judgment of this task is being made already: one at a time. It may land for this turn; or not (its stretch
+			// moved on, the judge failed or ran out of time), and then this look judges, so the turn is never left
+			// unjudged (#13711).
+			s.logf("task %s: its agent's turn %s is being judged: waiting for that judgment", t.ID, clip(e.Key, 40))
+			wait := time.NewTimer(2 * taskDoneTimeout)
+			select {
+			case <-done:
+			case <-wait.C:
+			}
+			wait.Stop()
+			cur, ok := s.turnOf(context.WithoutCancel(ctx), t.ID)
+			if ok && cur.Machine == e.Machine && cur.Session == e.Session && cur.Key == e.Key && cur.Judged != nil {
+				return // it landed: the turn has its one judgment
+			}
+			if ok {
+				failures = cur.JudgeFailures
+			}
+		}
+		if failures > 0 {
 			s.autoFinishTaskRetry(t, since, worked)
 		} else {
 			s.autoFinishTask(t, since, worked)
