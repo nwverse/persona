@@ -71,6 +71,67 @@ func TestTaskPlanSchemaIncludesScopeRevision(t *testing.T) {
 	}
 }
 
+func TestSkipProjectMemorySchemaAndDescription(t *testing.T) {
+	checkProp := func(t *testing.T, name string, raw json.RawMessage, required []string, toolDesc string) {
+		t.Helper()
+		if slices.Contains(required, "skip_project_memory") {
+			t.Errorf("%s: skip_project_memory must be optional", name)
+		}
+		var prop struct {
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		}
+		if err := json.Unmarshal(raw, &prop); err != nil {
+			t.Fatalf("%s: skip_project_memory schema: %v", name, err)
+		}
+		if prop.Type != "boolean" {
+			t.Errorf("%s: skip_project_memory type = %q, want boolean", name, prop.Type)
+		}
+		combined := strings.ToLower(toolDesc + "\n" + prop.Description)
+		for _, want := range []string{"skip_project_memory", "default false", "project", "direction"} {
+			if !strings.Contains(combined, want) {
+				t.Errorf("%s: description/schema missing %q", name, want)
+			}
+		}
+	}
+	for _, lang := range []string{"", "en", "ja"} {
+		for _, name := range []string{"task_plan", "leader_task_plan"} {
+			tool := Tool(name, lang)
+			var schema struct {
+				Properties struct {
+					Tasks struct {
+						Items struct {
+							Required   []string                   `json:"required"`
+							Properties map[string]json.RawMessage `json:"properties"`
+						} `json:"items"`
+					} `json:"tasks"`
+				} `json:"properties"`
+			}
+			if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+				t.Fatalf("%s/%s: %v", name, lang, err)
+			}
+			raw, ok := schema.Properties.Tasks.Items.Properties["skip_project_memory"]
+			if !ok {
+				t.Fatalf("%s/%s: skip_project_memory missing from task schema", name, lang)
+			}
+			checkProp(t, name+"/"+lang, raw, schema.Properties.Tasks.Items.Required, tool.Description)
+		}
+		tool := Tool("agent_start", lang)
+		var schema struct {
+			Required   []string                   `json:"required"`
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+			t.Fatalf("agent_start/%s: %v", lang, err)
+		}
+		raw, ok := schema.Properties["skip_project_memory"]
+		if !ok {
+			t.Fatalf("agent_start/%s: skip_project_memory missing from schema", lang)
+		}
+		checkProp(t, "agent_start/"+lang, raw, schema.Required, tool.Description)
+	}
+}
+
 // Every file ends with a newline (it is dropped), so adding one in an editor never changes a prompt.
 func TestFilesEndWithANewline(t *testing.T) {
 	err := fs.WalkDir(files, ".", func(path string, d fs.DirEntry, err error) error {

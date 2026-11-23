@@ -629,10 +629,17 @@ func (s *Service) withProjectContext(ctx context.Context, machine, dir, lead, pr
 }
 
 func (s *Service) withProjectContextForTodo(ctx context.Context, machine, dir, lead string, t Todo, prompt string) string {
+	return s.withProjectContextForTodoOptions(ctx, machine, dir, lead, t, prompt, false)
+}
+
+func (s *Service) withProjectContextForTodoOptions(ctx context.Context, machine, dir, lead string, t Todo, prompt string, skipProjectMemory bool) string {
 	if strings.TrimSpace(prompt) == "" {
 		return prompt
 	}
-	background := s.projectHandoffContextForTodo(ctx, machine, dir, lead, t)
+	var background string
+	if !skipProjectMemory {
+		background = s.projectHandoffContextForTodo(ctx, machine, dir, lead, t)
+	}
 	// The memory extension's entries the work bears on (memory_extension_source.go); a planned task's carry them in
 	// handOffMemory instead.
 	if memory := s.agentStartMemory(ctx, machine, strings.TrimSpace(t.Title+"\n"+prompt)); memory != "" {

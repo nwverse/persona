@@ -4,13 +4,13 @@ Fixed machine_policy stays on that machine and refuses unavailable launchers; fl
 
 Started tasks keep a hub brief (owner request or started_why; supplied brief dropped) confirmed by the card. Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides (manual Agents lack estimate_due). Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.
 
-Edits need readonly=false and authorized write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds the read-only constraint. Claude-family uses bypassPermissions for both; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor/agy refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review (workers cannot delegate).
+Edits need readonly=false and authorized write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds the read-only constraint. Claude-family uses bypassPermissions for both; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor/agy refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review (workers cannot delegate). Set skip_project_memory=true (default false) to omit automatic project/direction memory for that start only.
 
 When repository identity needs resolving, consult repositories_list, and repository_get only when useful. The user's explicit repository URL or path takes precedence. A saved binding is a reference, not authorization or an allowlist; never infer a machine or checkout path from it. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. Closing the terminal on acceptance is the owner's Start choice; this tool cannot set it.
 
-For a saved workspace naming plan on an existing todo, select {"backend":{"operation_id":"<id>"}}. For a multi-repo container workspace, select {"container":{"selected_repo_ids":["<repo_id>",...]}} (or {"container":{"operation_id":"<id>"}} with todo_id for a prepared container). Optional host picks an enabled engine. All selected repos must be ready before start.
+Saved workspace naming plan on existing todo: {"backend":{"operation_id":"<id>"}}. Multi-repo container: {"container":{"selected_repo_ids":["<id>",...]}} (or {"container":{"operation_id":"<id>"}} with todo_id). Optional host picks an enabled engine; selected repos must be ready.
 
-Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>","queue":true} picks one (queue:true or owner in after queues FIFO and auto-starts when free; else busy refuses with owner); "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing default, prefer-new to isolate), busy cwd uses new. Explicit existing never switches silently. Reusing explicit new branch needs clean checkout, no live Agent and no open owner, else refuse with path/owner. Engine owns creation/registration; never run git worktree add. Card previews editable path before Start. Default branch: task/<todo id>. Failed creation starts no Agent; workspaces stay after acceptance. Follow org read-only refusals; never retry unchanged.
+Workspace: "new" isolates checkout; {"new":{"branch":"task/x"}} names branch; {"existing":"<cwd|id>","queue":true} picks one (queue:true or owner in after queues FIFO; else busy refuses); "none" skips. Omitted: readonly=none; writable Git follows assistant.task_workspace_preference (prefer-existing default, prefer-new isolates), busy cwd uses new. Explicit existing never switches silently. Explicit new branch reuse needs clean checkout, no live Agent/open owner. Engine owns creation; never git worktree add. Card previews editable path; default branch task/<todo id>. Failed creation starts no Agent; workspaces stay after acceptance. Follow org read-only refusals; never retry unchanged.
 
 `wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.{{template "shared/mcp_language" .}}
 
@@ -114,7 +114,11 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
           },
           "ultracode": {
             "type": "boolean",
-            "description": "large tasks (many files, multi-angle checks): Claude Code multi-agent workflows, slower/costlier; small tasks: false; Claude Code 2.1.284+ only; never put in prompt/title"
+            "description": "large tasks (many files/angles): Claude Code multi-agent workflows (2.1.284+ only), slower/costlier; small: false; never in prompt/title"
+          },
+          "skip_project_memory": {
+            "type": "boolean",
+            "description": "default false; true omits automatic project/direction memory (summary, outcomes, decisions, pitfalls, lessons) for this start only"
           },
           "readonly": {
             "type": "boolean",
@@ -150,7 +154,7 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
           },
           "continues": {
             "type": "string",
-            "description": "Original todo id. Reuse todo, original brief and effective criteria even on failed Start; never split. Start stops/releases active prior Agents and reopens if closed. Refuse unauthorized takeover, unreachable Agents that cannot be stopped, or open legacy successors."
+            "description": "Original todo id. Reuse todo, brief and criteria (even on failed Start); never split. Start stops/releases prior Agents and reopens if closed; refuses unauthorized takeover, unstoppable Agents or legacy successors."
           },
           "scope_revision": {
             "type": "string",

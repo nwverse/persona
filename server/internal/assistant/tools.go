@@ -770,13 +770,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// conversation's turn and given agentStartTimeout instead of the old 100s.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 		defer cancel()
-		// The tab is named from the prompt as written; unless this start opts out, its project's background goes before it (#2820).
+		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820) unless opted out (#13538).
 		title := s.tabName(sctx, a.Prompt)
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode, "tab_name": title, "title": title}
-		prompt := a.Prompt
-		if !a.SkipProjectMemory {
-			prompt = s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
-		}
+		prompt := s.withProjectContextForTodoOptions(sctx, am.ID, a.Cwd, self, Todo{}, a.Prompt, a.SkipProjectMemory)
 		if a.Ultracode {
 			params["ultracode"] = true
 		}

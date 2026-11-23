@@ -408,7 +408,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// context, separate from the main supervision ledger (#10623, #5732). SkipProjectMemory leaves out the project and
 	// direction context, including extra workspace repositories; the to-do's own decisions still follow.
 	direction := s.taskDirectionOf(ctx, t)
-	background := ""
+	var background string
 	if !t.SkipProjectMemory {
 		background = s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, direction, s.todoForPlanContext(t))
 	}

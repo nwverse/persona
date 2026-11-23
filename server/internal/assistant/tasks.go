@@ -78,6 +78,8 @@ type PlanTask struct {
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`
 	Readonly  bool  `json:"readonly,omitempty"`
+	// SkipProjectMemory omits automatic project and direction memory from this start's first prompt only (#13538).
+	SkipProjectMemory bool `json:"skip_project_memory,omitempty"`
 	// UserRequested: the user asked for this very task in the turn that planned it (#2559); with
 	// assistant.start_requested_tasks on it starts without the card's "Start".
 	UserRequested bool   `json:"user_requested,omitempty"`
