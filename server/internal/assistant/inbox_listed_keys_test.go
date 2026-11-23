@@ -58,6 +58,8 @@ var listedDrops = map[string]string{
 	"agent.processing_turn": "the latest prompt issued to the processing conversation",
 	"agent.deferred_at":     "when a held wake joined the eligibility queue",
 	"agent.wake_slot":       "the processing conversation's reserved slot",
+	// Deterministic PR/Issue to-do auto-forward bookkeeping (inbox_forward.go: InboxTodoForward).
+	"todo_forward.last": "bookkeeping: the item's Last when deterministic auto-forward last acted",
 	// Each handoff's request bookkeeping (inbox_handling.go: InboxHandoff).
 	"handoffs[].op":                 "the request's client id",
 	"handoffs[].pending_suggestion": "coalesces Wrap up requests",

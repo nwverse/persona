@@ -450,8 +450,8 @@ export function createManagedAgentsRuntime(o = {}) {
     },
     async start(params) {
       const starters = [...profiles.values()].filter((x) => x.profile.start)
-      // A launcher none of the profiles names is the daemon link's own name for the first (daemons.json `launcher`).
-      const pr = starters.find((x) => x.profile.start.launcher === params.launcher) ?? starters[0]
+      // Only a daemon link may use its own daemons.json launcher name for the first profile.
+      const pr = starters.find((x) => x.profile.start.launcher === params.launcher) ?? (o.runtimeOptions?.listen ? starters[0] : undefined)
       if (!pr) throw new RpcError(`no Managed Agents profile starts sessions as ${params.launcher ?? 'this launcher'}`, 'launcher_missing')
       const st = pr.profile.start
       const title = params.prompt ? params.prompt.split('\n')[0].slice(0, 60) : undefined

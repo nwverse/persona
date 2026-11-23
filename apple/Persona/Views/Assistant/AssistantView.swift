@@ -53,6 +53,9 @@ struct AssistantView: View {
     #endif
     /// The last shell request shown (`ShellState.request`'s serial).
     @State private var handledRequest = 0
+    /// The leader conversation a direction's page was just opened over from the sidebar (#11516): its becoming current
+    /// is not the user leaving the page, which is already over it.
+    @State private var directionLanding: SessionKey?
     /// The sidebar's place in front and the paths of the places left (docs/design/sidebar-navigation.md).
     @State private var places = ShellPlaces()
     /// A first message whose start failed (#1368): it stays on the page until it is sent again or deleted.
@@ -128,18 +131,6 @@ struct AssistantView: View {
             routed.environment(\.pushInboxChat, inboxChatPush)
         } else if widthClass == .regular {
             // The split keeps both columns clear of the fold when the device is partly folded.
-            #if os(macOS)
-            // The history list beside the conversation, flush with the window; Chat History folds it away. Not a
-            // NavigationSplitView: the Mac's would not fold the list's column (#856, `MacListBeside`).
-            MacListBeside(listShown: columns != .detailOnly, widthKey: "mac.assistant.listWidth") {
-                sidebar(column: true)
-                    // The list's name and search are the title bar's row, beside the traffic lights: the row stood
-                    // empty above them (#830). Nothing of the window's toolbar sits over this column.
-                    .ignoresSafeArea(.container, edges: .top)
-            } page: {
-                stack
-            }
-            #else
             NavigationSplitView(columnVisibility: $columns) {
                 // One width, the other splits' (`SidebarWidth`, #4206).
                 sidebar(column: true)
@@ -165,7 +156,6 @@ struct AssistantView: View {
             #if os(iOS)
             // Shown or not, remembered; beside the page or over it by the width (#2624, #4206).
             .modifier(SplitListMemory(columns: $columns, key: Self.listKey, state: columnState))
-            #endif
             #endif
         } else {
             // The sidebar takes the whole height, like ChatGPT's: the tab bar fades away as it comes out
@@ -331,19 +321,25 @@ struct AssistantView: View {
         .navigationDestination(isPresented: $showRoutines) { AssistantRoutinesView() }
         .navigationDestination(isPresented: $showTodos) {
             #if os(iOS)
-            TodosPlacePage() // the V1 list where the hub sends the view (#10465), else TodosView
+            TodosPlacePage(openDetail: { navPath.wrappedValue.append($0) }) // V1 where the hub sends the view (#10465)
             #else
-            TodosView()
+            TodosView(openDetail: { navPath.wrappedValue.append($0) })
             #endif
         }
         .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
+        // A destination does not get what the stack's root was given in a split (iPad): the page's chats are pushed
+        // over it only with the push passed here, as the Inbox's pages get it, never opened as a sidebar pick (3.5).
+        .navigationDestination(for: DirectionPageRoute.self) {
+            DirectionPage(id: $0.id)
+                .modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
+        }
         .navigationDestination(isPresented: $showHealth) {
             HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, launcherModel: healthModelPick, mode: $starterMode, effort: $starterEffort) { text, images in
                 Task { await start(text, images, space: Session.healthSpace) }
             }
         }
         .modifier(ShellDestinations(path: $path, enabled: placesByValue && !embedded, inboxChat: inboxChatPush))
-        .modifier(ClassicDestinations(enabled: shell == nil && !padPlaces && !embedded))
+        .modifier(ClassicDestinations(path: $path, enabled: shell == nil && !padPlaces && !embedded))
         #if os(iOS)
         .modifier(SidebarRouteDestinations(enabled: embedded, page: sidebarPage))
         #endif
@@ -383,10 +379,6 @@ struct AssistantView: View {
                             newConversation: currentIsHealth ? { backToRoot(); present(.health) } : newConversation,
                             openKnowledge: { if placesByValue { show(.knowledge) } else { showKnowledge = true } },
                             openProfile: { if placesByValue { show(.profile) } else { showProfile = true } })
-            #if os(macOS)
-            // At the window's edge only with the history list folded away too (#830).
-            .transformEnvironment(\.macTitleRowLeading) { if columns != .detailOnly { $0 = 0 } }
-            #endif
             #if os(iOS)
             .liftBlur(host: liftHost)
             #endif
@@ -395,10 +387,6 @@ struct AssistantView: View {
         // A message pressed in the conversation, over the bar too: the whole page dims (#3188).
         .overlay { MessageLiftHostLayer(host: liftHost) }
         #endif
-        #if os(macOS)
-        // The bar is the title bar's row, as the list beside it (#830); pushed pages keep their own.
-        .ignoresSafeArea(.container, edges: .top)
-        #endif
     }
 
     private var stack: some View {
@@ -406,10 +394,6 @@ struct AssistantView: View {
             routed
         }
         .environment(\.pushInboxChat, inboxChatPush)
-        #if os(macOS)
-        // Its pushed pages (Knowledge, Scheduled Tasks, To-dos…) go back from the title row, not the system's button (#2318).
-        .environment(\.macSectionStack, true)
-        #endif
     }
 
     /// The root as the stack's (or, in the Sidebar layout, the split's page's) first page: what it does there (its routes,
@@ -447,8 +431,17 @@ struct AssistantView: View {
                 // The app picking the main conversation by itself once the hub answers (none was open) is not the user
                 // opening one: any page already pushed at launch stays. User-driven changes leave the conversation but
                 // keep the place's stack for a later return (`ShellPlaces`).
+                if let landing = directionLanding, landing == new {
+                    directionLanding = nil
+                    return // a direction's page was put over it already (`openDirectionPage`)
+                }
                 if AssistantCurrentNavigation.keepsPushedPages(old: old, new: new, main: model.assistantMain) { return }
                 leavePlace()
+            }
+            // A direction's page, from its sidebar row's All › or its leader conversation's title menu (#11516).
+            .onChange(of: DirectionPages.shared.ask?.serial, initial: true) { _, serial in
+                guard let serial, let ask = DirectionPages.shared.take(serial) else { return }
+                openDirectionPage(ask)
             }
             .onChange(of: model.hub?.group) { old, new in
                 if old != new { model.forgetMainClear() }
@@ -714,6 +707,40 @@ struct AssistantView: View {
         underDrawer { backToRoot() }
     }
 
+    /// A direction's page (#11516, `DirectionPage`), pushed one level over its leader conversation: ‹ and the edge swipe
+    /// come back to the conversation. From the title menu it is pushed as any page. From the sidebar the conversation
+    /// becomes the current place with the page already over it, without animation, and then the drawer closes: an
+    /// exception to a sidebar pick being a root (docs/design/DESIGN_SYSTEM.md 3.5), since the page is the conversation's
+    /// own drill-down and its ‹ has somewhere to go. On the iPad the same happens in the detail column.
+    private func openDirectionPage(_ ask: DirectionPages.Ask) {
+        let route = DirectionPageRoute(id: ask.id)
+        guard ask.fromSidebar else { return navPath.wrappedValue.append(route) }
+        model.shellSettings = false
+        shell?.select(0, animated: false)
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            // The place or root in front is left as any pick leaves it, and the conversation starts afresh: the page is
+            // the one page over it, never on a path the conversation was left with (an earlier page, an Agent's chat).
+            #if os(iOS)
+            if embedded, let unified {
+                unified.select(.conversation, path: navPath, contentChanged: true)
+            } else {
+                places.leave(with: navPath.wrappedValue)
+            }
+            #else
+            places.leave(with: navPath.wrappedValue)
+            #endif
+            backToRoot()
+            if current != ask.lead {
+                directionLanding = ask.lead
+                model.assistantCurrent = ask.lead
+            }
+            navPath.wrappedValue = NavigationPath([route])
+        }
+        activeDrawer.close()
+    }
+
     /// While the drawer is out the page is under it: it changes at once, and the drawer's closing is the only motion.
     private func underDrawer(_ change: () -> Void) {
         guard activeDrawer.isOut else { return change() }
@@ -814,7 +841,7 @@ struct AssistantView: View {
     /// error reports.
     private static func newChatMissed(_ line: String, model: AppModel) {
         UserDefaults.standard.set("\(Date.now.formatted(.iso8601)) \(line)", forKey: NewChatCheck.defaultsKey)
-        #if os(iOS) || os(macOS)
+        #if os(iOS)
         if ErrorReportQueue.shared.write(ErrorReports.report(kind: "log", level: "warning", message: line)), let group = model.hub?.group {
             model.flushErrorReports(group)
         }
@@ -1468,12 +1495,18 @@ struct StarterComposer: View {
         draft.sent()
     }
 
-    private func add(_ img: UIImage) { MessagePhotos.add(img, to: &draft.held.images, model: model) }
+    /// The pictures a message here may carry (the hub's, #12973).
+    private var limits: ImageLimits { model.imageLimits(machine.group) }
+
+    private func add(_ img: UIImage) {
+        MessagePhotos.add(img, to: &draft.held.images, model: model, limits: limits,
+                          spill: MessagePhotos.spill(into: files, machine: machine, model: model, dest: uploadDest))
+    }
 
     /// A scan's pages: the next message's photos while they fit, else one PDF uploaded as a picked file is (#3720).
     private func addScan(_ pages: [UIImage]) {
         #if os(iOS)
-        DocumentScanner.deliver(pages, room: MessagePhotos.limit - images.count, model: model, add: { add($0) }, upload: { upload($0) })
+        DocumentScanner.deliver(pages, room: limits.roomLeft(holding: images.count), model: model, add: { add($0) }, upload: { upload($0) })
         #endif
     }
 
@@ -1517,20 +1550,22 @@ struct StarterComposer: View {
 
     #if os(iOS)
     private var attachHost: AttachSheetHost<AttachMoreRows> {
-        AttachSheetHost(panel: attachPanel, caption: textBinding, photoRoom: max(0, MessagePhotos.limit - images.count),
+        // past the hub's pictures a pick goes as a file (`add`), so the panel takes as many as the files have room for too
+        AttachSheetHost(panel: attachPanel, caption: textBinding,
+                        photoRoom: limits.roomLeft(holding: images.count) + max(0, FileAttachments.most - files.items.count),
                         videoRoom: max(0, VideoAttachments.most - videos.items.count),
                         camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                         files: { showFiles = true }, allPhotos: { showPhotos = true }, showsMore: true,
                         more: { AttachMoreRows(panel: attachPanel, sections: moreSections) }) { outcome in
             switch outcome {
             case .then(let picks, let action):
-                Task { await draft.held.addPicked(picks, machine: machine, model: model) }
+                Task { await draft.held.addPicked(picks, machine: machine, model: model, limits: limits, dest: uploadDest) }
                 action()
             case .closed(let picks):
-                Task { await draft.held.addPicked(picks, machine: machine, model: model) }
+                Task { await draft.held.addPicked(picks, machine: machine, model: model, limits: limits, dest: uploadDest) }
             case .send(let picks):
                 Task {
-                    await draft.held.addPicked(picks, machine: machine, model: model)
+                    await draft.held.addPicked(picks, machine: machine, model: model, limits: limits, dest: uploadDest)
                     submit() // the gate first, as the box's Send
                 }
             }
@@ -1598,11 +1633,7 @@ struct StarterComposer: View {
             #if os(iOS) || os(visionOS)
             PasteImageChip(focused: focused) { add($0) }
             #endif
-            #if os(macOS)
-            if !images.isEmpty { ComposerImages(images: imagesBinding) }
-            #else
             if !images.isEmpty { ComposerImages.editable(draft.held) } // a tap marks it up, as in a conversation
-            #endif
             if let token = mentionToken {
                 ComposerMentionMenu(token: token, text: textBinding, selection: $selection, source: mentionSource) { ref in
                     if let updated = ContextRef.addingMention(ref, to: quotes) { quotes = updated }
@@ -1655,15 +1686,11 @@ struct StarterComposer: View {
                 }
             }
         }
-        .mediaPicker(isPresented: $showPhotos, selection: $picks)
+        .mediaPicker(isPresented: $showPhotos, selection: $picks, limit: limits.perMessage + VideoAttachments.most)
         .fileUploadPicker(isPresented: $showFiles) { urls in
             // The assistant runs on its machine (the hub's unless set otherwise): files go to that one's temp directory.
             upload(urls)
         }
-        #if os(macOS)
-        // Finder drags and ⌘V of pictures / copied files, as in an Agent's composer (docs/apple/mac.md「Details」).
-        .macComposerFiles(images: images.count, focused: focused, attach: { MacDrop.append($0, to: &images) }, upload: { urls in upload(urls) })
-        #endif
         #if os(iOS)
         .modifier(attachHost)
         // The Photos library warmed off the main thread, as a conversation's composer does (#4250).
@@ -1752,6 +1779,14 @@ struct BeautifulStarterComposer: View {
         files.start(urls, machine: machine, model: model, dest: uploadDest)
     }
 
+    /// The pictures a message here may carry (the hub's, #12973).
+    private var limits: ImageLimits { model.imageLimits(machine.group) }
+
+    private func add(_ img: UIImage) {
+        MessagePhotos.add(img, to: &images, model: model, limits: limits,
+                          spill: MessagePhotos.spill(into: files, machine: machine, model: model, dest: uploadDest))
+    }
+
     private var launcherMachine: String { uploadDest == Session.healthSpace ? model.healthMachineID : model.assistantConfig?.machineID ?? model.hubMachineID }
     /// The launcher a new conversation starts with (the user's pick, else the one in Persona settings), or nil while
     /// settings are not known (#4200): no name is made up, and requests omit the field so the hub picks its default.
@@ -1773,19 +1808,9 @@ struct BeautifulStarterComposer: View {
             if !files.items.isEmpty { FileAttachmentsBar(files: files) }
             if !videos.items.isEmpty { VideoAttachmentsBar(videos: videos) }
             #if os(iOS) || os(visionOS)
-            PasteImageChip(focused: focused) { img in
-                guard images.count < 4 else { return model.toast = Toast(String(localized: "Up to 4 at a time"), style: .error) }
-                let scaled = img.scaledDown(maxSide: 1600)
-                if let jpeg = scaled.jpegData(compressionQuality: 0.75) {
-                    images.append((scaled, ImagePayload(mime: "image/jpeg", data: jpeg.base64EncodedString())))
-                }
-            }
+            PasteImageChip(focused: focused) { add($0) }
             #endif
-            #if os(macOS)
-            if !images.isEmpty { ComposerImages(images: imagesBinding) }
-            #else
             if !images.isEmpty { ComposerImages.editable(draft.held) } // a tap marks it up, as in a conversation
-            #endif
             PromptComposer(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)…"), text: textBinding, selection: $selection, focused: $focused,
                            hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty, disabled: disabled,
                            attach: PromptItems.attachments(camera: false),
@@ -1846,15 +1871,11 @@ struct BeautifulStarterComposer: View {
                 launchers = answer.launchers.filter(\.runsAssistant)
             }
         }
-        .mediaPicker(isPresented: $showPhotos, selection: $picks)
+        .mediaPicker(isPresented: $showPhotos, selection: $picks, limit: limits.perMessage + VideoAttachments.most)
         .fileUploadPicker(isPresented: $showFiles) { urls in
             // The assistant runs on its machine (the hub's unless set otherwise): files go to that one's temp directory.
             upload(urls)
         }
-        #if os(macOS)
-        // Finder drags and ⌘V of pictures / copied files, as in an Agent's composer (docs/apple/mac.md「Details」).
-        .macComposerFiles(images: images.count, focused: focused, attach: { MacDrop.append($0, to: &images) }, upload: { urls in upload(urls) })
-        #endif
         .onChange(of: picks) { _, items in
             Task {
                 guard !items.isEmpty else { return }
@@ -1865,10 +1886,7 @@ struct BeautifulStarterComposer: View {
                         AppModel.shared.toast = Toast(String(localized: "Couldn't read some photos (they may still be downloading from iCloud)"), style: .error)
                         continue
                     }
-                    let scaled = img.scaledDown(maxSide: 1600)
-                    if let jpeg = scaled.jpegData(compressionQuality: 0.75) {
-                        images.append((scaled, ImagePayload(mime: "image/jpeg", data: jpeg.base64EncodedString())))
-                    }
+                    add(img) // held to the hub's pictures like every other way in (#12973)
                 }
                 picks = []
             }
@@ -2296,12 +2314,13 @@ private struct RootBarHidden: UIViewRepresentable {
 /// pushed from the todo list (TodosView) would open nothing. Nor the agent page Full Screen pushes (`SessionKey`). The
 /// shell registers both itself (ShellHome.swift).
 private struct ClassicDestinations: ViewModifier {
+    @Binding var path: NavigationPath
     var enabled: Bool
 
     func body(content: Content) -> some View {
         if enabled {
             content
-                .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id) }
+                .navigationDestination(for: TodoDetailRoute.self) { r in TodoDetailView(todoID: r.id, openDetail: { (route: TodoDetailRoute) in path.append(route) }) }
                 .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key) }
         } else {
             content

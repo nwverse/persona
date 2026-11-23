@@ -23,13 +23,10 @@ struct ExtensionViewRenderer: View {
     @Binding var link: LinkTarget?
 
     var body: some View {
-        #if !os(macOS)
-        // Mac pages already expose the same search in their toolbar.
         if let search = view.search, let model, model.managesConfirmation {
             Section { ExtensionSearchRow(search: search, model: model, link: $link) }
                 .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
         }
-        #endif
         if let f = view.filter, let model {
             Section { ExtensionFilterChips(filter: f, model: model, link: $link) }
                 .listRowInsets(EdgeInsets())
@@ -114,6 +111,11 @@ struct ExtensionParts: Identifiable {
                 // Left out: a component this app doesn't know, and the assistant's HTML outside its chat (extensions never
                 // receive the assistant sandbox context).
                 if case .unknown = c { leftOut = true; continue }
+                #if !os(iOS)
+                // Only iPhone and iPad draw UI version 11's 3D scene (#12544); older surfaces leave an assistant card's
+                // raw scene out rather than framing an empty section.
+                if case .scene = c { leftOut = true; continue }
+                #endif
                 if case .html = c, !includeHTML { leftOut = true; continue }
                 parts[parts.count - 1].append(Item(id: Item.id(c, section: i, index: j), component: c))
             }
@@ -396,6 +398,15 @@ struct ExtensionItemRow: View {
             #endif
         // UI version 6's picture (`ExtensionMedia.swift`).
         case .image(let i): ExtensionImageItem(item: i, model: model)
+        case .scene(let scene):
+            #if os(iOS)
+            ExtensionScene(scene: scene, controller: model, link: $link)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.flush,
+                                          bottom: Theme.Space.s, trailing: Theme.Space.flush))
+            #else
+            EmptyView()
+            #endif
         case .divider, .unknown: EmptyView()
         // UI version 4–5's code-hosting components: a whole page with them is drawn by the code page (`ExtensionCodePage`,
         // #2961); a card or a section says what they say (`ExtensionCodeSummary`).
@@ -524,19 +535,18 @@ struct ExtensionViewStack: View {
     /// assistant's HTML outside its chat.
     nonisolated static func leftOut(_ c: ExtensionComponent, html: Bool) -> Bool {
         if case .unknown = c { return true }
+        #if !os(iOS)
+        if case .scene = c { return true }
+        #endif
         if case .html = c, !html { return true }
         return false
     }
 }
 
 extension View {
-    /// Where an extension's links open: the link card (iPhone) or the panel at the trailing edge (Mac).
+    /// Where an extension's links open: the link card.
     @ViewBuilder func pluginLinks(_ link: Binding<LinkTarget?>) -> some View {
-        #if os(macOS)
-        macLinkPanel(link)
-        #else
         modifier(ExtensionLinkSheet(link: link))
-        #endif
     }
 
     /// The pages `models` ask to push (docs/extensions/extensions.md「Page navigation」), on the navigation stack this page is on; the one
@@ -714,12 +724,7 @@ struct ExtensionPageView: View {
     }
 
     private func updateVisibility() {
-        var foreground = phase == .active
-        #if DEBUG && os(macOS)
-        // A validated loopback capture uses the normal stream while its window stays non-activating.
-        // This exception exists only for the DEBUG batch; production still requires an active scene.
-        foreground = foreground || MacExtensionSnapshotBatch.isCapturing
-        #endif
+        let foreground = phase == .active
         page.setVisible(pageVisible && tabActive && foreground)
     }
 

@@ -123,8 +123,8 @@ type PlanTask struct {
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
-	// Supervisor: the leader conversation the main conversation handed the task to (task_plan's supervisor, #3608);
-	// "" the plan's own conversation supervises it, as before.
+	// Supervisor: optional initial direction lead chosen by main. Otherwise a planning lead supervises its own
+	// work and ordinary conversations use main. The durable task ledger takes precedence after a transfer.
 	Supervisor string `json:"supervisor,omitempty"`
 	// ReuseTodo: the todo this task runs on instead of a new one (task_plan's todo_id, #5279): one this conversation
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
@@ -200,11 +200,15 @@ type PlanTask struct {
 	planFirst bool
 	// callerPick: the launcher, model, effort, tier, permission mode and ultracode the task named itself, kept from its
 	// first start try in this process, so every try starts from them again whichever start-defaults rule fits it.
-	// Never serialized: the task as stored keeps its own value for whatever a policy filled in (storedLaunch).
+	// Never serialized: the task as stored keeps its own launch, not what a tier, Model configuration › Agents or a
+	// policy filled in for a start (storedLaunch, #12618).
 	callerPick *startPick
 	// startFilled: what the start-defaults policy filled in on this start try (start_defaults.go): the next try goes
 	// back to callerPick first, and the plan keeps the task's own value for exactly those. Never serialized.
 	startFilled startFill
+	// startNamed: what this start try put in place of the launch resolved for the task, which the task names from then
+	// on as its card shows it (storedLaunch). Never serialized; this try only.
+	startNamed startNamed
 	// startedAgent is the kind this start's answer reported, or the explicitly resolved launcher kind when that answer omitted it.
 	// Kept only until the Agent is linked; never serialized.
 	startedAgent string
@@ -343,6 +347,10 @@ type tasksState struct {
 	// the task's agent link or failure is recorded.
 	workspaceMu     sync.Mutex
 	workspaceClaims map[string]string
+	// workspaceQueueMu serializes deterministic FIFO dequeues for occupied existing workspaces (task_workspace_queue.go).
+	workspaceQueueMu     sync.Mutex
+	workspaceDispatching map[string]bool
+	lastWorkspaceQueueAt time.Time
 	// turns: the turns completion handling took up, kept in the database (task_turns.go).
 	turns turnsState
 	// quiet: the verdicts on task Agents' turns with no output, and the agents Persona's Stop interrupted (silent_turns.go).
@@ -353,7 +361,8 @@ func newTasksState() tasksState {
 	return tasksState{recoverBefore: time.Now(), plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
 		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]*taskStart{},
 		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, taking: map[string]*taskStart{}, sendsOut: map[[2]string]*sendsOut{},
-		sendsRetryAfter: sendsRetryEvery,
+		workspaceDispatching: map[string]bool{},
+		sendsRetryAfter:      sendsRetryEvery,
 		turns: turnsState{again: map[string]bool{}, looked: map[turnRecoveryKey]turnLook{}, recovering: map[string]bool{}, tries: map[string]int{},
 			retry:   map[turnRecoveryKey]turnRetry{},
 			judging: map[string]int{}, closed: map[SessionRef]turnLook{}}}
@@ -874,6 +883,14 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		p, err := s.dismissPlan(r.Context(), r.PathValue("id"))
+		// Don't Start on a card already started, dismissed or withdrawn elsewhere (another device, the conversation's
+		// task_plan_withdraw) while no event reached this client: answer with the plan as it is, so the client's card
+		// shows what happened instead of a 409 the user can only tap again (an iOS app held such a card until restarted).
+		if errors.Is(err, errPlanNotOpen) {
+			if cur, lerr := s.loadPlan(r.Context(), r.PathValue("id")); lerr == nil && cur.State != planOpen {
+				p, err = cur, nil
+			}
+		}
 		if err != nil {
 			planErr(w, err)
 			return

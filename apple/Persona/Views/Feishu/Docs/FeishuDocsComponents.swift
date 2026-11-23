@@ -32,11 +32,7 @@ extension Error {
             switch e.code {
             case .notConnectedToInternet, .networkConnectionLost: return String(localized: "No network connection")
             case .timedOut: return String(localized: "The request timed out. Try again later.")
-            #if os(macOS)
-            case .cannotConnectToHost, .cannotFindHost: return String(localized: "Can't reach the hub. Make sure this Mac can reach it.")
-            #else
             case .cannotConnectToHost, .cannotFindHost: return String(localized: "Can't reach the hub. Make sure your phone can reach it.")
-            #endif
             default: break
             }
         }

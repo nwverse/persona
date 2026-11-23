@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
@@ -92,7 +93,10 @@ class KnowledgeMapShotsTest {
             }
         }
         for ((s, d) in only) {
-            style = s; dark = d
+            rule.runOnIdle {
+                style = s; dark = d
+                Snapshot.sendApplyNotifications()
+            }
             rule.waitUntilExactlyOneExists(androidx.compose.ui.test.hasText(expected), 10_000)
             val language = if (name.endsWith("-zh")) "zh" else if (name.endsWith("-ja")) "ja" else "en"
             capture("knowledge-map-${name.removeSuffix("-zh").removeSuffix("-ja")}-$language-${s.name.lowercase()}-${if (d) "dark" else "light"}.png")

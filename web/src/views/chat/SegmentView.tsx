@@ -243,7 +243,7 @@ const ANSWER = "[&_.prose-j]:text-[length:var(--chat-body)]! [&_.prose-j]:leadin
  *  it); only a finished turn's last reply has the bar under it (`bar`, #5314).
  *  Memo'd: the chat context changes with every streamed item, so each SegmentView re-renders; a finished answer's
  *  props stay the same and it is skipped (#3024). */
-export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, stripCloseout, bar, cut, usage, usageMs }: {
+export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, stripCloseout, bar, cut, usage, usageMs, ttftMs }: {
   item?: Item;
   streaming?: string;
   mid?: string;
@@ -255,9 +255,10 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, st
   bar?: boolean;
   /** Its turn ended in a model error or an interruption right after these words (Segment.cut): cindy's line above them. */
   cut?: boolean;
-  /** With `bar`: what its exchange used (lib/turn-usage.ts usageKey, a string so the memo holds) and its work time. */
+  /** With `bar`: what its exchange used (lib/turn-usage.ts usageKey, a string so the memo holds), its work time, and streaming TTFT. */
   usage?: string;
   usageMs?: number;
+  ttftMs?: number;
 }) {
   // a long answer the hub cut for the page: its start, and "View full text" under it
   const live = streaming !== undefined;
@@ -266,7 +267,7 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, st
   if (!text) return null;
   const cwd = mid && sid ? getSession(mid, sid)?.cwd : undefined;
   return (
-    <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined}
+    <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined} ttftMs={bar ? ttftMs : undefined}
       starSource={!live && mid && sid && item?.id ? { mid, sid, item: item.id, fingerprint: item.source_fingerprint } : undefined}
       translationSource={item?.full_size ? {
         key: JSON.stringify([mid, sid, item.id, item.text, item.full_size, item.source_fingerprint, Boolean(stripCloseout)]),
@@ -292,13 +293,13 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, st
 /** Freshness reaches only the single visible persisted text, not every paragraph hidden in its execution summary: it
  *  reads its own id (fresh-words.ts), so a new reply renders these words, not every exchange. `done`: its turn is over,
  *  so the words have the bar under them (cindy: never while the turn runs). */
-const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout, done, cut, usage, usageMs }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean; done?: boolean; cut?: boolean; usage?: string; usageMs?: number }) {
+const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout, done, cut, usage, usageMs, ttftMs }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean; done?: boolean; cut?: boolean; usage?: string; usageMs?: number; ttftMs?: number }) {
   const persisted = streaming === undefined ? item?.id : undefined;
   const fresh = useFreshWords(mid, sid, persisted);
   const bar = Boolean(done && persisted);
   const stripCloseout = useCloseoutReader(Boolean(noCloseout));
   if (stripCloseout && item?.text?.trim() && !item.full_size && !stripCloseout(item.text)) return null;
-  return <div data-latest-text><Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} stripCloseout={stripCloseout} bar={bar || undefined} cut={cut} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined} /></div>;
+  return <div data-latest-text><Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} stripCloseout={stripCloseout} bar={bar || undefined} cut={cut} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined} ttftMs={bar ? ttftMs : undefined} /></div>;
 });
 
 export const SegmentView = memo(function SegmentView({
@@ -313,6 +314,7 @@ export const SegmentView = memo(function SegmentView({
   trace,
   offscreen,
   busy,
+  dockTurnClock,
 }: {
   seg: Segment;
   live: boolean;
@@ -335,8 +337,10 @@ export const SegmentView = memo(function SegmentView({
    *  answered): drawn finished for a moment when a send drops the live line, its words get no reply bar yet, so the
    *  bar does not come and go (#5314). */
   busy?: boolean;
+  /** The dock owns the live turn's elapsed clock; finished exchanges never receive this state. */
+  dockTurnClock?: boolean;
 }) {
-  const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment, children, dockTurnClock } = useChatContext();
+  const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment, children } = useChatContext();
   const own = useMemo(() => exchangeSteps(seg), [seg]);
   // the subagents its subagents launched, each a card of its own by when it started (#5030); a trace shows the calls only.
   // Keyed by what places them, not the list: that changes with every subagent's tokens and steps.
@@ -414,7 +418,7 @@ export const SegmentView = memo(function SegmentView({
       {liveRow}
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
-      {(latestItem || streaming !== undefined) && <Suspense key="latest-text" fallback={null}><LatestAnswer item={streaming === undefined ? latestItem : undefined} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} /></Suspense>}
+      {(latestItem || streaming !== undefined) && <Suspense key="latest-text" fallback={null}><LatestAnswer item={streaming === undefined ? latestItem : undefined} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} ttftMs={!live && !trace ? seg.ttftMs : undefined} /></Suspense>}
       {sourced && <Suspense key="turn-sources" fallback={null}><TurnSources steps={own} /></Suspense>}
       {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
     </section>

@@ -1,5 +1,6 @@
 package persona.feature.machines
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -11,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -144,7 +146,10 @@ internal fun MachinesScreen(
         state.failure?.let { failure -> item("failure") { JNotice(stringResource(failure.text)) } }
         if (state.sessionsFailure) item("sessions-failure") { JNotice(stringResource(R.string.machines_sessions_failure)) }
         if (machineId == null) {
-            usageWindows(subscriptionUsage, java.time.Instant.ofEpochSecond(state.now))
+            val tokenShares = entries.mapNotNull { entry ->
+                entry.metrics.usage?.let { (entry.machine?.displayName ?: entry.id) to it }
+            }
+            if (tokenShares.isNotEmpty()) item("today-tokens") { TodayTokensCard(tokenShares) }
             // An offline assistant with no computer the hub still keeps: out of reach, not a first run (no Add).
             if (!state.loading && ids.isEmpty() && assistant.offline != null) item("offline") { JAssistantOffline(assistant) }
             else if (!state.loading && ids.isEmpty()) item("empty") {
@@ -164,6 +169,11 @@ internal fun MachinesScreen(
                     navigator.navigate(MachineDetailRoute(id))
                 }
             }
+            usageWindows(subscriptionUsage, java.time.Instant.ofEpochSecond(state.now))
+            if (entries.any { entry ->
+                val cores = (entry.metrics.system ?: entry.machine?.system)?.cores
+                loadPerCore(entry.metrics.current(state.now)?.load, cores) != null
+            }) item("load-definition") { MachineLoadDefinition() }
         } else {
             val metric = state.history?.metrics?.live(machine) ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
             val system = metric.system ?: machine?.system
@@ -171,7 +181,7 @@ internal fun MachinesScreen(
             val agents = machineSessions(sessions, machineId, model.sessions.supportsFeature(machineId, "sessions_hierarchy"))
             item("machine") {
                 MachineCard(machine, metric, AgentTally(agents), state.now, state.history?.step ?: state.range.step, deploy = deployLine,
-                    onConfirm = if (adds) confirmComputer else null, linkSwitchExpected = linkSwitchBusy)
+                    onConfirm = if (adds) confirmComputer else null, linkSwitchExpected = linkSwitchBusy, showLoadReading = false)
             }
             if (machine != null && actions != null) item("link-switch") {
                 MachineLinkSwitchSection(machine, linkAttempt,
@@ -238,7 +248,16 @@ internal fun MachinesScreen(
             }
             itemsIndexed(values, key = { _, it -> "now-${it.first}" }, contentType = { _, _ -> "value" }) { index, value ->
                 JGroupItem(GroupPosition.of(index, values.size)) {
-                    JRow(stringResource(value.first), value = value.second ?: stringResource(R.string.machines_swap_off))
+                    val label = stringResource(value.first)
+                    val reading = value.second ?: stringResource(R.string.machines_swap_off)
+                    val perCore = if (value.first == R.string.machines_metric_load) loadPerCoreText(current?.load, system?.cores, locale) else null
+                    if (perCore == null) JRow(label, value = reading)
+                    else JRow(label, trailing = {
+                        Column(Modifier.widthIn(max = Tokens.Size.cardColumn / 2), horizontalAlignment = Alignment.End) {
+                            Text(reading, style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink3)
+                            Text(perCore, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, textAlign = TextAlign.End)
+                        }
+                    })
                 }
             }
             if (current == null) item("no-current") { JNotice(stringResource(if (metric.online) R.string.machines_no_sample else R.string.machines_offline_history)) }
@@ -267,9 +286,10 @@ internal fun MachinesScreen(
                         MetricKind.Rx -> current?.netRx; MetricKind.Tx -> current?.netTx; MetricKind.Load -> current?.load
                         MetricKind.Disk -> percent(current?.diskUsed, current?.diskTotal)
                     } }, state.now, state.range.seconds, state.history?.step ?: state.range.step, activeSelection, { selection = it },
-                    reference = system?.cores?.takeIf { kinds.first() == MetricKind.Load && it > 0 }?.toDouble())
+                    loadCores = system?.cores?.takeIf { kinds.first() == MetricKind.Load })
             }
             if (system?.os == "linux" && !current?.cores.isNullOrEmpty()) item("cores") { CoreBars(current.cores!!) }
+            item("load-definition") { MachineLoadDefinition() }
             if (machine != null && actions != null) machineLaunchers(machine.online, acting,
                 onLauncher = if (launcherPages) ({ name -> navigator.navigate(LauncherRoute(machine.id, name)) }) else null)
             item("system") { JSectionHeader(stringResource(R.string.machines_system_title)) }
@@ -310,6 +330,8 @@ internal fun MachineCard(
     onConfirm: ((String) -> Unit)? = null,
     /** A confirmed or listed Link switch makes this computer's temporary offline state expected. */
     linkSwitchExpected: Boolean = false,
+    /** The detail page shows load in its monitoring section instead. */
+    showLoadReading: Boolean = true,
     onClick: (() -> Unit)? = null,
 ) {
     val current = metrics.current(now)
@@ -325,7 +347,17 @@ internal fun MachineCard(
         MachineConcern.Offline -> Status.Offline
         MachineConcern.None -> Status.Unread
     }
-    JCard(modifier.padding(bottom = Tokens.Space.m), onClick = onClick, status = status) {
+    val glass = PersonaTheme.style == AppStyle.Glass
+    val glassAlertBorder = if (glass) when (concern) {
+        MachineConcern.Critical -> PersonaTheme.palette.danger.dot.copy(alpha = 0.6f)
+        MachineConcern.Warning -> PersonaTheme.palette.working.dot.copy(alpha = 0.6f)
+        else -> null
+    } else null
+    val cardModifier = modifier.padding(bottom = Tokens.Space.m).let { base ->
+        if (glassAlertBorder != null) base.border(Tokens.Size.line, glassAlertBorder, PersonaTheme.shapes.cardShape) else base
+    }
+    // On Glass, offline and healthy cards keep a clean neutral surface (matching iOS); only alert cards carry an edge.
+    JCard(cardModifier, onClick = onClick, status = if (glass) null else status) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp.dense)) {
             OsBadge(system)
             Column(Modifier.weight(1f)) {
@@ -375,6 +407,12 @@ internal fun MachineCard(
         if (deploy != null && showsDeploy(machine)) deploy(machine)
         else if (machine?.nodeMismatch == true) Warning(stringResource(R.string.machines_node_mismatch))
         alerts.forEach { Warning(stringResource(it.label)) }
+        if (showLoadReading) loadPerCoreText(current?.load, system?.cores, locale)?.let { load ->
+            Row(Modifier.fillMaxWidth().padding(top = Tokens.Space.s), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                Text(stringResource(R.string.machines_metric_load), Modifier.weight(1f), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink2)
+                Text(load, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink, textAlign = TextAlign.End)
+            }
+        }
         if (fillsRow) Spacer(Modifier.weight(1f))
         val groups = listOf(listOf(MetricKind.Cpu), listOf(MetricKind.Memory), listOf(MetricKind.Rx, MetricKind.Tx))
         groups.forEach { kinds ->
@@ -390,6 +428,12 @@ internal fun MachineCard(
             Plot(metrics.points, kinds, now, 3600, step, Modifier.fillMaxWidth().height(32.dp))
         }
     }
+}
+
+@Composable
+private fun MachineLoadDefinition() {
+    Text(stringResource(R.string.machines_load_definition), Modifier.padding(bottom = Tokens.Space.m),
+        style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
 }
 
 @Composable

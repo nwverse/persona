@@ -171,7 +171,7 @@ func (n *Node) defaultKind() string { return n.engineChoice().Default }
 // noEngineRefusal is why nothing can start on a machine that enables no terminal engine (the empty set).
 func noEngineRefusal() error {
 	return refusal(engineMissing, "这台电脑没启用终端引擎，不能从手机新开或接着会话，这次没有发送。"+
-		"在 设置 › 机器 › 这台电脑 › 引擎 里启用一个（herdr、Herdr App、Orca、Paseo 或 Cindy）再试。", nil)
+		"在 设置 › 机器 › 这台电脑 › 引擎 里启用一个（herdr、Herdr App、Orca、Paseo、Cindy 或 T3 Code）再试。", nil)
 }
 
 // watchEngine starts watching the engine in use for as long as ctx lasts (Serve); engine.use moves it to the new one.
@@ -252,7 +252,7 @@ func (n *Node) useEngineChoice(ctx context.Context, c proto.EngineChoice) error 
 	n.engEpoch++
 	epoch := n.engEpoch
 	n.hostAgents, n.layouts, n.agents, n.panePIDs, n.lastList = nil, nil, map[string]host.Agent{}, map[string]panePID{}, ""
-	n.lastPanes, n.onAgentsList = nil, nil
+	n.lastPanes, n.onAgentsList, n.agyBound = nil, nil, nil
 	n.mu.Unlock()
 	n.sent.forget() // the new engine's list goes once even when the old one's was the same (sessions_sent.go)
 	n.endTermStreams("the machine's terminal engine changed")
@@ -343,6 +343,7 @@ func (n *Node) engines(ctx context.Context, herdrVersion string) []proto.Engine 
 		rexEngine(ctx, rexClient()),
 		n.paseoEngine(ctx),
 		n.cindyEngine(ctx),
+		n.t3codeEngine(ctx),
 	}
 }
 

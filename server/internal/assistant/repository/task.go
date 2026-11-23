@@ -7,8 +7,12 @@ const CatalogKey = repositorywire.CatalogKey
 const MaxTaskRepositories = repositorywire.MaxTaskRepositories
 const MaxRepositoryLinks = repositorywire.MaxRepositoryLinks
 const MaxRevision = repositorywire.MaxRevision
+const LinkRoleDelivery = repositorywire.LinkRoleDelivery
+const LinkRoleReference = repositorywire.LinkRoleReference
 const LayoutRoot = repositorywire.LayoutRoot
 const LayoutContainer = repositorywire.LayoutContainer
+const TaskWorkflowIsolated = repositorywire.TaskWorkflowIsolated
+const TaskWorkflowSharedBranch = repositorywire.TaskWorkflowSharedBranch
 
 type Problem = repositorywire.Problem
 type RequestedRef = repositorywire.RequestedRef
@@ -52,10 +56,16 @@ func Snapshot(manager, todo string, revision int64, rows []TaskRepository, selec
 	return repositorywire.Snapshot(manager, todo, revision, rows, selected)
 }
 func ValidRevision(revision *int64) bool              { return repositorywire.ValidRevision(revision) }
+func NormalizeLinkRole(role string) (string, Problem) { return repositorywire.NormalizeLinkRole(role) }
+func NormalizeTaskWorkflow(workflow string) (string, Problem) {
+	return repositorywire.NormalizeTaskWorkflow(workflow)
+}
 func LinkKey(identity Identity, link TaskLink) string { return repositorywire.LinkKey(identity, link) }
 func DefaultAlias(identity Identity) string           { return repositorywire.DefaultAlias(identity) }
 
-func PreserveLinkTitles(current, next []TaskLink)          { repositorywire.PreserveLinkTitles(current, next) }
+func PreserveLinkTitles(current, next []TaskLink, input []LinkInput) {
+	repositorywire.PreserveLinkTitles(current, next, input)
+}
 func ParseTaskLink(raw string) (Identity, TaskLink, error) { return repositorywire.ParseTaskLink(raw) }
 func ParseTaskLinkInput(in LinkInput) (Identity, TaskLink, error) {
 	return repositorywire.ParseTaskLinkInput(in)

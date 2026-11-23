@@ -50,21 +50,41 @@ type startFill struct{ preset, effort, ultracode bool }
 
 func (f startFill) any() bool { return f.preset || f.effort || f.ultracode }
 
-// storedLaunch is the launch task t keeps in its plan: what this try resolved, as every task keeps it, with the
-// task's own value instead for whatever a start-defaults policy filled in on this try. A policy's values are for that
-// one start (the Agent's session shows what it runs with): kept with the task, a remedy, a queued start or a retry
-// from the card, which read the task back from the store, would take them for the task's own.
+// startNamed is what a start try put in place of the launch resolved for its task, which the task names from then on
+// (storedLaunch): launcher, the launcher (its tier goes with it) the computer has for a default it lacks (#2661) or an
+// engine runs in place of the one asked (#8140); noModel, that launcher runs its own default model, not the one asked;
+// effort, the effort an engine ran in place of the one asked (#8140).
+type startNamed struct{ launcher, noModel, effort bool }
+
+// storedLaunch is the launch task t keeps in its plan: the task's own launcher, model, effort, speed and tier
+// (callerPick), not what this try resolved for it from a tier, Model configuration › Agents or a start-defaults
+// policy. Those are for that one start (the Agent's session shows what it runs with, a failed start's error args its
+// launcher): kept with the task, a retry (task_retry, the card's Retry), a remedy or a queued start, which read the
+// task back from the store, would take them for the task's own choice and stay on them after the default or the
+// tier's model changed (#12618). What this try put in place of the resolved launch (startNamed) is kept, as the card
+// shows it, unless a policy's preset (or, for the effort, the policy's effort) decided it. The permission mode is the
+// one this try settled, except one a policy's preset brought.
 func (t PlanTask) storedLaunch() startPick {
 	kept := t.launchPick()
 	if t.callerPick == nil {
 		return kept
 	}
 	own := *t.callerPick
-	if t.startFilled.preset {
-		kept.launcher, kept.model, kept.effort, kept.speed, kept.tier, kept.permission = own.launcher, own.model, own.effort, own.speed, own.tier, own.permission
+	ran := kept
+	kept.launcher, kept.model, kept.effort, kept.speed, kept.tier = own.launcher, own.model, own.effort, own.speed, own.tier
+	if named := t.startNamed; !t.startFilled.preset {
+		if named.launcher {
+			kept.launcher, kept.tier = ran.launcher, ""
+		}
+		if named.noModel {
+			kept.model = ""
+		}
+		if named.effort && !t.startFilled.effort {
+			kept.effort = ran.effort
+		}
 	}
-	if t.startFilled.effort {
-		kept.effort = own.effort
+	if t.startFilled.preset {
+		kept.permission = own.permission
 	}
 	if t.startFilled.ultracode {
 		kept.ultracode = copyBool(own.ultracode)
@@ -214,9 +234,17 @@ func configuredStartAgentLookup(discovered, overrides []ConfiguredLauncher) func
 // allowAll: the Agents Persona itself starts on the launcher (agent_start, a planned task, a read-only one too) run with
 // Allow all, bypassPermissions: Claude Code's, and, by the owner's decision (#8141), those whose approval is a switch
 // Allow all turns on (Paseo's providers with Auto Accept: Grok and its other ACP providers, OpenCode), which otherwise
-// ask for every tool and leave a card the assistant never answers. Codex keeps its sandbox, on Paseo as in a terminal:
-// its tasks take the settled mode (tasks_permission.go). A start a person makes (New Agent) keeps the mode they chose.
-func (a startAgent) allowAll() bool { return a.agent == "claude" || a.autoAccept }
+// ask for every tool and leave a card the assistant never answers, and the Antigravity CLI (agy), whose worker would
+// otherwise stop at its own approval prompt in the pane (--dangerously-skip-permissions, node/workagent.go). Codex keeps
+// its sandbox, on Paseo as in a terminal: its tasks take the settled mode (tasks_permission.go). A start a person makes
+// (New Agent) keeps the mode they chose.
+func (a startAgent) allowAll() bool { return a.agent == "claude" || a.agent == "agy" || a.autoAccept }
+
+// allowAllOver: a task's mode gives way to Allow all, always on Claude Code and an Auto Accept provider (their planned
+// tasks run in it), only when it has none on agy, whose start runs in the mode it names (node/workagent.go).
+func (a startAgent) allowAllOver(mode string) bool {
+	return a.allowAll() && (a.agent != "agy" || mode == "")
+}
 
 // fitLauncher holds params' launcher (resolveStart's) to what computer m can start. One the caller named, or an
 // explicit tier resolved to, that m does not have is refused, naming the ones it has: both are caller choices the

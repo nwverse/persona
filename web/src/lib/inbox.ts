@@ -13,7 +13,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { api, ApiError, enc, errorText } from "./api";
 import type { AgentMutes } from "./agent-groups";
 import { agentName } from "./agent-kind";
-import { connectorOpenTitle } from "./connectors";
+import { connectorOpenTitle } from "./connector-profiles";
 import { contextBody } from "./context-body";
 import type { Route } from "./router";
 import { isResumed } from "./reconnect";
@@ -87,6 +87,19 @@ export interface InboxAgent {
   changes?: DocChange[];
 }
 
+/** Deterministic PR/Issue auto-forwarding metadata persisted on an Inbox item (#12492). */
+export interface InboxTodoForward {
+  todo_id: string;
+  todo_title?: string;
+  canonical_url?: string;
+  match_kind?: "pull_request" | "issue" | string;
+  status: "forwarded" | "queued" | "resumed" | "fallback" | "failed" | string;
+  machine_id?: string;
+  session_id?: string;
+  reason?: string;
+  forwarded_at?: string;
+}
+
 export interface InboxItem {
   id: string;
   /** The manager whose inbox it is, in the hub's merged list (docs/protocol/protocol.md "Per-manager routing"); none: the default.
@@ -130,6 +143,8 @@ export interface InboxItem {
   /** Only in GET /inbox/{id}: the conversation as text. */
   context?: string;
   agent?: InboxAgent;
+  /** Deterministic PR/Issue auto-forward status and linked to-do metadata (#12492). */
+  todo_forward?: InboxTodoForward;
   /** New foreign mail translated by the hub as it came in (for a device whose Settings › Translation asks), by target language. */
   translations?: Record<string, { subject: string; preview: string }>;
   /** What it grew out of (docs/assistant/inbox.md "Relationships: parents and children"): another item, a todo or an agent session ("<machine>/<session>"). */

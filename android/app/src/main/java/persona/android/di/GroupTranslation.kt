@@ -294,6 +294,8 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun assistantLauncherList(machineId: String) = source.assistantLauncherList(names.rawMachine(machineId))
         override suspend fun assistantLauncherList(machineId: String, refresh: Boolean) =
             source.assistantLauncherList(names.rawMachine(machineId), refresh)
+        override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean) =
+            source.mainAssistantLauncherList(names.rawMachine(machineId), refresh)
         override suspend fun launcherModels(machineId: String, launcher: String) = source.launcherModels(names.rawMachine(machineId), launcher)
         override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = source.setModelPick(names.raw(session), pick)
         override suspend fun clearModelPick(session: SessionKey) = source.clearModelPick(names.raw(session))
@@ -399,6 +401,7 @@ internal fun AgentOperations.inGroup(names: GroupNames): AgentOperations {
         override suspend fun attachSession(key: SessionKey) = source.attachSession(names.raw(key))
         override suspend fun interruptSession(key: SessionKey) = source.interruptSession(names.raw(key))
         override suspend fun deleteSession(key: SessionKey) = source.deleteSession(names.raw(key))
+        override suspend fun forkSession(key: SessionKey) = source.forkSession(names.raw(key))
     }
 }
 

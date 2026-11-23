@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
@@ -19,6 +20,59 @@ import (
 // both full-width and ASCII question marks are neither particles nor stops, so questions still go to the agent, and
 // negations ("not passed", "can't pass", "no good") never match because the regex anchors on the approval word.
 var passWords = lazyre.New(`(?i)^\s*(验收)?(通过|没问题|可以|好的?|ok|okay|lgtm|pass(ed)?|approved?|👍)(?:[了啦呀咯喽呗哒啊]{1,2})?\s*[。.!！]?\s*$`)
+
+// conclusionQuestion handles free text on a conclusion before acceptance can take it as an answer. A displayed
+// option or bare confirmation continues through the existing reply path. Other text is a conversation with the
+// supervisor, so the card, its deadline and the task's decisions are untouched.
+func (s *Service) conclusionQuestion(ctx context.Context, ev *feishubot.MessageEvent, content *feishubot.Content, features FeishuFeatures) bool {
+	msg := ev.Message
+	id, earlier := s.acceptFor(msg.ParentID, msg.RootID)
+	if id == "" || earlier {
+		return false
+	}
+	ask, _ := s.askCopy(id)
+	text := strings.TrimSpace(content.Text)
+	if !ask.Conclusion || text == "" {
+		return false
+	}
+	if !strings.ContainsAny(text, "?？") { // i18n-ignore: question marks in the owner's reply, never shown
+		if passWords.MatchString(text) && (!decideAsk(&ask) || ask.Recommend != "") {
+			return false
+		}
+		if decideAsk(&ask) {
+			if option := exactDecisionOption(text, ask.Options); option != "" {
+				content.Text = option
+				return false
+			}
+		}
+	}
+	todo, ok := s.todoNow(id)
+	if !ok {
+		return false
+	}
+	cfg := s.settings(ctx)
+	target := botTarget{Kind: targetMain, TodoID: id}
+	supervisor := cfg.Main
+	if todo.Supervision != nil && todo.Supervision.Supervisor != "" {
+		supervisor = todo.Supervision.Supervisor
+	}
+	if supervisor == cfg.Main {
+		supervisor = s.ownSupervisor(cfg)
+	}
+	if supervisor != "" && supervisor != cfg.Main {
+		if c, present := s.session(ctx, cfg.MachineID, supervisor); present && c.Assistant {
+			target.Kind, target.SessionID = targetPersona, supervisor
+		}
+	}
+	l := s.botLang(ctx)
+	if err := botAllowed(l, features, target); err != nil {
+		s.botNote(ctx, msg.MessageID, err.Error())
+	} else if err := s.botSend(ctx, ev, *content, target); err != nil {
+		s.logf("bots: conclusion question for task %s: %v", id, err)
+		s.botNote(ctx, msg.MessageID, i18n.T(l, "assistant-feishu.not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
+	}
+	return true
+}
 
 // acceptReply answers a reply to a "Please verify" card or a conclusion's (true: it was one): "Pass" marks it verified (a
 // decision: takes the option recommended), anything else is the user's change (a decision: their choice), written into the
@@ -204,7 +258,7 @@ func acceptSucceeded() acceptResult { return acceptResult{taken: true} }
 func (s *Service) decisionNotDelivered(ctx context.Context, id string, askedAt time.Time, choice string, cause error) acceptResult {
 	l := s.botLang(ctx)
 	s.userDecided(ctx, id)
-	s.signal(superviseSignal{Todo: id, Kind: sigIdle, Key: "undelivered|" + askedAt.UTC().Format(time.RFC3339Nano),
+	s.signal(superviseSignal{Todo: id, Kind: sigIdle, Key: "undelivered|" + askedAt.UTC().Format(time.RFC3339Nano), Handoff: true,
 		Detail: i18n.T(l, "assistant-reports.decision_not_delivered", i18n.Args{"decision": clip(oneLine(choice), 200),
 			"error": clip(oneLine(i18n.Localize(cause, l)), 120)})})
 	return acceptResult{taken: true, undelivered: cause}
@@ -277,6 +331,10 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			b.mu.Unlock()
 			return acceptResult{}, err
 		}
+	}
+	if decideAsk(a) && terminalResumeLabel(a.Recommend) {
+		b.mu.Unlock()
+		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
 	}
 	previousDueAt, previousAcceptedAt := a.DueAt, a.AcceptedAt
 	if a.AcceptedAt.IsZero() {

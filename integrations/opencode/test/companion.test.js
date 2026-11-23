@@ -1,8 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
+import { spawn } from 'node:child_process'
+import { EventEmitter, once } from 'node:events'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+import { chmodSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { parseCompanionArgs } from '../companion.mjs'
 import { buildAcpEnv, createOpencodeCompanion } from '../lib/companion.js'
@@ -64,6 +69,8 @@ class FakeAcpClient extends EventEmitter {
   constructor() {
     super()
     this.generation = 1
+    this.pid = 0
+    this.busy = false
     this.loadedSessions = new Set()
     this.calls = []
     this.nextId = 1
@@ -79,7 +86,16 @@ class FakeAcpClient extends EventEmitter {
   }
   async ensureStarted() {
     this.calls.push(['ensureStarted'])
+    if (!this.pid) {
+      this.pid = 40000 + this.generation
+      this.generation++
+    }
     return { agentCapabilities: { loadSession: true, mcpCapabilities: { http: true } } }
+  }
+  async stopChild() {
+    this.calls.push(['stopChild'])
+    this.pid = 0
+    this.loadedSessions.clear()
   }
   async newSession({ cwd, mcpServers }) {
     this.calls.push(['newSession', { cwd, mcpServers }])
@@ -103,6 +119,14 @@ class FakeAcpClient extends EventEmitter {
         { id: 'model', category: 'model', currentValue: 'opencode-go/claude-sonnet-4-6', options: this.configModels },
       ],
     }
+  }
+  async resumeSession(params) {
+    this.calls.push(['resumeSession', params])
+    this.loadedSessions.add(params.sessionId)
+    return { configOptions: [
+      { id: 'mode', category: 'mode', currentValue: 'build', options: [{ value: 'build' }, { value: 'plan' }] },
+      { id: 'model', category: 'model', currentValue: 'opencode-go/claude-sonnet-4-6', options: this.configModels },
+    ] }
   }
   async setConfigOption(sessionId, configId, value) {
     this.calls.push(['setConfigOption', { sessionId, configId, value }])
@@ -139,6 +163,25 @@ class FakeAcpClient extends EventEmitter {
   }
 }
 
+// Legacy feature tests share their expectation log and input controls, but
+// each assistant still receives a different ACP object and loaded-session set.
+function createTestCompanion(options) {
+  const parent = options.acp
+  return createOpencodeCompanion({ ...options, assistantAcpFactory: () => {
+    const child = new FakeAcpClient()
+    child.calls = parent.calls
+    for (const key of ['nextId', 'onPrompt', 'onNewSession', 'failModeSet', 'configModels']) {
+      Object.defineProperty(child, key, { get: () => parent[key], set: (value) => { parent[key] = value } })
+    }
+    child.newSession = async (params) => {
+      const result = await parent.newSession.call(child, params)
+      child.loadedSessions.add(result.sessionId)
+      return result
+    }
+    return child
+  } })
+}
+
 test('companion advertises launchers/models/assistant without supervision_policy, starts Agent session, streams, handles permissions, modes, rename, close', async (t) => {
   const n = await startFakeNode(t)
   const db = fakeV1Db()
@@ -147,7 +190,7 @@ test('companion advertises launchers/models/assistant without supervision_policy
   db.message('ses_disk_1', 'm2', 'assistant', [{ type: 'text', text: 'reply from tui' }], { modelID: 'gpt-5', providerID: 'openai' })
 
   const acp = new FakeAcpClient()
-  const companion = createOpencodeCompanion({
+  const companion = createTestCompanion({
     socketPath: n.path,
     retryMs: 20,
     pushDelayMs: 5,
@@ -252,6 +295,26 @@ test('companion advertises launchers/models/assistant without supervision_policy
   assert.ok(acp.calls.some((c) => c[0] === 'closeSession' && c[1].sessionId === sid))
 })
 
+test('the ACP companion exposes A2A tools and forwards calls from its own Agent session', async (t) => {
+  const n = await startFakeNode(t, { tools: [{ name: 'a2a_report', description: 'Report a task result' }] })
+  const acp = new FakeAcpClient()
+  let endpoint
+  acp.onNewSession = ({ mcpServers }) => { [endpoint] = mcpServers }
+  const companion = createTestCompanion({ socketPath: n.path, openDb: fakeV1Db().openDb, acp })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+  const { session } = await n.peer.call('session.start', { cwd: '/w/app' })
+  const headers = { 'Content-Type': 'application/json', ...Object.fromEntries(endpoint.headers.map(({ name, value }) => [name, value])) }
+  const mcp = (method, params) => fetch(endpoint.url, {
+    method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  }).then((res) => res.json())
+  assert.deepEqual((await mcp('tools/list', {})).result.tools.map(({ name }) => name), ['a2a_report'])
+  const args = { task_id: 'task', message_id: 'report', state: 'completed', text: 'Done' }
+  assert.equal((await mcp('tools/call', { name: 'a2a_report', arguments: args })).result.content[0].text, 'a2a_report ran')
+  assert.deepEqual(n.toolCalls, [{ name: 'a2a_report', args, session_id: session.session_id }])
+})
+
 test('companion assistant mode wires HTTP MCP end-to-end, hides context, enforces memory_dir, plan readonly_unsupported, command gates, and rejects supervision_instructions', async (t) => {
   const n = await startFakeNode(t, {
     tools: [
@@ -274,7 +337,7 @@ test('companion assistant mode wires HTTP MCP end-to-end, hides context, enforce
     assert.deepEqual(listRes.result.tools.map((x) => x.name), ['kb_search', 'mail_send'])
   }
 
-  const companion = createOpencodeCompanion({
+  const companion = createTestCompanion({
     socketPath: n.path,
     retryMs: 20,
     pushDelayMs: 5,
@@ -319,6 +382,16 @@ test('companion assistant mode wires HTTP MCP end-to-end, hides context, enforce
       ],
     })
     assert.deepEqual(gated, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    n.setHub(false)
+    await until('hub disconnected during native permission', () => !companion.runtime.hubConnected)
+    const disconnected = await client.onPermissionRequest({
+      sessionId,
+      toolCall: { toolCallId: 'tc_offline', kind: 'execute', title: 'bash', rawInput: { command: 'pwd' } },
+      options: [{ optionId: 'once', kind: 'allow_once', name: 'Allow' }, { optionId: 'reject', kind: 'reject_once', name: 'Reject' }],
+    })
+    assert.deepEqual(disconnected, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    n.setHub(true)
+    await until('hub reconnected during native permission', () => companion.runtime.hubConnected)
 
     // Memory write auto-allows without asking phone.
     const mem = await client.onPermissionRequest({
@@ -373,7 +446,7 @@ test('companion resumes a disk-only session via ACP session/load and supports in
   let resolvePrompt
   acp.onPrompt = () => new Promise((r) => { resolvePrompt = r })
 
-  const companion = createOpencodeCompanion({
+  const companion = createTestCompanion({
     socketPath: n.path,
     retryMs: 20,
     pushDelayMs: 5,
@@ -422,6 +495,11 @@ test('parseCompanionArgs honors --bin, --opencode-bin, --name, --display-name, P
   assert.equal(fromLegacyEnv.bin, '/env/old-oc')
 
   assert.throws(() => parseCompanionArgs(['--unknown-flag', '1'], {}))
+  const bounded = parseCompanionArgs(['--assistant-workers', '3', '--assistant-idle-ms', '2500'], {})
+  assert.equal(bounded.maxAssistantWorkers, 3)
+  assert.equal(bounded.assistantIdleMs, 2500)
+  for (const value of ['0', '65', '1.5', 'NaN']) assert.throws(() => parseCompanionArgs(['--assistant-workers', value], {}))
+  for (const value of ['0', '-1', 'Infinity']) assert.throws(() => parseCompanionArgs(['--assistant-idle-ms', value], {}))
 
   const acpEnv = buildAcpEnv({ OPENCODE_PERMISSION: JSON.stringify({ read: 'allow', bash: 'allow' }) })
   assert.deepEqual(JSON.parse(acpEnv.OPENCODE_PERMISSION), { read: 'allow', bash: 'ask', edit: 'ask', write: 'ask' })
@@ -498,7 +576,7 @@ test('companion enforces raw unclipped command gates, relative AGENTS.md rejecti
     return res
   }
 
-  const companion = createOpencodeCompanion({
+  const companion = createTestCompanion({
     socketPath: n.path,
     retryMs: 20,
     pushDelayMs: 5,
@@ -630,4 +708,130 @@ test('companion enforces raw unclipped command gates, relative AGENTS.md rejecti
   const thoughtItems = (await n.peer.call('session.items', { session_id: asstSid, limit: 10 })).items.filter((i) => i.kind === 'thinking')
   assert.equal(thoughtItems.length, 1)
   assert.equal(thoughtItems[0].text, 'step 1 step 2')
+})
+
+test('parseCompanionArgs supports --instance, --no-update, and --parent-stdin with strict validation', () => {
+  const parsed = parseCompanionArgs([
+    '--socket', '/tmp/runtime.sock',
+    '--bin', '/usr/local/bin/opencode',
+    '--instance', 'builtin-opencode-42-1',
+    '--no-update',
+    '--parent-stdin',
+  ], {})
+  assert.equal(parsed.socketPath, '/tmp/runtime.sock')
+  assert.equal(parsed.bin, '/usr/local/bin/opencode')
+  assert.equal(parsed.instance, 'builtin-opencode-42-1')
+  assert.equal(parsed.noUpdate, true)
+  assert.equal(parsed.parentStdin, true)
+  assert.equal(parsed.assistant, true)
+  assert.throws(() => parseCompanionArgs(['--unknown-flag'], {}))
+})
+
+test('companion.mjs with --parent-stdin exits cleanly when parent closes stdin', async () => {
+  const script = fileURLToPath(new URL('../companion.mjs', import.meta.url))
+  const child = spawn(process.execPath, [
+    script,
+    '--socket', '/tmp/persona-opencode-nonexistent-test.sock',
+    '--bin', '/nonexistent/opencode-test-bin',
+    '--instance', 'builtin-opencode-test-1',
+    '--no-update',
+    '--parent-stdin',
+  ], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+
+  await until('companion started', () => stderr.includes('started opencode ACP companion for Persona'), 5000)
+  child.stdin.end()
+
+  const exit = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch {}
+      reject(new Error(`companion did not exit after stdin closed; stderr=${stderr}`))
+    }, 5000)
+    child.once('exit', (code, signal) => {
+      clearTimeout(timer)
+      resolve({ code, signal })
+    })
+  })
+  assert.equal(exit.code, 0)
+  assert.equal(exit.signal, null)
+})
+
+// #12848: Node loads the entry module by its real path while argv[1] keeps a symlink on the way (a symlinked home is
+// common on Linux, and the node starts the companion from under ~/.persona), so an entry check comparing the two as given
+// skipped main() and the companion exited 0 without a word, once a minute.
+test('companion.mjs runs main() when started through a symlinked directory', async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'persona-opencode-link-')))
+  const pkg = fileURLToPath(new URL('..', import.meta.url))
+  const link = join(base, 'opencode')
+  symlinkSync(pkg, link, process.platform === 'win32' ? 'junction' : 'dir')
+  const child = spawn(process.execPath, [
+    join(link, 'companion.mjs'),
+    '--socket', join(base, 'missing', 'runtime.sock'),
+    '--bin', '/nonexistent/opencode-test-bin',
+    '--instance', 'builtin-opencode-test-link',
+    '--no-update',
+    '--parent-stdin',
+  ], { stdio: ['pipe', 'pipe', 'pipe'] })
+  const exited = once(child, 'exit')
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    await exited
+    chmodSync(base, 0o700)
+    rmSync(base, { recursive: true, force: true })
+  })
+  let stderr = ''
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+
+  await until('companion started or exited', () => stderr.includes('started opencode ACP companion for Persona') || child.exitCode !== null, 5000)
+  assert.equal(child.exitCode, null, `companion exited (${child.exitCode}) instead of starting; stderr=${JSON.stringify(stderr)}`)
+  child.stdin.end()
+  const [code] = await exited
+  assert.equal(code, 0)
+})
+
+test('companion does not spawn opencode acp on startup, stops idle acp child, and reloads on next turn', async (t) => {
+  const n = await startFakeNode(t)
+  const db = fakeV1Db()
+  const acp = new FakeAcpClient()
+  const companion = createOpencodeCompanion({
+    socketPath: n.path,
+    retryMs: 20,
+    pushDelayMs: 5,
+    home: '/home/u',
+    instance: 'builtin-opencode-idle-1',
+    acpIdleMs: 40,
+    openDb: db.openDb,
+    acp,
+    discoverModels: async () => [{ providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+  })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+
+  // Hello carries the configured --instance and never declares supervision_policy.
+  assert.equal(n.hello.instance, 'builtin-opencode-idle-1')
+  assert.equal(n.hello.caps?.supervision_policy, undefined)
+
+  // Idle startup never spawns opencode acp.
+  assert.equal(acp.pid, 0)
+  assert.equal(acp.calls.filter((c) => c[0] === 'ensureStarted').length, 0)
+
+  // Starting a session spawns acp; once idle, acp.stopChild() reclaims it.
+  const started = await n.peer.call('session.start', { cwd: '/w/app', prompt: 'hello' })
+  const sid = started.session.session_id
+  await until('first turn done', () => !companion.live.get(sid)?.running)
+  await until('idle acp child stopped', () => acp.pid === 0 && acp.calls.some((c) => c[0] === 'stopChild'), 2000)
+
+  // Next send transparently restarts acp and reloads the session via session/load.
+  acp.calls.length = 0
+  await n.peer.call('session.send', { session_id: sid, text: 'follow up' })
+  await until('second turn done', () => !companion.live.get(sid)?.running)
+  assert.ok(acp.calls.some((c) => c[0] === 'ensureStarted'))
+  assert.ok(acp.calls.some((c) => c[0] === 'loadSession' && c[1].sessionId === sid))
+  await until('idle acp child stopped again', () => acp.pid === 0 && acp.calls.some((c) => c[0] === 'stopChild'), 2000)
 })

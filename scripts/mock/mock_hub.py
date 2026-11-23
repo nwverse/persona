@@ -1825,9 +1825,9 @@ if os.environ.get("MOCK_AGENT_MARKS"):
         ("marks-pi", "pi", "给导出脚本加上进度条", "idle", "idle", 30),
         ("marks-gemini", "gemini", "Gemini CLI", "working", "working", 2),
         ("marks-cursor", "cursor", "补全设置页的单元测试", "idle", "idle", 50),
-        ("marks-traex", "traex", "TRAEX 的一个会话", "done", "done", 9),
+        ("marks-traex", "traex", "TRAE CLI 的一个会话", "done", "done", 9),
         ("marks-amp", "amp", "amp 的一个会话", "idle", "idle", 70),
-        ("marks-trae", "trae", "TRAE CLI 的一个会话", "working", "working", 3),
+        ("marks-trae", "trae", "TRAE 的一个会话", "working", "working", 3),
         ("marks-grok", "grok", "Grok", "idle", "idle", 5),
         ("marks-agy", "agy", "Antigravity CLI", "working", "working", 7),
         ("marks-dsh", "dsh", "DeepSeek Harness", "done", "done", 8),
@@ -2231,6 +2231,9 @@ if os.environ.get("MOCK_RECENT") == "1":
 # /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
 # sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
+# Directions ended (unpinned) in this run, by POST …/end or /mock/direction_sessions?ended=: still known for filing
+# (409 direction_ended, their chats leader conversations), their single read has `ended_at`; …/make takes one back.
+ENDED_LEADERS = set()
 MOCK_DIRECTION_NAMES = {}
 # A direction's notes (#10086, assistant/direction_notes.go): the first leader has some, PUT …/directions/{id}/notes keeps them.
 MOCK_DIRECTION_NOTES = {}
@@ -6728,6 +6731,12 @@ MEETING_TRANSCRIPTION = os.environ.get("MOCK_NO_MEETING_TRANSCRIPTION") != "1"
 TRANSCRIPTION_MODE = {"ready": os.environ.get("MOCK_MEETING_TRANSCRIPTION_READY") != "0", "upstream": "ok",
                       "fatal": "", "line_seconds": 4, "final_seconds": 2}
 TRANSCRIPTIONS = {}  # Protected by RECORDINGS_LOCK, including socket callbacks and final-pass timers.
+# The final pass's progress (#13461, docs/assistant/meeting-minutes.md "Gaps and the final pass"): while the mock's own
+# pass runs, transcription carries final_done (0: it replays in one step) and end. MOCK_MEETING_FINISHING=<done>,<end>
+# (recording seconds) shows every complete meeting recording with no transcription of its own as a hub-mode meeting whose
+# final pass has done <done> of <end>, for shots of the minutes line; its minutes stay as MOCK_RECORDING_MINUTES says.
+MEETING_FINISHING = tuple(float(x) for x in os.environ["MOCK_MEETING_FINISHING"].split(",")) \
+    if os.environ.get("MOCK_MEETING_FINISHING") else None
 TRANSCRIPTION_SCRIPT = ("我们先把 export cap 保持在 4 MB。", "Let's revisit pricing next week.",  # i18n-ignore: synthetic speech, never translated
                         "Alice 负责检查 export test。", "Bo will share the notes tomorrow.")  # i18n-ignore: synthetic speech
 
@@ -6872,11 +6881,19 @@ def transcription_gaps(t):
 
 def transcription_view(rid):
     t = TRANSCRIPTIONS.get(rid)
-    if not meeting_transcription_on() or not t: return None
+    if not meeting_transcription_on(): return None
+    if not t:
+        rec = RECORDINGS.get(rid)
+        if MEETING_FINISHING and isinstance(rec, dict) and rec.get("kind") == "meeting" and rec.get("complete"):
+            done, end = MEETING_FINISHING
+            return {"mode": "hub", "state": "finishing", "gaps": [], "final_done": min(done, end), "end": end}
+        return None
     if t["mode"] == "device": return {"mode": "device"}
     out = {"mode": "hub", "state": t["state"], "gaps": transcription_gaps(t) if rid not in RECORDINGS_TRIMMED else []}
     if t.get("problem"): out["problem"] = t["problem"]
     if t.get("fallback"): out["fallback"] = True
+    if t["state"] == "finishing" and t.get("final_started") and transcription_number(t.get("end")) and t["end"] > 0:
+        out["final_done"], out["end"] = min(t.get("final_done", 0), t["end"]), t["end"]
     return out
 
 
@@ -7097,11 +7114,13 @@ def transcription_finish_start(rid, force=False):
     if not t or t["mode"] != "hub" or t.get("final_started") or not t.get("complete_at"): return
     if not force and (t.get("socket") or transcription_gaps(t)): return
     t["final_started"] = True
+    t["final_done"] = 0
     t["final_gaps"] = transcription_gaps(t)
     if t.get("socket"): t["socket"]["fail"]("transcription_final")
     if not t["held"]:
         transcription_finish(rid, t)
         return
+    transcription_changed(rid)  # the pass's progress (final_done) from its start
     timer = threading.Timer(TRANSCRIPTION_MODE["final_seconds"], transcription_finish, args=(rid, t))
     timer.daemon = True; timer.start()
 
@@ -7131,7 +7150,9 @@ def transcription_finish(rid, expected):
 def transcription_configured():
     """What the switches make of the upstream now: the problem a job would have."""
     upstream = TRANSCRIPTION_MODE["upstream"]
+    # The kinds the hub passes on (#13446, spec/fixtures/meeting-transcription-problems): refused, busy, out of reach, failed.
     return ("upstream_unavailable" if not transcription_ready() or upstream == "unavailable" else
+            "upstream_forbidden" if upstream == "forbidden" else "upstream_busy" if upstream == "busy" else
             "upstream_failed" if upstream == "failed" else "no_interim" if upstream == "no_interim" else None)
 
 
@@ -7261,7 +7282,7 @@ def transcription_control(h, method):
         except ValueError: body = None
         if not isinstance(body, dict): return h.send_json({"code": "bad_request"}, 400) or True
         if any(k in body and type(body[k]) is not bool for k in ("on", "ready")) or \
-                ("upstream" in body and body["upstream"] not in ("ok", "unavailable", "failed", "no_interim")) or \
+                ("upstream" in body and body["upstream"] not in ("ok", "forbidden", "busy", "unavailable", "failed", "no_interim")) or \
                 ("fatal" in body and not isinstance(body["fatal"], str)) or \
                 any(k in body and (not transcription_number(body[k]) or body[k] < (1 / 16000 if k == "line_seconds" else 0)) for k in ("line_seconds", "final_seconds")):
             return h.send_json({"code": "bad_request"}, 400) or True
@@ -7368,7 +7389,7 @@ def transcription_socket(h, rid):
                     if end <= edge:
                         state["sentence"] = max(state["sentence"], edge)
                         continue
-                    if configured in ("upstream_unavailable", "upstream_failed"):
+                    if configured in ("upstream_forbidden", "upstream_busy", "upstream_unavailable", "upstream_failed"):
                         state["sentence"] = end
                         continue
                     if at < edge: state["sentence"] = max(state["sentence"], edge)
@@ -8407,6 +8428,15 @@ if os.environ.get("MOCK_MODEL_CHANGE") == "1":
                                                "new_string": "return hits.sort(byTime)"}, "ok", 60 * 26))
         + [it("assistant", "text", 60 * 26, text="排好了：用时短的菜谱排在前面，同样用时的按收藏数。", model="claude-sonnet-5-5")]
     )
+    # A separate chat for the negative UI case: an alias and snapshot are still Sonnet, and an older reply has no model.
+    ITEMS[OC_IDLE] = (
+        [it("user", "text", 60 * 8, text="先检查缓存配置")]
+        + [it("assistant", "text", 60 * 7, text="缓存配置正常。", model="claude-sonnet-4-5")]
+        + [it("user", "text", 60 * 6, text="再确认一次")]
+        + [it("assistant", "text", 60 * 5, text="结果仍然正常。", model="us.anthropic.claude-sonnet-4-5-20250929-v1:0")]
+        + [it("user", "text", 60 * 4, text="旧节点也检查一下")]
+        + [it("assistant", "text", 60 * 3, text="旧节点没有记录回答模型。")]
+    )
 if MOCK_CLOSEOUT:  # each agent's last reply ends with the raw closeout block (the not-done one is only the block)
     for _sid, _ask, _cmd in ((CLOSEOUT_DONE, "报表导出一到 50 万行就超时，修一下", "go test ./export/..."),
                              (CLOSEOUT_DISPROVED, "把支付 SDK 升到 v4", "cd app; npm test"),
@@ -9315,16 +9345,26 @@ if MOCK_TASKS:
     _interrupts = os.environ.get("MOCK_INTERRUPTS", "")
     if _interrupts:
         _gw = "API Error: 502 Bad Gateway"
-        _cut_tasks = [("todo_cut_login", "修登录页的崩溃", 9, "cancelled"), ("todo_cut_deps", "升级依赖到最新版", 8.5, "rerouted"),
+        _cut_tasks = [("todo_cut_login", "修登录页的崩溃", 9, "cancelled"), ("todo_cut_deps", "升级依赖到最新版（旧方案）", 8.5, "rerouted"),
                       ("todo_cut_tests", "补网络层的单元测试", 8, "resumed" if _interrupts == "handled" else "pending")]
         _now_iso = ago()
         for _tid, _title, _min, _res in _cut_tasks:
             _todo = dict(_task_todo(_tid, _title, "", "macbook", "", "/Users/me/code/example", _min + 20, ""), agents=[])
             if _res in ("cancelled", "rerouted"):
                 _todo.update(done_at=_now_iso, done_by="cancelled", cancelled_at=_now_iso)
+            if _tid == "todo_cut_deps":
+                _todo["cancelled_reason"] = "原方案已停下，由新方案的任务继续"
+                _todo["lineage"] = [
+                    {"todo_id": "todo_cut_deps", "title": _title, "superseded_by": "todo_cut_deps2", "current": True},
+                    {"todo_id": "todo_cut_deps2", "title": "升级依赖到最新版（新方案）", "continues": "todo_cut_deps"},
+                ]
             TODOS_INIT.append(_todo)
             TODOS.append(copy.deepcopy(_todo))
-        _again = dict(_task_todo("todo_cut_deps2", "升级依赖到最新版", "", "macbook", "", "/Users/me/code/example", 5, ""), agents=[])
+        _again = dict(_task_todo("todo_cut_deps2", "升级依赖到最新版（新方案）", "", "macbook", "", "/Users/me/code/example", 5, ""), agents=[])
+        _again["lineage"] = [
+            {"todo_id": "todo_cut_deps", "title": "升级依赖到最新版（旧方案）", "superseded_by": "todo_cut_deps2"},
+            {"todo_id": "todo_cut_deps2", "title": "升级依赖到最新版（新方案）", "continues": "todo_cut_deps", "current": True},
+        ]
         _solo = dict(_task_todo("todo_cut_docs", "整理周报", "", "studio", "", "/Users/me/code/example", 40, ""), agents=[])
         for _todo in (_again, _solo):
             TODOS_INIT.append(_todo)
@@ -9823,6 +9863,16 @@ INTERACTIONS = [
      "tool_name": "ExitPlanMode", "tool_use_id": "toolu_p1",
      "plan": "## 支持 HEIC\n\n1. 用 `sips` 把 HEIC 转成 JPEG，质量 90，保留 EXIF\n2. 转换放到导出前，原文件不动\n3. 已经转过的按内容哈希跳过\n4. 补测试：竖拍、实况照片、没有 EXIF 的图"},
 ]
+# MOCK_TASK_ASK_LONG=1 (#12306): the network tests' question (a task's question in the main conversation with MOCK_TASKS)
+# has long option descriptions, several lines each on a phone: what a short card cut off.
+if os.environ.get("MOCK_TASK_ASK_LONG") == "1":
+    INTERACTIONS[0]["questions"] = [{"question": "网络层的测试用哪个框架？第一批 40 个用例要按它来写，之后再换就得重写。", "header": "测试框架",
+                                     "multi_select": False, "options": [
+        {"label": "Swift Testing (Recommended)", "description": "新代码统一用 @Test，参数化测试写起来更短；合入后把网络层的 40 个用例排进下一批（各 10 个，按模块分开跑），失败的先标记已知问题再看"},
+        {"label": "XCTest", "description": "和现有的 UI 测试保持一致，CI 不用改；缺点是参数化要自己写循环，失败信息也没有 Swift Testing 清楚，之后迁移还要再改一遍"},
+        {"label": "两个都用", "description": "新用例用 Swift Testing，旧用例原样保留；同一个目标里两套写法并存，评审时要多看一眼用的是哪一套"},
+        {"label": "先不写", "description": "等这一版发布以后再补；这段时间网络层的改动只靠手工验证，回归风险由你来判断"}]}]
+
 # MOCK_PLAN_THEN=<mode>: the photo Agent's ExitPlanMode card records the mode that follows approval (#3784).
 if os.environ.get("MOCK_PLAN_THEN"):
     INTERACTIONS[1]["plan_then"] = os.environ["MOCK_PLAN_THEN"]
@@ -11804,6 +11854,44 @@ TOKEN_PUSH = {
     "dev_phone": {"route": "relay"},
     "dev_work": {"route": "none", "reason": "relay_failed", "detail": "403 topic not served"},
 }
+# Settings › Devices › Primary Device (PUT /api/v1/phone/primary, the `phone` object of GET /api/v1/auth/tokens;
+# docs/apple/phone-tools.md). The devices that can be chosen are the active phone credentials, sorted by id.
+# MOCK_PHONE_PRIMARY=dev_phone: that device is chosen from the start (default: none, Automatic).
+# MOCK_PHONE=none: a hub before it (no `phone` object, the route 404s) | single: only one candidate | refuse: every choice
+# is refused with 409 not_a_phone (the page puts the old value back and shows the error).
+MOCK_PHONE = os.environ.get("MOCK_PHONE", "")
+PHONE_PRIMARY = [os.environ.get("MOCK_PHONE_PRIMARY", "")]
+
+
+def phone_candidates():
+    ids = sorted(t["id"] for t in TOKENS if t.get("kind") == "phone" and not t.get("revoked_at"))
+    return ids[:1] if MOCK_PHONE == "single" else ids
+
+
+def phone_view():
+    candidates = phone_candidates()
+    active = {t["id"] for t in TOKENS if not t.get("revoked_at")}
+    return {"primary": PHONE_PRIMARY[0] if PHONE_PRIMARY[0] in active else "", "candidates": candidates}
+
+
+def phone_primary_forbidden(h):  # a watch (answer-only) credential cannot change settings
+    token = h.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    tok = next((t for t in TOKENS if token in (t.get("token"), t.get("id"))), {})
+    return tok.get("role") in ("answer", "watch", "readonly") or h.headers.get("X-Mock-Role") in ("answer", "watch", "readonly")
+
+
+def phone_primary_put(h, body):
+    if MOCK_PHONE == "none": return h.send_json({"error": "not found"}, 404)
+    if phone_primary_forbidden(h): return h.send_json({"error": "this device can only view and answer"}, 403)
+    if not isinstance(body, dict) or not isinstance(body.get("credential_id"), str):
+        return h.send_json({"error": "credential_id is required"}, 400)
+    want = body["credential_id"]
+    if MOCK_PHONE == "refuse" or (want and want not in phone_candidates()):
+        return h.send_json({"code": "not_a_phone", "error": "这台设备现在不能处理手机请求。在它上面打开 Persona，至少开启一项手机数据后再试。"}, 409)  # the hub's zh-Hans text (hub-phone_primary.not_candidate)
+    PHONE_PRIMARY[0] = want
+    return h.send_json(phone_view())
+
+
 def _claude_settings():  # Settings › Claude Code Settings: the node's whitelist (server/internal/node/claudeconfig.go)
     return [
         {"key": "awaySummaryEnabled", "title": "回来时先说进展", "detail": "离开 5 分钟以上再回来时，Claude 先简单说说这段时间做了什么",
@@ -18824,7 +18912,7 @@ def summary_row(s):
 
 def pane_origin(s):
     """Where a session was opened, as the hub's sessionorigin.Of says it (the paged list's pane_source)."""
-    if s.get("space_kind") == "codex_app" or s.get("host") in ("paseo", "cindy") or (s.get("source_kind") == "runtime" and s.get("source_instance_id") == "orca"):
+    if s.get("space_kind") == "codex_app" or s.get("host") in ("paseo", "cindy", "t3code") or (s.get("source_kind") == "runtime" and s.get("source_instance_id") == "orca"):
         return "desktop"
     pane = s.get("pane_id") or ""
     if not pane:
@@ -23745,10 +23833,10 @@ for _m in MACHINES:
                       if _m.get("online") else [])
 
 # MOCK_ENGINE_SETS=1 (#2576, docs/integrations/engines.md "Host sets"): a hub that takes sets of engine hosts. Every machine lists
-# engine_hosts / engine_default; the MacBook enables herdr + Herdr App, the Mac Studio herdr + Orca (Tern and Paseo found
+# engine_hosts / engine_default; the MacBook enables herdr + Herdr App, the Mac Studio herdr + Orca (Tern, Rex, Paseo, Cindy and T3 Code found
 # there too); the widget session on the MacBook is live in Herdr App as well (also_open_in). PUT …/engine takes {hosts, default}.
 ENGINE_SETS = os.environ.get("MOCK_ENGINE_SETS") == "1"
-ENGINE_HOST_IDS = ["herdr", "herdr-core", "orca", "tern", "paseo", "cindy"]
+ENGINE_HOST_IDS = ["herdr", "herdr-core", "orca", "tern", "rex", "paseo", "cindy", "t3code"]
 
 
 def legacy_engine(hosts, default):
@@ -23764,8 +23852,10 @@ if ENGINE_SETS:
         _m["engine"] = legacy_engine(_m["engine_hosts"], _m["engine_default"])
         if _m.get("online"):
             _m["engines"].append({"id": "tern", "name": "Tern", "available": _m["id"] == "studio", "version": "0.9.13"})
+            _m["engines"].append({"id": "rex", "name": "Rex", "available": _m["id"] == "studio", "version": "0.1.0"})
             _m["engines"].append({"id": "paseo", "name": "Paseo", "available": _m["id"] == "studio", "version": "0.9"})
             _m["engines"].append({"id": "cindy", "name": "Cindy", "available": _m["id"] == "studio", "version": "0.1.128"})
+            _m["engines"].append({"id": "t3code", "name": "T3 Code", "available": _m["id"] == "studio", "version": "0.1.11"})
             found = [h for h in ENGINE_HOST_IDS if any(e["id"] == h and e["available"] for e in _m["engines"])] or ["herdr"]
             _m["engine_suggested"] = {"hosts": found, "default": found[0]}
     for _s in SESSIONS:
@@ -23862,6 +23952,9 @@ def pins_route(handler, p):
 # switched off, incompatible), with feature plugin_manager; their pages, switches, settings and secrets work in memory.
 # The form of example-notes has every kind of field. A base_url that is not a URL is refused like the hub does.
 PLUGINS_MODE = os.environ.get("MOCK_EXTENSIONS", "")
+# Extension pages and overview cards a domain module adds to GET /api/v1/plugins/-/ui (each a catalog entry with its
+# "placement"); the domain answers the entry's own routes.
+EXTENSION_UI_EXTRA = []
 _NOTES_FORM = [
     {"name": "base_url", "type": "string", "title": "服务地址", "format": "uri", "default": "https://notes.example.com", "required": True},
     {"name": "folders", "type": "array", "title": "同步哪些文件夹", "items": {"name": "items", "type": "string"},
@@ -24995,6 +25088,8 @@ def markets_route(handler, p, body):
         if GRAPH_MODE and placement in ("", "overview_card"):
             ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work-card", "title": "Work",
                     "placement": "overview_card", "size": "compact", "opens": "work"}]
+        # The pages and cards domain modules add (scripts/mock/mock_domains.py), such as extension_scene_mock.py's.
+        ui += [dict(entry) for entry in EXTENSION_UI_EXTRA if placement in ("", entry["placement"])]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -26423,7 +26518,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/assistant_ask": return self.send_json(*mock_assistant_ask(q))
         if p == "/mock/notify_user": return self.send_json(*mock_notify_user(q))
         if p == "/mock/renew": return self.send_json(*renew_requests(int(q.get("minutes", ["30"])[0] or 30)))
-        if p == "/api/v1/auth/tokens": return self.send_json({"tokens": TOKENS, "current": "dev_phone", "push": TOKEN_PUSH})
+        if p == "/api/v1/auth/tokens":
+            return self.send_json({"tokens": TOKENS, "current": "dev_phone", "push": TOKEN_PUSH,
+                                   **({} if MOCK_PHONE == "none" else {"phone": phone_view()})})
         if p == "/mock/sent": return self.send_json({"sent": SENT})
         if p == "/mock/picture.png":  # a picture for replies to show (MOCK_EXPORT): ?w=&h=, a blue-to-violet gradient
             data = _fs_png(min(int(q.get("w", ["600"])[0] or 600), 2000), min(int(q.get("h", ["400"])[0] or 400), 2000), (110, 160, 255), (190, 140, 255))
@@ -26512,7 +26609,7 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT); DECISION_DISMISSALS.clear()
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS  # the cards back, unanswered
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS  # the cards back, unanswered (dock_mock.py puts its own back)
             ids = {x["id"] for x in again}
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
@@ -27972,7 +28069,7 @@ class H(BaseHTTPRequestHandler):
                     except Exception: pass
                 return self.send_json(out_machine(machine))
             engine = body.get("engine")
-            if engine not in ("herdr", "herdr-core", "herdr-both", "orca", "tern", "paseo", "cindy") and not any(
+            if engine not in ("herdr", "herdr-core", "herdr-both", "orca", "tern", "rex", "paseo", "cindy", "t3code") and not any(
                     e["id"] == engine and e["available"] for e in machine["engines"]):
                 return self.send_json({"error": "未知引擎"}, 400)
             if os.environ.get("MOCK_ENGINE_ERROR"): return self.send_json({"error": "暂时无法保存"}, 503)
@@ -28616,12 +28713,15 @@ class H(BaseHTTPRequestHandler):
             lead, op = p.split("/")[5], p.split("/")[6]
             if lead not in {c["session_id"] for c in ASSISTANT}: return self.send_json({"error": "not a Persona conversation"}, 409)
             if op == "make":
+                ENDED_LEADERS.discard(lead)
                 if lead not in MOCK_LEADERS:
                     MOCK_LEADERS.append(lead)
                     MOCK_DIRECTION_NAMES.setdefault(lead, next((c.get("title", "") for c in ASSISTANT if c["session_id"] == lead), ""))
                 return self.send_json({"leader": {"id": lead, "name": MOCK_DIRECTION_NAMES.get(lead, "")}})
             ended = lead in MOCK_LEADERS
-            if ended: MOCK_LEADERS.remove(lead)
+            if ended:
+                MOCK_LEADERS.remove(lead)
+                ENDED_LEADERS.add(lead)
             return self.send_json({"ended": ended})
         if p == "/api/v1/pins" and self.command == "PUT":  # the hub keeps them (the reply is what it kept)
             body = json.loads(self.last_body or b"{}")
@@ -28859,6 +28959,8 @@ class H(BaseHTTPRequestHandler):
                     push_machine(s["machine_id"])
                     push_todos()
             return self.send_json({"session": with_fold(decorated_session(s))})
+        if p == "/api/v1/phone/primary" and self.command == "PUT":
+            return phone_primary_put(self, json.loads(self.last_body or b"{}"))
         if p.startswith("/api/v1/auth/tokens/") and self.command == "DELETE":
             for t in TOKENS:
                 if t["id"] == p.split("/")[-1]:
@@ -29245,7 +29347,8 @@ class H(BaseHTTPRequestHandler):
         send({"type": "hello", "server_version": SERVER_VERSION, "client_id": observation["id"], "channel": "release",
               "build": 202611021500, "protocol": 1, "min_app_build": 0,
               **identity(), "endpoints": list(ENDPOINTS), **mesh_hello(),
-              "features": features() + (["sessions_delta"] if delta else []), **restart_hello(self.path)})
+              "features": features() + (["sessions_delta"] if delta else []), **restart_hello(self.path),
+              **send_state_hello()})
         restart_replay(send, self.path)  # a resumed hello: what this socket missed, right after it
 
         def close_going_away(reason=b"hub restarting"):
@@ -29254,8 +29357,10 @@ class H(BaseHTTPRequestHandler):
                 self.wfile.write(bytes([0x88, len(body)]) + body); self.wfile.flush()
             self.connection.shutdown(socket.SHUT_RDWR)
 
-        # ?features=managers: the roster event (hub/managers.go); the rest of ?features= keeps its old meaning here
-        client = {"send": send, "features": {"managers"} if "managers" in asked else set(), "close": close_going_away}
+        # ?features=managers: the roster event (hub/managers.go); the rest of ?features= keeps its old meaning here,
+        # and stays in asked for the opt-in events a hub sends on either declaration (todo_view_mock.py)
+        client = {"send": send, "features": {"managers"} if "managers" in asked else set(), "asked": set(asked),
+                  "close": close_going_away}
         ws_token = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         if not ws_token:
             ws_token = (parse_qs(urlparse(self.path).query).get("token") or [""])[0]
@@ -29756,6 +29861,7 @@ MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离�
 MOCK_HELP.append("MOCK_ASSISTANT_CARDS=run  主对话连着请求改六项设置（persona_settings set），输入区上方只占一张卡的位置（「1 / 6」），答完下一张在原位顶上来，已回答的合成一行，最后一次回答后约 3 秒收起")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|cjk|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); cjk: the report as varied in Chinese characters as a real one, ~800 distinct (#5076); a path serves that file's transcript items instead")
+MOCK_HELP.append("MOCK_TASK_ASK_LONG=1  补网络层测试的 Agent 提问（MOCK_TASKS 下主对话里的任务提问）带四个说明很长的选项，手机上每条好几行（#12306）")
 MOCK_HELP.append("MOCK_QUESTION_CANCEL=1  Adds can_cancel to the network tests' Agent question and Persona's main ask_user card for MOCK_ASK_LONG=1|actions|swipe|review; /mock/reset restores both unanswered exactly once and clears their resolved and interaction history entries")
 MOCK_HELP.append("MOCK_PLAN_THEN=<mode>  Only the photo Agent's ExitPlanMode card, recording the mode that follows approval (#3784)")
 MOCK_HELP.append("MOCK_ASK_LONG=1|actions|swipe|review|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；actions 单道八个带说明选项的多选题，swipe 短单选拖动不误发，review 六道单选题的长复核页，Submit 首屏可达（#4839）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
@@ -29953,6 +30059,12 @@ def restart_backlog():
     if not RESTART_MODE: return
     wait = RESTART["gap_until"] - time.time()
     if wait > 0: time.sleep(wait)
+
+
+def send_state_hello():
+    """The hello's send receipt markers (message_send_state, todo_send_state): none, as from a hub before them, unless
+    MOCK_TODO_VIEW sends the receipts (todo_view_mock.py)."""
+    return {}
 
 
 def restart_hello(path):
@@ -31711,6 +31823,7 @@ MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型
 MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
 MODEL_PICK_HOME = "claude"  # the launcher-list default a reset restores
 MODEL_PICK_DEFAULT = MODEL_PICK_HOME
+MODEL_PICK_DEFAULT_MODELS = {}  # a launcher-list default's model other than opus / gpt-5.5 (MOCK_MODEL_LEVELS)
 MODEL_PICK_LOG = []
 MODEL_PICK_SHARED = os.environ.get("MOCK_ASSISTANT_LAUNCHER_FIXTURE") == "1"
 MODEL_PICK_SHARED_UNAVAILABLE = []
@@ -31822,6 +31935,45 @@ if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_FAMILIES") == "1":
         _claude_row("gemini-3.8-flash", "gemini-3.8-flash", "From gateway", efforts=None),
     ]}
     LAUNCHER_MODELS["agy"] = {"agent": "agy", "models": [{"id": "默认", "name": "默认", "default": True}]}
+
+# MOCK_MODEL_LEVELS=1 (with MOCK_MODEL_PICK=1, #12315): the main chat follows its default on agy, whose list names each
+# thinking level as a model of its own (`<model>-<level>`, "<Name> (<Level>)"), as `agy models` does and the node marks
+# them (server/internal/node/launcher_models.go agyModelList: `default_effort` the ID's level, `efforts` the levels
+# listed): 27 entries for 11 models, beside plain claude and codex. For the web model panel's before / after screenshots.
+if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_LEVELS") == "1":
+    MODEL_PICK_LAUNCHERS[:] = [
+        # `assistant`: the hub's mark for a launcher that runs the main chat (web lib/assistant-chat.ts runsAssistant)
+        {"name": "agy", "model": "gemini-4-hydrogen-xhigh", "agent": "agy", "agent_type": "agy", "source": "persona",
+         "assistant": True},
+        {"name": "claude", "model": "opus", "source": "builtin"},
+        {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex", "source": "builtin"},
+    ]
+    MODEL_PICK_HOME = MODEL_PICK_DEFAULT = "agy"
+    MODEL_PICK_DEFAULT_MODELS["agy"] = "gemini-4-hydrogen-xhigh"
+    _LEVEL_NAMES = {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "XHigh", "max": "Max"}
+    _agy_catalog = [
+        ("gemini-4-neon", "Gemini 4 Neon", ["high", "xhigh", "medium", "low"]),
+        ("gemini-4-carbon", "Gemini 4 Carbon", ["medium", "high", "low"]),
+        ("gemini-4-argon", "Gemini 4 Argon", ["medium", "high", "low"]),
+        ("gemini-4-hydrogen", "Gemini 4 Hydrogen", ["high", "xhigh", "medium", "low"]),
+        ("gemini-pro-orchestrator-neon", "Orchestrator (Neon)", []),
+        ("gemini-pro-orchestrator", "Orchestrator (Carbon)", []),
+        ("gemini-pro-orchestrator-argon", "Orchestrator (Argon)", []),
+        ("gemini-3.8-flash", "Gemini 3.8 Flash", ["high", "medium", "low"]),
+        ("claude-opus-5-5", "Claude Opus 5.5", ["low", "medium", "high"]),
+        ("claude-sonnet-5-5", "Claude Sonnet 5.5", ["low", "medium", "high"]),
+        ("gpt-oss-120b", "GPT-OSS 120B", ["medium"]),
+    ]
+    _agy_rows = []
+    for _base, _name, _levels in _agy_catalog:
+        if not _levels:
+            _agy_rows.append({"id": _base, "name": _name})
+            continue
+        _listed = [level for level in _LEVEL_NAMES if level in _levels]  # the node lists them weakest first
+        for _level in _levels:
+            _agy_rows.append({"id": f"{_base}-{_level}", "name": f"{_name} ({_LEVEL_NAMES[_level]})",
+                              "efforts": _listed, "default_effort": _level})
+    LAUNCHER_MODELS["agy"] = {"agent": "agy", "models": _agy_rows}
 
 # MOCK_MODEL_GATEWAY=1 (with MOCK_MODEL_PICK=1, #10365, docs/assistant/model-config.md "One row per model"): the main chat
 # runs on gateway-api, a Persona-managed gateway provider whose Claude Code tiers all name one model, with the /model list
@@ -31988,7 +32140,9 @@ def model_pick_route(handler, p, body):
     if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
         return handler.send_json({
             "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
-            "default": {"provider": MODEL_PICK_DEFAULT, "model": None if MODEL_PICK_SHARED else ("gpt-5.5" if MODEL_PICK_DEFAULT == "codex" else "opus"), "effort": "high"},
+            "default": {"provider": MODEL_PICK_DEFAULT, "model": None if MODEL_PICK_SHARED else MODEL_PICK_DEFAULT_MODELS.get(MODEL_PICK_DEFAULT, "gpt-5.5" if MODEL_PICK_DEFAULT == "codex" else "opus"),
+                        # an agy level is its own effort: none beside it
+                        "effort": None if MODEL_PICK_DEFAULT in MODEL_PICK_DEFAULT_MODELS else "high"},
             "unavailable": [
                 dict(l, code="not_main_chat", reason=MODEL_PICK_REASONS["launcher_out_of_scope"][lang])
                 for l in MODEL_PICK_SHARED_UNAVAILABLE
@@ -32049,6 +32203,7 @@ MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模
 MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 MOCK_HELP.append("MOCK_MODEL_FAMILIES=1  配合 MOCK_MODEL_PICK：多个模型家族的长模型列表（claude-max 的 Claude 全系、codex 的 GPT-6、混合厂商的本机网关 aster、work-claude、agy），截模型面板用；主对话默认 claude-max")
 MOCK_HELP.append("MOCK_ASSISTANT_LAUNCHER_FIXTURE=1  配合 MOCK_MODEL_PICK：读取 spec/fixtures/assistant-launchers/cases.json，三端共用同一组启动器候选；默认 runtime、无显式模型，managed Codex 只在 unavailable")
+MOCK_HELP.append("MOCK_MODEL_LEVELS=1  With MOCK_MODEL_PICK: the main chat follows its default on agy, whose list names each thinking level as a model of its own (27 entries for 11 models, #12315)")
 MOCK_HELP.append("MOCK_MODEL_GATEWAY=1|raw  With MOCK_MODEL_PICK: the main chat defaults to gateway-api, a gateway provider whose Claude Code tiers all name one model; 1: the list as the hub folds it (one Opus 5.5 row, the route's row says its route, #10365), raw: as it served it before (five Opus 5.5 rows)")
 
 

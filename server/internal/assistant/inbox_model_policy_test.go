@@ -32,6 +32,9 @@ type policyExtensions struct {
 	calls []string
 }
 
+// ConnectorTool: none of its tools is a connector's.
+func (e *policyExtensions) ConnectorTool(string) bool { return false }
+
 func (e *policyExtensions) ToolAccess(name string) (bool, bool) {
 	read, known := e.read[name]
 	return known, known && read
@@ -214,29 +217,65 @@ func TestOrdinaryOriginsKeepNotifyDelegationAndConversationSend(t *testing.T) {
 	}
 }
 
-// Inbox starts use non-bypass default even if the caller asks for bypass, and the initial node request carries origin.
-// Unlike Plan, default lets the node's explicit Persona MCP allowlist run investigation and inbox_suggest unasked.
-// Ordinary starts retain their selected mode.
-func TestInboxStartForcesDefaultAndAttestsOrigin(t *testing.T) {
+// Inbox ignores a caller-supplied mode and an inherited Agents mode. Only the AI twin's own saved
+// permission override changes its safe default; clearing that override restores default.
+// The initial node request always carries origin, and ordinary starts retain their selected mode.
+func TestInboxStartUsesOnlyItsOwnPermissionOverride(t *testing.T) {
 	h := agentHub(t)
-	sess, err := h.Start(t.Context(), StartParams{Text: "Investigate", Origin: OriginInbox, PermissionMode: proto.ModeBypass})
-	if err != nil {
-		t.Fatal(err)
+	start := func(p StartParams) (map[string]any, proto.Session) {
+		t.Helper()
+		sess, err := h.Start(t.Context(), p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.f.mu.Lock()
+		defer h.f.mu.Unlock()
+		sent := h.f.sends[len(h.f.sends)-1]
+		if sent["origin"] != p.Origin || sent["origin_known"] != true {
+			t.Fatalf("start origin=%v known=%v, want %q attested", sent["origin"], sent["origin_known"], p.Origin)
+		}
+		if p.Origin == OriginInbox && sent["inbox_permission_mode"] != sess.PermissionMode {
+			t.Fatalf("Inbox manager-only mode=%v, session mode=%q, sent=%v", sent["inbox_permission_mode"], sess.PermissionMode, sent)
+		}
+		if p.Origin != OriginInbox {
+			if _, exists := sent["inbox_permission_mode"]; exists {
+				t.Fatalf("ordinary start gained the Inbox-only mode: %v", sent)
+			}
+		}
+		return sent, sess
 	}
-	h.f.mu.Lock()
-	inboxStart := h.f.sends[len(h.f.sends)-1]
-	h.f.mu.Unlock()
-	if inboxStart["permission_mode"] != "default" || inboxStart["origin"] != OriginInbox || inboxStart["origin_known"] != true || sess.PermissionMode != "default" {
-		t.Fatalf("Inbox start params=%v session mode=%q", inboxStart, sess.PermissionMode)
+
+	// The parent's bypass and an explicit caller mode never elevate an unconfigured Inbox chat.
+	setModel(t, h.Service, "agent.new", ModelBinding{Provider: "launcher.claude", PermissionMode: proto.ModeBypass})
+	inboxStart, sess := start(StartParams{Text: "Investigate", Purpose: purposeAgent, Origin: OriginInbox, PermissionMode: proto.ModeBypass})
+	if inboxStart["permission_mode"] != proto.ModeDefault || sess.PermissionMode != proto.ModeDefault {
+		t.Fatalf("unconfigured Inbox start params=%v session mode=%q", inboxStart, sess.PermissionMode)
 	}
-	sess, err = h.Start(t.Context(), StartParams{Text: "Ordinary", Origin: OriginUser, PermissionMode: proto.ModeBypass})
-	if err != nil {
-		t.Fatal(err)
+
+	// A mode saved on inbox.agent itself is the owner's explicit choice and takes effect.
+	setModel(t, h.Service, purposeAgent, ModelBinding{Provider: "launcher.claude", PermissionMode: proto.ModeBypass})
+	inboxStart, sess = start(StartParams{Text: "Investigate with the saved mode", Purpose: purposeAgent, Origin: OriginInbox})
+	if inboxStart["permission_mode"] != proto.ModeBypass || sess.PermissionMode != proto.ModeBypass {
+		t.Fatalf("configured Inbox start params=%v session mode=%q", inboxStart, sess.PermissionMode)
 	}
-	h.f.mu.Lock()
-	ordinaryStart := h.f.sends[len(h.f.sends)-1]
-	h.f.mu.Unlock()
-	if ordinaryStart["permission_mode"] != proto.ModeBypass || ordinaryStart["origin"] != OriginUser || ordinaryStart["origin_known"] != true || sess.PermissionMode != proto.ModeBypass {
+
+	// A legacy record can contain a mode this build does not know. The manager must normalize it before assistant.send;
+	// otherwise the node's generic mode validation rejects it before the Inbox-specific default fallback can run.
+	setModel(t, h.Service, purposeAgent, ModelBinding{Provider: "launcher.claude", PermissionMode: "future-mode"})
+	inboxStart, sess = start(StartParams{Text: "Investigate with an unknown saved mode", Purpose: purposeAgent, Origin: OriginInbox})
+	if inboxStart["permission_mode"] != proto.ModeDefault || sess.PermissionMode != proto.ModeDefault {
+		t.Fatalf("unknown saved mode start params=%v session mode=%q, want default", inboxStart, sess.PermissionMode)
+	}
+
+	// Clearing the override restores default rather than inheriting Agents' bypass.
+	setModel(t, h.Service, purposeAgent, ModelBinding{Provider: "launcher.claude"})
+	inboxStart, sess = start(StartParams{Text: "Investigate after reset", Purpose: purposeAgent, Origin: OriginInbox})
+	if inboxStart["permission_mode"] != proto.ModeDefault || sess.PermissionMode != proto.ModeDefault {
+		t.Fatalf("reset Inbox start params=%v session mode=%q", inboxStart, sess.PermissionMode)
+	}
+
+	ordinaryStart, sess := start(StartParams{Text: "Ordinary", Origin: OriginUser, PermissionMode: proto.ModeBypass})
+	if ordinaryStart["permission_mode"] != proto.ModeBypass || sess.PermissionMode != proto.ModeBypass {
 		t.Fatalf("ordinary start params=%v session mode=%q", ordinaryStart, sess.PermissionMode)
 	}
 }
@@ -249,13 +288,17 @@ func TestInboxLaterSendReattestsManagerOrigin(t *testing.T) {
 	const session = "inbox-after-node-restart"
 	h.f.setSessions("server", proto.Session{SessionID: session, Assistant: true, Status: proto.StatusWorking, Cwd: "/work"})
 	h.originSet(t.Context(), "server", session, OriginInbox, "lark:real-item:1", "")
+	setModel(t, h.Service, purposeAgent, ModelBinding{Provider: "launcher.claude", PermissionMode: proto.ModeBypass})
 	params, err := h.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: session,
-		Params: map[string]any{"text": "Continue", "origin": OriginUser, "origin_known": false, "permission_mode": proto.ModeBypass}})
+		Params: map[string]any{"text": "Continue", "origin": OriginUser, "origin_known": false, "permission_mode": proto.ModePlan, "inbox_permission_mode": proto.ModeDefault}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if params["origin"] != OriginInbox || params["origin_known"] != true {
 		t.Fatalf("later send origin=%v known=%v, want the manager's explicit Inbox attestation", params["origin"], params["origin_known"])
+	}
+	if params["inbox_permission_mode"] != proto.ModeBypass {
+		t.Fatalf("later send manager-only mode=%v, want the AI twin's own bypass; params=%v", params["inbox_permission_mode"], params)
 	}
 }
 
@@ -264,6 +307,7 @@ func TestInboxLaterSendReattestsManagerOrigin(t *testing.T) {
 func TestInboxDeliverNotesReattestsSessionSendOrigin(t *testing.T) {
 	h, _, it := handledHub(t)
 	h.originSet(t.Context(), "server", "s1", OriginInbox, it.ID, "")
+	setModel(t, h.Service, purposeAgent, ModelBinding{Provider: "launcher.claude", PermissionMode: proto.ModeBypass})
 	h.inbox.mu.Lock()
 	h.inbox.tell(it, inboxNote{Name: prompts.NoteNewMessages, Text: "A new message"}, true, time.Now())
 	h.inbox.mu.Unlock()
@@ -275,6 +319,9 @@ func TestInboxDeliverNotesReattestsSessionSendOrigin(t *testing.T) {
 	}
 	if got := h.f.agentSent[0]["origin"]; got != OriginInbox || h.f.agentSent[0]["origin_known"] != true {
 		t.Fatalf("session.send origin=%v known=%v, want the manager's explicit Inbox attestation", got, h.f.agentSent[0]["origin_known"])
+	}
+	if got := h.f.agentSent[0]["inbox_permission_mode"]; got != proto.ModeBypass {
+		t.Fatalf("session.send manager-only mode=%v, want the AI twin's own bypass", got)
 	}
 }
 

@@ -70,6 +70,9 @@ internal fun ChatHeader(
     sides: List<Session> = emptyList(),
     sideRollup: SideRollup = SideRollup(),
     onOpenSide: ((SessionKey) -> Unit)? = null,
+    /** Branches the whole conversation up to its latest completed turn into a new session and opens it (#12996). */
+    onForkSession: (() -> Unit)? = null,
+    forking: Boolean = false,
     menuOpen: MutableState<Boolean> = remember { mutableStateOf(false) },
     actions: @Composable RowScope.() -> Unit = {},
 ) {
@@ -207,6 +210,16 @@ internal fun ChatHeader(
             PersonaIcons.sideSessions, subtitle = if (sideRollup.needsYou) stringResource(R.string.chat_side_sessions_needs_you) else null) {
             dialog = "sides"
         })
+        if (onForkSession != null && session != null) {
+            val turnRunning = session.agentState == AgentState.Working || session.agentState == AgentState.NeedsYou
+            add(JAction(
+                stringResource(R.string.chat_menu_fork),
+                PersonaIcons.forkChat,
+                enabled = online && machine?.online != false && !forking && !turnRunning,
+                subtitle = if (turnRunning) stringResource(R.string.chat_menu_fork_wait_turn) else null,
+                onClick = onForkSession,
+            ))
+        }
         add(JAction(stringResource(R.string.chat_chrome_switch_session), enabled = session != null) { dialog = "peers" })
         children.forEach { child -> add(JAction(stringResource(R.string.chat_chrome_subagent, child.description?.takeIf(String::isNotBlank) ?: child.type),
             enabled = onOpenSession != null) { onOpenSession?.invoke(SessionKey(session!!.machineId, child.sessionId)) }) }

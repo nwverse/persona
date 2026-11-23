@@ -23,8 +23,9 @@ import (
 //   - the same node call as the user's Resume: session.start with resume_session_id and a node-side recovery guard
 //     (node node.go fillResume: the session's own launcher, directory, model and permission mode; the shell it left
 //     when that is still there, else a new tab), the text as its first message;
-//   - never unsupervised: the agent is on an open task of this conversation already, or the call gives task (main
-//     conversation), which makes it one as agent_send with a task does, the card marked resumed (wakeResumed);
+//   - never unsupervised: the agent is on an open task of this conversation already, or the call gives task (the main
+//     conversation, or a direction's lead within leadTakeAllowed, #12953), which makes it one as agent_send with a
+//     task does, the card marked resumed (wakeResumed);
 //   - visible: the phone's confirmation and the task's card say which agent was resumed and why (resume_note);
 //   - compacted before the text goes in when its context is nearly full (#11137): resumed without a first message,
 //     then the text sent with compact_if_full, so the node runs the runtime's own /compact and sends once it is done
@@ -43,7 +44,7 @@ func stoppedRefusal(c proto.Session) error {
 		"Nothing was sent. Choose how to go on: when the next work depends on what this agent already knows (it has just "+
 		"investigated this and should now fix it, rework of its own work, the user asked for the agent with the context), "+
 		"send again with resume true and resume_why, which resumes this same session with its context on its own "+
-		"launcher and permission mode (from the main conversation also give task, unless it is on an open task of yours). "+
+		"launcher and permission mode (also give task, unless it is on an open task of yours). "+
 		"A nearly full context is no reason to start over: the resume compacts it with the agent's own /compact before your "+
 		"text goes in. For unrelated work, or when it went off track, start a replacement and give it what "+
 		"it needs (read this one with agent_read): for its task, task_plan with continues (the task's todo id) and "+
@@ -73,7 +74,7 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 	}
 	if !cause.AllowsSupervisorResume() {
 		return fmt.Errorf("%s cannot be resumed by the assistant: stop cause is %s. User stops and unknown causes require "+
-			"the user's Resume on its terminal page. Nothing was started or sent", agentLabel(c), cause)
+			"the user's Resume on its terminal page. Give that instruction separately from the choices on a decision card. Nothing was started or sent", agentLabel(c), cause)
 	}
 	if why == "" {
 		return fmt.Errorf("resume_why is required: say why this agent's own context is needed (the user sees it). Nothing was started or sent")
@@ -93,8 +94,12 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 	}
 	t, ok := s.openTodoOfAgent(am.ID, c.SessionID)
 	if !ok {
-		return fmt.Errorf("%s is on no open task of yours: a resumed agent must be supervised. Give task (from the main "+
-			"conversation) to make it your task as you resume it. Nothing was started or sent", agentLabel(c))
+		if !s.supervises(ctx, self) {
+			return fmt.Errorf("%s is on no open task of yours: a resumed agent must be supervised, and only the main "+
+				"conversation and a direction's lead supervise agents. Nothing was started or sent", agentLabel(c))
+		}
+		return fmt.Errorf("%s is on no open task of yours: a resumed agent must be supervised. Give task to make it your "+
+			"task as you resume it. Nothing was started or sent", agentLabel(c))
 	}
 	if err := othersTask(c, t, self); err != nil {
 		return fmt.Errorf("%w; it is not yours to resume. Nothing was started or sent", err)

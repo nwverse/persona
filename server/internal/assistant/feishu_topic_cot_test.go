@@ -26,7 +26,7 @@ func topicCotRun(s *Service) (*channel.Run, *chanLive) {
 func TestFeishuTopicRunCreatesAgentMessageInOriginTopic(t *testing.T) {
 	s, posts, calls := cotHub(t, false)
 	r, _ := topicCotRun(s)
-	feishuSink{s}.progress(context.Background(), r, time.Second, []string{"运行 `ls`"}, "")
+	topicCotProgress(t, s, r, time.Second, []string{"运行 `ls`"}, "")
 
 	creates := s.hub.(*fakeHub).appParams(AppFeishu, FeishuCotCreate)
 	if len(creates) != 1 {
@@ -54,7 +54,7 @@ func TestFeishuTopicAgentMessageOpensOnFirstProcessItem(t *testing.T) {
 			s, posts, _ := cotHub(t, false)
 			r, prog := topicCotRun(s)
 			prog.items, prog.steps = tc.items, tc.steps
-			feishuSink{s}.progress(context.Background(), r, time.Second, tc.steps, "")
+			topicCotProgress(t, s, r, time.Second, tc.steps, "")
 			creates := s.hub.(*fakeHub).appParams(AppFeishu, FeishuCotCreate)
 			if got := len(creates); (got == 1) != tc.wantCreate {
 				t.Fatalf("native agent-message creations = %d, want create %v; posts = %v", got, tc.wantCreate, *posts)
@@ -62,7 +62,7 @@ func TestFeishuTopicAgentMessageOpensOnFirstProcessItem(t *testing.T) {
 			if tc.wantCreate {
 				return
 			}
-			s.finishChannelRun(r, &channel.Result{Answer: "好的"})
+			finishTopicCot(t, s, r, &channel.Result{Answer: "好的"})
 			if creates := s.hub.(*fakeHub).appParams(AppFeishu, FeishuCotCreate); len(creates) != 0 {
 				t.Fatalf("a text-only turn created an empty native agent message: %v", creates)
 			}
@@ -79,8 +79,8 @@ func TestFeishuTopicAgentMessageStreamsNativeEvents(t *testing.T) {
 	s, _, _ := cotHub(t, false)
 	r, prog := topicCotRun(s)
 	prog.items[2].Text = "a.txt"
-	feishuSink{s}.progress(context.Background(), r, time.Second, []string{"运行 `ls`"}, "")
-	s.finishChannelRun(r, &channel.Result{Answer: "结论在这里"})
+	topicCotProgress(t, s, r, time.Second, []string{"运行 `ls`"}, "")
+	finishTopicCot(t, s, r, &channel.Result{Answer: "结论在这里"})
 
 	var events []feishubot.CotEvent
 	for _, p := range s.hub.(*fakeHub).appParams(AppFeishu, FeishuCotAppend) {
@@ -129,7 +129,7 @@ func TestFeishuTopicNativeProcessKeepsProgressAndSingleAnswerCard(t *testing.T) 
 	s.hub.(*fakeHub).setSessions("server", proto.Session{SessionID: "m1", MachineID: "server", Assistant: true})
 	r, _ := topicCotRun(s)
 	withCot(s, r) // isolate the card/native coexistence from creation, covered above
-	feishuSink{s}.progress(context.Background(), r, 4*time.Second, []string{"运行 `ls`"}, "")
+	topicCotProgress(t, s, r, 4*time.Second, []string{"运行 `ls`"}, "")
 	if len(*posts) != 1 {
 		t.Fatalf("progress posts = %v, want the one progress card beside the native agent message", *posts)
 	}
@@ -138,7 +138,7 @@ func TestFeishuTopicNativeProcessKeepsProgressAndSingleAnswerCard(t *testing.T) 
 		t.Fatalf("progress card beside native process = %v", (*posts)[0])
 	}
 
-	s.finishChannelRun(r, &channel.Result{Answer: "结论在这里"})
+	finishTopicCot(t, s, r, &channel.Result{Answer: "结论在这里"})
 	if len(*posts) != 2 {
 		t.Fatalf("posts after finish = %v, want one progress post and its answer update", *posts)
 	}
@@ -166,11 +166,11 @@ func TestFeishuTopicNativeProcessSettingOffKeepsCardPanel(t *testing.T) {
 			"features": map[string]any{"main": true, "cards": true, "topic_cot": false}}, nil
 	})
 	r, _ := topicCotRun(s)
-	feishuSink{s}.progress(context.Background(), r, time.Second, []string{"运行 `ls`"}, "")
+	topicCotProgress(t, s, r, time.Second, []string{"运行 `ls`"}, "")
 	if creates := s.hub.(*fakeHub).appParams(AppFeishu, FeishuCotCreate); len(creates) != 0 || len(*posts) != 1 {
 		t.Fatalf("topic_cot off: native creations = %v, progress posts = %v", creates, *posts)
 	}
-	s.finishChannelRun(r, &channel.Result{Answer: "结论在这里"})
+	finishTopicCot(t, s, r, &channel.Result{Answer: "结论在这里"})
 	card := lastCard(t, r, *posts)
 	if !strings.Contains(card, "结论在这里") || !strings.Contains(card, "collapsible_panel") || !strings.Contains(card, "已调用 1 次工具") {
 		t.Fatalf("topic_cot off answer card = %s", card)
@@ -181,7 +181,7 @@ func TestFeishuTopicNativeProcessSettingOffKeepsCardPanel(t *testing.T) {
 func TestFeishuTopicNativeCreationRefusalFallsBack(t *testing.T) {
 	s, posts, calls := cotHub(t, true)
 	r, _ := topicCotRun(s)
-	feishuSink{s}.progress(context.Background(), r, time.Second, []string{"运行 `ls`"}, "")
+	topicCotProgress(t, s, r, time.Second, []string{"运行 `ls`"}, "")
 	creates := s.hub.(*fakeHub).appParams(AppFeishu, FeishuCotCreate)
 	if len(creates) != 1 {
 		t.Fatalf("refused native creation attempts = %v, want one", creates)
@@ -189,7 +189,7 @@ func TestFeishuTopicNativeCreationRefusalFallsBack(t *testing.T) {
 	if r.Ext["cot_off"] == "" || len(*posts) != 1 || r.Ext["card"] == "" {
 		t.Fatalf("fallback was not recorded with a progress card: ext = %v, posts = %v", r.Ext, *posts)
 	}
-	s.finishChannelRun(r, &channel.Result{Answer: "结论在这里"})
+	finishTopicCot(t, s, r, &channel.Result{Answer: "结论在这里"})
 	if len(*posts) != 2 {
 		t.Fatalf("fallback posts = %v, want the progress card and one answer update", *posts)
 	}
@@ -277,6 +277,7 @@ func measureTopicCotProgressTiming(t *testing.T, native bool, nativeDelay time.D
 	case <-time.After(2 * time.Second):
 		t.Fatal("progress pass did not complete")
 	}
+	waitTopicCot(t, s, r)
 	execution = time.Since(start)
 	if execution < feedback || execution < nativeDelay {
 		t.Fatalf("feedback %s, execution %s, native delay %s", feedback, execution, nativeDelay)
@@ -295,4 +296,56 @@ func TestFeishuTopicCotFeedbackAndExecutionTiming(t *testing.T) {
 	t.Run("before card only", func(t *testing.T) { measureTopicCotProgressTiming(t, false, 0) })
 	t.Run("after native process", func(t *testing.T) { measureTopicCotProgressTiming(t, true, 0) })
 	t.Run("delayed native process", func(t *testing.T) { measureTopicCotProgressTiming(t, true, 300*time.Millisecond) })
+}
+
+// waitTopicCot observes the native worker, without making card delivery wait on it in production.
+func waitTopicCot(t *testing.T, s *Service, r *channel.Run) {
+	t.Helper()
+	s.chans.mu.Lock()
+	p := s.chans.live[r.ID]
+	var w *cotWorker
+	if p != nil {
+		w = p.native
+	}
+	s.chans.mu.Unlock()
+	if w == nil {
+		return
+	}
+	waitCotWorker(t, w)
+}
+
+func waitCotWorker(t *testing.T, w *cotWorker) {
+	t.Helper()
+	waitFor(t, "native worker to become idle", func() bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return !w.queued && w.cancel == nil
+	})
+}
+
+func topicCotProgress(t *testing.T, s *Service, r *channel.Run, took time.Duration, steps []string, live string) {
+	t.Helper()
+	feishuSink{s}.progress(context.Background(), r, took, steps, live)
+	waitTopicCot(t, s, r)
+}
+
+func finishTopicCot(t *testing.T, s *Service, r *channel.Run, result *channel.Result) {
+	t.Helper()
+	// Keep the worker reference after finish removes the run.
+	s.chans.mu.Lock()
+	p := s.chans.live[r.ID]
+	s.chans.mu.Unlock()
+	s.finishChannelRun(r, result)
+	if p != nil {
+		s.chans.mu.Lock()
+		w := p.native
+		s.chans.mu.Unlock()
+		if w != nil {
+			select {
+			case <-w.done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("native finish did not end")
+			}
+		}
+	}
 }

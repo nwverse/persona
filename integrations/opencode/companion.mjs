@@ -5,10 +5,11 @@
 //
 //   node integrations/opencode/companion.mjs [--socket <runtime.sock>] [--bin <path>]
 //     [--db <opencode.db>] [--config-dir <dir>] [--launcher <name>] [--name <label>]
-//     [--model <provider/model>] [--no-assistant] [--parent-stdin]
+//     [--model <provider/model>] [--instance <id>] [--no-assistant] [--no-update] [--parent-stdin]
+//     [--assistant-workers <1..64>] [--assistant-idle-ms <milliseconds>]
 
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { realpathSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { createOpencodeCompanion } from './lib/companion.js'
 
@@ -28,6 +29,9 @@ export function parseCompanionArgs(argv = process.argv.slice(2), env = process.e
       runtime: { type: 'string' },
       instance: { type: 'string' },
       'no-assistant': { type: 'boolean' },
+      'no-update': { type: 'boolean' },
+      'assistant-workers': { type: 'string' },
+      'assistant-idle-ms': { type: 'string' },
       'parent-stdin': { type: 'boolean' },
     },
     strict: true,
@@ -36,7 +40,13 @@ export function parseCompanionArgs(argv = process.argv.slice(2), env = process.e
   const bin = values.bin || values['opencode-bin'] || env.PERSONA_OPENCODE_BIN || env.OPENCODE_BIN || 'opencode'
   const label = values.name || values['display-name'] || undefined
   const displayName = values['display-name'] || values.name || undefined
+  const maxAssistantWorkers = values['assistant-workers'] === undefined ? undefined : Number(values['assistant-workers'])
+  const assistantIdleMs = values['assistant-idle-ms'] === undefined ? undefined : Number(values['assistant-idle-ms'])
+  if (maxAssistantWorkers !== undefined && (!Number.isInteger(maxAssistantWorkers) || maxAssistantWorkers < 1 || maxAssistantWorkers > 64)) throw new Error('--assistant-workers must be an integer between 1 and 64')
+  if (assistantIdleMs !== undefined && (!Number.isFinite(assistantIdleMs) || assistantIdleMs < 1)) throw new Error('--assistant-idle-ms must be positive')
   return {
+    ...(maxAssistantWorkers === undefined ? {} : { maxAssistantWorkers }),
+    ...(assistantIdleMs === undefined ? {} : { assistantIdleMs }),
     socketPath: values.socket || undefined,
     bin,
     dbPath: values.db || undefined,
@@ -48,6 +58,7 @@ export function parseCompanionArgs(argv = process.argv.slice(2), env = process.e
     runtime: values.runtime,
     instance: values.instance,
     assistant: values['no-assistant'] ? false : true,
+    noUpdate: values['no-update'] === true,
     parentStdin: values['parent-stdin'] === true,
   }
 }
@@ -78,11 +89,25 @@ function main() {
 
   if (opts.parentStdin && !process.stdin.isTTY) {
     process.stdin.on('end', shutdown)
+    process.stdin.on('close', shutdown)
     process.stdin.on('error', shutdown)
     process.stdin.resume()
+    if (process.stdin.readableEnded || process.stdin.destroyed) {
+      shutdown()
+    }
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// Node loads the entry module by its real path, so compare real paths: through a symlinked home or package directory
+// argv[1] keeps the link while import.meta.url does not, and a plain comparison would skip main() and exit 0 (#12848).
+function isEntry() {
+  try {
+    return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return false // no file behind argv[1] (node -e, a REPL import)
+  }
+}
+
+if (isEntry()) {
   main()
 }

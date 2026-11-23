@@ -71,6 +71,55 @@ type DecisionOption struct {
 	LeadsTo string `json:"leads_to"`
 }
 
+// terminalResumeLabel recognizes the existing terminal instruction in the three
+// supported languages. It can only offer navigation; it never authorizes a start.
+func terminalResumeLabel(label string) bool {
+	label = strings.ToLower(strings.TrimSpace(label))
+	return strings.HasPrefix(label, "resume ") && strings.Contains(label, "terminal") ||
+		strings.Contains(label, "终端") && strings.Contains(label, "恢复") || // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+		strings.Contains(label, "ターミナル") && strings.Contains(label, "再開") // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+}
+
+func terminalResumeMention(text string) bool {
+	text = strings.ToLower(text)
+	return strings.Contains(text, "resume") && strings.Contains(text, "terminal") ||
+		strings.Contains(text, "终端") && strings.Contains(text, "恢复") || // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+		strings.Contains(text, "ターミナル") && strings.Contains(text, "再開") // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+}
+
+func soleDecisionAgent(t Todo, asked time.Time) *SessionRef {
+	var target *SessionRef
+	for _, a := range t.Agents {
+		if !a.active() || a.LinkedAt.After(asked) || a.MachineID == "" || a.SessionID == "" {
+			continue
+		}
+		if target != nil {
+			return nil
+		}
+		target = &SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}
+	}
+	return target
+}
+
+// decisionTerminal returns a task-owned target. An archived/released binding is
+// never used to redirect an owner's recovery action to another Agent.
+func decisionTerminal(t Todo, label string) *SessionRef {
+	if !terminalResumeLabel(label) {
+		return nil
+	}
+	var match *SessionRef
+	for _, a := range t.Agents {
+		if !a.active() || len(a.SessionID) < 8 || !strings.Contains(strings.ToLower(label), strings.ToLower(a.SessionID[:8])) {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = &SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}
+	}
+	return match
+}
+
 // reviewDecision is what a needs_user review says of its decision, as checked (readDecision).
 type reviewDecision struct {
 	WhyOwner, Reason, Recommend, CostOfWaiting string
@@ -282,6 +331,14 @@ func decisionLines(l i18n.Lang, loc *time.Location, a *acceptAsk) []string {
 
 // ---- answering ----
 
+// decisionTextDelivery distinguishes Agent delivery from a record awaiting supervisor follow-up.
+type decisionTextDelivery string
+
+const (
+	decisionTextAgent    decisionTextDelivery = "agent"
+	decisionTextRecorded decisionTextDelivery = "recorded_for_supervisor"
+)
+
 // errDecisionOption: the option named is none of the decision's.
 var errDecisionOption = errors.New("option is not one of the decision's options")
 
@@ -327,6 +384,9 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 			return acceptResult{}, errDecisionOption
 		}
 		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: label}, false)
+	}
+	if terminalResumeLabel(label) && i >= 0 {
+		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
 	}
 	switch {
 	case label == a.Recommend && label != "":
@@ -470,12 +530,14 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 	completeDismissal()
 	s.decisionsChanged(ctx, id, at)
 	result := acceptSucceeded()
+	delivery := decisionTextAgent
 	if sendErr != nil {
+		delivery = decisionTextRecorded
 		result = s.decisionNotDelivered(ctx, id, a.AskedAt, text, sendErr)
 	} else {
 		s.userDecided(ctx, id)
 	}
-	s.endAsk(ctx, id, a.AskedAt, "", row.Choice)
+	s.endAskWithTextDelivery(ctx, id, a.AskedAt, "", row.Choice, delivery)
 	return item, result, nil
 }
 
@@ -489,6 +551,11 @@ func (s *Service) askCardNow(id, card string) bool {
 // endAsk marks task id's decision asked at as answered (response: the fixed answer it got, or chosen: the option
 // taken that was not the recommended one), and redraws its cards.
 func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, response, chosen string) {
+	s.endAskWithTextDelivery(ctx, id, asked, response, chosen, "")
+}
+
+// endAskWithTextDelivery persists the observed free-text outcome with the answer before redrawing any cards.
+func (s *Service) endAskWithTextDelivery(ctx context.Context, id string, asked time.Time, response, chosen string, delivery decisionTextDelivery) {
 	b := &s.accept
 	b.mu.Lock()
 	a := b.asks[id]
@@ -496,7 +563,9 @@ func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, respon
 		b.mu.Unlock()
 		return
 	}
-	a.AcceptedAt, a.Response, a.Chosen = time.Now().UTC(), response, chosen
+	a.AcceptedAt, a.Response, a.Chosen, a.TextDelivery = time.Now().UTC(), response, chosen, delivery
+	// Only option/fixed-answer callers use endAsk; explicit text always supplies its delivery outcome.
+	a.OptionTaken = delivery == "" && response == "" && chosen != ""
 	s.saveAcceptLocked(ctx)
 	cp := *a
 	b.mu.Unlock()

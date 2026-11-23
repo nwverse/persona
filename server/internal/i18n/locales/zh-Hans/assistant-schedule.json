@@ -4,7 +4,9 @@
   "skip_next_invalid": "请输入有效的执行时间。",
   "skip_next_owner": "你已跳过这次执行",
   "execution_context_unavailable": "暂时无法核对任务对话的执行环境。请重新连接其 Agent 后重试。",
+  "task_execution_wait_timeout": "task_execution_wait_timeout：等待所选电脑支持任务执行选项超时，任务未发送。",
   "followup": "定时跟进",
+  "task_label": "定时任务",
   "morning": "早报",
   "evening": "晚间回顾",
   "unavailable": "暂时读不到定时任务（数据库没有响应），过一会儿再试",
@@ -72,5 +74,8 @@
   "todo_wait_cost": "可能再过一个定时窗口，任务仍没有推进。",
   "todo_change_result": "请督办在现有授权范围内提出另一种做法。",
   "todo_wait_result": "保留已经确认的做法，等下一次定时检查。",
+  "selected_file_unavailable": "所选文件不可用或执行上下文已更改，请移除后重新选择。",
+  "file_runtime_unsupported": "该 agent 暂不支持文件选择，请使用文本或选择其他 agent。",
+  "input_context_unavailable": "任务或其原始对话不可用，请重新打开任务后重试。",
   "execution_antigravity_unavailable": "{machine} 上的 Antigravity 已断开连接或不可用。请在该电脑上恢复 Antigravity，然后重新运行此任务以继续现有对话。"
 }

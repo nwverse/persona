@@ -26,10 +26,12 @@ import (
 //
 //   - Codex app-server can return the limits together with the account ID. The node sends only a digest of that ID.
 //     When the app-server cannot supply windows, read the newest rollout's token_count event without an account ID.
-//   - Claude Code: in a bounded background poll (usagewindows_claude.go), the node invokes the built-in `claude`
-//     launcher through the login shell for its subscription windows via stream-json `get_usage` (falling back to
-//     `-p /usage` when unsupported or when `get_usage` returns no windows) without touching credentials or making a
-//     model request. An opt-in status line drop (<node dir>/usage/claude*.json) keeps working and wins when fresh.
+//   - Claude Code: in Persona's own Claude assistant conversations, stream-json emits a rate_limit_event after each
+//     reply (usagewindows_claudestream.go, #12855) with no extra process; in addition, a bounded background poll
+//     (usagewindows_claude.go, #12412) invokes the built-in `claude` launcher through the login shell via stream-json
+//     `get_usage` (falling back to `-p /usage` when unsupported or when `get_usage` returns no windows) without
+//     touching credentials or making a model request. An opt-in status line drop (<node dir>/usage/claude*.json)
+//     keeps working and wins when fresh.
 //
 // The node polls every usageWindowsEvery, keeps the last sample of every source (a source that goes quiet keeps its
 // number for three days), and answers usage.windows from that. hub.json machines[].usage_windows false turns it off.
@@ -47,7 +49,7 @@ type usageWindowsState struct {
 	off          bool // the hub said usage_windows false
 	cancel       context.CancelFunc
 	at           time.Time
-	accounts     map[string]proto.UsageNodeAccount // by source ("codex:<source digest>", "claude:<file>", "claude-cli:<dir digest>")
+	accounts     map[string]proto.UsageNodeAccount // by source ("codex:<source digest>", "claude:<file>", "claude-cli:<dir digest>", "claude-stream:<launcher+dir digest>")
 	claudeProbes map[string]claudeUsageProbe       // by realPath(configDir): last probe time and next reset
 }
 

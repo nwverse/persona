@@ -42,8 +42,12 @@ func (h *Hub) hello() map[string]any {
 		"hub_id": h.hubID(), "hub_name": h.hubName(), "endpoints": h.endpointList(), "tls_port": port, "fp": fp,
 		// The hubs of this hub's mesh group, itself included (docs/archive/operations/plan-hub-mesh.md 2.6): only after authentication.
 		"mesh": map[string]any{"hubs": h.meshHubs()},
+		// Push grading switch (hub.ln_mode / push_grading): synced on hello and on switch toggles.
+		"push_grading": h.push.pushGradingOn(),
 		// the user's language (feature locale, locale.go)
 		"locale": string(h.userLang()),
+		// The pictures a message may carry (#12973): the clients size their pickers by them, the send routes check them.
+		"image_limits": proto.HubImageLimits,
 	}
 	// The address the hub's own links use (hub.json public_url; the assistant's /s/…, /persona/…, /todos links, #2194): the
 	// apps tell those links from other sites by it even when they reach the hub at another address (#2696). Only when set.

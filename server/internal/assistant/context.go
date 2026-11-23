@@ -28,7 +28,10 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		}
 		return ContextResult{}
 	}
-	background := s.isBackground(ctx, p.SessionID)
+	if p.RecoveryOnly {
+		return s.compactRecoveryContext(ctx, p)
+	}
+	background := s.isBackgroundSession(ctx, p.SessionID)
 	snapshot := ""
 	cleanRound := s.cleanRoundSession(p.SessionID)
 	if !cleanRound { // a granted schedule's round reads nothing from outside (schedule_grant.go)
@@ -55,7 +58,15 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 	if c.BackgroundStarted != "" {
 		receipts = append(receipts, assistantwire.ViewErrorReceipt{ItemID: backgroundAnnounceReceipt, Digest: c.BackgroundStarted})
 	}
-	return ContextResult{Text: text, ViewErrors: errs, Receipts: receipts}
+	out := ContextResult{Text: text, ViewErrors: errs, Receipts: receipts, CompactInstructions: prompts.RenderCompactInstructions(answerLanguage(s.hello(ctx).Locale))}
+	if !cleanRound {
+		if p.PrepareRecovery && p.RecoveryID == "" {
+			s.prepareCompactRecovery(ctx, p)
+		}
+		recovery := s.compactRecoveryContext(ctx, p)
+		out.RecoveryID, out.Recovery = recovery.RecoveryID, recovery.Recovery
+	}
+	return out
 }
 
 // contextState is the last snapshot taken for the live context.
@@ -136,7 +147,7 @@ func backgroundSnapshot(snap prompts.Snapshot) prompts.Snapshot {
 // whole list to the main conversation (docs/assistant/todos.md); another conversation that got it took the user's
 // question for one of the others' tasks, which crowded its own out of the first rows.
 func (s *Service) snapshotScope(ctx context.Context, id string) string {
-	if id == "" || s.settings(ctx).Main == "" || s.isMain(ctx, id) || s.isBackground(ctx, id) || s.runsScheduledTask(ctx, id) {
+	if id == "" || s.settings(ctx).Main == "" || s.isMain(ctx, id) || s.isBackgroundSession(ctx, id) || s.runsScheduledTask(ctx, id) {
 		return ""
 	}
 	return id
@@ -369,8 +380,8 @@ func snapshotAgentGroup(c proto.Session, now time.Time) snapshotAgentGroupKind {
 	recent := now.Sub(c.UpdatedAt) < 24*time.Hour
 	w := c.Work
 	switch {
-	case c.State == proto.StateNeedsYou, silentRow(c):
-		return snapshotAgentNeedsYou // a turn with no output is the owner's to continue, not finished (#10187)
+	case c.State == proto.StateNeedsYou, silentRow(c), upstreamRow(c):
+		return snapshotAgentNeedsYou // a turn with no output or a persistent upstream stall needs visibility (#10187, #13372)
 	case c.State == proto.StateWorking:
 		return snapshotAgentWorking
 	case c.AwaitsReply && c.State == proto.StateIdle && recent:
@@ -395,6 +406,7 @@ func snapshotAgentGroup(c proto.Session, now time.Time) snapshotAgentGroupKind {
 func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web string) (needs, unread, awaiting, waiting, done, muted []prompts.SnapshotAgent,
 	working []prompts.SnapshotAgent) {
 	now := time.Now()
+	lang := s.lang(ctx)
 	for _, m := range devices {
 		list, off, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
@@ -413,6 +425,8 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 			}
 			if silentRow(c) {
 				a.Line = c.TurnError // why it is the owner's: no output, or Persona's Stop (#10187)
+			} else if upstreamRow(c) {
+				a.Line = s.upstreamSnapshotLine(lang, m.ID, c) // persistent upstream 5xx / pool outage (#13372)
 			}
 			a.Line = clip(oneLine(a.Line), 160)
 			group := snapshotAgentGroup(c, now)

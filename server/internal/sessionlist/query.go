@@ -118,6 +118,49 @@ func (i *Index) Counts(options Options) (Counts, error) {
 	return copyCounts(i.countsResult(o.filters()).counts), nil
 }
 
+// CountMatchingState counts distinct items named by ids matching options whose state (under Roots) equals state.
+func (i *Index) CountMatchingState(options Options, state string, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if options.Search != "" {
+		return 0, failure("invalid_query", "search does not support counts")
+	}
+	o, err := validate(options)
+	if err != nil {
+		return 0, err
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.initialize()
+	i.pruneSnapshots()
+	f := o.filters()
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	if o.Cursor != "" {
+		s, _, _, err := i.cursorSnapshot(o)
+		if err != nil {
+			return 0, err
+		}
+		n := 0
+		for _, e := range s.result.events {
+			if e.value != nil && want[e.value.item.ID] && f.matches(e.value) && stateOf(e.value.item, f.Roots) == state {
+				n++
+			}
+		}
+		return n, nil
+	}
+	n := 0
+	for id := range want {
+		if r := i.items[id]; r != nil && f.matches(r) && stateOf(r.item, f.Roots) == state {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func copyCounts(c Counts) Counts {
 	c.Machine = maps.Clone(c.Machine)
 	c.ActiveAgentsByMachine = maps.Clone(c.ActiveAgentsByMachine)

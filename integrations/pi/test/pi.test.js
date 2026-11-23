@@ -23,6 +23,7 @@ function sessionManager(id, cwd, entries = [], name = '') {
       for (let e = byId.get(sm.leaf); e; e = byId.get(e.parentId)) out.unshift(e)
       return out
     },
+    appendCustomEntry(customType, data) { sm.append({ type: 'custom', id: `c${sm.entries.length}`, parentId: sm.leaf, customType, data }) },
     append(e) {
       sm.entries = [...sm.entries, e]
       sm.leaf = e.id
@@ -292,6 +293,8 @@ test('the pi-web companion lists sessions on disk, opens one to send to it, and 
   await n.ready
   assert.equal(n.hello.runtime, 'pi-files')
   assert.equal(n.hello.launcher, 'pi-web')
+  assert.deepEqual(n.hello.launchers[0].models, [{ id: 'default', name: 'pi', default: true }], 'the display label must not become a model argument')
+  assert.deepEqual(n.hello.launchers[0].permission_modes, ['default', 'bypassPermissions'])
   await until('listed', () => n.last('runtime.sessions')?.sessions.length === 2)
   const old = n.last('runtime.sessions').sessions.find((s) => s.session_id === 's-old')
   assert.equal(old.status, 'offline')
@@ -305,6 +308,17 @@ test('the pi-web companion lists sessions on disk, opens one to send to it, and 
   const { session } = await n.peer.call('session.start', { cwd: '/w/new', prompt: 'hello' })
   assert.equal(session.session_id, 'new-1')
   assert.deepEqual(posts[1].body, { cwd: '/w/new', type: 'prompt', message: 'hello' })
+})
+
+test('an assistant start pi-web has not written yet is refused as delivered nothing, so a switch rolls back', async (t) => {
+  const { n, host, posts } = await setup(t, { web: true, disk: [], files: {}, listDisk: true })
+  const live = piSession('s-live')
+  host.register(live.pi)
+  await live.fire('session_start')
+  await n.ready
+  await assert.rejects(n.peer.call('session.start', { cwd: '/w/new', assistant: true, permission_mode: 'default' }),
+    (error) => error.code === 'assistant_supervision_runtime' && error.data?.delivered === 'none')
+  assert.deepEqual(posts.at(-1).body, { cwd: '/w/new', type: 'ensure_session' }, 'no prompt went to pi-web')
 })
 
 test('approvals of configured tools go to the phone when it drives the session; pi\'s dialog otherwise; no answer blocks', async (t) => {
@@ -401,6 +415,22 @@ async function askSetup(t, opts = {}) {
   const ask = (id, params) => tool.execute(id, params, a.ctx.signal, undefined, a.ctx)
   return { ...env, a, tool, status, ask }
 }
+
+test('A2A tools send and report from the active pi session', async (t) => {
+  const { Type } = await import('./typebox-stub.js')
+  const { n, host } = await setup(t)
+  const a = piSession('s-a2a')
+  host.register(a.pi, { A2AType: Type })
+  await a.fire('session_start')
+  await n.ready
+  await until('A2A session listed', () => n.last('runtime.sessions')?.sessions.some(s => s.session_id === 's-a2a'))
+  assert.ok(!a.pi.tools.some(t => t.name === 'ask_user'))
+  const report = a.pi.tools.find(t => t.name === 'a2a_report')
+  const args = { task_id: 'task', message_id: 'report', state: 'completed', text: 'Test result' }
+  const result = await report.execute('call', args, a.ctx.signal, undefined, a.ctx)
+  assert.equal(result.details.error, false)
+  assert.deepEqual(n.toolCalls.at(-1), { name: 'a2a_report', args, session_id: 's-a2a' })
+})
 
 /** A phone that has not answered yet: resolve(answer) answers the card it holds. */
 function heldPhone(n) {
@@ -784,4 +814,88 @@ test('a host can serve another agent of the same extension API (omp)', async (t)
   n.resolve = () => ({ allow: true })
   await a.fire('tool_call', { toolName: 'bash', toolCallId: 'c1', input: { command: 'ls' } })
   assert.match(n.asked.at(-1).id, /^omp-/, 'its cards carry its own id prefix')
+})
+
+test('a turn settles on the agent\'s own event: omp on agent_end, pi only on agent_settled', async (t) => {
+  // omp's pi compatibility layer dispatches no agent_settled (pi's word for a run fully over): without settleEvents a
+  // session would list as working forever after its first turn.
+  const statusOf = (n) => () => n.last('runtime.sessions')?.sessions.find((s) => s.session_id === 's-ompe')?.status
+  const mk = async (options) => {
+    const n = await startFakeNode(t)
+    const host = createPiHost({ SessionManager: { listAll: async () => [], open: () => sessionManager('x', '/', []) }, pid: 4343, log: () => {} },
+      { socketPath: n.path, retryMs: 20, pushDelayMs: 5, agent: 'omp', name: 'omp', instancePrefix: 'omp', interactionPrefix: 'omp', ...options })
+    t.after(() => host.stop())
+    return { n, host }
+  }
+  const entries = [msg('u1', null, 'user', 'one'), msg('a1', 'u1', 'assistant', 'done')]
+  const omp = await mk({ settleEvents: ['agent_end'] })
+  const o = piSession('s-ompe', '/w/app', entries)
+  omp.host.register(o.pi)
+  await o.fire('session_start')
+  await omp.n.ready
+  await until('listed', () => statusOf(omp.n)() === 'done')
+  await o.fire('agent_start')
+  await until('working', () => statusOf(omp.n)() === 'working')
+  await o.fire('agent_end') // omp's own word for the turn being over
+  await until('settled to done', () => statusOf(omp.n)() === 'done')
+
+  const pi = await mk({}) // no settleEvents: pi as it always was
+  const p = piSession('s-ompe', '/w/app', entries)
+  pi.host.register(p.pi)
+  await p.fire('session_start')
+  await pi.n.ready
+  await until('listed', () => statusOf(pi.n)() === 'done')
+  await p.fire('agent_start')
+  await p.fire('agent_end') // the loop ended; its retry, compaction or queue may still run
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(statusOf(pi.n)(), 'working', 'a pi settles only on agent_settled')
+  await p.fire('agent_settled')
+  await until('settled to done', () => statusOf(pi.n)() === 'done')
+})
+
+test('Assistant native shell gates survive bypass mode and unavailable rules; ordinary pi stays unchanged', async (t) => {
+  const { n, host } = await setup(t, { web: true })
+  const assistant = piSession('guarded'), ordinary = piSession('ordinary')
+  host.register(assistant.pi)
+  host.register(ordinary.pi)
+  await assistant.fire('session_start')
+  await ordinary.fire('session_start')
+  await n.ready
+  n.tools = [{ name: 'send_message', shell: ['send-message'], input_schema: { type: 'object' } }]
+  await n.peer.call('session.send', { session_id: 'guarded', assistant: true, text: 'continue', mode: 'bypassPermissions' })
+  const direct = await assistant.fire('tool_call', { toolName: 'bash', input: { command: 'send-message --to example' } })
+  assert.equal(direct.block, true)
+  const nested = await assistant.fire('tool_call', { toolName: 'bash', input: { command: `bash -lc 'send-"message" --to example'` } })
+  assert.equal(nested.block, true)
+  assert.equal(await assistant.fire('tool_call', { toolName: 'bash', input: { command: 'pwd' } }), undefined)
+  assert.equal(await ordinary.fire('tool_call', { toolName: 'bash', input: { command: 'send-message --to example' } }), undefined)
+  n.setHub(false)
+  await until('hub disconnected', () => !host.runtime.hubConnected)
+  assert.equal((await assistant.fire('tool_call', { toolName: 'bash', input: { command: 'pwd' } })).block, true)
+  n.setHub(true)
+  await until('hub connected', () => host.runtime.hubConnected)
+  Object.defineProperty(n, 'tools', { get() { throw new Error('rules unavailable') }, configurable: true })
+  const unavailable = await assistant.fire('tool_call', { toolName: 'bash', input: { command: 'pwd' } })
+  assert.equal(unavailable.block, true)
+  assert.equal(n.toolCalls.length, 0, 'a native permission check never executes a Persona action')
+})
+
+test('Assistant messages wait for a fresh turn context; ordinary steering remains available', async (t) => {
+  const { n, host } = await setup(t, { web: true })
+  const a = piSession('context-turn')
+  host.register(a.pi)
+  await a.fire('session_start')
+  await n.ready
+  await n.peer.call('session.send', { session_id: 'context-turn', assistant: true, text: 'first', context: 'snapshot one', supervision_instructions: 'role', mode: 'default' })
+  await a.fire('agent_start')
+  const count = a.sm.getEntries().length
+  await assert.rejects(n.peer.call('session.send', { session_id: 'context-turn', assistant: true, text: 'second', context: 'snapshot two', supervision_instructions: 'role', mode: 'default' }), (error) => error.code === 'busy' && error.data?.delivered === 'none')
+  assert.equal(a.pi.sent.length, 1)
+  assert.equal(a.sm.getEntries().length, count, 'busy input cannot mutate an active turn’s state')
+  await a.fire('agent_settled')
+  await n.peer.call('session.send', { session_id: 'context-turn', assistant: true, text: 'second', context: 'snapshot two', supervision_instructions: 'role', mode: 'default' })
+  const applied = await a.fire('before_agent_start', { systemPrompt: 'base' })
+  assert.equal(applied.systemPrompt, 'base\n\nrole')
+  assert.equal(applied.message.content, 'snapshot two')
+  assert.equal(a.pi.sent.length, 2)
 })

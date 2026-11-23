@@ -31,8 +31,8 @@ extension Theme {
         /// A status dot (online, unread).
         static let dot = "circle.fill"
         static let time = "clock"
-        /// Someday on a to-do (#10465): the owner's own "not now", put aside for some other day (its swipe, its menu and
-        /// the list's Show Someday). Not `time`, which is Waiting's clock.
+        /// Someday on a to-do (#10465): the owner's own "not now", put aside for some other day (its swipe and its
+        /// menu). Not `time`, which is Waiting's clock.
         static let someday = "moon.stars.fill"
         /// An agent that only waits on background commands (Waiting in the Background, #6045): the mark in place of its dot.
         static let backgroundWaiting = "clock.fill"
@@ -307,6 +307,8 @@ extension Theme {
         /// Archive a conversation (out of the list, kept under Archived) and bring it back.
         static let archive = "archivebox"
         static let unarchive = "tray.and.arrow.up"
+        /// Move To…: file a chat or an Agent under one of the owner's long-running matters, or on its own (#11516).
+        static let moveTo = "rectangle.stack.badge.plus"
         static let mute = "bell.slash"
         static let unmute = "bell"
         /// An Inbox rule: where a chat's, sender's or repository's items go and what the AI twin does with them.
@@ -647,12 +649,8 @@ extension Theme {
         static let pairing = "link.badge.plus"
         /// Settings › Connectors: the data sources Persona reads and acts in (this device, mail, Lark).
         static let connectors = "point.3.connected.trianglepath.dotted"
-        /// This device as a connector (its contacts, calendar, photos…): iPhone, iPad or Mac.
-        #if os(macOS)
-        static let thisDevice = laptop
-        #else
+        /// This device as a connector (its contacts, calendar, photos…): iPhone or iPad.
         static let thisDevice = "iphone.gen3"
-        #endif
         /// AI Draft Reply: a reply drafted in the user's voice.
         static let draftReply = "pencil.and.scribble"
         /// A drafted reply that will not go out: its message was handled elsewhere first (a message card, #4797).

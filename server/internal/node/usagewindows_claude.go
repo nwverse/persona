@@ -222,6 +222,8 @@ func hasFreshClaudeStatusFile(found map[string]proto.UsageNodeAccount, now time.
 
 func isClaudeStatusKey(k string) bool { return strings.HasPrefix(k, "claude:") }
 
+func isClaudeStreamKey(k string) bool { return strings.HasPrefix(k, "claude-stream:") }
+
 func earliestWindowReset(wins []proto.UsageWindow) time.Time {
 	var earliest time.Time
 	for _, w := range wins {
@@ -941,23 +943,28 @@ func parseClaudeResetTime(s string, now time.Time, span time.Duration) (time.Tim
 	return time.Time{}, false
 }
 
-// dedupeClaudeUsage reconciles status-line drops (`claude:*`) and CLI readings (`claude-cli:*`) that describe the same
-// Claude account on this machine. A fresh status-line file wins; once it ages past claudeUsageStatusFresh, a newer CLI
-// reading takes over so the sidebar never shows duplicate cards when reset timestamps differ by a second.
+// dedupeClaudeUsage reconciles CLI readings (`claude-cli:*`) with status-line drops (`claude:*`) and live stream
+// readings (`claude-stream:*`, #12855) that describe the same Claude account on this machine. A fresh status-line file
+// wins over a CLI probe; once it ages past claudeUsageStatusFresh, a newer CLI reading takes over. When a CLI reading
+// and a stream reading describe the same account (even when reset timestamps differ by a few seconds), they are merged
+// in the snapshot view so the newer sample's windows win while preserving plan metadata and live per-model windows.
 func dedupeClaudeUsage(accounts map[string]proto.UsageNodeAccount, now time.Time) {
-	var statusKeys, cliKeys []string
+	var statusKeys, streamKeys, cliKeys []string
 	for k := range accounts {
 		switch {
 		case isClaudeStatusKey(k):
 			statusKeys = append(statusKeys, k)
+		case isClaudeStreamKey(k):
+			streamKeys = append(streamKeys, k)
 		case strings.HasPrefix(k, claudeUsagePrefix):
 			cliKeys = append(cliKeys, k)
 		}
 	}
-	if len(statusKeys) == 0 || len(cliKeys) == 0 {
+	if len(cliKeys) == 0 || (len(statusKeys) == 0 && len(streamKeys) == 0) {
 		return
 	}
 	slices.Sort(statusKeys)
+	slices.Sort(streamKeys)
 	slices.Sort(cliKeys)
 	for _, ck := range cliKeys {
 		cliAcct, ok := accounts[ck]
@@ -984,6 +991,66 @@ func dedupeClaudeUsage(accounts map[string]proto.UsageNodeAccount, now time.Time
 			}
 		}
 	}
+	for _, ck := range cliKeys {
+		cliAcct, ok := accounts[ck]
+		if !ok {
+			continue
+		}
+		for _, sk := range streamKeys {
+			streamAcct, ok := accounts[sk]
+			if !ok {
+				continue
+			}
+			if !sameClaudeAccount(streamAcct.UsageAccount, cliAcct.UsageAccount) {
+				continue
+			}
+			if streamAcct.SampledAt.After(cliAcct.SampledAt) {
+				accounts[sk] = mergeClaudeUsageAccount(streamAcct, cliAcct, now)
+				delete(accounts, ck)
+				break
+			}
+			cliAcct = mergeClaudeUsageAccount(cliAcct, streamAcct, now)
+			accounts[ck] = cliAcct
+			delete(accounts, sk)
+		}
+	}
+}
+
+// mergeClaudeUsageAccount combines two readings of the same Claude account, taking primary's sample time and live
+// windows while preserving plan metadata and non-overlapping live windows (such as per-model weekly allowances) from
+// secondary.
+func mergeClaudeUsageAccount(primary, secondary proto.UsageNodeAccount, now time.Time) proto.UsageNodeAccount {
+	merged := primary
+	if merged.Plan == "" && secondary.Plan != "" {
+		merged.Plan = secondary.Plan
+		merged.Name = secondary.Name
+	}
+	type slot struct {
+		minutes int
+		model   string
+	}
+	seen := map[slot]bool{}
+	wins := make([]proto.UsageWindow, 0, len(primary.Windows)+len(secondary.Windows))
+	for _, w := range liveWindows(primary.Windows, now) {
+		seen[slot{w.WindowMinutes, strings.ToLower(w.Model)}] = true
+		wins = append(wins, w)
+	}
+	for _, w := range liveWindows(secondary.Windows, now) {
+		k := slot{w.WindowMinutes, strings.ToLower(w.Model)}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		wins = append(wins, w)
+	}
+	sort.SliceStable(wins, func(i, j int) bool {
+		if wins[i].WindowMinutes != wins[j].WindowMinutes {
+			return wins[i].WindowMinutes < wins[j].WindowMinutes
+		}
+		return wins[i].Model < wins[j].Model
+	})
+	merged.Windows = wins
+	return merged
 }
 
 // sameClaudeAccount reports whether two Claude readings share at least one plan window whose reset lands within 5s.

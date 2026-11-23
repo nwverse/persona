@@ -235,6 +235,99 @@ func TestDedupeClaudeUsagePrefersFreshStatusLine(t *testing.T) {
 	}
 }
 
+func TestDedupeClaudeUsageReconcilesStreamAndCLI(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	r5 := now.Add(3 * time.Hour)
+	r5Jitter := r5.Add(time.Second) // 1s apart between rate_limit_event and CLI probe
+	r7 := now.Add(5 * 24 * time.Hour)
+	rExpired := now.Add(-time.Minute)
+	rOther := now.Add(4 * time.Hour)
+
+	// Newer stream sample wins on overlapping plan windows while preserving CLI plan metadata and live per-model
+	// windows, without duplicating the account or leaking expired extra windows.
+	streamKey := claudeStreamUsageKey("claude", "")
+	accounts := map[string]proto.UsageNodeAccount{
+		streamKey: {
+			UsageAccount: proto.UsageAccount{
+				Provider: "claude", Name: "Claude", SampledAt: now,
+				Windows: []proto.UsageWindow{
+					{Label: "5h", WindowMinutes: 300, UsedPercent: 40, ResetsAt: &r5},
+					{Label: "7d", WindowMinutes: 10080, UsedPercent: 25, ResetsAt: &r7},
+				},
+			},
+		},
+		claudeUsagePrefix + "same": {
+			UsageAccount: proto.UsageAccount{
+				Provider: "claude", Name: "Claude Max", Plan: "max", SampledAt: now.Add(-5 * time.Minute),
+				Windows: []proto.UsageWindow{
+					{Label: "5h", WindowMinutes: 300, UsedPercent: 32, ResetsAt: &r5Jitter},
+					{Label: "7d", WindowMinutes: 10080, UsedPercent: 20, ResetsAt: &r7},
+					{Label: "7d", WindowMinutes: 10080, UsedPercent: 12, Model: "Sonnet", ResetsAt: &r7},
+					{Label: "7d", WindowMinutes: 10080, UsedPercent: 9, Model: "Opus", ResetsAt: &rExpired},
+				},
+			},
+		},
+		claudeUsagePrefix + "other": {
+			UsageAccount: proto.UsageAccount{
+				Provider: "claude", Name: "Claude Pro", Plan: "pro", SampledAt: now.Add(-2 * time.Minute),
+				Windows: []proto.UsageWindow{{Label: "5h", WindowMinutes: 300, UsedPercent: 10, ResetsAt: &rOther}},
+			},
+		},
+	}
+	dedupeClaudeUsage(accounts, now)
+	if len(accounts) != 2 {
+		t.Fatalf("expected 2 accounts after reconciling stream+CLI, got %d: %+v", len(accounts), accounts)
+	}
+	if _, ok := accounts[claudeUsagePrefix+"same"]; ok {
+		t.Error("duplicate CLI entry was not folded into newer stream entry")
+	}
+	merged, ok := accounts[streamKey]
+	if !ok {
+		t.Fatal("newer stream entry was dropped")
+	}
+	if merged.Name != "Claude Max" || merged.Plan != "max" || !merged.SampledAt.Equal(now) {
+		t.Errorf("merged header = %+v, want Claude Max / max at %v", merged.UsageAccount, now)
+	}
+	if len(merged.Windows) != 3 {
+		t.Fatalf("expected 5h, 7d, 7d Sonnet (expired Opus dropped); got %+v", merged.Windows)
+	}
+	if merged.Windows[0].UsedPercent != 40 || merged.Windows[1].UsedPercent != 25 || merged.Windows[2].Model != "Sonnet" || merged.Windows[2].UsedPercent != 12 {
+		t.Errorf("merged windows = %+v", merged.Windows)
+	}
+	if _, ok := accounts[claudeUsagePrefix+"other"]; !ok {
+		t.Error("distinct Claude CLI account was dropped")
+	}
+
+	// Newer CLI sample replaces older stream sample for the same account while keeping one entry.
+	cliNewer := map[string]proto.UsageNodeAccount{
+		streamKey: {
+			UsageAccount: proto.UsageAccount{
+				Provider: "claude", Name: "Claude", SampledAt: now.Add(-20 * time.Minute),
+				Windows: []proto.UsageWindow{
+					{Label: "5h", WindowMinutes: 300, UsedPercent: 15, ResetsAt: &r5},
+				},
+			},
+		},
+		claudeUsagePrefix + "same": {
+			UsageAccount: proto.UsageAccount{
+				Provider: "claude", Name: "Claude Max", Plan: "max", SampledAt: now,
+				Windows: []proto.UsageWindow{
+					{Label: "5h", WindowMinutes: 300, UsedPercent: 48, ResetsAt: &r5Jitter},
+					{Label: "7d", WindowMinutes: 10080, UsedPercent: 30, ResetsAt: &r7},
+				},
+			},
+		},
+	}
+	dedupeClaudeUsage(cliNewer, now)
+	if len(cliNewer) != 1 {
+		t.Fatalf("expected 1 account when CLI is newer than stream, got %d: %+v", len(cliNewer), cliNewer)
+	}
+	got, ok := cliNewer[claudeUsagePrefix+"same"]
+	if !ok || got.Windows[0].UsedPercent != 48 || got.Plan != "max" {
+		t.Errorf("newer CLI entry = %+v (ok=%v)", got, ok)
+	}
+}
+
 func TestClaudeCLIUsageRefreshProtocolFallbackThrottleAndCancel(t *testing.T) {
 	useFakeClaudeUsageCLI(t)
 	// Keep Codex CLI out of this test so only Claude is probed.

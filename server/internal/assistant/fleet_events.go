@@ -14,7 +14,7 @@ import (
 
 // NodeEvent takes a node's event before the hub does (devices.Options.Event); false: the hub does not get it (the
 // manager tells it what follows instead).
-func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool {
+func (s *Service) nodeEvent(machine, event string, params json.RawMessage) bool {
 	if event == "launchers.changed" {
 		s.launchersChanged(machine)
 		return false
@@ -22,7 +22,6 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 	if err := s.conversationParamsAvailable(context.Background(), machine, params); err != nil {
 		return false
 	}
-	s.historySignal(machine, event, params)
 	var hook map[string]any
 	if event == "hook.event" && json.Unmarshal(params, &hook) == nil {
 		if sid, _ := hook["session_id"].(string); sid != "" {
@@ -106,7 +105,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 }
 
 // NodeRequest answers what of a node's requests is the manager's (devices.Options.Answer, with NodeAnswer's).
-func (s *Service) NodeRequest(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+func (s *Service) nodeRequest(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
 	if err := s.conversationParamsAvailable(ctx, machine, params); err != nil {
 		return nil, true, err
 	}
@@ -168,6 +167,15 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			return nil, true, errors.New("lark.sent: no extensions, there is no ledger")
 		}
 		out, err := s.ext.RecordNodeSent(ctx, machine, params)
+		return out, true, err
+	case proto.MethodGateRelay: // a relayed command gate's call, for the extension's socket here (#12904)
+		r, ok := s.ext.(interface {
+			RelayGate(ctx context.Context, machine string, params json.RawMessage) (any, error)
+		})
+		if !ok {
+			return nil, true, errors.New("gate.relay: no extensions here to relay to")
+		}
+		out, err := r.RelayGate(ctx, machine, params)
 		return out, true, err
 	case proto.MethodMailAttachment: // mail_save_attachment's bytes for the node that saves them (fleet_tools.go)
 		var p proto.MailAttachmentRequest

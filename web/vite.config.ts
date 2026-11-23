@@ -10,6 +10,7 @@ import { clientKeys, i18nCatalogs, startupEntries } from "./i18n-catalogs";
 import { pageTokensPlugin } from "./page-tokens";
 import { thirdPartyLicenses } from "./third-party-licenses";
 import { compatBootstrap } from "./compat-bootstrap";
+import { testWorkerLimit } from "./test-scheduling";
 
 // `npm run dev` talks to a hub through Vite's proxy: PERSONA_HUB_URL (eval "$(python3 ../scripts/persona_config.py env)").
 const environment = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
@@ -240,7 +241,7 @@ const holdLazyImports: Plugin = {
 };
 
 export default defineConfig({
-  plugins: [katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload(), holdLazyImports, classicWorker, buildStamp, thirdPartyLicenses,
+  plugins: [testWorkerLimit(), katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload(), holdLazyImports, classicWorker, buildStamp, thirdPartyLicenses,
     compatBootstrap(fileURLToPath(new URL("./public/compatibility-bootstrap.js", import.meta.url)))],
   // Text size (src/lib/text-scale.ts): font sizes become calc(size * var(--text-scale, 1)), after Tailwind wrote them.
   css: { postcss: { plugins: [textScale()] } },

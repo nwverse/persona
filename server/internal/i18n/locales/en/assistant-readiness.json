@@ -31,6 +31,8 @@
   "model_route_detail": "The model name is wrong, or the model isn't available right now. Try another model.",
   "rate_limited_title": "The model is being used too fast",
   "rate_limited_detail": "The model is being used too fast right now. It will recover on its own.",
+  "upstream_unavailable_title": "The model service isn't available right now",
+  "upstream_unavailable_detail": "No model service capacity is available right now. Nothing is wrong on your computer — try again in a little while.",
   "model_unverified_title": "The model hasn't been checked yet",
   "model_unverified_detail": "Send a message to check that the model answers.",
   "model_key_unverified_detail": "Claude Code on {machine} uses an account or key it was set up with, not tried yet. Send a message to check that it works.",

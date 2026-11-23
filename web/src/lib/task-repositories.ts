@@ -4,10 +4,13 @@ import { api, ApiError, credentialOwner, getToken, pastHub } from "./api";
 import { MANAGER_HEADER } from "./manager-choice";
 import { parseRepository, type RepositoryIdentity } from "./repository-identity";
 
+export type RepositoryTaskWorkflow = "isolated" | "shared_branch";
 export type RepositoryBinding = RepositoryIdentity & {
   id: string; name?: string; aliases?: string[]; purpose?: string; verified_at: string; clone_url?: string;
   /** An extension source's name when the reference was saved, so it still reads once the source is gone. */
   provider_name?: string;
+  /** Optional per-repository default task-collaboration cadence ("isolated" / unset or "shared_branch"). */
+  task_workflow?: RepositoryTaskWorkflow;
 };
 export type RepositoryLinkKind = "issue" | "pull_request";
 /** A source's own word for a link kind (MR for a pull request); the kinds stay these two. */
@@ -25,8 +28,9 @@ export type RepositorySourceSnapshot = {
   identity: RepositoryIdentity; clone_url: string; transport_origin: "catalog" | "canonical_default" | "provider"; catalog_revision: number;
   provider_name?: string;
 };
-export type RepositoryLinkInput = { url: string; kind?: never; number?: never; title?: string } | { kind: "issue" | "pull_request"; number: string; url?: never; title?: string };
-export type TaskRepositoryLink = { kind: "issue" | "pull_request"; number: string; canonical_url: string; title?: string };
+export type RepositoryLinkRole = "delivery" | "reference";
+export type RepositoryLinkInput = { url: string; kind?: never; number?: never; title?: string; role?: RepositoryLinkRole } | { kind: "issue" | "pull_request"; number: string; url?: never; title?: string; role?: RepositoryLinkRole };
+export type TaskRepositoryLink = { kind: "issue" | "pull_request"; number: string; canonical_url: string; title?: string; role?: RepositoryLinkRole };
 export type TaskRepositoryInput = { repo_id: string; directory_alias?: string; requested_ref?: RequestedRef; links?: RepositoryLinkInput[] };
 export type TaskRepository = Omit<TaskRepositoryInput, "links" | "requested_ref"> & {
   requested_ref: RequestedRef; source_snapshot: RepositorySourceSnapshot; links: TaskRepositoryLink[];
@@ -283,6 +287,8 @@ export function validRepositoryDraft(rows: TaskRepositoryInput[], identities?: R
 
 /** A source's name as saved beside an identity: absent, or at most 80 characters (the manifest's `name`). */
 export const validProviderName = (name: unknown): boolean => name === undefined || (typeof name === "string" && [...name].length <= 80);
+/** Optional per-repository task workflow preference: absent/empty (default isolated), "isolated", or "shared_branch". */
+export const validTaskWorkflow = (value: unknown): boolean => value === undefined || value === "" || value === "isolated" || value === "shared_branch";
 const LINK_KINDS = ["issue", "pull_request"];
 const validLinkKinds = (value: unknown): boolean => value === undefined || (Array.isArray(value) && value.length <= LINK_KINDS.length
   && value.every((entry: RepositoryLinkLabel) => !!entry && LINK_KINDS.includes(entry.kind) && typeof entry.label === "string"
@@ -345,7 +351,7 @@ export function repositoryRequestOptions(context: RepositoryRequestContext) {
 export async function loadRepositoryCatalog(context: RepositoryRequestContext): Promise<RepositoryCatalog> {
   const result = await api<RepositoryCatalog>("/assistant/repositories", repositoryRequestOptions(context));
   if (!context.isCurrent() || result.manager !== context.manager || !revision(result.catalog_revision)
-    || !Array.isArray(result.repositories) || !result.repositories.every((r) => typeof r.id === "string" && validRepositoryIdentity(r) && validProviderName(r.provider_name))) throw new Error("Invalid repository catalog response");
+    || !Array.isArray(result.repositories) || !result.repositories.every((r) => typeof r.id === "string" && validRepositoryIdentity(r) && validProviderName(r.provider_name) && validTaskWorkflow(r.task_workflow))) throw new Error("Invalid repository catalog response");
   return result;
 }
 /**

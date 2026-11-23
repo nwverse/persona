@@ -69,13 +69,17 @@ func (h *Hub) routes() http.Handler {
 	h.paneRoutes(api)
 	h.nodeDoctorRoutes(api)
 	h.machineProcRoutes(api)
+	h.machineToolchainRoutes(api)
+	h.machineServicesRoutes(api)
+	h.machineNetworkRoutes(api)
+	h.machineStorageRoutes(api)
 	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
 		if restrictedAgentData(r) {
 			em := extensionManager(r)
 			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool {
-				return em != "" && cmp.Or(ix.Manager, assistantwire.AssistantID) != em || h.hiddenFromExtensions(ix)
+				return em != "" && cmp.Or(ix.Manager, assistantwire.AssistantID) != em || ix.Private || h.spacesHidden(r) && h.hiddenFromExtensions(ix)
 			})
 		}
 		writeJSON(w, map[string]any{"interactions": h.withMuted(ixs)})
@@ -83,6 +87,7 @@ func (h *Hub) routes() http.Handler {
 	api.HandleFunc("GET /api/v1/ops/{id}", h.getClientOp)
 	h.fleetRoutesRelayed(api) // resolve, history, seen: the manager's (fleet_link.go)
 	h.phoneWriteRoutes(api)
+	h.phonePrimaryRoutes(api)
 	h.deviceRoutes(api)
 	h.pushRoutes(api)
 	h.webPushRoutes(api)
@@ -613,6 +618,9 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
+	// Allow binding a pending live Hub TTFT on latest-page / incremental reads while keeping historical pages read-only.
+	allowBind := atoi(q.Get("before_seq")) == 0 && atoi(q.Get("through_seq")) == 0
+	h.ttft.annotate(m.cfg.ID, r.PathValue("sid"), res.Items, allowBind)
 	if q.Get("lazy_images") == "1" {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
@@ -766,7 +774,7 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 		if mid != "" && m.cfg.ID != mid || em != "" && owner != em || named != "" && owner != named {
 			continue
 		}
-		lists = append(lists, stampedList{withoutHealthSessions(r, h.shown(m.cfg.ID, m.keptSessions())), owner})
+		lists = append(lists, stampedList{h.withoutSpaceSessions(r, h.shown(m.cfg.ID, m.keptSessions())), owner})
 	}
 	writeSessionLists(w, lists)
 }
@@ -824,42 +832,44 @@ func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 	_, _ = w.Write(buf.Bytes())
 }
 
+type sessionStartRequest struct {
+	MachineID       string        `json:"machine_id"`
+	Cwd             string        `json:"cwd"`
+	Launcher        string        `json:"launcher"`
+	AgentType       string        `json:"agent_type,omitempty"`
+	WorkSession     bool          `json:"work_session,omitempty"`
+	Model           string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
+	Prompt          string        `json:"prompt"`
+	ClientMsgID     string        `json:"client_msg_id,omitempty"`
+	Images          []proto.Image `json:"images,omitempty"`
+	ResumeSessionID string        `json:"resume_session_id"`
+	WorkspaceID     string        `json:"workspace_id"`
+	// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
+	// Checked by the node (an older node ignores it and starts in its engine).
+	Host           string `json:"host,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	// LauncherDefaultEffort keeps an explicit launcher's effort at its native default.
+	LauncherDefaultEffort bool   `json:"launcher_default_effort,omitempty"`
+	Speed                 string `json:"speed,omitempty"`
+	Ultracode             *bool  `json:"ultracode,omitempty"`
+	// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
+	// start it cannot take there answers 409 start_goal_unsupported before anything starts.
+	Goal string `json:"goal,omitempty"`
+	// TabName names the herdr tab; empty: one made from the first message (tabName, assistant/agents_start.go),
+	// else agent-<n>.
+	TabName string `json:"tab_name,omitempty"`
+	// Async: answer at once with the session it is going to be and start it in the background (node/starting.go);
+	// messages sent to it meanwhile go in once it is ready. NameHint: what the tab name is made from when the
+	// app sends the first message itself (so it shows as a message right away) instead of as prompt.
+	Async    bool   `json:"async,omitempty"`
+	NameHint string `json:"name_hint,omitempty"`
+	TodoID   string `json:"todo_id,omitempty"`
+}
+
 func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
-	var p struct {
-		MachineID       string        `json:"machine_id"`
-		Cwd             string        `json:"cwd"`
-		Launcher        string        `json:"launcher"`
-		AgentType       string        `json:"agent_type,omitempty"`
-		WorkSession     bool          `json:"work_session,omitempty"`
-		Model           string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
-		Prompt          string        `json:"prompt"`
-		Images          []proto.Image `json:"images,omitempty"`
-		ClientMsgID     string        `json:"client_msg_id,omitempty"`
-		ResumeSessionID string        `json:"resume_session_id"`
-		WorkspaceID     string        `json:"workspace_id"`
-		// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
-		// Checked by the node (an older node ignores it and starts in its engine).
-		Host           string `json:"host,omitempty"`
-		PermissionMode string `json:"permission_mode,omitempty"`
-		Effort         string `json:"effort,omitempty"`
-		// LauncherDefaultEffort keeps an explicit launcher's effort at its native default.
-		LauncherDefaultEffort bool   `json:"launcher_default_effort,omitempty"`
-		Speed                 string `json:"speed,omitempty"`
-		Ultracode             *bool  `json:"ultracode,omitempty"`
-		// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
-		// start it cannot take there answers 409 start_goal_unsupported before anything starts.
-		Goal string `json:"goal,omitempty"`
-		// TabName names the herdr tab; empty: one made from the first message (tabName, assistant/agents_start.go),
-		// else agent-<n>.
-		TabName string `json:"tab_name,omitempty"`
-		// Async: answer at once with the session it is going to be and start it in the background (node/starting.go);
-		// messages sent to it meanwhile go in once it is ready. NameHint: what the tab name is made from when the
-		// app sends the first message itself (so it shows as a message right away) instead of as prompt.
-		Async    bool   `json:"async,omitempty"`
-		NameHint string `json:"name_hint,omitempty"`
-		TodoID   string `json:"todo_id,omitempty"`
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	var p sessionStartRequest
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, proto.MessageBodyLimit)) // a first message with its pictures
 	if err == nil {
 		err = json.Unmarshal(body, &p)
 	}
@@ -867,12 +877,25 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		writeBodyErr(w, err, err)
 		return
 	}
+	h.startSessionWith(w, r, p, false)
+}
+
+func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff bool) {
+	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) {
+		writeErrCode(w, http.StatusBadRequest, "client_msg_id_reserved", i18n.Err("hub-send.reserved_id"))
+		return
+	}
 	if p.WorkSession && (p.Launcher == "" || p.AgentType == "" || strings.TrimSpace(p.Cwd) == "" ||
 		p.ResumeSessionID != "" || p.TodoID != "" || p.WorkspaceID != "" || p.Host != "") {
 		writeErrCode(w, http.StatusBadRequest, "work_target_required", errors.New("Choose a computer, project folder, harness and launcher for the new session."))
 		return
 	}
-	r = h.captureHumanSubmission(r, p.Prompt)
+	if apierr.ImagesOverLimit(w, proto.HubImageLimits.For(p.AgentType), len(p.Images)) {
+		return
+	}
+	if !handoff {
+		r = h.captureHumanSubmission(r, p.Prompt)
+	}
 	if p.TodoID != "" && principalOf(r.Context()).Role != roleFull {
 		writeErr(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
 		return
@@ -901,13 +924,13 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if restrictedAgentData(r) {
-		// A scoped token resumes only a chat its computer lists, shown and outside the health space. An extension's
+		// A scoped token resumes only a chat its computer lists, shown and outside any space. An extension's
 		// resume is decided last (extensionResume): one its computer no longer lists goes to the computer's check (#10941).
 		if pr.Role == roleScoped && p.ResumeSessionID != "" && !h.publicSessionForControl(m, p.ResumeSessionID) {
 			writeErr(w, http.StatusNotFound, errDeleteUnknown)
 			return
 		}
-		if identity.InHealthSpace(startCwd(m, p.Cwd)) {
+		if identity.InSpace(startCwd(m, p.Cwd)) {
 			writeErrCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
 			return
 		}
@@ -993,6 +1016,13 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	resolvedLauncher, _ := params["launcher"].(string)
 	resolvedAgent, _ := params["agent_type"].(string)
+	if handoff {
+		if resolvedLauncher != p.Launcher {
+			writeErr(w, http.StatusConflict, i18n.Err("hub-context_handoff.launcher_missing"))
+			return
+		}
+		params["require_launcher"] = true
+	}
 	async = startsAsync(p.Async, p.ResumeSessionID, resolvedLauncher, resolvedAgent)
 	if resolvedBudget := startBudget(async && !p.WorkSession); resolvedBudget != budget {
 		// The manager may have found a synchronous launcher after the request was admitted.
@@ -1390,26 +1420,22 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 	}
 }
 
+// phoneClient is the connected phone that takes tool (none given: any): only connected providers of it are eligible.
+// The primary device the owner chose goes first while it is connected and offers the tool (phone_primary.go); then
+// real devices before simulators, then the one active last.
 func (h *Hub) phoneClient(tool ...string) *client {
+	name := ""
+	if len(tool) > 0 {
+		name = tool[0]
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	// Only connected providers of the requested tool are eligible; prefer real devices, then recent activity.
-	var best *client
-	for c := range h.clients {
-		select {
-		case <-c.done:
-			continue
-		default:
-		}
-		if !c.phone || (len(tool) > 0 && !c.phoneToolNames[tool[0]]) {
-			continue
-		}
-		if best == nil || (best.sim && !c.sim) || (best.sim == c.sim &&
-			(c.activeAt.After(best.activeAt) || (c.activeAt.Equal(best.activeAt) && c.since.After(best.since)))) {
-			best = c
+	if primary, offers := h.primaryPhoneLocked(name); offers {
+		if c := h.phoneClientLocked(name, primary); c != nil {
+			return c
 		}
 	}
-	return best
+	return h.phoneClientLocked(name, "")
 }
 
 func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {

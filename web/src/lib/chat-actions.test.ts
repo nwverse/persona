@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyDraft, onDraftEvent, parseQuote, replaceNeedsConfirm, sendDraft, splitQuote, storedQuotes, withAppended, withQuote, withQuoteBlock, withUnsent } from "./drafts";
-import { browseTarget, byPrefix, chatFiles, displayTitle, mentionAt, nameMatches, otherSessions, relPath, replaceToken, sessionDetail, sessionQuote, workspaceContext, workspaceMatches, workspaceTitle } from "./mentions";
+import { browseTarget, byPrefix, chatFiles, displayTitle, mentionAt, nameMatches, otherSessions, pageSessions, relPath, replaceToken, sessionDetail, sessionQuote, workspaceContext, workspaceMatches, workspaceTitle } from "./mentions";
 import { contextXML } from "./links";
 import type { Workspace } from "./workspace-board";
 import { keepAllBut, moved, movedTo, sameMessage } from "./queue";
@@ -172,6 +172,28 @@ describe("@ mentions", () => {
     expect(displayTitle({ title: "Claude Code", cwd: "/x/weather" })).toBe("weather");
   });
 
+  it("holds the chats opened here and the Agents list's other rows, each session once (#12983)", () => {
+    const opened = sess("a", { title: "Complete detail", queued: [] });
+    const listed = [sess("a", { title: "List row", waiting: false }), sess("b", { waiting: false }), sess("a", { machine_id: "n", waiting: false })];
+    const held = pageSessions({ m: [opened] }, listed);
+    // the opened chat's complete row stands for its list row; the same session id on another computer is another session
+    expect(held.map((s) => `${s.machine_id}/${s.session_id}`)).toEqual(["m/a", "m/b", "n/a"]);
+    expect(held[0]).toBe(opened);
+    expect(held[1]).toBe(listed[1]);
+    // a hub that pushes complete rows and has no list: those rows as they are
+    expect(pageSessions({ m: [opened] }, [])).toEqual([opened]);
+    // an Agent the list has and nobody opened is offered once the panel reads both
+    expect(otherSessions(held, "m/self", "").map((s) => `${s.machine_id}/${s.session_id}`)).toEqual(["m/a", "m/b", "n/a"]);
+  });
+
+  it("folds a child session into its listed parent, as every list does (#5120)", () => {
+    const parent = sess("p", { waiting: false, children: { total: 1 } });
+    const child = sess("c", { folded_under: "p" });
+    expect(pageSessions({ m: [child] }, [parent]).map((s) => s.session_id)).toEqual(["p"]);
+    // a child whose parent the page does not hold stays a row of its own
+    expect(pageSessions({ m: [child] }, []).map((s) => s.session_id)).toEqual(["c"]);
+  });
+
   it("names a Windows computer's folder by its own separator (#9901)", () => {
     const win = sess("w", { title: "", cwd: "C:\\Users\\me\\code\\app" });
     expect(displayTitle(win)).toBe("app");
@@ -190,6 +212,16 @@ describe("@ mentions", () => {
     expect(q.url).toBe("persona://session/m/a");
     expect(q.title).toBe("修登录");
     expect(q.text).toBe("另一个会话：修登录（Claude）\n目录：/code/app\n它最近说：改好了");
+  });
+
+  it("keeps a TRAE CLI session's custom label in the mention menu and quote", () => {
+    for (const agent of ["traex", "traecli", "trae-cli"]) {
+      const s = sess("a", { title: "Import", cwd: "/code/app", agent, agent_label: "Team relay" });
+      expect(sessionDetail(s)).toBe("Team relay · app");
+      expect(sessionQuote(s).text).toContain("Import（Team relay）");
+      expect(sessionDetail({ ...s, agent_label: "TRAEX" })).toBe("TRAE CLI · app");
+      expect(sessionDetail({ ...s, agent_label: undefined })).toBe("TRAE CLI · app");
+    }
   });
 });
 
