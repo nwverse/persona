@@ -4927,7 +4927,8 @@ final class AppModel {
         }
         // A directory-hidden session's cards count nowhere, as the pages leave them out (`directoryVisibleInteractions`).
         let session = cardSessionResolver()
-        for ix in interactions.values where session(ix.sessionKey)?.hiddenByDirectory != true {
+        // A card its task's supervisor holds is the supervisor's until it passes it up (`Interaction.supervisorHeld`).
+        for ix in interactions.values where session(ix.sessionKey)?.hiddenByDirectory != true && !ix.supervisorHeld {
             guard scope.has(ix.manager ?? session(ix.sessionKey)?.manager, group: ix.group) else { continue }
             // A quiet task's agent asking is the main conversation's to tell (#1731): its count goes there, not on Agents.
             switch place(ix.sessionKey) {

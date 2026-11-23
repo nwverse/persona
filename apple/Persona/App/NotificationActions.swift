@@ -84,6 +84,12 @@ nonisolated enum NotificationActions {
         }
     }
 
+    /// Whether a button may settle the card `id`: not one its task's supervisor holds (`Interaction.supervisorHeld`), as
+    /// far as the app knows its pending cards; a card it has not loaded is left to the hub, as before.
+    static func answerable(_ id: String, among cards: some Sequence<Interaction>) -> Bool {
+        !cards.contains { $0.id == id && !$0.answerableHere }
+    }
+
     /// What Take Recommendation on a decision's push answers: the to-do, the round it was asked in (sent back exactly as
     /// the push carried it, so an older round's button cannot answer a newer one) and the manager whose to-do it is.
     struct Decision: Equatable, Sendable {

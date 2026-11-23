@@ -170,13 +170,10 @@ func TestLarkTerminalProtectedInput(t *testing.T) {
 		t.Fatal("only a choice's question and plain labels can go to its supervisor")
 	}
 	for name, change := range map[string]func(*proto.Interaction){
-		"raw":      func(v *proto.Interaction) { v.Dialog = nil },
-		"secret":   func(v *proto.Interaction) { v.Secret = true },
-		"private":  func(v *proto.Interaction) { v.Private = true },
-		"form":     func(v *proto.Interaction) { v.Fields = []proto.Field{{}} },
-		"command":  func(v *proto.Interaction) { v.Dialog.Command = "example" },
-		"warning":  func(v *proto.Interaction) { v.Dialog.Warning = "warning" },
-		"deadline": func(v *proto.Interaction) { v.Dialog.DeadlineAction = screen.DeadlineDeny },
+		"raw":     func(v *proto.Interaction) { v.Dialog = nil },
+		"secret":  func(v *proto.Interaction) { v.Secret = true },
+		"private": func(v *proto.Interaction) { v.Private = true },
+		"form":    func(v *proto.Interaction) { v.Fields = []proto.Field{{}} },
 	} {
 		v, d := ix, *ix.Dialog
 		v.Dialog = &d
@@ -185,14 +182,29 @@ func TestLarkTerminalProtectedInput(t *testing.T) {
 			t.Errorf("%s prompt went to a supervisor", name)
 		}
 	}
+	// A command approval, a warning and a countdown are the supervisor's to decide (#13752's rule for permissions);
+	// the plain-question wording (terminalQuestion) is for the ordinary choice only.
+	for name, change := range map[string]func(*proto.Interaction){
+		"command":  func(v *proto.Interaction) { v.Dialog.Command = "example" },
+		"warning":  func(v *proto.Interaction) { v.Dialog.Warning = "warning" },
+		"deadline": func(v *proto.Interaction) { v.Dialog.DeadlineAction = screen.DeadlineDeny },
+	} {
+		v, d := ix, *ix.Dialog
+		v.Dialog = &d
+		change(&v)
+		if !routable(v) || terminalQuestion(v) || userScreen(v) != "" {
+			t.Errorf("%s prompt: routable %v, ordinary %v, user's %q", name, routable(v), terminalQuestion(v), userScreen(v))
+		}
+	}
 	for _, fixture := range []string{"claude-2.1.322-bypass-confirm-160.txt", "claude-2.1.312-trust-162.txt"} {
 		plain, err := os.ReadFile("../screen/testdata/" + fixture)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ix.Dialog = screen.ParseDialog(string(plain))
-		if ix.Dialog == nil || routable(ix) {
-			t.Errorf("%s permission should remain the owner's", fixture)
+		// Held by the supervisor (never pushed on its own), but only the owner answers it: ask_escalate.
+		if ix.Dialog == nil || !routable(ix) || userScreen(ix) == "" || terminalQuestion(ix) {
+			t.Errorf("%s permission should remain the owner's to answer", fixture)
 		}
 	}
 }

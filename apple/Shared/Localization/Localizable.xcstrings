@@ -169942,6 +169942,52 @@
         }
       }
     },
+    "Supervisor is handling this" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supervisor is handling this"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "監督者が対応中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "督办者处理中"
+          }
+        }
+      }
+    },
+    "This went to its task's supervisor first. It comes to you only if the supervisor passes it up." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This went to its task's supervisor first. It comes to you only if the supervisor passes it up."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "これはまずタスクの監督者に渡されました。監督者が上げたときだけ、あなたに届きます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这张卡先交给了任务的督办者。督办者上交后，才会到你这里。"
+          }
+        }
+      }
+    },
     "Supervisor reviewing" : {
       "localizations" : {
         "en" : {

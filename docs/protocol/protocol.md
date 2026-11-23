@@ -3285,6 +3285,8 @@ GET /api/v1/agents/sessions?counts=1&source=demo
 
 `held_needs` (omitted when 0) is how many of `state.needs_you` only wait on held non-interrupting cards (`P1`/`P2`); when push grading is on, web and desktop clients subtract it from alert badges while keeping ordinary `state.needs_you` counts intact.
 
+`supervisor_held` (omitted when 0) is how many of `state.needs_you` only wait on cards their task's supervisor holds (a card of any kind but `question` marked `delegating`, `docs/assistant/unified-entry.md` "Asks go to the supervisor first"); none of them is in `held_needs`. They are not the user's until the supervisor escalates them, so clients subtract it from every Needs you count, push grading or not.
+
 Each map counts the complete filtered membership by that dimension; missing attributes use the empty-string key. `limit` does not truncate counts. With a matching `cursor`, counts refer to that frozen view; without one they refer to the current collection. `since`, if supplied, is validated but does not turn counts into counts of changes. Read counts separately when a group expands, rather than deriving totals from loaded pages. The runtime `pane_source` map uses the explicit four origins above, including `unknown`; the personal-agent collection omits this dimension. The maps do not contain preference-defined custom sections, per-user pins/mutes or computed repository trees.
 
 #### Counts with the page (`sessions_page_counts`, #4858)
