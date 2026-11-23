@@ -130,7 +130,7 @@ Because a missing flag means off, every flag a client gates on has to be announc
 - **Every built-in module declares `feature`** (`module.<id>`), also one that registers nothing with the kernel
   (`voice`, `volc`, `mail`): `TestEveryBuiltinModuleAnnouncesItsFlag` in `server/internal/modules/all`. Built out or
   switched off, its flag is gone and the clients hide their half.
-- **Client-only modules** (`modapi.ClientModules`: `glasses`, `health`, `knowledge-ui`, `recording`, `screen-share`)
+- **Client-only modules** (`modapi.ClientModules`: `glasses`, `health`, `knowledge-ui`, `screen-share`)
   have no server half, so the manager announces their flags itself. The `modules` settings row switches one off the
   same way (`{"disabled": ["health"]}`), which is how the owner turns a client module off from the hub without a new
   build. An id leaves the list in the PR that gives the module a server half (`TestNoBuiltinModuleIsListedAsClientOnly`).
