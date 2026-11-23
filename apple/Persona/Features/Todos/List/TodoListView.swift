@@ -3,13 +3,19 @@ import PersonaWire
 import SwiftUI
 
 extension TodosListDeps {
-    /// The app's: the shared store and outbox, the hub, the knowledge base's projects and the app's toast.
+    /// The app's: the shared store and outbox, the hub, the knowledge base's projects, the app's toast, and its runs'
+    /// pending cards and sessions for the rows' asks.
     @MainActor static var live: TodosListDeps {
         let app = AppModel.shared
         return TodosListDeps(store: TodoStore.shared, outbox: TodoOutbox.shared, api: { app.api }, now: { Date() },
                              calendar: { TodoCalendar.userCalendar }, projects: { TodoProjects.shared.list },
                              toast: { app.toast = $0 }, show: { app.show($0) },
-                             assistive: { UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning })
+                             assistive: { UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning },
+                             asks: .shared,
+                             interaction: { id in app.interactions.values.first { $0.id == id } },
+                             openRun: { run in
+                                 app.open(app.resolve(machineID: run.machineId, sessionID: run.sessionId, group: app.hub?.group))
+                             })
     }
 }
 

@@ -20,6 +20,14 @@ struct TodosListDeps {
     var undoWindow: Duration = Theme.Motion.todoUndo
     /// VoiceOver or Switch Control runs: a held write waits longer, and the rows offer its Undo.
     var assistive: @MainActor () -> Bool = { false }
+    /// What answers the rows' asks (`AskCardModel`): what each row says of its ask's answer, and its OK, Retry and card.
+    /// None: the rows draw their asks' answers as the hub's view has them.
+    var asks: AskCardModel? = nil
+    /// A run's pending card by the hub's id (`OwnerAsk.interaction`): what a row's unfolded card answers a run's question
+    /// with. nil while the app holds none for it.
+    var interaction: @MainActor (String) -> Interaction? = { _ in nil }
+    /// Opens a run's session, where its ask lives: an unfolded card's Review › when the app holds no card for it.
+    var openRun: @MainActor (TodoRunRef) -> Void = { _ in }
 }
 
 /// The V1 To-dos list (#10465; docs/design/proposals/todos-redesign.md 3.3, 3.4; DESIGN_SYSTEM 3.4 "To-dos list"): the
@@ -45,6 +53,8 @@ final class TodosListModel {
         fileprivate(set) var content: TodoRowContent
         /// How many re-filings put it in another group or fold.
         @ObservationIgnored fileprivate(set) var arrivals = 0
+        /// Its ask's card is unfolded in place under it (Options ⌄); one row's at a time.
+        fileprivate(set) var optionsOpen = false
         /// Hidden until the view drawing it where a re-filing put it fades it in (proposal 3.9; `TodoListRow`). That
         /// view is a new one (another section's `ForEach`), which reads this as it is first drawn, so no frame shows the
         /// row before its fade; it clears it as it appears (`entered`). A row that landed out of sight is shown as it
@@ -65,6 +75,8 @@ final class TodosListModel {
             var projects: [TodoProject]
             /// The owner's write on it still on the device (`TodoOutbox`): a tick waiting out its Undo, a new to-do.
             var pending: TodoRowWrite?
+            /// What this device did with its ask (`AskCardModel.mark`).
+            var mark: TodoAnswerMark?
         }
 
         fileprivate init(id: String, inputs: Inputs, content: TodoRowContent) {
@@ -141,6 +153,8 @@ final class TodosListModel {
         var named: Set<String> = []
         var ready = false
         var projects: [TodoProject] = []
+        /// What this device did with each row's ask, by to-do id (`AskCardModel.mark`).
+        var marks: [String: TodoAnswerMark] = [:]
         static let empty = Snapshot()
     }
 
@@ -349,6 +363,59 @@ final class TodosListModel {
         return (held.id, held.title, held.write)
     }
 
+    // MARK: The rows' answers (OK, Retry, Options ⌄; stage-2 plan PR 14)
+
+    /// What answers the rows' asks: the deps', else the app's.
+    var asks: AskCardModel { deps.asks ?? .shared }
+
+    /// OK or Retry on row `key`: held through its Undo window (`DecisionAnswers`), its ask out of the numbers at once.
+    func answer(_ key: String) {
+        guard let row = cells[key], let answers = row.content.answers, answers.mark == nil || answers.mark == .later else { return }
+        let item = row.inputs.item
+        if row.optionsOpen { row.optionsOpen = false }
+        Task {
+            switch answers.primary {
+            case .ok?: await asks.ok(answers.ask, todo: item)
+            case .retry?: await asks.retry(answers.ask, todo: item)
+            case nil: break
+            }
+        }
+    }
+
+    /// Options ⌄ on row `key`: its ask's card unfolds in place under it (another row's folds); again, it folds. Back from
+    /// Later, it opens again.
+    func toggleOptions(_ key: String) {
+        guard let row = cells[key], let answers = row.content.answers else { return }
+        Haptics.tap()
+        if answers.mark == .later { asks.bringBack(answers.ask, todo: row.inputs.item) }
+        let open = !row.optionsOpen
+        for cell in cells.values where cell.optionsOpen && cell.id != key { cell.optionsOpen = false }
+        row.optionsOpen = open
+    }
+
+    /// Folds row `key`'s card (an answer or Later on it).
+    func closeOptions(_ key: String) {
+        guard let row = cells[key], row.optionsOpen else { return }
+        row.optionsOpen = false
+    }
+
+    /// Undo on row `key`'s answer, while it is held.
+    func undoAnswer(_ key: String) {
+        guard let row = cells[key], let answers = row.content.answers else { return }
+        asks.undo(answers.ask, todo: row.inputs.item)
+    }
+
+    /// The run's own card for `ask`, while the app holds it: read only while a row's card is unfolded.
+    func interaction(_ ask: OwnerAsk) -> Interaction? {
+        ask.interaction.flatMap { deps.interaction($0) }
+    }
+
+    /// Review › on row `key`'s unfolded card: the run's session, where its ask lives.
+    func openRun(_ key: String) {
+        guard let run = cells[key]?.content.answers?.ask.run else { return }
+        deps.openRun(run)
+    }
+
     /// Today: due today, at the time of day it was due at if it had one.
     func setToday(_ key: String) {
         guard let item = item(key) else { return }
@@ -430,8 +497,14 @@ final class TodosListModel {
         var items = store.byID
         // A new to-do is drawn from what the owner wrote until the hub has it (`TodoCountsSource` files it).
         for entry in writes.values { if let item = entry.newItem, items[item.id] == nil { items[item.id] = item } }
+        var marks: [String: TodoAnswerMark] = [:]
+        if let asks = deps.asks {
+            for row in store.countsSource.filed where !row.asks.isEmpty {
+                if let ask = store.views[row.id]?.asks?.first, let mark = asks.mark(ask, todo: row.id) { marks[row.id] = mark }
+            }
+        }
         return Snapshot(filed: store.countsSource.filed, items: items, views: store.views, writes: writes,
-                        named: deps.outbox.named, ready: store.viewsRead, projects: deps.projects())
+                        named: deps.outbox.named, ready: store.viewsRead, projects: deps.projects(), marks: marks)
     }
 
     /// The store changed (or, `clock`, a minute passed): it all lands now, or once the list rests, but a row that comes
@@ -570,7 +643,7 @@ final class TodosListModel {
             let inputs = Row.Inputs(item: item, view: snapshot.views[filed.id], filed: filed, grouped: grouped, projects: projects,
                                     pending: snapshot.writes[filed.id].map {
                                         TodoRowWrite(write: $0.write, waits: $0.waits && !$0.answered, unsure: $0.unsure)
-                                    })
+                                    }, mark: snapshot.marks[filed.id])
             if let cell = cells[key], !force, cell.inputs == inputs {
                 if !held, let waiting = cell.waiting {
                     cell.waiting = nil
@@ -581,9 +654,11 @@ final class TodosListModel {
             let content = TodoRowContentLogic.content(filed, item: item, view: inputs.view, byProject: grouped, now: now,
                                                       calendar: calendar,
                                                       projectName: { TodoProjectLogic.name($0, in: projects) },
-                                                      pending: inputs.pending)
+                                                      pending: inputs.pending, answered: inputs.mark)
             if let cell = cells[key] {
                 cell.inputs = inputs
+                // Its ask answered or gone: the card folds with it, so a later ask does not open unasked.
+                if content.answers == nil, cell.optionsOpen { cell.optionsOpen = false }
                 if held {
                     cell.waiting = content == cell.content ? nil : content
                 } else {

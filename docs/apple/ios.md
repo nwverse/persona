@@ -2237,6 +2237,55 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     kept with the views at least once a minute); the line registers with `titleSaysLink()`, so the shell's pill stays
     away. Tests: `TodoOutboxTests`, `TodosListWritesTests`, the UI suite's `testTickAndUndo`, `testSwipeSomeday`,
     `testDeleteAndUndo` and `testOfflineIsSaidOnce` against `MOCK_TODO_VIEW=1`.
+- **The rows' answers** (`apple/Persona/Features/Todos/Components/`, `AskCard` and `AskPointer` in
+  `apple/Persona/DesignSystem/`; DESIGN_SYSTEM 3.4 "To-dos list", the row, and 4.8 "To-dos"). `TodoRowAnswersLogic`
+  works out what a row offers for its view's first ask with the row's content (P4): OK for a safe decision whose
+  recommendation is one of its options, Retry for a failed start's retry, Options ⌄ alone for a run's safe question
+  whose card the hub holds (`OwnerAsk.interaction`), nothing for an open ask or one without a `risk` (an older
+  manager's). `TodoRowAnswersLine` draws them in a packed `StackingButtonRow`; "OK: ‹option›" or "OK" comes from
+  `TodoRowAnswers.okWidth` (an estimate from the label's characters, a wide one an em) times `Theme.textScale`
+  against `Theme.Size.todoAnswerMax`, never measured. Options ⌄ sets the row's own `Row.optionsOpen` (one row at a
+  time; it folds when the row's ask goes), and the row draws the ask's `AskCard` under it: for a run's question, the
+  run's own card the app holds (`TodosListDeps.interaction`, by `OwnerAsk.interaction`, read only while unfolded),
+  else Review ›, which opens the run's session. What this device did with an ask (`TodoAnswerMark`: chosen,
+  with Undo while held; answered elsewhere; Later; busy) is read for each row with an ask when the list reads the
+  store (`AskCardModel.mark`), so a row redraws when its own answer moves.
+  - **Holding.** `AskCardModel` (one for the app, `.shared`; tests pass `AskCardDeps`) answers through
+    `DecisionAnswers`, the tray's engine, whose `Hold` (only while V1 is on) writes the answer to `TodoOutbox` as
+    `Write.answer(AskAnswer)` with the view's ask id, its round, the option or fixed answer and the words the row says
+    while it is held. The outbox holds it for `Theme.Motion.todoUndo` (`todoUndoAssistive` with VoiceOver or Switch
+    Control), sends it at once when the scene leaves the foreground, and again at launch with the same op id; an
+    answer has no reverse, so Undo works only while it is unsent. `TodoStore.write(.answer)` sends it through
+    `POST …/asks/{ask}/answer` (`APIClient.answerAsk`, the op id as `X-Persona-Op-Id`) while the hub lists `todo_asks`,
+    else `/accept` with the round or `/retry`; a 404 or 405 without the route's codes (`TodoAskRefusal.routeMissing`)
+    is a manager without the route, and today's route answers instead. Before it goes, and again when it waited, the
+    outbox checks that the to-do's view still lists the ask (`Standing.asks`): one answered meanwhile is dropped and
+    settles as `.elsewhere`. How a send ended (`TodoOutbox.outcome`): 409 `ask_stale` (and the accept route's bare
+    409), 404 `todo_not_found` or `ask_not_found` is answered elsewhere, said in place with no error haptic; a refusal
+    the assistant gave (4xx, a 5xx with `delivered: "none"` such as `accept_not_taken`) is dropped and said, since its
+    receipt answers a repeat the same; `delivered: "yes"` is taken. `DecisionAnswers.settled` (the outbox's
+    `Deps.settled`) turns that into the round's state. The Needs You tray's `DecisionRow` holds the same way while V1
+    is on, finding the view's ask id by the round (`TodoStore.askID`); before it, it answers at once as always.
+  - **Counting.** Every answer still in the outbox counts as given (`TodoOutbox.answering`, read by
+    `TodoCountsSource` through `TodoStore.V1.answering`, followed as `pending` is), from the tap on and after a
+    relaunch; one the hub took or found answered elsewhere joins `TodoCountsSource.answered`'s overlay until the view
+    stops listing the ask. So N drops once, in one recount, on the drawer and sidebar row, the folded Pages tally, the
+    Needs you header, the Filter's counts and the places, and comes back together if the answer is undone or refused.
+  - **Later and Don't handle.** Later is `AskCardModel.later` (this app session; a decision is put off in the tray
+    too, `TasksStore.laterDecision`). Don't handle goes at once: the asks route with `outcome: decline` while the hub
+    lists `todo_asks` (a toast whose Undo sends `outcome: undo` with the receipt), else `TasksStore.dismissDecision`;
+    its ask leaves the numbers on success. Discuss… is hidden until the to-do's composer can take "Answer: …".
+  - **Line 2 for a run's plan or tool** says "‹run›: Plan awaiting approval" or "‹run›: Waiting for your approval"
+    (DESIGN_SYSTEM 5.6's titles), whatever the hub's `text`, since the row has no door.
+  - **Mock.** Under `MOCK_TODO_VIEW=1` the hello lists `todo_asks` (`MOCK_TODO_ASKS=0` leaves it out, for today's
+    routes) and the asks route answers T01's decision and T03's retry with the hub's receipt and codes; each ask says
+    its `risk` and `lockscreen`, the Widget's plan its card's id. Tests: `AskCardModelTests` (both routes, a 405 falling
+    back, Undo, 409 answered elsewhere, a 423 refusal, Retry, Later, Don't handle and its Undo, the OK's words, what a
+    row offers for each kind of ask), `DecisionAnswersHoldTests` (the tray holds on V1, old hubs at once, the arm rule,
+    answered elsewhere during the hold, the foreground, the launch's same op id),
+    `TodoCountsSourceTests.anAnswerHeldHereMovesEveryReaderInOneUpdate`, `scripts/mock/test_todo_view_mock.py` and the
+    UI suite `TodosV1AnswersTests` (OK drops N on the header, the Filter's Needs you, the drawer's row and the Pages
+    tally at once; `testAnswerFrames` shoots the frames, `testTrayFrames` the tray's decision row).
 - **Which page.** `TodosPlacePage` draws the V1 list while the gate is on, else today's `TodosView` (frozen), deciding
   once, when the page is made (`TodosPageChoice`): a hello that turns the gate on while To-dos is up (a manager that
   connects late), or while a to-do is pushed over it, never swaps it; the next time To-dos opens it is the V1 list. The

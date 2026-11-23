@@ -35,13 +35,16 @@ final class TodoOutbox {
         case delete
         /// `POST /api/v1/todos`, under the to-do's own id here (`newID`) until the hub answers with its own.
         case create(title: String, notes: String?)
+        /// An answer to one of the to-do's own asks (S2-7): the asks route while the hub lists `todo_asks`, else today's
+        /// accept and retry routes. Nothing undoes a decision on the hub, so it waits out its Undo window here.
+        case answer(AskAnswer)
 
-        /// The write that takes this one back once the hub has it; none for a delete.
+        /// The write that takes this one back once the hub has it; none for a delete or an answer.
         func reverse() -> Write? {
             switch self {
             case .done(let done): .done(!done)
             case .someday(let on): .someday(!on)
-            case .delete: nil
+            case .delete, .answer: nil
             case .create: .delete
             }
         }
@@ -50,6 +53,25 @@ final class TodoOutbox {
         var edits: Bool {
             if case .create = self { false } else { true }
         }
+    }
+
+    /// One answer to a to-do's own ask, as it is held and sent.
+    nonisolated struct AskAnswer: Codable, Equatable, Sendable {
+        /// The id the row's view lists (`todo:decision@…`, `todo:retry@…`): the asks route's, and the counts' overlay's.
+        var ask: String
+        /// `OwnerAskKind`: a decision or a retry.
+        var kind: String
+        /// The round the accept route takes (the decision's `asked_at`, byte for byte); none for a retry.
+        var round: String?
+        /// One of a decision's options, by its label; the recommended one takes the recommendation.
+        var option: String?
+        /// One of the fixed answers (`TodoAsk.Response`).
+        var response: String?
+        /// What the row says while it is held ("You chose …").
+        var label: String
+
+        /// The asks route's body: none for a retry, which is the ask's one action.
+        var body: TodoAskAnswer { TodoAskAnswer(option: option, response: response) }
     }
 
     nonisolated struct Entry: Codable, Equatable, Identifiable, Sendable {
@@ -103,6 +125,9 @@ final class TodoOutbox {
         case unknown
         /// The hub turned it down: dropped, and said.
         case refused(String)
+        /// An answer whose ask no longer waits (answered elsewhere, a newer round, the to-do gone): the first answer
+        /// anywhere wins, so it is let go without a word here; the row says "Answered elsewhere".
+        case elsewhere
     }
 
     /// A to-do as the list last read it: what a write sent again is checked against.
@@ -111,13 +136,17 @@ final class TodoOutbox {
         var updatedAt: Date?
         var done: Bool
         var someday: Bool
+        /// The asks its view lists: an answer to one it no longer lists is moot.
+        var asks: Set<String> = []
 
-        /// The to-do is already as `write` asks (the write landed before, or someone did the same).
+        /// The to-do is already as `write` asks (the write landed before, or someone did the same); for an answer, its
+        /// ask no longer waits.
         func has(_ write: Write) -> Bool {
             switch write {
             case .done(let d): done == d
             case .someday(let on): someday == on
             case .delete, .create: false
+            case .answer(let a): !asks.contains(a.ask)
             }
         }
     }
@@ -140,6 +169,9 @@ final class TodoOutbox {
         var send: @MainActor (_ entry: Entry, _ answered: @escaping @MainActor (Answer) -> Void) async -> Sent
         /// A write the hub turned down, or that could not be saved: said where the owner is.
         var refused: @MainActor (Entry, String) -> Void
+        /// How an answer's send ended (`.done`, `.elsewhere`, `.refused`), or that it was let go unsent because its ask
+        /// no longer waits (`.elsewhere`): the asks' state on this device follows (`DecisionAnswers.settled`).
+        var settled: @MainActor (Entry, Sent) -> Void = { _, _ in }
         /// A to-do as the list has it now; nil when the list has none (gone from the hub).
         var standing: @MainActor (String) -> Standing? = { _ in nil }
         /// The shown hub's to-dos, for a new to-do nobody knew the hub made.
@@ -162,13 +194,15 @@ final class TodoOutbox {
                      }
                      AppModel.shared.toast = Toast(message, style: .error, action: edit)
                  },
+                 settled: { entry, sent in DecisionAnswers.shared.settled(entry, sent) },
                  standing: { id in
                      let store = TodoStore.shared
                      guard let item = store.byID[id] else { return nil }
                      let view = store.views[id]
                      return Standing(title: item.title, updatedAt: item.updatedAt,
                                      done: view.map { $0.phase == TodoPhase.done } ?? item.isDone,
-                                     someday: view?.section == TodoListSection.someday)
+                                     someday: view?.section == TodoListSection.someday,
+                                     asks: Set(view?.asks?.map(\.id) ?? []))
                  },
                  listed: { TodoStore.shared.todos },
                  followsScene: true)
@@ -247,9 +281,29 @@ final class TodoOutbox {
         guard let hub = deps.hub() else { return [:] }
         var out: [String: Entry] = [:]
         for entry in entries where entry.hub == hub && entry.created == nil && !entry.undone && !takenBack.contains(entry.id) {
+            if case .answer = entry.write { continue } // said by the row's answers, not as a change to the to-do
             out[entry.todo] = entry
         }
         return out
+    }
+
+    /// The shown hub's answers still here, the asks they answer by to-do (`TodoCountsSource`): each ask counts as answered
+    /// from the tap on, also after a relaunch, until its answer is let go.
+    var answering: [String: Set<String>] {
+        guard let hub = deps.hub() else { return [:] }
+        var out: [String: Set<String>] = [:]
+        for entry in entries where entry.hub == hub && !takenBack.contains(entry.id) {
+            if case .answer(let a) = entry.write, !a.ask.isEmpty { out[entry.todo, default: []].insert(a.ask) }
+        }
+        return out
+    }
+
+    /// The latest answer still here to an ask of to-do `todo` on hub `hub`.
+    func answer(todo: String, hub: String) -> Entry? {
+        entries.last { entry in
+            guard entry.hub == hub, entry.todo == todo, !takenBack.contains(entry.id), case .answer = entry.write else { return false }
+            return true
+        }
     }
 
     /// What the list's rows and every number show of the shown hub's writes (`TodoCountsSource`): a deleted to-do is
@@ -466,6 +520,16 @@ final class TodoOutbox {
     /// owner made it is let go: what the owner saw is not what is there now. Said, unless the to-do is already as it
     /// asks. One whose to-do is gone from the list is let go quietly: there is nothing left to change.
     private func stillWanted(_ entry: Entry) -> Bool {
+        if case .answer(let a) = entry.write, !a.ask.isEmpty {
+            // An answer goes only while its ask still waits: one answered meanwhile (a push, another device, the to-do
+            // gone) is let go and said as answered elsewhere, whether it waited out its window or the hub's answer.
+            guard let now = deps.standing(entry.todo), !now.has(entry.write) else {
+                drop(entry.id)
+                deps.settled(entry, .elsewhere)
+                return false
+            }
+            return true
+        }
         guard entry.waits, entry.write.edits else { return true }
         guard let now = deps.standing(entry.todo) else {
             drop(entry.id)
@@ -506,6 +570,7 @@ final class TodoOutbox {
                 retire(kept) // a read that began after its answer landed while it was being confirmed
                 save()
             }
+            if case .answer = entry.write { deps.settled(entry, sent) }
             return
         }
         let back = takenBack.remove(entry.id) != nil
@@ -513,6 +578,10 @@ final class TodoOutbox {
         switch sent {
         case .done:
             return
+        case .elsewhere:
+            entries.remove(at: i)
+            save()
+            deps.settled(entry, .elsewhere)
         case .notSent:
             if back {
                 entries.remove(at: i) // it never reached the hub: nothing went, so nothing goes
@@ -533,7 +602,9 @@ final class TodoOutbox {
                 if let reverse = taken.write.reverse() { add(reverse, todo: taken.todo, manager: taken.manager, hub: taken.hub) }
             } else if entries[i].unknown + 1 >= Self.tries {
                 let given = entries.remove(at: i)
-                deps.refused(given, String(localized: "Couldn't save your change to “\(deps.standing(given.todo)?.title ?? "")”. [To-dos Toast]"))
+                let said = String(localized: "Couldn't save your change to “\(deps.standing(given.todo)?.title ?? "")”. [To-dos Toast]")
+                deps.refused(given, said)
+                if case .answer = given.write { deps.settled(given, .refused(said)) }
             } else {
                 entries[i].unknown += 1
                 entries[i].waits = true
@@ -543,6 +614,7 @@ final class TodoOutbox {
             entries.remove(at: i)
             save()
             if !back { deps.refused(entry, message) }
+            if case .answer = entry.write { deps.settled(entry, sent) }
         }
     }
 
@@ -690,6 +762,20 @@ final class TodoOutbox {
     /// reached nothing goes again; a refusal is dropped and said; anything else may have been done.
     nonisolated static func outcome(_ error: Error, of write: Write) -> Sent {
         let api = error as? APIError
+        if case .answer(let a) = write {
+            // The ask no longer waits: the first answer anywhere won. Today's accept route says so with a bare 409.
+            if TodoAskRefusal.answeredElsewhere(error) || (api?.status == 409 && a.kind != OwnerAskKind.retry) { return .elsewhere }
+            if let api {
+                // The words reached the Agent and what followed failed: taken, and never sent again.
+                if api.fields["delivered"] == "yes" { return .done(created: nil) }
+                // A refusal the hub's assistant gave (a node's 423, 502 `accept_not_taken`): the receipt says the same to
+                // a repeat, so it is dropped and said rather than sent again. Not one that reached no assistant at all.
+                let away = api.status == 0 || [408, 425, 429].contains(api.status) || api.code == "assistant_offline"
+                if !away, (400..<500).contains(api.status) || (api.status >= 500 && api.fields["delivered"] == "none") {
+                    return .refused(api.message)
+                }
+            }
+        }
         if let api, write.edits, TodoNotThere.deleted(api) { return .done(created: nil) }
         if reachedNothing(error) { return .notSent }
         if let api, (400..<500).contains(api.status) { return .refused(api.message) }

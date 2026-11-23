@@ -10,8 +10,10 @@ import PersonaWire
 /// - Several managers, or a hub that sends no counts: counted from the current assistant's rows as filed
 ///   (`TodoFiling`, `TodoCountsFallback`), since the hub adds every manager's up while the pages list the current
 ///   assistant's; only its own project places are shown, each with its part of N counted the same way.
-/// - Less what the owner answered on this device that the hub's view does not show yet (`answered(_:of:)`): a to-do in
-///   Needs you whose every ask is answered leaves N at once, and comes back if the answer is undone.
+/// - Less what the owner answered on this device that the hub's view does not show yet: the answers held or on their way
+///   (`TodoOutbox.answering`, from the tap on, also after a relaunch) and those the hub took or found answered elsewhere
+///   (`answered(_:of:)`), until its view stops listing them. A to-do in Needs you whose every ask is answered leaves N
+///   at once, and comes back if the answer is undone or refused.
 /// - With what the owner did on this device that the hub has not filed yet (`Pending`, the list's writes still in
 ///   `TodoOutbox`): a deleted to-do is off the list and out of every number, one put in Someday is filed there, and a
 ///   new one is a To do row of its own, first in its section, until the hub's view says the same.
@@ -63,8 +65,10 @@ final class TodoCountsSource {
     @ObservationIgnored private let lookup: @MainActor ([TodoItem]) -> TodosLogic.SessionLookup?
     @ObservationIgnored private let now: @MainActor () -> Date
     @ObservationIgnored private let pending: @MainActor () -> [String: Pending]
+    @ObservationIgnored private let answering: @MainActor () -> [String: Set<String>]
     @ObservationIgnored private var watchesScope = false
     @ObservationIgnored private var watchesPending = false
+    @ObservationIgnored private var watchesAnswering = false
     /// The Agents of the rows filed by the app's own rules whose sessions are watched, and the watch's token: a session
     /// of theirs changing files them again (an older manager sends no push for it).
     @ObservationIgnored private var watched: (agents: Set<String>, token: Int)?
@@ -73,15 +77,18 @@ final class TodoCountsSource {
     /// `scope`: the current assistant's, nil with one manager (`TodoStore.Managers.scope`). `lookup`: the sessions of the
     /// given rows' Agents, read only to file a row without a view, one session at a time so only theirs are watched.
     /// `now`: the time a row is filed at again when the clock or a session moves it (`tick()`). `pending`: the list's
-    /// writes the hub has not filed yet, by to-do id, followed as `scope` is.
+    /// writes the hub has not filed yet, by to-do id, followed as `scope` is. `answering`: the asks answered by the
+    /// answers still on the device, by to-do id, followed the same way.
     init(scope: @escaping @MainActor () -> AssistantScope?,
          lookup: @escaping @MainActor ([TodoItem]) -> TodosLogic.SessionLookup? = { _ in nil },
          now: @escaping @MainActor () -> Date = { Date() },
-         pending: @escaping @MainActor () -> [String: Pending] = { [:] }) {
+         pending: @escaping @MainActor () -> [String: Pending] = { [:] },
+         answering: @escaping @MainActor () -> [String: Set<String>] = { [:] }) {
         self.scope = scope
         self.lookup = lookup
         self.now = now
         self.pending = pending
+        self.answering = answering
     }
 
     /// The store's rows, views, counts or places changed: answers the hub now shows are let go, and the numbers counted
@@ -156,9 +163,10 @@ final class TodoCountsSource {
         } else {
             next = TodoCountsFallback.counts(filed)
         }
-        let carried = overlay.isEmpty ? [] : TodoCountsFallback.carried(filed)
+        let given = overlay.merging(watchedAnswering()) { $0.union($1) }
+        let carried = given.isEmpty ? [] : TodoCountsFallback.carried(filed)
         for row in filed where row.section == TodoListSection.needsYou && !carried.contains(row.id) && !row.asks.isEmpty
-            && Set(row.asks).isSubset(of: overlay[row.id] ?? []) {
+            && Set(row.asks).isSubset(of: given[row.id] ?? []) {
             next.sections[TodoListSection.needsYou] = max(0, (next.sections[TodoListSection.needsYou] ?? 0) - 1)
             guard !row.quiet else { continue }
             next.needsYou = max(0, next.needsYou - 1)
@@ -265,6 +273,19 @@ final class TodoCountsSource {
             // Called once, before the change lands: counted again once it has.
             Task { @MainActor [weak self] in
                 self?.watchesPending = false
+                self?.recount()
+            }
+        }
+    }
+
+    /// The answers still on this device, followed: an answer held, undone or refused moves the numbers at once.
+    private func watchedAnswering() -> [String: Set<String>] {
+        guard !watchesAnswering else { return answering() }
+        watchesAnswering = true
+        return withObservationTracking { answering() } onChange: { [weak self] in
+            // Called once, before the change lands: counted again once it has.
+            Task { @MainActor [weak self] in
+                self?.watchesAnswering = false
                 self?.recount()
             }
         }
