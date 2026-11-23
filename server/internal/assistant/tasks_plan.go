@@ -37,7 +37,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	var a struct{ Tasks []PlanTask }
-	lead := "" // legacy supervisor input, kept in the saved plan; new work is supervised by main (#5732)
+	lead := "" // optional initial leader assignment; omission keeps the planning lead or main
 	if scope != nil {
 		tasks, err := scope.workerTasks(args)
 		if err != nil {
@@ -412,17 +412,17 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	return b.String(), nil
 }
 
-// planSupervisor validates task_plan's legacy supervisor input: "" or a current leader, which only the main
-// conversation may name. The value is saved for old-plan recognition; every new task is supervised by main (#5732).
+// planSupervisor validates an optional initial leader assignment. A lead may name itself; main may choose
+// a current lead explicitly. Omission uses the planning lead, or main for an ordinary conversation.
 func (s *Service) planSupervisor(ctx context.Context, self, lead string) (string, error) {
 	lead = strings.TrimSpace(lead)
 	switch {
 	case lead == "" || lead == self:
 		return "", nil
 	case !s.isMain(ctx, self):
-		return "", errors.New("supervisor: only the main conversation may name a leader here; leave it out: new tasks are supervised by the main conversation")
+		return "", errors.New("supervisor: only the main conversation may name another leader; omit it to keep this direction lead as supervisor")
 	case !s.isLeader(ctx, lead):
-		return "", fmt.Errorf("supervisor: %s is not a leader conversation (assistant.leaders lists them); leave it out: the main conversation supervises the tasks", lead)
+		return "", fmt.Errorf("supervisor: %s is not a leader conversation (assistant.leaders lists them); omit it to use the default supervisor", lead)
 	}
 	return lead, nil
 }

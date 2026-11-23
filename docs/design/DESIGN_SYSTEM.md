@@ -3176,6 +3176,11 @@ page the user watches during the meeting is the page they keep writing in after 
   to the caption alone while the keyboard is up). Otherwise it shows this iPhone's own lines with a notice under its
   title: one caption line, the iPhone mark (`Theme.Icon.phone`) in `Theme.caution` and why in words (waiting for Wi-Fi,
   the hub stopped transcribing this meeting, or it isn't transcribing right now), "Showing this iPhone's transcript". When
+  the hub says what kind of failure stands (#13446), the first line says it in the owner's words with what to do, naming the
+  speech service ("The hub isn't transcribing right now: Volcengine Speech refused the requests, maybe because speech
+  recognition isn't turned on for the account, or its quota ran out or expired. The hub tries again by itself; if this goes
+  on, check in its console."; busy, out of reach and
+  any other error alike), and "Showing this iPhone's transcript" moves to a second line; never a raw error or a log id. When
   this iPhone can't transcribe the meeting either (#13385: no model for its language, an older iOS, a model that didn't
   download), the notice says only what the hub is at and never that this iPhone's transcript shows, and a second line in
   the same notice says why, naming the meeting's language ("This iPhone can't transcribe Chinese on the device either, so
