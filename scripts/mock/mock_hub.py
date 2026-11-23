@@ -7134,7 +7134,9 @@ def transcription_finish(rid, expected):
 def transcription_configured():
     """What the switches make of the upstream now: the problem a job would have."""
     upstream = TRANSCRIPTION_MODE["upstream"]
+    # The kinds the hub passes on (#13446, spec/fixtures/meeting-transcription-problems): refused, busy, out of reach, failed.
     return ("upstream_unavailable" if not transcription_ready() or upstream == "unavailable" else
+            "upstream_forbidden" if upstream == "forbidden" else "upstream_busy" if upstream == "busy" else
             "upstream_failed" if upstream == "failed" else "no_interim" if upstream == "no_interim" else None)
 
 
@@ -7264,7 +7266,7 @@ def transcription_control(h, method):
         except ValueError: body = None
         if not isinstance(body, dict): return h.send_json({"code": "bad_request"}, 400) or True
         if any(k in body and type(body[k]) is not bool for k in ("on", "ready")) or \
-                ("upstream" in body and body["upstream"] not in ("ok", "unavailable", "failed", "no_interim")) or \
+                ("upstream" in body and body["upstream"] not in ("ok", "forbidden", "busy", "unavailable", "failed", "no_interim")) or \
                 ("fatal" in body and not isinstance(body["fatal"], str)) or \
                 any(k in body and (not transcription_number(body[k]) or body[k] < (1 / 16000 if k == "line_seconds" else 0)) for k in ("line_seconds", "final_seconds")):
             return h.send_json({"code": "bad_request"}, 400) or True
@@ -7371,7 +7373,7 @@ def transcription_socket(h, rid):
                     if end <= edge:
                         state["sentence"] = max(state["sentence"], edge)
                         continue
-                    if configured in ("upstream_unavailable", "upstream_failed"):
+                    if configured in ("upstream_forbidden", "upstream_busy", "upstream_unavailable", "upstream_failed"):
                         state["sentence"] = end
                         continue
                     if at < edge: state["sentence"] = max(state["sentence"], edge)
@@ -10349,29 +10351,6 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
                         {"key": "1", "label": "Yes", "keys": ["1"]},
                         {"key": "2", "label": "Yes, and don't ask again for git push commands in /Users/me/code/weather", "keys": ["2"]},
                         {"key": "3", "label": "No, and tell Claude what to do differently (esc)", "keys": ["3"]}]}})
-
-# MOCK_DOCK=1 (#12831, with MOCK_TASKS): two more of the main conversation's tasks wait for the owner, so its To Decide
-# pager has several kinds: the widget fix asks to run a command (a tool approval) and the blog migration asks a question
-# read off its terminal (a screen card with no tool use id). /mock/reset puts both back unanswered, and the network
-# tests' question.
-DOCK_INTERACTIONS = []
-if os.environ.get("MOCK_DOCK") == "1":
-    DOCK_INTERACTIONS = [
-        {"id": "ix_dock_widget_bash", "machine_id": "macbook", "session_id": WIDGET, "session_title": "修小组件横屏崩溃",
-         "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=20), "expires_at": later(minutes=40),
-         "tool_name": "Bash", "tool_use_id": "toolu_dock_bash",
-         "tool_input": {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17'",
-                        "description": "跑小组件的测试"}},
-        {"id": "scr_studio_blog_6a1d0e9c", "machine_id": "studio", "session_id": BLOG, "session_title": "博客迁移到 Astro",
-         "cwd": "/Users/me/code/blog", "kind": "screen", "created_at": ago(minutes=10), "expires_at": later(hours=24),
-         "screen": " 旧文章的固定链接怎么处理？\n ❯ 1. 保留旧链接\n   2. 换成新格式并加跳转\n",
-         "dialog": {"question": "旧文章的固定链接怎么处理？", "detail": "", "rev": "6a1d0e9c", "options": [
-             {"key": "1", "label": "保留旧链接", "keys": ["1"]},
-             {"key": "2", "label": "换成新格式并加跳转", "keys": ["2"]}]}},
-    ]
-    INTERACTIONS.extend(copy.deepcopy(DOCK_INTERACTIONS))
-    # The network tests' question too: a test answers it in the pager, the next starts with it again.
-    DOCK_INTERACTIONS += [copy.deepcopy(x) for x in INTERACTIONS if x["id"] == "ix_tests"]
 
 # MOCK_SCREEN_DANGER=before|after: Claude Code 2.1.322's safety check on a command (bypass mode, #5265 / #5266) with
 # its countdown, on the review agent. "before": as a hub before #5265 read it at a narrow width (the command missing,
@@ -23957,6 +23936,9 @@ def pins_route(handler, p):
 # switched off, incompatible), with feature plugin_manager; their pages, switches, settings and secrets work in memory.
 # The form of example-notes has every kind of field. A base_url that is not a URL is refused like the hub does.
 PLUGINS_MODE = os.environ.get("MOCK_EXTENSIONS", "")
+# Extension pages and overview cards a domain module adds to GET /api/v1/plugins/-/ui (each a catalog entry with its
+# "placement"); the domain answers the entry's own routes.
+EXTENSION_UI_EXTRA = []
 _NOTES_FORM = [
     {"name": "base_url", "type": "string", "title": "服务地址", "format": "uri", "default": "https://notes.example.com", "required": True},
     {"name": "folders", "type": "array", "title": "同步哪些文件夹", "items": {"name": "items", "type": "string"},
@@ -25090,12 +25072,8 @@ def markets_route(handler, p, body):
         if GRAPH_MODE and placement in ("", "overview_card"):
             ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work-card", "title": "Work",
                     "placement": "overview_card", "size": "compact", "opens": "work"}]
-        if SCENE_MODE and placement in ("", "nav_page"):
-            ui += [{"plugin": "example-home", "plugin_name": "Example Home", "id": "home-scene", "title": "Home",
-                    "placement": "nav_page", "size": "full", "icon": "home"}]
-        if SCENE_MODE and placement in ("", "overview_card"):
-            ui += [{"plugin": "example-home", "plugin_name": "Example Home", "id": "home-scene-card", "title": "Home",
-                    "placement": "overview_card", "size": "compact", "opens": "home-scene"}]
+        # The pages and cards domain modules add (scripts/mock/mock_domains.py), such as extension_scene_mock.py's.
+        ui += [dict(entry) for entry in EXTENSION_UI_EXTRA if placement in ("", entry["placement"])]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -26615,7 +26593,7 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT); DECISION_DISMISSALS.clear()
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS + DOCK_INTERACTIONS  # the cards back, unanswered
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS  # the cards back, unanswered (dock_mock.py puts its own back)
             ids = {x["id"] for x in again}
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
@@ -29860,7 +29838,6 @@ MOCK_HELP.append("MOCK_NAVIGATION=no-overview  A default manager from before Ove
 MOCK_HELP.append("MOCK_OVERVIEW_CARDS=1  (with MOCK_EXTENSIONS=1) Three more made-up Overview cards beside the gateway's 今天的用量: Quota left (example-quota), Needs me and Agenda (example-today), for arranging them (#9745)")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
 MOCK_HELP.append("MOCK_EXTENSION_GRAPH=1  (with MOCK_EXTENSIONS=1) A made-up Work page, UI version 10's graph (#9727): a 200-node tree of work in states with groups, progress, a folded part and a selected step; a node pushes its own page; each draw moves one step to Done; an overview card shows the graph as a still preview")
-MOCK_HELP.append("MOCK_EXTENSION_SCENE=1  (with MOCK_EXTENSIONS=1) A made-up Home page, UI version 11's scene (#12544): a two-room flat with floors, walls, windows, furniture, room labels and device pins in plain words; tapping a pin pushes its device page; each draw flips one lamp so a redraw changes state without moving the camera; an overview card shows the scene as a still preview")
 MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
@@ -30466,9 +30443,6 @@ def plugins_route(handler, p, body):
         return mock_work(handler, body, card=p.endswith("-card"))
     if PLUGINS_MODE and GRAPH_MODE and p == "/api/v1/extensions/example-work/-/ui/control-room":
         return mock_control_room(handler, body)
-    if PLUGINS_MODE and SCENE_MODE and p in ("/api/v1/extensions/example-home/-/ui/home-scene",
-                                             "/api/v1/extensions/example-home/-/ui/home-scene-card"):
-        return mock_home_scene(handler, body, card=p.endswith("-card"))
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -30731,128 +30705,6 @@ def mock_work(handler, body, card=False):
     view = _work_view(_WORK_DRAWS[0], node)
     if card:
         view = {"title": "Work", "sections": [{"key": "work", "items": [_work_graph(_WORK_DRAWS[0])]}]}
-    handler.send_json({"view": view})
-    return True
-
-
-# MOCK_EXTENSION_SCENE=1 (with MOCK_EXTENSIONS=1): UI version 11's scene (#12544), a made-up "Home" page: a two-room
-# flat with wood and tile floors, cutaway walls with a doorway and a glass window, a sofa, a round table, a TV and a
-# bed, room labels and five device pins in plain words. Tapping a pin pushes its device page; each draw toggles the
-# bedroom lamp so a redraw changes pin and light state while keeping the same key and shapes. All names are invented.
-SCENE_MODE = os.environ.get("MOCK_EXTENSION_SCENE") == "1"
-_HOME_DRAWS = [0]
-
-
-def _home_scene_component(draw):
-    bedroom_on = (draw % 2) == 1
-    shapes = [
-        {"kind": "prism", "points": [[-4.0, -2.6], [0.6, -2.6], [0.6, 2.6], [-4.0, 2.6]],
-         "bottom": 0.0, "top": 0.06, "color": "#C9AD8C", "material": "wood"},
-        {"kind": "prism", "points": [[0.6, -2.6], [4.0, -2.6], [4.0, 2.6], [0.6, 2.6]],
-         "bottom": 0.0, "top": 0.06, "color": "#D8D3CA", "material": "tile"},
-        {"kind": "box", "center": [0.0, 2.54], "size": [8.0, 0.12], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-3.94, 0.0], "size": [0.12, 5.2], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [3.94, 0.0], "size": [0.12, 5.2], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-2.7, -2.54], "size": [2.6, 0.12], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-0.3, -2.54], "size": [2.2, 0.12], "bottom": 0.06, "top": 0.55, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-0.3, -2.54], "size": [2.2, 0.06], "bottom": 0.55, "top": 2.2,
-         "color": "#9EC4DC", "material": "glass"},
-        {"kind": "box", "center": [2.4, -2.54], "size": [3.2, 0.12], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        # a wardrobe against the west wall: see-through while that wall is cut away (#13036)
-        {"kind": "box", "center": [-3.56, -0.9], "size": [0.6, 1.4], "bottom": 0.06, "top": 2.1, "color": "#EFEBE4", "material": "wood"},
-        {"kind": "box", "center": [0.6, 1.55], "size": [0.1, 2.1], "bottom": 0.06, "top": 2.5, "color": "#E2DDD4", "wall": True},
-        {"kind": "box", "center": [0.6, -1.55], "size": [0.1, 2.1], "bottom": 0.06, "top": 2.5, "color": "#E2DDD4", "wall": True},
-        {"kind": "box", "center": [-2.2, 1.4], "size": [2.1, 0.9], "round": 0.14, "bottom": 0.06, "top": 0.48, "color": "#788796"},
-        {"kind": "box", "center": [-2.2, 1.76], "size": [2.1, 0.2], "round": 0.08, "bottom": 0.48, "top": 0.84, "color": "#6E7D8C"},
-        {"kind": "cylinder", "center": [-2.1, 0.15], "radius": 0.46, "bottom": 0.06, "top": 0.44,
-         "color": "#B58E65", "material": "wood"},
-        {"kind": "box", "center": [-2.1, -1.75], "size": [1.7, 0.42], "round": 0.06, "bottom": 0.06, "top": 0.46,
-         "color": "#8E7358", "material": "wood"},
-        {"kind": "box", "center": [-2.1, -1.78], "size": [1.35, 0.06], "bottom": 0.5, "top": 1.24,
-         "color": "#20252D", "material": "screen"},
-        {"kind": "cylinder", "center": [-3.45, 1.95], "radius": 0.16, "bottom": 0.06, "top": 1.52,
-         "color": "#9BA2AA", "material": "metal"},
-        {"kind": "box", "center": [2.35, 1.05], "size": [2.0, 2.2], "round": 0.1, "bottom": 0.06, "top": 0.56, "color": "#DFD9CF"},
-        {"kind": "box", "center": [2.35, 1.95], "size": [1.85, 0.35], "round": 0.08, "bottom": 0.56, "top": 0.82, "color": "#C8C1B6"},
-    ]
-    pins = [
-        {"id": "living-lamp", "at": [-1.9, 0.3], "height": 2.35, "label": "Ceiling lamp", "state": "On",
-         "icon": "light", "tone": "positive", "light": {"on": True, "warmth": "warm"},
-         "action": {"id": "open", "values": {"id": "living-lamp"}, "push": {"ui": "home-scene", "state": "living-lamp"}}},
-        {"id": "living-ac", "at": [-3.75, 0.1], "height": 2.05, "label": "Air conditioner", "state": "26 °C",
-         "icon": "fan", "color": "blue",
-         "action": {"id": "open", "values": {"id": "living-ac"}, "push": {"ui": "home-scene", "state": "living-ac"}}},
-        {"id": "living-tv", "at": [-2.1, -1.78], "height": 1.0, "label": "TV", "state": "Not sure if on",
-         "icon": "video", "tone": "caution",
-         "action": {"id": "open", "values": {"id": "living-tv"}, "push": {"ui": "home-scene", "state": "living-tv"}}},
-        {"id": "bedroom-lamp", "at": [2.35, 0.35], "height": 2.35, "label": "Bedroom lamp",
-         "state": "On" if bedroom_on else "Off",
-         "icon": "light", **({"tone": "positive"} if bedroom_on else {}),
-         "light": {"on": bedroom_on, "warmth": "cool"},
-         "action": {"id": "open", "values": {"id": "bedroom-lamp"}, "push": {"ui": "home-scene", "state": "bedroom-lamp"}}},
-    ]
-    return {
-        "type": "scene",
-        "key": "home",
-        "alt": "Two-room flat with a living room on the west and a bedroom on the east.",
-        "caption": "Drag to turn, pinch to zoom, tap a device for its controls.",
-        "shapes": shapes,
-        "labels": [
-            {"text": "Living room", "at": [-0.9, -0.35], "height": 0.08},
-            {"text": "Bedroom", "at": [2.3, -1.2], "height": 0.08},
-        ],
-        "pins": pins,
-    }
-
-
-def _home_scene_downgrade(scene):
-    items = [{"type": "text", "text": scene["caption"]}]
-    for pin in scene["pins"]:
-        row = {"type": "row", "key": f"{scene['key']}:{pin['id']}", "title": pin["label"],
-               "icon": pin.get("icon"), "action": pin.get("action")}
-        if pin.get("tone"):
-            row["badge"] = {"text": pin.get("state", ""), "tone": pin["tone"]}
-        elif pin.get("state"):
-            row["value"] = pin["state"]
-        if pin.get("color"):
-            row["icon_color"] = pin["color"]
-        items.append(row)
-    return items
-
-
-def _home_scene_view(draw, device=None, ui_version=11):
-    if device:
-        return {"title": device, "sections": [{"key": "device", "items": [
-            {"type": "header", "title": device, "subtitle": "A made-up device", "badges": [{"text": "On", "tone": "positive"}]},
-            {"type": "text", "text": "This page stands for a device's own page: its switches, its temperature and its history."}]}]}
-    scene = _home_scene_component(draw)
-    body_items = [scene] if ui_version >= 11 else _home_scene_downgrade(scene)
-    lamp_count = 2 if (draw % 2) == 1 else 1
-    return {"title": "Home", "refresh_after": 30, "sections": [{"key": "home", "items": [
-        {"type": "header", "title": "Two-room flat", "subtitle": f"{lamp_count} of 2 lamps on · 26 °C",
-         "badges": [{"text": "Home", "tone": "positive"}]},
-        *body_items]}]}
-
-
-def mock_home_scene(handler, body, card=False):
-    request = json.loads(body) if body else {}
-    ctx = request.get("context") or {}
-    ui_version = ctx.get("ui_version", 11)
-    if os.environ.get("MOCK_EXTENSION_SCENE_DOWNGRADE") == "1":
-        ui_version = 10
-    state = request.get("state")
-    device = state if isinstance(state, str) and state else None
-    if request.get("action") == "open":
-        device = (request.get("values") or {}).get("id") or "living-lamp"
-        handler.send_json({"view": _home_scene_view(0, device, ui_version=ui_version)})
-        return True
-    if not card and not device:
-        _HOME_DRAWS[0] += 1
-    view = _home_scene_view(_HOME_DRAWS[0], device, ui_version=ui_version)
-    if card:
-        scene = _home_scene_component(_HOME_DRAWS[0])
-        items = [scene] if ui_version >= 11 else _home_scene_downgrade(scene)[:4]
-        view = {"title": "Home", "sections": [{"key": "home", "items": items}]}
     handler.send_json({"view": view})
     return True
 

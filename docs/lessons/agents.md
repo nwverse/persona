@@ -1,5 +1,11 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Visibility-only `TurnErrorCode` values must not trip `readinessBlocks` or `CutOff` on node `TurnError` (#13372)
+
+- `readinessBlocks` (`server/internal/assistant/readiness.go`) defaults every `StepProblem` code to `mode: "setup"` unless explicitly excluded. Any non-user-fix `TurnErrorCode` (such as `upstream_unavailable`, alongside `rate_limited`, `model_fallback_unavailable`, and `tool_search_unsupported`) must be excluded in `readinessBlocks` and paired with `test_assistant` and plain-language readiness strings, or an upstream outage locks every client's composer with "Connect a model first".
+- Apply `assistantwire.CutOff` (`"API Error:"` prefix check) only when falling back to `Session.LastText`, never to a node-populated `Session.TurnError` (`latestTurnError`): Codex rollouts and runtime bridges report `5xx` errors as plain messages (`unexpected status 503 Service Unavailable`) that do not start with `"API Error:"`.
+- When tracking multi-turn streaks in `transcript.Meta`, copy the streak fields in `Tail.Settle` (`server/internal/transcript/branch.go`) and preserve/merge them in `mergeModelFallback` (`server/internal/node/model_refusal.go`), which otherwise resets `m.turnErr.code` on every `bgScan` merge.
+
 ## An App update can leave a socket without its server (#13190)
 
 - A Unix socket file proves only that a process bound that path at some point. After the Codex App removed its IPC router, the old `<CODEX_HOME>/ipc/ipc.sock` remained and a file-type check still advertised writable chats. Check that a listener accepts connections, with a short timeout and one probe per home per list, and handle a later connection failure as a normal control refusal.
@@ -1614,3 +1620,9 @@ embedded resource back into native `USER_INPUT.content` with a `Content of perso
 Removing only the snapshot XML leaves that label visible. Check the native export before blaming replay, and clean
 both the companion and pane history projections. Require the complete leading Persona resource envelope so ordinary
 labels and other URI schemes survive; keep embedded-resource transport intact and version the history format.
+
+## A persisted triage wait needs answerable evidence
+
+A read-only session skips card creation, but must not skip evidence validation. Normalize model `blocked / user`
+results with no grounded question or authorization link before storing them and when displaying old records.
+Otherwise a guess appears as "Awaiting your reply" with nothing in the chat to answer.

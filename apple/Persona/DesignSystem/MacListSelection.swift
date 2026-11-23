@@ -9,11 +9,7 @@ struct MacSelectingList<Selection: Hashable, Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        #if os(macOS)
-        List(selection: selection) { content }
-        #else
         List { content }
-        #endif
     }
 }
 
@@ -34,14 +30,7 @@ private struct MacListRow<S: Shape>: ViewModifier {
     var drawsShade: Bool
 
     func body(content: Content) -> some View {
-        #if os(macOS)
         content
-            .environment(\.backgroundProminence, .standard)
-            .background { if selected && drawsShade { shape.fill(Theme.Fill.macSelected).padding(-outset) } }
-            .listRowBackground(Theme.pageBackground)
-        #else
-        content
-        #endif
     }
 }
 

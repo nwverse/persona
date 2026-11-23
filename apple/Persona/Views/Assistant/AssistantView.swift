@@ -131,18 +131,6 @@ struct AssistantView: View {
             routed.environment(\.pushInboxChat, inboxChatPush)
         } else if widthClass == .regular {
             // The split keeps both columns clear of the fold when the device is partly folded.
-            #if os(macOS)
-            // The history list beside the conversation, flush with the window; Chat History folds it away. Not a
-            // NavigationSplitView: the Mac's would not fold the list's column (#856, `MacListBeside`).
-            MacListBeside(listShown: columns != .detailOnly, widthKey: "mac.assistant.listWidth") {
-                sidebar(column: true)
-                    // The list's name and search are the title bar's row, beside the traffic lights: the row stood
-                    // empty above them (#830). Nothing of the window's toolbar sits over this column.
-                    .ignoresSafeArea(.container, edges: .top)
-            } page: {
-                stack
-            }
-            #else
             NavigationSplitView(columnVisibility: $columns) {
                 // One width, the other splits' (`SidebarWidth`, #4206).
                 sidebar(column: true)
@@ -168,7 +156,6 @@ struct AssistantView: View {
             #if os(iOS)
             // Shown or not, remembered; beside the page or over it by the width (#2624, #4206).
             .modifier(SplitListMemory(columns: $columns, key: Self.listKey, state: columnState))
-            #endif
             #endif
         } else {
             // The sidebar takes the whole height, like ChatGPT's: the tab bar fades away as it comes out
@@ -392,10 +379,6 @@ struct AssistantView: View {
                             newConversation: currentIsHealth ? { backToRoot(); present(.health) } : newConversation,
                             openKnowledge: { if placesByValue { show(.knowledge) } else { showKnowledge = true } },
                             openProfile: { if placesByValue { show(.profile) } else { showProfile = true } })
-            #if os(macOS)
-            // At the window's edge only with the history list folded away too (#830).
-            .transformEnvironment(\.macTitleRowLeading) { if columns != .detailOnly { $0 = 0 } }
-            #endif
             #if os(iOS)
             .liftBlur(host: liftHost)
             #endif
@@ -404,10 +387,6 @@ struct AssistantView: View {
         // A message pressed in the conversation, over the bar too: the whole page dims (#3188).
         .overlay { MessageLiftHostLayer(host: liftHost) }
         #endif
-        #if os(macOS)
-        // The bar is the title bar's row, as the list beside it (#830); pushed pages keep their own.
-        .ignoresSafeArea(.container, edges: .top)
-        #endif
     }
 
     private var stack: some View {
@@ -415,10 +394,6 @@ struct AssistantView: View {
             routed
         }
         .environment(\.pushInboxChat, inboxChatPush)
-        #if os(macOS)
-        // Its pushed pages (Knowledge, Scheduled Tasks, To-dos…) go back from the title row, not the system's button (#2318).
-        .environment(\.macSectionStack, true)
-        #endif
     }
 
     /// The root as the stack's (or, in the Sidebar layout, the split's page's) first page: what it does there (its routes,
@@ -866,7 +841,7 @@ struct AssistantView: View {
     /// error reports.
     private static func newChatMissed(_ line: String, model: AppModel) {
         UserDefaults.standard.set("\(Date.now.formatted(.iso8601)) \(line)", forKey: NewChatCheck.defaultsKey)
-        #if os(iOS) || os(macOS)
+        #if os(iOS)
         if ErrorReportQueue.shared.write(ErrorReports.report(kind: "log", level: "warning", message: line)), let group = model.hub?.group {
             model.flushErrorReports(group)
         }
@@ -1658,11 +1633,7 @@ struct StarterComposer: View {
             #if os(iOS) || os(visionOS)
             PasteImageChip(focused: focused) { add($0) }
             #endif
-            #if os(macOS)
-            if !images.isEmpty { ComposerImages(images: imagesBinding) }
-            #else
             if !images.isEmpty { ComposerImages.editable(draft.held) } // a tap marks it up, as in a conversation
-            #endif
             if let token = mentionToken {
                 ComposerMentionMenu(token: token, text: textBinding, selection: $selection, source: mentionSource) { ref in
                     if let updated = ContextRef.addingMention(ref, to: quotes) { quotes = updated }
@@ -1720,10 +1691,6 @@ struct StarterComposer: View {
             // The assistant runs on its machine (the hub's unless set otherwise): files go to that one's temp directory.
             upload(urls)
         }
-        #if os(macOS)
-        // Finder drags and ⌘V of pictures / copied files, as in an Agent's composer (docs/apple/mac.md「Details」).
-        .macComposerFiles(images: images.count, focused: focused, attach: { MacDrop.append($0, to: &images) }, upload: { urls in upload(urls) })
-        #endif
         #if os(iOS)
         .modifier(attachHost)
         // The Photos library warmed off the main thread, as a conversation's composer does (#4250).
@@ -1843,11 +1810,7 @@ struct BeautifulStarterComposer: View {
             #if os(iOS) || os(visionOS)
             PasteImageChip(focused: focused) { add($0) }
             #endif
-            #if os(macOS)
-            if !images.isEmpty { ComposerImages(images: imagesBinding) }
-            #else
             if !images.isEmpty { ComposerImages.editable(draft.held) } // a tap marks it up, as in a conversation
-            #endif
             PromptComposer(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)…"), text: textBinding, selection: $selection, focused: $focused,
                            hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty, disabled: disabled,
                            attach: PromptItems.attachments(camera: false),
@@ -1913,10 +1876,6 @@ struct BeautifulStarterComposer: View {
             // The assistant runs on its machine (the hub's unless set otherwise): files go to that one's temp directory.
             upload(urls)
         }
-        #if os(macOS)
-        // Finder drags and ⌘V of pictures / copied files, as in an Agent's composer (docs/apple/mac.md「Details」).
-        .macComposerFiles(images: images.count, focused: focused, attach: { MacDrop.append($0, to: &images) }, upload: { urls in upload(urls) })
-        #endif
         .onChange(of: picks) { _, items in
             Task {
                 guard !items.isEmpty else { return }

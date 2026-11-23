@@ -91,39 +91,6 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
 
     @ViewBuilder private var layout: some View {
         if widthClass == .regular {
-            #if os(macOS)
-            // The list in the content column (flush; the sidebar column floats as a glass card on macOS 26 and stays
-            // empty). A value link in the content column replaces the detail column's stack, as one in the sidebar did.
-            NavigationSplitView(columnVisibility: $columns) {
-                SplitColumns.noSidebar
-            } content: {
-                // The look the list had in the sidebar column (no row lines, footers as before) on the window's white,
-                // as the Persona and Agents lists beside the sections are; lists that pick a style keep it. Inside the
-                // destinations, so the style stays in this column whichever environment the pushed pages are built in.
-                sidebar
-                    .listStyle(.sidebar)
-                    .scrollContentBackground(.hidden)
-                    .modifier(destinations)
-                    .modifier(SidebarWidth())
-            } detail: {
-                NavigationStack(path: $path) {
-                    empty.modifier(destinations)
-                }
-                // The page keeps a width it can be read at; narrowing the window narrows the list first (#1200).
-                .navigationSplitViewColumnWidth(min: Theme.Size.macDetailMin, ideal: Theme.Size.macWindowWidth)
-                .onGeometryChange(for: Bool.self) { $0.size.width < Theme.Size.macSplitSquished } action: { squished in
-                    SplitColumns.log.notice("detail squished: \(squished) (columns \(String(describing: columns), privacy: .public), depth \(path.count))")
-                }
-            }
-            .navigationSplitViewStyle(.balanced)
-            .environment(\.splitDetail, SplitDetail(isFirstPage: firstPage))
-            // The detail column once came out a few points wide, the chat squeezed into it (2026-11-02, not reproduced):
-            // what the columns and the stack did, for the next time (`log show --predicate 'category == "split"'`).
-            .onChange(of: columns) { old, new in
-                SplitColumns.log.notice("columns \(String(describing: old), privacy: .public) → \(String(describing: new), privacy: .public)")
-            }
-            .onChange(of: path.count) { old, new in SplitColumns.log.notice("depth \(old) → \(new)") }
-            #else
             NavigationSplitView(columnVisibility: $columns) {
                 // No stack of its own: a value link in the sidebar column replaces the detail column's stack. A sidebar
                 // stack that refused its pushes (a path binding that always read empty) first slid the list away, then
@@ -185,7 +152,6 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
             // A new root the sidebar picked, with no path to change (#8359): the content is already replaced, the list's
             // sliding away is the only motion.
             .onChange(of: selection) { hideOverlay() }
-            #endif
             #endif
         } else {
             #if os(iOS)
@@ -267,14 +233,6 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
 /// floating off the window's edges, the window's backdrop showing round it (2026-11-02 user: like floating on a backdrop, with a gap).
 /// The shell's sections column is the window's sidebar there.
 enum SplitColumns {
-    #if os(macOS)
-    static let shown = NavigationSplitViewVisibility.doubleColumn
-
-    /// The empty sidebar column, and no system button to bring it out.
-    static var noSidebar: some View { Color.clear.toolbar(removing: .sidebarToggle) }
-
-    static let log = Logger(subsystem: "persona", category: "split")
-    #else
     static let shown = NavigationSplitViewVisibility.all
     static let log = Logger(subsystem: "persona", category: "split")
 
@@ -287,7 +245,6 @@ enum SplitColumns {
     /// In a split this wide the page beside the list column keeps its least width (`SplitPageMin`): the column lies beside
     /// it; else over it.
     @MainActor static func fitsBeside(width: CGFloat) -> Bool { width - listWidth >= Theme.Size.splitPageMin }
-    #endif
     #endif
 }
 
@@ -439,9 +396,6 @@ private struct SplitDetailPage: ViewModifier {
     var ownsBack = false
 
     func body(content: Content) -> some View {
-        #if os(macOS)
-        content.modifier(MacDetailBack(shown: !ownsBack && split?.isFirstPage == false))
-        #else
         // `ownsBack` is fixed for a page (no identity change as the path grows).
         Group {
             if ownsBack { content } else { content.navigationBarBackButtonHidden(split?.isFirstPage == true) }
@@ -453,7 +407,6 @@ private struct SplitDetailPage: ViewModifier {
         // Under side bars it is the side column's first item, where Back is on a sub-page (#11636).
         .modifier(ListButtonItem(shown: !ownsBack && split?.roots == true && split?.drawer != true
                                     && split?.isFirstPage == true && split?.listHidden == true))
-        #endif
         #endif
     }
 }

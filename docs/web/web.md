@@ -1520,6 +1520,11 @@ or writes them: the main chat's fixed payload stays as it was.
 
 ### Starred messages (#7524)
 
+Starred is off by default. **Settings › General › Appearance › Starred messages** turns it on for this browser
+(`persona.starredMessages` in local storage, like Reply animation). While it is off, the sidebar has no Starred
+page and the message menu has no Star or Unstar, and no saved marker shows; saved messages stay on the hub and
+reappear when the switch is turned on again.
+
 Use **Star** from a text message's menu in an Assistant or Agent chat. The menu opens with its More
 button, a right click, or a long press. A small star marks the saved message. **Unstar** is available in
 the same menu and on the **Starred** page. Removing a star offers **Undo** in the notification. It saves
@@ -2368,7 +2373,8 @@ refreshed once a minute, with no requests while the page is in the background. T
 Accounts come from files read on the computers and from the account-pool gateways the hub queries (#2595): in the popover, the line under each account's title gives the plan and the source ("MacBook · Relay": the computers that read it by name, then the gateways; with only one source it names that one).
 Single-model windows put the model name next to the length (not used for sorting); when a gateway can't be read it says "these are its last numbers". The sidebar bar's tooltip also gives the source. Gateways are configured under "Usage sources" in the admin interface (`docs/operations/admin.md`).
 A prepaid account with no rate-limit window (the official DeepSeek launcher, #11825) is a row of its own: the collapsed strip shows its name and the provider's amount and currency ("CNY 12.34"), without taking a bar from the two fullest window accounts, and the popover lists it beside them. A genuine zero is shown as `CNY 0.00`; an unreadable balance shows `—` in the strip, and the popover says "Balance unavailable" and why, so it never becomes a zero; a failure after a successful read keeps the last amount and says so.
-Code: `lib/usage-windows.ts` (pure functions, with unit tests), `views/UsageBars.tsx`; the mock hub has `MOCK_USAGE=none` to simulate no data and `MOCK_USAGE=gateways` to simulate a mix of computer and gateway accounts.
+**Pinning chosen accounts (#12418):** By default the collapsed strip shows the two fullest window accounts plus live prepaid balance rows. Inside the popover, each live account (window or balance) has a pin toggle to choose which account(s) stay visible in the collapsed strip, with a **Reset to automatic** action whenever custom pins are active. The selection is stored per browser in `localStorage` (`persona.usage.pinnedAccounts`), syncs across tabs via `storage` events, and is display-only (it does not affect launchers, models, sign-in state, scheduling, or backend polling). The popover still lists every live account; if all pinned accounts go offline, expire, or are hidden by an administrator, the collapsed strip falls back automatically to the default ranking rather than rendering empty.
+Code: `lib/usage-windows.ts` (pure functions and pinned-account store, with unit tests), `views/UsageBars.tsx`, `views/UsagePopover.tsx`; the mock hub has `MOCK_USAGE=none` to simulate no data and `MOCK_USAGE=gateways` to simulate a mix of computer and gateway accounts.
 
 ## Model pill and model panel (#5032)
 
@@ -3111,6 +3117,7 @@ The defaults add nothing to the page (no attribute, no stylesheet), so the defau
   Both terminal modes read the selected mono stack when opened, keeping their separate font size and local CJK width correction. A retained Full UI feed also reads it when another terminal surface attaches.
 - **Recent chats in the sidebar** (`persona.sidebar-recent`, #5146): 5 / 10 / 15 / 25, default 5 (#6228), how many of the latest chats the sidebar's Persona chats › 最近 lists before **Show N more**. iOS and Android list 5 and have no such setting yet. The fold of the 最近 group itself is `fold:recent-chats` (#6228).
 - **Sidebar icons** (`persona.sidebar-icons`, #10822): Monochrome (stores nothing, the default) or Colored (`colored`), a color for each page's icon in the sidebar ("The sidebar's pages", **Icon colors**). Other tabs follow through the `storage` event.
+- **Launcher quota in the sidebar** (`persona.sidebar-usage`, #13493): on by default (stores nothing); off (`0`) stops the sidebar mounting its usage card (`lib/sidebar-usage.ts`, `views/UsageBars.tsx`). Settings › General › Appearance. Other tabs follow through the `storage` event.
 
 ## New versions
 

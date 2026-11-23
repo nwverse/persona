@@ -758,9 +758,14 @@ func TestStopButtonOnATopicsProgressCard(t *testing.T) {
 	if card == "" {
 		t.Fatalf("no progress card with a Stop button went into the topic: %v", e.f.appParams(AppFeishu, FeishuPost))
 	}
+	// Stop acts only from the run's current progress card (#12710): press it on that card's own message.
+	mid := e.s.channelRuns(channel.Feishu)[0].Ext["card"]
+	if mid == "" {
+		t.Fatal("the run does not record its progress card")
+	}
 	var a feishubot.CardAction
 	a.Action.Value = map[string]any{"a": "stop", "k": targetPersona, "m": r.MachineID, "s": r.SessionID}
-	a.Context.MessageID, a.Context.ChatID = "om_post", testChat
+	a.Context.MessageID, a.Context.ChatID = mid, testChat
 	if res := e.s.botCardAction(ctx, &a, ""); res.Toast == nil {
 		t.Fatalf("no answer to the press: %+v", res)
 	}

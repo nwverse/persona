@@ -215,7 +215,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			// Persist the approved edges, including edges inherited from a reused to-do.
 			t.After = cleanIDs(slices.Concat(t.After, todo.After))
 			t.Queue = s.prerequisiteQueue(ctx, *t, s.requestBlockers(ctx, *t))
-		} else if t.Workspace != nil && t.Workspace.Mode == workspaceExisting && !t.WorkspaceInferred && t.WorkspaceResolved != nil {
+		} else if t.Workspace != nil && t.Workspace.Mode == workspaceExisting && (!t.WorkspaceInferred || t.Workspace.Queue) && t.WorkspaceResolved != nil {
 			effMachine := s.effectiveBoardMachine(t.Machine)
 			wsPath := t.WorkspaceResolved.Path
 			wsKey := effMachine + "\x00" + s.taskDirKey(ctx, t.Machine)(wsPath)
@@ -237,8 +237,8 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
 		// Its stage kind from that brief; how it is handed out is kept for every later look (task_stage_kind.go).
 		s.restage(ctx, todo.ID, func(st *todoStage) { st.Readonly = t.Readonly })
-		// Every conversation-dispatched task is supervised by the main conversation; its origin still names where it
-		// was handed out (#5732). A task leader's worker keeps its leader Agent through supervisors[i].
+		// The planning lead owns its task from the first dispatch; main owns its own plans. A task leader's worker
+		// keeps its leader Agent through supervisors[i].
 		if sup := supervisors[i]; sup != "" {
 			if t.Parent == "" && t.ReuseTodo == "" && sup != p.Conversation {
 				s.taskCard(ctx, sup, todo.ID, "")
@@ -276,7 +276,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	for i := range p.Tasks {
 		task := p.Tasks[i]
 		if task.TodoID == "" || task.Error != "" || task.Queue != nil || task.Workspace == nil ||
-			task.Workspace.Mode != workspaceExisting || task.WorkspaceInferred || task.WorkspaceResolved == nil {
+			task.Workspace.Mode != workspaceExisting || (task.WorkspaceInferred && !task.Workspace.Queue) || task.WorkspaceResolved == nil {
 			continue
 		}
 		effMachine := s.effectiveBoardMachine(task.Machine)
@@ -339,6 +339,11 @@ func (s *Service) failPlanSupervision(ctx context.Context, todo Todo, t *PlanTas
 // if the scope changed between accepting the card and preparing dispatch.
 func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, t *PlanTask) error {
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		if v.assigned() {
+			supervisor = v.Supervisor // a transfer that won before this write stays authoritative
+		} else if s.isLeader(ctx, supervisor) {
+			v.SupervisorSource = "plan"
+		}
 		if t.Continues == "" {
 			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(t.DoneWhen), t.ExpectMinutes
 			return true

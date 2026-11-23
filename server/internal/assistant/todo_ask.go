@@ -36,16 +36,18 @@ type todoAsk struct {
 	AskedAt   time.Time `json:"asked_at"`
 	Risk      string    `json:"risk,omitempty"`
 
-	Question      string           `json:"question,omitempty"`
-	WhyOwner      string           `json:"why_owner,omitempty"`
-	Options       []DecisionOption `json:"options,omitempty"`
-	CostOfWaiting string           `json:"cost_of_waiting,omitempty"`
-	From          *askFrom         `json:"from,omitempty"`
-	Stands        string           `json:"stands,omitempty"`
-	Background    string           `json:"background,omitempty"`
-	Deadline      *time.Time       `json:"deadline,omitempty"`
-	Default       string           `json:"default,omitempty"`
-	Responses     []string         `json:"responses,omitempty"`
+	Terminal       *SessionRef      `json:"resume_terminal,omitempty"`
+	TerminalOption string           `json:"terminal_option,omitempty"`
+	Question       string           `json:"question,omitempty"`
+	WhyOwner       string           `json:"why_owner,omitempty"`
+	Options        []DecisionOption `json:"options,omitempty"`
+	CostOfWaiting  string           `json:"cost_of_waiting,omitempty"`
+	From           *askFrom         `json:"from,omitempty"`
+	Stands         string           `json:"stands,omitempty"`
+	Background     string           `json:"background,omitempty"`
+	Deadline       *time.Time       `json:"deadline,omitempty"`
+	Default        string           `json:"default,omitempty"`
+	Responses      []string         `json:"responses,omitempty"`
 	// Response: the fixed answer the owner already gave it while it still waits (explain_first).
 	Response string `json:"response,omitempty"`
 	// Suggestion: the owner gave this go-ahead for this directory three times; the decision offers a standing
@@ -84,6 +86,21 @@ func (s *Service) todoAsks(ctx context.Context) map[string]todoAsk {
 		a := todoAsk{Outcome: w.ask.Outcome, Verdict: verdictText(l, &w.ask), AskedAt: w.ask.AskedAt, Risk: askRisk(&w.ask)}
 		if decideAsk(&w.ask) {
 			a.Recommend = w.ask.Recommend
+			if w.ask.OutsideID == "" {
+				if task, ok := s.todoNow(w.todo); ok {
+					for _, option := range w.ask.Options {
+						if target := decisionTerminal(task, option.Label); target != nil {
+							a.Terminal, a.TerminalOption = target, option.Label
+							break
+						}
+					}
+					// A new card keeps the manual control out of its choices. The
+					// reason can still direct the owner to the one bound Agent.
+					if a.Terminal == nil && terminalResumeMention(w.ask.Reason) {
+						a.Terminal = soleDecisionAgent(task, w.ask.AskedAt)
+					}
+				}
+			}
 			a.Question, a.Responses, a.Response = w.ask.Reason, ownerResponses, w.ask.Response
 			a.ForBriefing = w.ask.ForBriefing
 			a.WhyOwner, a.Options, a.CostOfWaiting = w.ask.WhyOwner, w.ask.Options, w.ask.CostOfWaiting
@@ -173,6 +190,14 @@ func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) 
 	// Self-contained (#3804): where it came from and stands, what each option leads to, what waiting costs.
 	if lines := decisionLines(l, s.location(ctx), &a); len(lines) > 0 {
 		n.Body += "\n" + strings.Join(lines, "\n")
+	}
+	// A decision whose words say something sensitive is still pushed (it is due), but the lock screen hears only that
+	// there is news, and a tap opens it, with no answer to give from there (exitPolicy; a track that redacts is not
+	// pushed, above). The recommended label stays in the payload for the app, which the lock screen does not show.
+	space, _ := s.selfSpace(ctx, sessionID)
+	if s.exitPolicy(ctx, n.Title+"\n"+n.Body+"\n"+strings.Join(n.Todo.Options, "\n"), sessionID, space).Redact {
+		n.Title, n.Body = s.redactedNotice(ctx, l, space)
+		n.Todo.Options, n.Todo.Lockscreen = nil, assistantwire.OwnerAskLockscreenOpenOnly
 	}
 	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 		s.logf("task %s: decision push: %v", id, err)

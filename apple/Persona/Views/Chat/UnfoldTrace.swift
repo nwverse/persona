@@ -1,9 +1,6 @@
 #if DEBUG
 import QuartzCore
 import SwiftUI
-#if os(macOS)
-import AppKit
-#endif
 
 /// `-unfoldTrace YES`: every row opened or folded in the chat (`toggleInPlace`, a work line's `toggleWork`) is
 /// measured for `window` from the tap (#1123): the frames drawn, the late ones (over 1.5 frames), the longest, and how far

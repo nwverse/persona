@@ -440,7 +440,8 @@ func readinessBlocks(st ReadinessStep) bool {
 		return true
 	case StepProblem:
 		return st.Code != proto.TurnErrorRateLimited && st.Code != proto.TurnErrorModelFallbackUnavailable &&
-			st.Code != proto.TurnErrorToolSearchUnsupported // the node already loads every tool there: a retry works
+			st.Code != proto.TurnErrorToolSearchUnsupported && // the node already loads every tool there: a retry works
+			st.Code != proto.TurnErrorUpstreamUnavailable // temporary upstream outage: never lock the composer (#13372)
 	}
 	return false
 }
@@ -487,6 +488,7 @@ func (s *Service) readinessMain(ctx context.Context, machine, main string) (prot
 				sess.TurnError, sess.TurnErrorKind = text, kind
 			}
 			sess.TurnErrorCode = sessionTurnErrorCode(sess)
+			putUpstreamTurn(&sess, s.upstreamMarks(machine))
 			return sess, true
 		}
 	}
@@ -597,6 +599,8 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 				action = "" // recovery is a new conversation or the TUI's /model, neither is a model-settings action
 			case proto.TurnErrorToolSearchUnsupported:
 				action = "test_assistant" // nothing to set up: try again (toolSearchWords)
+			case proto.TurnErrorUpstreamUnavailable:
+				action = "test_assistant" // upstream capacity outage: nothing on the computer is broken (#13372)
 			}
 			st := s.toolSearchWords(lang, d, s.readinessStep(lang, StepModel, StepProblem, code, d.Name, launcher, action))
 			if code == proto.TurnErrorRateLimited {

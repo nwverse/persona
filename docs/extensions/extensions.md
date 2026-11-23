@@ -493,7 +493,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `decisions.raise` | Ask the owner for a decision | `POST /api/v1/decisions`, `GET /api/v1/decisions/{id}`, `POST /api/v1/decisions/{id}/withdraw`; raise a rich pending Needs-you decision, poll only the caller's own answer and withdraw it ([todos.md](../assistant/todos.md) "Decisions raised outside a supervisor"). It does not open any owner answer route and is never included in legacy every-scope access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `assistant.entries.read` | Read unified ledger entries | `assistant.entries.list` RPC and `GET /api/v1/assistant/entries`; see "Unified entries ledger" |
-| `assistant.memory.read` | Read what Persona remembers about you (read-only, never the health space) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
+| `assistant.memory.read` | Read what Persona remembers about you (read-only; another track's memory only as the user lets this extension read it) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `transcription` | Turn its own audio into text with the transcription you chose for meetings (never the key, never other audio) | No HTTP route: the `transcription.*` RPC (see "Transcription for extensions"). Not covered by the legacy `hub_api` full access |
 | `market.refresh_own` | Refresh the extension marketplace it was installed from | `POST /api/v1/extensions/-/self/market/refresh` only. Not covered by an all-scope token or the legacy `hub_api` grant: the manifest must name it and the owner must approve it |
@@ -735,8 +735,10 @@ sends, renames, archives or changes a conversation. The manager, which owns the 
 
 The schema is `schema/extension/assistant.schema.json`; the Go SDK has them as `ext.Hub.AssistantConversations` and `AssistantMessages`.
 
-- **Which conversations**: only the assistant's own space. The health space's (docs/assistant/health.md "How directories and memory are isolated") and guest
-  conversations are never listed or read (`not_found`), nor are other agents' sessions (those are `agents.read`'s).
+- **Which conversations**: the assistant's own, each shown by its information categories and what the user lets this extension read
+  (docs/assistant/health.md "Using information by scene", scene 6): an extension the user marked as their own reads every track's; any
+  other reads a conversation carrying a sensitive category (a health space's, one tagged finance) only when granted that category.
+  Guest conversations are never listed or read (`not_found`), nor are other agents' sessions (those are `agents.read`'s).
   `assistant.conversations` lists the ones last active at or after `since`, newest first, 50 a page (at most 200); with `until`, one
   known to have started at or after it is left out (`started` is set when the manager knows when it began). `origin` says who opened it
   (`user`, `channel`, `inbox`, `task`, `spawned`, `lark_agent`, `extension`; what the hub cannot tell is `user`), `title` is empty while
@@ -766,7 +768,7 @@ answer an extension's token 403). The manager answers it from the assistant's co
 
 | Method | Parameters | Returns | Scope |
 | --- | --- | --- | --- |
-| `assistant.memory` | `{include_content?}` | `{entries: [{name, description?, type?, size, created?, modified, content?, truncated?}]}` | `assistant.memory.read` |
+| `assistant.memory` | `{include_content?}` | `{entries: [{name, description?, type?, size, created?, modified, content?, truncated?, track?}]}` | `assistant.memory.read` |
 
 The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ext.Hub.AssistantMemory`.
 
@@ -926,7 +928,11 @@ the run that went wrong without reading any tool output, then opens only that ru
 
 ### Never shown to extensions
 
-Whatever scopes it was granted, an extension's token never sees:
+Whatever scopes it was granted, an extension's token never sees what follows, with one exception (#13246): an extension the
+user marked as their own (`PUT /api/v1/assistant/extension-trust/{id}` with `trust: owner`, such as their memory extension) reads
+the tracks' conversations and cards on the read routes below, and the manager's reads by the user's grants
+(docs/assistant/health.md "Using information by scene"). It still never controls a track's session or sees a private card,
+and the extensions' `agent.needs_you` / `agent.finished` events still leave the tracks out.
 
 - **The health space's conversations** (`docs/assistant/health.md`): not in `GET /api/v1/sessions` (the full list, the paged list, its
   totals and counts) or `/sessions/archived`, and their items, images, info and screen answer 404 as for a chat that does not exist.
@@ -935,7 +941,7 @@ Whatever scopes it was granted, an extension's token never sees:
   read grant. Session controls (a message, interrupt, queue changes, rename, modes, seen) require a listed session outside
   the health space; a resume is decided as "Resuming a chat" says. Extension tokens cannot start sessions in the health
   space. `assistant.conversations` and `assistant.messages` leave health sessions out, and `assistant.memory` reads only
-  the assistant's own memory. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling
+  the memory of tracks the extension may read. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling
   conversation's space to filter their targets. `GET /api/v1/assistant` lists none of them (`?space=health` lists
   nothing), and a chat's feed (`GET …/conversations/{id}/feed`) answers 404 for one of them, or for one whose space
   cannot be told. `agent.finished` is not sent of such a chat either.

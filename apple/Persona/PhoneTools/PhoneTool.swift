@@ -23,9 +23,7 @@ enum PhoneDataSource: String, CaseIterable, Identifiable, Codable {
 
     /// The sources this device has tools for, in order (Settings › Phone Data).
     static var onThisDevice: [PhoneDataSource] {
-        #if os(macOS)
-        allCases.filter { $0 != .health && !iPhoneOnly.contains($0) } // no health data on a Mac (PhoneToolRegistry.healthTools)
-        #elseif os(iOS)
+        #if os(iOS)
         // Home needs the HomeKit capability in the build (#2285), alarms AlarmKit (iOS 26).
         allCases.filter { ($0 != .home || HomeAccess.isBuilt) && ($0 != .alarms || AlarmsAccess.isSupported) }
         #else
