@@ -59,16 +59,46 @@ func TestLostPacketsAreRebuiltOrAskedForAgain(t *testing.T) {
 			rng := rand.New(rand.NewSource(int64(c.ratio) + 1))
 			var mu sync.Mutex
 			var dropped int
+			seenData := map[udpShardIdentity]bool{}
+			droppedData := map[udpShardIdentity]bool{}
 			lossy := false
 			// 5 % of the node's packets while the video runs (the proof, resumed and pongs get through).
-			relay := lossyRelay(t, l.nodeAt, func(int) bool {
+			relay := lossyRelay(t, l.nodeAt, func(_ int, packet []byte) bool {
 				mu.Lock()
 				defer mu.Unlock()
-				if lossy && rng.Float64() < 0.05 {
-					dropped++
-					return true
+				if !lossy {
+					return false
 				}
-				return false
+				drop := rng.Float64() < 0.05
+				if drop {
+					dropped++
+				}
+				_, pn, ok := udpHeader(packet)
+				if !ok {
+					t.Error("a packet during loss had no UDP header")
+					return drop
+				}
+				body, err := openUDP(l.up.keys.toPhone, l.up.keys.ivPhone, packet, pn)
+				if err != nil || len(body) == 0 {
+					t.Errorf("a packet during loss did not open: %v", err)
+					return drop
+				}
+				if body[0] == udpData {
+					h, _, err := decodeFragment(body)
+					if err != nil {
+						t.Errorf("a fragment during loss did not decode: %v", err)
+						return drop
+					}
+					if int(h.Index) < int(h.Data) {
+						id := udpShardIdentity{offset: h.Offset, block: h.Block, index: h.Index}
+						original := !seenData[id]
+						seenData[id] = true
+						if drop && original {
+							droppedData[id] = true
+						}
+					}
+				}
+				return drop
 			})
 			setLoss := func(on bool) { mu.Lock(); lossy = on; mu.Unlock() }
 			l.up = newUDPPhone(t, l.p, l.dc, l.ready, relay)
@@ -89,20 +119,184 @@ func TestLostPacketsAreRebuiltOrAskedForAgain(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 			l.up.mu.Lock()
-			rebuilt, nacks := l.up.rebuilt, l.up.nacks
+			rebuilt, nacks, askedShards := l.up.rebuilt, l.up.nacks, l.up.askedShards
+			outcomes := make(map[udpShardIdentity]udpShardOutcome, len(l.up.outcomes))
+			for id, outcome := range l.up.outcomes {
+				outcomes[id] = outcome
+			}
+			nackStats := make(map[udpShardIdentity]udpNACKStat, len(l.up.nackStats))
+			for id, stat := range l.up.nackStats {
+				nackStats[id] = stat
+			}
 			l.up.mu.Unlock()
-			t.Logf("dropped %d packets: %d rebuilt from parity, %d asked for again, %d parity bytes, %d resent bytes",
-				dropped, rebuilt, nacks, parity, resent)
-			if dropped == 0 {
-				t.Fatal("nothing was dropped")
+
+			expected := map[udpShardIdentity]bool{}
+			off := uint64(0)
+			for _, msg := range msgs {
+				for bi, block := range udpBlocks(len(msg)) {
+					for j := 0; j < block.Data; j++ {
+						expected[udpShardIdentity{offset: off, block: uint16(bi), index: uint16(j)}] = true
+					}
+				}
+				off += uint64(len(msg))
 			}
-			if c.ratio > 0 && (rebuilt == 0 || parity == 0 || nacks >= dropped) {
-				t.Fatalf("parity rebuilt %d and %d were asked for, of %d dropped", rebuilt, nacks, dropped)
+			parityOutcomes := 0
+			for id := range expected {
+				outcome, ok := outcomes[id]
+				if !ok || outcome.completedAt.IsZero() {
+					t.Fatalf("data shard %+v has no terminal recovery outcome", id)
+				}
+				if outcome.parity {
+					parityOutcomes++
+				}
 			}
-			if c.ratio == 0 && (rebuilt != 0 || resent == 0) {
-				t.Fatalf("without parity: %d rebuilt, %d bytes resent", rebuilt, resent)
+			if len(outcomes) != len(expected) || parityOutcomes != rebuilt {
+				t.Fatalf("outcome mismatch: %d/%d data shards, %d/%d parity rebuilds", len(outcomes), len(expected), parityOutcomes, rebuilt)
+			}
+			for id := range droppedData {
+				if !expected[id] {
+					t.Fatalf("relay recorded unknown original data shard %+v", id)
+				}
+			}
+			if len(droppedData) > dropped {
+				t.Fatalf("%d original data drops exceed %d packet drops", len(droppedData), dropped)
+			}
+
+			raw, requestedParity := 0, 0
+			for id, stat := range nackStats {
+				raw += stat.count
+				outcome, ok := outcomes[id]
+				if !ok {
+					t.Errorf("requested shard %+v has no terminal outcome", id)
+					continue
+				}
+				if outcome.parity {
+					requestedParity++
+				}
+				if !udpNACKHistoryBounded(stat, outcome) {
+					t.Errorf("shard %+v sent %d raw NACKs before block completion, exceeding the retry bound", id, stat.count)
+				}
+			}
+			if raw != nacks || len(nackStats) != askedShards {
+				t.Fatalf("NACK counter mismatch: raw %d/%d, distinct %d/%d", raw, nacks, len(nackStats), askedShards)
+			}
+
+			summary := accountUDPDroppedData(droppedData, outcomes)
+			t.Logf("dropped %d packets (%d original data): %d parity, %d copies, %d missing; %d total parity outcomes, %d distinct NACKs (%d raw, %d requested parity), %d parity bytes, %d resent bytes",
+				dropped, len(droppedData), summary.parity, summary.copies, summary.missing, rebuilt, askedShards, nacks, requestedParity, parity, resent)
+			if dropped == 0 || len(droppedData) == 0 {
+				t.Fatalf("insufficient loss coverage: %d packets, %d original data shards", dropped, len(droppedData))
+			}
+			if summary.total() != len(droppedData) || summary.missing != 0 {
+				t.Fatalf("recovery accounting covered %d of %d original data drops; %d missing", summary.total(), len(droppedData), summary.missing)
+			}
+			if c.ratio > 0 && (rebuilt == 0 || parity == 0 || summary.parity == 0 || summary.copies >= len(droppedData)) {
+				t.Fatalf("parity rebuilt %d and %d original data drops needed copies, of %d dropped data", summary.parity, summary.copies, len(droppedData))
+			}
+			if c.ratio == 0 && (rebuilt != 0 || resent == 0 || summary.parity != 0 || summary.copies != len(droppedData)) {
+				t.Fatalf("without parity: %d rebuilt, %d bytes resent, %+v", rebuilt, resent, summary)
 			}
 		})
+	}
+}
+
+type udpDropAccounting struct {
+	parity  int
+	copies  int
+	missing int
+}
+
+func (a udpDropAccounting) total() int { return a.parity + a.copies + a.missing }
+
+// accountUDPDroppedData partitions relay-confirmed original data losses by their terminal block state. A requested
+// shard rebuilt by parity stays in parity; NACK, WANT and tail-probe copies all stay in copies. No request set is added.
+func accountUDPDroppedData(dropped map[udpShardIdentity]bool, outcomes map[udpShardIdentity]udpShardOutcome) udpDropAccounting {
+	var out udpDropAccounting
+	for id := range dropped {
+		outcome, ok := outcomes[id]
+		switch {
+		case !ok:
+			out.missing++
+		case outcome.parity:
+			out.parity++
+		default:
+			out.copies++
+		}
+	}
+	return out
+}
+
+// udpNACKHistoryBounded keeps raw retries bounded without confusing them with drops: n requests need more than n-1
+// strict retry intervals before their block completes, and the requested shard must have a terminal outcome.
+func udpNACKHistoryBounded(stat udpNACKStat, outcome udpShardOutcome) bool {
+	if stat.count <= 0 || stat.firstNACKAt.IsZero() || outcome.completedAt.IsZero() {
+		return false
+	}
+	elapsed := outcome.completedAt.Sub(stat.firstNACKAt)
+	return elapsed >= 0 && (stat.count == 1 || elapsed > time.Duration(stat.count-1)*udpPhoneRetryAfter)
+}
+
+// The two recorded false failures become deterministic counterexamples here: non-dropped in-flight requests inflate
+// distinct NACKs in the first, and legitimate retries inflate raw NACKs in the second. Terminal outcomes fix both.
+func TestRecoveryAccountingCounterexamples(t *testing.T) {
+	base := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name                     string
+		dropped, parity          int
+		requested, extraRequests int
+		extraRaw                 int
+	}{
+		{"71 distinct requests over 60 drops", 60, 43, 45, 26, 0},
+		{"91 raw NACKs over 60 drops", 60, 45, 45, 0, 46},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dropped := map[udpShardIdentity]bool{}
+			outcomes := map[udpShardIdentity]udpShardOutcome{}
+			stats := map[udpShardIdentity]udpNACKStat{}
+			for i := 0; i < tc.dropped+tc.extraRequests; i++ {
+				id := udpShardIdentity{offset: uint64(i)}
+				if i < tc.dropped {
+					dropped[id] = true
+				}
+				outcomes[id] = udpShardOutcome{parity: i < tc.parity, completedAt: base.Add(2 * time.Second)}
+				if i < tc.requested || i >= tc.dropped {
+					stat := udpNACKStat{count: 1, firstNACKAt: base}
+					if i == 0 {
+						stat.count += tc.extraRaw
+					}
+					stats[id] = stat
+				}
+			}
+			raw, distinct := 0, 0
+			for id, stat := range stats {
+				raw += stat.count
+				distinct++
+				if !udpNACKHistoryBounded(stat, outcomes[id]) {
+					t.Fatalf("valid recovery history exceeded the raw bound: %+v", stat)
+				}
+			}
+			if distinct != tc.requested+tc.extraRequests || raw != distinct+tc.extraRaw {
+				t.Fatalf("bad counterexample fixture: distinct %d, raw %d", distinct, raw)
+			}
+			if distinct < tc.dropped && raw < tc.dropped {
+				t.Fatal("counterexample would also pass the old comparison")
+			}
+			got := accountUDPDroppedData(dropped, outcomes)
+			if got.parity != tc.parity || got.copies != tc.dropped-tc.parity || got.missing != 0 || got.total() != tc.dropped {
+				t.Fatalf("wrong terminal accounting: %+v", got)
+			}
+		})
+	}
+
+	missing := udpShardIdentity{offset: 99}
+	if got := accountUDPDroppedData(map[udpShardIdentity]bool{missing: true}, nil); got.missing != 1 || got.total() != 1 {
+		t.Fatalf("missing terminal outcome was hidden: %+v", got)
+	}
+	if udpNACKHistoryBounded(udpNACKStat{count: 2, firstNACKAt: base}, udpShardOutcome{completedAt: base.Add(udpPhoneRetryAfter)}) {
+		t.Fatal("two raw NACKs fit inside one strict retry interval")
+	}
+	if udpNACKHistoryBounded(udpNACKStat{count: 1, firstNACKAt: base}, udpShardOutcome{}) {
+		t.Fatal("a requested shard without a terminal outcome passed the raw bound")
 	}
 }
 
