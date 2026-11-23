@@ -191,6 +191,7 @@ var claudeLiveTexts = map[string]string{
 	proto.ReadOnlyClaudeInbox:               "read_only_claude_inbox",
 	proto.AttentionClaudeComputer:           "attention_claude_computer",
 	proto.AttentionClaudeComputerBefore5965: "attention_claude_computer",
+	proto.AttentionClaudeDesktopComputer:    "attention_claude_desktop_computer",
 	proto.AttentionClaudeAnswer:             "attention_claude_answer",
 }
 

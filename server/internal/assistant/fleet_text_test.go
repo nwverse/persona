@@ -213,3 +213,31 @@ func TestClaudeComputerAttentionSuggestsTmuxOrPersona(t *testing.T) {
 		}
 	}
 }
+
+// A Claude Desktop session with Persona's permission plugin waiting on a computer-only safety check (e.g. Auto mode
+// personOnly review that bypassed hooks) gets accurate Desktop guidance and never tells the user to start in tmux.
+func TestClaudeDesktopComputerAttentionDoesNotSuggestTmux(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		lang i18n.Lang
+		want []string
+	}{
+		{"en", i18n.En, []string{"claude desktop", "computer"}},
+		{"zh-Hans", i18n.ZhHans, []string{"claude 桌面端", "电脑"}},
+		{"ja", i18n.Ja, []string{"claude デスクトップ", "コンピューター"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := proto.Session{AttentionReason: proto.AttentionClaudeDesktopComputer}
+			localizeSession(c.lang, &s)
+			got := strings.ToLower(s.AttentionReason)
+			if strings.Contains(got, "tmux") {
+				t.Errorf("desktop attention reason %q must not suggest tmux", s.AttentionReason)
+			}
+			for _, want := range c.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("desktop attention reason %q does not mention %q", s.AttentionReason, want)
+				}
+			}
+		})
+	}
+}

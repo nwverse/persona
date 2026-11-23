@@ -34,7 +34,9 @@ func (n *Node) outsideAskCards() []proto.Interaction {
 	seen := map[string]bool{}
 	for _, c := range n.liveClaudes() {
 		// The status file first: every other check reads a file or the process, and almost no claude is waiting.
-		if c.Status != "waiting" || seen[c.SessionID] || n.outsideSource(c) == "" || outsidePane(c) != "" {
+		// A session with a permissions-capable Persona plugin receives AskUserQuestion cards through the plugin directly.
+		if c.Status != "waiting" || seen[c.SessionID] || n.outsideSource(c) == "" || outsidePane(c) != "" ||
+			n.ccPlugins.permissionsCapable(c.SessionID, c.pid) {
 			continue
 		}
 		if p, has := peerOf(c); !has || !peerReachable(p) {

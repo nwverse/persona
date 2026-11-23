@@ -2,31 +2,63 @@ import type { EngineInterface, Register } from 'claude-code'
 import {
   BASE,
   CAPABILITIES,
+  PERMISSION_BODY_MOST,
+  PERMISSION_GRACE_MS,
+  PERMISSION_MAX_ERRORS,
+  PERMISSION_MAX_WAIT_MS,
+  PERMISSION_RETRY_MS,
+  PERMISSION_WAIT_MS,
   POLL_WAIT_MS,
   SUBMIT_QUEUE_SETTLE_MS,
   applyStepOverride,
+  buildPermissionPayload,
+  createPreToolCache,
+  hasPermissionDecision,
   homeDir,
+  isToolCompleted,
+  markToolCompleted,
   mergeOverride,
   nextBackoff,
+  readPermissionAnswer,
   readPoll,
+  recordPreTool,
   socketPath,
+  takePreTool,
+  toolCallKey,
   verdict,
   type ActiveTurn,
   type InterruptRequest,
   type Message,
+  type PermissionAnswer,
   type PollAnswer,
+  type PreToolCache,
   type SessionOverride,
   type SettingsUpdate,
 } from './bridge'
 
-// Persona's plugin (README.md): while this session lives it asks the local Persona node for the owner's own messages
-// and owner turn interrupts plus session-scoped model / effort picks from the Persona apps. Messages go in as the
-// person's words (`asUser`, immediately when idle or queued natively while a turn runs), interrupts cancel the active
-// main-loop turn (`$.turn.abort`), and model / effort overrides apply to main-loop `turn.step` requests without touching
-// global settings files. The plugin runs no command, reads no file but its own manifest, and keeps quiet (the debug log
-// only) when no node answers.
+// Persona's plugin (README.md): while this session lives it asks the local Persona node for the owner's own messages,
+// owner turn interrupts, session-scoped model / effort picks, and interactive permission / plan / question approvals
+// from the Persona apps. Messages go in as the person's words (`asUser`, immediately when idle or queued natively
+// while a turn runs), interrupts cancel the active main-loop turn (`$.turn.abort`), model / effort overrides apply to
+// main-loop `turn.step` requests without touching global settings files, and permission requests bridge over the local
+// node socket only when explicitly authorized on `/poll`. The plugin runs no command, reads no file but its own
+// manifest, and keeps quiet (the debug log only) when no node answers.
 
 type Engine = EngineInterface
+
+type PermissionAuth = { sock: string; session: string }
+
+type ActivePerm = {
+  reqId: string
+  sessionId: string
+  toolUseId: string
+  toolName: string
+  toolKey: string
+  agentId: string
+  cancelled: boolean
+  cancelPromise: Promise<'cancelled'>
+  cancel: () => void
+}
 
 export const register: Register = on => {
   // One poll loop per load: a reload runs session.start again in a fresh environment, and the old loop goes with
@@ -34,6 +66,10 @@ export const register: Register = on => {
   let loop = 0
   let activeTurn: ActiveTurn | undefined
   let override: SessionOverride | undefined
+  let permissionAuth: PermissionAuth | undefined
+  const preToolCache = createPreToolCache()
+  const activePerms = new Map<string, ActivePerm>()
+  let permSeq = 0
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
@@ -43,9 +79,14 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('turn.complete', (_$, e, next) => {
+  on('turn.complete', ($, e, next) => {
     if (e.agentId === undefined && activeTurn?.turnId === e.turnId) {
       activeTurn = undefined
+    }
+    try {
+      handleTurnDone($, activePerms, permissionAuth, e.turnId, e.agentId ?? '')
+    } catch {
+      // Turn cleanup never blocks turn completion.
     }
     return next(e)
   })
@@ -63,6 +104,194 @@ export const register: Register = on => {
     return yield* next(applied.step)
   })
 
+  on('classic.PreToolUse', (_$, e, next) => {
+    try {
+      recordPreTool(preToolCache, e)
+      return next(e)
+    } catch {
+      return next(e)
+    }
+  }).catch((_$, e, next) => next(e))
+
+  on('classic.PostToolUse', ($, e, next) => {
+    try {
+      handleToolDone($, preToolCache, activePerms, permissionAuth, e, 'post_tool_use')
+      return next(e)
+    } catch {
+      return next(e)
+    }
+  }).catch((_$, e, next) => next(e))
+
+  on('classic.PermissionDenied', ($, e, next) => {
+    try {
+      handleToolDone($, preToolCache, activePerms, permissionAuth, e, 'permission_denied')
+      return next(e)
+    } catch {
+      return next(e)
+    }
+  }).catch((_$, e, next) => next(e))
+
+  on('classic.PermissionRequest', async ($, e, next) => {
+    type CoreResult = Awaited<ReturnType<typeof next>>
+    try {
+      const rec = asRecord(e)
+      const sessionId = typeof rec?.session_id === 'string' ? rec.session_id : ''
+      const auth = permissionAuth
+      if (auth === undefined || sessionId === '' || auth.session !== sessionId) {
+        return next(e)
+      }
+      const toolName = typeof rec?.tool_name === 'string' ? rec.tool_name : ''
+      if (toolName === '') return next(e)
+      const explicitToolUseId = typeof rec?.tool_use_id === 'string' ? rec.tool_use_id : ''
+      const toolUseId = explicitToolUseId !== '' ? explicitToolUseId : takePreTool(preToolCache, toolName, rec?.tool_input)
+      if (isToolCompleted(preToolCache, toolUseId)) {
+        return next(e)
+      }
+      const agentId = typeof rec?.agent_id === 'string' ? rec.agent_id : ''
+      const now = await $.clock.now().catch(() => 0)
+      const reqId = `p_${now}_${++permSeq}`
+      let resolveCancel!: () => void
+      const cancelPromise = new Promise<'cancelled'>(resolve => {
+        resolveCancel = () => resolve('cancelled')
+      })
+      const entry: ActivePerm = {
+        reqId,
+        sessionId,
+        toolUseId,
+        toolName,
+        toolKey: toolCallKey(toolName, rec?.tool_input, toolName === 'AskUserQuestion'),
+        agentId,
+        cancelled: false,
+        cancelPromise,
+        cancel() {
+          if (!entry.cancelled) {
+            entry.cancelled = true
+            resolveCancel()
+          }
+        },
+      }
+      activePerms.set(reqId, entry)
+
+      // Start core (local command hooks) immediately and give fast local allow/deny hooks a brief grace window.
+      let coreDone = false
+      let coreResult: CoreResult = {}
+      let coreHasDecision = false
+      let resolveCoreDecision!: () => void
+      const coreDecisionPromise = new Promise<'core'>(resolve => {
+        resolveCoreDecision = () => resolve('core')
+      })
+      const coreP: Promise<CoreResult> = Promise.resolve().then(() => next(e))
+      const coreSettled = coreP.then(
+        val => {
+          coreDone = true
+          coreResult = val
+          coreHasDecision = hasPermissionDecision(val)
+          if (coreHasDecision) resolveCoreDecision()
+          return 'core_settled' as const
+        },
+        () => {
+          coreDone = true
+          coreResult = {}
+          coreHasDecision = false
+          return 'core_settled' as const
+        },
+      )
+
+      const passthrough = (): CoreResult | Promise<CoreResult> => (coreDone ? coreResult : coreP)
+
+      try {
+        // If core settles quickly with a decision (e.g. a local allow hook), return it with zero HTTP round trips.
+        // If core settles quickly without a decision (the common case with no local hooks), open the card right away.
+        await Promise.race([coreSettled, sleep($, PERMISSION_GRACE_MS), cancelPromise])
+        if (entry.cancelled || isToolCompleted(preToolCache, toolUseId)) {
+          return passthrough()
+        }
+        if (coreDone && coreHasDecision) {
+          return coreResult
+        }
+
+        const payload = buildPermissionPayload(sessionId, reqId, toolUseId, rec ?? {}, PERMISSION_WAIT_MS)
+        const body = JSON.stringify(payload)
+        if (body.length > PERMISSION_BODY_MOST) {
+          return passthrough()
+        }
+
+        const startedAt = await $.clock.now().catch(() => now)
+        let errors = 0
+        while (!entry.cancelled) {
+          const currentNow = await $.clock.now().catch(() => startedAt)
+          if (currentNow - startedAt >= PERMISSION_MAX_WAIT_MS) {
+            void notifyPermissionDone($, auth.sock, {
+              session_id: sessionId,
+              req_id: reqId,
+              ...(toolUseId !== '' ? { tool_use_id: toolUseId } : {}),
+              reason: 'timeout',
+            })
+            return passthrough()
+          }
+          const fetchP = fetchPermission($, auth.sock, body).then(answer => ({ kind: 'http' as const, answer }))
+          const winner = await Promise.race([fetchP, coreDecisionPromise, cancelPromise])
+          if (winner === 'core') {
+            void notifyPermissionDone($, auth.sock, {
+              session_id: sessionId,
+              req_id: reqId,
+              ...(toolUseId !== '' ? { tool_use_id: toolUseId } : {}),
+              reason: 'local_hook',
+            })
+            return coreResult
+          }
+          if (winner === 'cancelled' || entry.cancelled) {
+            return passthrough()
+          }
+          const ans = winner.answer
+          if (ans.action === 'decide') {
+            return { decision: ans.decision } as unknown as CoreResult
+          }
+          if (ans.action === 'passthrough') {
+            return passthrough()
+          }
+          if (ans.action === 'refused') {
+            if (permissionAuth?.session === sessionId) permissionAuth = undefined
+            return passthrough()
+          }
+          if (ans.action === 'renew') {
+            errors = 0
+            continue
+          }
+          // Transient error (e.g. node restarting): retry briefly, otherwise hand back safely.
+          errors++
+          if (errors >= PERMISSION_MAX_ERRORS) {
+            return passthrough()
+          }
+          const retryWinner = await Promise.race([
+            sleep($, PERMISSION_RETRY_MS).then(() => 'retry' as const),
+            coreDecisionPromise,
+            cancelPromise,
+          ])
+          if (retryWinner === 'core') {
+            void notifyPermissionDone($, auth.sock, {
+              session_id: sessionId,
+              req_id: reqId,
+              ...(toolUseId !== '' ? { tool_use_id: toolUseId } : {}),
+              reason: 'local_hook',
+            })
+            return coreResult
+          }
+          if (retryWinner === 'cancelled' || entry.cancelled) {
+            return passthrough()
+          }
+        }
+        return passthrough()
+      } catch {
+        return passthrough()
+      } finally {
+        activePerms.delete(reqId)
+      }
+    } catch {
+      return next(e)
+    }
+  }).catch((_$, e, next) => next(e))
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     const mine = ++loop
@@ -77,9 +306,93 @@ export const register: Register = on => {
         const sessionModel = update.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
         override = mergeOverride(override, session, update, sessionModel)
       },
+      auth => {
+        permissionAuth = auth
+      },
     )
     return started
   })
+}
+
+function handleToolDone(
+  $: Engine,
+  preToolCache: PreToolCache,
+  activePerms: Map<string, ActivePerm>,
+  auth: PermissionAuth | undefined,
+  raw: unknown,
+  reason: 'post_tool_use' | 'permission_denied',
+): void {
+  const rec = asRecord(raw)
+  const toolUseId = typeof rec?.tool_use_id === 'string' ? rec.tool_use_id : ''
+  const toolName = typeof rec?.tool_name === 'string' ? rec.tool_name : ''
+  if (toolUseId !== '') markToolCompleted(preToolCache, toolUseId)
+  if (activePerms.size === 0) return
+
+  const sessionId = typeof rec?.session_id === 'string' && rec.session_id !== '' ? rec.session_id : auth?.session ?? ''
+  const matched: ActivePerm[] = []
+  if (toolUseId !== '') {
+    for (const entry of activePerms.values()) {
+      if (entry.toolUseId === toolUseId && (sessionId === '' || entry.sessionId === sessionId)) {
+        matched.push(entry)
+      }
+    }
+  }
+  if (matched.length === 0 && toolName !== '') {
+    const key = toolCallKey(toolName, rec?.tool_input, toolName === 'AskUserQuestion')
+    for (const entry of activePerms.values()) {
+      if (
+        entry.toolUseId === '' &&
+        entry.toolKey === key &&
+        (sessionId === '' || entry.sessionId === sessionId)
+      ) {
+        matched.push(entry)
+        break
+      }
+    }
+  }
+  for (const entry of matched) {
+    entry.cancel()
+    activePerms.delete(entry.reqId)
+    if (auth !== undefined && entry.sessionId !== '') {
+      void notifyPermissionDone($, auth.sock, {
+        session_id: entry.sessionId,
+        req_id: entry.reqId,
+        ...(toolUseId !== '' || entry.toolUseId !== '' ? { tool_use_id: toolUseId || entry.toolUseId } : {}),
+        ...(toolName !== '' ? { tool_name: toolName } : {}),
+        reason,
+      })
+    }
+  }
+}
+
+function handleTurnDone(
+  $: Engine,
+  activePerms: Map<string, ActivePerm>,
+  auth: PermissionAuth | undefined,
+  turnId: string,
+  agentId: string,
+): void {
+  if (activePerms.size === 0) return
+  const bySession = new Map<string, string[]>()
+  for (const entry of [...activePerms.values()]) {
+    if (entry.agentId !== agentId) continue
+    entry.cancel()
+    activePerms.delete(entry.reqId)
+    const list = bySession.get(entry.sessionId) ?? []
+    list.push(entry.reqId)
+    bySession.set(entry.sessionId, list)
+  }
+  if (auth !== undefined) {
+    for (const [sid, reqIds] of bySession) {
+      void notifyPermissionDone($, auth.sock, {
+        session_id: sid,
+        req_ids: reqIds,
+        turn_id: turnId,
+        ...(agentId !== '' ? { agent_id: agentId } : {}),
+        reason: 'turn_complete',
+      })
+    }
+  }
 }
 
 async function run(
@@ -88,6 +401,7 @@ async function run(
   getActiveTurn: () => ActiveTurn | undefined,
   clearActiveTurn: (turnId: string) => void,
   onSettings: (session: string, update: SettingsUpdate) => Promise<void>,
+  setPermissionAuth: (auth: PermissionAuth | undefined) => void,
 ): Promise<void> {
   const home = homeDir(await $.env.get('USERPROFILE'), await $.env.get('HOME'))
   const sock = socketPath(home, await $.env.get('PERSONA_HOME'))
@@ -121,17 +435,41 @@ async function run(
       $.ui.log(now ? 'Persona node reached' : `Persona node not reachable (${answer.kind})`, { to: 'debug' })
     }
     if (answer.kind !== 'messages') {
+      setPermissionAuth(undefined)
       backoff = answer.kind === 'refused' ? answer.retryMs : nextBackoff(backoff)
       await sleep($, backoff)
       continue
     }
     backoff = 0
+    setPermissionAuth(answer.permissions ? { sock, session } : undefined)
     if (answer.interrupt !== undefined) {
       await applyInterrupt($, sock, session, answer.interrupt, getActiveTurn, clearActiveTurn)
     }
     if (answer.settings !== undefined) await applySettings($, sock, session, answer.settings, onSettings)
     for (const m of answer.messages) await deliver($, sock, session, m)
     if (answer.retryMs > 0) await sleep($, answer.retryMs)
+  }
+}
+
+async function fetchPermission($: Engine, sock: string, body: string): Promise<PermissionAnswer> {
+  try {
+    const res = await $.http.fetch(`${BASE}/permission`, {
+      method: 'POST',
+      socketPath: sock,
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+    return readPermissionAnswer(res.status, res.text)
+  } catch {
+    return { action: 'unavailable' }
+  }
+}
+
+async function notifyPermissionDone($: Engine, sock: string, body: Record<string, unknown>): Promise<void> {
+  try {
+    await $.http.fetch(`${BASE}/permission-done`, post(sock, body))
+  } catch {
+    // The node went away; its own watcher withdraws the card.
   }
 }
 
@@ -241,6 +579,10 @@ async function manifestVersion($: Engine): Promise<string> {
   } catch {
     return ''
   }
+}
+
+function asRecord(v: unknown): Record<string, unknown> | undefined {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined
 }
 
 function post(socket: string, body: Record<string, unknown>) {
