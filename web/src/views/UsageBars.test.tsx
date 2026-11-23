@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { initI18n } from "../i18n";
 import { onDraftEvent, type DraftEvent } from "../lib/drafts";
-import { PINNED_USAGE_ACCOUNTS_KEY, resetPinnedUsageAccounts, type UsageAccount } from "../lib/usage-windows";
+import { PINNED_USAGE_ACCOUNTS_KEY, resetPinnedUsageAccounts, timelinePosition, type UsageAccount } from "../lib/usage-windows";
 import { UsageBars } from "./UsageBars";
 import { UsagePopover } from "./UsagePopover";
 import { unconnectedUsageProviders } from "./UsageUnconnected";
@@ -469,6 +469,42 @@ describe("provider cards with a reset timeline (#13173)", () => {
     const chart = html.slice(html.indexOf('data-timeline-row="2"'));
     expect(chart.indexOf('data-timeline-row="2"')).toBeLessThan(chart.indexOf('data-timeline-row="1"'));
   });
+
+  it.each([
+    ["zh-Hans", ["现在", "1 天", "7 天"], ["4.4 小时", "4 天 16 小时", "6 天 24 小时"]],
+    ["en", ["Now", "1d", "7d"], ["4.4h", "4d 16h", "6d 24h"]],
+    ["ja", ["今", "1日", "7日"], ["4.4時間", "4日16時間", "6日24時間"]],
+  ])("lays out sparse ticks and separate countdowns in %s", async (lang, ticks, countdowns) => {
+    await initI18n(lang);
+    try {
+      const a = account("a", 10, 20, { name: "Codex Pro team account", plan: "Team" });
+      a.windows[0].resets_at = iso(4.4 * H);
+      a.windows[1].resets_at = iso(112 * H);
+      a.windows.push({ label: "30d", window_minutes: 43200, used_percent: 10, resets_at: iso(167.75 * H) });
+      const host = document.createElement("div");
+      host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
+      const axis = host.querySelector("[data-usage-timeline]")!.firstElementChild!;
+      expect([...axis.children].map((tick) => tick.textContent)).toEqual(ticks);
+      expect(axis.classList.contains("whitespace-nowrap")).toBe(true);
+
+      const row = host.querySelector("[data-timeline-row]")!;
+      const name = row.querySelector("[title='Codex Pro team account']")!;
+      expect(name.textContent).toBe(a.name);
+      expect(name.classList.contains("truncate")).toBe(true);
+      expect(name.parentElement!.classList.contains("pr-2")).toBe(true);
+      expect(row.getAttribute("aria-label")).toContain(a.name);
+
+      const lanes = [...row.querySelectorAll("[data-timeline-lane]")];
+      expect(lanes.map((lane) => lane.getAttribute("data-timeline-lane"))).toEqual(["5h", "7d", "30d"]);
+      const labels = lanes.map((lane) => lane.querySelector<HTMLElement>("[data-timeline-remaining]")!);
+      expect(labels.map((label) => label.textContent)).toEqual(countdowns);
+      const positions = labels.map((label) => parseFloat(label.parentElement!.style.gridTemplateColumns));
+      expect(positions).toEqual([4.4, 112, 167.75].map((hours) => timelinePosition(hours * H)));
+    } finally {
+      await initI18n("zh-Hans");
+    }
+  });
+
   it("draws no timeline for a card whose accounts have no reset time", () => {
     const a = account("a", 1, 1);
     a.windows.forEach((w) => delete w.resets_at);

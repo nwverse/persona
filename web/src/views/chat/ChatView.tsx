@@ -63,7 +63,7 @@ import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands, openPickerCommand } from "../../lib/composer-commands";
 import { IMAGE_LIMIT_CODE } from "../../lib/api-errors";
 import { COMPACT_FEATURE, compactBody, compactPath } from "../../lib/compaction";
-import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, snapshotTerminalCompaction, waitForAssistantCompaction, watchTerminalCompaction, type OutgoingPayload } from "../../lib/compact-resend";
+import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, type OutgoingPayload } from "../../lib/compact-resend";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
 import { PendingCards, TurnCards } from "./Interactions";
 import { splitTurnAsks } from "../../lib/turn-asks";
@@ -138,6 +138,8 @@ import { usePersona } from "../assistant/Persona";
 import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
 import { agentLabel } from "../../lib/mentions";
 import { useVoiceEntry, VoiceBar, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
+import { ChatTail, useChatBar, useComposerAction } from "../../core/ChatSlots";
+import type { ChatPageProps, ComposerAction } from "../../core/module-host";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, knownAction, refreshReadiness, type CodedFailure } from "../../lib/readiness";
 import { FALLBACK_UNAVAILABLE, recoveryExhausted } from "../../lib/model-fallback";
@@ -505,6 +507,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   itemsNow.current = tr.items;
   const readItems = useCallback(() => itemsNow.current, []);
   const voiceEntry = useVoiceEntry({ ...voiceOwner, session, items: readItems, label: voiceLabel, off: Boolean(offlineLine) || !sessionCan(session, "send") });
+  const voiceOffer = voiceEntry.offer;
+  const voiceAction = useMemo<ComposerAction | undefined>(
+    () => voiceOffer && { icon: "voice", name: t("voice.voice_chat"), label: voiceOffer.label, primary: voiceOffer.mode === "start", onClick: voiceOffer.onClick, attributes: { "data-testid": "composer-voice", "data-voice-mode": voiceOffer.mode } },
+    [voiceOffer],
+  );
   // the message is in, the hub has not said working yet (#3654): the live row covers that wait too
   const segs = useMemo(() => segments(tr.items), [tr.items]);
   const lastSeg = segs[segs.length - 1];
@@ -1514,6 +1521,16 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       stopDone();
     }
   }, [mid, sid, stopDone]);
+  // The chat slots modules fill (core/ChatSlots.tsx, core/module-host.ts ChatSlotComponents): what the page hands them.
+  const canSendHere = !offlineLine && sessionCan(session, "send");
+  const slotPage = useMemo<ChatPageProps>(
+    () => ({ mid, sid, owner: voiceId, session, assistant: Boolean(assistant), label: voiceLabel, persona: persona.name, canSend: canSendHere, items: readItems, cards: interactions, onStopAgent: sessionCan(session, "interrupt") ? interrupt : undefined }),
+    [mid, sid, voiceId, session, assistant, voiceLabel, persona.name, canSendHere, readItems, interactions, interrupt],
+  );
+  const composerAction = useComposerAction(slotPage);
+  const chatBar = useChatBar(slotPage);
+  // a call (or a module's bar) in the composer's place: the composer and the Assistant's action rows give it their place
+  const takeover = voiceState === "live" || chatBar.taken;
   // Ctrl/⌘+Enter in the box: the queue panel's Send now (QueuePanel.tsx), after the message is queued
   const sendQueueNow = useCallback(async () => {
     try {
@@ -1996,6 +2013,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box. Whether it went:
   // deliver can refuse without leaving a bubble (the setup gate, a row that cannot send, a refused launcher switch)
   const retry = useCallback(() => deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
+  const retryEmpty = useCallback(async (user: UserMessage, signal: AbortSignal) => {
+    const captured = user.client_msg_id ? deliveredPayloads.current.get(user.client_msg_id) : undefined;
+    const resolved = await resolveFailedTurnPayload({ user, captured }, mid, sid, undefined, signal);
+    if (signal.aborted || chatNow.current !== `${mid}/${sid}`) return true;
+    if (!resolved.ok) return false;
+    await deliver(resolved.payload, uuid());
+    return true;
+  }, [deliver, mid, sid]);
+  const emptyAction = canCompose && !working && !gate.blocked && !stoppedLine ? retryEmpty : undefined;
   // the failure notice "Retry" was pressed on: kept here, not in the note, so it stays gone while the session goes through
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
@@ -2297,15 +2323,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         toast(t("chat-lines.compact_resend_unrecoverable"), "error");
         return;
       }
+      const { waitForAssistantCompaction, snapshotTerminalCompaction, watchTerminalCompaction } = await import("../../lib/wait-for-compaction");
+      if (ctl.signal.aborted) return;
       if (compactResend.mode === "assistant") {
         const before = getSession(mid, sid)?.compaction;
-        try {
-          await api(compactPath(sid), { method: "POST", json: compactBody(mid) });
-          window.dispatchEvent(new CustomEvent("persona:compact-requested", { detail: { mid, sid } }));
-        } catch (e) {
-          toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(e) }), "error");
-          return;
-        }
+        await api(compactPath(sid), { method: "POST", json: compactBody(mid) });
+        window.dispatchEvent(new CustomEvent("persona:compact-requested", { detail: { mid, sid } }));
         const outcome = await waitForAssistantCompaction(mid, sid, before, ctl.signal);
         if (ctl.signal.aborted || outcome !== "done") return;
       } else {
@@ -2341,6 +2364,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       backToComposer();
       const went = await sendMessageNow.current(resolved.payload);
       if (!went && key) setErrorRetried((k) => (k === key ? undefined : k));
+    } catch (error) {
+      if (!ctl.signal.aborted) toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(error) }), "error");
     } finally {
       if (compactResendCtl.current === ctl) {
         compactResendCtl.current = null;
@@ -2469,6 +2494,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
                         busy={d.line.id === busySegment || undefined}
+                        retryEmpty={d.line.kind === "segment" && d.line.seg.emptyResponse ? emptyAction : undefined}
                         dockTurnClock={("live" in d.line && d.line.live && dockTurnClock) || undefined}
                       />
                     ),
@@ -2494,6 +2520,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   assistant={assistant}
                   offscreen={offscreen(row.line)}
                   busy={row.line.id === busySegment || undefined}
+                  retryEmpty={row.line.kind === "segment" && row.line.seg.emptyResponse ? emptyAction : undefined}
                   dockTurnClock={("live" in row.line && row.line.live && dockTurnClock) || undefined}
                 />
               )])}
@@ -2522,6 +2549,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               </div>
             )}
             {voiceState && <VoiceTail owner={voiceOwner} persona={persona.name} />}
+            <ChatTail {...slotPage} />
           </div>
           <CommentMarks scroller={scroller} jump={landRow} />
           </ChatActionsContext.Provider>
@@ -2562,15 +2590,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         )}
         {assistant && (
           <>
-            {voiceState === "live" && <TaskQuestions conversation={sid} />}
+            {takeover && <TaskQuestions conversation={sid} />}
             {/* the cards this chat's own turn waits on, open above the capsules (also while a voice call is live); the cards
                 of the sessions folded under it are in the chat under the bar (#4883, as iOS): Needs you counts them and
                 lists a row for each that closes the tray onto its card. */}
             <TurnCards asks={turnSplit.turn} />
-            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownAsks={isMain ? docked : trayAsks} />}
-            {voiceState !== "live" && <RouteChip conversation={sid} />}
+            {!takeover && <AssistantActionBar key={sid} conversation={sid} ownAsks={isMain ? docked : trayAsks} />}
+            {!takeover && <RouteChip conversation={sid} />}
             {/* items handed to this conversation that are still open: "Wrap up" asks it for the final write-back (#5932) */}
-            {voiceState !== "live" && isMain && <Suspense fallback={null}><LazyWrapUpChips conversation={sid} /></Suspense>}
+            {!takeover && isMain && <Suspense fallback={null}><LazyWrapUpChips conversation={sid} /></Suspense>}
           </>
         )}
         {pendingCards}
@@ -2604,6 +2632,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           />
         )}
         {voiceState === "ended" && <VoiceEnded owner={voiceOwner} />}
+        {chatBar.bar("dock")}
         {/* the error the chat stopped on, right over the composer as cindy places it (#5313); keyed by the error, so a new
             one opens with its details folded */}
         {bannerError && (
@@ -2627,15 +2656,17 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {session?.goal && !assistant && <Suspense fallback={null}><GoalBar goal={session.goal} /></Suspense>}
         </div>
         {voiceEntry.dialog}
+        {composerAction.slot}
         {voiceState === "live" && voiceCall && (
           <div className="shrink-0">
             <VoiceBar call={voiceCall} session={session} cards={interactions} label={voiceLabel} persona={persona.name} onStopAgent={interrupt} />
           </div>
         )}
+        {chatBar.bar("composer")}
         {/* picking messages to forward (#3838): the bar in the composer's place, which stays with its draft */}
         {picker && pickParts.Bar && <pickParts.Bar pick={picker} chat={forwardFrom} onEnd={endPick} />}
         {/* kept while a call is on (its draft, attachments and quotes stay), the bar in its place */}
-        <div ref={composerBox} className="shrink-0" hidden={voiceState === "live" || Boolean(picker)}>
+        <div ref={composerBox} className="shrink-0" hidden={takeover || Boolean(picker)}>
         {stoppedLine ? (
           <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} />
         ) : (
@@ -2667,7 +2698,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           leading={leading}
           trailing={trailing}
           planMode={planMode}
-          voice={voiceEntry.offer}
+          action={composerAction.action ?? voiceAction}
           top={short ? undefined : queue}
         />
         )}
