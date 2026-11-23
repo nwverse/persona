@@ -99,14 +99,11 @@ public struct ModuleRegistry<Host: ModuleHost> {
     public let problems: [String]
     /// Every settings entry of the active modules, in list order, then registration order.
     public let settingsEntries: [ModuleSettingsEntry<Host>]
-||||||| 28474cb3d7
-    private let launchHooks: [() -> Void]
     private let launchHooks: [(ModuleID, () -> Void)]
     private let urlHandlers: [(URL) -> Bool]
     private let placeViews: [Host.Place: [ModuleView<Host>]]
     private let signOutHooks: [() -> Void]
     private let capabilities: [ObjectIdentifier: Any]
-||||||| 28474cb3d7
     private let modules: [any PersonaModule<Host>]
     private let isEnabled: @MainActor (any PersonaModule<Host>) -> Bool
 
@@ -189,7 +186,6 @@ public struct ModuleRegistry<Host: ModuleHost> {
         self.settingsEntries = settings
         self.signOutHooks = signOut
         self.capabilities = capabilities
-||||||| 28474cb3d7
         self.modules = modules
         self.isEnabled = isEnabled
     }
