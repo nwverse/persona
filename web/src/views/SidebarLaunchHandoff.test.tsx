@@ -4,7 +4,7 @@
 // in the "Not on a to-do" group.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -28,7 +28,7 @@ vi.hoisted(() => {
   g.WebSocket = MockWS as unknown as typeof WebSocket;
 });
 
-import { deliverLaunch, launchAgent, loadDelivery } from "../lib/new-agent";
+import { deliverLaunch, launchAgent } from "../lib/new-agent";
 import { connect, flushPushes, getState, reset } from "../lib/store";
 import type { Machine, Session } from "../lib/types";
 import { Sidebar } from "./Sidebar";
@@ -61,9 +61,6 @@ const flush = async () => {
 };
 const todoNoneRow = () => host.querySelector('[data-tree-branch="todo:none"] [data-tree-branch-row]')?.textContent ?? "";
 const startingSection = () => [...host.querySelectorAll("[data-sidebar-group-heading]")].find((el) => el.textContent?.includes("正在启动"));
-
-// Launch delivery loads on first use (lib/new-agent.ts); loaded once here, as after the first start in the app.
-beforeAll(async () => { await loadDelivery(); });
 
 beforeEach(() => {
   (globalThis as unknown as { __socks: Sock[] }).__socks.length = 0;

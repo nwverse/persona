@@ -128,12 +128,6 @@ export function acknowledgeLaunch(mid: string, sid: string, user: Seen) {
 }
 
 const delivering = new Set<string>();
-let delivery: typeof import("./new-agent-delivery") | undefined;
-
-/** The delivery code, loaded once; after that a start goes out in the same turn, without waiting on the import again. */
-export async function loadDelivery() {
-  return (delivery ??= await import("./new-agent-delivery"));
-}
 
 /** Load transport work on intent; repeated clicks during loading or delivery share the same launch. */
 export async function deliverLaunch(id: string, clearDraft?: string) {
@@ -141,7 +135,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
   if (!launch || delivering.has(id) || (launch.phase !== "failed" && launch.phase !== "creating")) return;
   delivering.add(id);
   try {
-    await (delivery ?? (await loadDelivery())).deliverLaunch(id, clearDraft);
+    const delivery = await import("./new-agent-delivery");
+    await delivery.deliverLaunch(id, clearDraft);
   } catch (e) {
     // A missing chunk has made no request. Keep the draft and operation IDs so Retry remains safe.
     const current = getState().launches[id];
