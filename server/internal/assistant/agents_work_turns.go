@@ -485,7 +485,11 @@ func triageRules(c proto.Session, loc *time.Location, l i18n.Lang) (w *proto.Wor
 			return limitWork(c, time.Now(), loc, l), "rule", false
 		}
 		if turnErrorTransient(c) {
-			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, Line: workT(l, "transient_retrying"),
+			line := workT(l, "transient_retrying")
+			if c.TurnErrorCode == proto.TurnErrorUpstreamUnavailable {
+				line = clip(oneLine(workT(l, "upstream_unavailable_retrying", i18n.Args{"error": e})), 120)
+			}
+			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, Line: line,
 				Wait: clip(oneLine(e), 200)}, "rule", false
 		}
 		return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, Line: clip(oneLine(workT(l, "model_error", i18n.Args{"error": e})), 60),
