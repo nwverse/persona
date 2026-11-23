@@ -4081,5 +4081,6 @@ Center the Persona mark and title above the primary control. A phone opens its s
 
 A chip the user may take away (a space conversation's categories on iOS) is a `Chip` with the close mark whose tap opens
 a menu with one destructive Remove, never a bare x that removes on touch: a chip is small, and a slip should cost
-nothing. A chip the user may not take away carries the lock mark and is read as set by its owner. What was removed comes
+nothing. iOS draws the close mark before the words, where every `Chip` draws its symbol (#6578; the web puts its
+button after them), and the menu's label is a finger's height (`tapTargetHeight`). A chip the user may not take away carries the lock mark and is read as set by its owner. What was removed comes
 back from a + menu at the end of the row. The change shows at once and rolls back with a toast when the hub refuses it.

@@ -960,7 +960,8 @@ struct AssistantView: View {
         failedStart.messages.last { $0.space != nil || model.assistantShows($0.manager) }
     }
 
-    /// Health's launcher pick: home's with one manager.
+    /// Health's launcher pick: home's with one manager. A space's home shares it on purpose (#13500): every space runs
+    /// on the default manager as Health does, with Health's launcher setting as the fallback, so one pick serves them.
     private var healthLauncherPick: Binding<String?> { model.managerRoster?.isMulti == true ? $healthLauncher : $starterLauncher }
     private var healthModelPick: Binding<String?> { model.managerRoster?.isMulti == true ? $healthModel : $starterModel }
 

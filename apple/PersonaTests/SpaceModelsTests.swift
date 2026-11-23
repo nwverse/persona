@@ -89,6 +89,12 @@ struct SpaceModelsTests {
         #expect(page.fetched.first?.machineID == "m" && page.fetched.first?.assistantSpace == "qa-finance")
         #expect(page.fetched.first?.isDomainSpace == true)
         #expect(page.spaceMd.value?.state == "Filed.")
+        // what the card shows is worked out with the file and the name, not on each redraw
+        #expect(page.written == "# QA Finance\n\nBudget.")
+        page.name = "QA Finance"
+        #expect(page.written == "Budget.")
+        page.saved(SpaceMd(content: "# QA Finance\n\nSavings.", digest: "d2", state: ""))
+        #expect(page.written == "Savings.")
     }
 
     @Test func aPageThatCantBeReadSaysSoPlainly() async {
@@ -216,7 +222,8 @@ struct SpaceModelsTests {
         form.title = "QA Trip"
         #expect(await form.create(taken: [])?.slug == "qa-trip-2")
         #expect(hub.sent("POST", "/api/v1/assistant/tracks").count == 2)
-        #expect(Self.body(hub.sent("POST", "/api/v1/assistant/tracks")[0])["default_categories"] == nil)
+        #expect(Self.body(hub.sent("POST", "/api/v1/assistant/tracks")[0])["default_categories"] as? [String] == [],
+                "no category chosen is sent as none, not left to the kind's own")
     }
 
     // MARK: Categories

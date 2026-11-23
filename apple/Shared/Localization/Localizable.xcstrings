@@ -385,6 +385,14 @@
         "ja": {"stringUnit": {"state": "translated", "value": "まだ何も書かれていません。"}}
       }
     },
+    "For example: who is involved, what to keep track of, how you like answers.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {"stringUnit": {"state": "translated", "value": "For example: who is involved, what to keep track of, how you like answers."}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "比如：涉及哪些人、要记着什么、你喜欢怎样的回答。"}},
+        "ja": {"stringUnit": {"state": "translated", "value": "例：関わる人、覚えておくこと、好きな答え方。"}}
+      }
+    },
     "Show less [Spaces]": {
       "extractionState": "manual",
       "localizations": {

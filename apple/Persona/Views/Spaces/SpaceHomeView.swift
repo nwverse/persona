@@ -42,6 +42,9 @@ struct SpaceHomeView: View {
     @State private var editing = false
     @State private var askArchive = false
     @State private var aboutOpen = false
+    /// The written part is taller than the folded height, so it folds and Show more appears (as the web's FoldedMarkdown).
+    @State private var aboutTall = false
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var link: LinkTarget?
     private var store: SpaceStore { SpaceStore.shared }
 
@@ -89,6 +92,7 @@ struct SpaceHomeView: View {
         } message: {
             Text("The space leaves the sidebar. Its conversations and files stay on the assistant's computer.")
         }
+        .onChange(of: track?.name ?? "", initial: true) { _, name in page.name = name }
         .task { await page.load() }
         .refreshable { await page.load() }
     }
@@ -206,15 +210,21 @@ struct SpaceHomeView: View {
         case .failed(let why):
             Text(why).font(Theme.Font.secondary).foregroundStyle(.secondary)
         case .loaded(let md):
-            let written = SpaceMarkdown.body(md.content, title: track?.name ?? "")
+            let written = page.written
+            let fold = Theme.Size.box150 * Theme.sizeScale(typeSize)
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 if written.isEmpty {
                     Text("Nothing written yet.").font(Theme.Font.secondary).foregroundStyle(.secondary)
                 } else {
                     ExtensionMarkdown(text: written, link: $link)
-                        .scaledFrame(maxHeight: aboutOpen ? nil : Theme.Size.box150, alignment: .top)
+                        .fixedSize(horizontal: false, vertical: true)
+                        // its natural height, before the fold: only something taller than the fold gets Show more
+                        .onGeometryChange(for: Bool.self) { $0.size.height > fold } action: { aboutTall = $0 }
+                        .scaledFrame(maxHeight: aboutOpen || !aboutTall ? nil : Theme.Size.box150, alignment: .top)
                         .clipped()
                         .accessibilityIdentifier("space-md")
+                }
+                if !written.isEmpty && aboutTall {
                     Button {
                         withAnimation(Theme.Motion.standard) { aboutOpen.toggle() }
                     } label: {

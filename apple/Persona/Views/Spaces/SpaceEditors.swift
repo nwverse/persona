@@ -83,6 +83,18 @@ struct SpaceMdEditorSheet: View {
                     TextEditor(text: Binding(get: { page.text(i) }, set: { page.edits[i] = $0 }))
                         .font(Theme.Font.body)
                         .scaledFrame(minHeight: shape.editable.first == i ? Theme.Size.box150 : Theme.Size.box56)
+                        .overlay(alignment: .topLeading) {
+                            // what to write, while the first part is empty (the web's placeholder)
+                            if shape.editable.first == i && page.text(i).isEmpty {
+                                Text("For example: who is involved, what to keep track of, how you like answers.")
+                                    .font(Theme.Font.body)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, Theme.Space.xs)
+                                    .padding(.top, Theme.Space.s)
+                                    .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
+                            }
+                        }
                         .accessibilityLabel(String(localized: "About this space"))
                         .accessibilityIdentifier("space-md-field")
                 }
@@ -253,7 +265,10 @@ struct SpaceConversationCategories: View {
                     Label(String(localized: "Remove \(name)"), systemImage: Theme.Icon.close)
                 }
             } label: {
+                // the mark before the words, as every Chip draws its symbol (#6578); a finger's height to press
                 Chip(text: name, symbol: Theme.Icon.close)
+                    .tapTargetHeight()
+                    .contentShape(.rect)
             }
             .disabled(page.busy != nil)
             .accessibilityLabel(name)

@@ -74,6 +74,13 @@ import Observation
     /// Why the list could not be read; shown only while there is nothing to show.
     private(set) var error: String?
     private(set) var spaceMd: Loadable<SpaceMd> = .loading
+    /// The parts of SPACE.md the user wrote (`SpaceMarkdown.body`), worked out when the file or the space's name
+    /// changes rather than on every redraw (docs/apple/performance.md P4).
+    private(set) var written = ""
+    /// The space's name as the page shows it; a leading heading that repeats it is left out of `written`.
+    var name = "" {
+        didSet { if name != oldValue { rewrite() } }
+    }
     private(set) var archiving = false
     @ObservationIgnored private let deps: AssistantDeps
 
@@ -102,6 +109,7 @@ import Observation
         guard let api = deps.api() else { return }
         do {
             spaceMd = .loaded(try await api.spaceMd(slug))
+            rewrite()
         } catch {
             // a space without one, or a computer that can't read it now: the card says so plainly
             if spaceMd.value == nil { spaceMd = .failed(SpaceMdWords.unavailable) }
@@ -109,7 +117,15 @@ import Observation
     }
 
     /// What the editor saved, shown at once.
-    func saved(_ md: SpaceMd) { spaceMd = .loaded(md) }
+    func saved(_ md: SpaceMd) {
+        spaceMd = .loaded(md)
+        rewrite()
+    }
+
+    private func rewrite() {
+        let next = spaceMd.value.map { SpaceMarkdown.body($0.content, title: name) } ?? ""
+        if next != written { written = next }
+    }
 
     /// The space's open conversations, newest first: the hub's list with what the pushes say since over it. An
     /// archived one leaves the list.
@@ -288,7 +304,7 @@ enum SpaceMdWords {
             let slug = Tracks.suggestSlug(title: name, taken: used)
             let body = TrackCreate(slug: slug, kind: kind, title: name, icon: icon,
                                    description: about.trimmingCharacters(in: .whitespacesAndNewlines),
-                                   defaultCategories: categories.isEmpty ? nil : InfoCategory.all.filter { categories.contains($0) })
+                                   defaultCategories: InfoCategory.all.filter { categories.contains($0) })
             do {
                 return try await api.createTrack(body)
             } catch let e as APIError where e.status == 409 && attempt == 0 {

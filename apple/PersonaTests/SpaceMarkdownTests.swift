@@ -82,5 +82,7 @@ struct SpaceMarkdownTests {
         #expect(SpaceMarkdown.body("# Money\n", title: "Money") == "")
         #expect(SpaceMarkdown.body("# Money ##\n\nText", title: "Money") == "Text")
         #expect(SpaceMarkdown.body("#Money\n\nText", title: "Money") == "#Money\n\nText")
+        // as the web's spaceMdBody, whose `.` stops at a carriage return: a CRLF heading line is kept
+        #expect(SpaceMarkdown.body("# Money\r\n\r\nText", title: "Money") == "# Money\r\n\r\nText")
     }
 }
