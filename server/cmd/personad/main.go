@@ -32,7 +32,6 @@ import (
 	"github.com/nwverse/persona/server/internal/shareproxy"
 	"github.com/nwverse/persona/server/internal/supervise"
 	"github.com/nwverse/persona/server/internal/update"
-	"github.com/nwverse/persona/server/internal/voice"
 )
 
 // What the build wrote in (-X): the version for people, and for updates (docs/operations/hub-update.md) the channel
@@ -78,7 +77,6 @@ const usage = `usage:
   personad supervise [--manager-only [--hub <hub address>]]
                            the hub and the built-in manager side by side in one container, each started again when it
                            stops (the hub image runs it; docs/operations/docker.md)
-  personad voice            the built-in voice extension: the hub runs it (hub.json extensions, docs/extensions/extensions.md "Built-in voice extension")
   personad extension …      extensions on the hub's machine: list, install, upgrade, rollback, enable, disable, config,
                            secret, uninstall, markets (docs/extensions/extensions.md "Command line"; personad extension for the details;
                            also personad ext …, and personad plugin … as before)
@@ -174,8 +172,6 @@ func main() {
 		if err = supervise.Run(ctx, os.Args[2:], os.Stderr); errors.Is(err, supervise.ErrStopped) {
 			os.Exit(1) // it said why in its log
 		}
-	case "voice":
-		err = voice.Run(ctx)
 	case "extension", "ext", "plugin": // plugin: its name before #1844
 		err = extmgr.ExtensionCommand(ctx, os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
 	default:

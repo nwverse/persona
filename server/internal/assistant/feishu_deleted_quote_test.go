@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
@@ -94,7 +95,7 @@ func TestFeishuReplyDeletedQuote(t *testing.T) {
 						if entry == "private" {
 							e.deliver(ev)
 						} else {
-							content := feishubot.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
+							content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
 							if err := e.s.botSend(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil {
 								t.Fatal(err)
 							}

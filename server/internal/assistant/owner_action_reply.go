@@ -5,8 +5,8 @@ import (
 	"errors"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -54,7 +54,7 @@ func (s *Service) resolveAppOwnerReply(ctx context.Context, machine, session, cl
 // replying to a server-owned proposal card in the authenticated owner's DM.
 // Once a parent names such a card, every verification or delivery failure is
 // final for this message: the words never fall through to a model turn.
-func (s *Service) botApproveOwnerAction(ctx context.Context, ev feishubot.MessageEvent, text, action string) bool {
+func (s *Service) botApproveOwnerAction(ctx context.Context, ev botcard.MessageEvent, text, action string) bool {
 	msg := ev.Message
 	if msg.ChatType != "p2p" || msg.ParentID == "" || action == "" || !ownerApprovalPhrase(s.settings(ctx), text) {
 		return false

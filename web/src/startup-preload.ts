@@ -541,12 +541,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // 285 B in each language, measured in one environment against main c04291e493 after merging it (ja 484,098 B to
 // 484,383 B; en 481,251 B to 481,536 B, zh-Hans 481,974 B to 482,259 B). Main had 108 B of room, so the budget is
 // main's 484,206 B ceiling plus those 285 B.
-// #13407: the recording module's descriptor (src/modules/recording/module.ts: its Labs name and line in sidebar.json, its
-// catalog loaders and the dynamic import of its code) and the knowledge detail's `kb.detail` slot in the module host and
-// the router add 262 B in ja against main 6565e2fa4 (ja 484,445 B to 484,707 B; en 481,786 B to 482,044 B, zh-Hans
-// 482,421 B to 482,706 B). None of the recording UI itself loads with the first screen. Main had 46 B of room, so the
-// budget is main's 484,491 B ceiling plus those 262 B.
-export const FIRST_SCREEN_BUDGET = 484_753;
+// #13846: the module host serves the chat slots, Settings categories and card renderers (core/ChatSlots.tsx, the
+// served fields and the hub flag rule in core/module-host.ts, their places in views/chat/ChatView.tsx, Composer.tsx and
+// Interactions.tsx). 799 B in ja, measured in one environment against main 7be9a71cc (ja 484,445 B to 485,244 B; en
+// 481,786 B to 482,585 B, zh-Hans 482,421 B to 483,220 B). Main had 46 B of room, so the budget is main's 484,491 B
+// ceiling plus those 799 B. The web half of #13431 takes voice's first-screen parts off with the move into a module.
+export const FIRST_SCREEN_BUDGET = 485_290;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

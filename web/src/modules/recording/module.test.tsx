@@ -132,6 +132,18 @@ describe("the recording module", () => {
     expect(catalog).not.toHaveBeenCalled();
   });
 
+  it("is off on a hub that publishes module flags without module.recording, and on with it", () => {
+    registerModule(counted());
+    Object.assign(getState(), { features: ["modules"], loaded: true });
+    expect(moduleKBKindAt("recordings")).toBe("absent");
+    expect(parse(`/kb/recordings/${id}`).name).toBe("not-found");
+    Object.assign(getState(), { features: ["modules", "module.recording"], loaded: true });
+    expect(moduleKBKindAt("recordings")).toMatchObject({ id: "recording" });
+    // a hub that publishes no module flags (an older one) keeps it on
+    Object.assign(getState(), { features: ["managers"], loaded: true });
+    expect(moduleKBKindAt("recordings")).toMatchObject({ id: "recording" });
+  });
+
   it("refuses a second module that claims the same knowledge kind", () => {
     registerModule(recording);
     expect(() => registerModule({ ...recording, id: "recording-two" })).toThrow(/knowledge kind "recordings"/);

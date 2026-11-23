@@ -39,10 +39,11 @@ var hardcodedDirs = []string{
 	"internal/extmgr",
 	"internal/feishubot",
 	"internal/hub",
-	"internal/mail",
+	"internal/modules/mail",
+	"internal/mailwire",
 	"internal/quota",
 	"internal/update",
-	"internal/voice",
+	"internal/modules/voice",
 	"internal/workspaceboard",
 	"plugins",
 }

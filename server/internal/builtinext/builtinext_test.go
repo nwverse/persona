@@ -6,7 +6,7 @@ import (
 )
 
 func TestProgramsAndVolc(t *testing.T) {
-	t.Cleanup(func() { programs, volc = map[string]program{}, nil })
+	t.Cleanup(func() { programs, volc, voice = map[string]program{}, nil, nil })
 	if _, ok := LookupProgram("x"); ok {
 		t.Fatal("an unknown program was found")
 	}
@@ -33,6 +33,13 @@ func TestProgramsAndVolc(t *testing.T) {
 	}()
 	ProvideVolc(Volc{ExtensionID: "volc", Voices: []string{"a"}})
 	if v, ok := VolcSpeech(); !ok || v.ExtensionID != "volc" || v.Voices[0] != "a" {
+		t.Fatalf("%+v %v", v, ok)
+	}
+	if _, ok := VoiceExtension(); ok {
+		t.Fatal("the voice extension is there without its module")
+	}
+	ProvideVoice(Voice{TranscriptionContribution: "gpt-live"})
+	if v, ok := VoiceExtension(); !ok || v.TranscriptionContribution != "gpt-live" {
 		t.Fatalf("%+v %v", v, ok)
 	}
 }
