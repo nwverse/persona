@@ -124,7 +124,7 @@ func TestReviewCardlessWaitRearmsOnNewRound(t *testing.T) {
 func TestReviewCardlessWaitSurvivesRestart(t *testing.T) {
 	database := taskRecoveryDatabase(t)
 	s, f, todo := newSupervisedServiceOn(t, database)
-	quietDigest(s)
+	quietDigest(s) // until the claim is let go below: the watch's claim stays pending to be read
 	holdDigest(s)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "做完了。")
@@ -132,6 +132,8 @@ func TestReviewCardlessWaitSurvivesRestart(t *testing.T) {
 	if !slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
 		t.Fatalf("card-less review not handed back: %v", pendingKinds(s, todo.ID))
 	}
+	setSuperviseTimings(s, shortSuperviseTimings) // the claim goes out now, at the test's usual pace, before the restart
+	releaseDigest(s)
 	forgetSignals(t, s)
 	again, _ := restartedOn(t, database)
 	quietDigest(again)
