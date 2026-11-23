@@ -1,19 +1,19 @@
 // The voice call's bar (docs/assistant/voice.md 6.2, docs/web/web.md "Voice"): the composer turned into it in place, in the
 // composer's own shape. Its top row: Mute, the orb (a click while the voice speaks interrupts it: never the agent),
-// what the voice does, ⋯ and End. Under it the line about the bound conversation (lib/voice/bar-line.ts) with its buttons,
+// what the voice does, ⋯ and End. Under it the line about the bound conversation (../bar-line.ts) with its buttons,
 // Stop <agent> among them. Every button is one line; the line's buttons wrap under its words when they do not fit.
 import { useEffect, useRef, useState } from "react";
 import { t } from "../../../i18n";
 import { BUSY_MOTION, spinStyle } from "../../../lib/busy-motion";
-import { announced, barLine, barStatus, sinceText, type BarAction, type BarLine, type OrbPhase } from "../../../lib/voice/bar-line";
-import { voiceCalls, useVoiceSnapshot } from "../../../lib/voice/calls";
-import type { VoiceConversation } from "../../../lib/voice/conversation";
-import { chooseVoice, listVoices } from "../../../lib/voice/support";
+import { announced, barLine, barStatus, sinceText, type BarAction, type BarLine, type OrbPhase } from "../bar-line";
+import { voiceCalls, useVoiceSnapshot } from "../calls";
+import type { VoiceConversation } from "../conversation";
+import { chooseVoice, listVoices } from "../support";
 import type { Interaction, Session } from "../../../lib/types";
 import { Button, cx, Dialog, EASE, Menu, useMenu, useNow, type MenuItem } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
 import { StatusMark } from "../../../ui/StatusMark";
-import { resolve } from "../Interactions";
+import { resolve } from "../../../views/chat/Interactions";
 
 export function VoiceBar({ call, session, cards, label, persona, onStopAgent }: {
   call: VoiceConversation;

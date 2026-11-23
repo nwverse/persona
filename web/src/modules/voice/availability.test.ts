@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { HubExtension } from "../extensions";
-import type { Session } from "../types";
+import type { HubExtension } from "../../lib/extensions";
+import type { Session } from "../../lib/types";
 import { browserVoice, entryMode, evaluate, httpsAddress, pickVoice, readInfo, type VoiceInfoState } from "./availability";
 import { unavailableNote, endNote } from "./notes";
 
