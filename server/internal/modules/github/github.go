@@ -55,7 +55,6 @@ var (
 // Scrub blanks anything that looks like a GitHub token in s (an error, a message): tokens never leave the hub.
 func Scrub(s string) string { return githubwire.Scrub(s) }
 
-
 // refuse is the transport of a connector whose proxy is malformed.
 type refuse struct{ err error }
 

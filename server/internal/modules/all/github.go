@@ -3,8 +3,8 @@
 package all
 
 import (
-	"github.com/nwverse/persona/server/internal/modules/github"
 	"github.com/nwverse/persona/server/internal/extmgr/githubport"
+	"github.com/nwverse/persona/server/internal/modules/github"
 )
 
 // The GitHub connector module: the built-in GitHub connector reaches the extension manager through its port
