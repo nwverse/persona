@@ -167,9 +167,6 @@ struct ViewedImagesRow: View, Equatable {
             .accessibilityLabel(again ? Text("Image didn't load. Tap to retry") : Text(caption))
             .accessibilityHint(again ? Text(verbatim: "") : Text("View full size"))
             .accessibilityIdentifier("viewed-image-\(index)")
-            #if os(macOS)
-            .help(caption)
-            #endif
             .contextMenu {
                 if let path = im.path {
                     Button { UIPasteboard.general.string = path } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }

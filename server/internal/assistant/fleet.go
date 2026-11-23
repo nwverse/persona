@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modelretry"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -34,10 +35,11 @@ import (
 type fleetBook struct {
 	mu           sync.Mutex
 	interactions map[string]*pending
-	seen         map[[2]string]time.Time // (machine, session) -> when the user last looked at it
-	seenLoaded   bool                    // seen holds the table's times (loadSeen succeeded once)
-	stateSince   map[[2]string]stateMark // (machine, session) -> its state and when it entered it
-	notified     map[string]time.Time    // assistant conversation -> when it last pushed with notify_user
+	seen         map[[2]string]time.Time      // (machine, session) -> when the user last looked at it
+	seenLoaded   bool                         // seen holds the table's times (loadSeen succeeded once)
+	stateSince   map[[2]string]stateMark      // (machine, session) -> its state and when it entered it
+	upstream     map[[2]string]upstreamStreak // (machine, session) -> consecutive no-work upstream 5xx turns (fleet_upstream.go)
+	notified     map[string]time.Time         // assistant conversation -> when it last pushed with notify_user
 	// reportSent: assistant conversation -> when a scheduled run or a task notice was sent into it (noteReportTurn):
 	// the turn it starts is pushed however short it is.
 	reportSent map[string]time.Time
@@ -356,10 +358,15 @@ func turnErrorCode(text string) string {
 		// Before the classes below: a gateway's words for it may say "not supported" next to "model". The node resent
 		// the turn once with every tool loaded and starts the conversation that way from now on (#10365).
 		return proto.TurnErrorToolSearchUnsupported
+	case modelretry.AccountExhausted(t):
+		// Explicit upstream account-pool exhaustion (#13372): ahead of model_route in case the message also names the model.
+		return proto.TurnErrorUpstreamUnavailable
 	}
 	switch classifyLauncherError(t) { // the launcher health checks' classes (launcher_health.go)
 	case errKindUsageLimit:
 		return proto.TurnErrorRateLimited
+	case errKindUpstream:
+		return proto.TurnErrorUpstreamUnavailable
 	case errKindAuth:
 		return proto.TurnErrorAuthFailed
 	case errKindModelRoute:
@@ -392,6 +399,13 @@ func sessionTurnErrorCode(c proto.Session) string {
 				(code == proto.TurnErrorModelRoute || strings.Contains(strings.ToLower(c.TurnError), "model_not_found")) {
 			return proto.TurnErrorModelFallbackUnavailable
 		}
+	}
+	// Preserve a node's transcript-streak upstream_unavailable code (#13372), including on a 503 whose words also
+	// matched model_route, while keeping auth, sign-in, 429 and tool-search codes ahead of it.
+	if c.TurnErrorCode == proto.TurnErrorUpstreamUnavailable &&
+		(code == "" || code == proto.TurnErrorUpstreamUnavailable ||
+			(code == proto.TurnErrorModelRoute && modelretry.UpstreamServerError(c.TurnError))) {
+		return proto.TurnErrorUpstreamUnavailable
 	}
 	return code
 }

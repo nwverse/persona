@@ -830,10 +830,6 @@ struct AssistantSidebar: View {
     @StoredValue("sidebar.fold.chats") private var chatsFolded = false
     @State private var own = AssistantSidebarUI()
     private var ui: AssistantSidebarUI { shared ?? own }
-    #if os(macOS)
-    /// Its header is in the title bar's row (#830): past the traffic lights when the window's sections column is hidden.
-    @Environment(\.macTitleRowLeading) private var titleRowLeading
-    #endif
     /// Whether Recent is folded, kept on this device (#6228): default open, the choice survives relaunches.
     @StoredValue("assistant.sidebar.recent.folded") private var recentFolded = false
     private let taskChats = AssistantTaskChatsStore.shared
@@ -874,18 +870,9 @@ struct AssistantSidebar: View {
         let archived = shownArchived
         VStack(spacing: 0) {
             topBar
-                #if os(macOS)
-                // Starts where the other sections' titles do (`MacPageTitle`: `l`, past the traffic lights when the
-                // sections column is hidden), #3179.
-                .padding(.leading, max(Theme.Space.l, titleRowLeading))
-                .padding(.trailing, Theme.Space.xl)
-                // The title bar's row: centred on it as the other sections' titles are, so it does not jump (#830).
-                .frame(height: Theme.Size.macToolbarHeight)
-                #else
                 .padding(.horizontal, Theme.Space.xl)
                 .padding(.top, besideBar ? AssistantTopBar.topInset : Theme.Space.s)
                 .padding(.bottom, Theme.Space.s)
-                #endif
             // A list (not a stack in a scroll view) for its rows' own swipe: a conversation swipes left to Archive. On the
             // Mac it selects the open conversation: ↑ / ↓ open the next, Delete archives (`MacListKeys`, #2113).
             MacSelectingList(selection: Binding(get: { current }, set: { key in if let key, key != current { open(key) } })) {
@@ -903,34 +890,17 @@ struct AssistantSidebar: View {
                         results(searchRows(all))
                     }
                 }
-                #if os(macOS)
-                // The list's own margin is the shell's rows' `s` (`MacSidebarRow`, Inbox's Source): the shade and the rows'
-                // words line up with the other sections' columns (#3179).
-                .listRowInsets(EdgeInsets())
-                #else
                 .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.s, bottom: 0, trailing: Theme.Space.s))
-                #endif
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            #if os(macOS)
-            .modifier(MacListKeys(current: { current }, delete: { key in
-                guard key != model.assistantMain, !model.isBackgroundSupervisor(key.sessionID) else { return }
-                Task { await model.archiveConversation(key, true) }
-            }))
-            #endif
             .environment(\.defaultMinListRowHeight, 0)
             .contentMargins(.bottom, Theme.Space.l, for: .scrollContent)
             .scrollDismissesKeyboard(.interactively)
             footer
         }
-        #if os(macOS)
-        // Conversation rows cover the system selection with this color (`macListRow`).
-        // Paint the entire column with it too, including the title, actions and unused space.
-        .background(Theme.pageBackground)
-        #endif
         #if os(iOS)
         // A column (the iPad's split, the open iPhone Duo) keeps out of the keyboard only while its own search field is
         // typed in, so the chats found stay above it. Another field's keyboard, above all a sheet's over the page, shrank
@@ -1282,11 +1252,7 @@ extension AssistantSidebar {
                 } else {
                     // A hub without a roster has no switcher: with several hubs the title keeps a hub menu under it (#12594).
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                        #if os(macOS)
-                        Text(model.assistantShownName).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
-                        #else
                         Text(model.assistantShownName).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
-                        #endif
                         HubSwitcher(compact: true)
                     }
                 }
@@ -1334,11 +1300,7 @@ extension AssistantSidebar {
 
     /// The header sits in the Mac's title bar row: one line.
     private var macTitleRow: Bool {
-        #if os(macOS)
-        true
-        #else
         false
-        #endif
     }
 
     /// Settings on the page `AppModel.settingsPath` names (the switcher's Manage Assistants…): the way this sidebar has
@@ -1350,11 +1312,7 @@ extension AssistantSidebar {
     /// The split's list column (a wide display), beside the conversation's top bar: the header is that bar's row, with
     /// the shell's places or without. The drawer keeps its own; on the Mac both sit in the title bar's row already (#830).
     private var besideBar: Bool {
-        #if os(macOS)
-        false
-        #else
         drawer == nil
-        #endif
     }
 
     /// The open search field; in the BeautifulUI style SidebarNav's.
@@ -1403,18 +1361,7 @@ extension AssistantSidebar {
                 extensionRows
             }
         } else {
-            #if os(macOS)
-            // One row as the conversations' (#2113): New Chat is the title row's button and ⇧⌘N, Knowledge the window's
-            // sections column (2026-11-05 user: not twice). Headed by nothing: a heading over one row is noise.
-            if !AppStyle.current.usesBeautifulUI {
-                macPlace(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, run: openRoutines)
-                if let openHealth { macPlace(String(localized: "Health"), Theme.Icon.health, run: openHealth) }
-            } else {
-                phoneActions
-            }
-            #else
             phoneActions
-            #endif
         }
     }
 
@@ -1494,30 +1441,6 @@ extension AssistantSidebar {
         .accessibilityIdentifier("sidebar-extension-\(p.owner)-\(p.id)")
     }
 
-    #if os(macOS)
-    /// Whether the places to go are one row of the list (the Mac's plain styles) rather than the phone's big rows.
-    private var macPlaces: Bool { !isShell && !AppStyle.current.usesBeautifulUI }
-
-    /// A place to go at the top of the Mac's list: a conversation row's size, its symbol where a conversation has its mark.
-    private func macPlace(_ title: String, _ symbol: String, run: @escaping () -> Void) -> some View {
-        Button(action: run) {
-            HStack(spacing: Theme.Sidebar.gap) {
-                Image(systemName: symbol).resizable().scaledToFit().foregroundStyle(.secondary)
-                    .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
-                    .scaledFrame(width: Theme.Sidebar.mark)
-                Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, Theme.Sidebar.rowPadding)
-            .scaledFrame(minHeight: Theme.Sidebar.row)
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("sidebar-" + title)
-    }
-    #endif
 
     /// The sidebar's first row in every layout: the main conversation, as "Main Chat" with the main conversation's symbol
     /// in the places' symbol column (#9973). The assistant's face and name are the head's right above it; this row had
@@ -1953,11 +1876,7 @@ extension AssistantSidebar {
 
     /// The Mac's place is a row like the conversations': no line between it and them.
     private var macPlacesGroup: Bool {
-        #if os(macOS)
-        macPlaces
-        #else
         false
-        #endif
     }
 
     /// Persona's face and name with where it runs (a tap: its profile), Settings on the right (the tab bar is hidden while
@@ -1971,15 +1890,7 @@ extension AssistantSidebar {
                 AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: nil)
             }
         } else {
-            #if os(macOS)
-            if macPlacesGroup {
-                AssistantStatusLine(machineID: machineID, openProfile: openProfile)
-            } else {
-                AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: openSettings)
-            }
-            #else
             AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: openSettings)
-            #endif
         }
     }
 
@@ -2122,42 +2033,6 @@ private struct AssistantProfileFooter: View {
     }
 }
 
-#if os(macOS)
-/// The Mac's foot of the list (#2113): one small line, where Persona runs and whether it is up, as a Mac app's status
-/// at the bottom of its sidebar; a click opens its profile, as the phone's card does.
-private struct AssistantStatusLine: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.tabIsActive) private var inFront
-    let machineID: String
-    let openProfile: () -> Void
-
-    var body: some View {
-        let machine = model.machine(model.hubRef(machineID), inFront: inFront)
-        let online = machine?.online ?? false
-        let place = machine?.name ?? machineID
-        let state = online ? String(localized: "Online") : String(localized: "Offline [Machine Entity be1b4f]")
-        VStack(spacing: 0) {
-            Divider()
-            Button(action: openProfile) {
-                HStack(spacing: Theme.Space.s) {
-                    Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
-                        .scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
-                    Text("\(model.assistantShownName) \(state) · \(place)").lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                .font(Theme.Font.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, Theme.Space.l)
-                .padding(.vertical, Theme.Space.s)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .help("View \(model.assistantShownName)'s Profile")
-            .accessibilityLabel("\(model.assistantShownName), \(state), \(place), view profile")
-        }
-    }
-}
-#endif
 
 /// A conversation's round mark in the sidebar: a chat bubble in a soft color picked by its id, so neighbours differ.
 struct ConversationMark: View {

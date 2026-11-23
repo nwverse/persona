@@ -262,18 +262,10 @@ struct ComputerSection: View {
         if let a = try? await api.computerApps(machine: ref.id) { apps = a }
     }
 
-    #if os(macOS)
-    static let oneTapTitle = String(localized: "One-Tap Unlock from This Mac")
-    #else
     static let oneTapTitle = String(localized: "One-Tap Unlock from This iPhone")
-    #endif
 
-    /// deviceOwnerAuthentication is Touch ID (or the password) on macOS, Face ID (or the password) on iOS.
-    #if os(macOS)
-    static let oneTapAuthName = String(localized: "Touch ID")
-    #else
+    /// deviceOwnerAuthentication's name on the iPhone: Face ID (or the password).
     static let oneTapAuthName = String(localized: "Face ID")
-    #endif
 
     /// One-Tap Unlock on this device (it needs the sign-in kept), and Lock while it is on (#1507 a-2).
     private func unlockRow(locked: Bool) -> some View {

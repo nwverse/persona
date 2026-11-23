@@ -285,9 +285,6 @@ struct TableFileView: View {
         Color.clear
             .frame(width: Theme.Space.m)
             .contentShape(.rect)
-            #if os(macOS)
-            .onHover { inside in if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
-            #endif
             .gesture(DragGesture(minimumDistance: Theme.Space.xxs).onChanged { g in
                 let base = dragBase ?? width / scale
                 dragBase = base
