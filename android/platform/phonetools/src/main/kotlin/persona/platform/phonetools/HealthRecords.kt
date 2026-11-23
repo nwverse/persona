@@ -269,12 +269,12 @@ internal object HealthRecords {
             end?.let { put("end", iso(it)) }
             type.unit?.let { put("unit", it) }
         }
-        val access = access(type, Health.granted(c), declared(c))
-        if (access != "granted") {
+        val status = access(type, Health.granted(c), declared(c))
+        if (status != "granted") {
             return PhoneToolResult.text(JsonObject(base + buildJsonObject {
-                put("access", access)
+                put("access", status)
                 put("samples", JsonArray(emptyList()))
-                put("note", if (access == "unavailable") "This build of Persona does not declare this type's Health Connect permission."
+                put("note", if (status == "unavailable") "This build of Persona does not declare this type's Health Connect permission."
                     else "Persona may not read this type yet: call phone_health_request_access with it while Persona is open on the phone.")
             }).toString())
         }
@@ -287,7 +287,7 @@ internal object HealthRecords {
                 val changes = client.getChanges(anchor.changesToken)
                 if (changes.changesTokenExpired) {
                     return PhoneToolResult.text(JsonObject(base + buildJsonObject {
-                        put("access", access); put("status", "anchor_expired"); put("samples", JsonArray(emptyList()))
+                        put("access", status); put("status", "anchor_expired"); put("samples", JsonArray(emptyList()))
                         put("note", "Health Connect keeps changes for a limited time: read the window again without an anchor.")
                     }).toString())
                 }
@@ -310,7 +310,7 @@ internal object HealthRecords {
                 out["anchor"] = JsonPrimitive(anchorText(if (page != null) Anchor.Page(page, changesToken) else Anchor.Changes(changesToken)))
             }
         }
-        return PhoneToolResult.text(JsonObject(base + mapOf("access" to JsonPrimitive(access)) + out + mapOf("source" to JsonPrimitive("live"))).toString())
+        return PhoneToolResult.text(JsonObject(base + mapOf("access" to JsonPrimitive(status)) + out + mapOf("source" to JsonPrimitive("live"))).toString())
     }
 
     internal fun inWindow(end: Instant, start: Instant, windowEnd: Instant?) = !end.isBefore(start) && (windowEnd == null || !end.isAfter(windowEnd))
