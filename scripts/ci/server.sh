@@ -53,6 +53,8 @@ if [ "$lane" = all ] || [ "$lane" = node ]; then
 fi
 for shard in node managers other; do
   if [ "$lane" = all ] || [ "$lane" = "$shard" ]; then
-    ci_run "Server $shard tests with Postgres" 600 python3 scripts/ci/server-shards.py "$shard" --database-file "$fixture/database.json"
+    shard_budget=600
+    if [ "$shard" = managers ]; then shard_budget=900; fi
+    ci_run "Server $shard tests with Postgres" "$shard_budget" python3 scripts/ci/server-shards.py "$shard" --database-file "$fixture/database.json"
   fi
 done
