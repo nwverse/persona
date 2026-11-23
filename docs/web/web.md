@@ -736,7 +736,10 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
 - **Agent follow-up** (Settings › Assistant, #3617, #4293, #4754 and #3618): **Follow up every agent Persona starts** (`agent_tasks` on `GET/PUT /assistant`, off by default), **Close an Agent's terminal when it ends** (`close_ended_terminals`, off by default, #10355; [engines.md](../integrations/engines.md) "Agents run in a terminal"), **Tell supervisors about new messages** (`inbox_signals`, off by default; [unified-entry.md](../assistant/unified-entry.md) "Supervision (#3124)"), **Stop idle Agents after** N hours (`idle_close_hours`, default 12, 0 to 8760, 0 is never; the Agent stops and its terminal stays, #4754; saved like the days below) and **Archive closed sessions after** N days (`archive_closed_days`, 0 to 3650, 0 is never; saved on Enter or when the field is left, anything else goes back to the saved number). Each row shows only when the hub sends its setting; a refused change goes back with the hub's reason.
   - **Queued messages** (`QueuePanel.tsx`, loaded on demand by `QueueStrip.tsx`; `POST …/queue {keep}`, which the hub forwards to node's `session.queue.edit`; #5327): drawn as cindy's pending queue at the owner's request, at the top of the composer's card, flush with its edges and a hairline above the input (`Composer`'s `top` slot). Rows are in send order, the top one next, without numbers (the labels carry them): one line each at 13 px, cut with an ellipsis and the whole message as a tooltip only when cut, muted until the row is hovered or focused. A hovered or focused row shows a drag handle on its left and, on the right, 20 px round buttons: **Send now** (↑, where the agent takes queued messages now; see below), **Edit** (the old **Pull back to edit**: takes it back to the end of the input and puts the focus there) and **Delete**; a screen without hover shows them always. Dragging the handle, or ↑ ↓ Home End on it, re-queues them all in the new order (a permutation of `keep`, `movedTo` in `lib/queue.ts`, #6088); the rows keep the new order until the hub's push shows it, and nothing else can be changed meanwhile. While a request is out its row shows a spinner where its buttons were and the others' buttons are disabled. Four rows or fewer show in full; five or more show the first three and **N more** / **Show less** under them (only the view: it never holds a message back). On a phone on its side (under 500 px tall) the queue keeps a folded one-line header, "N queued", in the line of the run's status, and opens the same rows under it: a deviation from cindy, whose fused panel would take most of the little height the chat has there. Copy is gone from the rows (cindy has none; the tooltip shows the words);
     a queued message is only Claude Code's text, with what it carried written into it (`[Image #n]` placeholders, the `<attached_images>` block's `path:` lines, `<persona-file>` / `<persona-context>` tags; `parseQueued` in `lib/queue.ts`, #3032), so a row shows the words with a mark per kind of attachment (the attachments in words when nothing was typed), and **Edit** puts the words under what is typed, the photos back in the tray (read from the session's machine by path; one it no longer has goes in as its path, with a toast), the contexts back on their chips and a file or video in as its path, as this composer sends files; the stand-in words a message with no words went with ("See the images" and the apps' versions, in each language) are left out;
-    messages already in the queue are no longer also shown as "sending" bubbles, and one taken back or deleted drops its sending bubble too.
+    While a turn is working, a follow-up that waits in the queue appears there immediately with Sending and local photo previews (#13958).
+    The queue opens at the new row if it was folded. The hub's queue update confirms the same row and clears its status.
+    Idle sends and the Send now shortcut start in the transcript. Edit and Delete can take back a local send before its request
+    starts, or apply to the confirmed row after the request starts. Failed and held sends use the conversation's recovery controls.
     A Persona chat's queue (#4342) offers the same for the user's own messages: the hub's answer to a take-back carries the message's photos, which go
     back in the tray, and Send now's tooltip says the step it is on stops or goes on in the background. Its queue holds only the words, so a
     row has the photo mark when this browser sent the message with photos. Messages from other conversations come last (`queued_relayed`),
@@ -2319,18 +2322,23 @@ code. Its fields use the names of the module contract in #13430 section 4, in ca
 | --- | --- | --- |
 | `id` | `id` (lower-case, hyphenated; the directory name) | yes |
 | `api` | `api` (the module API it is written for; `MODULE_API`, 1, when absent) | yes: another version is refused |
-| `feature` | `feature` (a hello feature flag; none for a module every hub has served) | yes |
+| `feature` | `feature` (its hello feature flag, `module.<id>`; see "When a module is there") | yes |
 | `needs` | `needs` (other modules it may import; ESLint holds it to them) | yes (guard) |
 | `wants` | `wants` (modules it uses when they are there) | declared, not yet served |
 | `shell_places` | `routes` (a page: a base segment, its aliases, its title), `extensionPages` (reserved `/extension/-<id>/…` pages the module draws, such as the health module's water and protein pages, #13176) and `navItems` (a sidebar entry and the page it follows) | yes |
 | `i18n_namespaces` | `i18nNamespaces` and `locales` (its catalog loaders) | yes |
-| `settings` | `settingsTabs` | declared, not yet served |
-| `chat_card_kinds` | `cardRenderers` | declared, not yet served |
-| `composer_actions`, `chat_accessories` | `chatSlots`: `composer.trailingAction`, `chat.tail`, `chat.bar`, `interaction.asked` | declared, not yet served (#13431 wires them) |
+| `settings` | `settingsTabs` (a Settings category in one of its groups) | yes (#13846) |
+| `chat_card_kinds` | `cardRenderers` (pending-card kinds the core has no card for) | yes (#13846) |
+| `composer_actions`, `chat_accessories` | `chatSlots`: `composer.trailingAction`, `chat.tail`, `chat.bar`, `interaction.asked` | yes (#13846) |
 
-`registerModule` refuses a descriptor that fills a field the shell does not serve yet (`wants`, `settingsTabs`,
-`cardRenderers`, `chatSlots`) rather than dropping it silently, and refuses a route that collides: a base that is one of
-the core's first segments (`CORE_PATHS`, kept in step with `lib/router.ts` parse by its test), an alias that is a core
+`registerModule` refuses a descriptor that fills a field the shell does not serve yet (`wants`) rather than dropping it
+silently, and names what it refuses: a chat slot the shell does not have, a Settings category whose key is not the module's id or its id
+and a suffix (a core category's key always wins in `views/settings/nav.ts`, and `modules/module-names.test.ts` fails on
+a module named like one), a card kind the core draws (`CORE_CARD_KINDS`, kept the same as `Interaction.kind` by a test) or another module
+renders. `loadModule` refuses code that leaves out a slot, category or card kind its descriptor names. It also refuses a
+route that collides: a base that is one of
+the core's first segments (`CORE_PATHS`, kept in step with `lib/router.ts` parse in both directions by its tests: every segment parse routes is
+listed, and everything listed is routed or is one of the hub's own addresses beside the app), an alias that is a core
 page or lies under a core address other than `/tracks/<slug>` (a space the module has its own page for), and a base or
 alias that another module's base or alias starts, or that starts one of theirs. The rest of the contract (`hub_routes`,
 `mcp_tools`, `prompt_sections`, `background_jobs`, …) belongs to the server.
@@ -2340,9 +2348,13 @@ registers it. A descriptor the host refuses throws in development and tests, so 
 it is logged and that module is left out (absent), so one bad module does not stop the app from starting. It is the only place module ids appear outside their own directories. `App.tsx` imports it first, so the
 modules are registered before any address is routed. Importing the list loads no module's code and none of its strings.
 
-**When a module is there.** A module is *on* when its hub feature flag is in the hello's `features` (or it names none)
-and this browser has not switched it off. Before a flagged module's hub has said hello it is *pending*: its address waits,
-its sidebar entry does not show. Otherwise it is *off*, and an off module is absent:
+**When a module is there.** A module is *on* when the hub serves it and this browser has not switched it off. The hub
+flag rule is the same on every client (agreed on #13844; `MODULES_FEATURE` and `moduleFeature` in `module-host.ts` are
+the one place the names live): a module's `feature` is `module.<id>`; a hub that publishes module flags also announces
+the marker `modules`; a module with a `feature` is off only when the hello has `modules` and lacks its flag. Before the
+hello, and with an older hub whose hello has no `modules`, every module is on, so defaults never change and nothing
+waits on the hello to draw; a later hello that adds or drops the flag turns it on or off at once. Otherwise it is *off*,
+and an off module is absent:
 
 - no sidebar entry, and no switch it could have left behind (the start page falls back as for a removed page);
 - its addresses route as unknown ones (`not-found`), aliases included;
@@ -2351,11 +2363,32 @@ its sidebar entry does not show. Otherwise it is *off*, and an off module is abs
 
 An on module's page is warmed as the built-in pages are (`core/ModulePage.tsx`, `lib/lazy-page.ts` `preloadOnIntent`):
 when the pointer, the focus or a finger reaches a link to it (its sidebar entry); not with Data Saver on, and never for
-an off or pending module. Never at idle: that would make every browser fetch every module, outside `IDLE_TIER_BUDGET`. Otherwise it loads on its first render: its strings first (`i18n` `addCatalogs`; its code may call `t()` at module
+an off module. Never at idle: that would make every browser fetch every module, outside `IDLE_TIER_BUDGET`. Otherwise it loads on its first render: its strings first (`i18n` `addCatalogs`; its code may call `t()` at module
 scope), then its code. A module's namespaces (`<id>.json`, `<id>-*.json` under `src/i18n/locales/<lang>/`) stay beside the
 others, so every catalog check covers them, but the build leaves them out of `client-startup` and `client-rest` and makes
 them the module's own catalog (`?catalog=module-<id>`, `web/i18n-catalogs.ts`). A module's sidebar label, page title and Labs description
 are read before its strings load, so their keys live in the shell's namespaces (`sidebar.json`, `app.json`).
+
+**Chat slots, Settings categories and cards** (#13846, `web/src/core/ChatSlots.tsx`, `core/ModuleSettingsPage.tsx`).
+A module's code (`ModuleCode`) fills what its descriptor names: `chat` for its chat slots, `settings` for its categories
+by key, `cards` for its card kinds. The chat page hands every chat slot the same `ChatPageProps` (the conversation, its
+session, who answers, whether it can send, the transcript and the cards on read, Stop):
+
+- `composer.trailingAction`: mounted while the page shows the conversation (it may draw a dialog); it tells the page its
+  `ComposerAction` (icon, name, tooltip, `primary`, click), which the composer draws in its own style: a tool button,
+  or with an empty box and nothing to stop, a primary one round in the Send button's place.
+- `chat.tail`: after the last message of the thread.
+- `chat.bar`: drawn in the dock over the composer (`place: "dock"`) and where the composer is (`place: "composer"`);
+  while one says `take(true)` (in a layout effect, so before the frame is painted) the composer hides with its draft
+  kept and the Assistant's action rows give way, as they do for a live voice call.
+- `interaction.asked`: in a pending card's kicker row, after its kind.
+
+A module's Settings category is listed after its group's own (`views/settings/nav.ts` `navGroups`), opens by
+`?tab=<key>`, is found by the search box, and draws the module's page, loaded on its first render. A pending card whose
+kind a module renders is drawn by that module (`InteractionCard`), before the generic fallback. A slot loads its
+module's code when a page first reaches it and draws nothing until it is in, and nothing at all while the module is
+off, so with no module filling a slot every screen is as it was; a module's part that throws is left out, not the page.
+The search box also finds each module's switch in Labs › Features, from the module list.
 
 **The switch.** Settings › Labs › Features lists every registered module with a switch (`web/src/core/module-labs.ts`,
 drawn by the configuration form like any Labs entry). Every module is on by default, so nothing changes for anyone who
@@ -2380,8 +2413,8 @@ colors or the Settings tabs, and when a module namespace is on the first screen.
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
 extension-page id `-health-intake`, which routes as unknown while the module is off), its sidebar entry (right after Inbox, pink with
 Colored icons) and its `health` namespace come from its descriptor instead of the `Route` union, `App.tsx` and
-`SidebarParts.tsx`. The hub has no flag for it and the page was always there, so it names none and stays on unless a
-browser switches it off. Core code that needs one of its addresses writes the path (`/health/<id>`), which routes as
+`SidebarParts.tsx`. Its flag is `module.health`: every hub before #13844 publishes no module flags and keeps it on, as
+the page always was, and a browser can still switch it off. Core code that needs one of its addresses writes the path (`/health/<id>`), which routes as
 unknown while the module is off.
 
 ### Adding a module

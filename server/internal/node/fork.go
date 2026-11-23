@@ -189,7 +189,7 @@ func (n *Node) forkOnRuntime(ctx context.Context, h *runtimeConn, source proto.S
 			st.Launcher = firstNonEmpty(st.Launcher, out.Session.Launcher)
 		}
 		n.state.put(out.ID, sessionState{Cwd: st.Cwd, Launcher: st.Launcher, Model: st.Model,
-			ModelFingerprint: st.ModelFingerprint, ModelEffort: st.ModelEffort, AppMode: st.AppMode, AppEffort: st.AppEffort,
+			ModelFingerprint: st.ModelFingerprint, ModelEffort: st.ModelEffort, AppMode: st.AppMode, AppModeExplicit: st.AppModeExplicit, AppEffort: st.AppEffort,
 			Origin: st.Origin, OriginKnown: true, StartedAt: time.Now().UTC()})
 	}
 	if out.Session != nil {
