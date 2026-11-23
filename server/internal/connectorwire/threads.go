@@ -1,10 +1,8 @@
-package connector
+package connectorwire
 
 import (
 	"context"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // Threads is a connector whose inbox threads the app opens as a conversation of their own (CapThreads): a page of
@@ -136,6 +134,3 @@ type (
 		Log   string `json:"log,omitempty"`
 	}
 )
-
-// Defined in the contract package connectorwire (docs/server/architecture.md "Contract packages"); the old names stay.
-type Media = connectorwire.Media

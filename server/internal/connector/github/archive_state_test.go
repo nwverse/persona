@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // stateAPI is search and threads of example-org/example-repo on made-up data whose state a test changes; nothing but
@@ -99,7 +99,7 @@ func newStateAPI(t *testing.T) (*stateAPI, *Connector) {
 	return f, c
 }
 
-func stateLines(b connector.ChatBatch) string {
+func stateLines(b connectorwire.ChatBatch) string {
 	var out []string
 	for _, m := range b.Messages {
 		if m.Type == "SYSTEM" {

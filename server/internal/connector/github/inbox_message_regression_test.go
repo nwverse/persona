@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 const newestMessageThread = "example-org/example-repo#12"
@@ -29,7 +29,7 @@ func replaceNewestMessageData(t *testing.T, f *fakeNotifications, c *Connector, 
 	}
 }
 
-func newestMessageThing(t *testing.T, c *Connector) (got map[string]connector.InboxThing) {
+func newestMessageThing(t *testing.T, c *Connector) (got map[string]connectorwire.InboxThing) {
 	t.Helper()
 	return things(t, c)
 }

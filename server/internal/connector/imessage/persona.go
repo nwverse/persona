@@ -12,15 +12,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // "Hand to Persona" (#528; the user, 2026-11-03: iMessage's texts may go to AI like Feishu's): while the switch is on, the
-// Mac's real conversations (KeepContacts) go into the knowledge base (connector.Archive, by ROWID), unread ones into
-// the inbox (connector.Inbox, triaged like Feishu's), and the assistant reads them (ReadTools). Codes are masked in
+// Mac's real conversations (KeepContacts) go into the knowledge base (connectorwire.Archive, by ROWID), unread ones into
+// the inbox (connectorwire.Inbox, triaged like Feishu's), and the assistant reads them (ReadTools). Codes are masked in
 // all of it. Off: none of it — nothing is read for Persona, the tools are gone; what the hub kept stays until the
 // user deletes it (extmgr/imessage.go).
 
@@ -50,9 +50,9 @@ func (c *Remote) zone() *time.Location {
 // changesPage is how many messages one connector.changes call asks for.
 const changesPage = 300
 
-// Changes is connector.Archive: the new messages of the conversations that go to Persona, as knowledge-base chats
+// Changes is connectorwire.Archive: the new messages of the conversations that go to Persona, as knowledge-base chats
 // "imessage-<12 hex>" (the conversation's id) with people "imessage-<hash of their number>".
-func (c *Remote) Changes(ctx context.Context, cursor string, _ int) ([]connector.ChatBatch, string, bool, error) {
+func (c *Remote) Changes(ctx context.Context, cursor string, _ int) ([]connectorwire.ChatBatch, string, bool, error) {
 	if !c.AI() {
 		return nil, cursor, false, nil
 	}
@@ -61,28 +61,28 @@ func (c *Remote) Changes(ctx context.Context, cursor string, _ int) ([]connector
 		"days": 30, "keep": KeepContacts}, &page); err != nil {
 		return nil, cursor, false, err
 	}
-	out := make([]connector.ChatBatch, 0, len(page.Batches))
+	out := make([]connectorwire.ChatBatch, 0, len(page.Batches))
 	for _, b := range page.Batches {
 		out = append(out, kbBatch(b))
 	}
 	return out, page.Next, page.More, nil
 }
 
-func kbBatch(b Batch) connector.ChatBatch {
+func kbBatch(b Batch) connectorwire.ChatBatch {
 	kind := "dm"
 	if b.Chat.Group {
 		kind = "group"
 	}
-	out := connector.ChatBatch{Chat: kb.SourceChat{ID: strings.TrimPrefix(b.Chat.ID, ID+"-"), Name: b.Chat.Name, Kind: kind,
+	out := connectorwire.ChatBatch{Chat: kbwire.SourceChat{ID: strings.TrimPrefix(b.Chat.ID, ID+"-"), Name: b.Chat.Name, Kind: kind,
 		UpdatedAt: b.Chat.Last}}
 	for _, m := range b.Messages {
-		sm := kb.SourceMessage{ID: m.ID, Position: m.ID, Mine: m.FromMe, Type: "TEXT", Text: lineText(m), At: m.At}
+		sm := kbwire.SourceMessage{ID: m.ID, Position: m.ID, Mine: m.FromMe, Type: "TEXT", Text: lineText(m), At: m.At}
 		if m.Kind == "event" {
 			sm.Type = "SYSTEM"
 		}
 		if m.Sender != nil {
 			sm.SenderID, sm.SenderName = PersonKey(m.Sender.Handle), m.Sender.shown()
-			sm.SenderHandles = []kb.Handle{handleOf(m.Sender.Handle)} // hashed by the knowledge base, never kept as it is
+			sm.SenderHandles = []kbwire.Handle{handleOf(m.Sender.Handle)} // hashed by the knowledge base, never kept as it is
 		}
 		out.Messages = append(out.Messages, sm)
 	}
@@ -90,11 +90,11 @@ func kbBatch(b Batch) connector.ChatBatch {
 }
 
 // handleOf is a Messages handle as an identity hint: an Apple ID's address or a number.
-func handleOf(h string) kb.Handle {
+func handleOf(h string) kbwire.Handle {
 	if strings.Contains(h, "@") {
-		return kb.Handle{Kind: kb.HandleEmail, Value: h}
+		return kbwire.Handle{Kind: kbwire.HandleEmail, Value: h}
 	}
-	return kb.Handle{Kind: kb.HandlePhone, Value: h}
+	return kbwire.Handle{Kind: kbwire.HandlePhone, Value: h}
 }
 
 // PersonKey is a person's id in the knowledge base: a hash of their number or address, never the number itself.
@@ -138,9 +138,9 @@ func (a Attachment) describe() string {
 	return "[文件]"
 }
 
-// Collect is connector.Inbox: the conversations Watch last saw (unread ones open or add to an item; one read
+// Collect is connectorwire.Inbox: the conversations Watch last saw (unread ones open or add to an item; one read
 // elsewhere or answered closes it).
-func (c *Remote) Collect(context.Context) ([]connector.InboxThing, error) {
+func (c *Remote) Collect(context.Context) ([]connectorwire.InboxThing, error) {
 	if !c.AI() {
 		return nil, nil
 	}
@@ -155,7 +155,7 @@ var errNoReply = errors.New("在「信息」里回复：Persona 不替你发信�
 var errNotHanded = errors.New("「信息」没有交给 Persona（设置 › 连接器 › 信息）")
 
 // Reply: Persona does not send messages (the item's "Reply in Messages" opens Messages with the number).
-func (c *Remote) Reply(context.Context, connector.InboxReply) error { return errNoReply }
+func (c *Remote) Reply(context.Context, connectorwire.InboxReply) error { return errNoReply }
 
 // How often Watch looks at the Mac for new messages, how many conversations it looks at, and how many of a
 // conversation's last messages go to the inbox (triage, the AI twin).
@@ -165,12 +165,12 @@ var (
 	contextLines = 15
 )
 
-// Watch is connector.Events: every couple of minutes it lists the newest conversations, keeps the inbox's things
+// Watch is connectorwire.Events: every couple of minutes it lists the newest conversations, keeps the inbox's things
 // from them and kicks the knowledge base when anything came in. A Mac that does not answer is waited for (the
 // status says why), so the hub does not restart and log this every few minutes.
-func (c *Remote) Watch(ctx context.Context, changed func(connector.Scope)) error {
+func (c *Remote) Watch(ctx context.Context, changed func(connectorwire.Scope)) error {
 	for {
-		if c.AI() && c.Status(ctx).State == connector.StateOK {
+		if c.AI() && c.Status(ctx).State == connectorwire.StateOK {
 			c.look(ctx, changed)
 		}
 		select {
@@ -181,14 +181,14 @@ func (c *Remote) Watch(ctx context.Context, changed func(connector.Scope)) error
 	}
 }
 
-func (c *Remote) look(ctx context.Context, changed func(connector.Scope)) {
+func (c *Remote) look(ctx context.Context, changed func(connectorwire.Scope)) {
 	things, newest, err := c.rows(ctx)
 	if err != nil {
 		return
 	}
 	c.inboxMu.Lock()
 	moved := !newest.Equal(c.newest)
-	same := slices.EqualFunc(things, c.things, func(a, b connector.InboxThing) bool {
+	same := slices.EqualFunc(things, c.things, func(a, b connectorwire.InboxThing) bool {
 		return a.Thread == b.Thread && a.Last == b.Last && a.Read == b.Read && a.Done == b.Done
 	})
 	c.newest = newest
@@ -197,22 +197,22 @@ func (c *Remote) look(ctx context.Context, changed func(connector.Scope)) {
 	}
 	c.inboxMu.Unlock()
 	if moved {
-		changed(connector.ScopeChats)
+		changed(connectorwire.ScopeChats)
 	}
 	if !same {
-		changed(connector.ScopeInbox)
+		changed(connectorwire.ScopeInbox)
 	}
 }
 
 // rows are the inbox's things of the newest conversations, those of the last week, and when the newest one moved:
 // what the watch keeps for Collect, and what inbox_things answers a things subscription, one computation (#6317).
-func (c *Remote) rows(ctx context.Context) ([]connector.InboxThing, time.Time, error) {
+func (c *Remote) rows(ctx context.Context) ([]connectorwire.InboxThing, time.Time, error) {
 	var page ChatsPage
 	if err := c.read(ctx, "connector.chats", map[string]any{"id": ID, "limit": watchChats, "keep": KeepContacts}, &page); err != nil {
 		return nil, time.Time{}, err
 	}
 	var newest time.Time
-	var things []connector.InboxThing
+	var things []connectorwire.InboxThing
 	for _, chat := range page.Chats {
 		if chat.Last.After(newest) {
 			newest = chat.Last
@@ -226,13 +226,13 @@ func (c *Remote) rows(ctx context.Context) ([]connector.InboxThing, time.Time, e
 }
 
 // thing is a conversation as the inbox sees it; an unread one carries its last messages for triage.
-func (c *Remote) thing(ctx context.Context, chat Chat) connector.InboxThing {
+func (c *Remote) thing(ctx context.Context, chat Chat) connectorwire.InboxThing {
 	last := strconv.FormatInt(chat.Last.UnixNano(), 10)
-	t := connector.InboxThing{Thread: chat.ID, Kind: "dm", Title: chat.Name, Sender: chat.Name, Preview: MaskCodes(chat.Preview),
-		At: chat.Last, Last: last, ReplyTo: "在「信息」里回复（Persona 不替你发）", Tier: connector.TierAction,
-		Tags: []connector.Tag{{Key: connector.TagChat, Value: chat.ID, Name: chat.Name}}}
+	t := connectorwire.InboxThing{Thread: chat.ID, Kind: "dm", Title: chat.Name, Sender: chat.Name, Preview: MaskCodes(chat.Preview),
+		At: chat.Last, Last: last, ReplyTo: "在「信息」里回复（Persona 不替你发）", Tier: connectorwire.TierAction,
+		Tags: []connectorwire.Tag{{Key: connectorwire.TagChat, Value: chat.ID, Name: chat.Name}}}
 	if chat.Group {
-		t.Kind, t.Label, t.Tier = "group", "群聊", connector.TierFYI
+		t.Kind, t.Label, t.Tier = "group", "群聊", connectorwire.TierFYI
 		if s, _, ok := strings.Cut(t.Preview, "："); ok {
 			t.Sender = s
 		}
@@ -242,7 +242,7 @@ func (c *Remote) thing(ctx context.Context, chat Chat) connector.InboxThing {
 	}
 	switch {
 	case chat.FromMe:
-		t.Done = connector.DoneReplied
+		t.Done = connectorwire.DoneReplied
 	case chat.Unread == 0:
 		t.Read = true
 	default:
@@ -299,26 +299,26 @@ var readTools = []string{"imessage_chats", "imessage_read", "imessage_search"}
 // assistant's tools (Tools), which read conversations.
 const inboxThings = "inbox_things"
 
-var _ connector.Catalog = (*Remote)(nil)
+var _ connectorwire.Catalog = (*Remote)(nil)
 
-// Catalog is connector.Catalog: the read tools as the derived catalog had them (the same names, descriptions and
+// Catalog is connectorwire.Catalog: the read tools as the derived catalog had them (the same names, descriptions and
 // schemas, so a subscription keeps its tool), and inbox_things. None while the switch is off.
-func (c *Remote) Catalog(context.Context) ([]connector.CatalogSource, error) {
-	src := connector.CatalogSource{ID: ID, Name: c.Name(), Tools: []connector.CatalogTool{}}
+func (c *Remote) Catalog(context.Context) ([]connectorwire.CatalogSource, error) {
+	src := connectorwire.CatalogSource{ID: ID, Name: c.Name(), Tools: []connectorwire.CatalogTool{}}
 	tools := c.Tools()
 	if len(tools) > 0 {
 		t := prompts.Tool("imessage_inbox_things")
 		tools = append(tools, proto.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
 	}
 	for _, t := range tools {
-		src.Tools = append(src.Tools, connector.CatalogTool{Name: strings.TrimPrefix(t.Name, ID+"_"), Description: t.Description,
+		src.Tools = append(src.Tools, connectorwire.CatalogTool{Name: strings.TrimPrefix(t.Name, ID+"_"), Description: t.Description,
 			InputSchema: t.InputSchema, ReadOnly: true})
 	}
-	return []connector.CatalogSource{src}, nil
+	return []connectorwire.CatalogSource{src}, nil
 }
 
-// CatalogCall is connector.Catalog: the read tools' JSON answers (CallJSON, as before), and inbox_things' rows.
-func (c *Remote) CatalogCall(ctx context.Context, q connector.CatalogQuery) (string, error) {
+// CatalogCall is connectorwire.Catalog: the read tools' JSON answers (CallJSON, as before), and inbox_things' rows.
+func (c *Remote) CatalogCall(ctx context.Context, q connectorwire.CatalogQuery) (string, error) {
 	if q.Tool == inboxThings {
 		if !c.AI() {
 			return "", errNotHanded
@@ -328,7 +328,7 @@ func (c *Remote) CatalogCall(ctx context.Context, q connector.CatalogQuery) (str
 			return "", errors.New(c.explain(err))
 		}
 		if things == nil {
-			things = []connector.InboxThing{}
+			things = []connectorwire.InboxThing{}
 		}
 		out, err := json.Marshal(map[string]any{"things": things})
 		return string(out), err
@@ -340,7 +340,7 @@ func (c *Remote) CatalogCall(ctx context.Context, q connector.CatalogQuery) (str
 	return string(out), err
 }
 
-// Tools is connector.ReadTools: none while the switch is off.
+// Tools is connectorwire.ReadTools: none while the switch is off.
 func (c *Remote) Tools() []proto.Tool {
 	if !c.AI() {
 		return nil
@@ -370,9 +370,9 @@ func (c *Remote) Call(ctx context.Context, name string, args json.RawMessage) (s
 	return "", fmt.Errorf("unknown tool %s", name)
 }
 
-var _ connector.ReadJSON = (*Remote)(nil)
+var _ connectorwire.ReadJSON = (*Remote)(nil)
 
-// CallJSON is connector.ReadJSON: the same answers for subscriptions, as JSON with an id on each item
+// CallJSON is connectorwire.ReadJSON: the same answers for subscriptions, as JSON with an id on each item
 // (persona_json.go).
 func (c *Remote) CallJSON(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, bool, error) {
 	if !slices.Contains(readTools, name) {
