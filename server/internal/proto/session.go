@@ -376,8 +376,6 @@ type Session struct {
 	Background []BackgroundTask `json:"background,omitempty"`
 	// Subagents the agent launched (Agent / Task tool); each one's transcript is the session "<id>@<agent id>".
 	Subagents []Subagent `json:"subagents,omitempty"`
-	// SwarmWorkers holds the native Antigravity Swarm roster, excluding the coordinator.
-	SwarmWorkers []SwarmWorker `json:"swarm_workers,omitempty"`
 	// Workflows are the Claude Code workflow runs (the Workflow tool) the agent launched in the last day, newest first:
 	// a running one is background work, as Background is (a running one is in Background too, kind "workflow").
 	Workflows []Workflow `json:"workflows,omitempty"`

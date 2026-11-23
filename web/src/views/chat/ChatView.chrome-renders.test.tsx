@@ -382,18 +382,20 @@ it("toggles the session overview and leaves it open while using the chat", async
 });
 
 it("shows the native Antigravity Swarm status in the session overview", async () => {
-  const session = row({ agent: "agy" });
-  await open(<ChatView mid="mac" sid="s1" inPage />, session);
-  await act(async () => {
-    host.querySelector<HTMLButtonElement>("[data-session-overview-trigger]")!.click();
-    await import("./SessionOverview");
-  });
+  const { SessionOverview } = await import("./SessionOverview");
+  const { emptyTaskIndex } = await import("../../lib/tasks");
+  let info = {};
+  fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(info), { status: 200, headers: { "Content-Type": "application/json" } })));
+  vi.useFakeTimers();
+  await act(async () => root.render(<SessionOverview id="test-overview" session={row({ agent: "agy" })}
+    machineName="Example computer" items={[]} tasks={emptyTaskIndex()} children={[]} />));
   const overview = host.querySelector("[data-session-overview]")!;
   expect(overview.querySelector("[data-swarm-roster]")).toBeNull();
-  act(() => applyCompleteSessions([{ ...session, swarm_workers: [
+  info = { swarm_workers: [
     { name: "Build", state: "working" },
     { name: "Review", state: "waiting" },
-  ] }]));
+  ] };
+  await act(() => vi.advanceTimersByTimeAsync(3000));
   const roster = overview.querySelector<HTMLDetailsElement>("[data-swarm-roster]")!;
   expect(roster.open).toBe(false);
   expect(roster.querySelector("summary")?.textContent).toContain(t("chat-sessionoverview.swarm_workers", { count: 2 }));
@@ -403,7 +405,8 @@ it("shows the native Antigravity Swarm status in the session overview", async ()
     "Build" + t("chat-sessionoverview.swarm_working"),
     "Review" + t("chat-sessionoverview.swarm_waiting"),
   ]);
-  act(() => applyCompleteSessions([{ ...session, swarm_workers: [{ name: "Review", state: "stopped" }] }]));
+  info = { swarm_workers: [{ name: "Review", state: "stopped" }] };
+  await act(() => vi.advanceTimersByTimeAsync(3000));
   expect(roster.open).toBe(true);
   expect(roster.querySelector("li")?.textContent).toContain(t("chat-sessionoverview.swarm_stopped"));
 });

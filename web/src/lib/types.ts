@@ -402,7 +402,6 @@ export interface Session {
    *  (#10661, `computer` set on each). Drawn as the owner's bubbles marked not delivered. */
   undelivered?: UndeliveredMessage[];
   subagents?: Subagent[];
-  swarm_workers?: { name: string; state: "working" | "waiting" | "stopped" | "unknown" }[];
   loop?: LoopInfo;
   /** The goal it works toward until it holds (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md). */
   goal?: GoalInfo;

@@ -1,11 +1,11 @@
 // The session overview's scrollable contents, loaded when the user turns it on.
 import "./SessionOverview.css";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { formatTokens } from "../../lib/tokens";
 import { contextLabel, contextTier, contextTooltip, contextUsage } from "../../lib/context-usage";
 import { sessionTitle, shortPath, stateOf } from "../../lib/format";
-import { credentialOwner } from "../../lib/api";
+import { api, credentialOwner, sessionPath } from "../../lib/api";
 import { openPanel } from "../../lib/panel";
 import { followChildSession, followSubagentLink } from "../../lib/subagent-link";
 import { getSession, useStore } from "../../lib/store";
@@ -72,7 +72,7 @@ export function SessionOverview({ id, session, machineName, items, tasks, childr
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3">
         <Environment session={session} machineName={machineName} onInfo={() => setInfoOpen(true)} />
         <OverviewContext session={session} />
-        {session.swarm_workers && session.swarm_workers.length > 0 && <SwarmRoster workers={session.swarm_workers} />}
+        {!hidden && session.agent === "agy" && <SwarmRoster key={`${mid}/${sid}`} mid={mid} sid={sid} />}
         {agents.length > 0 && <Subagents agents={agents} running={running} open={(agent) => {
           if (!current()) return;
           if (session.subagents?.some((entry) => entry.session_id === agent.session_id)) {
@@ -97,7 +97,27 @@ export function SessionOverview({ id, session, machineName, items, tasks, childr
   );
 }
 
-function SwarmRoster({ workers }: { workers: NonNullable<Session["swarm_workers"]> }) {
+type SwarmWorker = { name: string; state: "working" | "waiting" | "stopped" | "unknown" };
+
+function SwarmRoster({ mid, sid }: { mid: string; sid: string }) {
+  const [workers, setWorkers] = useState<SwarmWorker[]>([]);
+  useEffect(() => {
+    const abort = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const info = await api<{ swarm_workers?: SwarmWorker[] }>(`${sessionPath(mid, sid)}/info`, { signal: abort.signal });
+        if (!abort.signal.aborted) setWorkers(info.swarm_workers ?? []);
+      } catch {
+        // Keep the displayed roster across a transient read failure.
+      } finally {
+        if (!abort.signal.aborted) timer = setTimeout(refresh, 3000);
+      }
+    };
+    void refresh();
+    return () => { abort.abort(); clearTimeout(timer); };
+  }, [mid, sid]);
+  if (!workers.length) return null;
   const labels = {
     working: t("chat-sessionoverview.swarm_working"),
     waiting: t("chat-sessionoverview.swarm_waiting"),

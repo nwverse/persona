@@ -132,9 +132,3 @@ type Subagent struct {
 	// Tokens is its latest reply's context plus output tokens, as a workflow agent's (WorkflowAgent.Tokens).
 	Tokens int `json:"tokens,omitempty"`
 }
-
-// SwarmWorker is a worker in an Antigravity Swarm.
-type SwarmWorker struct {
-	Name  string `json:"name"`
-	State string `json:"state"` // working | waiting | stopped | unknown
-}

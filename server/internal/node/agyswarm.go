@@ -6,8 +6,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-
-	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const (
@@ -20,6 +18,11 @@ type agySwarmMember struct {
 	Phase    string `json:"phase"`
 	WakeMode string `json:"wake_mode"`
 	Killed   bool   `json:"killed"`
+}
+
+type agySwarmWorker struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
 }
 
 func (m agySwarmMember) state() string {
@@ -37,7 +40,7 @@ func (m agySwarmMember) state() string {
 
 // agySwarmWorkers reads the current roster for a verified agy conversation.
 // Swarm workers can change state without adding a step to the parent's transcript.
-func (n *Node) agySwarmWorkers(conversation string) []proto.SwarmWorker {
+func (n *Node) agySwarmWorkers(conversation string) []agySwarmWorker {
 	if !validID(conversation) {
 		return nil
 	}
@@ -65,11 +68,11 @@ func (n *Node) agySwarmWorkers(conversation string) []proto.SwarmWorker {
 	if json.Unmarshal(raw, &roster) != nil {
 		return nil
 	}
-	var workers []proto.SwarmWorker
+	var workers []agySwarmWorker
 	for _, name := range slices.Sorted(maps.Keys(roster.Members)) {
 		member := roster.Members[name]
 		if member.Role == "worker" && strings.TrimSpace(name) != "" {
-			workers = append(workers, proto.SwarmWorker{Name: name, State: member.state()})
+			workers = append(workers, agySwarmWorker{Name: name, State: member.state()})
 		}
 	}
 	return workers
