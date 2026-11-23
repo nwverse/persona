@@ -21,7 +21,7 @@ def five_lanes(source):
     projects = shards.modules(source)
     features = [project + ":test" for project in projects if project.startswith(":feature:")]
     return {
-        "lint-build": ["lint", ":app:assembleDebug"],
+        "lint-build": ["lint", ":app:assembleDebug", ":app:moduleGuard"],
         "test-core": [project + ":test" for project in projects if project.startswith(":core:")],
         "test-feature-0": features[0::2],
         "test-feature-1": features[1::2],
@@ -43,12 +43,14 @@ class ShardTests(unittest.TestCase):
         projects = shards.modules(SETTINGS)
         lanes = {lane: shards.tasks(SETTINGS, lane) for lane in CI_LANES}
         self.assertEqual(len(lanes), 2)
-        for task in [project + ":test" for project in projects] + ["lint", ":app:assembleDebug"]:
+        for task in [project + ":test" for project in projects] + ["lint", ":app:assembleDebug", ":app:moduleGuard"]:
             self.assertEqual(sum(task in selected for selected in lanes.values()), 1, task)
         self.assertTrue(all(lanes.values()))
         self.assertIn(":core:contracts:test", lanes["test-1"])  # JVM test lifecycle stays covered.
         self.assertIn(":app:test", lanes["test-1"])  # Debug and Release, not testDebugUnitTest.
         self.assertIn("lint", lanes["lint-build-test-0"])
+        self.assertIn(":module:voice:test", lanes["lint-build-test-0"])  # The modules' own tests (#13433).
+        self.assertIn(":app:moduleGuard", lanes["lint-build-test-0"])
 
     def test_literals_multiline_comments_duplicates_and_included_builds(self):
         source = '''
@@ -65,14 +67,15 @@ class ShardTests(unittest.TestCase):
         self.assertEqual(shards.modules(source), [":app", ":core:domain", ":feature:new"])
 
     def test_new_modules_and_nested_paths_have_a_fallback(self):
-        source = 'include(":core:new", ":feature:new:deep", ":platform:new", ":new", ":core")'
-        self.assertEqual(shards.tasks(source, "lint-build-test-0"), ["lint", ":app:assembleDebug", ":feature:new:deep:test"])
+        source = 'include(":core:new", ":feature:new:deep", ":platform:new", ":new", ":core", ":module:new")'
+        self.assertEqual(shards.tasks(source, "lint-build-test-0"),
+                         ["lint", ":app:assembleDebug", ":app:moduleGuard", ":feature:new:deep:test", ":module:new:test"])
         self.assertEqual(shards.tasks(source, "test-1"), [":core:new:test", ":core:test", ":new:test", ":platform:new:test"])
 
     def test_full_and_lint_keep_original_all_module_selectors(self):
-        self.assertEqual(shards.tasks(SETTINGS, "full"), ["lint", "test", ":app:assembleDebug"])
-        self.assertEqual(shards.tasks(SETTINGS, "lint-build-test-0")[:2], ["lint", ":app:assembleDebug"])
-        self.assertEqual(shards.tasks('include(":app")', "lint-build-test-0"), ["lint", ":app:assembleDebug"])
+        self.assertEqual(shards.tasks(SETTINGS, "full"), ["lint", "test", ":app:assembleDebug", ":app:moduleGuard"])
+        self.assertEqual(shards.tasks(SETTINGS, "lint-build-test-0")[:3], ["lint", ":app:assembleDebug", ":app:moduleGuard"])
+        self.assertEqual(shards.tasks('include(":app")', "lint-build-test-0"), ["lint", ":app:assembleDebug", ":app:moduleGuard"])
 
     def test_computed_or_malformed_declarations_fail_closed(self):
         for source in ('include(projects)', 'include(":core:$name")', 'include(":core:" + name)',

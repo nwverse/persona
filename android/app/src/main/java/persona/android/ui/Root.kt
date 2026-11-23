@@ -100,7 +100,6 @@ import persona.feature.machines.machinesEntries
 import persona.feature.machines.rememberSidebarUsage
 import persona.feature.settings.*
 import persona.feature.terminal.terminalEntries
-import persona.feature.voice.voiceEntries
 import persona.platform.notify.Notify
 import persona.platform.phonetools.*
 import kotlinx.coroutines.CancellationException
@@ -708,9 +707,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val shellNeedsYou = remember(agentRows, sessions, needsMessages) {
         persona.feature.assistant.needsYouBySession(agentRows, sessions, needsMessages)
     }
-    // Voice chat is offered while the hub runs a voice extension: asked each time the Persona tab shows while connected.
-    val voiceExtension = persona.feature.voice.rememberVoiceExtension(session.voice,
-        active = selected == AppTab.Persona && connection == ConnectionState.Online)
+    // The modules on for this hub (Modules.kt): carried by the build, and offered by the hub when they need a feature.
+    val hubFeatures by session.features.collectAsStateWithLifecycle()
+    val modules = remember(hubFeatures) { persona.android.Modules.carried.active(hubFeatures) }
+    // The modules' items in the assistant's title menu, asked each time the Persona tab shows while connected.
+    val moduleUi = { id: String -> persona.core.moduleapi.ModuleUiContext(navigator, session.modules[id],
+        active = selected == AppTab.Persona && connection == ConnectionState.Online) }
+    val assistantModuleActions = modules.flatMap { module ->
+        key(module.id) { module.menuActions(persona.core.moduleapi.MenuSlot.AssistantTitle, moduleUi(module.id)) }
+    }
     // Links over the whole shell, persona:// links from conversations, "Hand to Persona" from pages (ShellLinks.kt).
     ShellLinkHost(session, navigator, shell.feedback) {
         val uriHandler = LocalUriHandler.current
@@ -1118,7 +1123,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         requestedSession = assistantRequest, onKnowledge = { sidebarDestination(KnowledgeRoute) },
                         needsYou = needsYou, shellNeedsYou = shellNeedsYou, onOpenNeed = { line -> openWithCard(needsYouRoute(line), fromPage = true) },
                         onOpenInbox = { sidebarDestination(InboxRoute) },
-                        onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
+                        moduleActions = assistantModuleActions,
                         onTodos = { sidebarDestination(TodosRoute) },
                         todoCount = uncompletedTodosCount,
                         showTodos = todosSupported, mentionSessions = session.sessions.sessions,
@@ -1191,7 +1196,11 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 entry<KnowledgeDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
             }
             settingsDetailEntries(navigator, services, askSubscriptions)
-            session.voice?.let { voiceEntries(navigator, it, session.identity, onModelConfiguration = { purpose -> navigator.navigate(ModelPurposeRoute(purpose)) }) } ?: run { entry<VoiceRoute> { UnavailablePage(stringResource(R.string.app_demo_no_voice), navigator) } }
+            // Each module's pages (Modules.kt); in demo mode a module has no services and says why its pages cannot work.
+            modules.forEach { module ->
+                module.navEntries(this, persona.core.moduleapi.ModuleNavContext(navigator, session.modules[module.id],
+                    unavailable = { message -> UnavailablePage(message, navigator) }))
+            }
             tools?.run { register(navigator) }
         }
         val panes: (NavKey, Boolean) -> NavEntry<NavKey> = { key, singleRightStack ->

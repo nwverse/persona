@@ -18,7 +18,8 @@ usage() {
     'Accept SDK licenses using sdkmanager --licenses if required by your SDK tools.' \
     'Toolchain versions are read from android/gradle/libs.versions.toml.' \
     'No arguments runs the original complete verification. lint-build-test-0 owns checker tests,' \
-    'translation/token checks, all-module lint, the debug APK and feature test shard 0; test-1' \
+    'translation/token checks, all-module lint, the debug APK, the module guard (:app:moduleGuard),' \
+    'feature test shard 0 and the :module:* tests; test-1' \
     'runs core, feature shard 1, platform and app tests. Together the two lanes run every' \
     'included module once using its all-variant test lifecycle task (release unit tests included).' \
     '--profile writes Gradle timing reports to android/build/reports/profile/.' \
@@ -157,6 +158,10 @@ if [[ $LANE == full || $LANE == lint-build-test-0 ]]; then
   run_check 'generated design tokens' python3 -B "$ROOT/scripts/assets/gen_tokens.py" --check \
     --kotlin "$ROOT/android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt"
   run_check 'icon meanings' python3 -B "$ROOT/scripts/assets/gen_icon_meanings.py" --check
+  # The module guard's rules (build-logic ModuleGuard); the guard itself, :app:moduleGuard, runs with the lane's tasks.
+  cd "$ROOT/android"
+  run_check 'module guard tests' bash ./gradlew --no-daemon --no-watch-fs --console=plain --max-workers="$WORKERS" \
+    -p build-logic :convention:test
 fi
 
 # The commit About shows: an explicit value, else the runner's public GITHUB_SHA, else unknown. Never read from git here.
