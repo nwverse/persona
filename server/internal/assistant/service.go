@@ -1065,12 +1065,13 @@ func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
 	if s.meetingTurnStarted(r.MachineID, r.SessionID, true) {
 		return // a meeting's batch started it: a side exchange (meeting_turns.go)
 	}
-	s.turnStartedObserved(ctx, r, true)
+	s.turnStartedObserved(ctx, r, true, startRow{})
 }
 
-func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn bool) {
+// turnStartedObserved: session r started a turn; row is the list's row that showed it (zero: the hub's own word).
+func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn bool, row startRow) {
 	s.quietTurnOver(r.MachineID, r.SessionID) // a turn with no output before this one is over (silent_turns.go)
-	s.taskWorking(ctx, r.MachineID, r.SessionID)
+	s.taskWorking(ctx, r.MachineID, r.SessionID, row)
 	s.workStartedObserved(ctx, r.MachineID, r.SessionID, time.Now(), newTurn)
 	s.availTurnStarted(r.MachineID, r.SessionID, newTurn, time.Now())
 }
