@@ -1,0 +1,20 @@
+{
+  "err_store": "Watch cards are temporarily unavailable. Try again in a moment.",
+  "err_read_only": "This device can only view watch cards.",
+  "err_not_found": "That watch card no longer exists.",
+  "err_question": "Say what the card should check, in up to {max} characters.",
+  "err_title": "Give the card a name of up to {max} characters on one line.",
+  "err_unit": "Keep the unit to {max} characters.",
+  "err_display": "Choose how the card shows its answer: number, status light, table or trend.",
+  "err_alert": "Choose when to alert: above or below a number, when the light turns red, or when the answer changes.",
+  "err_schedule": "Use a time like 09:00, an interval like 2h, or a cron rule.",
+  "err_project": "That project isn't in the knowledge base.",
+  "err_too_many": "You can keep up to {max} watch cards. Delete one to add another.",
+  "err_not_draft": "This card is already on Overview. Edit it instead.",
+  "err_draft": "Confirm this card first.",
+  "err_text": "The result needs one line of up to {max} characters.",
+  "err_number": "The number isn't valid.",
+  "err_status": "The status must be ok, warn or bad.",
+  "err_table": "A table can have up to {cols} columns and {rows} rows of short cells.",
+  "push_subtitle": "Watch card"
+}

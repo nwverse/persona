@@ -41,8 +41,9 @@ export function Knowledge({ kind, id, onToggleSidebar }: { kind?: string; id?: s
     setReloadKey((k) => k + 1);
   };
 
-  // /kb/map: the knowledge map (topics and projects as a mind map), a page of its own.
-  if (kind === "map") return <KnowledgeMap onToggleSidebar={onToggleSidebar} />;
+  // /kb/map: the knowledge map (topics and projects as a mind map), a page of its own; /kb/map/<project slug> opens its
+  // project tree with that project selected (Overview's project cards, #13019).
+  if (kind === "map") return <KnowledgeMap key={id ?? ""} focus={id} onToggleSidebar={onToggleSidebar} />;
 
   return (
     <div className="@container flex h-full min-w-0">

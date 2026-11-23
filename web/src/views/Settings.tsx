@@ -35,6 +35,7 @@ import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
 import { StartPageGroup } from "./settings/StartPage";
+import { OverviewLayoutGroup } from "./settings/OverviewLayout";
 import { AgentsDisplayRow } from "./settings/AgentsDisplayRow";
 import { AgentGroup } from "./settings/AgentGroup";
 import { AssistantSettings } from "./settings/AssistantSettings";
@@ -672,6 +673,7 @@ function General({ onModel }: { onModel: () => void }) {
 
       <DesktopSettings />
       <StartPageGroup />
+      <OverviewLayoutGroup />
       <SidebarPagesGroup />
 
       <section id="settings-translation" className="scroll-mt-4">

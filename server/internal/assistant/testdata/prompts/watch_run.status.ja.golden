@@ -1,0 +1,6 @@
+ウォッチカード「Open orders」（id w_1a2b）：オーナーがこれを確認し、結果を概要のカードに表示しておくよう頼んでいます。
+
+確認すること：How many orders are waiting in the Garden app shop?
+
+いまの答えを調べたら、watch_report を id "w_1a2b" で一度だけ呼び、`status` のランプと、その理由を一行の `text` で渡します。判断できるときは `status`（ok / warn / bad）も付けます。`text` はひと目で読める短い一行にし、答えが見つからなかったときは推測せず、そう書いて status を warn にします。
+notify_user は呼ばないでください。カードのルールに当てはまったときは Persona が自分で通知します。返答は一行で。

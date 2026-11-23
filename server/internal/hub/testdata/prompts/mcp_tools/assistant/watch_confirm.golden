@@ -1,0 +1,15 @@
+{
+  "name": "watch_confirm",
+  "description": "Put an agreed draft card on Overview and start its schedule.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "id"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      }
+    }
+  }
+}

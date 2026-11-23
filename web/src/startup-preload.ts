@@ -541,18 +541,42 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // 285 B in each language, measured in one environment against main c04291e493 after merging it (ja 484,098 B to
 // 484,383 B; en 481,251 B to 481,536 B, zh-Hans 481,974 B to 482,259 B). Main had 108 B of room, so the budget is
 // main's 484,206 B ceiling plus those 285 B.
+// #13021: main ec2563b7d7 itself measures ja 484,587 B (en 481,938 B, zh-Hans 482,579 B), 96 B over the 484,491 B
+// above. The question rail's marks add 141 B in ja (en 141 B, zh-Hans 141 B): the rail now drawn on a touch screen for
+// Persona's chats, the marks' state in ChatView and the lazy import of views/chat/QuestionMarksHost.tsx (the rules and
+// read marks moved out of the first screen into that chunk, which took 808 B off the first version). ja 484,728 B;
+// 10 B of room on top.
+// #13026: main ec2563b7d7 itself measures ja 484,587 B (en 481,938 B, zh-Hans 482,579 B), 96 B over the 484,491 B
+// above. Sorting into projects adds 80 B in ja (en 80 B, zh-Hans 80 B): the To-dos page's unsorted count and the line
+// that opens the sort sheet (views/todos/SortUnsortedLine.tsx, lib/todo-sort.ts isUnsorted); the sheet itself is a
+// chunk of its own (views/todos/SortTodos.tsx). ja 484,667 B; 10 B of room on top.
+// #12927: main ec2563b7d7 itself measures ja 484,587 B (en 481,938 B, zh-Hans 482,579 B), 96 B over the 484,491 B
+// above, so its build fails on its own. The project tree adds nothing to the first screen (it is the knowledge map's
+// chunk): this tree measures ja 484,584 B (en 481,935 B, zh-Hans 482,576 B), 3 B under main. The budget is this tree's
+// ja 484,584 B with 10 B of room on top.
+// #13020: main ec2563b7d7 itself measures ja 484,587 B (en 481,938 B, zh-Hans 482,579 B), 96 B over the 484,491 B
+// above, so its build fails on its own. The watch cards add nothing to the first screen (Overview's wall is idle-tier,
+// IDLE_TIER_BUDGET below): this tree measures ja 484,585 B (en 481,936 B, zh-Hans 482,577 B), 2 B under main. The
+// budget is this tree's ja 484,585 B with 10 B of room on top.
+// #13019 (stacked on #13745, #13796, #13784 and #13882, each refreshed on main ec2563b7d7): main and the four merged
+// measure ja 484,871 B (en 482,222 B, zh-Hans 482,863 B), 284 B over main's own 484,587 B (the four's 216 B measured
+// one by one, the rest how they compress together). Overview by project adds 7 B in ja (the lazy import of
+// views/overview/ProjectOverview.tsx and the Classic layout switch, lib/overview-layout.ts): ja 484,878 B. 10 B of room
+// on top.
 // #13846: the module host serves the chat slots, Settings categories and card renderers (core/ChatSlots.tsx, the
 // served fields and the hub flag rule in core/module-host.ts, their places in views/chat/ChatView.tsx, Composer.tsx and
 // Interactions.tsx). 799 B in ja, measured in one environment against main 7be9a71cc (ja 484,445 B to 485,244 B; en
 // 481,786 B to 482,585 B, zh-Hans 482,421 B to 483,220 B). Main had 46 B of room, so the budget is main's 484,491 B
 // ceiling plus those 799 B. The web half of #13431 takes voice's first-screen parts off with the move into a module.
+// Merged, the four stacked branches add 284 B and Overview by project adds 7 B to main's 484,587 B ja first screen;
+// the module host adds its measured 799 B and main's 46 B of room is kept: 485,697 B.
 // #13803: mount-once long-chat windowing adds 200 B to the ja first screen, measured in one environment against main at
 // 464c1b17b3 (ja 484,433 B to 484,633 B; en 481,792 B to 481,992 B, zh-Hans 482,418 B to 482,618 B). The near-viewport
 // observer, searchable estimated placeholders and synchronous scroll compensation start with the chat; rich bodies stay
 // deferred. The budget moves by the same 200 B, keeping the 58 B of room main had. Merged with #13846, the measured
 // first screens are ja 485,259 B, en 482,600 B and zh-Hans 483,235 B; the budget keeps #13846's 46 B of room rather
-// than adding the whole separate allowance again.
-export const FIRST_SCREEN_BUDGET = 485_305;
+// than adding the whole separate allowance again. Keep the stricter existing limit while combining these changes.
+export const FIRST_SCREEN_BUDGET = 485_697;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -788,7 +812,9 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // And 26 B for the stalled-background hint (#13744): the idle sidebar rows (SidebarRows.tsx) draw "Background commands
 // quiet for N h" under a Working row whose background work has stalled (ui/BackgroundStallHint.tsx). Main 7b023aa70 with
 // #13842 sends 46,091 B at idle, 16 B over; 10 B of room on top.
-export const IDLE_TIER_BUDGET = 46_101;
+// And 29 B for the watch wall (#13020): Overview (idle) gains the lazy import of views/watch/WatchWall.tsx and its
+// Suspense; the wall itself loads as a chunk of its own. Merged with main ec2563b7d7 (46,101 B above, #13744): 46,101 + 29 = 46,130 B.
+export const IDLE_TIER_BUDGET = 46_130;
 
 const gzip = promisify(gzipCompress);
 

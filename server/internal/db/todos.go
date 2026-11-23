@@ -82,6 +82,9 @@ type TodoRow struct {
 	// Responsible is an external responsible party that is not a Persona-started agent (#12712): a long-running
 	// external session or a person, with optional machine_id / session_id hints; nil while none is set.
 	Responsible *TodoResponsible `json:"responsible,omitempty"`
+	// Temporary marks a one-off to-do that belongs to no project (#13026, docs/assistant/todos.md "Sorting into
+	// projects"). Filing it under a project clears it, and marking it clears the project (TodoEdit.Apply).
+	Temporary bool `json:"temporary"`
 	// Images are the to-do's pictures, in the order the client supplied them. CreateTodo stores Data atomically with
 	// the row; ListTodos reconstructs only their metadata.
 	Images []TodoImage `json:"images,omitempty"`
@@ -164,13 +167,13 @@ type TodoAgentRow struct {
 }
 
 const todoColumns = `id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by, done_reason, reopened_at, quiet,
-	due_at, due_date, remind_at, reminded_at, priority, project, kind, seen_at, inbox_item, part_of, after_ids, restored_at, someday_until, require_accepted_after, responsible`
+	due_at, due_date, remind_at, reminded_at, priority, project, kind, seen_at, inbox_item, part_of, after_ids, restored_at, someday_until, require_accepted_after, responsible, temporary`
 
 // todoDest is where a row of todoColumns is scanned to.
 func todoDest(r *TodoRow) []any {
 	return []any{&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy,
 		&r.DoneReason, &r.ReopenedAt, &r.Quiet, &r.DueAt, &r.DueDate, &r.RemindAt, &r.RemindedAt, &r.Priority, &r.Project, &r.Kind,
-		&r.SeenAt, &r.InboxItem, &r.PartOf, &r.After, &r.RestoredAt, &r.SomedayUntil, &r.RequireAcceptedAfter, &r.Responsible}
+		&r.SeenAt, &r.InboxItem, &r.PartOf, &r.After, &r.RestoredAt, &r.SomedayUntil, &r.RequireAcceptedAfter, &r.Responsible, &r.Temporary}
 }
 
 // ListTodos returns all todos ordered by created_at DESC, with image metadata but without image bytes.
@@ -353,6 +356,9 @@ type TodoEdit struct {
 	RemindAt    *time.Time
 	Priority    *string
 	Project     *string
+	// Temporary marks (true) or unmarks a one-off to-do (#13026). A project set by the same edit wins: a to-do filed
+	// under a project is no longer temporary, and one marked temporary leaves its project.
+	Temporary *bool
 	// Origin: the conversation (or agent) the task belongs to now; a task whose supervisor was handed to another
 	// conversation moves with it (assistant/task_leader.go rehome).
 	Origin *string
@@ -406,8 +412,17 @@ func (e TodoEdit) Apply(cur *TodoRow, at time.Time) {
 	if e.Priority != nil {
 		cur.Priority = *e.Priority
 	}
+	if e.Temporary != nil {
+		cur.Temporary = *e.Temporary
+		if cur.Temporary {
+			cur.Project = ""
+		}
+	}
 	if e.Project != nil {
 		cur.Project = *e.Project
+		if cur.Project != "" {
+			cur.Temporary = false
+		}
 	}
 	if e.Origin != nil {
 		cur.Origin = *e.Origin
@@ -476,10 +491,10 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 		_, err = tx.Exec(ctx, `UPDATE todos SET title = $2, notes = $3, done_at = $4, updated_at = $5, start_error = $6,
 			done_by = $7, done_reason = $8, reopened_at = $9, due_at = $10, due_date = $11, remind_at = $12, reminded_at = $13,
 			priority = $14, project = $15, origin = $16, part_of = $17, after_ids = $18, inbox_item = $19,
-			someday_until = $20, require_accepted_after = $21, responsible = $22 WHERE id = $1`,
+			someday_until = $20, require_accepted_after = $21, responsible = $22, temporary = $23 WHERE id = $1`,
 			cur.ID, cur.Title, cur.Notes, cur.DoneAt, cur.UpdatedAt, cur.StartError, cur.DoneBy, cur.DoneReason, cur.ReopenedAt,
 			cur.DueAt, cur.DueDate, cur.RemindAt, cur.RemindedAt, cur.Priority, cur.Project, cur.Origin, cur.PartOf, nonNilIDs(cur.After), cur.InboxItem,
-			cur.SomedayUntil, cur.RequireAcceptedAfter, resp)
+			cur.SomedayUntil, cur.RequireAcceptedAfter, resp, cur.Temporary)
 		if err != nil {
 			return err
 		}

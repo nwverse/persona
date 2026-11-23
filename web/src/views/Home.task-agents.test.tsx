@@ -1,6 +1,7 @@
 // The overview's task cards say who works on each task (#10904): the lead agent's computer, model and effort as its
 // model pill names them, "+N" for its other agents, a held delivery first, and today's "N agents" while no row is read.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setClassicOverview } from "../lib/overview-layout";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { LauncherModels } from "../lib/launcher-models";
 import type { ModelList } from "../lib/session-models";
@@ -174,3 +175,6 @@ describe("a task card on a touch screen (#11442)", () => {
     expect(classOf(inner, /<a href="\/todos\?id=a" class="([^"]*)"/).some((c) => c.startsWith("after:"))).toBe(false);
   });
 });
+
+// these tests read the classic layout's sections (#13019: off by default, Settings › General › Overview)
+beforeEach(() => setClassicOverview(true));

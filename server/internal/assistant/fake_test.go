@@ -142,6 +142,8 @@ type fakeHub struct {
 	judgeBy      func(input string) string // when set, what the done judge answers to its input (instead of f.judge)
 	outcome      string                    // what the outcome model answers (todo_outcome.go; "": an error)
 	outcomeAsked []modelCall
+	sortReply    string // what the to-do sort's model answers (todo_sort.go; "": an error)
+	sortAsked    []modelCall
 	lessons      string // what the lessons model answers (task_lessons.go; "": an error)
 	lessonsAsked []modelCall
 	retired      []string         // the session ids of session.retire and of session.stop with retire (the done and idle passes)
@@ -1634,6 +1636,9 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case strings.Contains(in.System, "给一件做完的任务记结论"): // the outcome of a finished task (todo_outcome.go)
 			f.outcomeAsked = append(f.outcomeAsked, modelCall{in.System, user})
 			reply, fail = f.outcome, f.outcome == ""
+		case strings.Contains(in.System, `{"items":[{"todo":`): // the to-do sort (todo_sort.go), in any language
+			f.sortAsked = append(f.sortAsked, modelCall{in.System, user})
+			reply, fail = f.sortReply, f.sortReply == ""
 		case strings.Contains(in.System, `{"lessons":[`): // the lessons of an accepted task (task_lessons.go), in any language
 			f.lessonsAsked = append(f.lessonsAsked, modelCall{in.System, user})
 			reply, fail = f.lessons, f.lessons == ""
