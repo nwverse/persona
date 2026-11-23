@@ -75,22 +75,38 @@ type Kernel struct {
 	facts    *modapi.ScheduleFacts
 }
 
-// New loads mods in order, leaving out those off says are switched off (off may be nil), those whose needs are not
-// loaded, those written for another API, and those whose Register fails. logf may be nil.
+// New loads mods, leaving out those off says are switched off (off may be nil), those written for another API or
+// not built in, those that declare a slot this host does not serve, those whose needs do not load (whatever their
+// place in the list; a cycle of needs loads none of them), and those whose Register fails. A module registers after
+// the modules it needs, and after those it wants that load; otherwise list order holds. An id listed again is
+// ignored after its first entry. logf may be nil.
 func New(mods []modapi.Module, off func(id string) bool, logf func(format string, args ...any)) *Kernel {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	k := &Kernel{skipped: map[string]string{}, settings: map[string]modapi.Setting{}}
+	skip := func(id, why string) {
+		k.skipped[id] = why
+		if why != "switched off" {
+			logf("module %s not loaded: %s", id, why)
+		}
+	}
+	type candidate struct {
+		m    modapi.Module
+		info modapi.Info
+	}
+	var pending []candidate
 	seen := map[string]bool{}
 	for _, m := range mods {
 		info := m.Info()
 		why := ""
 		switch {
 		case info.ID == "":
-			why = "no id"
+			logf("module without an id not loaded")
+			continue
 		case seen[info.ID]:
-			why = "listed twice"
+			logf("module %s listed twice: the later entry is ignored", info.ID)
+			continue
 		case info.API != modapi.API:
 			why = fmt.Sprintf("written for module API %d, this host serves %d", info.API, modapi.API)
 		case info.Origin != modapi.OriginBuiltin:
@@ -98,43 +114,57 @@ func New(mods []modapi.Module, off func(id string) bool, logf func(format string
 		case off != nil && off(info.ID):
 			why = "switched off"
 		}
+		seen[info.ID] = true
 		if why == "" {
 			if err := served(info); err != nil {
 				why = err.Error()
 			}
 		}
-		if why == "" {
-			for _, need := range info.Needs {
-				if !k.Loaded(need) {
-					why = "needs " + need + ", which is not loaded"
-					break
-				}
-			}
-		}
-		if info.ID != "" {
-			seen[info.ID] = true
-		}
 		if why != "" {
-			if info.ID != "" {
-				k.skipped[info.ID] = why
-			}
-			if why != "switched off" {
-				logf("module %s not loaded: %s", info.ID, why)
-			}
+			skip(info.ID, why)
 			continue
 		}
-		h := &host{info: info, settings: map[string]modapi.Setting{}, logf: logf}
-		if err := m.Register(h); err != nil {
-			k.skipped[info.ID] = "register: " + err.Error()
-			logf("module %s not loaded: register: %v", info.ID, err)
+		pending = append(pending, candidate{m, info})
+	}
+	waiting := func(id string) bool {
+		return slices.ContainsFunc(pending, func(c candidate) bool { return c.info.ID == id })
+	}
+	// Each round registers the first module whose needs are loaded and whose wants are not still waiting; when none
+	// is (wants in a cycle), the first whose needs are loaded. A module whose needs can no longer load is left out.
+	for len(pending) > 0 {
+		next := -1
+		for _, strict := range []bool{true, false} {
+			next = slices.IndexFunc(pending, func(c candidate) bool {
+				return !slices.ContainsFunc(c.info.Needs, func(n string) bool { return !k.Loaded(n) }) &&
+					(!strict || !slices.ContainsFunc(c.info.Wants, waiting))
+			})
+			if next >= 0 {
+				break
+			}
+		}
+		if next < 0 {
+			for _, c := range pending {
+				for _, n := range c.info.Needs {
+					if !k.Loaded(n) {
+						skip(c.info.ID, "needs "+n+", which is not loaded")
+						break
+					}
+				}
+			}
+			break
+		}
+		c := pending[next]
+		pending = slices.Delete(pending, next, next+1)
+		h := &host{info: c.info, settings: map[string]modapi.Setting{}, logf: logf}
+		if err := c.m.Register(h); err != nil {
+			skip(c.info.ID, "register: "+err.Error())
 			continue
 		}
 		if err := k.take(h); err != nil {
-			k.skipped[info.ID] = err.Error()
-			logf("module %s not loaded: %v", info.ID, err)
+			skip(c.info.ID, err.Error())
 			continue
 		}
-		k.loaded = append(k.loaded, info)
+		k.loaded = append(k.loaded, c.info)
 	}
 	return k
 }

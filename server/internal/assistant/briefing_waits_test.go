@@ -17,6 +17,7 @@ import (
 // The fixed direction rows come from the same ledgers as supervision. A task that was dispatched and later stopped is
 // named; one that was never dispatched is only counted. All ids and secrets here are placeholders on a fake hub.
 func TestBriefDirectionsListStoppedWork(t *testing.T) {
+	needsBriefingModule(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 	e := newTodoEventEnv(t, nil)
@@ -250,6 +251,7 @@ func TestBriefDirectionsListStoppedWork(t *testing.T) {
 // The owner reads parked-until values in the hub's configured zone, directions by conversation name rather than raw ID,
 // and every ordinary task row with the same to-do URL in both the rich card and its complete plain-text substitute.
 func TestBriefDirectionsUseHubZoneNamesAndTaskLinks(t *testing.T) {
+	needsBriefingModule(t)
 	ctx := context.Background()
 	now := time.Date(2030, 1, 2, 20, 0, 0, 0, time.UTC)
 	until := time.Date(2030, 1, 3, 1, 30, 0, 0, time.UTC)
@@ -393,6 +395,7 @@ type briefingWaitsJSON struct {
 // defaultTestWaits are the briefing module's wait rules with nothing set.
 func defaultTestWaits(t *testing.T, s *Service) modapi.WaitRules {
 	t.Helper()
+	needsBriefingModule(t)
 	w, ok := s.briefingWaits(Settings{})
 	if !ok {
 		t.Fatal("the briefing module is not loaded")
@@ -401,6 +404,7 @@ func defaultTestWaits(t *testing.T, s *Service) modapi.WaitRules {
 }
 
 func TestBriefingWaitsSettingUsesSupervisionDefaultsAndApprovalChange(t *testing.T) {
+	needsBriefingModule(t)
 	ctx := context.Background()
 	s := newTestService(t, newFakeHub().withMachine())
 	var registered *ownSetting

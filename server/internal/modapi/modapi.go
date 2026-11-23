@@ -36,7 +36,8 @@ type Info struct {
 	Origin Origin `json:"origin"`
 	// Title is a short English label for logs and settings ("Daily briefing"); clients localize by id.
 	Title string `json:"title,omitempty"`
-	// Needs are module ids that must be loaded for this one to load; Wants are ones it uses when they are.
+	// Needs are module ids that must be loaded for this one to load (it may import them); Wants are ones it uses
+	// when they are, through the kernel only: a wanted module may be left out of the build.
 	Needs []string `json:"needs,omitempty"`
 	Wants []string `json:"wants,omitempty"`
 	// Feature is the wire feature flag announced while the module is loaded ("" for none).

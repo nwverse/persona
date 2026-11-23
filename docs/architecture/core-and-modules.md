@@ -63,10 +63,12 @@ package. A module may later keep its own prompts in its own tree, under the same
 
 ### Loading
 
-The manager loads modules once, in `assistant.New`, before anything a module adds to is set up. In list order the
-kernel leaves out a module that is switched off, is written for another `api`, is not `builtin`, declares a slot the
-host does not serve yet, needs a module that is not loaded, or whose `Register` fails. A module left out adds nothing,
-including what it added before failing; why is kept (`Kernel.Skipped`) and logged.
+The manager loads modules once, in `assistant.New`, before anything a module adds to is set up. The kernel leaves out a
+module that is switched off, is written for another `api`, is not `builtin`, declares a slot the host does not serve
+yet, needs a module that does not load (wherever it stands in the list; a cycle of needs loads none of them), or whose
+`Register` fails. A module registers after the modules it needs and after those it wants that load; otherwise list
+order holds. `wants` never keeps a module from loading. An id listed again is ignored after its first entry. A module
+left out adds nothing, including what it added before failing; why is kept (`Kernel.Skipped`) and logged.
 
 ### Slots
 
@@ -83,8 +85,11 @@ missing quietly.
 ### The switch
 
 - **At build time**: the build tag `persona_without_<id>` leaves one module out, `persona_core_only` leaves every module
-  out. `go build -tags persona_core_only ./...` must pass; `scripts/ci/server.sh build` builds both and runs the module
-  tests with them.
+  out. `go build -tags persona_core_only ./...` must pass. `scripts/ci/server.sh build` builds both and runs, with each
+  tag, the module and kernel tests and a `-run` subset of `internal/assistant` (Brief, Module, Setting, Routine, Facts,
+  ScheduledConfiguration, NorthStar, Accept, Later, Golden): the assistant's tests of the briefing itself skip
+  (`needsBriefingModule`), and `TestBuildWithoutBriefingLoadsNone` checks the core without it. The whole package passes
+  with both tags too (about 9 minutes each, too long for the lane).
 - **At run time**: the settings row `modules` (the `settings` table, as every other setting; no state file) holds
   `{"disabled": ["<id>", …]}`. The manager reads it once where it starts (`server/internal/assistant/main.go`,
   `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so a change takes effect at the next
@@ -93,15 +98,19 @@ missing quietly.
 
 ### Guards
 
-`server/internal/archguard` keeps the boundary:
+`server/internal/archguard` keeps the boundary. Both module guards read the import lines of every `.go` file under
+`server/` (testdata left out), whatever its build constraint or GOOS, so a file only a `persona_core_only` build or one
+platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` proves it on a fixture).
 
 - **`TestCoreImportsNoModule`**: no package outside `internal/modules` imports `internal/modules/…`, except the composition
-  roots listed in `testdata/module_roots.txt`, which import only `internal/modules/all`. Known violations would go into
-  `testdata/module_imports_baseline.txt`, which only shrinks (a stale line fails); it is empty. Tests are not read: a core
-  package's test may link `internal/modules/all` to run as the manager does (`internal/assistant/modules_link_test.go`).
-- **`TestModulesUseOnlyTheSPI`**: a module's whole import graph is the standard library, `modapi` and the other contract
-  packages, its own packages, and the modules its `module.json` needs or wants. Each module directory has a `module.json`
-  whose id is the directory's name.
+  roots listed in `testdata/module_roots.txt`, which import only `internal/modules/all`. A core package's tests may
+  import `internal/modules/all` to run as the manager does (`internal/assistant/modules_link_test.go`), and nothing
+  else of `internal/modules`. Known violations would go into `testdata/module_imports_baseline.txt`, which only shrinks
+  (a stale line fails); it is empty.
+- **`TestModulesUseOnlyTheSPI`**: every file of a module, tests included, imports only the standard library, `modapi` and
+  the other contract packages (pure, so nothing more comes with them), its own packages, and the modules its
+  `module.json` needs. A module it only wants may be left out of the build (`persona_without_<id>`), so it is reached
+  through the kernel, never imported. Each module directory has a `module.json` whose id is the directory's name.
 - **`TestContractsArePure`** covers `modapi` like every contract package, and the hub's
   `TestHubDoesNotImportTheManager` (`server/internal/hub/architecture_guard_test.go`) forbids `internal/modules`.
 - `scripts/test/test_module_schema.py` checks every `module.json` against `schema/module.schema.json`, refuses invalid
@@ -129,7 +138,7 @@ assistant and move as the host learns to serve them.
    add the `Host` method and the kernel's support first, in their own PR, and update "Slots" above.
 2. Create `server/internal/modules/<id>/` with `module.json` (validated by `schema/module.schema.json`), a `Module` whose
    `Info()` reads it and whose `Register` adds what it declares. Import only `modapi`, contract packages and the modules
-   it needs.
+   it needs (never one it only wants).
 3. Add `server/internal/modules/all/<id>.go` with `//go:build !persona_without_<id> && !persona_core_only`, and the id to
    `want_default_test.go` there.
 4. In the core, replace each direct call with a question to the kernel (`s.modules`), and define what happens when the

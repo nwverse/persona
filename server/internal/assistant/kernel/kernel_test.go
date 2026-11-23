@@ -3,6 +3,7 @@ package kernel
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -113,5 +114,47 @@ func TestNilKernelHasNothing(t *testing.T) {
 	}
 	if _, ok := k.ScheduleFacts(); ok {
 		t.Fatal("a nil kernel served facts")
+	}
+}
+
+// A module listed before what it needs still loads, after it; a cycle of needs loads neither; a module that wants
+// another registers after it when it loads, and loads anyway when it does not.
+func TestNeedsAndWantsIgnoreListOrder(t *testing.T) {
+	var order []string
+	track := func(f fake) fake {
+		inner := f.reg
+		f.reg = func(h modapi.Host) error {
+			order = append(order, f.info.ID)
+			if inner == nil {
+				return nil
+			}
+			return inner(h)
+		}
+		return f
+	}
+	plain := func(id string) fake {
+		return fake{info: modapi.Info{ID: id, API: modapi.API, Origin: modapi.OriginBuiltin}}
+	}
+	a, b, c, d, e, w := plain("a"), plain("b"), plain("c"), plain("d"), plain("e"), plain("w")
+	a.info.Needs = []string{"b"}
+	c.info.Needs = []string{"d"}
+	d.info.Needs = []string{"c"}
+	w.info.Wants = []string{"e", "missing"}
+	k := New([]modapi.Module{track(a), track(w), track(b), track(c), track(d), track(e)}, nil, t.Logf)
+	if want := []string{"b", "a", "e", "w"}; !slices.Equal(order, want) {
+		t.Fatalf("registered %v, want %v", order, want)
+	}
+	for _, id := range []string{"c", "d"} {
+		if k.Loaded(id) || !strings.Contains(k.Skipped(id), "needs") {
+			t.Errorf("%s in a cycle of needs: loaded %v, skipped %q", id, k.Loaded(id), k.Skipped(id))
+		}
+	}
+}
+
+// A second entry with a loaded module's id is ignored: Loaded and Skipped agree.
+func TestDuplicateIDKeepsTheFirst(t *testing.T) {
+	k := New([]modapi.Module{full("a"), full("a")}, nil, t.Logf)
+	if !k.Loaded("a") || k.Skipped("a") != "" || len(k.Modules()) != 1 {
+		t.Fatalf("loaded %+v, skipped %q", k.Modules(), k.Skipped("a"))
 	}
 }

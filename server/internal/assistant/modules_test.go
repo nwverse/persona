@@ -15,6 +15,32 @@ import (
 // The built-in feature modules as the assistant loads them (modules.go). The briefing module is the pilot: loaded by
 // default, and absent (no setting, no routine facts, no briefing) when switched off or not compiled in.
 
+// needsBriefingModule skips a test of the briefing itself in a build without the module (persona_core_only,
+// persona_without_briefing); the tests below cover the core without it in every build.
+func needsBriefingModule(t testing.TB) {
+	t.Helper()
+	for _, m := range kernel.Builtin() {
+		if m.Info().ID == "briefing" {
+			return
+		}
+	}
+	t.Skip("the briefing module is not in this build")
+}
+
+// In a build without the briefing module the assistant loads none: the default is the core alone.
+func TestBuildWithoutBriefingLoadsNone(t *testing.T) {
+	s := newTestService(t, newFakeHub().withMachine())
+	for _, m := range kernel.Builtin() {
+		if m.Info().ID == "briefing" {
+			t.Skip("this build has the briefing module")
+		}
+	}
+	if s.modules.Loaded("briefing") {
+		t.Fatal("the briefing module loaded in a build without it")
+	}
+	assertBriefingAbsent(t, s)
+}
+
 func ownSettingKeys(s *Service) []string {
 	var keys []string
 	for _, o := range s.ownSettings() {
@@ -24,6 +50,7 @@ func ownSettingKeys(s *Service) []string {
 }
 
 func TestBriefingModuleIsLoadedByDefault(t *testing.T) {
+	needsBriefingModule(t)
 	s := newTestService(t, newFakeHub().withMachine())
 	if !s.modules.Loaded("briefing") || !s.briefingOn() {
 		t.Fatalf("the briefing module is not loaded: %+v (skipped: %q)", s.modules.Modules(), s.modules.Skipped("briefing"))
@@ -38,6 +65,7 @@ func TestBriefingModuleIsLoadedByDefault(t *testing.T) {
 // none and keeps no briefing run, a daily report has the north star's lines alone, and the acceptance reminders wait for
 // no briefing.
 func TestSwitchedOffBriefingModuleIsAbsent(t *testing.T) {
+	needsBriefingModule(t) // switching off needs it compiled in; TestBuildWithoutBriefingLoadsNone covers the rest
 	ctx := context.Background()
 	st := &memStore{}
 	if err := st.PutSetting(ctx, modulesKey, ModuleSwitch{Disabled: []string{"briefing"}}); err != nil {
@@ -115,7 +143,7 @@ func assertBriefingAbsent(t *testing.T, s *Service) {
 // End to end: the morning routine with facts on runs with the module absent as a routine with facts off does: its answer
 // goes out, with no briefing rows and no brief item.
 func TestMorningRoutineRunsWithoutTheBriefingModule(t *testing.T) {
-	off := newBriefRunEnvWith(t, true, func(e *briefRunEnv) { e.s.modules = kernel.New(nil, nil, nil) })
+	off := briefRunEnvWith(t, true, func(e *briefRunEnv) { e.s.modules = kernel.New(nil, nil, nil) })
 	off.mirror()
 	plain := newBriefRunEnv(t, false)
 	plain.mirror()
