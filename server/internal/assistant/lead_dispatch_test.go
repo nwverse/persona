@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A direction lead driving its own Agents is not asked on the phone about what its words say: the owner confirmed the
@@ -13,7 +15,11 @@ import (
 func TestLeadDrivesItsOwnAgentsWithoutAPhoneCard(t *testing.T) {
 	ctx := context.Background()
 	s, f, _ := infoUseService(t)
-	setSettings(t, s, func(v *Settings) { v.Main, v.Leaders = "qa-main-chat", []string{"qa-main", "qa-health-1"} })
+	setSettings(t, s, func(v *Settings) {
+		v.Main, v.Leaders, v.MachineID = "qa-main-chat", []string{"qa-main", "qa-health-1"}, "qa-machine"
+	})
+	f.setSessions("qa-machine", proto.Session{SessionID: "qa-main", MachineID: "qa-machine", Assistant: true},
+		proto.Session{SessionID: "qa-health-1", MachineID: "qa-machine", Assistant: true, Space: SpaceHealth})
 	f.mu.Lock()
 	f.infoTag = `{"categories":["legal_id"]}`
 	f.mu.Unlock()
@@ -56,7 +62,7 @@ func TestLeadPlanStartsAtOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(res, "card") {
+	if !strings.Contains(res, "without asking") {
 		t.Fatalf("the lead's plan waits on a card: %s", res)
 	}
 	waitFor(t, "the lead's task to start", func() bool { return len(onlyTodo(s).Agents) == 1 })
