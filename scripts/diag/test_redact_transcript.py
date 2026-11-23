@@ -25,6 +25,38 @@ class TimestampTests(unittest.TestCase):
             with self.subTest(stamp=stamp):
                 self.assertEqual(r.ts(stamp), shifted)
 
+    def test_offset_rfc3339_timestamps_shift_to_utc_without_leaking_timezone(self):
+        r = redact.Redactor()
+        out = r.obj({
+            "timestamp": "2026-03-01T18:00:01+08:00",
+            "created_at": "2026-03-01T18:00:03.25+08:00",
+            "message": {
+                "content": "started 2026-03-01T03:00:06.5-07:00 finished 2026-03-01T10:00:11z",
+            },
+        })
+        self.assertEqual(out["timestamp"], "2026-01-01T00:00:00.000Z")
+        self.assertEqual(out["created_at"], "2026-01-01T00:00:02.250Z")
+        self.assertIn("2026-01-01T00:00:05.500Z", out["message"]["content"])
+        self.assertIn("2026-01-01T00:00:10.000Z", out["message"]["content"])
+        self.assertNotIn("+08:00", json.dumps(out))
+        self.assertNotIn("-07:00", json.dumps(out))
+
+    def test_image_content_blocks_replace_base64_payload_with_1x1_png(self):
+        r = redact.Redactor()
+        raw_b64 = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
+        out = r.obj({
+            "content": [
+                {"type": "image", "mimeType": "image/png", "data": raw_b64},
+                {"type": "image", "media_type": "image/jpeg", "data": raw_b64},
+                {"kind": "image", "image": {"mime": "image/webp", "data": raw_b64}},
+                {"type": "progress", "data": "still running"},
+            ],
+        })
+        self.assertEqual(out["content"][0]["data"], redact.PNG_1x1)
+        self.assertEqual(out["content"][1]["data"], redact.PNG_1x1)
+        self.assertEqual(out["content"][2]["image"]["data"], redact.PNG_1x1)
+        self.assertNotEqual(out["content"][3]["data"], redact.PNG_1x1)
+
 
 class KeptAsIsTests(unittest.TestCase):
     """`--words` is the review step before a fixture is committed, so it lists every string the output keeps as is."""

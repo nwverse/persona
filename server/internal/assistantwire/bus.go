@@ -105,6 +105,13 @@ const (
 	// rows). The hub lists the todo_view feature only while every manager whose to-dos it merges names it; until then
 	// clients keep their own rules, and draw a row without `view` as before.
 	CapabilityTodoView = "todo_view"
+	// CapabilityTodoRevision: the manager answers GET /api/v1/todos/revision with a cheap validator for the full list's
+	// to-do writes and stable view classes (#13804). The hub lists todo_revision only while every manager whose to-dos it
+	// merges names it; older and mixed fleets keep reading the complete list after a push.
+	CapabilityTodoRevision = "todo_revision"
+	// TodoRevisionHeader carries the manager's or merged hub's lightweight to-do validator on GET /api/v1/todos and
+	// GET /api/v1/todos/revision. It is separate from the full body's ETag.
+	TodoRevisionHeader = "X-Persona-Todos-Revision"
 	// CapabilityTodoPlaces: the manager answers GET /api/v1/todos/places, the To-dos sidebar's places with the list's
 	// counts (#10226, TodoPlaces). The hub lists the todo_places feature only while every manager whose to-dos it
 	// merges names it.

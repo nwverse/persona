@@ -19,9 +19,11 @@ import (
 // Runtime fixes merged on 2026-11-24 add 872 B (253,709 B): the runtime-sdk's shell gates reading quoted $(…) and
 // $'…' words (#14040, 574 B), opencode's JSONC comma-brace strings and provider:org/model split (#14091, 189 B), pi's
 // top-level oldText/newText (#14092, 11 B) and paseo's WebSocket RSV-bit and Close-payload checks (#14095, 98 B).
+// OpenCode live ACP tool-call normalization (#14130) adds 383 B on main (254,092 B).
+// The dedicated-Assistant environment handoff (#14068) adds 114 B (254,206 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 253_709
+	const budget = 254_206
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
