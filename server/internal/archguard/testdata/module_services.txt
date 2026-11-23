@@ -14,3 +14,7 @@ github (test) internal/subscriptions
 imessage (test) internal/connector
 imessage (test) internal/connector/conformance
 imessage (test) internal/subscriptions
+#
+# Meeting recording keeps the recordings' storage in the knowledge base (the kb.Recording model with its Engine and
+# Store), which stays in the core until kb offers a recording port (#13407).
+recording internal/kb

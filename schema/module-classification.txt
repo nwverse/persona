@@ -94,6 +94,8 @@ go server/internal/cachewarm core
 go server/internal/channel core
 go server/internal/channel/conformance core
 go server/internal/chatexport core
+go server/internal/cliport core
+go server/internal/cliwire core
 go server/internal/claudeplugin core
 go server/internal/clitext core
 go server/internal/closeout core
@@ -194,6 +196,7 @@ go server/internal/proto core
 go server/internal/proxyproto core
 go server/internal/pushcrypto core
 go server/internal/quota core
+go server/internal/recordinghost core
 go server/internal/relay core
 go server/internal/relayproto core
 go server/internal/remoteimage core
@@ -226,6 +229,7 @@ go server/internal/tmux core
 go server/internal/tokenuse core
 go server/internal/toolcli core
 go server/internal/toolschema core
+go server/internal/transcribejob core
 go server/internal/transcript core
 go server/internal/tunnel core
 go server/internal/tzguard core
@@ -243,8 +247,6 @@ go server/plugins core
 # Module code still in core paths.
 go server/internal/transcribelive voice
 go server/internal/lark lark
-go server/internal/larkcli lark
-go server/internal/connector/larkcli lark
 go server/internal/office office
 go server/internal/screen screen-share
 go server/internal/screenlink screen-share
