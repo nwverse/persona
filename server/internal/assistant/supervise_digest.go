@@ -254,6 +254,12 @@ func (s *Service) sendDigest(ctx context.Context) {
 		s.scheduleDigestLocked(now)
 		b.mu.Unlock()
 	}
+	for key, list := range leaders {
+		leaders[key] = s.screenFinalWakeSignals(ctx, list, now, prev)
+	}
+	for to, list := range groups {
+		groups[to] = s.screenFinalWakeSignals(ctx, list, now, prev)
+	}
 	delivered := false
 	for _, lead := range leaderOrder {
 		delivered = s.deliverToLeaderAgent(ctx, lead, leaders[[2]string{lead.MachineID, lead.SessionID}], web, now, prev) || delivered
@@ -906,6 +912,29 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if st != reviewNeedsUser {
 			return prompts.SuperviseEntry{}, false // decided or reviewed again meanwhile
 		}
+	case sigCardlessWait:
+		// The marker (stamped when raised, persisted whole-round) is the hold: Postgres truncates PendingSince to
+		// microseconds, so a full key comparison against it could fail only on a database-backed service.
+		if st != reviewPending || v.CardlessToldAt == nil {
+			return prompts.SuperviseEntry{}, false // reviewed, or handed back already, meanwhile
+		}
+		// Re-run the conditions that made the signal valid against current data: a card or active worker can have
+		// appeared while the entry waited in a queued/batched digest, in which case the "no card" claim is stale and
+		// must not be rendered (#12648 semantic review).
+		if a, ok := s.askCopy(t.ID); ok && !acceptAskStale(&a, t) && a.AcceptedAt.IsZero() {
+			return prompts.SuperviseEntry{}, false // an owner answer now stands
+		}
+		// taskAgents, like taskAgentsIn, omits a machine whose session list cannot be read; a machine that went
+		// unreachable between the signal and delivery therefore still reads as stopped and the entry is delivered,
+		// not dropped. That is the conservative direction (a nudge to review, never a false owner card), and the
+		// watch-side cardlessAgentsReachable gate is what withholds the stamp while a machine is already unknown.
+		if !cardlessWorkersStopped(s.taskAgents(ctx, t)) {
+			return prompts.SuperviseEntry{}, false // a worker holds a card or went back to work meanwhile
+		}
+	case sigDeliveryHold:
+		if !deliveryHoldStands(t, g) {
+			return prompts.SuperviseEntry{}, false // reviewed, parked, delivered or held anew meanwhile
+		}
 	case sigRecheck:
 		if a, ok := s.askCopy(t.ID); st != reviewNeedsUser || !ok || !a.AcceptedAt.IsZero() || a.AgentReply != nil ||
 			"recheck@"+a.AskedAt.UTC().Format(time.RFC3339Nano) != g.Key {
@@ -1110,7 +1139,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOrphaned: 4, sigTimedOut: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigDeliveryHold: 1, sigRecheck: 1, sigCardlessWait: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOrphaned: 4, sigTimedOut: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind == sigCheck && e.Report == checkDecidedReport: // the owner's answer

@@ -2297,9 +2297,18 @@ The same holds on every path that reports a push, not only the API that was fixe
 
 `Pusher.send*` and the WebSocket notify take `wants func(NotifyPrefs) bool`, and nil is not just "every device": `alertWanted` lets it past Phone Muted (`mute_while_desktop`) and the pusher sends it to an open desktop too (an assistant's reminder, an extension's push). Wrapping nil in a filter to add one more condition (a muted manager) silently turns those pushes into ordinary ones, and they stop reaching a phone in Phone Muted mode. Put an extra per-device rule where the devices are walked (`Pusher.sendFrom`, `notifyWSFrom` take the manager) instead of in `wants`.
 
-## A LaunchAgent node is throttled, and a protected folder stalls Claude before any hook (macOS, measured 2026-11; re-check; #5944)
+## A LaunchAgent node is throttled, and a protected folder stalls Claude before any hook (macOS 26 and 27, measured 2026-11; #5944, #13359)
 
-- A plist with no `ProcessType` doesn't get "Standard" scheduling: launchd gives the job the Background policy, low scheduling priority and throttled I/O (`launchctl print gui/<uid>/<label>` shows `spawn type = daemon (3)`). A resident node under it got 15.45 CPU seconds in 139 s (scheduling priority 4 instead of 31), and the Claude Code it started did not become ready in time. Nothing looks wrong in the node's own logs; only the timings are long. When a Mac's Agents start slowly or time out, look at the agent's spawn type before blaming the machine's load.
+What each `ProcessType` gives a LaunchAgent, measured with short-lived test agents on Apple silicon Macs with 18 cores in three 6-core clusters: on macOS 27 (2026-11-21, rechecked on 27.2.1) and on macOS 26.5.1 (2026-11-23), with the same results on both. `launchctl print gui/<uid>/<label>` shows the spawn type, `ps -M` (or `ps -o pri=`) the threads' priority; the cores column is a job of 12 busy children on an otherwise lightly loaded Mac (macOS 26.5.1).
+
+| `ProcessType` | spawn type | thread priority | cores |
+| --- | --- | --- | --- |
+| not set, or `Standard` | `daemon (3)` | 20 (utility clamp) | every cluster: 11 of 12 children ran at once |
+| `Background` | `background (5)` | 4 | one 6-core cluster at a time: about 4.8 |
+| `Interactive` | `interactive (4)` | 31 | every cluster: 12 |
+
+- A plist with no `ProcessType` doesn't get default scheduling: the job and every child run at the utility clamp (priority 20 instead of 31) on every cluster and yield to default-priority work (on macOS 27, a 6-thread default-priority job started beside one got about 5.7 cores at once). `Background` is the throttled one: priority 4 on one cluster, inherited by every child. The priority comes from the spawn type and changes only when launchd starts the job again from a new definition (`bootout`, then `bootstrap`): `taskpolicy -B -p <pid>` returns 0 and leaves the job, and the children it starts afterwards, at 4 (both versions). A background mark set from outside with `taskpolicy -b` is cleared by `-B` at once, which makes the two easy to confuse. `Nice` does not move threads that run with a QoS class (macOS 27).
+- The case behind this lesson (#5944): a resident node got 15.45 CPU seconds in 139 s at scheduling priority 4 instead of 31, and the Claude Code it started did not become ready in time. Priority 4 is what `Background` gives; neither version measured gives it to a job without `ProcessType`, so that node ran under a background policy from somewhere else or on an earlier macOS (which was not recorded). Nothing looks wrong in the node's own logs; only the timings are long. When a Mac's Agents start slowly or time out, look at the agent's spawn type and its threads' priority before blaming the machine's load.
 - `ProcessType=Interactive` gives `spawn type = interactive (4)`. It changes scheduling only and grants no TCC permission: a job that cannot read a protected folder still cannot (`docs/plans/plan-connectors.md` "Full Disk Access (TCC)"). The plists Persona wrote (`scripts/deploy/node-launchd.sh`, `nodePlist` in `cmd/persona-link/nodesvc.go`) did not set it; both write it now, and `personad node doctor` reports an agent without it.
 - Editing the plist isn't enough. `kickstart -k` restarts the job from the definition launchd loaded, so the change needs `bootout` then `bootstrap`. Right after `bootout`, `bootstrap` can briefly fail with `5: Input/output error`, so retry it. Whether a running agent has the key is visible only in `launchctl print`'s spawn type, not in the file.
 - The rename (#277) introduced a new node-agent label, but both installers leave an installed agent as it is. A Mac can have either supported plist, or both. Code that looks for the node's agent has to recognize the installed definitions. With both there, use the one launchd has loaded: the other is a file launchd is not running, and loading it starts a second node next to the running one.
@@ -3167,3 +3176,13 @@ proxy. Container images must carry bubblewrap and allow its nested user namespac
 and mounts; test the actual runtime stage as a non-root user with no outer
 capabilities. Merely finding `bwrap` on PATH or skipping an unavailable real test
 is not evidence of isolation.
+
+## Shared runner mirrors
+
+- Versioned queue output can retain incomplete entries during a rolling upgrade. Preserve empty ticket, tag and commit fields as unknown; do not reject the whole snapshot or deduplicate an empty commit. Track an external lease by its stable run name when present: a legacy waiting ticket may be absent once that same run enters a slot. Keep the original ticket for display. A v1 result with null exit and empty run/finish time means no known result, not exit zero. Cover both transitions with scrubbed fixtures.
+
+- Register relayed resource routes in the domain’s `assistantwire` file instead of expanding the frozen central literal. New CLI tools that bind to a verified process need both forged-caller rejection and a positive process-session test; pane-only fixtures cannot attest process identity. Keep package-level validation regexes lazy so adding a CLI does not add startup work to every hook.
+
+- The hub’s MCP golden harness reconstructs the Agent tool list separately from the manager’s live discovery path. Add new manager-owned Agent tools to that helper as well as the per-tool goldens; otherwise production discovery can match its language snapshots while the hub’s legacy golden test still offers the old list. Full runner logs identify this as an index/leftover-file mismatch.
+
+- Register non-session runner RPCs through `nodeRPC` in the resource domain file. Adding a case to `Node.handleMethod` bypasses the domain registration rule and fails the central-list freeze even when the node package tests pass. Include the architecture-guard shard when adding a node RPC.

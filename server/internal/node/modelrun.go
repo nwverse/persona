@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/aiwire"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -181,7 +182,11 @@ func (n *Node) modelRunClaude(ctx context.Context, p proto.ModelRunParams, dir s
 	if err != nil {
 		return proto.ModelRunAnswer{}, err
 	}
-	b.WriteString(scriptSettingsFlag(n.claudeSettings(ctx, p.Launcher, ours, dir)))
+	settings, err := n.sourceClaudeSettings(ctx, p.Launcher, dir, n.claudeSettings(ctx, p.Launcher, ours, dir), "", modelhttp.Source{Role: "background"})
+	if err != nil {
+		return proto.ModelRunAnswer{}, err
+	}
+	b.WriteString(scriptSettingsFlag(settings))
 	in, err := writeTempFile(dir, "prompt.md", p.Prompt)
 	if err != nil {
 		return proto.ModelRunAnswer{}, err
@@ -304,7 +309,8 @@ func (n *Node) modelRunCodex(ctx context.Context, p proto.ModelRunParams, dir st
 	if err != nil {
 		return proto.ModelRunAnswer{}, err
 	}
-	cmd := loginShell(ctx, "cd "+scriptPath(dir)+" && "+n.launcherForScript(p.Launcher)+b.String()+" < "+scriptPath(in))
+	cmd := loginShell(ctx, "cd "+scriptPath(dir)+" && "+codexShellWith(n.launcherForScript(p.Launcher)+b.String(), "")+" < "+scriptPath(in))
+	cmd.Env = append(cmd.Environ(), modelSourceEnvironment(modelhttp.Source{Role: "background"}, n.bin)...)
 	killGroupOnCancel(cmd)
 	raw, runErr := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(raw))

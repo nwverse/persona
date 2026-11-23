@@ -155,6 +155,7 @@
   "unblock_user": "needs your OK",
   "unblock_agent": "the agent can go on",
   "unblock_other": "waiting on others / CI / an environment",
+  "unblock_supervisor": "its supervisor reads it first",
   "thread_section": "Topic",
   "thread_unbind": "Unbind",
   "thread_unbind_label": "Unbind topic “{name}”",

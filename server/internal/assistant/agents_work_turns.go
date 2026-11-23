@@ -342,6 +342,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if !closed {
 		s.actOn(ctx, v, machine, c, &e)
 	}
+	// Validate the stored conclusion even when no action was possible, e.g.
+	// when the only source for a Codex App thread was read-only history.
+	clearUnsupportedUserWait(&e.Work, s.lang(ctx))
 	// The turn after a status question is its answer (agents_closeout_ask.go): never asked again, whatever it says.
 	answersAsk := had && last.Work.CloseoutAsk == closeoutAskSent && !sameTurn(c, last.TurnAt)
 	switch {
@@ -397,6 +400,17 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		"line": e.Work.Line, "ms": time.Since(start).Milliseconds()})
 	if answersAsk {
 		s.workEvent(machine, c.SessionID, closeoutAskOutcome(e.Work), map[string]any{"phase": e.Work.Phase})
+	}
+}
+
+func unsupportedUserWait(w *proto.WorkState) bool {
+	return w.Phase == proto.WorkBlocked && w.On == proto.WaitUser && w.By == "model" && len(w.Questions) == 0 && w.Link == nil
+}
+
+func clearUnsupportedUserWait(w *proto.WorkState, lang i18n.Lang) {
+	if unsupportedUserWait(w) {
+		*w = proto.WorkState{TurnAt: w.TurnAt, At: w.At, By: w.By, Artifacts: w.Artifacts, Closeout: w.Closeout}
+		unfinished(w, lang)
 	}
 }
 
@@ -471,7 +485,11 @@ func triageRules(c proto.Session, loc *time.Location, l i18n.Lang) (w *proto.Wor
 			return limitWork(c, time.Now(), loc, l), "rule", false
 		}
 		if turnErrorTransient(c) {
-			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, Line: workT(l, "transient_retrying"),
+			line := workT(l, "transient_retrying")
+			if c.TurnErrorCode == proto.TurnErrorUpstreamUnavailable {
+				line = clip(oneLine(workT(l, "upstream_unavailable_retrying", i18n.Args{"error": e})), 120)
+			}
+			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, Line: line,
 				Wait: clip(oneLine(e), 200)}, "rule", false
 		}
 		return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, Line: clip(oneLine(workT(l, "model_error", i18n.Args{"error": e})), 60),

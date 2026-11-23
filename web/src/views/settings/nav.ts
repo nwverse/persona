@@ -5,14 +5,15 @@
 import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
+import { SUB } from "./href";
+
+export { settingsHref } from "./href";
 
 export type Tab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar" | "labs";
 export const TABS: Tab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
 export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
-// The tab whose page opens one of its items, and the query parameter that names it.
-const SUB: Partial<Record<Tab, string>> = { models: "purpose", channels: "channel", extensions: "extension", connectors: "connector" };
 /** A host-owned secondary page, not a connector ID. */
 export const SENT_SUB = "-sent";
 
@@ -86,14 +87,6 @@ export function settingsAt(search: string, hash = ""): { tab: Tab | null; sub: s
   if (t === "extensions" && sub?.startsWith("-channels/")) return { tab: "channels", sub: sub.slice("-channels/".length), section: null };
   const section = legacy?.section ?? sectionOfHash(hash, t);
   return { tab: t, sub, section };
-}
-
-/** The URL of a category (and its open item). "General" is plain /settings on a wide screen, where that opens it; on a
- *  phone /settings is the list, so it is named. */
-export function settingsHref(tab: Tab, id: string | null, phone: boolean, manager?: string | null, section?: SettingsSection | null): string {
-  const param = SUB[tab];
-  const query = `/settings?tab=${tab}${id && param ? `&${param}=${encodeURIComponent(id)}` : ""}${manager ? `&manager=${encodeURIComponent(manager)}` : ""}`;
-  return `${tab === "general" && !phone ? "/settings" : query}${section ? `#settings-${section}` : ""}`;
 }
 
 /** Replace a legacy category URL in place, retaining provider and manager parameters. */

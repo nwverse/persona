@@ -78,6 +78,7 @@ type fakeHub struct {
 	modelExts      []assistantwire.ModelExtension // plugins.models: the extensions granted models (model_rpc.go)
 	needTriage     []string
 	ownModels      bool                         // the test sets hello.Models itself: no fake model
+	infoTagModel   bool                         // the service tags with information categories (Service.noInfoTag off)
 	devices        []Device                     // devices.list answers these when set (else one per machine with sessions)
 	devicesFull    bool                         // devices.list says its list is complete (a machine not in it was removed)
 	devicesOther   []string                     // devices.list's ids kept out of it (pending, leaving, absorbed)
@@ -159,6 +160,10 @@ type fakeHub struct {
 	// were asked; the sessions whose pushes are off, by machine.
 	triage      string
 	triageAsked []modelCall
+	// infoTag answers the information tagging (info_tag.go): {"categories":[]} when empty; infoTagFails fails it.
+	infoTag      string
+	infoTagFails bool
+	infoTagAsked []modelCall
 	// The Progress row's paraphrase of a report (report_line.go): its answer (none: an error), and what was asked.
 	reportLine      string
 	reportLineAsked []modelCall
@@ -1320,6 +1325,8 @@ func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	// And about what a supervisor does with its tasks, told to the main conversation: the background supervisor that
 	// takes them by default is supervise_background_test.go's, which turns this off.
 	s.noBackground = true
+	// And with no information tagging (info_tag.go), as before it: its tests turn it on (f.infoTagModel).
+	s.noInfoTag = !f.infoTagModel
 	if f.settings != nil {
 		setSettings(t, s, func(v *Settings) { *v = *f.settings })
 	}
@@ -1551,6 +1558,9 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case in.System == tabName:
 			f.tabAsked = append(f.tabAsked, in.System+"\n---\n"+user)
 			reply = f.tabReply
+		case strings.HasPrefix(in.System, "You tag a piece of text"): // information tagging (info_tag.go)
+			f.infoTagAsked = append(f.infoTagAsked, modelCall{in.System, user})
+			reply, fail = cmp.Or(f.infoTag, `{"categories":[]}`), f.infoTagFails
 		case strings.Contains(in.System, "起一个待办标题"): // a task's todo (todo_titles.go): none unless the test gives one
 			f.todoTitleAsked = append(f.todoTitleAsked, modelCall{in.System, user})
 			reply, fail = f.todoTitleReply, f.todoTitleErr != nil

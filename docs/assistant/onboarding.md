@@ -151,7 +151,7 @@ Implementation (#4045): generated values are **not written back to `.env`**. Com
 
 On the iPhone, a pairing link never pairs by itself (#9929): whether it comes from the camera, another app or the pairing page's scanner, the app first asks **Connect to <host>?**, naming the hub's address as the link gives it (and saying when that hub is already paired), and pairs only after Connect. Cancel leaves everything as it was; typing an address and token and tapping Connect is already the user's own step. The launch arguments `-pairURL` and `-openPairLink` (DEBUG automation) still pair directly.
 
-The web login page (`Login.tsx:45-48`) prefers "Scan with a logged-in phone to sign in" (existing `#token=jp_…` web login code), followed by "Paste pairing link". Put the main-token field and `jq` / `--legacy` in "Advanced," labeled "This is hub's master key." When signing in again in the same browser, reuse or replace the old device, with a date in the device name, rather than accumulating identically named "Web (Chrome · Linux)" entries. Implementation (#3356): web sends `replaces` (the previous device ID) when exchanging credentials; hub revokes only that `kind: web` device (`docs/protocol/protocol.md`, "Authentication"). "No hub yet?" is an explanation within the page; web cannot obtain the website URL.
+The browser pairing page leads with a field for the pairing link. Scan opens the phone approval flow on demand, Help explains how to obtain a link, and Key opens the advanced master-key form with its warning and terminal commands. When signing in again in the same browser, reuse or replace the old device, with a date in the device name, rather than accumulating identically named "Web (Chrome · Linux)" entries. Implementation (#3356): web sends `replaces` (the previous device ID) when exchanging credentials; hub revokes only that `kind: web` device (`docs/protocol/protocol.md`, "Authentication"). "No hub yet?" is an explanation within the page; web cannot obtain the website URL.
 
 #### Your computers ↔ hub
 
@@ -279,21 +279,17 @@ Risks (why a decision is needed): memory, transcript, and permissions split into
 
 #### First screen (not paired yet)
 
-Same structure on all four platforms:
+On iOS and Android, center the Persona mark and a single scan button above three shortcuts:
 
 ```
-Persona
-Connect your computers and phone, and let AI do the work.
-
-[ Scan to connect to hub ]       ← Primary button
-Find nearby hubs                ← P1, mDNS
-No hub yet?                     ← In-app browser opens "Get started" (choices in 3.3)
-Try demo first (all data is fictional) ← Hidden on web, which has no demo mode
-Other ways                      ← Manual entry, SSH tunnel, paste link, command-line instructions
+                 Persona
+            [ Scan to pair ]
+       Other ways   Help   Demo
 ```
 
-- Replace the small text below the primary button, "Run `personad hub pair` on the hub machine," with "A QR code appears when hub is installed. You can also open Settings › Devices › Connect new device on an already connected device."
-- Web: if the page opens, hub already exists; show only "Scan with your phone to sign in" and "Paste pairing link," plus a "No hub yet?" link.
+- **Other ways** opens the platform's alternative connection methods. **Help** explains where to find the code and opens the getting-started guide when the build provides one. **Demo** lets the user try the app with sample data.
+- Web uses the same hierarchy. Paste a pairing link and submit it using the arrow. The shortcuts open phone scanning, help, or the master-key form. Keep the credential warning with that form.
+- Nearby hub discovery (P1, mDNS) belongs with alternative connection methods.
 - Android: remove `JCodeBlock("personad hub pair")` from the welcome page. Replace "Run personad hub pair again" in failure copy with "Generate a new code on a logged-in device."
 - Exiting demo mode lands on "No hub yet?".
 
@@ -430,7 +426,7 @@ Lives under the assistant service, which already knows machine, launcher, and mo
 | `launcher` | Effective launcher name (after `effective()`, overridden by main-chat purpose in model configuration) |
 | `steps[].id` | Fixed order: `computer`, `claude`, `model`, `first_message` |
 | `steps[].state` | `ok` / `todo` / `problem` / `checking` / `unknown` / `skipped` |
-| `steps[].code` | Supplied for `todo` / `problem`, using codes in 4.6. `computer`: `no_machine`, `node_unreachable`, `machine_pending`, `node_outdated`; `claude`: `claude_missing`, `launcher_missing`; `model`: `not_logged_in`, `auth_failed`, `model_route`, `rate_limited`, `model_unverified`; `first_message`: `never_tried`, or the failure code |
+| `steps[].code` | Supplied for `todo` / `problem`, using codes in 4.6. `computer`: `no_machine`, `node_unreachable`, `machine_pending`, `node_outdated`; `claude`: `claude_missing`, `launcher_missing`; `model`: `not_logged_in`, `auth_failed`, `model_route`, `rate_limited`, `model_fallback_unavailable`, `tool_search_unsupported`, `upstream_unavailable`, `model_unverified`; `first_message`: `never_tried`, or the failure code |
 | `steps[].action.id` / `alt_actions[].id` | `add_computer`, `confirm_computer`, `wake_computer`, `install_claude`, `login_claude`, `connect_model`, `edit_provider`, `test_assistant`, `enable_tls`, `open_admin` |
 | `suggestions[]` | `local: true` opens client-local help without sending to a model; `needs` lists system permissions requested only on tap (client explains beforehand) |
 | `probe` | Present only with `?probe=1`; the `{ok, model, answer, millis, error, assistant_turn?}` of the node's `launchers.check` run as the main chat's next turn (below) |
@@ -489,7 +485,8 @@ On failure from `POST /api/v1/assistant/conversations` or a session-send endpoin
 
 - `no_machine`, `claude_missing`, `launcher_missing`, and `machine_pending` return 409; `node_unreachable` is unchanged (coded 502, `ErrOffline` 503); `assistant_offline` is unchanged (503).
 - `detail` contains the original text; clients show it only in "Details."
-- For turns with `turn_error_kind: "user"`, sessions also carry `turn_error_code` (`not_logged_in` / `auth_failed` / `model_route` / `rate_limited`), which clients use to render cards.
+- For turns with a recognized cause, sessions carry `turn_error_code` (`not_logged_in` / `auth_failed` / `model_route` / `rate_limited` / `model_fallback_unavailable` / `compaction_sealed` / `tool_search_unsupported` / `upstream_unavailable`), which clients and server lists use for fix cards or stall visibility.
+- `upstream_unavailable` identifies an explicit upstream account-pool outage (`no eligible upstream account`, `no other eligible account`, `upstream attempt budget …`) or `>= 2` consecutive upstream `5xx` failed turns with no assistant progress in between (#13372). Nothing on the user's computer is broken, so readiness offers `test_assistant` with plain-language copy (`assistant-readiness.upstream_unavailable_*`) and never puts readiness into `setup` mode or blocks sending.
 - A `model_route` card's "Fix it" opens the chat's own model picker (client action `pick_model`), where another model is picked for the chat; where the page has none it opens model settings, never the add-provider wizard, which only fits `not_logged_in` (#10365). While the chat keeps a pick, the card also offers the picker's way back (follow the default again, or undo the pick). A gateway that refused on-demand tool loading (`tool_search_unsupported`) gets a card saying so with Retry, worded to promise only the retry (the card can't tell whether the chat's computer runs a node that now sends every tool there); clients also read it from the 400's words for a hub that does not code it. Web does both; Apple and Android still send `model_route` to their old destinations. On the web the readiness card's and the blocked send button's `connect_model` for a `model_route` model step opens the same picker (`pick_model`; the hub's action is unchanged for the other clients), and once another model is picked there, `test_assistant` becomes their primary action, since only a pass of the picked model clears the main chat's failed turn, on the launcher it was picked on, whichever that is (the model step is judged on the next turn's launcher and model, 5.1; `docs/web/web.md`, "What the main chat still needs (#3847)").
 - `model_fallback_unavailable` identifies a model-route failure after Claude Code switched the session following an upstream refusal (#2203). Readiness explains the chain and recommends a new conversation or `/model` in the terminal, with no model-settings or test-message action. This session-only failure does not put readiness into setup mode or prevent creating a new conversation. Existing client error cards still need to adopt this code and hide their old Retry/Continue actions; the ordinary refusal notice already carries localized recovery guidance.
 - `tool_search_unsupported` identifies a gateway that refused Claude Code's on-demand tool loading (tool search, #10365) after the node's one automatic resend with every tool loaded. It is not the user's to fix and not a model route: the node starts that launcher and model with every tool from then on, so readiness offers `test_assistant` and the step does not put readiness into setup mode. Words: "The gateway refused on-demand tool loading" / "Try again" (`assistant-readiness.tool_search_unsupported_*`); only for a computer whose node announces `assistant_tool_search_fallback` (the resend and the remembered refusal) does the detail say "Persona sends every tool to this gateway from now on, so try again" (`tool_search_unsupported_fallback_detail`): an older node keeps tool search on, and a retry there is refused the same way.

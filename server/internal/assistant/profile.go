@@ -594,7 +594,8 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 		return nil
 	}
 	v := s.effective(ctx, saved)
-	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone}
+	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone,
+		ExtensionOwners: s.extensionOwners(ctx)}
 	if tasks != nil && todos != nil {
 		if placed, err := s.directionKeep(ctx, v); err != nil {
 			s.logf("assistant: keep: %v", err)
@@ -779,8 +780,8 @@ type assistantView struct {
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
-// assistant's own conversations; space "health" lists the health space's instead (docs/assistant/health.md), with that
-// space's directory as Cwd.
+// assistant's own conversations; a space (space "health") lists that space's instead (docs/assistant/health.md), with
+// that space's directory as Cwd.
 func (s *Service) view(ctx context.Context, withArchived bool, space ...string) assistantView {
 	sp := ""
 	if len(space) > 0 {
@@ -860,8 +861,8 @@ func (s *Service) profileRoutes() {
 		}
 		archived := r.URL.Query().Get("archived")
 		space := r.URL.Query().Get("space")
-		if !validSpace(space) {
-			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: health or none", space))
+		if !s.trackKnown(r.Context(), space) {
+			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: not a registered space", space))
 			return
 		}
 		out := s.view(r.Context(), archived == "1" || archived == "true", space)
@@ -997,10 +998,10 @@ func (s *Service) memory(ctx context.Context, op map[string]any, out any) error 
 	}
 	space, _ := op["space"].(string)
 	delete(op, "space")
-	if !validSpace(space) {
-		return badRequest(fmt.Errorf("space %q: health or none", space))
+	if !s.trackKnown(ctx, space) {
+		return badRequest(fmt.Errorf("space %q: not a registered space", space))
 	}
-	cwd := s.spaceCwd(d, space) // the health space keeps a memory of its own (docs/assistant/health.md)
+	cwd := s.spaceCwd(d, space) // a space keeps a memory of its own (docs/assistant/health.md)
 	if cwd == "" {
 		return errMemoryMachineOffline
 	}
