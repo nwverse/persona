@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,105 @@ func TestCodexMcpToolCallImages(t *testing.T) {
 	}
 	if a.Image.Mime != "image/png" || a.Image.Data != "iVBORw0KGgo=" || b.Image.Mime != "image/jpeg" || a.ID == b.ID {
 		t.Fatalf("images %+v %+v", a.Image, b.Image)
+	}
+}
+
+func TestCodexMcpResultTypes(t *testing.T) {
+	completed := func(item string) []byte {
+		return []byte(`{"timestamp":"2026-11-01T00:00:00Z","type":"event_msg","payload":{"type":"item_completed","item":` + item + `}}`)
+	}
+	base := `{"type":"McpToolCall","id":"same","server":"example","tool":"lookup","status":"completed"`
+	valid := base + `,"result":{"content":[{"type":"text","text":"found"}]}}`
+	formats := []struct {
+		name string
+		wrap func(string) []byte
+	}{
+		{"event", completed},
+		{"history mutation", func(item string) []byte {
+			return []byte(`{"type":"history_mutation","payload":{"display_completions":[{"item":` + item + `}]}}`)
+		}},
+	}
+	for _, test := range []struct {
+		name   string
+		result string
+	}{
+		{"string", `,"result":"opaque"`},
+		{"array", `,"result":[]`},
+		{"wrong content shape", `,"result":{"content":"bad"}`},
+		{"wrong error shape", `,"result":{"isError":"false"}`},
+	} {
+		for _, format := range formats {
+			t.Run(format.name+"/"+test.name, func(t *testing.T) {
+				meta := &Meta{Codex: true}
+				if items := ParseLine(1, format.wrap(base+test.result+`}`), meta); len(items) != 0 {
+					t.Fatalf("malformed result emitted items: %+v", items)
+				}
+				items := ParseLine(2, format.wrap(valid), meta)
+				if len(items) != 2 || items[0].Kind != proto.KindToolUse || items[1].Kind != proto.KindToolResult || items[1].Text != "found" || items[1].IsError {
+					t.Fatalf("valid same-ID result was lost: %+v", items)
+				}
+			})
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		result string
+	}{
+		{"absent", ""},
+		{"null", `,"result":null`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			items := ParseLine(1, completed(base+test.result+`}`), &Meta{Codex: true})
+			if len(items) != 2 || items[1].Kind != proto.KindToolResult || items[1].Text != "" || items[1].IsError {
+				t.Fatalf("empty MCP result: %+v", items)
+			}
+		})
+	}
+	items := ParseLine(1, completed(base+`,"result":{"content":[{"type":"text","text":"failure"}],"isError":true}}`), &Meta{Codex: true})
+	if len(items) != 2 || items[1].Text != "failure" || !items[1].IsError || items[1].Outcome == nil || items[1].Outcome.Status != proto.OutcomeFailed {
+		t.Fatalf("typed MCP error: %+v", items)
+	}
+	for _, test := range []struct {
+		name string
+		item string
+	}{
+		{"other extension", `{"type":"Extension","kind":"other","id":"image","result":"opaque"}`},
+		{"malformed other field", `{"type":"Extension","kind":"image_gen.generation","id":"image","content":"bad","result":"opaque"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if items := ParseLine(1, completed(test.item), &Meta{Codex: true}); len(items) != 0 {
+				t.Fatalf("invalid extension emitted items: %+v", items)
+			}
+		})
+	}
+}
+
+func TestCodexHistoryMutationGeneratedAndMcp(t *testing.T) {
+	meta := &Meta{Codex: true}
+	generated := `{"type":"Extension","kind":"image_gen.generation","id":"generated","status":"completed","savedPath":"/home/example/picture.png","result":"<base64>"}`
+	native := []byte(`{"type":"event_msg","payload":{"type":"item_completed","item":` + generated + `}}`)
+	if items := ParseLine(1, native, meta); len(items) != 2 || items[0].ToolName != "Read" {
+		t.Fatalf("native generated image: %+v", items)
+	}
+	other := `{"type":"Extension","kind":"image_gen.generation","id":"other","status":"completed","savedPath":"/home/example/other.png","result":"<other bytes>"}`
+	mcp := `{"type":"McpToolCall","id":"mcp","server":"example","tool":"lookup","result":{"content":[{"type":"text","text":"found"}]}}`
+	mutation := []byte(`{"type":"history_mutation","payload":{"display_completions":[{"item":` + generated + `},{"item":` + other + `},{"item":` + mcp + `}]}}`)
+	items := ParseLine(2, mutation, meta)
+	if len(items) != 4 || items[0].ToolName != "Read" || string(items[0].ToolInput) != `{"file_path":"/home/example/other.png"}` ||
+		items[1].Kind != proto.KindToolResult || items[2].ToolName != "mcp__example__lookup" || items[3].Text != "found" {
+		t.Fatalf("history mutation items: %+v", items)
+	}
+	for _, item := range items {
+		if item.Kind == proto.KindImage || strings.Contains(item.Text, "<other bytes>") {
+			t.Fatalf("image bytes entered history projection: %+v", item)
+		}
+	}
+	encoded, err := json.Marshal(items)
+	if err != nil || strings.Contains(string(encoded), "<other bytes>") {
+		t.Fatalf("image result entered history items: %s %v", encoded, err)
+	}
+	if duplicate := ParseLine(3, []byte(`{"type":"event_msg","payload":{"type":"item_completed","item":`+mcp+`}}`), meta); len(duplicate) != 0 {
+		t.Fatalf("native duplicate of history item: %+v", duplicate)
 	}
 }
 

@@ -204,12 +204,8 @@ func projectCodexShare(ctx context.Context, data []byte, source, incarnation str
 					continue
 				}
 				var results []devicewire.ShareResult
-				if len(item.Result) > 0 {
-					var result codexMcpResult
-					if err := json.Unmarshal(item.Result, &result); err != nil {
-						return deny("source_incomplete")
-					}
-					for _, part := range result.Content {
+				if item.Result != nil {
+					for _, part := range item.Result.Content {
 						if part.Type != "text" {
 							continue
 						}
