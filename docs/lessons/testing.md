@@ -469,7 +469,7 @@ What a hit would save, measured the same day with the build already cached (110 
 guard packages check-fast runs on every server change took 12 s uncached and 1 s cached, and its guard tests 10 to
 14 s uncached. Only packages the change did not reach can hit at all: the edited package and every package that imports
 it get a new test binary and run again. Caching also changes the run itself: `go test` passes `-test.testlogfile` only
-when the result may be cached, and `internal/office` failed only in that mode, because a test that lowered the file size
+when the result may be cached, and `internal/modules/office/office` failed only in that mode, because a test that lowered the file size
 limit also cut off that log (#8962, fixed by #8968).
 
 - Keep `-count=1` in every command whose result is reported as verification, and in any new entry point. A plain
@@ -516,7 +516,7 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
   `kbEnd` closes for good, and test fixtures register `t.Cleanup(s.kbEnd)`, not `kbClose` (which stays reopenable,
   for the disconnected case and restart tests). A timer that already holds the engine still writes: the meeting
   fixture runs the attending feed on real timers, so its cleanup waits for the looks already running and lets none
-  start after (`trackAttendFeed` in `server/internal/assistant/meeting_live_test.go`).
+  start after (`trackAttendFeed` in `server/internal/modules/recording/fixtures_test.go`).
 - It shows only under load (one in four shuffled package runs on a busy Mac; six processes of `-run '^TestMeeting'
   -count=20 -cpu=1` reproduce it every time). To find such a writer, give the fixture a directory whose cleanup, when
   `os.RemoveAll` fails, lists what is left (with modification times against the cleanup's start) and dumps every
@@ -816,7 +816,7 @@ Retain strict checks for the complete target set, existing modules, artifact pat
 ## Go tests requiring macOS built-in commands (2026-11-02)
 
 - The Messages connector reads `chat.db` with macOS `/usr/bin/sqlite3` (personad has no cgo). The Linux hub lacks `sqlite3`, so these tests skip there.
-  If the development Mac has no Go, cross-compile on hub: `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c -o x.test ./internal/connector/imessage`,
+  If the development Mac has no Go, cross-compile on hub: `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c -o x.test ./internal/modules/imessage`,
   copy to Mac, and run **in the package directory** (`testdata` is relative). Use the same approach for macOS-dependent `node` tests.
 - `sqlite3 -json` prints nothing for no rows, not `[]`; check empty before parsing.
 

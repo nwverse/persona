@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import concurrent.futures
 import collections
 import json
 from pathlib import Path
@@ -183,8 +184,13 @@ def main():
     if not packages and args.shard != AFFECTED:
         parser.error(f"No packages in server shard {args.shard}")
     try:
-        partitions = {package: go_partitions.list_patterns(ROOT / "server", package)
-                      for package in go_partitions.split(packages)[1]}
+        # Listing compiles each partitioned package's tests; after a change most of them compile from scratch, so they
+        # are listed at once rather than one after another (an affected run reaching five of them: 161 s in turn, 113 s
+        # at once, on a busy CI machine).
+        listed = go_partitions.split(packages)[1]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(listed), 1)) as pool:
+            patterns = list(pool.map(lambda package: go_partitions.list_patterns(ROOT / "server", package), listed))
+        partitions = dict(zip(listed, patterns))
     except subprocess.CalledProcessError as error:
         # Listing a partitioned package's tests compiles it; a compile error ends the shard here, before any test.
         print(f"Server shard {args.shard}: could not list the tests of a partitioned package "

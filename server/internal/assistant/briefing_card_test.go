@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
+
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -257,8 +258,8 @@ func TestBriefAcceptButtonIsForItsRoundOnly(t *testing.T) {
 	if value == nil || value["id"] != "todo_v1" || value["asked_at"] == "" {
 		t.Fatalf("no Accept button with its round on the card: %v", value)
 	}
-	press := func(v map[string]any) *feishubot.CardAction {
-		var a feishubot.CardAction
+	press := func(v map[string]any) *botcard.CardAction {
+		var a botcard.CardAction
 		a.Action.Value = v
 		a.Context.MessageID = "om_brief_1"
 		return &a
@@ -447,7 +448,7 @@ func TestBriefCardsKeepEveryOwnerWaitWithinPhysicalBudget(t *testing.T) {
 	f.Directions = []prompts.BriefDirection{d}
 	const header = "Model unavailable; these are the computed facts"
 	card, plain, _ := (&Service{}).briefCardWithHeader(f, "Morning briefing", "", header)
-	card.Buttons(feishubot.Btn("Open", feishubot.Default, map[string]any{"a": "open"}))
+	card.Buttons(botcard.Btn("Open", botcard.Default, map[string]any{"a": "open"}))
 	cards := splitBriefAnswerCards(card, plain, header)
 	if len(cards) < 2 {
 		t.Fatalf("the oversized fixture produced %d card, want continuations", len(cards))
@@ -471,7 +472,7 @@ func TestBriefCardsKeepEveryOwnerWaitWithinPhysicalBudget(t *testing.T) {
 	last := -1
 	rendered := all.String()
 	for i, w := range d.Waits {
-		row := feishubot.EscapeMarkdown(w.Line) + briefLink(f.l, w.Link)
+		row := botcard.EscapeMarkdown(w.Line) + briefLink(f.l, w.Link)
 		if n := strings.Count(rendered, row); n != 1 {
 			t.Fatalf("owner row %d occurs %d times in the rich cards, want exactly once", i, n)
 		}
