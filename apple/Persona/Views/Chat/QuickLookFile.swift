@@ -2,9 +2,6 @@ import CryptoKit
 import ImageIO
 import QuickLook
 import SwiftUI
-#if os(macOS)
-import Quartz
-#endif
 
 /// Files the file viewer hands to the system's QuickLook (docs/apple/ios.md「File viewer」): Office and iWork documents and
 /// RTF, which no viewer of ours draws. Feishu attachments open the same way (`LarkAttachmentView`).

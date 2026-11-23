@@ -48,6 +48,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	for _, sess := range list {
 		// Any agent (herdr or headless, started by Persona or not) finishing a turn may notify the phone.
 		was, key := before[sess.SessionID], machine+"/"+sess.SessionID
+		s.noteUpstreamRow(machine, sess, now) // consecutive upstream 5xx / pool-exhaustion turns (fleet_upstream.go)
 		s.availSeen(machine, &sess, was, now) // the owner's wait for a reply (availability.go)
 		prev := was.Status
 		// The turn stopped on background work and its report woke it again within one of the node's list ticks: the
@@ -108,6 +109,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	}
 	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
 	s.pruneGoneQuiet(machine)        // the verdicts and Stops of task Agents no longer listed (silent_turns.go)
+	s.pruneGoneUpstream(machine, list)
 	s.fleetKeep(machine, list, connected, unsure)
 	for _, ref := range inlineUpdates {
 		s.inOrder(func() { go s.registerInlineTurn(context.Background(), ref) })
@@ -534,7 +536,8 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	asks := s.fleet.asks.reader(machine, complete)
 	defer asks.done()
 	suggested := s.hubSuggestions(machine)
-	quiet := s.quietMarks(machine) // turns of task Agents that had no output (silent_turns.go)
+	quiet := s.quietMarks(machine)       // turns of task Agents that had no output (silent_turns.go)
+	upstream := s.upstreamMarks(machine) // consecutive no-work upstream 5xx turns (fleet_upstream.go)
 	bgMatch := s.backgroundMatcher(context.Background(), machine)
 	for i := range list {
 		list[i].MachineID = machine
@@ -586,6 +589,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		putQuietTurn(&list[i], quiet, lang)
 		decorateLimit(&list[i]) // a subscription's usage limit and when it resets (usage_limit.go)
 		list[i].TurnErrorCode = sessionTurnErrorCode(list[i])
+		putUpstreamTurn(&list[i], upstream)
 		if list[i].TurnError != "" {
 			if proto.UnrecoverableTurnErrorCode(list[i].TurnError) != "" {
 				list[i].TurnErrorKind = proto.TurnErrorUnrecoverable

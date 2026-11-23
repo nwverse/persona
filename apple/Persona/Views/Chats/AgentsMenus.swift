@@ -256,10 +256,7 @@ struct AgentRowMenu: View, Equatable {
         #endif
         // The session as it is when an item is tapped (all of it: Hand to Persona sends its last line).
         let now = { model.latest(key) }
-        #if os(macOS)
-        MacOpenInWindowButton(key: key)
-        Divider()
-        #elseif os(visionOS)
+        #if os(visionOS)
         VisionOpenInWindowButton(key: key)
         Divider()
         #endif
