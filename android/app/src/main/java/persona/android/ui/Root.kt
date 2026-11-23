@@ -170,14 +170,21 @@ private fun PersonaRootContent(
                         onDiagnostics = { diagnostics = true }, diagnostics = services.diagnostics,
                         onCredentialsSaved = { MainActivity.pendingPairLink.value = null }, machines = services.machines,
                         attempts = services.pairingAttempts, mainReadiness = services.readiness,
-                        footer = {
-                            if (hub == null) JTextButton(stringResource(R.string.app_try_demo), onClick = { scope.launch {
-                                try { shell.enterDemo(); MainActivity.pendingPairLink.value = null }
-                                catch (error: Exception) {
-                                    android.util.Log.w("PersonaShell", "Unable to start demo", error)
-                                    shell.feedback.failure(error)
+                        footer = { welcome ->
+                            if (hub == null) {
+                                val startDemo: () -> Unit = {
+                                    scope.launch {
+                                        try { shell.enterDemo(); MainActivity.pendingPairLink.value = null }
+                                        catch (error: Exception) {
+                                            android.util.Log.w("PersonaShell", "Unable to start demo", error)
+                                            shell.feedback.failure(error)
+                                        }
+                                    }
                                 }
-                            } })
+                                val title = stringResource(R.string.app_try_demo)
+                                if (welcome) PairingShortcut(title, PhIcons.Play, startDemo)
+                                else JTextButton(title, onClick = startDemo)
+                            }
                         })
                     if (diagnostics) {
                         val close = { diagnostics = false }

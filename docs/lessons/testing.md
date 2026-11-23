@@ -1,5 +1,9 @@
 # Lessons: testing and validation
 
+- A manager route's response contract is also asserted by hub relay tests (#13234). When making a closed plan's
+  dismiss response idempotent, update both the manager's route test and the hub's end-to-end plan lifecycle test;
+  verify the returned state and persisted state, rather than only replacing the expected HTTP status.
+
 - Execute release collection steps against the actual build-directory layout (#11684). The installer is rendered at
   `build-publish/install.sh`, while archives and indexes live in `build-publish/bin/`. A receipt that only hashes files
   that happened to be copied cannot detect an omitted installer. Stop on failed copies, require bootstrap files before
@@ -168,6 +172,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - Assistant tests swap a service's hub with `setHub`, never `s.hub = h` (2026-11-11, #4006). The inbox's "Needs you" teller (`tellInboxNeedsYou`) reads `s.hub` on a goroutine of its own, and a test's service starts one at its first inbox read, so a plain assignment raced with it under `-race`. The teller reads the hub only under `needsYouMu`, and `setHub` swaps it under that lock. The teller is not the only reader: a timer armed while the service is set up (`directionsSoon`, which reads `s.hub` through `hello`) can fire during the test, on a `synctest` bubble's clock too, and nothing orders it after a swap. Where a test only needs a fake behavior, the fake hub does it under `f.mu` (`hangChannel`) and the hub is never swapped. A test with two racing readers can report one in a combined run and the other when run alone, so check each test in separate processes of its own. In the same run, two leader retry tests ended before their retry ran because `sendsTo` also counts sends the fake refused; the retry goroutine then read a package timing their cleanup restored. Such timings belong on the `Service` (`leaderResume`, like `taskRetry`), and a wait must see the effect it names (`deliveredTo`, the sends the fake took).
 
 - Prepared approval result counts need a resumable fake conversation and settled delivery lanes (#10455). Listing `s1` is not enough: the fake also needs `known["s1"]` for `resume_only`, or it records a refused direct try and its asynchronous queued retry as two sends. Mark the conversation known and wait for approval delivery plus relay draining before asserting exactly one terminal result; waiting for the first visible result hides the duplicate.
+
+- A snapshot observer must not own a prepared approval's lifecycle (#13303). `askOnPhone` replays connection snapshots and withdraws observers when they disappear. If it reattaches an unanswered prepared card through `awaitPrepared`, cancelling that observer takes the shared caller-cancellation path and removes the original card while its tool call is still waiting. Keep every active prepared card out of snapshot waiters, before clarification as well as after it; its original caller and prepared timer own cancellation, expiry and final delivery. A regression that only observes the flaky `pending = 0` outcome is not enough: assert that no observer is created, then clarify and resolve the original card exactly once.
 
 - Shortening a shared input window for one event must not expire another event's admission (#10480). `TestAvailabilityReplyWaitWithoutQueue` set `availInputFor` to 1 ms before starting its supervision round; an `inOrder` delay then expired the supervision input, recorded the round as `other`, and timed out the fixture. Scope the shortened window to the owner message and restore it immediately. Do not lengthen the assertion deadline or change production round attribution for a race the fixture created.
 

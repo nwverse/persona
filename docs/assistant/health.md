@@ -52,8 +52,42 @@ Sources:
 - **Registry and policy** (#13104): the health space is the built-in entry of the manager's track registry (`server/internal/assistant/track_registry.go`; the manager supplies it, the `assistant_tracks` table holds the others), with the health template, the health category as its default, and the manager's health directory.
   A track has a kind (a domain space is one kind) and its directory is data: the health space keeps `health`, a new track defaults to `tracks/<slug>` whatever its kind. Kinds, templates and the versioned list of information categories are checked in code, not in the table. Conversations still name their track in the wire field `space`.
   What hides, redacts or confirms never compares a track's name: it reads the track's `TrackPolicy` (lock screen and channels, extensions, knowledge-base writes, handing things out, the main chat's file tools).
-  The main space has every switch off; every other track, registered or not, has every switch on, which is exactly the health space's behavior. Grading uses by information category and scene replaces `trackPolicy` later.
+  The main space has every switch off and the health space every one; another registered track's follow its default categories, and a slug the registry does not know has every switch on ("Using information by scene" below).
   The hub and the nodes cannot read the registry: a node learns the other tracks' directories from the manager (`deny_dirs`) and tells sessions in them by `space`, and both treat any track as the strictest. Once noted in a track other than the main space, a conversation stays there (`assistant_conversation_spaces`).
+
+## Information categories (#13246)
+
+Collecting is not limited by track: every assistant conversation is tagged with the kinds of personal information it carries, so a later step can decide each use by the information's categories and the scene it goes to instead of by the track it came from.
+
+- **Categories** (`server/internal/assistant/track_registry.go`, versioned in code, never user-defined): `health`, `finance`, `relationships`, `emotion`, `legal_id`. No category means general. Credentials are no category: they are filtered out before anything is kept.
+- **A conversation's categories** (`conversationCategories` in `server/internal/assistant/info_tag.go`): its track's default categories, a floor nobody takes away (the health space's is `health`), and what was tagged since, kept in the manager table `assistant_info_categories` by session id. They only grow: the model and agents only add, and only the user takes one away, which stays away (a `removed_by_user` row) until the user adds it back. When the categories cannot all be told (the store or the conversation's track cannot be read), uses outside the track are to take the conversation for sensitive.
+- **Tagging after each turn**: once an assistant conversation's turn ended and stayed still, what the user said and the reply (the first 1,000 characters) go to the model use `info.tag`, a read-only use under Sorting (`inbox.triage`). Its prompt is `server/internal/prompts/assistant/info_tag.md`, in English whatever the owner's language, and the answer is category names only; the track's default categories are passed as the ones to look for especially. Health conversations are tagged too: tagging is collecting, and limits belong to how information is used, so the first 1,000 characters of every health turn go to the model Sorting is set up with, which need not be the health conversation's own. Answers are cached by text and model. A turn that cannot be read or tagged (no model set up, paused, timed out) leaves the categories as they were.
+- The health space behaves exactly as before: what hides, redacts or confirms still reads `TrackPolicy`; the categories are what the scene decision reads next.
+
+## Using information by scene (#13246)
+
+What a piece of information may do is decided where it is used, by one function, `usage` (`server/internal/assistant/usage.go`), from what it is (its categories, whether they are all known, the track it came from) and where it goes. It never reads a track's name or kind: a track takes part only through its default categories, which everything from it carries.
+
+| # | Scene | General | Sensitive (any category, or not known) |
+| --- | --- | --- | --- |
+| 1 | Inside its own track | Used | Used |
+| 2 | The main chat or another track | By relevance | Only when on topic, never in a standing context; the main chat's Read and Edit are denied the track's directory |
+| 3 | Handed to an agent or a computer | By relevance | Confirmed on the phone each time; a task plan does not start on its own |
+| 4 | Lock screen and pushes | As usual | Only that there is news |
+| 5 | Sent to other people | As usual | Confirmed on the phone each time |
+| 6 | Read by an extension | As usual | Hidden unless the extension is the user's own or was granted every category |
+| 7 | Written to the shared knowledge base | As usual | Refused |
+
+Information whose categories are not known yet (not tagged, tagging failed or timed out) takes the sensitive side outside its own track. `TrackPolicy` sums these rules up as the switches the call sites read until each asks `usage` for its own scene (`policyOf`); a track's policy is that of its default categories, so the health space keeps every switch on, the main space none, a slug the registry does not know every one, and only tracks with a sensitive default category have their directories denied the other conversations (`deny_dirs`). `TestUsageHealthOutbound` maps every row of the table under "Outbound" to its scene.
+
+Which categories a use reads depends on the scene:
+
+- **A text leaving Persona** (scenes 3, 4, 5 and 7: a push or `notify_user`, `phone_notify`, `urgent_call`, a to-do reminder, a scheduled task's failure notice, a decision's push, "all cards" and "all questions" on Lark and the plugin channels, `agent_send`, `agent_start`, `agent_switch`, an A2A message or task from an assistant conversation, a task plan, `kb_update`) carries the categories tagged of its own words, within 800 ms, and its track's default categories (`exitPolicy` in `server/internal/assistant/info_use.go`). Never its conversation's accumulated ones: the main chat would soon carry every category and have everything confirmed. A track sensitive by default asks no model. When the words cannot be tagged in time (a timeout, a paused model, an error), the conversation's categories stand in when it was tagged and no turn of it waits to be tagged; otherwise the text is taken for sensitive. With no model set up for `info.tag`, a text carries its track's default categories, as before tagging.
+- **A conversation as a whole** (scenes 6 and 2: an extension listing or reading it, a recall elsewhere) carries its accumulated categories (`conversationPolicy`); while a turn of it waits to be tagged they are not known. An extension reading the assistant's conversations (`assistant.conversations`, `assistant.messages`) is shown each by its categories; its other reads in the manager (the feed, card history, archived agents, memory) go by the track's default categories and its grant. To-dos, and every control (starting a conversation in a track, taking a run onto a to-do), keep the track's rule whatever the extension's trust or grants: trust widens reads only. The hub still hides every track from extensions on its own routes (session lists, transcripts, cards) for now.
+- **Extension trust and grants** (scene 6, `server/internal/assistant/extension_trust.go`): an extension the user marked as their own (`trust: owner`, such as their memory extension) reads everything; any other is a third party's and reads sensitive information only of the categories the user granted it, each one (`assistant_extension_trust`, `assistant_extension_grants`). The extension manager names the reading extension (`assistant.extension_read`); a read that names none is a third party's with no grant. When an extension is removed, its trust and grants go with it (`assistant.extension_trust_forget`): installed again it starts as a third party's. With no grants given, every extension sees what it saw before, except that conversations of a track with no sensitive default category, and their memory, are no longer kept from it, and a main conversation tagged with a sensitive category is.
+- **Only the user changes it** (`GET /api/v1/assistant/extension-trust`, `PUT /api/v1/assistant/extension-trust/{id}`, `GET` / `PUT /api/v1/assistant/conversations/{id}/categories`): a full-access client only; an extension's token or a scoped device gets 403, and agents have no tool for it. A track's own categories cannot be taken away (409); a category the user took away stays away until the user adds it back.
+- A redacted push outside the health space says only that there is news (`assistant-health.sensitive_notice_*`), and a confirmation card says the content may be personal (`assistant-health.sensitive_outbound`); a track whose default categories carry health keeps the health space's words.
+- What stays inside Persona is not a text leaving: to-do edits from a conversation (`todo_create`, `todo_update`, their repositories and workspaces) and the main chat's mirror to the owner's own Lark chat and plugin channels keep the track's rule.
 
 ## API
 
@@ -95,7 +129,7 @@ The `conversation*` tools in a chat only see chats in the same space (`server/in
 ## Outbound (#3194)
 
 The boundary is not "health information may not leave" but "it may not leave without the user knowing". Emailing checkup results to a doctor, or sending them over Lark to a fitness coach or family, is legitimate and still works.
-The decision always depends on the chat's space (the trusted session directory), never on a model judging "does this sentence count as health".
+In the health space the decision always depends on the chat's space (the trusted session directory), never on a model judging "does this sentence count as health": its default category makes every exit below strict without asking a model. Outside it the same exits judge the words leaving ("Using information by scene").
 
 | Exit | In a health chat | Code |
 | --- | --- | --- |

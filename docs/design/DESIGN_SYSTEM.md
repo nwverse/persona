@@ -3988,3 +3988,7 @@ Unknown freshness is always visible, retained data is labeled stale, duplicate
 tickets name their shared result, and start estimates say unknown when no reliable
 duration is available. Runner registration is editable only on explicit request
 through Configure runners, and saving an empty list disables polling.
+
+## First-run pairing
+
+Center the Persona mark and title above the primary control. A phone opens its scanner. A browser takes a pairing link and submits it with the arrow inside the field group. Place the secondary actions in one centered row of icons with short labels. Keep the action and its label in a single tap target. Allow wrapping or stacking at larger text sizes. Help explains where to get a code or link. A warning about replacing an existing pairing stays beside the action.

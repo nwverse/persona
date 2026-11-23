@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
@@ -241,11 +242,23 @@ func TestWindowsUnchangedDirectStartsUseMainBytes(t *testing.T) {
 	}
 }
 
-func TestWindowsHostNamedBashUsesMainBytes(t *testing.T) {
+func TestWindowsHostNamedBashKeepsMainBytesAndClearsModelSource(t *testing.T) {
 	n := &Node{dir: `C:\node dir`}
 	shells := windowsPaneShellDecision(false, "bash", nil, "")
 	payload := n.agentStartCommand("claude", shellQuote, shells...)
-	if got := startScript(r3MainStartPath, payload); got != r3MainHostBashFile {
+	got := startScript(r3MainStartPath, payload)
+	// Clear inherited attribution before applying this Agent's source. Apart from
+	// these additional unset fields, preserve the established Windows shell bytes.
+	for _, key := range []string{modelSourceEnv, modelSourceBinEnv} {
+		current, legacy := compat.EnvNames(key)
+		for _, name := range []string{current, legacy} {
+			if !strings.Contains(got, " "+name+" ") {
+				t.Fatalf("start file retained inherited %s", name)
+			}
+			got = strings.Replace(got, name+" ", "", 1)
+		}
+	}
+	if got != r3MainHostBashFile {
 		t.Fatalf("start file = %q, want main %q", got, r3MainHostBashFile)
 	}
 	if !n.typesStartFile(&herdrHost{}, shells...) {

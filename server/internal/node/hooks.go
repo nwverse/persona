@@ -188,7 +188,14 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "claude-plugin.status": // which sessions' Persona plugin polls this node (ccplugin.go): installers, doctor
 		resp = n.ccPluginStatusNow()
 	case "ping": // personad node doctor, persona-link node switch: a round trip that changes nothing
-		resp = map[string]any{"ok": true, "program": n.Program, "version": n.Version}
+		n.mu.Lock()
+		machine := n.machineID
+		n.mu.Unlock()
+		pong := map[string]any{"ok": true, "program": n.Program, "version": n.Version}
+		if machine != "" {
+			pong["machine_id"] = machine
+		}
+		resp = pong
 	case "update.inventory":
 		var target nodeclient.UpdateInventoryTarget
 		if err := json.Unmarshal(req.Input, &target); err != nil {

@@ -292,9 +292,11 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	explicitPermission := strings.TrimSpace(p.PermissionMode)
 	if p.Origin == OriginInbox {
-		// Default keeps the explicit Persona MCP allowlist effective: Plan rejects MCP before consulting it. The
-		// manager/node origin policy, not the launcher's permission mode, prevents externally visible work.
-		p.PermissionMode = "default"
+		// A caller cannot elevate externally originated work. Only the AI twin's own saved override, applied after
+		// model resolution below, can replace its safe default. Default keeps the explicit Persona MCP allowlist
+		// effective: Plan rejects MCP before consulting it. The manager/node origin policy, not the launcher's mode,
+		// prevents externally visible work.
+		p.PermissionMode = ""
 	} else {
 		p.PermissionMode = explicitPermission
 	}
@@ -316,6 +318,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	params["model_source"] = s.startModelSource(ctx, p, main)
 	if p.TaskExecution {
 		params["task_execution"] = true
 		if p.LegacyTaskExecution {
@@ -388,7 +391,11 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	// back to the assistant default / bypassPermissions, while preserving Inbox and guest safety boundaries.
 	switch {
 	case p.Origin == OriginInbox:
-		params["permission_mode"] = "default"
+		mode, modeErr := s.inboxPermissionMode(ctx, machine, used)
+		if modeErr != nil {
+			return proto.Session{}, modeErr
+		}
+		params["permission_mode"] = mode
 	case p.GuestTools != nil:
 		params["permission_mode"] = ""
 	default:
@@ -397,14 +404,8 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			mode = cmp.Or(s.settings(ctx).DefaultPermissionMode, proto.ModeBypass)
 			params["permission_mode"] = mode
 		}
-		if explicitPermission == "" && used != "" && used != "claude" {
-			if l, ok := s.targetMachineLauncher(ctx, machine, used); ok {
-				if !permissionModeSupported(cmp.Or(l.AgentType, l.Agent), l.PermissionModes, mode) {
-					delete(params, "permission_mode")
-				}
-			} else if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" && !permissionModeSupported(agent, 0, mode) {
-				delete(params, "permission_mode")
-			}
+		if explicitPermission == "" && !s.startPermissionModeSupported(ctx, machine, used, mode) {
+			delete(params, "permission_mode")
 		}
 	}
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
@@ -467,6 +468,58 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	sess.Effort, _ = params["effort"].(string)
 	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
 	return sess, nil
+}
+
+// inboxPermissionMode reads only the AI twin's own record. Plan, unknown values and modes the resolved launcher cannot
+// run return to default: Plan rejects the Persona MCP calls that investigation and inbox_suggest require before their
+// allowlist runs, and an unknown value must be normalized before the node's generic mode validation.
+func (s *Service) inboxPermissionMode(ctx context.Context, machine, used string) (string, error) {
+	record, err := s.modelRecord(ctx, purposeAgent)
+	if err != nil {
+		return "", i18n.Err("assistant-models.err_read_config", i18n.Args{"error": err.Error()})
+	}
+	mode := cmp.Or(record.Binding.PermissionMode, proto.ModeDefault)
+	if mode == proto.ModePlan || !slices.Contains(proto.PermissionModes, mode) ||
+		!s.startPermissionModeSupported(ctx, machine, used, mode) {
+		mode = proto.ModeDefault
+	}
+	return mode, nil
+}
+
+// putInboxPermissionMode replaces any caller-supplied value with the manager's own AI-twin decision. The separate wire
+// field lets a new node distinguish this choice from an older manager's caller-controlled permission_mode.
+func (s *Service) putInboxPermissionMode(ctx context.Context, machine, session string, params map[string]any, origin string, originKnown bool) error {
+	delete(params, assistantwire.InboxPermissionModeParam)
+	if !originKnown || origin != OriginInbox {
+		return nil
+	}
+	used, _ := params["launcher"].(string)
+	if used == "" {
+		if c, ok := s.session(ctx, machine, session); ok {
+			used = c.Launcher
+		}
+	}
+	mode, err := s.inboxPermissionMode(ctx, machine, used)
+	if err != nil {
+		return err
+	}
+	params[assistantwire.InboxPermissionModeParam] = mode
+	return nil
+}
+
+// startPermissionModeSupported checks an inherited or saved mode against the launcher the start finally runs on.
+// Unknown launchers keep the existing behavior: the node validates the start rather than the manager guessing a type.
+func (s *Service) startPermissionModeSupported(ctx context.Context, machine, used, mode string) bool {
+	if used == "" || used == "claude" {
+		return true
+	}
+	if l, ok := s.targetMachineLauncher(ctx, machine, used); ok {
+		return permissionModeSupported(cmp.Or(l.AgentType, l.Agent), l.PermissionModes, mode)
+	}
+	if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" {
+		return permissionModeSupported(agent, 0, mode)
+	}
+	return true
 }
 
 // start starts a conversation: on p.MachineID ("" the assistant's machine), or the main conversation.
@@ -540,6 +593,9 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 // conversation_new's). Nobody is in front of it to sign in, so it starts signed in as a meeting's do (startSignedIn):
 // in the profile the assistant's conversations had, not a new private one with no login in it (#6015).
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
+	if p.modelSource.Role != "" {
+		ctx = context.WithValue(ctx, modelSourceKey{}, p.modelSource.Safe())
+	}
 	return s.startSignedIn(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
 		Origin: p.Origin, OriginRef: p.OriginRef, MachineID: p.MachineID, Cwd: p.Cwd, TaskExecution: p.TaskExecution,
 		LegacyTaskExecution: p.LegacyTaskExecution, PromptSelections: p.PromptSelections, TaskModel: p.TaskModel, NewSessionID: p.NewSessionID})
@@ -995,7 +1051,7 @@ func (s *Service) startRoutes() {
 			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: not a registered space", in.Space))
 			return
 		}
-		if in.Space != "" && s.trackPolicy(ctx, in.Space).HideFromExtensions && r.Header.Get(RoleHeader) == roleExtension {
+		if in.Space != "" && s.trackPolicy(ctx, in.Space).HideFromExtensions && r.Header.Get(RoleHeader) == roleExtension { // a start is a control: trust and grants widen reads only
 			apierr.WriteCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
 			return
 		}
@@ -1233,6 +1289,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if params == nil {
 		params = map[string]any{}
 	}
+	params["model_source"] = s.conversationModelSource(ctx, p.MachineID, p.SessionID)
 	delete(params, "external")
 	delete(params, "cache_keepalive") // only the manager may attest a refresh role, including on early returns
 	if launcher, _ := params["launcher"].(string); proto.IsExternalLauncher(launcher) {
@@ -1248,8 +1305,11 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	}
 	if origin != "" {
 		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
-		// first resumed process is clamped to non-bypass default and its Lark gate cannot fall back to an ordinary conversation.
+		// first resumed process keeps its Inbox tool policy and its Lark gate cannot fall back to an ordinary conversation.
 		params["origin"] = origin
+	}
+	if err := s.putInboxPermissionMode(ctx, p.MachineID, p.SessionID, params, origin, originKnown); err != nil {
+		return nil, false, err
 	}
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
