@@ -93,7 +93,14 @@ func TestReportAndStopOfOneTurnAreOneMessage(t *testing.T) {
 	if res := s.agentTool(ctx, "box", sid, "report_to_supervisor", json.RawMessage(`{"kind":"done","text":"PR 已合并","evidence":["https://example.com/pr/7"]}`)); res.IsError {
 		t.Fatalf("report: %+v", res)
 	}
-	time.Sleep(10 * shortSuperviseTimings.gather)
+	reportID := todo.ID + "|" + sigReport + ":" + upReportDone
+	held := func() bool {
+		s.supervise.mu.Lock()
+		defer s.supervise.mu.Unlock()
+		g, ok := s.supervise.pending[reportID]
+		return ok && g.NotBefore.After(time.Now().Add(time.Minute))
+	}
+	waitFor(t, "the report held for the stop", held)
 	if n := len(assistantSendsTo(f, "conv1")); n != 0 {
 		t.Fatalf("the report went out before its Agent stopped: %d message(s)", n)
 	}
@@ -104,7 +111,11 @@ func TestReportAndStopOfOneTurnAreOneMessage(t *testing.T) {
 		!strings.Contains(text, "停下前它主动向你汇报说做完了") || !strings.Contains(text, "PR 已合并") || !strings.Contains(text, "https://example.com/pr/7") {
 		t.Fatalf("message:\n%s", text)
 	}
-	time.Sleep(10 * shortSuperviseTimings.gather)
+	waitFor(t, "nothing left to tell", func() bool {
+		s.supervise.mu.Lock()
+		defer s.supervise.mu.Unlock()
+		return len(s.supervise.pending) == 0
+	})
 	if n := len(assistantSendsTo(f, "conv1")); n != 1 {
 		t.Fatalf("%d messages for one turn", n)
 	}
