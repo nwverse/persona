@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/assistantskills"
@@ -219,6 +220,20 @@ func TestScheduledPromptDeliveryThroughNode(t *testing.T) {
 
 func TestScheduledPromptFirstUseOfDefaultDirectory(t *testing.T) {
 	f := cliTestBash(t)
+	// The preview checks "claude" against the launchers the node lists, which the package caches for a minute. A test
+	// before this one in the same process may have listed another shell's (TestOrcaResumesAnOfflineSession lists the
+	// machine's own, which has no plain claude): list this fixture's shell instead.
+	launcherCache.Lock()
+	at, list := launcherCache.at, launcherCache.list
+	codex, aliases, settings, scripts := launcherCache.codex, launcherCache.codexAliases, launcherCache.settings, launcherCache.scripts
+	launcherCache.at, launcherCache.list = time.Time{}, nil
+	launcherCache.Unlock()
+	t.Cleanup(func() {
+		launcherCache.Lock()
+		launcherCache.at, launcherCache.list = at, list
+		launcherCache.codex, launcherCache.codexAliases, launcherCache.settings, launcherCache.scripts = codex, aliases, settings, scripts
+		launcherCache.Unlock()
+	})
 	f.n.machineID = "remote-fixture"
 	hub := &schedulePromptHub{node: f.n}
 	service := assistant.New(assistant.Options{Hub: hub})

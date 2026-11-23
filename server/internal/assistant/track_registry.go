@@ -313,7 +313,28 @@ func (s *Service) trackPolicy(ctx context.Context, space string) TrackPolicy {
 	if !ok {
 		return policyOf(infoUse{SourceTrack: space})
 	}
-	return policyOf(infoUse{Categories: e.DefaultCategories, Known: true, SourceTrack: space})
+	return policyOf(infoUse{Categories: e.DefaultCategories, Known: true, SourceTrack: space, Rules: e.Config.Usage})
+}
+
+// trackKindOf is the kind of track space: the main track's (orchestration) for "", a registered track's own, "" for a
+// track the registry does not know.
+func (s *Service) trackKindOf(ctx context.Context, space string) string {
+	if space == "" {
+		return trackKindOrchestration
+	}
+	if e, ok := s.trackEntryOf(ctx, space); ok {
+		return e.Kind
+	}
+	return ""
+}
+
+// trackRules are the usage rules of track space (its effective config's, #13472): none for the main space or a track
+// the registry does not know (its information is taken for sensitive anyway).
+func (s *Service) trackRules(ctx context.Context, space string) []assistantwire.TrackUsageRule {
+	if e, ok := s.trackEntryOf(ctx, space); ok {
+		return e.Config.Usage
+	}
+	return nil
 }
 
 // trackKnown: slug is the main space ("") or a registered track that is not archived: what a conversation, a task or

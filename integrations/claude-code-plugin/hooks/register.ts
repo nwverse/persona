@@ -197,33 +197,40 @@ async function applySettings(
 /**
  * Submits one message as the person's words, if it may go in now, and tells the node what became of it.
  * When a turn is running, Claude Code enqueues the prompt synchronously (`queue-operation: enqueue`) and only resolves
- * `$.prompt.submit` once the queued prompt enters its own turn; racing against `SUBMIT_QUEUE_SETTLE_MS` keeps the poll
- * loop free to receive interrupts or further follow-up prompts while the active turn finishes.
+ * `$.prompt.submit` once the queued prompt enters its own turn. The settle window releases the poll loop for interrupts
+ * and further prompts; it is not a submission acknowledgement. The continuation reports the actual result later, while
+ * the node can confirm the queued prompt from the transcript.
  */
 async function deliver($: Engine, sock: string, session: string, m: Message): Promise<void> {
+  const report = async (outcome: string) => {
+    const ack = outcome === 'ok' ? { submitted: true } : { submitted: false, reason: outcome }
+    try {
+      await $.http.fetch(`${BASE}/ack`, post(sock, { session_id: session, id: m.id, ...ack }))
+    } catch {
+      // The node went away: it reads the transcript to learn what became of the message.
+    }
+  }
   let outcome: string = verdict(m, await $.clock.now())
   if (outcome === 'ok' && typeof m.text === 'string') {
     try {
       const pending = $.prompt.submit({ text: m.text, asUser: true })
-      // Prevent unhandled rejection if `pending` settles later after being queued behind a running turn.
-      pending.catch(() => undefined)
+      const result = pending.then(
+        submitted => (submitted.drop !== undefined ? 'dropped' : 'ok'),
+        () => 'failed',
+      )
       outcome = await Promise.race([
-        pending.then(
-          submitted => (submitted.drop !== undefined ? 'dropped' : 'ok'),
-          () => 'failed',
-        ),
-        sleep($, SUBMIT_QUEUE_SETTLE_MS).then(() => 'ok'),
+        result,
+        sleep($, SUBMIT_QUEUE_SETTLE_MS).then(() => 'pending'),
       ])
+      if (outcome === 'pending') {
+        void result.then(report)
+        return
+      }
     } catch {
       outcome = 'failed'
     }
   }
-  const ack = outcome === 'ok' ? { submitted: true } : { submitted: false, reason: outcome }
-  try {
-    await $.http.fetch(`${BASE}/ack`, post(sock, { session_id: session, id: m.id, ...ack }))
-  } catch {
-    // The node went away: it reads the transcript to learn what became of the message.
-  }
+  await report(outcome)
 }
 
 async function manifestVersion($: Engine): Promise<string> {

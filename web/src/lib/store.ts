@@ -39,7 +39,7 @@ import type { OutboxEntry } from "./outbox";
 import { NO_LINK, RESTARTING_MS, type ConnLink } from "./connection";
 import { unreachable } from "./shell";
 import { setOfflineProbe } from "./feedback";
-import { readDirectionTree } from "./direction-names";
+import { isExternalDirection, readDirectionTree } from "./direction-names";
 import { unlistedConversations } from "./conversation-origins";
 import { directionTreeAwaitsHello } from "./direction-tree";
 import { configureMessageFeedback, resetMessageFeedback } from "./message-send";
@@ -994,7 +994,7 @@ async function followDirections(changed = false) {
   const a = state.assistant;
   if (!ids || !a) return;
   const known = new Set(a.conversations.map((c) => c.session_id));
-  if (ids.some((id) => !known.has(id))) void refreshAssistant().catch(() => {});
+  if (ids.some((id) => !known.has(id) && !isExternalDirection(id))) void refreshAssistant().catch(() => {});
   else if (JSON.stringify(ids) !== JSON.stringify((a.leaders ?? []).filter((id) => id !== a.main))) set({ assistant: { ...a, leaders: ids } });
 }
 

@@ -45,6 +45,7 @@ func (s *Service) trackRoutes() {
 	s.handle("GET /api/v1/assistant/track-kinds", s.trackKindList)
 	s.handle("POST /api/v1/assistant/track-kinds", s.trackKindCreate)
 	s.handle("PUT /api/v1/assistant/track-kinds/{slug}", s.trackKindChange)
+	s.trackSpaceMDRoutes() // track_space_md.go
 }
 
 // wireTrack is e as the apps see it.
@@ -189,6 +190,13 @@ func (s *Service) trackCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		trackWriteError(w, err)
 		return
+	}
+	s.prepareTrackSoon(in.Slug)
+	if e, ok := s.trackEntryOf(ctx, in.Slug); ok {
+		// Its rhythms become its scheduled tasks once, now (track_rhythms.go); the track stands either way.
+		if err := s.createTrackRhythms(ctx, e); err != nil {
+			s.logf("tracks: %q: rhythms: %v", in.Slug, err)
+		}
 	}
 	s.answerTrack(ctx, w, in.Slug, http.StatusCreated)
 }

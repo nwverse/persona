@@ -2,11 +2,18 @@
 // Android canTypeClaudeCommands): the "/" list. The pictures a message takes are the hub's (lib/image-limits.ts).
 import { agentName, sessionAgent } from "./agent-kind";
 import { WORKFLOWS_COMMAND } from "./background-panel";
-import { canSwitchModel } from "./model-switch";
+import { canSwitchModel, isModelCommand, requestModelPicker } from "./model-switch";
 import { hasLoop, LOOP_TEXT } from "./loop-command";
 import { sessionCan, stateOf } from "./format";
 import type { Session } from "./types";
-import { canPickPermissions, PERMISSIONS_COMMAND } from "./permissions-command";
+import { canPickPermissions, isPermissionsCommand, PERMISSIONS_COMMAND, requestPermissionPicker } from "./permissions-command";
+
+/** Handles local composer picker commands (`/model` -> model panel, `/permissions` -> permission menu) when there are
+ *  no attached images. Returns true if a picker opened; false when the text should be sent as a normal message. */
+export function openPickerCommand(draftKey: string, text: string, images = 0): boolean {
+  if (images > 0) return false;
+  return (isModelCommand(text) && requestModelPicker(draftKey)) || (isPermissionsCommand(text) && requestPermissionPicker(draftKey));
+}
 
 /** Rows the "/" palette lists at most (cindy's filterSlashCommands). */
 export const SLASH_LIMIT = 25;
