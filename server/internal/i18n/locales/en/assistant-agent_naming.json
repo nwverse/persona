@@ -3,6 +3,7 @@
   "upgrade": "Update the assistant to name agents automatically from here",
   "assistant_session": "Persona names its own conversations. Auto Rename is for agents",
   "model_not_configured": "No model is set up for naming. Choose one for Sorting in Settings › Model configuration",
+  "launcher_too_slow": "The naming model takes longer to answer on its computer than naming can wait, so it wasn't asked. Choose a faster model for Sorting in Settings › Model configuration",
   "no_dialogue": "This agent has no conversation to name it from yet",
   "invalid_name": "The model did not give a usable name. Try again",
   "model_failed": "The naming model could not be reached. Try again",

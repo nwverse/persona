@@ -28,6 +28,11 @@ const agentNamingRecentRunes = 4000
 const agentNamingTitleRunes = 40
 const agentNamingFailureLimit = 3
 
+// agentNameHeldBack is the reason of a naming call that was never sent: the Sorting model runs on a launcher whose
+// runs there take longer than naming waits (runFloorBook). Asking again soon ends the same way, and it says nothing of
+// the session, so it is no naming failure: it counts toward no limit and starts no cooldown.
+const agentNameHeldBack = "launcher_too_slow"
+
 var agentNamingTimeout = 45 * time.Second
 
 // A distinct manager-owned ledger preserves counters and manual intent across restarts.
@@ -443,6 +448,11 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 			s.logf("agent naming: session=%q/%q reason=%s: %v", machine, c.SessionID, failureReason, err)
 		}
 	}
+	if failureReason == agentNameHeldBack {
+		// Not asked, so not failed: the lease taken before the call holds the next try off, with no count and no
+		// growing cooldown, and once runs there are fast enough again (or what was seen of them expires) it is named.
+		return true
+	}
 	if failureReason != "" {
 		r.Failures++
 		r.LastFailure = failureReason
@@ -505,7 +515,7 @@ func (s *Service) agentNamingSay(reason string) bool {
 		said := b.unconfigured
 		b.unconfigured = true
 		return !said
-	case "", "model_call_failed", "invalid_name", "model_output_truncated": // a model was there to call
+	case "", "model_call_failed", "invalid_name", "model_output_truncated", agentNameHeldBack: // a model was there to call
 		b.unconfigured = false
 	}
 	return reason != ""
@@ -526,8 +536,11 @@ func (s *Service) agentNameFromModel(ctx context.Context, machine, id string) (t
 	if err == nil {
 		reason = "model_call_failed"
 		reply, err = s.purposeModel("inbox.triage").Chat(ctx, ai.Request{System: prompts.RenderAgentSessionName(), Messages: []ai.Message{{Role: ai.RoleUser, Content: prompts.RenderAgentSessionNameInput(prompts.AgentSessionNameInput{First: first, Recent: recent})}}, MaxTokens: 256, BoundOutput: true})
-		if ai.IsNotConfigured(err) {
+		switch {
+		case ai.IsNotConfigured(err):
 			reason = "model_not_configured"
+		case runHeldBack(err): // its launcher's runs take longer than naming waits: not asked (models_run.go)
+			reason = agentNameHeldBack
 		}
 	}
 	title = strings.TrimSpace(strings.Trim(strings.TrimSpace(reply.Text), "\"“”『』")) // i18n-ignore: punctuation normalization

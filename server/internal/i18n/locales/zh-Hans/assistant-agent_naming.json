@@ -3,6 +3,7 @@
   "upgrade": "更新助手后才能在这里自动重命名 Agent",
   "assistant_session": "Persona 自己的对话由它自己命名，自动重命名只用于 Agent",
   "model_not_configured": "还没有可用于命名的模型：在 设置 › 模型配置 为「信息筛选」选一个",
+  "launcher_too_slow": "命名用的模型在它所在的电脑上回答一次，比起名能等的时间还长，所以这次没有去问它。可在 设置 › 模型配置 为「信息筛选」换一个更快的模型",
   "no_dialogue": "这个 Agent 还没有对话内容，暂时起不了名字",
   "invalid_name": "模型没有给出可用的名字，请重试",
   "model_failed": "连不上命名用的模型，请重试",

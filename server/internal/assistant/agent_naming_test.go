@@ -216,6 +216,28 @@ func TestAgentNameFailureCooldown(t *testing.T) {
 	}
 }
 
+// A background call held back because the Sorting model's launcher answers slower than naming waits was never sent
+// (runFloorBook): it is no naming failure, so it counts toward no limit and grows no cooldown. Only the lease taken
+// before the call holds the next try off, so tries go on past the failure limit.
+func TestAgentNameHeldBackIsNoFailure(t *testing.T) {
+	s, f, calls := namingFixture(t, func(w http.ResponseWriter, r *http.Request) { namingReply(w, "Fix export") })
+	holdBackSorting(t, s)
+	c := f.sessions["server"][0]
+	now := time.Now()
+	for i := range agentNamingFailureLimit + 1 {
+		at := now.Add(time.Duration(i) * 11 * time.Minute) // each after the previous try's lease
+		if !s.tryAgentName(context.Background(), "server", c, at) {
+			t.Fatalf("try %d missing", i)
+		}
+		if rec := agentNameRecordOf(s, "server", "s1"); rec.Failures != 0 || rec.LastFailure != "" || !rec.NextAttempt.Equal(at.Add(10*time.Minute)) {
+			t.Fatalf("try %d recorded %+v, want no failure and the lease", i, rec)
+		}
+	}
+	if calls.Load() != 0 || s.agentDisplayName("server", c) != "" {
+		t.Fatalf("a held-back call reached the model (%d calls) or named the session", calls.Load())
+	}
+}
+
 func TestAgentNameManualAndSettingsRace(t *testing.T) {
 	for _, manual := range []bool{true, false} {
 		t.Run(map[bool]string{true: "manual", false: "disabled"}[manual], func(t *testing.T) {

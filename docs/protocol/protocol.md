@@ -200,6 +200,7 @@ its name; a later native rename or `POST …/rename` wins again.
 | 403 | `forbidden` | The device is not a full device (an answer-only device, an extension's token) | false |
 | 404 | `not_found` | No such computer, or its node lists no such session | false |
 | 409 | `model_not_configured` | No model is set up for **Sorting** | false |
+| 409 | `launcher_too_slow` | **Sorting** runs on a launcher whose recent runs on that computer took longer than naming waits, so the model was not asked (`docs/assistant/model-config.md`, "Running API purposes on a launcher"); asking again soon is held back the same way | false |
 | 409 | `no_dialogue` | The session has no user or assistant text to name it from yet | false |
 | 409 | `renamed_meanwhile` | A rename in the app or the Agent finished while the model was working; the later hand-written name is kept | false |
 | 501 | `agent_autoname_unsupported` | The computer's manager is older than the feature (the hub answers; nothing was asked) | false |

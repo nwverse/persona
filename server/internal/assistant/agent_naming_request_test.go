@@ -273,6 +273,9 @@ func TestRequestedAgentNameRefusals(t *testing.T) {
 			f.mu.Unlock()
 			s.settingsChanged(context.Background())
 		}, status: http.StatusConflict, code: "model_not_configured", reason: "model_not_configured"},
+		// Never sent: asking again soon is held back the same way, so it says what to change instead of "try again".
+		{name: "launcher too slow", role: roleFull, sid: "s1", prepare: func(t *testing.T, s *Service, f *fakeHub) { holdBackSorting(t, s) },
+			status: http.StatusConflict, code: "launcher_too_slow", reason: "launcher_too_slow"},
 		{name: "no dialogue", role: roleFull, sid: "s1", prepare: func(t *testing.T, s *Service, f *fakeHub) { f.setItems() },
 			status: http.StatusConflict, code: "no_dialogue", reason: "no_dialogue"},
 		{name: "invalid name", role: roleFull, sid: "s1", answer: func(w http.ResponseWriter, r *http.Request) { namingReply(w, "<private-instruction>") },

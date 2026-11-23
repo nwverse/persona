@@ -31,9 +31,12 @@ func (e *agentNameRefusal) Error() string { return e.err.Error() }
 func (e *agentNameRefusal) Unwrap() error { return e.err }
 
 // agentNameRefusals are the naming call's static reasons (agentNameFromModel) as the apps get them. A truncated
-// answer is an invalid name to the user; a canceled call can only be the manager stopping.
+// answer is an invalid name to the user; a canceled call can only be the manager stopping. A call held back because
+// the Sorting model's launcher answers slower than naming waits was never sent, and asking again soon is held back
+// the same way, so it is not retryable and says what to change.
 var agentNameRefusals = map[string]agentNameRefusal{
 	"model_not_configured":   {status: http.StatusConflict, code: "model_not_configured", err: i18n.Err("assistant-agent_naming.model_not_configured")},
+	agentNameHeldBack:        {status: http.StatusConflict, code: "launcher_too_slow", err: i18n.Err("assistant-agent_naming.launcher_too_slow")},
 	"no_dialogue":            {status: http.StatusConflict, code: "no_dialogue", err: i18n.Err("assistant-agent_naming.no_dialogue")},
 	"invalid_name":           {status: http.StatusBadGateway, code: "invalid_name", retry: true, err: i18n.Err("assistant-agent_naming.invalid_name")},
 	"model_output_truncated": {status: http.StatusBadGateway, code: "invalid_name", retry: true, err: i18n.Err("assistant-agent_naming.invalid_name")},

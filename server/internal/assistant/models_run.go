@@ -29,9 +29,10 @@ import (
 const modelRunTimeout = 2 * time.Minute
 
 // The launcher's CLI starts cold for every request: agy's isolated runs took 12–48 s on a Linux hub machine where
-// claude's and codex's take seconds (#13443). runFloorBook keeps, for each launcher on each computer, how fast a run
-// there has been seen to be, so a request whose caller cannot wait that long (a new Agent's tab name waits 8 s on the
-// start's path) fails at once instead of starting a run that is cancelled unanswered while its caller waits.
+// claude's and codex's take seconds (#13443). runFloorBook keeps, for each launcher on each computer and each model
+// and effort it runs, how fast a run there has been seen to be, so a request whose caller cannot wait that long (a new
+// Agent's tab name waits 8 s on the start's path) fails at once instead of starting a run that is cancelled
+// unanswered while its caller waits.
 
 // runFloorTTL is how long what was seen counts: after it the next request runs, whatever it showed. runFloorSlack is
 // how much longer than the floor a request must be able to wait to be sent (the hop to the computer, the CLI's exit).
@@ -53,7 +54,12 @@ type runFloor struct {
 	at      time.Time     // when it last changed
 }
 
-func runFloorKey(c ai.Config) string { return c.ViaMachine + "\x00" + c.RunLauncher }
+// runFloorKey is what one floor is kept for: a launcher on a computer, run with one model and effort. The purposes on
+// a launcher differ in both, and those decide how long a run takes, so what one configuration showed (a small model's
+// quick answer, a large one's misses) never holds back or lets through another's requests.
+func runFloorKey(c ai.Config) string {
+	return c.ViaMachine + "\x00" + c.RunLauncher + "\x00" + c.Model + "\x00" + c.ReasoningEffort
+}
 
 // floor is how long a run of key has recently taken at least; false when nothing seen says so.
 func (b *runFloorBook) floor(key string, now time.Time) (time.Duration, bool) {
@@ -98,11 +104,12 @@ func (b *runFloorBook) note(key string, took time.Duration, answered bool, now t
 }
 
 // runTooSlowError is a request that was never sent: its caller could not wait as long as runs of its launcher there
-// take (runFloorBook). It reads as a timeout to its caller and is not counted as a model call (countedClient).
+// take (runFloorBook). It is not a timeout (no run started and its caller's time has not run out, so asking again at
+// once ends the same way, and ai.Transient says so): a caller that tells it apart uses runHeldBack. It is not counted
+// as a model call (countedClient).
 type runTooSlowError struct{ msg string }
 
-func (e *runTooSlowError) Error() string        { return e.msg }
-func (e *runTooSlowError) Is(target error) bool { return target == context.DeadlineExceeded }
+func (e *runTooSlowError) Error() string { return e.msg }
 
 // runHeldBack: err is a request runFloorBook held back, which never reached the computer.
 func runHeldBack(err error) bool {

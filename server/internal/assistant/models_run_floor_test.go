@@ -86,11 +86,12 @@ func TestLauncherRunHeldBackWhenItCannotAnswerInTime(t *testing.T) {
 	if devs.runs() != runFloorMisses {
 		t.Fatalf("runs = %d", devs.runs())
 	}
-	// The next is held back at once, reads as a timeout, says why, and is not counted.
+	// The next is held back at once and says why. It is no timeout (nothing was asked and its caller's time has not
+	// run out), so nothing retries it as one, and it is not counted.
 	started := time.Now()
 	_, err := ask(100 * time.Millisecond)
-	if !runHeldBack(err) || !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > 50*time.Millisecond || devs.runs() != runFloorMisses {
-		t.Fatalf("held back: %v after %s, %d runs", err, time.Since(started), devs.runs())
+	if !runHeldBack(err) || errors.Is(err, context.DeadlineExceeded) || ai.Transient(err) || time.Since(started) > 50*time.Millisecond || devs.runs() != runFloorMisses {
+		t.Fatalf("held back: %v (timeout %t, transient %t) after %s, %d runs", err, errors.Is(err, context.DeadlineExceeded), ai.Transient(err), time.Since(started), devs.runs())
 	}
 	if msg := err.Error(); !strings.Contains(msg, "claude") || !strings.Contains(msg, "server") {
 		t.Fatalf("reason: %q", msg)
@@ -120,13 +121,105 @@ func TestLauncherRunHeldBackWhenItCannotAnswerInTime(t *testing.T) {
 	}
 }
 
-// What a launcher's runs showed counts per computer and launcher, for runFloorTTL after the last run.
+// Purposes on one launcher run different models and efforts, which decide how long a run takes: what one of them
+// showed never holds back or lets through another's requests. A small model's misses leave a large one's short waits
+// alone, and its quick answer does not clear the large one's misses.
+func TestLauncherRunFloorIsPerModelAndEffort(t *testing.T) {
+	s, _, _ := modelService(t)
+	devs := &slowRunDevs{delay: 400 * time.Millisecond}
+	s.devs = devs
+	slack := runFloorSlack
+	runFloorSlack = 20 * time.Millisecond
+	t.Cleanup(func() { runFloorSlack = slack })
+	// Tab names (agent.title, under kb) on a small model; Sorting on a large one at high effort; both on claude.
+	if r := modelRequest(s, "PATCH", "kb", `{"revision":0,"provider":"launcher.claude","model":"m-small"}`); r.Code != 200 {
+		t.Fatalf("kb on claude: %d %s", r.Code, r.Body.String())
+	}
+	if r := modelRequest(s, "PATCH", "inbox.triage", `{"revision":0,"provider":"launcher.claude","model":"m-large","effort":"high"}`); r.Code != 200 {
+		t.Fatalf("sorting on claude: %d %s", r.Code, r.Body.String())
+	}
+	ask := func(purpose string, wait time.Duration) error {
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		defer cancel()
+		_, err := s.purposeModel(purpose).Complete(ctx, "", "name this", 64)
+		return err
+	}
+
+	for range runFloorMisses {
+		if err := ask("agent.title", 100*time.Millisecond); runHeldBack(err) {
+			t.Fatalf("small model held back before its misses: %v", err)
+		}
+	}
+	if err := ask("agent.title", 100*time.Millisecond); !runHeldBack(err) {
+		t.Fatalf("small model after its misses: %v", err)
+	}
+	before := devs.runs()
+	if err := ask("inbox.triage", 100*time.Millisecond); runHeldBack(err) || devs.runs() != before+1 {
+		t.Fatalf("the small model's misses held the large one back: %v (%d runs)", err, devs.runs()-before)
+	}
+	if err := ask("inbox.triage", 100*time.Millisecond); runHeldBack(err) || devs.runs() != before+2 { // its own second miss
+		t.Fatalf("large model's second wait: %v (%d runs)", err, devs.runs()-before)
+	}
+
+	devs.setDelay(5 * time.Millisecond)
+	if err := ask("agent.title", time.Second); err != nil {
+		t.Fatalf("small model's quick answer: %v", err)
+	}
+	if err := ask("agent.title", 100*time.Millisecond); err != nil {
+		t.Fatalf("small model's short wait after its quick answer: %v", err)
+	}
+	before = devs.runs()
+	if err := ask("inbox.triage", 100*time.Millisecond); !runHeldBack(err) || devs.runs() != before {
+		t.Fatalf("the small model's quick answer let the large one's short wait through: %v (%d runs)", err, devs.runs()-before)
+	}
+	devs.mu.Lock()
+	defer devs.mu.Unlock()
+	for _, p := range devs.saw {
+		if p.Model != "m-small" && (p.Model != "m-large" || p.Effort != "high") {
+			t.Fatalf("a run with neither configuration: %+v", p)
+		}
+	}
+}
+
+// holdBackSorting puts the Sorting purpose (inbox.triage: Agent naming's model) on the computer's claude launcher and
+// records runs there as taking an hour, so every naming call is held back before it is sent (runFloorBook).
+func holdBackSorting(t *testing.T, s *Service) {
+	t.Helper()
+	if r := modelRequest(s, "PATCH", "inbox.triage", `{"revision":0,"provider":"launcher.claude"}`); r.Code != 200 {
+		t.Fatalf("sorting on claude: %d %s", r.Code, r.Body.String())
+	}
+	ctx := context.Background()
+	b, err := s.resolveModel(ctx, "inbox.triage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.apiConfig(ctx, b)
+	if err != nil || c.RunLauncher == "" {
+		t.Fatalf("sorting runs on %+v: %v", c, err)
+	}
+	s.runFloors.note(runFloorKey(c), time.Hour, true, time.Now())
+}
+
+// What a launcher's runs showed counts per computer, launcher, model and effort, for runFloorTTL after the last run.
 func TestRunFloorBook(t *testing.T) {
 	var b runFloorBook
 	now := time.Now()
 	agy, claude := runFloorKey(ai.Config{ViaMachine: "server", RunLauncher: "agy"}), runFloorKey(ai.Config{ViaMachine: "server", RunLauncher: "claude"})
 	if _, ok := b.floor(agy, now); ok {
 		t.Fatal("a floor before any run")
+	}
+	keys := map[string]bool{agy: true, claude: true}
+	for _, c := range []ai.Config{
+		{ViaMachine: "laptop", RunLauncher: "agy"},
+		{ViaMachine: "server", RunLauncher: "agy", Model: "m-small"},
+		{ViaMachine: "server", RunLauncher: "agy", Model: "m-large"},
+		{ViaMachine: "server", RunLauncher: "agy", Model: "m-small", ReasoningEffort: "high"},
+	} {
+		if k := runFloorKey(c); keys[k] {
+			t.Fatalf("%+v shares a floor with another computer, launcher, model or effort", c)
+		} else {
+			keys[k] = true
+		}
 	}
 	b.note(agy, 8*time.Second, false, now)
 	if _, ok := b.floor(agy, now); ok {

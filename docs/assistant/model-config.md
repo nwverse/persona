@@ -203,14 +203,19 @@ only the prompt and the answer travel.
   sends `rpc.cancel` and the node kills the run. Each run pays a CLI start on top of the answer, so this suits
   background work: claude's and codex's take seconds, agy's isolated start more (its runs took 12–48 s on a Linux hub
   machine, #13443).
-- **A caller that cannot wait that long** (#13443): the manager keeps, for each launcher on each computer, how fast a
-  run there has been seen to be: the shortest run that answered, else the shortest of two or more waits in a row that
-  ended unanswered, for an hour after the last run (`runFloorBook` in `server/internal/assistant/models_run.go`). A
-  request whose caller can wait less than that plus a second fails at once with a message saying so: no CLI starts,
-  and it is not counted as a model call. A new Agent's tab name waits 8 s on the start's path, so on agy it no longer
-  holds every start up for 8 s and wastes the run; the tab keeps the name the computer gives it, which the background
-  Agent naming can replace. A to-do's title is made in the background and waits 50 s on a launcher (15 s on an API
-  connection), long enough for a cold CLI.
+- **A caller that cannot wait that long** (#13443): the manager keeps, for each launcher on each computer and each
+  model and effort it runs there, how fast a run has been seen to be: the shortest run that answered, else the
+  shortest of two or more waits in a row that ended unanswered, for an hour after the last run (`runFloorBook` in
+  `server/internal/assistant/models_run.go`). Purposes on one launcher differ in model and effort, which decide how
+  long a run takes, so one purpose's quick answers or misses never hold back or let through another configuration's
+  requests. A request whose caller can wait less than that plus a second fails at once with a message saying so: no
+  CLI starts, and it is not counted as a model call. It is not a timeout (no run started and the caller's time has
+  not run out), so nothing retries it as one: a new Agent's tab name waits 8 s on the start's path, so on agy it no
+  longer holds every start up for 8 s and wastes the run; the tab keeps the name the computer gives it, which the
+  background Agent naming can replace. Agent naming that is held back this way is no naming failure (no count, no
+  cooldown), and **Auto Rename** answers `launcher_too_slow`, not a retryable model failure ("Naming an Agent on
+  request" in `docs/protocol/protocol.md`). A to-do's title is made in the background and waits 50 s on a launcher
+  (15 s on an API connection), long enough for a cold CLI.
 - **Purposes that call tools**: no API purpose uses the provider's native tool calling. Inbox event grouping
   (`inbox_group.go`) asks for its tools in its JSON answer and the manager runs them, so it works unchanged, each step
   within its 45 seconds; a step that runs out of time falls back to the rule grouping, as any failed model call does.
