@@ -450,7 +450,9 @@ func (s *Service) remind(ctx context.Context, id string, at, now time.Time) {
 	title, body := s.reminderText(ctx, todo, at, now)
 	larkTitle, larkBody := s.reminderLarkText(ctx, todo, at, now)
 	set := s.settings(ctx)
-	channelTitle, channelBody := s.reminderChannelText(ctx, todo, title, body)
+	// Decided once, on the fullest copy's words, so the phone, the channels and Feishu agree.
+	private, known, space := s.todoReminderPrivate(ctx, todo, larkTitle+"\n"+larkBody)
+	channelTitle, channelBody := s.reminderCopyText(ctx, private, space, title, body)
 	// A reminder the owner set for themself: theirs to act on, so P0 even in the hub's low-distraction mode, keyed by
 	// to-do and due time (each due time rings once).
 	s.push(ctx, Notification{Subtitle: i18n.T(s.lang(ctx), "assistant-todos.remind_subtitle"), DeviceID: set.MachineID,
@@ -459,16 +461,35 @@ func (s *Service) remind(ctx context.Context, id string, at, now time.Time) {
 	// Only the Feishu copy gets the full notes, to-do deep link and reply context. Ordinary phone and other-channel
 	// copies keep their existing short text; the content of a task from a space that redacts stays behind the generic
 	// notice on every copy.
-	go s.feishuTodoReminder(set.MachineID, set.Main, larkTitle, larkBody, todo)
+	// Feishu's copy, which carries the notes and a link, also stays behind the notice when the origin cannot be told,
+	// with the notice it always had then.
+	lark := &todoReminderSend{private: private || !known, space: space}
+	if !private && !known {
+		lark.noticeTitle, lark.noticeBody = spaceNotice(s.botLang(ctx))
+	}
+	go s.feishuTodoReminderSend(set.MachineID, set.Main, larkTitle, larkBody, todo, lark)
 	go s.channelPush(set.MachineID, set.Main, channelTitle, channelBody)
 	s.logf("todo %s: reminded (due %s)", id, at.Format(time.RFC3339))
 }
 
-// reminderChannelText applies the outbound rule of a space that redacts to phone and channel copies; ordinary text is
-// unchanged.
+// todoReminderPrivate is whether a reminder of t saying text leaves as only a notice (exitPolicy: the text's own
+// categories and its origin track's), whether its origin could be told, and its track.
+func (s *Service) todoReminderPrivate(ctx context.Context, t Todo, text string) (private, known bool, space string) {
+	space, known = s.selfSpace(ctx, t.Origin)
+	return s.exitPolicy(ctx, text, t.Origin, space).Redact, known, space
+}
+
+// reminderChannelText applies the outbound rule to the phone and channel copies of t's reminder saying title and
+// body; ordinary text is unchanged.
 func (s *Service) reminderChannelText(ctx context.Context, t Todo, title, body string) (string, string) {
-	if s.todoPolicy(ctx, t).Redact {
-		return spaceNotice(s.lang(ctx))
+	private, _, space := s.todoReminderPrivate(ctx, t, title+"\n"+body)
+	return s.reminderCopyText(ctx, private, space, title, body)
+}
+
+// reminderCopyText is a reminder's phone or channel copy: only a notice when it is private (from track space).
+func (s *Service) reminderCopyText(ctx context.Context, private bool, space, title, body string) (string, string) {
+	if private {
+		return s.redactedNotice(ctx, s.lang(ctx), space)
 	}
 	return title, body
 }

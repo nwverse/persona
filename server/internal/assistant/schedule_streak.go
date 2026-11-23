@@ -91,10 +91,11 @@ func (s *Service) pushStreak(t Task, count int, last ScheduleRun) bool {
 	}
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
-		name, _ = spaceNotice(l)
-	}
 	why := clip(oneLine(last.Error), 300)
+	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
+	if s.exitPolicy(ctx, name+"\n"+why, last.SessionID, t.Space).Redact {
+		name, _ = s.redactedNotice(ctx, l, t.Space)
+	}
 	if why == "" {
 		why = i18n.T(l, "assistant-schedule.streak_unknown")
 	}

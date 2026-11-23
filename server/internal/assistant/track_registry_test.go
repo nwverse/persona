@@ -37,10 +37,11 @@ func TestTrackPolicy(t *testing.T) {
 	}
 }
 
-// Registered tracks (#13104): every one other than the main space is strict for now; the built-in row cannot change
-// the health space; a directory is data (a new track's defaults to tracks/<slug> whatever its kind); a row the
-// manager cannot use (an unknown template or category, a bad slug or directory) is left out, so it stays strict and
-// unknown; an archived track is no longer one to name while its conversations stay as strict as they were.
+// Registered tracks (#13104, #13246): a track's policy follows its default categories (none: all off; a sensitive
+// one: all on), and only the second's directory is denied the other conversations; the built-in row cannot change
+// the health space; a directory is data (a new track's defaults to tracks/<slug> whatever its kind); a row the manager
+// cannot use (an unknown template or category, a bad slug or directory) is left out, so it stays strict and unknown;
+// an archived track is no longer one to name while its conversations keep its policy.
 func TestTracksFromRegistry(t *testing.T) {
 	ctx := context.Background()
 	gone := time.Unix(1_800_000_000, 0)
@@ -70,12 +71,15 @@ func TestTracksFromRegistry(t *testing.T) {
 			t.Errorf("%s: known or not strict", slug)
 		}
 	}
-	if s.trackKnown(ctx, "qa-gone") || !s.trackKnown(ctx, "qa-plain") || s.trackPolicy(ctx, "qa-gone") != strictPolicy {
-		t.Error("an archived track is unknown and strict, a live one known")
+	if s.trackKnown(ctx, "qa-gone") || !s.trackKnown(ctx, "qa-plain") {
+		t.Error("an archived track is no longer one to name, a live one is")
+	}
+	if s.trackPolicy(ctx, "qa-plain") != (TrackPolicy{}) || s.trackPolicy(ctx, "qa-gone") != (TrackPolicy{}) ||
+		s.trackPolicy(ctx, "qa-finance") != strictPolicy {
+		t.Error("a track without default categories has every switch off, one with finance every switch on")
 	}
 	got := s.trackDenyDirs(ctx)
-	want := []denyDir{{compat.StateDir + "/tracks/qa-plain", "qa-plain"}, {compat.StateDir + "/kept/finance", "qa-finance"},
-		{compat.StateDir + "/tracks/qa-gone", "qa-gone"}}
+	want := []denyDir{{compat.StateDir + "/kept/finance", "qa-finance"}}
 	if !slices.Equal(got, want) {
 		t.Errorf("deny %+v, want %+v", got, want)
 	}

@@ -74,11 +74,17 @@ func normalCategories(cats []string) (out []string, ok bool) {
 // could not all be told (its track or the store could not be read): a use outside its track takes it then for
 // sensitive.
 func (s *Service) conversationCategories(ctx context.Context, sid string) (cats []string, ok bool) {
+	cats, _, ok = s.conversationCategoryState(ctx, sid)
+	return cats, ok
+}
+
+// conversationCategoryState is conversationCategories, and whether the conversation was ever tagged (the store keeps
+// a row for it, infoNoneTagged for none found).
+func (s *Service) conversationCategoryState(ctx context.Context, sid string) (cats []string, tagged, ok bool) {
 	space, known := s.conversationSpace(ctx, sid)
-	if e, found := s.trackEntryOf(ctx, space); found {
-		cats = append(cats, e.DefaultCategories...)
-	}
-	ok = known
+	floor, registered := s.trackFloor(ctx, space)
+	cats = append(cats, floor...)
+	ok = known && registered
 	if st, durable := s.store().(infoCategoryStore); durable && sid != "" {
 		rctx, cancel := context.WithTimeout(ctx, infoCategoryStoreTimeout)
 		rows, err := st.InfoCategories(rctx, db.InfoCategoryConversation, []string{sid})
@@ -88,13 +94,14 @@ func (s *Service) conversationCategories(ctx context.Context, sid string) (cats 
 			ok = false
 		}
 		for _, r := range rows[sid] {
+			tagged = true
 			if !r.RemovedByUser {
 				cats = append(cats, r.Category)
 			}
 		}
 	}
 	cats, _ = normalCategories(cats)
-	return cats, ok
+	return cats, tagged, ok
 }
 
 // tagConversation adds cats to conversation sid's categories, by a tagger (model names the model, when one did): a
@@ -114,15 +121,26 @@ func (s *Service) tagConversation(ctx context.Context, sid string, cats []string
 // user said and the reply, its first infoTagTurnText characters. A turn that cannot be read or tagged leaves the
 // conversation's categories as they were; a meeting's batch is no turn here (turnEnded).
 func (s *Service) infoTagTurnSettled(ctx context.Context, machine, sid string) {
+	waiting := true // until the turn is tagged, or found to be none to tag
+	defer func() {
+		if !waiting {
+			s.infoTagWaiting.set(sid, false)
+		}
+	}()
 	if _, durable := s.store().(infoCategoryStore); !durable {
+		waiting = false
 		return
 	}
 	sess, ok := s.decoratedSession(machine, sid)
 	if !ok {
 		sess, ok = s.session(ctx, machine, sid)
 	}
-	if !ok || !sess.Assistant || sess.Status == proto.StatusWorking || sess.Starting {
+	if !ok || !sess.Assistant || sess.Starting {
+		waiting = ok && sess.Assistant // a conversation still starting is tagged at its turn's end
 		return
+	}
+	if sess.Status == proto.StatusWorking {
+		return // a newer turn: tagged when it ends
 	}
 	ask, answer, err := s.lastTurnOf(ctx, machine, sid)
 	if err != nil {
@@ -130,18 +148,39 @@ func (s *Service) infoTagTurnSettled(ctx context.Context, machine, sid string) {
 	}
 	text := infoTagTurn(ask, answer)
 	if text == "" {
+		waiting = false
 		return
 	}
-	cctx, cancel := context.WithTimeout(ctx, infoTagTurnTimeout)
-	defer cancel()
-	cats, err := s.infoTag(cctx, text, s.infoTagFocus(ctx, spaceOf(sess)))
+	cats, err := s.infoTag(ctx, text, s.infoTagFocus(ctx, spaceOf(sess)), infoTagTurnTimeout)
+	if modelUnconfigured(err) {
+		waiting = false
+		return
+	}
 	if err != nil {
 		s.logf("info tag %s: %v", sid, infoTagFailure(err))
 		return
 	}
-	if err := s.tagConversation(ctx, sid, cats, infoTaggedByModel, ""); err != nil {
+	if err := s.keepTurnTags(ctx, sid, cats); err != nil {
 		s.logf("info categories: tag %s: %v", sid, err)
+		return
 	}
+	waiting = false
+}
+
+// keepTurnTags keeps what the model tagged of a turn of conversation sid: its categories, or that it was tagged with
+// none (infoNoneTagged).
+func (s *Service) keepTurnTags(ctx context.Context, sid string, cats []string) error {
+	cats, _ = normalCategories(cats)
+	if len(cats) > 0 {
+		return s.tagConversation(ctx, sid, cats, infoTaggedByModel, "")
+	}
+	st, durable := s.store().(infoCategoryStore)
+	if !durable {
+		return nil
+	}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), infoCategoryStoreTimeout)
+	defer cancel()
+	return st.AddInfoCategories(wctx, db.InfoCategoryConversation, sid, []string{infoNoneTagged}, infoTaggedByModel, "")
 }
 
 // infoTagTurn is the text tagged of a turn: what the user said, then the reply, clipped to infoTagTurnText runes.
@@ -175,9 +214,10 @@ func infoTagFailure(err error) string {
 	return err.Error()
 }
 
-// infoTag tags text with the information categories it carries, by the info.tag use; ctx's deadline bounds the
-// call. Answers are kept by the text, the focus and the model, so the same text is tagged once.
-func (s *Service) infoTag(ctx context.Context, text string, focus []string) ([]string, error) {
+// infoTag tags text with the information categories it carries, by the info.tag use; timeout bounds the model's
+// call alone, not reading which model it is. Answers are kept by the text, the focus and the model, so the same text
+// is tagged once.
+func (s *Service) infoTag(ctx context.Context, text string, focus []string, timeout time.Duration) ([]string, error) {
 	focus, _ = normalCategories(focus)
 	fp, err := s.modelFingerprint(ctx, purposeInfoTag)
 	if err != nil {
@@ -187,7 +227,9 @@ func (s *Service) infoTag(ctx context.Context, text string, focus []string) ([]s
 	if cats, ok := s.infoTags.get(key); ok {
 		return cats, nil
 	}
-	cats, err := tagInfoWith(ctx, s.purposeModel(purposeInfoTag), text, focus)
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	cats, err := tagInfoWith(cctx, s.purposeModel(purposeInfoTag), text, focus)
+	cancel()
 	if err != nil {
 		return nil, err
 	}

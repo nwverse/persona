@@ -78,11 +78,12 @@ func runSpace(c proto.Session) string {
 	return identity.SpaceAt(c.Cwd)
 }
 
-// What leaves a space (docs/assistant/health.md "Outbound", #3194): the user may share their health with anyone they
-// like (a doctor, a coach, family), so nothing is refused for being in a space. What must not happen is it leaving
-// without them knowing: for a space whose policy says so, a push or a channel says only that there is news, and a
-// hand-off to somewhere outside the space is confirmed on the phone each time. The space is the conversation's (the
-// trusted session), never a guess at the text.
+// What leaves a conversation (docs/assistant/health.md "Outbound", #3194, "Using information by scene", #13246): the
+// user may share their health with anyone they like (a doctor, a coach, family), so nothing is refused for being
+// sensitive. What must not happen is it leaving without them knowing: a push or a channel says only that there is
+// news, and a hand-off is confirmed on the phone each time. A text on its way out is judged by its own categories
+// and its track's default categories (exitPolicy), never by what its conversation said before; a track sensitive by
+// default (the health space) asks no model and keeps every switch on.
 
 // selfPolicy is the policy of the space conversation self runs in (the assistant's own, all off, for one that cannot
 // be told: as before, the tools that reach other conversations then reach the assistant's only).
@@ -118,23 +119,37 @@ func (s *Service) ixPolicy(ctx context.Context, ix proto.Interaction) TrackPolic
 	return s.trackPolicy(ctx, s.ixSpace(ctx, ix))
 }
 
-// spaceNotice is what a push or a channel says for a conversation of a space that redacts: that there is news, not the
-// news, and not which space.
+// spaceNotice is what a push or a channel says for a conversation of the health space: that there is news, not the
+// news.
 func spaceNotice(l i18n.Lang) (title, body string) {
 	return i18n.T(l, "assistant-health.notice_title"), i18n.T(l, "assistant-health.notice_body")
 }
 
-// confirmOutbound asks the phone before conversation self of a space that confirms what leaves it hands what (said as
-// summary) to somewhere outside the space (tool: another agent, a new one): true when the user allows it, at once
-// when self's space does not confirm.
-func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, summary string, input json.RawMessage) (bool, error) {
-	if !s.selfPolicy(ctx, self).ConfirmOutbound {
+// redactedNotice is what a push or a channel says for something redacted from track space: the health space's notice
+// for a track whose default categories carry health (as it always said there), else only that there is news, not
+// even which track.
+func (s *Service) redactedNotice(ctx context.Context, l i18n.Lang, space string) (title, body string) {
+	if floor, _ := s.trackFloor(ctx, space); slices.Contains(floor, categoryHealth) {
+		return spaceNotice(l)
+	}
+	return i18n.T(l, "assistant-health.sensitive_notice_title"), i18n.T(l, "assistant-health.sensitive_notice_body")
+}
+
+// confirmOutbound asks the phone before conversation self hands text (said as summary) to somewhere outside it
+// (tool: another agent, a new one): true when the user allows it, at once when text needs no confirming (exitPolicy:
+// its own categories and its track's default categories).
+func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text, summary string, input json.RawMessage) (bool, error) {
+	space, _ := s.selfSpace(ctx, self)
+	if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok {
+		text = "" // the owner just confirmed these very words: only the track decides, as before tagging
+	}
+	if !s.exitPolicy(ctx, text, self, space).ConfirmOutbound {
 		return true, nil
 	}
 	l := s.lang(ctx)
 	now := time.Now().UTC()
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: machine, SessionID: self, Kind: proto.IxPermission, ToolName: tool,
-		Summary: i18n.T(l, "assistant-health.outbound", i18n.Args{"what": summary}), ToolInput: input, SessionTitle: "Persona",
+		Summary: s.outboundSummary(ctx, l, space, summary), ToolInput: input, SessionTitle: "Persona",
 		CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
 	if c, ok := s.session(ctx, machine, self); ok {
 		ix.Cwd = c.Cwd
@@ -144,4 +159,22 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, summ
 		return false, err
 	}
 	return r.Allow != nil && *r.Allow, nil
+}
+
+// ownerConfirmedKey marks a tool call carrying words the owner confirmed on the phone just before (an Inbox
+// suggestion's instruction): confirmOutbound does not ask about them again by what they say.
+type ownerConfirmedKey struct{}
+
+// ownerConfirmed is ctx for a tool call whose words the owner just confirmed.
+func ownerConfirmed(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ownerConfirmedKey{}, true)
+}
+
+// outboundSummary is what the phone is asked before a hand-off of what (said as summary) from track space: as the
+// health space always asked for a track whose default categories carry health, else as for any sensitive content.
+func (s *Service) outboundSummary(ctx context.Context, l i18n.Lang, space, what string) string {
+	if floor, _ := s.trackFloor(ctx, space); slices.Contains(floor, categoryHealth) {
+		return i18n.T(l, "assistant-health.outbound", i18n.Args{"what": what})
+	}
+	return i18n.T(l, "assistant-health.sensitive_outbound", i18n.Args{"what": what})
 }

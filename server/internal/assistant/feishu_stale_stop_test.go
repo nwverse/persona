@@ -6,11 +6,13 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -208,6 +210,94 @@ func TestFeishuStaleStopConcurrentCurrentPresses(t *testing.T) {
 	wg.Wait()
 	if got := f.interrupted(); len(got) != 1 {
 		t.Fatalf("concurrent presses interrupted %v", got)
+	}
+}
+
+// stopWatcherHub gates only the first device list after this test's message send returned. Other device lists before
+// that send belong to routing, not the run watcher.
+type stopWatcherHub struct {
+	*fakeHub
+	sent     atomic.Bool
+	watching chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (h *stopWatcherHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Device == DeviceAll && p.Method == DeviceDevicesList && h.sent.Load() {
+		h.once.Do(func() { close(h.watching) })
+		select {
+		case <-h.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	raw, err := h.fakeHub.DeviceCall(ctx, p)
+	if p.Method == DeviceSessionSendOnce && err == nil {
+		h.sent.Store(true)
+	}
+	return raw, err
+}
+
+// A test that posts progress directly can beat the asynchronous watcher's initial devices.list. Exercise that exact
+// ordering: the unregistered card cannot interrupt; after registration the same current card acts once. Production's
+// progress tick already requires the watcher, so this preserves its ownership guard rather than adding a bypass.
+func TestFeishuStopBeforeTheRunWatcher(t *testing.T) {
+	e := newThreadEnv(t, nil)
+	h := &stopWatcherHub{fakeHub: e.f, watching: make(chan struct{}), release: make(chan struct{})}
+	setHub(e.s, h)
+	e.topicTodo("发版")
+	delivered := make(chan struct{})
+	go func() {
+		defer close(delivered)
+		e.deliver(topicEvent("om_watched", "开始"))
+	}()
+	select {
+	case <-h.watching:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run watcher did not start its initial devices.list")
+	}
+	defer func() {
+		select {
+		case <-h.release:
+		default:
+			close(h.release)
+		}
+		select {
+		case <-delivered:
+		case <-time.After(5 * time.Second):
+			t.Error("topic delivery did not finish after the watcher was released")
+		}
+	}()
+	ctx := context.Background()
+	runs := e.s.channelRuns(channel.Feishu)
+	if len(runs) != 1 {
+		t.Fatalf("topic runs = %d, want 1", len(runs))
+	}
+	r, prog := e.s.channelRunByID(runs[0].ID)
+	if r == nil || prog != nil {
+		t.Fatalf("run=%v watcher=%v before its initial devices.list returned", r != nil, prog != nil)
+	}
+	feishuSink{e.s}.progress(ctx, r, time.Second, nil, "")
+	if r.Ext["card"] == "" {
+		t.Fatal("progress was not posted")
+	}
+	a := staleStopAction(botTargetOf(r), r.Ext["card"])
+	out := e.s.botCardAction(ctx, a, "")
+	wantExpired := i18n.T(e.s.botLang(ctx), "assistant-feishu_cards.card_expired")
+	if out.Toast == nil || out.Toast.Content != wantExpired || len(e.f.interrupted()) != 0 {
+		t.Fatalf("unwatched current card acted: %+v / %v", out.Toast, e.f.interrupted())
+	}
+	close(h.release)
+	select {
+	case <-delivered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("topic delivery did not finish after the watcher was released")
+	}
+	waitFor(t, "registered topic run watcher", func() bool { _, prog := e.s.channelRunByID(r.ID); return prog != nil })
+	out = e.s.botCardAction(ctx, a, "")
+	if out.Toast == nil || out.Toast.Type != "success" || len(e.f.interrupted()) != 1 {
+		t.Fatalf("watched current card did not interrupt once: %+v / %v", out.Toast, e.f.interrupted())
 	}
 }
 
