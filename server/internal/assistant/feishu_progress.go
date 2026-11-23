@@ -243,7 +243,7 @@ const (
 
 const (
 	// progressLiveID is the element of the progress card the conversation's words are streamed into.
-	progressLiveID = "live"
+	progressLiveID = botcard.ProgressLiveID
 	// progressLiveMost is how much of the words the card shows (their end): text that has outgrown it is written over
 	// rather than streamed on, as it no longer starts the same.
 	progressLiveMost = 2000

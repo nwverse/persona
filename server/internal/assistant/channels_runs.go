@@ -66,24 +66,16 @@ type chanLive struct {
 	failing  time.Time // its answer first failed to go out (answerAgain)
 	// unsettled: the turn was first read as over without words at its end (its answer may not be written yet)
 	unsettled time.Time
-	// items are the turn's thinking, words and tool calls (for the Feishu bot's agent message); cot what of them it
-	// has shown, under mu.
+	// items are the turn's thinking, words and tool calls (for the Feishu bot's agent message).
 	items []proto.Item
-	cot   cotProgress
-	// native belongs to one topic-turn generation; protected by chans.mu.
-	native *cotWorker
+	// sink is the sink's own state of the run (the lark module's, larkHost.RunState), made on first use; under the
+	// channels' lock. It may stop work of its own when the run is dropped (Abort) and forget a held run's turn
+	// (NextTurn).
+	sink any
 	// from is the seq of the run's own message once found (0: not yet: queued behind another turn, or not in);
 	// upTo the last item noted; looked when locateRun last read the conversation.
 	from, upTo int
 	looked     time.Time
-	// sentCard is the progress card last sent (its hash), not sent again; backoff and quietUntil hold updates back
-	// after Feishu's rate limit. All under mu.
-	sentCard   [32]byte
-	backoff    time.Duration
-	quietUntil time.Time
-	// kit is the progress card as a CardKit entity, streamed into (feishu_stream.go); nil before it is sent, or for
-	// a card sent as a message. Under mu.
-	kit *cardKit
 	// What the progress card shows besides the steps, noted as the items come (liveNote): the calls with no result
 	// yet (oldest first), how many calls, the files read and changed, the subagents.
 	open         []openCall
