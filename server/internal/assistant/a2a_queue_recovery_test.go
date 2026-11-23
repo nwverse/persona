@@ -188,7 +188,7 @@ func TestA2AQueuedResultStillWaitsForOfflineSender(t *testing.T) {
 }
 
 func TestA2AIdleNotificationBypassesBusyPollLease(t *testing.T) {
-	s, h, st, _, parent, child := a2aFixture(t)
+	s, h, st, cfg, parent, child := a2aFixture(t)
 	setStatus(h.fakeHub, child.Machine, child.Session, proto.StatusWorking)
 	task, err := s.a2aStart(t.Context(), st, cfg, parent, child, "leased", "", "Deliver on idle.", false, nil)
 	if err != nil {
