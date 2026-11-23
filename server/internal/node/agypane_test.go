@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -1263,5 +1264,104 @@ func TestAgyPaneLegitimateConversationSwitches(t *testing.T) {
 	lastItem := hub.got()[len(hub.got())-1]
 	if lastSpan.fromSeq != 0 || lastSpan.history != agyStepsHistory(wakeID).token || lastItem.Text != "Handled background wake." {
 		t.Fatalf("switch to SYSTEM-sourced USER_INPUT conversation failed: span=%+v item=%+v", lastSpan, lastItem)
+	}
+}
+
+func TestAgyPaneUpdatedAtAndOrdering(t *testing.T) {
+	n, herdr, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	older := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	fileTime := time.Date(2026, 11, 23, 11, 30, 0, 0, time.UTC)
+
+	const offlineID = "agy-" + agyOtherTestID
+	n.runtimes = newRuntimeRegistry()
+	rt := n.runtimes.add(nil)
+	rt.ready, rt.hello.Runtime = true, agyAgent
+
+	findRow := func(rows []proto.Session, id string) (proto.Session, int) {
+		for i, r := range rows {
+			if r.SessionID == id {
+				return r, i
+			}
+		}
+		t.Fatalf("session %s not found in %d rows", id, len(rows))
+		return proto.Session{}, -1
+	}
+
+	// 1. Live agy herdr pane with companion row inherits UpdatedAt, LastText, and Rev, sorting ahead of older rows.
+	n.runtimes.setSessions(rt, []proto.Session{
+		{
+			SessionID: "agy-" + agyTestID,
+			Agent:     agyAgent,
+			Cwd:       home,
+			Status:    proto.StatusIdle,
+			Model:     "gemini-test",
+			UpdatedAt: newer,
+			LastText:  "Ready to ship.",
+			Rev:       7,
+		},
+		{
+			SessionID: offlineID,
+			Agent:     agyAgent,
+			Cwd:       home,
+			Status:    proto.StatusOffline,
+			UpdatedAt: older,
+		},
+	})
+	herdr.reply("session.snapshot", snapshot(nil, nil, []any{agyTestAgent(agyTestPane, home, agyTestID)}, nil))
+	rows := listSessions(t, n)
+	paneRow, paneIdx := findRow(rows, agyTestRow)
+	_, offlineIdx := findRow(rows, offlineID)
+	if !paneRow.UpdatedAt.Equal(newer) || paneRow.LastText != "Ready to ship." || paneRow.Rev != 7 {
+		t.Fatalf("companion merge = UpdatedAt=%v LastText=%q Rev=%d, want %v / Ready to ship. / 7", paneRow.UpdatedAt, paneRow.LastText, paneRow.Rev, newer)
+	}
+	if paneIdx >= offlineIdx {
+		t.Fatalf("live agy pane ranked %d behind older offline row %d", paneIdx, offlineIdx)
+	}
+
+	// 2. Companion row with zero UpdatedAt and Rev falls back to the verified local transcript's ModTime and Size.
+	transcriptFile := agyTestFile(t, n.agyDataRoot(), agyTestID, `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":"Check status"}`+"\n")
+	if err := os.Chtimes(transcriptFile, fileTime, fileTime); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(transcriptFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.runtimes.setSessions(rt, []proto.Session{
+		{SessionID: "agy-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusIdle, Model: "gemini-test"},
+		{SessionID: offlineID, Agent: agyAgent, Cwd: home, Status: proto.StatusOffline, UpdatedAt: older},
+	})
+	rows = listSessions(t, n)
+	paneRow, paneIdx = findRow(rows, agyTestRow)
+	_, offlineIdx = findRow(rows, offlineID)
+	if !paneRow.UpdatedAt.Equal(fileTime) || paneRow.Rev != st.Size() {
+		t.Fatalf("companion fallback = UpdatedAt=%v Rev=%d, want %v / %d", paneRow.UpdatedAt, paneRow.Rev, fileTime, st.Size())
+	}
+	if paneIdx >= offlineIdx {
+		t.Fatalf("fallback agy pane ranked %d behind older offline row %d", paneIdx, offlineIdx)
+	}
+
+	// 3. Standalone herdr pane (no companion row) takes UpdatedAt and Rev from its local transcript.
+	n.runtimes.setSessions(rt, []proto.Session{
+		{SessionID: offlineID, Agent: agyAgent, Cwd: home, Status: proto.StatusOffline, UpdatedAt: older},
+	})
+	rows = listSessions(t, n)
+	paneRow, paneIdx = findRow(rows, agyTestRow)
+	_, offlineIdx = findRow(rows, offlineID)
+	if !paneRow.UpdatedAt.Equal(fileTime) || paneRow.Rev != st.Size() {
+		t.Fatalf("standalone merge = UpdatedAt=%v Rev=%d, want %v / %d", paneRow.UpdatedAt, paneRow.Rev, fileTime, st.Size())
+	}
+	if paneIdx >= offlineIdx {
+		t.Fatalf("standalone agy pane ranked %d behind older offline row %d", paneIdx, offlineIdx)
+	}
+
+	// 4. Unresolved pane with no companion row and no transcript keeps zero UpdatedAt and Rev.
+	herdr.reply("session.snapshot", snapshot(nil, nil, []any{agyTestAgent(agyTestPane, home, "")}, nil))
+	rows = listSessions(t, n)
+	paneRow, _ = findRow(rows, agyTestRow)
+	if !paneRow.UpdatedAt.IsZero() || paneRow.Rev != 0 {
+		t.Fatalf("unresolved pane = UpdatedAt=%v Rev=%d, want zero", paneRow.UpdatedAt, paneRow.Rev)
 	}
 }

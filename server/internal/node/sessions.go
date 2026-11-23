@@ -268,11 +268,23 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
 						s.OutputTokens = runtimeRow.OutputTokens
 					}
+					if s.UpdatedAt.IsZero() && !runtimeRow.UpdatedAt.IsZero() {
+						s.UpdatedAt = runtimeRow.UpdatedAt.UTC()
+					}
+					if s.LastText == "" && runtimeRow.LastText != "" {
+						s.LastText = runtimeRow.LastText
+					}
+					if s.Rev == 0 && runtimeRow.Rev > 0 {
+						s.Rev = runtimeRow.Rev
+					}
 				}
 			}
 			if a.Agent == agyAgent {
 				if hasRuntimeRow {
 					n.resolveAgyContextWindow(&s)
+					if s.UpdatedAt.IsZero() || s.Rev == 0 {
+						n.mergeAgyTranscriptActivity(&s, agyConversations[id])
+					}
 				} else {
 					n.mergeAgyTranscript(&s, agyConversations[id])
 				}

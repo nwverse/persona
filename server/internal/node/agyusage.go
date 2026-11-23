@@ -366,13 +366,19 @@ func (n *Node) resolveAgyContextWindow(s *proto.Session) {
 
 // agyTranscriptMeta reads (with stat-based LRU caching) the token usage summary of an agy conversation on disk.
 func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool) {
+	usage, _, ok := n.agyTranscriptMetaFile(conversation)
+	return usage, ok
+}
+
+// agyTranscriptMetaFile returns the cached transcript usage summary along with the stat'd transcript file info.
+func (n *Node) agyTranscriptMetaFile(conversation string) (agyTranscriptUsage, os.FileInfo, bool) {
 	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
-		return agyTranscriptUsage{}, false
+		return agyTranscriptUsage{}, nil, false
 	}
 	dir := n.agyDataRoot()
 	root, err := agyBrain(dir, conversation)
 	if err != nil {
-		return agyTranscriptUsage{}, false
+		return agyTranscriptUsage{}, nil, false
 	}
 	defer root.Close()
 	rel := agyTranscriptPath
@@ -381,7 +387,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool)
 		rel = agyFullTranscriptPath
 		info, err = root.Stat(rel)
 		if err != nil || !info.Mode().IsRegular() {
-			return agyTranscriptUsage{}, false
+			return agyTranscriptUsage{}, nil, false
 		}
 	}
 	key := filepath.Join(dir, conversation)
@@ -389,14 +395,14 @@ func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool)
 	if n.agyMetas != nil {
 		if cached, ok := n.agyMetas.get(key); ok && cached.path == rel && sameAgyFile(info, cached.file) && time.Since(info.ModTime()) > time.Second {
 			n.mu.Unlock()
-			return cached.usage, true
+			return cached.usage, cached.file, true
 		}
 	}
 	n.mu.Unlock()
 
 	raw, err := root.ReadFile(rel)
 	if err != nil {
-		return agyTranscriptUsage{}, false
+		return agyTranscriptUsage{}, nil, false
 	}
 	raw = raw[:bytes.LastIndexByte(raw, '\n')+1]
 	steps, _ := parseAgySteps(raw, conversation)
@@ -408,16 +414,38 @@ func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool)
 	}
 	n.agyMetas.put(key, agyMetaEntry{file: info, path: rel, usage: usage})
 	n.mu.Unlock()
-	return usage, true
+	return usage, info, true
 }
 
-// mergeAgyTranscript populates Session.Model, ContextTokens, ContextWindow, and OutputTokens on a standalone
-// herdr-pane agy session row from its local transcript and resolves ContextWindow from launcher/catalog/model metadata.
+// mergeAgyTranscriptActivity fills UpdatedAt and Rev on a herdr-pane agy row from its local transcript file's stat
+// when still unset (for example when the companion row carries no timestamp or no companion is connected).
+func (n *Node) mergeAgyTranscriptActivity(s *proto.Session, conversation string) {
+	if s == nil {
+		return
+	}
+	if _, info, ok := n.agyTranscriptMetaFile(conversation); ok {
+		if s.UpdatedAt.IsZero() {
+			s.UpdatedAt = info.ModTime().UTC()
+		}
+		if s.Rev == 0 && info.Size() > 0 {
+			s.Rev = info.Size()
+		}
+	}
+}
+
+// mergeAgyTranscript populates Session.Model, ContextTokens, ContextWindow, OutputTokens, UpdatedAt, and Rev on a
+// standalone herdr-pane agy session row from its local transcript and resolves ContextWindow from metadata.
 func (n *Node) mergeAgyTranscript(s *proto.Session, conversation string) {
 	if s == nil {
 		return
 	}
-	if u, ok := n.agyTranscriptMeta(conversation); ok {
+	if u, info, ok := n.agyTranscriptMetaFile(conversation); ok {
+		if s.UpdatedAt.IsZero() {
+			s.UpdatedAt = info.ModTime().UTC()
+		}
+		if s.Rev == 0 && info.Size() > 0 {
+			s.Rev = info.Size()
+		}
 		if s.Model == "" && u.model != "" {
 			s.Model = u.model
 		}
