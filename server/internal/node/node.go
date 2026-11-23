@@ -2746,6 +2746,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// conversations' Read and Edit are denied, each with its track's slug (nodeproto.DenyDirs, healthdeny.go);
 			// nil from a manager that does not send them: the list kept stays.
 			DenyDirs []denyDir `json:"deny_dirs"`
+			// Space names a track's own directory (nodeproto.TrackSpaces, assistant_space.go); nil for the
+			// assistant's and the health space's.
+			Space *spacePrepare `json:"space"`
 		}
 		if err := json.Unmarshal(params, &a); err != nil || a.Dir == "" || strings.Contains(a.Dir, "..") {
 			return nil, fmt.Errorf("bad assistant dir")
@@ -2781,6 +2784,19 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.logger.Printf("assistant: skills: %v", err)
 		} else if a.WorkGuideMD != "" && assistantskills.WorkGuideReady(dir) {
 			a.ClaudeMD = a.WorkGuideMD
+		}
+		if a.Space != nil {
+			spaceMD, err := prepareSpaceDir(dir, *a.Space)
+			if err != nil {
+				return nil, err
+			}
+			md := []byte(spaceInstructions(a.ClaudeMD, spaceMD))
+			for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
+				if err := writeIfChanged(filepath.Join(dir, name), md); err != nil {
+					return nil, err
+				}
+			}
+			return map[string]any{"cwd": dir, "plugin_skills_need": need, "space_md_digest": digestOf(spaceMD)}, nil
 		}
 		// The same instructions for both agents: Claude reads CLAUDE.md, Codex AGENTS.md.
 		for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
