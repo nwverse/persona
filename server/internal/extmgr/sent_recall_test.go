@@ -510,7 +510,7 @@ func TestRecallSentNeverMailsNorRecordedSends(t *testing.T) {
 	h := newTestManager(t)
 	st := newSentLedgerStore()
 	h.store = st
-	h.mail = &sendingMail{id: "1A2B.3C4D@hub.example.com"}
+	h.mail = &sendingMail{replyMail: *newReplyMail(t), id: "1A2B.3C4D@hub.example.com"}
 	h.connectors = h.newConnectors([]connector.Rule{{Connector: "mail", Action: "mail_send", Decision: connector.Allow}})
 	h.registerConnectors()
 	if _, ok := connector.RecallerOf(h.connectors.Get("github")); !ok {

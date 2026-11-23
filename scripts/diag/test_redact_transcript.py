@@ -80,12 +80,31 @@ class RangeTests(unittest.TestCase):
             root = Path(directory)
             source, output = root / "source.jsonl", root / "output.jsonl"
             source.write_text("".join(json.dumps({"line": i}) + "\n" for i in range(1, 12)))
-            selection = str(source) + ":7,4-5,2-4,3,9-6,10-200"
+            selection = str(source) + ":7,4-5,2-4,3,10-200"
             run = subprocess.run([sys.executable, "-B", redact.__file__, "-o", str(output), selection],
                                  capture_output=True, text=True, timeout=10)
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertEqual([json.loads(line)["line"] for line in output.read_text().splitlines()],
                              [2, 3, 4, 5, 7, 10, 11])
+
+    def test_invalid_selection_is_reported_before_replacing_existing_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second, output = root / "first.jsonl", root / "second.jsonl", root / "output.jsonl"
+            first.write_text('{"line":1}\n')
+            second.write_text('{"line":2}\n')
+            for suffix in ("4-2", "0", "0-2", "1,4-2", "1,,2", "1-", "-2", "1--2"):
+                with self.subTest(suffix=suffix):
+                    output.write_text("existing output\n")
+                    run = subprocess.run([sys.executable, "-B", redact.__file__, "-o", str(output),
+                                          str(first), f"{second}:{suffix}"], capture_output=True, text=True, timeout=10)
+                    self.assertEqual((run.returncode, output.read_text()), (2, "existing output\n"), run.stderr)
+                    self.assertIn("invalid line selection", run.stderr)
+                    self.assertNotIn("Traceback", run.stderr)
+
+    def test_colon_in_a_filename_is_not_itself_a_selector(self):
+        self.assertEqual(redact.parse_spec("fixture:copy.jsonl"), ("fixture:copy.jsonl", None))
+        self.assertEqual(redact.parse_spec("fixture:copy.jsonl:1"), ("fixture:copy.jsonl", [range(1, 2)]))
 
 
 class OutputTests(unittest.TestCase):
