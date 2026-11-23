@@ -52,6 +52,11 @@ them (#8151); a read-only task for them is refused (below). Planning, card edits
 legacy plans, retries, and the final dispatch all resolve the launcher before applying this rule; a permission change is
 saved with the resolved launcher and model.
 
+An agy task the computer's Antigravity companion runs is the exception: the companion holds a `plan` start read-only
+(`caps.readonly`), so a read-only agy task starts there in agy's plan mode, pinned to it (`host: "agy"`, never a pane);
+with `assistant.readonly_mode: prompt` it keeps agy's Allow all and the first-message constraint, as Claude Code does
+(#13464). It is refused, as below, when the companion does not run its launcher or the task names a terminal host.
+
 A read-only task whose launcher starts pi, the Cursor CLI or the Antigravity CLI in a terminal is refused when it is
 planned (#8316, `assistant/tasks_placement.go` `readonlyLauncherRefusal`): these agents have no read-only mode, so
 `task_plan` answers `readonly_unsupported` with the launchers on that computer that do take a read-only task (Claude
