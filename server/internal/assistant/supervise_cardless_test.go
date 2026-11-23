@@ -16,6 +16,7 @@ import (
 // the settle time the watch hands it back to its supervisor once, naming the card to open (#12648).
 func TestReviewCardlessWaitGoesBackOnce(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
+	quietDigest(s) // until its message is let go below: the watches' claim stays pending to be read
 	holdDigest(s)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "做完了，你看下要不要这样发布。")
@@ -36,6 +37,7 @@ func TestReviewCardlessWaitGoesBackOnce(t *testing.T) {
 	if cur.Supervision.CardlessToldAt == nil {
 		t.Fatal("the hand-back was not kept on the ledger round")
 	}
+	setSuperviseTimings(s, shortSuperviseTimings) // the message goes out now, at the test's usual pace
 	releaseDigest(s)
 	waitFor(t, "the card-less message", func() bool { return len(f.notices()) > before })
 	n := f.notices()[before]
@@ -173,7 +175,18 @@ func TestCardlessWorkersStopped(t *testing.T) {
 // go out. The card-less claim is immediate, so holdDigest does not keep it in, and a digest takes what it delivers out
 // of the pending signals (#13877).
 func quietDigest(s *Service) {
-	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	setSuperviseTimings(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
+}
+
+// setSuperviseTimings changes s's supervision timings under the locks every reader of them holds, digestMu then b.mu
+// in sendDigest's order, so a digest or timer reading them meanwhile does not race the write.
+func setSuperviseTimings(s *Service, p superviseTimings) {
+	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.superviseTimes = p
 }
 
 // pendingCardlessSignal reads the pending claim with the digest's lock, in sendDigest's order: a digest under way has
