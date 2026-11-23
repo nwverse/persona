@@ -1,10 +1,8 @@
-package connector
+package netproxy
 
 import (
 	"net/http"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/netproxy"
 )
 
 // Egress is how a connector reaches the services it reads. A connector's hub.json config embeds it to get a "proxy"
@@ -17,9 +15,9 @@ type Egress struct {
 // HTTPClient is the connector's client: through the proxy when one is set, else direct. A malformed proxy is an
 // error, never a silent fall back to direct.
 func (e Egress) HTTPClient(timeout time.Duration) (*http.Client, error) {
-	u, err := netproxy.Parse(e.Proxy)
+	u, err := Parse(e.Proxy)
 	if err != nil {
 		return nil, err
 	}
-	return netproxy.HTTPClient(u, timeout), nil
+	return HTTPClient(u, timeout), nil
 }

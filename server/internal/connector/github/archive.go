@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+	"github.com/nwverse/persona/server/internal/kbwire"
 )
 
 // The knowledge base (docs/plans/plan-connectors.md "Knowledge base"): the PRs and issues the user is involved in
@@ -48,7 +48,7 @@ type archivePartial struct {
 
 // Changes reads the threads updated since the cursor, oldest first, with the messages not archived yet. It waits while
 // either the hour's core quota or the search API's minute runs low.
-func (c *Connector) Changes(ctx context.Context, cursor string, limit int) ([]connector.ChatBatch, string, bool, error) {
+func (c *Connector) Changes(ctx context.Context, cursor string, limit int) ([]connectorwire.ChatBatch, string, bool, error) {
 	if !c.signedIn() || c.ratesLow() || c.searchQuotaLow() {
 		return nil, cursor, false, nil
 	}
@@ -74,14 +74,14 @@ func (c *Connector) Changes(ctx context.Context, cursor string, limit int) ([]co
 	cur.Since = cur.Since.UTC().Truncate(time.Second)
 	limit = max(1, min(limit, 100))
 	me := c.Status(ctx).Account
-	var batches []connector.ChatBatch
+	var batches []connectorwire.ChatBatch
 	processed := 0
 	// Threads known from before states were reported get theirs first, one read each (archive_state.go).
 	archiveRecheckQueue(&cur)
 	if len(cur.Recheck) > 0 {
 		chats, lines, n, limited, err := c.archiveRecheck(ctx, &cur, limit)
 		for i, sc := range chats {
-			batches = append(batches, connector.ChatBatch{Chat: sc, Messages: lines[i]})
+			batches = append(batches, connectorwire.ChatBatch{Chat: sc, Messages: lines[i]})
 		}
 		if err != nil {
 			return batches, encode(cur), false, err
@@ -115,7 +115,7 @@ func (c *Connector) Changes(ctx context.Context, cursor string, limit int) ([]co
 			noteArchiveState(&cur, thread, it)
 		}
 		if len(msgs) > 0 {
-			batches = append(batches, connector.ChatBatch{Chat: archiveChat(it), Messages: msgs})
+			batches = append(batches, connectorwire.ChatBatch{Chat: archiveChat(it), Messages: msgs})
 		}
 		if !whole {
 			at := it.UpdatedAt
@@ -343,7 +343,7 @@ func encode(cur archiveCursor) string {
 // messages from the last one read on are left to the next call, since the rest of that second may be on the next
 // page; should that leave nothing, the messages up to that second are taken, and a list without since (reviews) gets
 // no further.
-func (c *Connector) threadMessages(ctx context.Context, it issue, after time.Time, me string) (out []kb.SourceMessage, upTo time.Time, whole bool, err error) {
+func (c *Connector) threadMessages(ctx context.Context, it issue, after time.Time, me string) (out []kbwire.SourceMessage, upTo time.Time, whole bool, err error) {
 	repo, n := it.repo(), it.Number
 	add := func(id string, u user, at time.Time, text string) {
 		text = strings.TrimSpace(text)
@@ -353,8 +353,8 @@ func (c *Connector) threadMessages(ctx context.Context, it issue, after time.Tim
 		if r := []rune(text); len(r) > archiveText {
 			text = string(r[:archiveText]) + "…"
 		}
-		out = append(out, kb.SourceMessage{ID: id, SenderID: u.Login, SenderName: who(u), Mine: me != "" && strings.EqualFold(u.Login, me),
-			Type: "TEXT", Text: text, At: at, SenderHandles: []kb.Handle{{Kind: kb.HandleGitHub, Value: u.Login}}})
+		out = append(out, kbwire.SourceMessage{ID: id, SenderID: u.Login, SenderName: who(u), Mine: me != "" && strings.EqualFold(u.Login, me),
+			Type: "TEXT", Text: text, At: at, SenderHandles: []kbwire.Handle{{Kind: kbwire.HandleGitHub, Value: u.Login}}})
 	}
 	var cut time.Time // the earliest end of a list read in part, among those past after
 	end := func(last time.Time) {

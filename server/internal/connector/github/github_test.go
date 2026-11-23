@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 const (
@@ -70,7 +70,7 @@ func TestSignedInThroughTheMachine(t *testing.T) {
 	c.check(context.Background())
 	c.check(context.Background())
 	st := c.Status(context.Background())
-	if st.State != connector.StateOK || st.Account != "alice" || st.Via != "来自 Mac 的 gh 登录" || st.LastSync.IsZero() {
+	if st.State != connectorwire.StateOK || st.Account != "alice" || st.Via != "来自 Mac 的 gh 登录" || st.LastSync.IsZero() {
 		t.Fatalf("%+v", st)
 	}
 	if m.fetched != 1 {
@@ -86,7 +86,7 @@ func TestRefusedTokenIsFetchedAgainOnce(t *testing.T) {
 	m := &machine{tokens: []string{oldToken, newToken}}
 	c := newTest(t, m, newToken)
 	c.check(context.Background())
-	if st := c.Status(context.Background()); st.State != connector.StateOK || m.fetched != 2 {
+	if st := c.Status(context.Background()); st.State != connectorwire.StateOK || m.fetched != 2 {
 		t.Fatalf("%+v after %d fetches", st, m.fetched)
 	}
 
@@ -94,7 +94,7 @@ func TestRefusedTokenIsFetchedAgainOnce(t *testing.T) {
 	c = newTest(t, m)
 	c.check(context.Background())
 	st := c.Status(context.Background())
-	if st.State != connector.StateNotSignedIn || !strings.Contains(st.Error, "Mac 上的 gh 登录失效了") || m.fetched != 2 {
+	if st.State != connectorwire.StateNotSignedIn || !strings.Contains(st.Error, "Mac 上的 gh 登录失效了") || m.fetched != 2 {
 		t.Fatalf("%+v after %d fetches", st, m.fetched)
 	}
 }
@@ -106,13 +106,13 @@ func TestOfflineMachine(t *testing.T) {
 	c.check(context.Background())
 	m.err = ErrOffline
 	c.check(context.Background())
-	if st := c.Status(context.Background()); st.State != connector.StateOK {
+	if st := c.Status(context.Background()); st.State != connectorwire.StateOK {
 		t.Fatalf("offline with a token in memory: %+v", st)
 	}
 
 	c = newTest(t, &machine{err: ErrOffline}, oldToken)
 	c.check(context.Background())
-	if st := c.Status(context.Background()); st.State != connector.StateNotSignedIn || st.Error != "GitHub 未授权（Mac 离线）：它连上后会自动再读" {
+	if st := c.Status(context.Background()); st.State != connectorwire.StateNotSignedIn || st.Error != "GitHub 未授权（Mac 离线）：它连上后会自动再读" {
 		t.Fatalf("%+v", st)
 	}
 	c.fetch = (&machine{tokens: []string{oldToken}}).fetch
@@ -135,7 +135,7 @@ func TestEveryFailureSaysWhatToDo(t *testing.T) {
 	} {
 		c := newTest(t, &machine{err: err})
 		c.check(context.Background())
-		if st := c.Status(context.Background()); st.State == connector.StateOK || !strings.Contains(st.Error, want) {
+		if st := c.Status(context.Background()); st.State == connectorwire.StateOK || !strings.Contains(st.Error, want) {
 			t.Errorf("%v: %+v", err, st)
 		}
 	}

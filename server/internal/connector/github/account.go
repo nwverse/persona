@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // The account the connector reads as, and what was read as it (#7832).
@@ -284,7 +284,7 @@ func (c *Connector) adopt(cred uint64, login string, h http.Header) bool {
 	}
 	c.acct.login, c.acct.known = login, true
 	c.scopes, c.scopesKnown = scopesOf(h)
-	c.status = connector.Status{State: connector.StateOK, Account: login, LastSync: now.UTC(), LastEvent: c.status.LastEvent}
+	c.status = connectorwire.Status{State: connectorwire.StateOK, Account: login, LastSync: now.UTC(), LastEvent: c.status.LastEvent}
 	return true
 }
 
