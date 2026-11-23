@@ -140,7 +140,7 @@ func (s *Service) forgetExtensionTrust(ctx context.Context, ext string) error {
 // trackUse is what everything from track space carries at least (trackFloor), for a decision made by track.
 func (s *Service) trackUse(ctx context.Context, space string) infoUse {
 	floor, known := s.trackFloor(ctx, space)
-	return infoUse{Categories: floor, Known: known, SourceTrack: space}
+	return infoUse{Categories: floor, Known: known, SourceTrack: space, Rules: s.trackRules(ctx, space)}
 }
 
 // extensionHides: the extension reading in ctx (withExtensionReader) is not shown what comes from track space (usage,
@@ -154,7 +154,7 @@ func (s *Service) extensionHides(ctx context.Context, space string) bool {
 func (s *Service) extensionHidesConversation(ctx context.Context, c proto.Session) bool {
 	space := spaceOf(c)
 	cats, _, ok := s.categoryStateIn(ctx, c.SessionID, space, true)
-	info := infoUse{Categories: cats, Known: ok && !s.infoTagWaiting.has(c.SessionID), SourceTrack: space}
+	info := infoUse{Categories: cats, Known: ok && !s.infoTagWaiting.has(c.SessionID), SourceTrack: space, Rules: s.trackRules(ctx, space)}
 	return usage(info, sceneExtension, readerGrant(ctx)) == usageDeny
 }
 

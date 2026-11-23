@@ -773,6 +773,7 @@ func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCa
 		Name          string                    `json:"name"`
 		Machine       string                    `json:"machine"`
 		Sender        string                    `json:"sender"`
+		Extension     string                    `json:"extension"`
 		Request       json.RawMessage           `json:"request"`
 		Hash          string                    `json:"hash"`
 	}
@@ -808,6 +809,10 @@ func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCa
 		}
 		h.dropRevokedToken(from, a.Hash)
 		out = map[string]any{}
+	case extwire.HubMachinesPairLink:
+		out, err = h.hubMachinesPairLink(ctx, from, a.Extension, a.Request)
+	case extwire.HubMachinesStatus:
+		out, err = h.hubMachinesStatus(from, a.Request)
 	default:
 		return nil, true, errors.New("hub: no method " + p.Method)
 	}

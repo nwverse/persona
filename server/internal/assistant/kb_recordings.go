@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,14 +25,21 @@ const maxTitleBody = 4 << 10
 
 func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request) *kb.Engine) {
 	s.handle("PUT /api/v1/recordings/{id}", func(w http.ResponseWriter, r *http.Request) {
-		e := engine(w, r)
-		if e == nil {
-			return
-		}
 		var u kb.RecordingUpload
 		// The transcript is at most 4 MB of text; JSON escaping and the segments' numbers on top.
 		if err := decodeLargeBody(w, r, &u, 16<<20); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+			if engine(w, r) != nil { // a knowledge base that is off or read-only answers first, as before
+				apierr.Write(w, http.StatusBadRequest, err)
+			}
+			return
+		}
+		// One saved into a track (space_recordings.go) goes there, and stays there whatever a later upload names.
+		if strings.TrimSpace(u.Space) != "" || s.inSpaceRecording(r.Context(), r.PathValue("id")) {
+			s.putSpaceRecordingRoute(w, r, u)
+			return
+		}
+		e := engine(w, r)
+		if e == nil {
 			return
 		}
 		meeting := strings.EqualFold(strings.TrimSpace(u.Kind), kb.RecordingMeeting)
@@ -100,6 +108,17 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 		apierr.WriteJSON(w, out)
 	})
 	s.handle("DELETE /api/v1/recordings/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if id, ok := kb.RecordingID(r.PathValue("id")); ok {
+			if row, ok := s.spaceRecordingOf(r.Context(), id); ok { // saved into a track (space_recordings.go)
+				deleted, err := s.deleteSpaceRecording(r.Context(), row, time.Now())
+				if err != nil {
+					writeSpaceRecordingError(w, err)
+					return
+				}
+				apierr.WriteJSON(w, map[string]any{"deleted": deleted})
+				return
+			}
+		}
 		e := engine(w, r)
 		if e == nil {
 			return
@@ -163,6 +182,12 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 			return
 		}
 		kept, deleted := e.RecordingStates()
+		// Those saved into a track are listed too (with space), so the phone sends them no more than the others.
+		if more, gone := s.spaceRecordingStates(r.Context()); len(more)+len(gone) > 0 {
+			kept, deleted = append(kept, more...), append(deleted, gone...)
+			slices.SortStableFunc(kept, func(a, b kb.RecordingState) int { return b.StartedAt.Compare(a.StartedAt) })
+			slices.Sort(deleted)
+		}
 		apierr.WriteJSON(w, map[string]any{"days": e.RecordingDays(), "recordings": kept, "deleted": deleted})
 	})
 	s.minutesRoutes(engine)
