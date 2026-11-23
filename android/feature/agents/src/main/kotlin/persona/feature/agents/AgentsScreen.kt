@@ -96,7 +96,10 @@ private fun SidebarNeedsJump(state: LazyListState, motion: ListTapMotion, count:
                     val index = withTimeoutOrNull(2_000L) {
                         snapshotFlow { motion.composedKeys.indexOf(NeedsYouListKey) }.first { it >= 0 }
                     } ?: motion.composedKeys.indexOf(AgentsHeadingKey)
-                    if (index in 0 until state.layoutInfo.totalItemsCount) state.animateScrollToItem(index)
+                    if (index in 0 until state.layoutInfo.totalItemsCount) {
+                        motion.onProgrammaticScroll()
+                        state.animateScrollToItem(index)
+                    }
                 }
             },
         )
@@ -136,11 +139,13 @@ internal fun AgentsScreen(
     // What the list draws: the hub's page, held still for a bounded time while it is scrolled (AgentsFeedHold.kt). The
     // controls and the window size start it over; a rebuilt window is not told apart from a new list.
     val window = androidx.compose.ui.platform.LocalConfiguration.current
+    // Tap-driven row motion only (#9600). Hub pushes change [tree] with the flag clear, so they stay put.
+    val listTapMotion = remember { ListTapMotion() }
     // The pill counts what the Needs You section of a page would draw, from the requests the screen shows for that page.
     val feed = rememberAgentsFeed(latestPage, { p ->
         agentsFeedNeedsYou(p, shownRequests(everyRequest, group, assistant, p.sessions, p.hiddenSessions)) { key -> model.operationState.value.sessions[key]?.closed == true }
     }, listOf(group?.namespace, assistant.id, assistant.group, latestPage.settings, latestPage.preferences, PersonaTheme.style,
-        window.screenWidthDp, window.screenHeightDp), listState)
+        window.screenWidthDp, window.screenHeightDp), listState, onProgrammaticScroll = listTapMotion::onProgrammaticScroll)
     val page = feed.page
     LaunchedEffect(model, assistant) { model.show(assistant) }
     // The shell keeps the picked computer for the next launch: it follows the filter however that changes (a chip, or
@@ -416,8 +421,6 @@ internal fun AgentsScreen(
                 page.settings.query.isEmpty() && page.settings.quick == AgentQuickFilter.All && !page.pagination.paged
             }, idleRepos = repoTree, hideIdle = hideIdle)
     }
-    // Tap-driven row motion only (#9600). Hub pushes change [tree] with the flag clear, so they stay put.
-    val listTapMotion = remember { ListTapMotion() }
     // The motion follows this screen's model. A second model (the shot loop, or a new key) must not
     // leave the flag on the previous one: that list then folds with nothing armed.
     DisposableEffect(model, listTapMotion) {
@@ -436,13 +439,17 @@ internal fun AgentsScreen(
     val controls = page.settings
     // Use the effective sort and the user's fold choices, which are kept separately from the live list projection.
     // Display includes the Compact/Detailed preference in every style.
-    val restoring = RestoreAgentReadingPosition(listState, tree, paginationFooter, page.loaded)
+    val restoring = RestoreAgentReadingPosition(
+        listState, tree, paginationFooter, page.loaded,
+        onProgrammaticScroll = listTapMotion::onProgrammaticScroll,
+    )
     KeepAgentReadingPosition(listState, tree, paginationFooter,
         scope = listOf(group?.namespace, assistant.id, assistant.group, controls.grouping, controls.sort,
             controls.quick, controls.machineFilter, controls.query, page.preferences.hiddenBotmuxHubs,
             controls.folded, controls.expandedIdle, controls.expandedQuiet, controls.expandedAll, page.preferences.foldedTabs, expandedTasks,
             page.preferences.range, page.preferences.display, PersonaTheme.style),
-        restoring = restoring)
+        restoring = restoring,
+        onProgrammaticScroll = listTapMotion::onProgrammaticScroll)
     // Rows outside the tree name their computer while the list mixes computers, By To-do's their host while it mixes
     // hosts (iOS `rowMachine`, `mixedHosts`; #4338 A9). By Machine's sections are the computers, so rows omit the name
     // (iOS `rowMachine` skips `.machine`).

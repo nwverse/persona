@@ -279,14 +279,16 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             return
         }
         // The large title comes back on this frame, with no spring (InboxView.swift:152-153). The
-        // removal waits until that frame has been laid out, then fades in its new place
-        // (InboxView.swift:632-634). Doing both here draws the fading row on top of the next one.
+        // removal waits until that frame has been laid out, then arms one frame ahead so `exitFade`
+        // attaches `fadeOutSpec` before the row leaves composition (InboxView.swift:632-634).
         after?.invoke()
         val job = scope.launch {
             try {
                 androidx.compose.runtime.withFrameNanos { }
                 androidx.compose.runtime.withFrameNanos { }
                 listTapMotion.arm(ListTapMotionKind.State)
+                androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+                androidx.compose.runtime.withFrameNanos { }
                 asked.forEach { pending[it.id] = done }
                 applyVisual()
             } finally {
@@ -301,6 +303,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     /** [ListTapMotion.arm], then the list write on the next frame, so the spec is already measured. */
     fun animateChange(block: () -> Unit) {
         listTapMotion.arm(ListTapMotionKind.State)
+        androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
         scope.launch {
             androidx.compose.runtime.withFrameNanos { }
             block()
@@ -520,7 +523,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             androidx.compose.runtime.withFrameNanos { }
             androidx.compose.runtime.withFrameNanos { }
             // Jump to (InboxView.swift:924, :1099) scrolls with Theme.Motion.standard. The row swap itself stays instant.
-            listIndex.positions[key]?.let { at -> scroll.animateScrollToItem((scroll.layoutInfo.totalItemsCount - listIndex.counted).coerceAtLeast(0) + at) }
+            listIndex.positions[key]?.let { at ->
+                listTapMotion.onProgrammaticScroll()
+                scroll.animateScrollToItem((scroll.layoutInfo.totalItemsCount - listIndex.counted).coerceAtLeast(0) + at)
+            }
             jumpTo = null
         }
         BindListTapMotion(listTapMotion)

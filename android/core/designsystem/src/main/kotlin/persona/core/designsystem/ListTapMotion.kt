@@ -1,5 +1,7 @@
 package persona.core.designsystem
 
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector
@@ -15,13 +17,13 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -166,27 +168,36 @@ class ListTapMotion {
     }
 
     /** Drop rows that scrolled away, so a long scroll does not keep every row that was ever placed. */
-    private fun pruneRetained(keep: Set<Any>) {
+    internal fun pruneRetained(keep: Set<Any>) {
         if (keep.isEmpty()) return
         layoutY.keys.retainAll(keep)
         shiftedEpoch.keys.retainAll(keep)
+        val dropShifts = shifts.keys.filter { it !in keep }
+        for (key in dropShifts) {
+            shifts.remove(key)?.job?.cancel()
+            // Wake any still-attached observer before removing its tick state so placement returns to 0.
+            ticks[key]?.let { it.intValue++ }
+        }
         val dropTicks = ticks.keys.filter { it !in keep }
         for (key in dropTicks) ticks.remove(key)
-        val dropShifts = shifts.keys.filter { it !in keep }
-        for (key in dropShifts) shifts.remove(key)?.job?.cancel()
         placed.retainAll(keep)
         gone.retainAll(keep)
     }
 
     private var prunedToken: Long = Long.MIN_VALUE
 
-    /** Once per visible set, not once per row. Wall-clock buckets split a pass and dropped rows. */
+    /** Once per visible window, never mid-tap-diff. Tracks start offset, count, first and last keys. */
     private fun pruneToVisible(current: Any) {
+        if (diffReady) return
         val info = listState?.layoutInfo ?: return
         val items = info.visibleItemsInfo
         if (items.isEmpty()) return
         val first = items.first().key
-        val token = info.viewportStartOffset.toLong() xor (first.hashCode().toLong() shl 32)
+        val last = items.last().key
+        var token = info.viewportStartOffset.toLong()
+        token = 31L * token + items.size.toLong()
+        token = 31L * token + first.hashCode().toLong()
+        token = 31L * token + (last.hashCode().toLong() shl 32)
         if (token == prunedToken) return
         prunedToken = token
         val keep = HashSet<Any>(items.size + 1)
@@ -280,10 +291,12 @@ class ListTapMotion {
     /** The list content lambda is not composable, so it only stages. [BindListTapMotion] writes. */
     private var stagedKeys: List<Any>? = null
     private var stagedEpoch: Int = -1
-    /** Per row, so a tick does not remeasure every visible row. */
-    private val ticks = mutableStateMapOf<Any, Int>()
+    /** Per-key state, so one row's animation only invalidates that row's placement. */
+    private val ticks = HashMap<Any, MutableIntState>()
     /** Added to a viewport y to undo scrolling. A drag must not look like the row changed place. */
     private var scrollAccum = 0f
+
+    private fun tickOf(key: Any): MutableIntState = ticks.getOrPut(key) { mutableIntStateOf(0) }
 
     /** [consumedY] is the nested-scroll delta already applied to viewport positions (negative when the list moves up). */
     fun addViewportDelta(consumedY: Float) {
@@ -291,8 +304,36 @@ class ListTapMotion {
         scrollAccum += consumedY
     }
 
+    /**
+     * Call before or immediately after a programmatic scroll (`scrollToItem`, `requestScrollToItem`,
+     * `animateScrollToItem`) that bypasses [NestedScrollConnection]. Cancels active row shifts and
+     * resets content-relative baselines so rows never spring across a viewport jump.
+     */
+    fun onProgrammaticScroll() {
+        cancelAllShifts()
+        layoutY.clear()
+        shiftedEpoch.clear()
+        commonShift = null
+        scrollAccum = 0f
+        prunedToken = Long.MIN_VALUE
+        eligible = emptySet()
+        if (kind != null || plainKind != null || diffReady) disarm()
+    }
+
+    /** Cancels every active row shift and wakes its observer so placement returns to 0 immediately. */
+    fun cancelAllShifts() {
+        if (shifts.isEmpty()) return
+        val keys = shifts.keys.toList()
+        for (key in keys) {
+            shifts.remove(key)?.job?.cancel()
+            poke(key)
+        }
+    }
+
+    internal fun hasActiveShifts(): Boolean = shifts.isNotEmpty()
+
     fun shiftPx(key: Any): Int {
-        ticks[key]
+        tickOf(key).intValue
         val shift = shifts[key] ?: return 0
         if (shift.job.isCompleted) {
             shifts.remove(key)
@@ -313,7 +354,16 @@ class ListTapMotion {
         placed.remove(key)
     }
 
-    fun notePlaced(key: Any, viewportY: Float, scope: CoroutineScope, spec: FiniteAnimationSpec<Float>?) {
+    private fun resolvePlacementSpec(spec: FiniteAnimationSpec<Float>?): FiniteAnimationSpec<Float>? {
+        if (themeReduce) return null
+        if (plainKind == null && kind == null) return null
+        if (spec != null && spec !== liveFade) return spec
+        if (placedSpec != null) return placedSpec
+        if (themeMotion != null) return currentFade()
+        return spec
+    }
+
+    fun notePlaced(key: Any, viewportY: Float, scope: CoroutineScope, spec: FiniteAnimationSpec<Float>? = null) {
         // The list's content lambda runs in measure, after [BindListTapMotion]'s side effect.
         // Flush here so this placement sees the keys it just declared.
         flushStaged()
@@ -322,7 +372,7 @@ class ListTapMotion {
         placed.add(key)
         val y = viewportY - scrollAccum
         val current = shifts[key]
-        val active = spec ?: placedSpec
+        val active = resolvePlacementSpec(spec)
         if (diffReady && eligible.isEmpty() && layoutY.isNotEmpty()) eligible = layoutY.keys.toSet()
         // The gap between arm and the list write used to drop the spring (a second tap jumped).
         if (!diffReady || active == null) {
@@ -418,6 +468,19 @@ class ListTapMotion {
     /** Bound by [BindListTapMotion] so row springs survive transient LazyColumn item disposal during a cross-list jump. */
     internal var hostScope: CoroutineScope? = null
 
+    private fun onMainThread(action: () -> Unit) {
+        val main = runCatching { Looper.getMainLooper() }.getOrNull()
+        if (main == null || Looper.myLooper() === main) action()
+        else Handler(main).post(action)
+    }
+
+    private fun clearShift(key: Any, anim: Animatable<Float, AnimationVector1D>) {
+        if (shifts[key]?.anim === anim) {
+            shifts.remove(key)
+            poke(key)
+        }
+    }
+
     private fun launchShift(
         key: Any, from: Float, y: Float, scope: CoroutineScope, spec: FiniteAnimationSpec<Float>, assumed: Float,
     ) {
@@ -430,26 +493,22 @@ class ListTapMotion {
         val anim = Animatable(from)
         val job = runScope.launch {
             try {
-                anim.animateTo(0f, spec) { poke(key) }
-            } finally {
-                if (shifts[key]?.anim === anim) {
-                    shifts.remove(key)
-                    poke(key)
+                withTimeoutOrNull(MAX_SHIFT_DURATION_MS) {
+                    anim.animateTo(0f, spec) { poke(key) }
                 }
+            } finally {
+                onMainThread { clearShift(key, anim) }
             }
         }
         shifts[key] = RowShift(anim, y, job, from, assumed, runScope, spec)
         // If runScope cancelled before the coroutine body started, finally never runs; invokeOnCompletion runs immediately.
         job.invokeOnCompletion {
-            if (shifts[key]?.anim === anim) {
-                shifts.remove(key)
-                poke(key)
-            }
+            onMainThread { clearShift(key, anim) }
         }
         poke(key)
     }
 
-    private fun poke(key: Any) { ticks[key] = (ticks[key] ?: 0) + 1 }
+    private fun poke(key: Any) { tickOf(key).intValue++ }
 
     /** The first list after [arm]. Keys that were not in this diff are not added later. */
     fun capture(keys: List<Any>) {
@@ -514,6 +573,7 @@ class ListTapMotion {
     fun disarm() {
         plainKind = null
         kind = null
+        placedSpec = null
         captured = false
         movingKeys = emptySet()
         diffKeys = emptySet()
@@ -541,6 +601,8 @@ class ListTapMotion {
     /** The theme [BindListTapMotion] last drew with. [LiveFadeSpec] reads it when an animation starts. */
     internal var themeMotion: PersonaMotion? = null
     internal var themeReduce: Boolean = false
+    internal var hasTheme by mutableStateOf(false)
+    internal var reduceMotion by mutableStateOf(false)
 
     /**
      * The fade in force at this moment. Null snaps. Read from [vectorize], not from composition,
@@ -600,6 +662,8 @@ fun BindListTapMotion(motion: ListTapMotion, keys: List<Any>? = null) {
         motion.hostScope = hostScope
         motion.themeMotion = theme
         motion.themeReduce = reduce
+        motion.hasTheme = true
+        motion.reduceMotion = reduce
         motion.placedSpec = fade
     }
     DisposableEffect(motion, hostScope) {
@@ -678,7 +742,12 @@ fun BindListTapMotion(motion: ListTapMotion, keys: List<Any>? = null) {
 private suspend fun finishMovingKeys(motion: ListTapMotion, generation: Int) {
     val ms = if (motion.kind == ListTapMotionKind.Layout) Tokens.Motion.Layout.duration else Tokens.Motion.State.duration
     kotlinx.coroutines.delay(ms.toLong())
-    if (motion.generation == generation) motion.disarm()
+    if (motion.generation != generation) return
+    motion.disarm()
+    if (motion.hasActiveShifts()) {
+        kotlinx.coroutines.delay(MAX_SHIFT_DURATION_MS)
+        if (motion.generation == generation) motion.cancelAllShifts()
+    }
 }
 
 /** Null unless a tap is in flight and motion is allowed. Same spec for placement and fade: iOS animates both. */
@@ -710,21 +779,22 @@ fun listTapScroll(motion: ListTapMotion): NestedScrollConnection = object : Nest
 }
 
 /**
- * Fade still goes through `animateItem`. The fade-out spec object does not change, so arming does
- * not recompose the row; [LiveFadeSpec.vectorize] reads the fade when the removal starts
- * (`InboxView.swift:632-634`). A hub insert is not that animation: a non-null fade-in spec draws
- * the new row transparent for a frame (`origin/main` has no `animateItem`). Placement is a layout
- * offset read only while placing.
+ * Fade goes through `animateItem` only while a tap is armed (and Reduce Motion is off). When idle,
+ * all three specs are null so Compose skips `LazyLayoutAnimateItemElement` and allocates zero
+ * `GraphicsLayer` / `LazyLayoutItemAnimation` instances, preventing idle `snap()` removals from
+ * hitting Compose `LazyLayoutItemAnimator`'s `disappearingItems` re-entry race. Placement is a
+ * layout offset read only while placing.
  */
 @Composable
 private fun LazyItemScope.moving(
     modifier: Modifier, motion: ListTapMotion, key: Any, pin: LazyListState?, stick: Boolean,
 ): Modifier {
     val scope = rememberCoroutineScope()
-    val fade = motion.liveFade
-    val armed = androidx.compose.runtime.remember { derivedStateOf { motion.kind != null } }
-    DisposableEffect(key) { onDispose { motion.forget(key) } }
-    return exitFade(modifier.then(RowMoveElement(motion, key, fade, scope, pin, stick)), armed, fade)
+    val armed = androidx.compose.runtime.remember(motion) {
+        derivedStateOf { motion.kind != null && motion.hasTheme && !motion.reduceMotion }
+    }
+    DisposableEffect(motion, key) { onDispose { motion.forget(key) } }
+    return exitFade(modifier.then(RowMoveElement(motion, key, scope, pin, stick)), armed, motion.liveFade)
 }
 
 /** Reads [armed] so only this wrapper recomposes when a tap starts or ends, not the row body. */
@@ -732,8 +802,8 @@ private fun LazyItemScope.moving(
 private fun LazyItemScope.exitFade(
     modifier: Modifier, armed: State<Boolean>, fade: FiniteAnimationSpec<Float>,
 ): Modifier {
-    val fadeIn = if (armed.value) fade else null
-    return modifier.animateItem(fadeInSpec = fadeIn, placementSpec = null, fadeOutSpec = fade)
+    val activeFade = if (armed.value) fade else null
+    return modifier.animateItem(fadeInSpec = activeFade, placementSpec = null, fadeOutSpec = activeFade)
 }
 
 /**
@@ -741,40 +811,60 @@ private fun LazyItemScope.exitFade(
  * change invalidates placement only. A pinned header (its y is the viewport start) stays put
  * (`InboxView.swift:827`); an unpinned one moves (`:456`).
  */
-private class RowMoveElement(
+internal class RowMoveElement(
     val motion: ListTapMotion,
     val key: Any,
-    val spec: FiniteAnimationSpec<Float>?,
     val scope: CoroutineScope,
     val pin: LazyListState?,
     val stick: Boolean,
 ) : ModifierNodeElement<RowMoveNode>() {
-    override fun create() = RowMoveNode(motion, key, spec, scope, pin, stick)
+    override fun create() = RowMoveNode(motion, key, scope, pin, stick)
     override fun update(node: RowMoveNode) {
-        node.motion = motion
-        node.key = key
-        node.spec = spec
-        node.scope = scope
-        node.pin = pin
-        node.stick = stick
+        node.update(motion, key, scope, pin, stick)
     }
     override fun equals(other: Any?): Boolean = other is RowMoveElement && other.motion === motion && other.key == key &&
-        other.spec == spec && other.scope === scope && other.pin === pin && other.stick == stick
+        other.scope === scope && other.pin === pin && other.stick == stick
     override fun hashCode(): Int = 31 * (31 * (31 * motion.hashCode() + key.hashCode()) + (pin?.hashCode() ?: 0)) + stick.hashCode()
     override fun InspectorInfo.inspectableProperties() { name = "listTapMove" }
 }
 
-private class RowMoveNode(
+internal class RowMoveNode(
     var motion: ListTapMotion,
     var key: Any,
-    var spec: FiniteAnimationSpec<Float>?,
     var scope: CoroutineScope,
     var pin: LazyListState?,
     var stick: Boolean,
 ) : Modifier.Node(), LayoutModifierNode, ObserverModifierNode, LayoutAwareModifierNode {
     private var stuck = false
 
-    override fun onAttach() { observe() }
+    fun update(
+        motion: ListTapMotion,
+        key: Any,
+        scope: CoroutineScope,
+        pin: LazyListState?,
+        stick: Boolean,
+    ) {
+        val targetChanged = this.motion !== motion || this.key != key
+        val unsticking = stuck && (targetChanged || !stick || pin == null)
+        if (unsticking) {
+            stuck = false
+            this.motion.setStuck(this.key, false)
+        }
+        this.motion = motion
+        this.key = key
+        this.scope = scope
+        this.pin = pin
+        this.stick = stick
+        if (isAttached && (targetChanged || unsticking)) {
+            if (targetChanged) observe()
+            invalidatePlacement()
+        }
+    }
+
+    override fun onAttach() {
+        observe()
+        invalidatePlacement()
+    }
     override fun onDetach() {
         if (stuck) {
             stuck = false
@@ -802,7 +892,7 @@ private class RowMoveNode(
             stuck = now
             invalidatePlacement()
         }
-        motion.notePlaced(key, y, scope, spec)
+        motion.notePlaced(key, y, scope, null)
     }
 
     override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
@@ -940,3 +1030,6 @@ class ListTapLazyScope(
  * emission that carries the tap, and no longer than this.
  */
 internal const val PAGE_WAIT_MS = 320L
+
+/** Upper bound for any row shift spring so a stalled animation can never leave a row displaced. */
+internal const val MAX_SHIFT_DURATION_MS = 1_500L
