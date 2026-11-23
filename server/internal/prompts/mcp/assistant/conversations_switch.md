@@ -1,0 +1,49 @@
+Switch a named set of Assistant conversations to another launcher/model, previewing first when the user has not confirmed. Busy conversations wait durably for their current turn; nothing interrupts them or sends a synthetic message. Execution returns a batch ID and each conversation's saved launcher/model/effort/permission mode. Use `restore_batch_id` to preview or restore every completed item exactly, and `batch_id` to check progress. An item changed independently is refused rather than overwritten.{{template "shared/mcp_language" .}}
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "conversation_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "description": "Assistant conversation IDs from conversations_list; required for a forward switch"
+    },
+    "machine_id": {
+      "type": "string",
+      "description": "optional Assistant machine; defaults to this Assistant's machine"
+    },
+    "launcher": {
+      "type": "string",
+      "description": "target launcher for a forward switch"
+    },
+    "model": {
+      "type": "string",
+      "description": "target model, or empty for the target launcher's default"
+    },
+    "effort": {
+      "type": "string",
+      "description": "target effort, or empty for the target launcher's default"
+    },
+    "permission_mode": {
+      "type": "string",
+      "description": "target permission mode, or empty to inherit each conversation's current mode"
+    },
+    "preview": {
+      "type": "boolean",
+      "description": "read-only plan: no batch, operation, queue write or confirmation"
+    },
+    "restore_batch_id": {
+      "type": "string",
+      "description": "completed batch to restore; mutually exclusive with IDs and target fields"
+    },
+    "batch_id": {
+      "type": "string",
+      "description": "batch status lookup; use alone"
+    }
+  }
+}
+```

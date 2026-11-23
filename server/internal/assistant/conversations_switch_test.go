@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,6 +42,7 @@ type conversationSwitchTestItem struct {
 
 type conversationSwitchTestReport struct {
 	BatchID   string                       `json:"batch_id"`
+	Preview   bool                         `json:"preview"`
 	RestoreOf string                       `json:"restore_of"`
 	Items     []conversationSwitchTestItem `json:"items"`
 }
@@ -78,14 +80,17 @@ func newConversationSwitchTestRig(t *testing.T) *conversationSwitchTestRig {
 		}
 		r.mu.Lock()
 		r.preparations = append(r.preparations, p)
+		id := fmt.Sprintf("prepared-chat-%d", len(r.preparations))
 		r.mu.Unlock()
-		id := "target-chat"
-		switch p["launcher"] {
-		case "sub", "claude":
-			id = "restored-chat"
-		case "other":
-			id = "independent-chat"
+		launcher := fmt.Sprint(p["launcher"])
+		agent, model := "codex", fmt.Sprint(p["model"])
+		if launcher == "sub" || launcher == "claude" {
+			agent = "claude"
 		}
+		r.f.mu.Lock()
+		r.f.known[id] = true
+		r.f.sessions["server"] = append(r.f.sessions["server"], proto.Session{SessionID: id, MachineID: "server", Assistant: true, Agent: agent, Launcher: launcher, Model: model, RequestedModel: &model, Effort: fmt.Sprint(p["effort"]), PermissionMode: fmt.Sprint(p["permission_mode"]), Status: proto.StatusIdle, State: proto.StateIdle, Rev: 100})
+		r.f.mu.Unlock()
 		return map[string]any{"session_id": id, "prepared": true}, nil
 	})
 	for _, method := range []string{"assistant.segment.retire", "assistant.segment.restore"} {
@@ -95,18 +100,31 @@ func newConversationSwitchTestRig(t *testing.T) *conversationSwitchTestRig {
 }
 
 func (r *conversationSwitchTestRig) setTurn(busyStatus string) {
-	oldModel, changedModel := "old-model", "independent-model"
+	oldModel := "old-model"
 	busyState := proto.StateIdle
 	if busyStatus == proto.StatusWorking {
 		busyState = proto.StateWorking
 	}
-	r.f.setSessions("server",
-		proto.Session{SessionID: "fresh-chat", MachineID: "server", Assistant: true, Agent: "claude", Launcher: "sub", Model: "transcript-model", RequestedModel: &oldModel, Effort: "high", Status: proto.StatusIdle, State: proto.StateIdle, Rev: 100},
-		proto.Session{SessionID: "busy-chat", MachineID: "server", Assistant: true, Agent: "claude", Launcher: "sub", Model: "transcript-model", RequestedModel: &oldModel, Effort: "medium", Status: busyStatus, State: busyState, Rev: 100},
-		proto.Session{SessionID: "target-chat", MachineID: "server", Assistant: true, Agent: "codex", Launcher: "fallback", Model: "new-model", RequestedModel: &changedModel, Status: proto.StatusIdle, State: proto.StateIdle, Rev: 100},
-		proto.Session{SessionID: "restored-chat", MachineID: "server", Assistant: true, Agent: "claude", Launcher: "sub", Model: "old-model", Status: proto.StatusIdle, State: proto.StateIdle, Rev: 100},
-		proto.Session{SessionID: "independent-chat", MachineID: "server", Assistant: true, Agent: "codex", Launcher: "other", Model: "independent-model", Status: proto.StatusIdle, State: proto.StateIdle, Rev: 100},
-	)
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	rows := r.f.sessions["server"]
+	haveFresh, haveBusy := false, false
+	for i := range rows {
+		switch rows[i].SessionID {
+		case "fresh-chat":
+			haveFresh = true
+		case "busy-chat":
+			haveBusy = true
+			rows[i].Status, rows[i].State = busyStatus, busyState
+		}
+	}
+	if !haveFresh {
+		rows = append(rows, proto.Session{SessionID: "fresh-chat", MachineID: "server", Assistant: true, Agent: "claude", Launcher: "sub", Model: "transcript-model", RequestedModel: &oldModel, Effort: "high", Status: proto.StatusIdle, State: proto.StateIdle, Rev: 100})
+	}
+	if !haveBusy {
+		rows = append(rows, proto.Session{SessionID: "busy-chat", MachineID: "server", Assistant: true, Agent: "claude", Launcher: "sub", Model: "transcript-model", RequestedModel: &oldModel, Effort: "medium", Status: busyStatus, State: busyState, Rev: 100})
+	}
+	r.f.sessions["server"] = rows
 }
 
 func (r *conversationSwitchTestRig) moveBusyIndependently() {
@@ -201,7 +219,7 @@ func TestConversationSwitchesPreviewQueueAndRestore(t *testing.T) {
 
 	code, raw = conversationSwitchTestCall(t, r.s, http.MethodPost, "/api/v1/assistant/conversation-switches", "", `{"conversation_ids":["fresh-chat","busy-chat"],"launcher":"fallback","model":"new-model","effort":"low","permission_mode":"plan","preview":true}`)
 	preview := conversationSwitchTestDecode(t, code, raw)
-	if preview.BatchID != "" || conversationSwitchTestItemFor(t, preview, "fresh-chat").Outcome != "ready" || conversationSwitchTestItemFor(t, preview, "busy-chat").Outcome != "queued" {
+	if !preview.Preview || preview.BatchID != "" || conversationSwitchTestItemFor(t, preview, "fresh-chat").Outcome != "ready" || conversationSwitchTestItemFor(t, preview, "busy-chat").Outcome != "queued" {
 		t.Fatalf("preview: %+v", preview)
 	}
 	var state json.RawMessage
@@ -246,11 +264,9 @@ func TestConversationSwitchesPreviewQueueAndRestore(t *testing.T) {
 	}
 
 	conversationSwitchTestDrive(t, r.s, started.BatchID, map[string]string{"fresh-chat": "switched", "busy-chat": "queued"})
-	for _, id := range []string{"fresh-chat", "target-chat"} {
-		for _, call := range callsFor(r.f, id) {
-			if call == DeviceAssistantSend {
-				t.Fatalf("synthetic message sent to %s", id)
-			}
+	for _, call := range nodeCalls(r.f) {
+		if call.Method == DeviceAssistantSend {
+			t.Fatalf("synthetic message sent: %+v", call)
 		}
 	}
 
@@ -281,11 +297,74 @@ func TestConversationSwitchesPreviewQueueAndRestore(t *testing.T) {
 	if preparations[2]["effort"] != "high" || preparations[3]["effort"] != "medium" {
 		t.Errorf("restore did not keep per-conversation effort: %+v", preparations[2:])
 	}
-	for _, id := range []string{"fresh-chat", "busy-chat", "target-chat", "restored-chat"} {
-		for _, call := range callsFor(r.f, id) {
-			if call == DeviceAssistantSend {
-				t.Errorf("synthetic message sent during restore to %s", id)
-			}
+	for _, call := range nodeCalls(r.f) {
+		if call.Method == DeviceAssistantSend {
+			t.Errorf("synthetic message sent during restore: %+v", call)
+		}
+	}
+}
+
+func TestConversationSwitchesIsolatedHubDemo(t *testing.T) {
+	r := newConversationSwitchTestRig(t)
+	hub := httptest.NewServer(r.s)
+	defer hub.Close()
+	call := func(method, path, body string) (int, []byte) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method, hub.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := hub.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, raw
+	}
+	drive := func(id string) conversationSwitchTestReport {
+		t.Helper()
+		var report conversationSwitchTestReport
+		waitFor(t, "isolated hub batch "+id, func() bool {
+			r.s.logicalSweep(context.Background())
+			code, raw := call(http.MethodGet, "/api/v1/assistant/conversation-switches/"+id, "")
+			report = conversationSwitchTestDecode(t, code, raw)
+			return conversationSwitchTestItemFor(t, report, "fresh-chat").Outcome == "switched"
+		})
+		return report
+	}
+
+	code, raw := call(http.MethodPost, "/api/v1/assistant/conversation-switches", `{"conversation_ids":["fresh-chat"],"launcher":"fallback","model":"new-model","effort":"low","preview":true}`)
+	preview := conversationSwitchTestDecode(t, code, raw)
+	t.Logf("isolated hub preview: %s", raw)
+	if !preview.Preview || preview.BatchID != "" || conversationSwitchTestItemFor(t, preview, "fresh-chat").Outcome != "ready" {
+		t.Fatalf("isolated preview: %+v", preview)
+	}
+
+	code, raw = call(http.MethodPost, "/api/v1/assistant/conversation-switches", `{"conversation_ids":["fresh-chat"],"launcher":"fallback","model":"new-model","effort":"low"}`)
+	started := conversationSwitchTestDecode(t, code, raw)
+	t.Logf("isolated hub switch requested: %s", raw)
+	switched := drive(started.BatchID)
+	encoded, _ := json.Marshal(switched)
+	t.Logf("isolated hub switched: %s", encoded)
+
+	code, raw = call(http.MethodPost, "/api/v1/assistant/conversation-switches", `{"restore_batch_id":"`+started.BatchID+`"}`)
+	restoring := conversationSwitchTestDecode(t, code, raw)
+	t.Logf("isolated hub restore requested: %s", raw)
+	restored := drive(restoring.BatchID)
+	encoded, _ = json.Marshal(restored)
+	t.Logf("isolated hub restored: %s", encoded)
+
+	preparations := conversationSwitchTestPreparations(r)
+	if len(preparations) != 2 || preparations[0]["model"] != "new-model" || preparations[1]["model"] != "old-model" || preparations[1]["launcher"] != "sub" || preparations[1]["effort"] != "high" || preparations[1]["permission_mode"] != "default" {
+		t.Fatalf("isolated hub did not restore the before-image: %+v", preparations)
+	}
+	for _, call := range nodeCalls(r.f) {
+		if call.Method == DeviceAssistantSend {
+			t.Fatalf("isolated hub sent a synthetic message: %+v", call)
 		}
 	}
 }
@@ -349,8 +428,8 @@ func TestConversationSwitchesRefuseIndependentChanges(t *testing.T) {
 		}
 		code, raw = conversationSwitchTestCall(t, r.s, http.MethodPost, "/api/v1/assistant/conversation-switches", "", `{"restore_batch_id":"`+started.BatchID+`"}`)
 		refused := conversationSwitchTestDecode(t, code, raw)
-		if item := conversationSwitchTestItemFor(t, refused, "fresh-chat"); item.Outcome != "refused" || item.Reason == "" || refused.BatchID != "" {
-			t.Fatalf("restore crossed its fence: %+v", refused)
+		if item := conversationSwitchTestItemFor(t, refused, "fresh-chat"); item.Outcome != "refused" || item.Reason == "" || refused.BatchID != "" || refused.Preview {
+			t.Fatalf("restore crossed its fence or mislabeled execution as preview: %+v", refused)
 		}
 		c, err := r.d.LogicalConversation(context.Background(), "server", "fresh-chat")
 		active, ok := c.Active()
@@ -360,6 +439,29 @@ func TestConversationSwitchesRefuseIndependentChanges(t *testing.T) {
 	})
 }
 
+func TestConversationSwitchHTTPStatusReadsSpaceBatch(t *testing.T) {
+	r := newConversationSwitchTestRig(t)
+	state := map[string]any{"batches": []any{map[string]any{
+		"id": "space-batch", "space": "another-space", "created_at": time.Now().UTC(),
+		"items": []any{map[string]any{"machine": "server", "conversation_id": "fresh-chat", "outcome": "switched"}},
+	}}}
+	if err := r.d.PutSetting(context.Background(), "assistant.conversation_switches", state); err != nil {
+		t.Fatal(err)
+	}
+	report := conversationSwitchTestStatus(t, r.s, "space-batch")
+	if report.BatchID != "space-batch" || conversationSwitchTestItemFor(t, report, "fresh-chat").Outcome != "switched" {
+		t.Fatalf("full-role HTTP status: %+v", report)
+	}
+	args := json.RawMessage(`{"batch_id":"space-batch"}`)
+	if text, err := r.s.runTool(context.Background(), "server", "main-chat", "conversations_switch", args); err == nil {
+		t.Fatalf("main-space MCP read another space's batch: %s", text)
+	}
+	args = json.RawMessage(`{"restore_batch_id":"space-batch","preview":true}`)
+	if text, err := r.s.runTool(context.Background(), "server", "main-chat", "conversations_switch", args); err == nil {
+		t.Fatalf("main-space MCP previewed another space's restore: %s", text)
+	}
+}
+
 func TestConversationSwitchToolPreviewIsReadOnly(t *testing.T) {
 	r := newConversationSwitchTestRig(t)
 	args := json.RawMessage(`{"conversation_ids":["fresh-chat"],"launcher":"fallback","preview":true}`)
@@ -367,6 +469,21 @@ func TestConversationSwitchToolPreviewIsReadOnly(t *testing.T) {
 	text, err := r.s.runTool(context.Background(), "server", "main-chat", "conversations_switch", args)
 	if err != nil || !strings.Contains(text, "Preview") || !strings.Contains(text, "fresh-chat") {
 		t.Fatalf("tool preview: %q %v", text, err)
+	}
+	text, err = r.s.runTool(context.Background(), "server", "main-chat", "conversations_switch", json.RawMessage(`{"conversation_ids":["fresh-cha"],"launcher":"fallback","preview":true}`))
+	if err != nil || !strings.Contains(text, `"conversation_id": "fresh-chat"`) {
+		t.Fatalf("prefix did not resolve to the durable full ID: %q %v", text, err)
+	}
+	if text, err = r.s.runTool(context.Background(), "server", "main-chat", "conversations_switch", json.RawMessage(`{"conversation_ids":["fresh-cha","fresh-chat"],"launcher":"fallback","preview":true}`)); err == nil {
+		t.Fatalf("two aliases resolved to one batch item twice: %s", text)
+	}
+	r.f.mu.Lock()
+	r.f.known["other-chat"] = true
+	r.f.sessions["other"] = []proto.Session{{SessionID: "other-chat", MachineID: "other", Assistant: true, Agent: "claude", Launcher: "sub", Model: "old-model", Status: proto.StatusIdle, State: proto.StateIdle}}
+	r.f.mu.Unlock()
+	text, err = r.s.runTool(context.Background(), "server", "main-chat", "conversations_switch", json.RawMessage(`{"conversation_ids":["other-chat"],"machine_id":"other","launcher":"fallback","preview":true}`))
+	if err != nil || !strings.Contains(text, `"machine": "other"`) || !strings.Contains(text, `"outcome": "ready"`) {
+		t.Fatalf("selected machine was not used for space-scoped lookup: %q %v", text, err)
 	}
 	var state json.RawMessage
 	if found, err := r.d.Setting(context.Background(), "assistant.conversation_switches", &state); err != nil || found {
