@@ -895,14 +895,17 @@ nonisolated struct AgentModel: Codable, Hashable, Sendable, Identifiable {
     /// An ID the user typed before that ran, remembered on the hub for this computer and launcher (#1644); listed after
     /// the agent's own, most recent first, with no efforts (not known). It can be forgotten.
     var custom = false
+    /// Other spellings the hub folded into this row because they run the same model and context window (#10365).
+    /// Absent from an older hub, which lists every spelling as its own row.
+    var aliases: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, resolved, efforts, custom
+        case id, name, description, resolved, efforts, custom, aliases
         case isDefault = "default", defaultEffort = "default_effort"
     }
 
     init(id: String, name: String, description: String? = nil, resolved: String? = nil, isDefault: Bool = false,
-         efforts: [String]? = nil, defaultEffort: String? = nil, custom: Bool = false) {
+         efforts: [String]? = nil, defaultEffort: String? = nil, custom: Bool = false, aliases: [String]? = nil) {
         self.id = id
         self.name = name
         self.description = description
@@ -911,6 +914,7 @@ nonisolated struct AgentModel: Codable, Hashable, Sendable, Identifiable {
         self.efforts = efforts
         self.defaultEffort = defaultEffort
         self.custom = custom
+        self.aliases = aliases
     }
 
     init(from decoder: Decoder) throws {
@@ -923,6 +927,7 @@ nonisolated struct AgentModel: Codable, Hashable, Sendable, Identifiable {
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
         defaultEffort = try c.decodeIfPresent(String.self, forKey: .defaultEffort)
         custom = try c.decodeIfPresent(Bool.self, forKey: .custom) ?? false
+        aliases = try c.decodeIfPresent([String].self, forKey: .aliases)
     }
 }
 
@@ -2249,10 +2254,7 @@ extension Session {
         if state == .needsYou, let r = attentionReason, !r.isEmpty { return r } // a stale reason (offline, seen) stays out
         if state != .working, let r = failureReason, !r.isEmpty { return Session.failureText(r) }
         if let r = replyLine(muted: muted) { return r }
-        // The native Mac app is frozen (docs/apple/mac.md): its rows keep the line they had.
-        #if !os(macOS)
         if let c = closeoutPreview() { return c }
-        #endif
         if let w = workLine() { return w }
         return lastText.flatMap { $0.isEmpty ? nil : Fmt.plain($0) }
     }

@@ -454,9 +454,6 @@ struct PlanEditSheet: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Start") { start(tasks) }.bold() }
             }
         }
-        #if os(macOS)
-        .macSheet()
-        #endif
         .onAppear {
             guard tasks.isEmpty else { return }
             tasks = Ultracode.editsOf(plan, choices: ultracode)

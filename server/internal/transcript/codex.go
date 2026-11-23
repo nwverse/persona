@@ -322,7 +322,7 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 		meta.codexTurnID, meta.codexUserID, meta.codexTurnModel = p.TurnID, "", ""
 		meta.codexUsage = proto.TokenUsage{}
 		meta.clearTurnError()
-		meta.turnWorked = false
+		meta.turnWorked, meta.turnErrorCounted = false, false
 		meta.turnParts = nil
 		meta.codexSeen = nil // an item repeats only within its turn: a long rollout keeps no ids of the turns before
 		return nil
@@ -338,8 +338,11 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 			if meta.TurnErrorKind == proto.TurnErrorUsageLimit && meta.codexLimitFull.After(l.Timestamp) {
 				meta.TurnErrorResetsAt = meta.codexLimitFull
 			}
+			meta.noteUpstreamTurnError(meta.TurnError, meta.TurnErrorKind, p.TurnID)
+		} else if meta.turnWorked {
+			meta.resetUpstreamStreak()
 		}
-		meta.turnWorked = false
+		meta.turnWorked, meta.turnErrorCounted = false, false
 		usage := meta.codexTurnUsage()
 		ms, ok := recordedMilliseconds(p.DurationMS)
 		if !ok || strings.TrimSpace(p.TurnID) == "" || (meta.codexTurnID != "" && meta.codexTurnID != p.TurnID) {
@@ -396,6 +399,7 @@ func (m *Meta) codexWorked(items []proto.Item) {
 	for _, it := range items {
 		if it.Role == "assistant" {
 			m.turnWorked = true
+			m.resetUpstreamStreak()
 			return
 		}
 	}

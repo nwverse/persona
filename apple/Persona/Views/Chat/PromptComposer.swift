@@ -171,16 +171,6 @@ struct PromptComposer: View {
     }
     #endif
 
-    #if os(macOS)
-    private func toggleDictation() {
-        if dictation.isListening { stopDictation(); return }
-        let base = text.isEmpty || text.last?.isWhitespace == true ? text : text + " "
-        dictation.start(hints: [text], update: { heard in text = base + heard }) { problem in
-            AppModel.shared.toast = Toast(problem, style: .error)
-        }
-    }
-    #endif
-
     /// Ends dictation, and a start still asking for permission with it (#3407).
     private func stopDictation() { dictation.stop() }
 
@@ -269,7 +259,10 @@ enum PromptItems {
             return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
         }
         if let row = list.first(where: { $0.id.caseInsensitiveCompare(m) == .orderedSame }) { return row.id }
-        if let alias = list.first(where: { !$0.isDefault && $0.resolved == m }) ?? list.first(where: { $0.resolved == m }) {
+        let matches: (AgentModel) -> Bool = { row in
+            row.resolved == m || (row.aliases ?? []).contains { $0.caseInsensitiveCompare(m) == .orderedSame }
+        }
+        if let alias = list.first(where: { !$0.isDefault && matches($0) }) ?? list.first(where: matches) {
             return alias.id
         }
         return m

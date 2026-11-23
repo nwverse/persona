@@ -76,15 +76,15 @@ type DecisionOption struct {
 func terminalResumeLabel(label string) bool {
 	label = strings.ToLower(strings.TrimSpace(label))
 	return strings.HasPrefix(label, "resume ") && strings.Contains(label, "terminal") ||
-		strings.Contains(label, "终端") && strings.Contains(label, "恢复") ||
-		strings.Contains(label, "ターミナル") && strings.Contains(label, "再開")
+		strings.Contains(label, "终端") && strings.Contains(label, "恢复") || // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+		strings.Contains(label, "ターミナル") && strings.Contains(label, "再開") // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
 }
 
 func terminalResumeMention(text string) bool {
 	text = strings.ToLower(text)
 	return strings.Contains(text, "resume") && strings.Contains(text, "terminal") ||
-		strings.Contains(text, "终端") && strings.Contains(text, "恢复") ||
-		strings.Contains(text, "ターミナル") && strings.Contains(text, "再開")
+		strings.Contains(text, "终端") && strings.Contains(text, "恢复") || // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+		strings.Contains(text, "ターミナル") && strings.Contains(text, "再開") // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
 }
 
 func soleDecisionAgent(t Todo, asked time.Time) *SessionRef {

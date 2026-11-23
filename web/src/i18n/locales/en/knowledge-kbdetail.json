@@ -49,6 +49,8 @@
   "minutes_regenerate": "Regenerate",
   "minutes_make": "Make minutes",
   "minutes_writing": "Writing the minutes…",
+  "minutes_checking": "Checking the whole recording…",
+  "minutes_checking_progress": "Checking the whole recording ({done} of {total} min)…",
   "minutes_updating": "Updating…",
   "minutes_failed": "Couldn’t write the minutes. Try regenerating them.",
   "minutes_waiting": "Minutes will be written when transcription finishes.",

@@ -241,6 +241,22 @@ writes for a start with a creation identity, plus `engine_runtime` in the model 
 (no table changes), so rolling the node back leaves them to be read as those, the mark ignored. Nothing else is
 stored: rolling either side back or forward changes only what the next resume does.
 
+### Outside reporting directions (#8236)
+
+The manager migration `20261120081453_outside_directions.sql` adds only `assistant_outside_directions`; existing
+settings, directions, conversations and to-do ownership are not rewritten. A new manager on an older database therefore
+starts with no outside bindings until one is created. The table is separate because an older settings writer does not
+know the outside marker and would otherwise discard it.
+
+An older manager or hub has neither new write route nor `leaders.write`; those calls keep its previous 404 / 403
+behavior. A new CLI talking to an older node receives its legacy `unknown kind` answer and exits unavailable without
+retrying. `leaders.read` keeps its existing routes and events. On rollback, an older manager does not read the outside
+binding table or emit `external` / Agent-target metadata, and its legacy direction code may treat the stored opaque id
+as a conversation id; outside directions are therefore not a supported rollback interface. Existing
+conversation-backed directions keep their old behavior. Rolling forward again rejoins bindings that remain in the
+table to the surviving direction records; an owner or older manager removing a direction from `assistant.leaders`
+still ends its current membership as before.
+
 ### Launcher default models (#4663)
 
 A launcher with no explicit model has an empty `model` on the wire; display text is never a model ID. Older nodes and

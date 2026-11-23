@@ -44,6 +44,8 @@
   "minutes_regenerate": "再生成",
   "minutes_make": "議事録を作成",
   "minutes_writing": "議事録を作成中…",
+  "minutes_checking": "録音全体を確認しています…",
+  "minutes_checking_progress": "録音全体を確認しています（{done}/{total}分）…",
   "minutes_updating": "更新中…",
   "minutes_failed": "議事録を作成できませんでした。再生成してください。",
   "minutes_waiting": "文字起こしが完了すると議事録が作成されます。",
