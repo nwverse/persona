@@ -2145,7 +2145,7 @@ struct ChatView: View {
     /// list scrolls under it.
     private var headerRoom: CGFloat {
         if backgroundActivity { return 0 }
-        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
+        return style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
     }
 
     /// Git only for repositories, files only when we know the directory; the assistant has neither.
