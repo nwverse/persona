@@ -184,7 +184,7 @@ func (c *Connector) tokenNow(ctx context.Context, refused string) (string, uint6
 			return "", cred, ErrNoMachine
 		default:
 			var err error
-			if fresh, err = fetch(ctx, c.cfg.host()); err != nil {
+			if fresh, err = fetch(ctx, c.cfg.Host()); err != nil {
 				return "", cred, err
 			}
 		}

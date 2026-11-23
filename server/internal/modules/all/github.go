@@ -1,0 +1,14 @@
+//go:build !persona_without_github && !persona_core_only
+
+package all
+
+import (
+	"github.com/nwverse/persona/server/internal/connector/github"
+	"github.com/nwverse/persona/server/internal/extmgr/githubport"
+)
+
+// The GitHub connector module: the built-in GitHub connector reaches the extension manager through its port
+// (docs/architecture/core-and-modules.md "Provider seams"); it registers nothing with the kernel yet.
+func init() {
+	githubport.Provide(github.Provider)
+}

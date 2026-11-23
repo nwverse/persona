@@ -16,12 +16,6 @@ import (
 // (hub.json's github.auth.from_machine is only the default), or the device flow (login.go), which needs no computer.
 // Choosing one leaves the other: there is no separate signing out.
 
-// Sources of the token.
-const (
-	SourceMachine = "machine"
-	SourceDevice  = "device"
-)
-
 var errNoDeviceLogin = errors.New("not signed in with the device flow")
 
 // Source is where the token comes from now.
@@ -75,31 +69,6 @@ func (c *Connector) kickCheck() {
 	}
 }
 
-// RequiredScope is a scope the connector needs and what does not work without it.
-type RequiredScope struct {
-	Scope   string   `json:"scope"`
-	Affects []string `json:"affects"`
-}
-
-// MissingScopes are the scopes a token lacks (granted: X-OAuth-Scopes) and what goes wrong for it. repo covers
-// everything the connector does — reading private repositories' PRs, issues, comments, checks and CI logs, searching,
-// commenting and reviewing — and notifications; without it, notifications alone keeps the inbox.
-func MissingScopes(granted []string) []RequiredScope {
-	has := func(s string) bool { return slices.Contains(granted, s) }
-	if has("repo") {
-		return nil
-	}
-	write := "评论和 review 发不了"
-	if has("public_repo") {
-		write = "评论和 review 只能发到公开仓库"
-	}
-	out := []RequiredScope{{Scope: "repo", Affects: []string{"私有仓库的 PR、issue、评论、代码搜索读不到", "私有仓库的 CI 失败和日志读不到", write}}}
-	if !has("notifications") {
-		out = append(out, RequiredScope{Scope: "notifications", Affects: []string{"收件箱收不到 GitHub 的通知"}})
-	}
-	return out
-}
-
 // Scopes are what the token in use may do; known is false until GitHub said (or for tokens it says nothing for, such
 // as fine-grained ones).
 func (c *Connector) Scopes() (scopes []string, known bool) {
@@ -122,20 +91,9 @@ func scopesOf(h http.Header) ([]string, bool) {
 	return out, true
 }
 
-// MachineLogin is how a computer's gh login looks to GitHub.
-type MachineLogin struct {
-	// State: signed_in, not_signed_in (gh has no login, or GitHub refused it), no_gh, too_old (its personad),
-	// offline, error.
-	State   string          `json:"state"`
-	Account string          `json:"account,omitempty"`
-	Scopes  []string        `json:"scopes,omitempty"`
-	Missing []RequiredScope `json:"missing,omitempty"`
-	Error   string          `json:"error,omitempty"`
-}
-
 // Probe asks a computer for its gh login (fetch) and GitHub who it is and what it may do; the token goes nowhere.
 func (c *Connector) Probe(ctx context.Context, fetch TokenSource) MachineLogin {
-	tok, err := fetch(ctx, c.cfg.host())
+	tok, err := fetch(ctx, c.cfg.Host())
 	switch {
 	case errors.Is(err, ErrOffline), errors.Is(err, ErrNoMachine):
 		return MachineLogin{State: "offline"}

@@ -19,51 +19,44 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connectorwire"
+	"github.com/nwverse/persona/server/internal/githubwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/netproxy"
 )
 
-// Config is hub.json's "github".
-type Config struct {
-	Auth AuthConfig `json:"auth"`
-	// Inbox: the defaults of what comes into the inbox until the user chooses in the app (rules.go).
-	Inbox InboxOptions `json:"inbox,omitempty"`
-	// Egress gives github.proxy: an http:// proxy for everything sent to GitHub (the device flow on its web host,
-	// the REST API, CI logs), for networks that cannot reach github.com directly; empty is direct.
-	netproxy.Egress
-	// APIRoot is where the REST requests go (no trailing slash) instead of the host's own API, read when the connector is
-	// made: a fake GitHub for a test in another package. It is not a setting (never read from hub.json).
-	APIRoot string `json:"-"`
-}
+// Defined in the contract package githubwire (docs/architecture/core-and-modules.md "Provider seams"); the old names stay.
+type (
+	Config          = githubwire.Config
+	AuthConfig      = githubwire.AuthConfig
+	InboxOptions    = githubwire.InboxOptions
+	TokenSource     = githubwire.TokenSource
+	MachineLogin    = githubwire.MachineLogin
+	RequiredScope   = githubwire.RequiredScope
+	PRCheckSnapshot = githubwire.PRCheckSnapshot
+)
 
-// AuthConfig: whose gh login the hub reads, and for which host. Host is github.com when empty; a GitHub Enterprise
-// host goes here and only here (not built yet: only github.com is tried).
-type AuthConfig struct {
-	FromMachine string `json:"from_machine,omitempty"`
-	Host        string `json:"host,omitempty"`
-}
-
-// Configured says whether the hub should run the connector at all.
-func (c *Config) Configured() bool { return c != nil && c.Auth.FromMachine != "" }
-
-func (c *Config) host() string {
-	if c.Auth.Host == "" {
-		return "github.com"
-	}
-	return strings.ToLower(c.Auth.Host)
-}
+// Sources of the token.
+const (
+	SourceMachine = githubwire.SourceMachine
+	SourceDevice  = githubwire.SourceDevice
+)
 
 // Why a token could not be had (TokenSource's errors, errors.Is).
 var (
-	ErrNoMachine   = errors.New("github.auth.from_machine is not one of the manager's machines")
-	ErrOffline     = errors.New("the machine is offline")
-	ErrNodeTooOld  = errors.New("the machine's personad is too old")
-	ErrNoGh        = errors.New("gh is not installed")
-	ErrNotSignedIn = errors.New("gh is not signed in")
+	ErrNoMachine   = githubwire.ErrNoMachine
+	ErrOffline     = githubwire.ErrOffline
+	ErrNodeTooOld  = githubwire.ErrNodeTooOld
+	ErrNoGh        = githubwire.ErrNoGh
+	ErrNotSignedIn = githubwire.ErrNotSignedIn
 	// errBadProxy: hub.json's github.proxy cannot be used; every request fails with it rather than going direct.
 	errBadProxy = errors.New("github.proxy")
 )
+
+// Scrub blanks anything that looks like a GitHub token in s (an error, a message): tokens never leave the hub.
+func Scrub(s string) string { return githubwire.Scrub(s) }
+
+// MissingScopes are the scopes a token lacks and what goes wrong for it (githubwire.MissingScopes).
+func MissingScopes(granted []string) []RequiredScope { return githubwire.MissingScopes(granted) }
 
 // refuse is the transport of a connector whose proxy is malformed.
 type refuse struct{ err error }
@@ -73,15 +66,12 @@ func (r refuse) RoundTrip(*http.Request) (*http.Response, error) { return nil, r
 // httpClient is the connector's client: through github.proxy when set, direct when not.
 func httpClient(cfg Config) *http.Client {
 	const timeout = 30 * time.Second
-	cl, err := cfg.HTTPClient(timeout)
+	cl, err := netproxy.Egress{Proxy: cfg.Proxy}.HTTPClient(timeout)
 	if err != nil {
 		return &http.Client{Timeout: timeout, Transport: refuse{fmt.Errorf("%w: %v", errBadProxy, err)}}
 	}
 	return cl
 }
-
-// TokenSource asks the machine for its gh login's token for host.
-type TokenSource func(ctx context.Context, host string) (string, error)
 
 // Connector is GitHub. Run keeps its status (and token) fresh.
 type Connector struct {
@@ -259,7 +249,7 @@ func (c *Connector) searchQuotaLow() bool {
 // New is the connector for cfg, reading the token of machine (its display name) through fetch.
 func New(cfg Config, machine string, fetch TokenSource) *Connector {
 	api := "https://api.github.com"
-	if h := cfg.host(); h != "github.com" {
+	if h := cfg.Host(); h != "github.com" {
 		api = "https://" + h + "/api/v3"
 	}
 	if cfg.APIRoot != "" {
@@ -270,10 +260,20 @@ func New(cfg Config, machine string, fetch TokenSource) *Connector {
 		waiting, source = notSignedIn, SourceDevice
 	}
 	return &Connector{cfg: cfg, machine: machine, machineID: cfg.Auth.FromMachine, fetch: fetch, source: source, api: api,
-		web: "https://" + cfg.host(), client: httpClient(cfg), opts: cfg.Inbox,
+		web: "https://" + cfg.Host(), client: httpClient(cfg), opts: cfg.Inbox,
 		status: connectorwire.Status{State: connectorwire.StateNotSignedIn, Error: waiting}, poke: make(chan struct{}, 1),
 		repoll: make(chan struct{}, 1)}
 }
+
+// BuiltinGitHub marks the module's connector (githubwire.Connector).
+func (c *Connector) BuiltinGitHub() {}
+
+// Provider is the module's factory for the extension manager's port (githubwire.Factory).
+func Provider(cfg Config, machine string, fetch TokenSource) githubwire.Connector {
+	return New(cfg, machine, fetch)
+}
+
+var _ githubwire.Connector = (*Connector)(nil)
 
 func (c *Connector) ID() string   { return "github" }
 func (c *Connector) Name() string { return "GitHub" }
@@ -284,7 +284,7 @@ func (c *Connector) Manifest() connectorwire.Manifest {
 		Capabilities: []connectorwire.Capability{connectorwire.CapStatus, connectorwire.CapTools, connectorwire.CapActions, connectorwire.CapEvents,
 			connectorwire.CapInbox, connectorwire.CapSettle, connectorwire.CapArchive, connectorwire.CapLogin, connectorwire.CapOptions, connectorwire.CapThreads,
 			connectorwire.CapMachines},
-		Hosts: []string{c.cfg.host()},
+		Hosts: []string{c.cfg.Host()},
 		Kinds: []string{"review_requested", "mention", "team_mention", "assign", "author", "ci_failed"},
 	}
 }
@@ -399,7 +399,7 @@ func (c *Connector) explain(err error) (string, string) {
 	case errors.Is(err, ErrNoGh):
 		return connectorwire.StateNotSignedIn, m + " 上没有 gh：在那台机器上装好 gh 并运行 gh auth login"
 	case errors.Is(err, ErrNotSignedIn):
-		return connectorwire.StateNotSignedIn, m + " 上的 gh 没有登录 " + c.cfg.host() + "，或者登录存在钥匙串里、经 ssh 读不到：" +
+		return connectorwire.StateNotSignedIn, m + " 上的 gh 没有登录 " + c.cfg.Host() + "，或者登录存在钥匙串里、经 ssh 读不到：" +
 			"在那台机器上运行 gh auth login --insecure-storage"
 	case errors.Is(err, errUnauthorized):
 		return connectorwire.StateNotSignedIn, m + " 上的 gh 登录失效了：在那台机器上运行 gh auth login"
@@ -516,8 +516,3 @@ func (c *Connector) send(ctx context.Context, method, path string, hdr http.Head
 	}
 	return c.client.Do(req)
 }
-
-var tokenLike = lazyre.New(`\b(gh[opsur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|[0-9a-f]{40})\b`)
-
-// Scrub blanks anything that looks like a GitHub token in s (an error, a message): tokens never leave the hub.
-func Scrub(s string) string { return tokenLike.ReplaceAllString(s, "[token]") }

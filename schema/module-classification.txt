@@ -122,10 +122,12 @@ go server/internal/extension/serve core
 go server/internal/extension/sourcevalidate core
 go server/internal/extension/uistream core
 go server/internal/extmgr core
+go server/internal/extmgr/githubport core
 go server/internal/extmgr/mailport core
 go server/internal/extmgr/storage core
 go server/internal/extwire core
 go server/internal/fleetsoak core
+go server/internal/githubwire core
 go server/internal/herdr core
 go server/internal/herdrcore core
 go server/internal/host core

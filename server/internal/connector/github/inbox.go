@@ -275,7 +275,7 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, c
 		}
 		// Unread on GitHub, whatever the inbox makes of it below (a reason it leaves out, a muted repository).
 		unread[thread] = true
-		if kind == "" || o.muted(n.Repository.FullName) || kind == "ci_failed" && (!parsed || o.ignoredBranch(run.branch) || o.ci() == CIOff) {
+		if kind == "" || mutedIn(o, n.Repository.FullName) || kind == "ci_failed" && (!parsed || ignoredBranch(o, run.branch) || ciOf(o) == CIOff) {
 			continue
 		}
 		stamp := n.UpdatedAt.UTC().Format(time.RFC3339)

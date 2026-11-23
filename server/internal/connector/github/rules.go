@@ -32,26 +32,19 @@ const (
 // DefaultIgnoreBranches are branches automation pushes all day (a training loop's train/<timestamp>).
 var DefaultIgnoreBranches = []string{"train/*"}
 
-// InboxOptions are the user's choices for GitHub's inbox.
-type InboxOptions struct {
-	CI         string   `json:"ci,omitempty"`
-	MutedRepos []string `json:"muted_repos,omitempty"`
-	// IgnoreBranches are path.Match patterns of branches whose CI never comes in; nil is DefaultIgnoreBranches.
-	IgnoreBranches []string `json:"ignore_branches,omitempty"`
-}
-
-func (o InboxOptions) ci() string {
+// ciOf is o.CI, the default when empty.
+func ciOf(o InboxOptions) string {
 	if o.CI == "" {
 		return CIMine
 	}
 	return o.CI
 }
 
-func (o InboxOptions) muted(repo string) bool {
+func mutedIn(o InboxOptions, repo string) bool {
 	return slices.ContainsFunc(o.MutedRepos, func(m string) bool { return strings.EqualFold(m, repo) })
 }
 
-func (o InboxOptions) ignoredBranch(branch string) bool {
+func ignoredBranch(o InboxOptions, branch string) bool {
 	patterns := o.IgnoreBranches
 	if patterns == nil {
 		patterns = DefaultIgnoreBranches
@@ -64,7 +57,7 @@ func (o InboxOptions) ignoredBranch(branch string) bool {
 	return false
 }
 
-func (o InboxOptions) check() error {
+func checkOptions(o InboxOptions) error {
 	switch o.CI {
 	case "", CIDefaultBranch, CIMine, CIAll, CIOff:
 	default:
@@ -92,7 +85,7 @@ func (c *Connector) options() InboxOptions {
 // Options are the inbox's choices as the app shows them (defaults filled in).
 func (c *Connector) Options() json.RawMessage {
 	o := c.options()
-	o.CI = o.ci()
+	o.CI = ciOf(o)
 	if o.IgnoreBranches == nil {
 		o.IgnoreBranches = DefaultIgnoreBranches
 	}
@@ -110,7 +103,7 @@ func (c *Connector) SetOptions(raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &o); err != nil {
 		return fmt.Errorf("options: %v", err)
 	}
-	if err := o.check(); err != nil {
+	if err := checkOptions(o); err != nil {
 		return err
 	}
 	c.mu.Lock()
@@ -257,9 +250,9 @@ func (c *Connector) describeCI(ctx context.Context, n notification, run ciRun, m
 	switch {
 	case run.branch == def:
 		t.Tier, t.Why = connectorwire.TierAction, "规则：默认分支的 CI 失败"
-	case o.ci() == CIDefaultBranch:
+	case ciOf(o) == CIDefaultBranch:
 		return t, false, nil
-	case o.ci() == CIAll:
+	case ciOf(o) == CIAll:
 		t.Tier, t.Why = connectorwire.TierAction, "规则：CI 失败（设置为全部提醒）"
 	default: // mine
 		if pr, err = c.myOpenPR(ctx, repo, run.branch, me); err != nil {
@@ -421,15 +414,15 @@ func (c *Connector) over(thread string, o InboxOptions) string {
 	if r, branch, ok := splitCIThread(thread); ok {
 		repo = r
 		switch {
-		case o.ignoredBranch(branch):
+		case ignoredBranch(o, branch):
 			return "GitHub：自动分支的 CI 不提醒"
-		case o.ci() == CIOff:
+		case ciOf(o) == CIOff:
 			return "GitHub：CI 失败已设为不提醒"
 		}
 	} else if r, _, ok := strings.Cut(thread, "#"); ok {
 		repo = r
 	}
-	if o.muted(repo) {
+	if mutedIn(o, repo) {
 		return "GitHub：仓库已静音"
 	}
 	return ""
