@@ -1140,9 +1140,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // A windowed body mounts from IntersectionObserver, later in the frame than content-visibility's own layout. Give
   // the same compensation its old and new heights now, and advance the observer's baseline so it cannot apply them twice.
   const windowDrawn = useCallback((section: HTMLElement, was: number) => {
-    const now = section.getBoundingClientRect().height;
-    heights.current.set(section, now);
-    compensate([{ top: section.getBoundingClientRect().top, was, now }]);
+    const rect = section.getBoundingClientRect();
+    heights.current.set(section, rect.height);
+    compensate([{ top: rect.top, was, now: rect.height }]);
   }, [compensate]);
   useEffect(() => {
     const view = scroller.current;
