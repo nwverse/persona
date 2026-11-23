@@ -395,6 +395,9 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
 		}
 		argv = codexTaskArgs(codexExecutionArgs(argv, n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), st.Cwd, modelExecution{Model: st.Model, Effort: st.ModelEffort})), codexKeptTaskInstructions(st))
+		if src, ok := n.codexSource(id); ok {
+			argv = codexHomeArgv(argv, src.home, canonicalCodexHome(n.codexHome(), n.home))
+		}
 		if home, thread, ok := n.codexThread(id); ok && codexArchived(home, n.codexPath(id)) {
 			// Restore through Codex itself before its TUI can block the first prompt on an archive confirmation.
 			restored, err := n.codexArchive(ctx, id, home, thread, false)
@@ -469,6 +472,14 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	defer done()
 	n.bindPane(pane, id) // the pane runs this thread (kept in its state): no guessing another rollout for it
+	if src, ok := n.codexSource(id); ok && src.home != "" && n.codices != nil {
+		n.codices.mu.Lock()
+		if n.codices.byPane == nil {
+			n.codices.byPane = map[string]string{}
+		}
+		n.codices.byPane[pane] = src.home
+		n.codices.mu.Unlock()
+	}
 	wait, cancel := context.WithTimeout(ctx, codexResumeWait)
 	defer cancel()
 	for {

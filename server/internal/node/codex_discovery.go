@@ -22,9 +22,31 @@ type codexProcess struct {
 	// herdrSession is the herdr session pane is in ("" the default server; herdr.EnvSession): the registry writes the
 	// pane as the herdr host does (node herdrPaneIn).
 	herdrSession string
+	// desktop is true for the Codex desktop App GUI process or its bundled stdio app-server, not for CLI or unrelated
+	// app-server processes.
+	desktop bool
 }
 
 var codexHomePS = lazyre.New(`(?:^|\s)CODEX_HOME=(.*?)(?:\s+[A-Za-z_][A-Za-z_0-9]*=|$)`)
+
+// codexDesktopAppBundle reports whether exe is inside a Codex desktop App installation.
+func codexDesktopAppBundle(exe string) bool {
+	lower := strings.ToLower(strings.ReplaceAll(exe, `\`, "/"))
+	return strings.Contains(lower, "/codex.app/") ||
+		strings.Contains(lower, "/chatgpt.app/contents/resources/codex") ||
+		strings.Contains(lower, "openai.codex") ||
+		strings.HasSuffix(lower, "/codex-desktop") ||
+		lower == "codex-desktop"
+}
+
+// codexDesktopAppGUI reports whether exe is the Codex desktop App GUI process itself (not a CLI or terminal binary).
+func codexDesktopAppGUI(exe string) bool {
+	lower := strings.ToLower(strings.ReplaceAll(exe, `\`, "/"))
+	return strings.Contains(lower, "/codex.app/contents/macos/") ||
+		strings.HasSuffix(lower, "/codex-desktop") ||
+		lower == "codex-desktop" ||
+		(strings.Contains(lower, "openai.codex") && (strings.HasSuffix(lower, "/codex.exe") || strings.HasSuffix(lower, "/chatgpt.exe")))
+}
 
 func codexProcessArgs(pid int, args []string, env string) (codexProcess, bool) {
 	at := -1
@@ -37,7 +59,8 @@ func codexProcessArgs(pid int, args []string, env string) (codexProcess, bool) {
 	if len(args) == 0 {
 		return codexProcess{}, false
 	}
-	if at < 1 && progName(args[0]) != "codex" { // progName: codex.exe on Windows
+	gui := codexDesktopAppGUI(args[0])
+	if !gui && at < 1 && progName(args[0]) != "codex" { // progName: codex.exe on Windows
 		return codexProcess{}, false
 	}
 	p := codexProcess{pid: pid}
@@ -85,6 +108,9 @@ func codexProcessArgs(pid int, args []string, env string) (codexProcess, bool) {
 			break
 		}
 	}
+	// The Codex desktop App itself or its bundled private stdio app-server (not a shared --listen daemon or an
+	// unrelated CLI/assistant app-server).
+	p.desktop = gui || (at >= 1 && p.endpoint == "stdio://" && codexDesktopAppBundle(args[0]))
 	return p, true
 }
 
@@ -132,7 +158,7 @@ func scanCodexProcessesChecked() ([]codexProcess, bool) {
 	}
 	for _, line := range strings.Split(string(b), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 3 {
+		if len(fields) < 2 {
 			continue
 		}
 		pid, err := strconv.Atoi(fields[0])

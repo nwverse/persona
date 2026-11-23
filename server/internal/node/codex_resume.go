@@ -69,7 +69,31 @@ func (n *Node) codexResumableIn(ctx context.Context, id string, pass *codexListP
 	if n.codexRemoteConnecting(src.home) { // its app-server may own the thread once it is back
 		return false
 	}
-	if o := readCodexOrigin(src.path); o.desktop || o.exec || o.sub || o.parent != "" {
+	o := readCodexOrigin(src.path)
+	if o.exec || o.sub || o.parent != "" || o.guardian {
+		return false
+	}
+	if o.desktop {
+		// Refuse resuming a Codex App thread whenever the App bus is live or the App itself is running and could load it.
+		if pass.desktopAvailable(src.home) {
+			return false
+		}
+		if pass != nil {
+			if pass.desktopRunning(n, src.home) {
+				return false
+			}
+		} else if running, complete := n.codexAppRunningNow(src.home); running || !complete {
+			return false
+		}
+	}
+	var qm quickMeta
+	if st, err := pass.stat(src.path); err == nil {
+		qm = n.meta(src.path, st)
+	}
+	if n.codexEncryptedFailed(id, qm) {
+		return false
+	}
+	if o.desktop && n.codexTurnRunning(src, qm) {
 		return false
 	}
 	m := metaOf(src.home, src.path)
@@ -185,6 +209,15 @@ func (n *Node) resumeCodexThread(ctx context.Context, id, launcher, text string,
 	if path := n.codexPath(id); path != "" && n.codices != nil && n.codexHeldNow(path) {
 		return busy
 	}
+	if src, ok := n.codexSource(id); ok && codexAppOrigin(src) {
+		running, complete := n.codexAppRunningNow(src.home)
+		if running {
+			return takeoverRefusal("app_running")
+		}
+		if !complete {
+			return takeoverRefusal("unavailable")
+		}
+	}
 	if !complete {
 		src, ok := n.codexSource(id)
 		if !ok || src.path == "" {
@@ -194,6 +227,16 @@ func (n *Node) resumeCodexThread(ctx context.Context, id, launcher, text string,
 		st.Cwd = metaOf(src.home, src.path).cwd
 	}
 	err := n.resumeOtherWith(ctx, id, st, text, images)
+	if err != nil && encryptedCodexFailure(err.Error()) {
+		n.takeovers.mu.Lock()
+		if n.takeovers.failed == nil {
+			n.takeovers.failed = map[string]bool{}
+		}
+		n.takeovers.failed[id] = true
+		n.takeovers.mu.Unlock()
+		codexResumes.Delete(id)
+		return takeoverRefusal("continue_only")
+	}
 	if maybeDelivered(err) && n.paneOf(id) != "" { // a tab runs it (one never made holds nothing off)
 		codexResumes.Store(id, time.Now())
 	} else {

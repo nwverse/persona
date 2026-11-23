@@ -62,21 +62,50 @@ func takeoverRefusal(key string) error {
 
 func (n *Node) takeoverSource(id string) (codexSource, bool) {
 	src, ok := n.codexSource(id)
-	if !ok || src.path == "" || src.thread != id || n.codexBlocked(id) ||
-		n.isAssistantSession(id) || n.ownedAssistantSource(src.thread) {
+	if !ok || n.codexBlocked(id) || n.isAssistantSession(id) || n.ownedAssistantSource(src.thread) {
 		return codexSource{}, false
 	}
 	if _, live := n.agent(id); live {
 		return codexSource{}, false
 	}
-	o := readCodexOrigin(src.path)
-	if !o.cli || o.desktop || o.exec || o.sub || o.parent != "" {
+	o := codexThreadOrigin(src)
+	if (!o.cli && !o.desktop) || o.exec || o.sub || o.parent != "" || o.guardian {
 		return codexSource{}, false
+	}
+	if o.cli && (src.path == "" || src.thread != id) {
+		return codexSource{}, false
+	}
+	if o.desktop && src.path == "" {
+		if _, hasAppRow := codexAppThreadOf(src); !hasAppRow {
+			return codexSource{}, false
+		}
 	}
 	if _, _, err := n.codexOwner(id); !errors.Is(err, errCodexNoOwner) {
 		return codexSource{}, false
 	}
 	return src, true
+}
+
+func (n *Node) codexEncryptedFailed(id string, m quickMeta) bool {
+	n.takeovers.mu.Lock()
+	failed := n.takeovers.failed[id]
+	n.takeovers.mu.Unlock()
+	return failed || encryptedCodexFailure(m.turnErr.code+" "+m.turnErr.text)
+}
+
+func codexHomeArgv(argv []string, srcHome, defaultHome string) []string {
+	if srcHome == "" || (defaultHome != "" && srcHome == defaultHome) {
+		return argv
+	}
+	for _, w := range argv {
+		if strings.HasPrefix(w, "CODEX_HOME=") {
+			return argv
+		}
+		if !strings.Contains(w, "=") {
+			break
+		}
+	}
+	return append([]string{"CODEX_HOME=" + srcHome}, argv...)
 }
 
 func (n *Node) takeoverHost(ctx context.Context) (context.Context, error) {
@@ -95,20 +124,54 @@ func (n *Node) takeoverHost(ctx context.Context) (context.Context, error) {
 
 // The listing is advisory. Preparation and commit both inspect the actual writer again.
 func (n *Node) codexTakeoverRow(id string, src codexSource, m quickMeta, running bool) *proto.CodexTakeover {
-	o := readCodexOrigin(src.path)
-	if src.thread != id || src.path == "" || !o.cli || o.desktop || o.exec || o.sub || o.parent != "" {
+	return n.codexTakeoverRowIn(id, src, m, running, nil)
+}
+
+func (n *Node) codexTakeoverRowIn(id string, src codexSource, m quickMeta, running bool, pass *codexListPass) *proto.CodexTakeover {
+	o := codexThreadOrigin(src)
+	if (!o.cli && !o.desktop) || o.exec || o.sub || o.parent != "" || o.guardian {
 		return nil
+	}
+	if o.cli && (src.thread != id || src.path == "") {
+		return nil
+	}
+	if o.desktop {
+		if running {
+			return nil
+		}
+		if src.path == "" {
+			t, ok := codexAppThreadOf(src)
+			if !ok || t.Cwd == "" || n.codexAppHistoryPath(src, pass) == "" {
+				return nil
+			}
+		} else if m.cwd == "" && metaOf(src.home, src.path).cwd == "" {
+			return nil
+		}
 	}
 	if _, err := n.takeoverHost(context.Background()); err != nil {
 		return nil
 	}
-	state := &proto.CodexTakeover{Running: running, CanResume: true}
-	n.takeovers.mu.Lock()
-	failed := n.takeovers.failed[id]
-	n.takeovers.mu.Unlock()
+	state := &proto.CodexTakeover{Running: running, CanResume: true, AppOwned: o.desktop}
 	switch {
-	case failed || encryptedCodexFailure(m.turnErr.code+" "+m.turnErr.text):
+	case n.codexEncryptedFailed(id, m):
 		state.CanResume, state.Reason = false, "encrypted_context"
+	case o.desktop:
+		if pass != nil {
+			if pass.desktopRunning(n, src.home) {
+				state.CanResume, state.Reason = false, "app_running"
+			}
+		} else {
+			appRunning, complete := n.codexAppRunningNow(src.home)
+			switch {
+			case appRunning:
+				state.CanResume, state.Reason = false, "app_running"
+			case !complete:
+				state.CanResume, state.Reason = false, "unavailable"
+			}
+		}
+		if state.CanResume && (src.path == "" || src.thread != id || n.codexTurnRunning(src, m)) {
+			state.CanResume, state.Reason = false, "unavailable"
+		}
 	case running && runtime.GOOS == "windows":
 		state.CanResume, state.Reason = false, "unavailable"
 	}
@@ -133,34 +196,62 @@ func (n *Node) prepareCodexTakeover(ctx context.Context, id string) (*codexTakeo
 	if _, err := n.takeoverHost(ctx); err != nil {
 		return nil, err
 	}
-	st, err := os.Stat(src.path)
-	if err != nil {
-		return nil, err
+	var m quickMeta
+	transcriptPath := src.path
+	cwd := ""
+	if transcriptPath != "" {
+		st, err := os.Stat(transcriptPath)
+		if err != nil {
+			return nil, err
+		}
+		m = n.meta(transcriptPath, st)
+		cwd = m.cwd
+	} else if t, hasAppRow := codexAppThreadOf(src); hasAppRow {
+		_ = n.refreshCodexAppHistory(id)
+		transcriptPath = n.codexAppHistoryPath(src, nil)
+		cwd = t.Cwd
 	}
-	m := n.meta(src.path, st)
-	state := n.codexTakeoverRow(id, src, m, false)
-	if state == nil || m.cwd == "" {
+	if transcriptPath == "" || cwd == "" {
 		return nil, takeoverRefusal("unsupported")
 	}
-	writers, err := n.takeoverWriters(src)
-	if err != nil {
-		state.CanResume, state.Reason = false, "unavailable"
+	state := n.codexTakeoverRowIn(id, src, m, false, nil)
+	if state == nil {
+		return nil, takeoverRefusal("unsupported")
 	}
-	state.Running = len(writers) > 0
-	if state.Running && runtime.GOOS == "windows" {
-		state.CanResume, state.Reason = false, "unavailable"
-	}
-	if state.Running && state.CanResume && n.takeovers.stop == nil {
-		if _, err := prepareCodexWriterQuit(ctx, writers[0]); err != nil {
+	var writers []codexWriter
+	if state.AppOwned {
+		if src.path != "" {
+			var err error
+			writers, err = n.takeoverWriters(src)
+			if err != nil || len(writers) > 0 || n.codexTurnRunning(src, m) || n.codexRemoteConnecting(src.home) {
+				if state.CanResume {
+					state.CanResume, state.Reason = false, "unavailable"
+				}
+				writers = nil
+			}
+		}
+	} else {
+		var err error
+		writers, err = n.takeoverWriters(src)
+		if err != nil {
 			state.CanResume, state.Reason = false, "unavailable"
 		}
+		state.Running = len(writers) > 0
+		if state.Running && runtime.GOOS == "windows" {
+			state.CanResume, state.Reason = false, "unavailable"
+		}
+		if state.Running && state.CanResume && n.takeovers.stop == nil {
+			if _, err := prepareCodexWriterQuit(ctx, writers[0]); err != nil {
+				state.CanResume, state.Reason = false, "unavailable"
+			}
+		}
 	}
-	recent, err := codexContinuation(src.path)
+	recent, err := codexContinuation(transcriptPath)
 	if err != nil {
 		return nil, err
 	}
-	p := codexTakeoverPlan{CodexTakeover: *state, Token: newUUID(), Cwd: m.cwd, TranscriptPath: src.path,
-		ContinuationPrompt: prompts.RenderCodexContinuation(prompts.CodexContinuation{Path: src.path, Messages: recent}),
+	p := codexTakeoverPlan{CodexTakeover: *state, Token: newUUID(), Cwd: cwd, TranscriptPath: transcriptPath,
+		ContinuationPrompt: prompts.RenderCodexContinuation(prompts.CodexContinuation{Path: transcriptPath, Messages: recent}),
 		id:                 id, source: src, writers: writers, expires: time.Now().Add(takeoverPlanTTL)}
 	n.takeovers.mu.Lock()
 	defer n.takeovers.mu.Unlock()
@@ -199,18 +290,43 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 		return nil, takeoverRefusal("expired")
 	}
 	if !p.CanResume {
+		if p.Reason == "app_running" {
+			return nil, takeoverRefusal("app_running")
+		}
 		return nil, takeoverRefusal("continue_only")
+	}
+	if p.AppOwned && !confirm {
+		return nil, takeoverRefusal("app_confirmation_required")
 	}
 	if p.Running && !confirm {
 		return nil, takeoverRefusal("confirmation_required")
 	}
 	src, ok := n.takeoverSource(id)
-	if !ok || src != p.source {
+	if !ok || src != p.source || src.path == "" || src.thread != id {
 		return nil, takeoverRefusal("changed")
 	}
 	ctx, err = n.takeoverHost(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if p.AppOwned {
+		if n.codexRemoteConnecting(src.home) {
+			return nil, takeoverRefusal("writer_busy")
+		}
+		appRunning, complete := n.codexAppRunningNow(src.home)
+		if appRunning {
+			return nil, takeoverRefusal("app_running")
+		}
+		if !complete {
+			return nil, takeoverRefusal("unavailable")
+		}
+		st, err := os.Stat(src.path)
+		if err != nil {
+			return nil, takeoverRefusal("changed")
+		}
+		if n.codexTurnRunning(src, n.meta(src.path, st)) {
+			return nil, takeoverRefusal("writer_busy")
+		}
 	}
 	current, err := n.takeoverWriters(src)
 	if err != nil || !slices.Equal(current, p.writers) {
@@ -224,6 +340,15 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	argv, err := shared(ctx, src)
 	if err != nil {
 		return nil, err
+	}
+	if p.AppOwned {
+		appRunning, complete := n.codexAppRunningNow(src.home)
+		if appRunning {
+			return nil, takeoverRefusal("app_running")
+		}
+		if !complete {
+			return nil, takeoverRefusal("unavailable")
+		}
 	}
 	// Daemon startup may take a while. Never signal a replacement writer with an old confirmation.
 	if current, err = n.takeoverWriters(src); err != nil || !slices.Equal(current, p.writers) {
@@ -258,6 +383,7 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	if err != nil {
 		return nil, err
 	}
+	argv = codexHomeArgv(argv, src.home, canonicalCodexHome(n.codexHome(), n.home))
 	// A new tab is intentional: do not adopt or type into the source terminal.
 	st := sessionState{Launcher: "codex", Cwd: p.Cwd}
 	err = n.resumeCodex(ctx, launch, id, st, argv, "", ws, n.resumeTabName(id))
