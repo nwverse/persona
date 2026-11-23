@@ -131,7 +131,8 @@ type report struct {
 }
 
 func say(format string, args ...any) {
-	fmt.Printf("%s slowlinksoak: %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
+	// In UTC: the machine's time zone is not read (internal/tzguard).
+	fmt.Printf("%sZ slowlinksoak: %s\n", time.Now().UTC().Format("15:04:05"), fmt.Sprintf(format, args...))
 }
 
 func run(ctx context.Context, o *options) (*report, error) {
