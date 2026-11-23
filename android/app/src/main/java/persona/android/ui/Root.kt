@@ -964,7 +964,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         fullWindowSearch = regular || merged,
                         shadedPlace = if (merged) {
                             val root = if (agentDrill) personaRoot else visibleRoot
-                            if (root == AssistantRoute && sidebar.healthInFront) AssistantSidebarShade.Health else sidebarShadeKey(root)
+                            if (root == AssistantRoute && sidebar.healthInFront) AssistantSidebarShade.Health
+                            else if (root == AssistantRoute && sidebar.spaceInFront != null) sidebar.spaceInFront!!.let(AssistantSidebarShade::space)
+                            else sidebarShadeKey(root)
                         } else visibleSidebarShade(
                             regular = regular,
                             selected = selected,
