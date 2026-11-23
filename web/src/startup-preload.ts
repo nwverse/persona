@@ -774,7 +774,10 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // And 12 B for the Agents list's Filter switch (#13727): the idle Palette's "Filter Agents list" row (palette/
 // SavedSearchesDialog.tsx) draws only while Settings > Agents has the list's Filter on (useShowFilter), which is the
 // tier's whole growth: this tree merged with main measured 46,065 B against the 46,063 B budget, 2 B over. 10 B of room on top.
-export const IDLE_TIER_BUDGET = 46_075;
+// And 26 B for the stalled-background hint (#13744): the idle sidebar rows (SidebarRows.tsx) draw "Background commands
+// quiet for N h" under a Working row whose background work has stalled (ui/BackgroundStallHint.tsx). Main 7b023aa70 with
+// #13842 sends 46,091 B at idle, 16 B over; 10 B of room on top.
+export const IDLE_TIER_BUDGET = 46_101;
 
 const gzip = promisify(gzipCompress);
 

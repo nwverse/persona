@@ -534,7 +534,7 @@
   },
   {
     "name": "agent_send",
-    "description": "Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Recorded non-user stops (including quota/capacity errors) allow resume. User, exit or unknown stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nGive task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.\n\nUse `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.",
+    "description": "Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Any stop but the user's allows resume, an unknown one too. User or exit stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nGive task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.\n\nUse `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1027,7 +1027,7 @@
   },
   {
     "name": "interaction_answer",
-    "description": "Answer another agent's card for the user, in their place, when they said what to answer or told you to decide. Answer each question by its own wording with an option label it offers; no free text (use agent_send). A multi-select takes an array of labels. A card a 督办 message handed you (a task you supervise) is yours to decide: answer a question, or allow or deny a tool permission or a plan with allow, giving reason; it is kept as the task's decision, never as the user's. Forms, secrets and approvals that send or reply in the user's name, spend money or delete are the user's: ask_escalate them. Never other approvals, terminal dialogs or the assistant's own questions.",
+    "description": "Answer another agent's card for the user when they said what to answer or told you to decide: each question by its own wording with an option label it offers (multi-select: an array); no free text (use agent_send). A card a 督办 message handed you is yours: answer a question or terminal dialog (an option's label or number), or allow/deny a permission, plan or dialog's Yes/No with allow, giving reason; kept as the task's decision, not the user's. Forms, secrets, approvals that send or reply in the user's name, spend money or delete, and folder-trust or Bypass Permissions dialogs are the user's: ask_escalate them. Never other approvals or the assistant's own questions.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2635,7 +2635,7 @@
   },
   {
     "name": "task_review",
-    "description": "accepted closes work after the delivery gate (default delivery_gate=merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback to that Agent. If opted in at Start, accepted done cleans up the idle tab unless user_check. Report closed/skipped/pending; never close the tab yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new cap at 10 total); accept with a brief note instead of bouncing for low-ROI edge cases or style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits and needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), include each done_when criterion once in checks (met=true, nonblank evidence), even with user_check. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts can omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers or Agent claims.\n\nGive accepted outcome/reason/link. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline. Irreversible or visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.",
+    "description": "accepted closes work after the delivery gate (default delivery_gate=merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback to that Agent. If opted in at Start, accepted done cleans up the idle tab unless user_check. Report closed/skipped/pending; never close the tab yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new cap at 10 total); accept with a brief note instead of bouncing for low-ROI edge cases or style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits and needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), include each done_when criterion once in checks (met=true, nonblank evidence), even with user_check. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts can omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers or Agent claims.\n\nGive accepted outcome/reason/link. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline. Irreversible or visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2760,7 +2760,7 @@
               }
             }
           },
-          "description": "needs_user (required): 2 to 4 options the user chooses from, the recommended one first"
+          "description": "needs_user (required): 2–4 options, recommended first"
         },
         "cost_of_waiting": {
           "type": "string",
@@ -2768,15 +2768,15 @@
         },
         "question_quote": {
           "type": "string",
-          "description": "needs_user: quote the Agent's original question verbatim if reason paraphrases it, so the hub can check for an existing reply"
+          "description": "needs_user: the Agent's question verbatim when reason paraphrases it (hub checks for an existing reply)"
         },
         "can_wait": {
           "type": "boolean",
-          "description": "needs_user, optional: defer to next daily briefing (no deadline \u003c12h, low cost_of_waiting); no push/card, listed in Needs you. Ignored for irreversible/visible_to_others, deadline \u003c12h, reversible=false, or no briefing with facts due within 24h and \u003e=12h before deadline; default false"
+          "description": "needs_user, optional: defer to next daily briefing (low cost, nobody blocked today, no deadline \u003c12h); no push/card, listed in Needs you. Ignored for irreversible/visible_to_others, deadline \u003c12h, reversible=false, or no briefing with facts due within 24h and \u003e=12h before deadline; default false"
         },
         "deadline": {
           "type": "string",
-          "description": "needs_user, optional: until when the decision waits, a duration (\"4h\", \"90m\") or an RFC 3339 time, 1 minute to 30 days ahead; needs reversible. Default: 24h and reversible, except for why_owner irreversible and visible_to_others, which have none"
+          "description": "needs_user, optional: how long the decision waits, duration (\"4h\") or RFC 3339 time, 1m–30d ahead; needs reversible. Default 24h reversible; none for why_owner irreversible/visible_to_others"
         },
         "also_done": {
           "type": "array",
@@ -2785,6 +2785,10 @@
             "type": "string"
           },
           "description": "accepted, optional: what was done beyond the task's brief (one line each); the task's page lists it after the criteria"
+        },
+        "withdraw_needs_user": {
+          "type": "boolean",
+          "description": "accepted only, task in needs_user: its supervisor or main takes it back and closes it silently (no card/push)"
         },
         "user_check": {
           "type": "boolean",

@@ -31,6 +31,8 @@ export interface Machine {
   deploy_reason?: string;
   deploy_phase?: "waiting_idle" | "transferring" | "restarting" | "confirming";
   deploy_error?: string;
+  /** Where the owning assistant obtained the program for this deployment, when known. */
+  deploy_source?: "hub_package" | "local_build";
   system?: { name?: string; model?: string; cpu?: string; cores?: number; memory?: number };
   /** The terminal engine its sessions come from (herdr when absent); `engines`: what its node found, empty while offline. */
   engine?: string;
@@ -456,6 +458,9 @@ export interface Session {
   /** Working only because of background commands that only wait (sleep, a check loop, gh … --watch; #6045): shown
    *  as "Waiting in the background", lighter, and not counted as Working. An older hub never sends it. */
   background_waiting?: boolean;
+  /** Working on background commands that have used no CPU and written no output since this time (#13744; a known
+   *  worker, set once that has lasted ten minutes, omitted otherwise). The state is still Working: a hint, not a state. */
+  background_stalled_since?: string;
   rev?: number;
   suggestion?: string;
   /** The suggestion names a command, a path, a link, a secret-looking string or a risky action (#4644): it is filled
