@@ -140,7 +140,8 @@ Because a missing flag means off, every flag a client gates on has to be announc
 
 ### The switch
 
-- **At build time**: the build tag `persona_without_<id>` leaves one module out, `persona_core_only` leaves every module
+- **At build time**: the build tag `persona_without_<id>` leaves one module out (a `-` in the id is `_` in the tag, which
+  Go's build constraints need: `persona_without_screen_share`), `persona_core_only` leaves every module
   out. `go build -tags persona_core_only ./...` must pass. `scripts/ci/server.sh build` builds both and runs, with each
   tag, the module and kernel tests and a `-run` subset of `internal/assistant` (Brief, Module, Setting, Routine, Facts,
   ScheduledConfiguration, NorthStar, Accept, Later, Golden): the assistant's tests of the briefing itself skip
@@ -283,6 +284,9 @@ needs in its own terms:
 
 - a device command: `server/internal/nodecmd/commandport` (`AddCommand`, `LookupCommand`). `nodecmd` runs a command
   it does not know itself if a module provides it, and its usage lists the provided commands (`CommandUsage`).
+- a live screen's sessions (#6398): `server/internal/node/screenport` (`Provide`, `New`, the `Links` and `Session`
+  interfaces). Without them the node offers no session, and a live screen is the plain relayed stream the phone gets
+  when it asks for none.
 
 Such a module keeps its manager side small: the module's root package (`internal/modules/<id>`) holds only its
 manifest and a `modapi.Module` that registers nothing, and `internal/modules/all` lists it, so a hub announces its flag
@@ -297,6 +301,11 @@ The modules of this kind:
 
 - `office` (`server/internal/modules/office`, #14258): `personad office …`, the Office files generator
   (`docs/assistant/office.md`), in `internal/modules/office/office`.
+- `screen-share` (`server/internal/modules/screen-share`, #14258): the node's screen sessions
+  (`internal/modules/screen-share/screenlink`, the relays and direct routes of `docs/extensions/computer-use.md`) and
+  the measuring tool `vncbench`. Its manifest's flag `module.screen-share` replaces the id's place in
+  `modapi.ClientModules`, so a hub whose manager lacks the module turns the clients' screen sharing off. The node's
+  `internal/screen` is not part of it: it reads Agents' terminal panes (dialogs, the input box, rewind) and is core.
 
 ### Guards
 

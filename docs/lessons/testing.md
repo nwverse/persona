@@ -1281,7 +1281,7 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - A result from a loaded machine can reverse once it is quiet: at a load of ~400, asking for VNC updates early looked
   239 ms faster for typing (3 of 6 pairs); at 25–80 it was slower in all 5 pairs (median +81 ms). Decide on runs made at
   a low load, interleaved (ABBA), and say the load next to the numbers.
-- Driving the real desktop (`server/cmd/vncbench run`): other lanes' windows and dialogs open on top of yours at any
+- Driving the real desktop (`server/internal/modules/screen-share/vncbench run`): other lanes' windows and dialogs open on top of yours at any
   time. Send a click, a wheel notch or a drag only where your own page is seen on the screen (vncbench's target
   checker), type only while your page says it has the keyboard, and bring your browser forward with `open -a`, never
   by clicking. A window's rounded corner clips a marker drawn in it: keep markers inset.
