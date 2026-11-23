@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/connector/github"
 	"github.com/nwverse/persona/server/internal/connector/imessage"
 	"github.com/nwverse/persona/server/internal/extension/denohost"
+	"github.com/nwverse/persona/server/internal/githubwire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lark"
 	"github.com/nwverse/persona/server/internal/managerconf"
@@ -26,10 +26,10 @@ type Config struct {
 	Lark lark.Config `json:"lark"`
 	// LarkGate and ConnectorGate: the rules for the assistant's Feishu writes and the connectors' writes
 	// (internal/connector/gate.go).
-	LarkGate      []proto.LarkRule `json:"lark_gate,omitempty"`
-	ConnectorGate []connector.Rule `json:"connector_gate,omitempty"`
-	GitHub        *github.Config   `json:"github,omitempty"`
-	IMessage      *imessage.Config `json:"imessage,omitempty"`
+	LarkGate      []proto.LarkRule   `json:"lark_gate,omitempty"`
+	ConnectorGate []connector.Rule   `json:"connector_gate,omitempty"`
+	GitHub        *githubwire.Config `json:"github,omitempty"`
+	IMessage      *imessage.Config   `json:"imessage,omitempty"`
 	// Google and Microsoft: mail's sign-ins (docs/extensions/mail.md).
 	Google                  GoogleConfig      `json:"google"`
 	Microsoft               MicrosoftConfig   `json:"microsoft,omitempty"`

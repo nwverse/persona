@@ -1,10 +1,16 @@
-# The core services a module may import (docs/architecture/core-and-modules.md "Guards"): "<module id> <core package>",
-# one module and one package a line, exactly (no wildcard, no prefix). Each is a known debt, not a precedent: a module
-# reaches the core through internal/modapi, its seam and the contracts and leaf libraries, and a line here goes away when
-# the core serves what the module needs through a port. TestModuleServicesAreUsed fails on a line no module needs any
-# more, so the list only shrinks unless a reviewer adds a line. Never add internal/assistant, internal/hub or
-# internal/extmgr.
+# Known exceptions to TestModulesUseOnlyTheSPI, shrink-only debt (docs/architecture/core-and-modules.md "Guards"): a
+# module that still imports a stateful core package, as "<module id> <core package>" for any of its files or
+# "<module id> (test) <core package>" for its tests only. A line no import needs fails the test. Never add one to make
+# a new import pass when a contract, a leaf library or a port would do; no wildcards.
 #
-# recording keeps the recordings' storage in the knowledge base (the kb.Recording model and its Engine and Store), which
-# stays in the core until kb exposes a recording port (#13407).
+# The GitHub connector's tests run it through the connector framework as the manager does: the registry and the
+# write gate (chatrule_test.go, gate_args_test.go), the connector-protocol conformance suite (conformance_test.go) and
+# the subscription service (inbox_things_test.go). They use the module's unexported fixtures, so they stay in the
+# module until those fixtures are a stand-in (internal/modules/github/githubtest) a core test can use (#13936).
+github (test) internal/connector
+github (test) internal/connector/conformance
+github (test) internal/subscriptions
+#
+# Meeting recording keeps the recordings' storage in the knowledge base (the kb.Recording model with its Engine and
+# Store), which stays in the core until kb offers a recording port (#13407).
 recording internal/kb

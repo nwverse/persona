@@ -214,6 +214,32 @@ the core's trees until `prompt_sections` and `i18n_namespaces` are served. `scri
 tests the core, the modules, the guards and the manager's mail, inbox, connector and settings tests with
 `persona_core_only` and with `persona_without_mail`.
 
+The GitHub connector (`server/internal/modules/github`, #13936) is a connector the extension manager registers. It is
+written against the connector SPI, the contract `server/internal/connectorwire` (the `Connector` interface, its
+`Manifest` and capability interfaces; `internal/connector`, the framework that runs connectors, aliases them), and the
+manager reaches it through the contract `server/internal/githubwire` (manager.json's `github` section, the token
+source and its errors, the CI-check snapshot, and the `Connector` interface of the methods the manager calls) and the
+port `server/internal/extmgr/githubport`, which the module's file in `server/internal/modules/all` fills with
+`github.Provider`. The assistant's CI checks read `githubwire.PRCheckSnapshot` from the manager, so they need no
+module. With the module left out (`persona_without_github`, `persona_core_only`) the manager registers no built-in
+GitHub connector: it is not listed, `/api/v1/connectors/github/auth` answers 404, no `github_*` tool is offered, and
+an extension's GitHub connector can still take the id (`TestManagerWithoutGitHub`). Its prompts
+(`server/internal/prompts/mcp/github`, `prompts/inbox/kinds/github.md`) stay in the core's trees as mail's do.
+`scripts/ci/server.sh build` runs "Builds without the connector modules" with both tags, and
+`scripts/ci/core-only-smoke.py` checks that a core-only hub lists no GitHub connector.
+Its `module.json` declares `feature` = `module.github`, so a hub whose manager loaded the module announces it. The
+run-time `modules` switch drops the flag, but the extension manager still registers the connector until it reads the
+switch too (only a build without the module leaves the connector out today).
+
+The `lark` module (#13404) is of the same kind as mail: code the manager runs in process, which the extension host
+drives. The core declares what it needs of the Feishu / Lark bot's client in `server/internal/botport` (the client's REST calls,
+the long connection, the device-code registration, as interfaces over the pure types of `server/internal/botcard`, a
+leaf library the core's cards are built with), and `server/internal/modules/all/lark.go` provides it from
+`server/internal/modules/lark/feishubot`. Without the module `botport.Available()` is false: the bot cannot be bound,
+registered or started (the setting answers that it is not part of this build), and the extension host's tests of the
+bot skip (`needsLarkModule`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
+`persona_without_lark`.
+
 ### Guards
 
 `server/internal/archguard` keeps the boundary. Both module guards read the import lines of every `.go` file under
@@ -230,13 +256,13 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
   packages, `modapi` and the other contract packages (pure, so nothing more comes with them), the leaf libraries, its
   own packages, and the modules its `module.json` needs. A module it only wants may be left out of the build (`persona_without_<id>`), so it is reached
   through the kernel, never imported. Each module directory has a `module.json` whose id is the directory's name.
-- **`TestModuleServicesAreUsed`**: `testdata/module_services.txt` declares the core services a module may import, one
-  `<module id> <core package>` pair a line, exactly (no wildcard, no prefix, never a module), and
-  `TestModulesUseOnlyTheSPI` allows exactly those pairs. A pair no file of its module imports any more fails, so the
-  list only shrinks unless a reviewer adds a line. Each pair is a known debt, not a precedent: the only one is
-  `recording internal/kb` (the recordings' storage, the `kb.Recording` model with its `Engine` and `Store`, stays in
-  the knowledge base until it offers a recording port), and the assistant, the hub and the extension host are never
-  listed.
+  Known exceptions are debt in `testdata/module_services.txt`, which only shrinks (a stale line fails): `<module id>
+  <core package>` for any of the module's files, `<module id> (test) <core package>` for its tests only, no wildcards.
+  The lines are the GitHub connector's tests, which run it through the connector registry and gate, the conformance
+  suite and the subscription service with the module's own fixtures, and `recording internal/kb`: the recordings'
+  storage (the `kb.Recording` model with its `Engine` and `Store`) stays in the knowledge base until it offers a
+  recording port. A declared core-service dependency is a known debt, not a precedent: the assistant, the hub and the
+  extension host are never listed.
 - **`TestLibrariesAreLeaves`**: the leaf libraries (`testdata/libraries.txt`) are the core's packages a module may use
   that hold no state and own no feature (localization, the extension SDK, small helpers). Each depends only on the
   standard library, third-party packages, the contracts and the other libraries, so a module that uses one reaches no

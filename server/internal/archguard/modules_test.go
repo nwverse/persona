@@ -137,13 +137,13 @@ type moduleManifest struct {
 // moduleImportProblems checks the modules under root/internal/modules: each directory but all has a module.json whose
 // id is its name, and every file in it (tests and every build constraint included) imports only the standard library,
 // third-party packages, internal/modapi and the other contract packages, the leaf libraries (testdata/libraries.txt),
-// its own packages, the modules its manifest needs, and the core services declared for it (services: the pairs of
-// testdata/module_services.txt, "<module id> <core package>"). A module it only wants may be left out of the build
-// (persona_without_<id>), so it is reached through the kernel, never imported. used are the service pairs some file
-// imports.
+// its own packages, and the modules its manifest needs. A module it only wants may be left out of the build
+// (persona_without_<id>), so it is reached through the kernel, never imported. The known exceptions (services, from
+// testdata/module_services.txt) are "<module id> <core package>" for any file of the module and "<module id> (test)
+// <core package>" for its tests only; used says which were needed.
 func moduleImportProblems(t *testing.T, root string, files []goFile, contracts, libraries, services []string) (problems []string, checked int, used map[string]bool) {
-	t.Helper()
 	used = map[string]bool{}
+	t.Helper()
 	entries, err := os.ReadDir(filepath.Join(root, modulesDir))
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,9 @@ func moduleImportProblems(t *testing.T, root string, files []goFile, contracts, 
 						"outside the server a module uses only the listed contracts and libraries")
 				case slices.Contains(contracts, rel), slices.Contains(libraries, rel),
 					slices.ContainsFunc(allowed, func(a string) bool { return under(rel, a) }):
-				case slices.Contains(services, id+" "+rel): // a declared core-service dependency (exactly the package)
+				case f.test && slices.Contains(services, id+" (test) "+rel):
+					used[id+" (test) "+rel] = true
+				case slices.Contains(services, id+" "+rel):
 					used[id+" "+rel] = true
 				default:
 					problems = append(problems, "module "+id+" ("+f.pkg+"/"+f.name+") imports "+rel+": a module reaches the core only "+
@@ -197,40 +199,22 @@ func moduleImportProblems(t *testing.T, root string, files []goFile, contracts, 
 	return problems, checked, used
 }
 
-// A module uses only the module API (moduleImportProblems).
+// A module uses only the module API (moduleImportProblems). The known exceptions (testdata/module_services.txt) only
+// shrink: a line no import needs fails.
 func TestModulesUseOnlyTheSPI(t *testing.T) {
 	root := filepath.Join("..", "..")
-	problems, checked, _ := moduleImportProblems(t, root, scanGoFiles(t, root), readList(t, "contracts.txt"), readList(t, "libraries.txt"),
-		readList(t, "module_services.txt"))
+	services := readList(t, "module_services.txt")
+	problems, checked, used := moduleImportProblems(t, root, scanGoFiles(t, root), readList(t, "contracts.txt"), readList(t, "libraries.txt"), services)
 	for _, p := range problems {
 		t.Errorf("%s; %s", p, modulesDoc)
 	}
+	for _, s := range services {
+		if !used[s] {
+			t.Errorf("testdata/module_services.txt lists %q, which no module file needs: delete the line", s)
+		}
+	}
 	if checked == 0 {
 		t.Error("no module under internal/modules: the guard checks nothing")
-	}
-}
-
-// The declared core-service dependencies (testdata/module_services.txt) are known debt, not a way in: each line is one
-// module and one core package, exactly (no prefix, no wildcard), of a module that exists, and some file of that module
-// imports that package. A line no module needs any more fails, so the list only shrinks unless a reviewer adds one.
-func TestModuleServicesAreUsed(t *testing.T) {
-	root := filepath.Join("..", "..")
-	services := readList(t, "module_services.txt")
-	_, _, used := moduleImportProblems(t, root, scanGoFiles(t, root), readList(t, "contracts.txt"), readList(t, "libraries.txt"), services)
-	for _, line := range services {
-		id, pkg, ok := strings.Cut(line, " ")
-		switch {
-		case !ok || strings.Contains(pkg, " ") || strings.ContainsAny(line, "*.") || !strings.HasPrefix(pkg, "internal/"):
-			t.Errorf("testdata/module_services.txt: %q is not \"<module id> internal/<package>\" (one package, no wildcard)", line)
-		case strings.HasPrefix(pkg, modulesDir+"/"):
-			t.Errorf("testdata/module_services.txt: %q names a module: a module imports another only when its module.json needs it", line)
-		case !used[line]:
-			if _, err := os.Stat(filepath.Join(root, modulesDir, id, "module.json")); err != nil {
-				t.Errorf("testdata/module_services.txt: %q names no module", line)
-			} else {
-				t.Errorf("testdata/module_services.txt lists %q, which module %s no longer imports: delete the line", line, id)
-			}
-		}
 	}
 }
 
@@ -272,6 +256,13 @@ func TestModuleGuardsSeeEveryBuild(t *testing.T) {
 	if checked != 2 || len(problems) != 2 || !strings.Contains(problems[0]+problems[1], "imports internal/assistant") ||
 		!strings.Contains(problems[0]+problems[1], "imports internal/modules/voice") {
 		t.Fatalf("checked %d modules, problems %q", checked, problems)
+	}
+	// A known exception for a module's tests does not cover its other files; one for any file does.
+	if p, _, used := moduleImportProblems(t, root, files, []string{"internal/modapi"}, nil, []string{"briefing (test) internal/assistant"}); len(p) != 2 || len(used) != 0 {
+		t.Fatalf("a tests-only exception: problems %q, used %v", p, used)
+	}
+	if p, _, used := moduleImportProblems(t, root, files, []string{"internal/modapi"}, nil, []string{"briefing internal/assistant"}); len(p) != 1 || !used["briefing internal/assistant"] {
+		t.Fatalf("an exception for any file: problems %q, used %v", p, used)
 	}
 	if p := standInProblems(files, []string{"internal/modapi"}, nil); len(p) != 1 || !strings.Contains(p[0], "voicetest") {
 		t.Fatalf("stand-in problems %q", p)

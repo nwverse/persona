@@ -282,6 +282,7 @@ func (s *Service) ensureTodosLoaded(ctx context.Context) error {
 	if loaded {
 		s.backfillPlanSupervisors(ctx)
 		s.restoreSupervisePending(ctx)
+		s.migrateOwnerWaits(ctx) // waits earlier versions pushed straight to the owner go to the supervisor
 		// The links as read are the ones the marks go by from now on: one that goes away later syncs its machine
 		// again (syncLinkedTodoTokens), even before any of the links changed.
 		s.syncLinkedTodoTokens()

@@ -4,18 +4,9 @@ import SwiftUI
 struct HealthTodaySection: View {
     let page: HealthModel
     var openDetail: (HealthIntake.Kind) -> Void
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var asking = false
     @State private var kind = HealthIntake.Kind.water
     @State private var amount = ""
-
-    private var usesLargeActions: Bool {
-        #if os(iOS) || os(visionOS)
-        typeSize.isAccessibilitySize || WindowTextSize.system.isAccessibilitySize
-        #else
-        typeSize.isAccessibilitySize
-        #endif
-    }
 
     private var enteredAmount: Double? {
         guard let value = Double(amount.replacingOccurrences(of: ",", with: ".")), value.isFinite,
@@ -72,17 +63,13 @@ struct HealthTodaySection: View {
         }
     }
 
-    @ViewBuilder private var waterActions: some View {
-        if usesLargeActions {
-            VStack(spacing: Theme.Space.s) { waterButtons }
-        } else {
-            HStack(spacing: Theme.Space.xs) { waterButtons }
+    /// The interface stops growing at xxxLarge (DESIGN_SYSTEM.md, "Dynamic Type"), so the two buttons keep one row
+    /// at every size and shrink their one-line titles instead of stacking.
+    private var waterActions: some View {
+        HStack(spacing: Theme.Space.xs) {
+            action("Drank a Glass", id: "health-log-water") { Task { await page.record(.water) } }
+            action("Other Amount", id: "health-log-water-amount") { ask(.water) }
         }
-    }
-
-    @ViewBuilder private var waterButtons: some View {
-        action("Drank a Glass", id: "health-log-water") { Task { await page.record(.water) } }
-        action("Other Amount", id: "health-log-water-amount") { ask(.water) }
     }
 
     private func action(_ title: LocalizedStringKey, id: String, run: @escaping () -> Void) -> some View {

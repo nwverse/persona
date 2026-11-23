@@ -749,7 +749,7 @@ live snapshot kept repeating them (#9427). State is the source's fact, so it com
 - **The chat's state.** A connector may report a chat's `state` (`open`, `merged`, `closed`) and `state_at` with any batch (`kbwire.SourceChat`, the extension schema's
   `ConnectorArchiveChat`). `Ingest` keeps them in the chat's `meta.json` (`state`, `state_at`), also from a batch without new lines, and only for a chat it already has.
   A change marks the chat's projects dirty, so they are rewritten. It is not the owner's `done` flag, and the selection does not read it.
-- **GitHub** (`connector/github/archive_state.go`) sends every thread it reads with its state. A change since the state it last sent (the cursor keeps the ended ones per thread,
+- **GitHub** (`modules/github/archive_state.go`) sends every thread it reads with its state. A change since the state it last sent (the cursor keeps the ended ones per thread,
   forgotten with the thread after 90 days) adds one system line, merged at the merge time, closed at the close time, reopened at the thread's update. The line's ID is the state and
   its time (`state-merged-<unix>`), so a replay or a cursor that starts over adds it once. The line is what compression reads, so the chat's summary follows. A cursor from before
   states were sent reads each thread it knows once (`recheck`, one request each, paused while the quota is low), so pull requests merged before then are recorded too.
