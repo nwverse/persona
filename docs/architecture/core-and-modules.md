@@ -108,7 +108,7 @@ missing quietly.
 | Slot | Served | How |
 | --- | --- | --- |
 | `settings` | Yes | `Host.AddSetting(modapi.Setting)`: the module says what a value means (`Value`, `Check`, `Describe`); the core keeps it stored, lists it in `persona_settings` and asks the owner to approve a change |
-| `feature` | Yes | The manifest value is `module.<id>`. While the module is loaded it joins the manager hello's `features`; the hub forwards it while that default manager is connected |
+| `feature` | Yes | The manifest value is `module.<id>`. While the module is loaded it joins the manager hello's `features`; the hub forwards it while that default manager is connected. Every built-in module declares it, and the manager announces the client-only modules' flags itself (below) |
 | `hub_routes` | Yes | `Host.AddHubRoute(pattern, handler)`: the assistant serves the declared `METHOD /api/v1/…` route only while the module is loaded |
 | `mcp_tools` | Yes | `Host.AddMCPTool(...)`: the assistant lists and dispatches the declared tool only while the module is loaded |
 | `background_jobs` | Yes | `Host.AddBackgroundJob(name, run)`: `Service.Run` starts the declared loop under its context; an absent module starts none |
@@ -135,6 +135,8 @@ Because a missing flag means off, every flag a client gates on has to be announc
   same way (`{"disabled": ["health"]}`), which is how the owner turns a client module off from the hub without a new
   build. An id leaves the list in the PR that gives the module a server half (`TestNoBuiltinModuleIsListedAsClientOnly`).
   A client that starts gating a new module adds its id here in the same PR, or the module disappears on current hubs.
+  `scripts/test/test_module_flags.py` (run by `scripts/ci/scripts.sh`) reads the ids the web, Android and Apple modules
+  gate and fails on one no hub announces.
 
 ### The switch
 
@@ -147,11 +149,11 @@ Because a missing flag means off, every flag a client gates on has to be announc
   with it ("How to build and run the core alone" below).
 - **At run time**: the settings row `modules` (the `settings` table, as every other setting; no state file) holds
   `{"disabled": ["<id>", …]}`. `persona_settings` lists and reads this row as the `modules` key. A set rejects unknown
-  or duplicate compiled-in ids before showing the existing owner approval card; `null` or an empty disabled list
+  or duplicate ids (compiled-in modules and the client-only ones of `modapi.ClientModules`) before showing the existing owner approval card; `null` or an empty disabled list
   restores the default. The manager reads the row once where it starts (`server/internal/assistant/main.go`,
   `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so the saved change takes effect at the
-  next manager start, never as a hot switch in the running process. A module switched off is absent exactly as one left
-  out of the build. There is no settings screen yet; the settings registry of #13395 remains its intended UI home.
+  next manager start, never as a hot switch in the running process. A built-in module switched off is absent exactly as one left
+  out of the build; a client-only one loses its hub flag, so the clients hide it. There is no settings screen yet; the settings registry of #13395 remains its intended UI home.
 
 ### How to build and run the core alone
 
