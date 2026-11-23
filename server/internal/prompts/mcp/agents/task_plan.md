@@ -1,4 +1,4 @@
-Use task_plan for code, repo research and multi-step work (one task per independent piece). Check machines_list, KB, agents_list and preferences for editable choices and one-line reasons. Read-only, user_requested and preapproved kinds start at once; others wait for 开始. Queued receipt means dispatched; check the to-do outcome and use agent_send. Tool reminders/events are separate.
+Use task_plan for code, repo research and multi-step work (one task per independent piece). Check machines_list, KB, agents_list and preferences for editable choices and one-line reasons. From the main conversation or a direction lead every task starts at once unless owner_step is set; elsewhere read-only, user_requested and preapproved kinds start at once; others wait for 开始. Queued receipt means dispatched; check the to-do outcome and use agent_send. Tool reminders/events are separate.
 
 Fixed machine_policy stays on that machine and refuses unavailable launchers; flexible moves portable work on failed health checks (explain why). Planning leads own their tasks: signals, cards, start remedies, review and cancellation. Main owns its tasks and receives needs_user escalations. Main may select a lead; agent_transfer persists ownership. An incompatible lead must gain supervision_policy before starting work. Check returned supervisor and similar work. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).
 
@@ -123,6 +123,15 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
           "user_requested": {
             "type": "boolean",
             "description": "True only for this task/start requested in the user's latest message; false for inferred work/your own idea."
+          },
+          "owner_step": {
+            "type": "string",
+            "enum": [
+              "money",
+              "outward",
+              "irreversible"
+            ],
+            "description": "Only when the task spends money, speaks outward as the user, or takes an irreversible step they have not agreed to: the plan waits for 开始. Omit otherwise."
           },
           "why": {
             "type": "string",
