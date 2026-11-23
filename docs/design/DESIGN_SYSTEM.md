@@ -1747,7 +1747,15 @@ VoiceOver reads the label and percentage; finite ratios are clamped to 0–1 and
 The circular gauge is independent of `progress.style`. `accessory_rectangular` uses a bar and `accessory_inline`
 omits progress.
 
-The watch widget extension doesn't build `Theme`, so complications take their fonts, marks and colors from `WatchFaceTokens` (`apple/Shared/Design/WatchFaceTokens.swift`, the documented fixed-size exception in 2.2), whose symbols mirror `Theme.Icon` with an `// icon:` note. A complication only draws what its app last wrote (a snapshot file in the watch App Group); all-day recording reloads only its own kind's timeline (`AllDaySnapshot.widgetKind`), not the other faces'.
+The watch widget extension doesn't build `Theme`, so complications take their fonts, marks and colors from `WatchFaceTokens` (`apple/Shared/Design/WatchFaceTokens.swift`, the documented fixed-size exception in 2.2), whose symbols mirror `Theme.Icon` with an `// icon:` note. Recording and pet complications draw snapshots the app writes in the watch App Group; all-day recording reloads only its own kind's timeline (`AllDaySnapshot.widgetKind`), not the other faces'. Extension and intake complications can read directly with the watch's own shared credential.
+
+- **Water and Protein** (#13275): circular, rectangular and inline only. The circle uses the system circular capacity
+  gauge with today's amount in its center; the rectangle shows the name, total, goal and unit above a straight capacity
+  bar; inline keeps the name, amount and unit. They share the phone's blue/amber `HealthIntakePalette`, system accent
+  grouping, and the `.xxxLarge` text cap with shrinking. VoiceOver reads name, total, goal and unit. On a failed read,
+  cached values remain, identified in the rectangle and VoiceOver; an old hub's 403 says Update the hub instead.
+  No watch app page or Health permission is added. Hub choice lives on the complication; the default is the default
+  paired group, or the only available group. Data and 15-minute refresh rules are in `docs/apple/home-widgets.md`.
 
 - **All-Day Recording** (#4741, `AllDayRecordingComplication`; circular, corner, rectangular, inline, the Smart Stack): five faces, each in words and a mark, never by color alone. Off: "All-Day Recording" (the corner says "All-Day"), "Tap to start". Recording: "Recording all day" with the running time (`Text(_:style: .timer)`, so it needs no reload), in red as the system shows a microphone in use. Paused (by the user or a call): "Paused", "Tap to continue", `allDayPausedSymbol`, orange. Stopped by itself: "Stopped", "Tap to continue", the triangle, orange.
 - **The stale face**: a recording snapshot is trusted only while the app keeps rewriting it (every 10 minutes while recording); the timeline carries a second entry at `AllDaySnapshot.staleAfter` (25 minutes after the last write), which shows "Check recording", how long since it was last heard, the triangle, orange. Why: if the app dies without a word, a face still saying "Recording all day" would be a lie.
@@ -1786,6 +1794,16 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 - **Choices live on the widget** (Edit Widget), never in the app's Settings: each starts at a default that works on a fresh install (every agent, every computer, the fullest account), and its list is the snapshot's, named as the widget names them.
 - **A widget's own switch and buttons** (the Calendar widget's Today · Week · Month and its days, #6946): a segmented control drawn in `HomeWidgetTokens` (`segment…`: a track, the chosen part filled, fixed sizes like a hero), and days as buttons. Each is a widget button (an App Intent) that changes only that widget and redraws it at once, without the app or the network; Edit Widget keeps where it starts. Why a new pattern: a view people flip between often does not belong behind Edit Widget's sheet, and a widget has no other control.
 - **The Lock Screen** shows the same hero in one color: the circle holds the hero alone, the rectangle the widget's line and one or two under it, the inline one line beside the clock.
+
+Water and Protein (#13275) share `HealthIntakePalette` with `Theme.Health`, keeping the app's blue and amber exactly.
+Today's Health has four separate rings (Water, Protein, Steps, Sleep), chosen independently in Edit Widget; repeated
+items retain their positions. Its steps token is purple, apart from Move's red; the existing Health widget keeps pink.
+Sleep remains indigo. Activity uses only short neutral straight bars and values, never rings or UIKit: Move, Exercise,
+Stand, with absent goals removing rows. Small has values, medium adds names, goals and units. The compact Activity
+numbers and cell captions use fixed widget tokens to fit the system canvas, with shrinking and a `.xxxLarge` cap.
+VoiceOver reads each cell's label, value and goal or average, including the compact rows' omitted names and units.
+Today's Health is privacy sensitive; standalone Water and Protein remain readable while locked. See
+`docs/apple/home-widgets.md` for day boundaries, data ownership, sizes and refresh rules.
 
 ### 3.15 Charts (iOS)
 
