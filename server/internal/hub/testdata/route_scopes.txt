@@ -54,6 +54,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/conversations/{id}/undelivered/{msg}
 -                    DELETE /api/v1/assistant/directions/offers/{id}
 -                    DELETE /api/v1/assistant/followups/{id}
+-                    DELETE /api/v1/assistant/health/intake/{id}
 -                    DELETE /api/v1/assistant/memory/{name}
 -                    DELETE /api/v1/assistant/places/{id}
 -                    DELETE /api/v1/assistant/repositories/{id}
@@ -160,6 +161,8 @@ assistant.entries.read GET /api/v1/assistant/entries
 -                    GET /api/v1/assistant/extension-trust
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
+-                    GET /api/v1/assistant/health/intake
+-                    GET /api/v1/assistant/health/intake/changes
 -                    GET /api/v1/assistant/history
 leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/memory
@@ -473,6 +476,9 @@ leaders.write        POST /api/v1/assistant/directions/{id}/progress
 -                    POST /api/v1/assistant/feishu/notices/action
 -                    POST /api/v1/assistant/feishu/workbench
 -                    POST /api/v1/assistant/followups/{id}/run
+-                    POST /api/v1/assistant/health/intake
+-                    POST /api/v1/assistant/health/intake/ui
+-                    POST /api/v1/assistant/health/water/reminder
 -                    POST /api/v1/assistant/health/workouts
 -                    POST /api/v1/assistant/main/clear
 -                    POST /api/v1/assistant/main/new
