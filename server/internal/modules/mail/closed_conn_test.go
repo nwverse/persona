@@ -77,16 +77,26 @@ func selects(command string) bool {
 func (p *hangupProxy) serve(n int, client, server net.Conn) {
 	var mu sync.Mutex
 	tag := ""
+	var hungUp atomic.Bool
 	go func() {
 		r := bufio.NewReader(client)
 		for {
 			line, err := r.ReadString('\n')
+			if hungUp.Load() {
+				// Drain what the client sent after the hang-up: closing a socket with unread input sends a reset,
+				// and the client would read "connection reset" instead of the server's clean close.
+				if err != nil {
+					client.Close()
+					return
+				}
+				continue
+			}
 			if f := strings.Fields(line); len(f) > 1 && p.after(n, line) {
 				mu.Lock()
 				tag = f[0]
 				mu.Unlock()
 			}
-			if _, werr := server.Write([]byte(line)); werr != nil || err != nil {
+			if _, werr := server.Write([]byte(line)); (werr != nil && !hungUp.Load()) || err != nil {
 				return
 			}
 		}
@@ -102,8 +112,14 @@ func (p *hangupProxy) serve(n int, client, server net.Conn) {
 		mu.Unlock()
 		if hangup {
 			p.hung.Add(1)
-			client.Close()
+			hungUp.Store(true)
 			server.Close()
+			// End the client's side with a clean close (FIN); the reader above drains and then closes it.
+			if tc, ok := client.(*net.TCPConn); ok {
+				tc.CloseWrite()
+			} else {
+				client.Close()
+			}
 			return
 		}
 	}
