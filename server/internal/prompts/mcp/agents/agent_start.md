@@ -34,6 +34,10 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
     "prompt": {
       "type": "string"
     },
+    "skip_project_memory": {
+      "type": "boolean",
+      "description": "default false; true omits automatic project/direction memory for this start, including project summary, outcomes, decisions, pitfalls, lessons and direction notes; the supplied prompt is unchanged"
+    },
     "attachments": {
       "type": "array",
       "maxItems": 8,

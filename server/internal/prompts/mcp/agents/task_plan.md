@@ -58,7 +58,11 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
           "context": {"type": "string", "description": "facts the manager cannot resolve; omit project background"},
           "prompt": {
             "type": "string",
-            "description": "goal, authorization bounds and new facts; the manager adds project context, criteria and framework rules once"
+            "description": "goal, authorization bounds and new facts; the manager adds project context unless skip_project_memory is true, plus criteria and framework rules once"
+          },
+          "skip_project_memory": {
+            "type": "boolean",
+            "description": "default false; true omits automatic project/direction memory for this task, including project summary, outcomes, decisions, pitfalls, lessons and direction notes; the supplied prompt and criteria are unchanged"
           },
           "machine": {
             "type": "string",
