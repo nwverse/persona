@@ -82,9 +82,6 @@ type briefFacts struct {
 	// and patrols currently off. Unlike Leaders, these are also fixed card/feed facts and survive a model failure.
 	Directions       []prompts.BriefDirection
 	DisabledRoutines []prompts.BriefDisabledRoutine
-	// CardLedger is the day's reconciliation of the cards pushed to the owner (card_layers.go cardLedgerLine): how many,
-	// and how many of them were not layer 4, by source. "" when none was pushed that day.
-	CardLedger string
 	// InboxWaiting are matters waiting on the other side for over a day; InboxDue are matters to look at again today,
 	// for the model only. Each list has at most briefFollowingMax rows.
 	InboxWaiting, InboxDue []prompts.BriefFollow
@@ -151,7 +148,6 @@ func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) 
 	f.ConfirmationLines = s.confirmationLines(l, f.Confirmations)
 	f.Leaders = s.briefLeaders(ctx, now)
 	f.Directions, f.DisabledRoutines = s.briefDirections(ctx, now, l, web)
-	f.CardLedger = s.cardLedgerLine(ctx, l, now, loc)
 	f.InboxWaiting, f.InboxDue = briefFollowing(s.followingInboxItems(ctx), now, loc)
 	if self == "evening" { // the day's recap was written for it, 30 minutes before (kb_day.go)
 		f.Day = s.briefDay(ctx, now, loc)

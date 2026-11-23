@@ -300,7 +300,7 @@ type Service struct {
 	room       roomState         // meeting_room_tools.go: the meetings' rooms, their asks and sources
 	meetLive   meetingLiveEvents // meeting_events.go: the meeting_live events, at most one a second per recording
 	justMe     justMeBook        // meeting_justme.go: the Just me turns
-	cards      cardLedger        // card_layers.go: the cards pushed to the owner, counted by day, layer and source
+	cards      cardLedger        // card_layers.go: the cards pushed to the owner, counted by day, source and which of the six kinds
 	cardAsks   sync.Map          // card_layers.go: the source of each card ask has up (interaction id → source)
 	meetLocks  meetingLocks      // meeting_followup.go: one creation at a time per recording
 	live       contextState      // context.go
