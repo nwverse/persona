@@ -13,7 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/mail"
+	"github.com/nwverse/persona/server/internal/mailwire"
 )
 
 type replayInboxConnector struct {
@@ -69,7 +69,7 @@ func TestInboxReplayReadsOnlyLarkAndHandsNormalRound(t *testing.T) {
 		rounds = append(rounds, r)
 		return json.RawMessage(`{}`), nil
 	}
-	mailSource := &inboxMail{msgs: []mail.MailSummary{{UID: 1}}}
+	mailSource := &inboxMail{msgs: []mailwire.MailSummary{{UID: 1}}}
 	h.mail = mailSource
 	in := assistantwire.InboxLarkReplay{ChatID: "chat-1", Start: "2026-11-13T10:00:00Z", End: "2026-11-13T10:30:00Z", MessageIDs: []string{"m1"}}
 	raw, _ := json.Marshal(assistantwire.InboxCollectRequest{LarkReplay: &in})
