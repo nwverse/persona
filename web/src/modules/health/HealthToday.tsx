@@ -10,7 +10,7 @@ import { healthIntakePath } from "../../lib/health-intake-ui";
 import { BASE } from "../../lib/base";
 import { navigate } from "../../lib/router";
 import { GaugeFace } from "../../ui/GaugeFace";
-import { inputClass, SectionTitle } from "../assistant/parts";
+import { inputClass, SectionTitle } from "../../views/assistant/parts";
 import { INTAKE_MIN, INTAKE_MAX, newDraft, parseAmount, type IntakeDraft, type IntakeEntry, type IntakeKind } from "./intake";
 import { useHealthIntake, type Ring } from "./useHealthIntake";
 

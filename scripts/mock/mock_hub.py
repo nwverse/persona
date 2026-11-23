@@ -6734,11 +6734,8 @@ TRANSCRIPTION_MODE = {"ready": os.environ.get("MOCK_MEETING_TRANSCRIPTION_READY"
                       "fatal": "", "line_seconds": 4, "final_seconds": 2}
 TRANSCRIPTIONS = {}  # Protected by RECORDINGS_LOCK, including socket callbacks and final-pass timers.
 # The final pass's progress (#13461, docs/assistant/meeting-minutes.md "Gaps and the final pass"): while the mock's own
-# pass runs, transcription carries final_done (0: it replays in one step) and end. MOCK_MEETING_FINISHING=<done>,<end>
-# (recording seconds) shows every complete meeting recording with no transcription of its own as a hub-mode meeting whose
-# final pass has done <done> of <end>, for shots of the minutes line; its minutes stay as MOCK_RECORDING_MINUTES says.
-MEETING_FINISHING = tuple(float(x) for x in os.environ["MOCK_MEETING_FINISHING"].split(",")) \
-    if os.environ.get("MOCK_MEETING_FINISHING") else None
+# pass runs, transcription carries final_done (0: it replays in one step) and end. A pass in progress on a recording without
+# a transcription of its own, for shots of the minutes line, is MOCK_MEETING_FINISHING's (meeting_finishing_mock.py).
 TRANSCRIPTION_SCRIPT = ("我们先把 export cap 保持在 4 MB。", "Let's revisit pricing next week.",  # i18n-ignore: synthetic speech, never translated
                         "Alice 负责检查 export test。", "Bo will share the notes tomorrow.")  # i18n-ignore: synthetic speech
 
@@ -6884,12 +6881,7 @@ def transcription_gaps(t):
 def transcription_view(rid):
     t = TRANSCRIPTIONS.get(rid)
     if not meeting_transcription_on(): return None
-    if not t:
-        rec = RECORDINGS.get(rid)
-        if MEETING_FINISHING and isinstance(rec, dict) and rec.get("kind") == "meeting" and rec.get("complete"):
-            done, end = MEETING_FINISHING
-            return {"mode": "hub", "state": "finishing", "gaps": [], "final_done": min(done, end), "end": end}
-        return None
+    if not t: return None
     if t["mode"] == "device": return {"mode": "device"}
     out = {"mode": "hub", "state": t["state"], "gaps": transcription_gaps(t) if rid not in RECORDINGS_TRIMMED else []}
     if t.get("problem"): out["problem"] = t["problem"]
