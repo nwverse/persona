@@ -2395,6 +2395,41 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
   the To-dos entrance, as before.
 
+## Domain spaces
+
+Who it serves: everyday people who keep one part of their life (family, money, a home) apart from the main chat, as the
+health space does. The iOS / iPadOS app follows the web (`docs/web/web.md`, "Domain spaces"); the server side is in
+`docs/assistant/health.md` ("Tracks and kinds").
+
+- **Model**: `apple/Shared/Tracks.swift` decodes tracks, kinds, `SPACE.md`, a conversation's categories and the extension
+  grants; every field is optional and unknown ones are ignored. Every call goes to the default manager (no
+  `X-Persona-Manager`), as spaces are the default manager's. A hub without `GET /api/v1/assistant/tracks` (404 / 405, or an
+  answer without `tracks`) has no spaces: the section stays out and nothing else changes. `SpaceStore.shared` keeps the
+  list, read again when the hub or its hello changes (`RootView`).
+- **Sidebar and drawer**: a Spaces section lists the tracks of the `spaces` sidebar group by their order (built-in health
+  and archived ones left out), then New space; in the Sidebar layout it is a folding section after Pages. A tap opens the
+  space's latest conversation, else its home (`SpaceHomeModel.entry`). Health keeps its own row and pages unchanged.
+- **Space home** (`apple/Persona/Views/Spaces/SpaceHomeView.swift`): the name, a composer whose conversation starts in the
+  space, a plain privacy line, its conversations (swipe to archive), About this space (the user's part of `SPACE.md` as
+  formatted text, a leading heading repeating the name dropped, folded past a height) with Where things stand (the state
+  block), and the kinds of personal information it holds. Edit and Archive are in the page's menu; built-in spaces have no
+  Archive. Archive confirms first and sends the revision it was read at.
+- **SPACE.md editor**: the parts the user wrote are fields; the `persona:managed` blocks show read-only under "Kept up to
+  date by Persona" and go back byte for byte (`SpaceMarkdown`, which works on UTF-8 bytes, since Swift's `String ==`
+  calls an NFC copy equal and a CRLF line end does not end in `\n`). A save sends the `base_digest` it read; a stale one
+  says another change came first and offers Load latest; a changed block, a missing space and an offline computer each
+  have a plain sentence.
+- **New space**: name, one line about it, an icon from 16 tokens (`SpaceIcon`, never a color or a raw symbol name), the
+  personal information it holds and, only when the assistant offers more than one, its kind (reconciled against the kinds
+  read: the default kind, else the first on offer). The slug is made from the name and never shown; a taken one gets the
+  next number, once more on a 409.
+- **A space conversation's categories**: chips under the top bar (`SpaceConversationCategories`, room added to the
+  chat's top inset through `assistantTopExtra`). A chip the user may take away is a menu with Remove; the space's own
+  carry a lock; removed ones come back from +. Changes are optimistic and roll back with a toast.
+- **Extension grants**: the extension detail page of the default manager shows "Personal information it may read": an
+  owner switch ("This is my own extension") or one switch per kind. Read-only when the extension is set outside the app
+  (`readOnly`, or a dev / config-file source); left out on an assistant without grants and on another manager's page.
+
 ## Quiet supervision rounds (#2092)
 
 Persona conversations on iOS, iPadOS and macOS share the web's whole-round visibility contract. A `system` / `supervise`
