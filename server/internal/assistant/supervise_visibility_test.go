@@ -305,6 +305,7 @@ func TestInternalAcceptedReviewDisposition(t *testing.T) {
 		{name: "independent blocking review", verdict: reviewAccepted, autoReview: true, autoState: autoBlocking, wantBackground: true},
 		{name: "running review stays visible", verdict: reviewAccepted, autoReview: true, autoState: autoRunning},
 		{name: "failed review stays visible", verdict: reviewAccepted, autoReview: true, autoState: autoFailed},
+		{name: "cancelled review stays visible", verdict: reviewAccepted, autoReview: true, autoState: autoCancelled},
 		{name: "old-round review stays visible", verdict: reviewAccepted, autoReview: true, autoRound: 1},
 		{name: "rework", verdict: reviewAccepted, round: 1, wantBackground: true},
 		{name: "internal subtask", verdict: reviewAccepted, parent: "todo_parent", wantBackground: true},
