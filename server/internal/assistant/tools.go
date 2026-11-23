@@ -1608,12 +1608,16 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		session := ix.SessionID
 		source := [2]string{ix.MachineID, session}
-		isFolded := ix.FoldedUnder != "" && ix.FoldedUnder != session
+		targetMachine := ix.MachineID
+		isFolded := ix.FoldedUnder != "" && (ix.FoldedUnder != session || (ix.FoldedUnderMachineID != "" && ix.FoldedUnderMachineID != ix.MachineID))
 		if isFolded {
 			folded[source] = false // include a folded card only after checking its own session
 			session = ix.FoldedUnder
+			if ix.FoldedUnderMachineID != "" {
+				targetMachine = ix.FoldedUnderMachineID
+			}
 		}
-		k := [2]string{ix.MachineID, session}
+		k := [2]string{targetMachine, session}
 		// The id goes after the clip: a long request must not cut it off, or interaction_answer has nothing to answer.
 		id := " (interaction_id=" + ix.ID + ")"
 		pending[k] = append(pending[k], pendingCard{clip(what, max(400-utf8.RuneCountInString(id), 1)) + id, isFolded, source})
@@ -1651,7 +1655,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 					folded[source] = true
 				}
 			}
-			if c.Assistant || c.FoldedUnder() != "" || s.isBackgroundSession(ctx, c.SessionID) {
+			if c.Assistant || c.FoldedUnder() != "" || c.IsSubagent || c.IsCodexSubagent() || s.isBackgroundSession(ctx, c.SessionID) {
 				continue
 			}
 			c.State = c.FoldedState()

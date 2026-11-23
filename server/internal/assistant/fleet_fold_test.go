@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -552,4 +553,120 @@ func TestFoldSessionsWithoutWalk(t *testing.T) {
 	if walks < 500 || skips < 500 {
 		t.Fatalf("%d lists walked, %d not: the lists do not try both ways", walks, skips)
 	}
+}
+
+// Cross-machine A2A subagents fold under their parent on another computer, roll up working/needs_you/total
+// into the parent's SessionChildren, carry folded_under_machine_id on both sessions and interactions, and
+// handle multi-hop chains, cycles, and missing/archived parents cleanly.
+func TestFoldFleetCrossMachine(t *testing.T) {
+	lists := map[string][]proto.Session{
+		"mac": {
+			foldRow("lead", proto.StateIdle, func(s *proto.Session) { s.MachineID = "mac" }),
+			foldRow("local-kid", proto.StateWorking, func(s *proto.Session) {
+				s.MachineID, s.IsSubagent, s.ParentSessionID = "mac", true, "lead"
+			}),
+		},
+		"box": {
+			foldRow("remote-working", proto.StateWorking, func(s *proto.Session) {
+				s.MachineID, s.IsSubagent, s.ParentSessionID = "box", true, "lead"
+				s.SetSubagentProvenance("mac", "task-1", proto.SubagentOriginA2A)
+			}),
+			foldRow("remote-needs", proto.StateNeedsYou, func(s *proto.Session) {
+				s.MachineID, s.IsSubagent, s.ParentSessionID = "box", true, "remote-working"
+				s.SetSubagentProvenance("", "", proto.SubagentOriginNative)
+			}),
+			foldRow("remote-orphan", proto.StateWorking, func(s *proto.Session) {
+				s.MachineID, s.IsSubagent, s.ParentSessionID = "box", true, "missing-on-mac"
+				s.SetSubagentProvenance("mac", "task-orphan", proto.SubagentOriginA2A)
+			}),
+			// Cross-machine cycle must fold nothing.
+			foldRow("cyc-b", proto.StateIdle, func(s *proto.Session) {
+				s.MachineID, s.IsSubagent, s.ParentSessionID = "box", true, "cyc-a"
+				s.SetParentMachineID("mac")
+			}),
+		},
+	}
+	lists["mac"] = append(lists["mac"], foldRow("cyc-a", proto.StateIdle, func(s *proto.Session) {
+		s.MachineID, s.IsSubagent, s.ParentSessionID = "mac", true, "cyc-b"
+		s.SetParentMachineID("box")
+	}))
+
+	folds := foldFleet(lists, nil)
+	folds["mac"].apply(lists["mac"])
+	folds["box"].apply(lists["box"])
+
+	lead := rowNamed(lists["mac"], "lead")
+	if got := lead.Children(); got != (proto.SessionChildren{Total: 3, Working: 2, NeedsYou: 1}) {
+		t.Fatalf("lead cross-machine rollup = %+v, want {Total:3 Working:2 NeedsYou:1}", got)
+	}
+	if lead.FoldedState() != proto.StateNeedsYou {
+		t.Fatalf("lead folded state = %s, want needs_you", lead.FoldedState())
+	}
+	if local := rowNamed(lists["mac"], "local-kid"); local.FoldedUnder() != "lead" || local.FoldedUnderMachineID() != "" {
+		t.Fatalf("same-machine child must omit folded_under_machine_id: %+v", local.Hierarchy)
+	}
+	for _, id := range []string{"remote-working", "remote-needs"} {
+		kid := rowNamed(lists["box"], id)
+		if kid.FoldedUnder() != "lead" || kid.FoldedUnderMachineID() != "mac" {
+			t.Fatalf("%s: under=%q underMachine=%q, want lead/mac", id, kid.FoldedUnder(), kid.FoldedUnderMachineID())
+		}
+	}
+	if orphan := rowNamed(lists["box"], "remote-orphan"); orphan.FoldedUnder() != "" || orphan.FoldedUnderMachineID() != "" {
+		t.Fatalf("orphan folded unexpectedly: %+v", orphan.Hierarchy)
+	}
+	for _, pair := range [][2]string{{"mac", "cyc-a"}, {"box", "cyc-b"}} {
+		if cyc := rowNamed(lists[pair[0]], pair[1]); cyc.FoldedUnder() != "" || cyc.FoldedUnderMachineID() != "" {
+			t.Fatalf("cycle %s/%s folded unexpectedly: %+v", pair[0], pair[1], cyc.Hierarchy)
+		}
+	}
+}
+
+// End-to-end fleet publishing: when an A2A subagent starts on box for a parent on mac,
+// foldInventory folds box's child under mac/lead, updates mac's published parent rollup
+// asynchronously, and stamps folded_under_machine_id on box's pending interactions.
+func TestPublishedListFoldsCrossMachineSubagent(t *testing.T) {
+	ft := newFleetTestNoStore(t)
+	ft.d.add("box", "Box")
+	lead := proto.Session{SessionID: "lead", Status: proto.StatusIdle, Cwd: "/w/app", Agent: "claude"}
+	ft.sessions("mac", lead)
+	waitFor(t, "mac initial list", func() bool {
+		return rowNamed(ft.lastList("mac"), "lead") != nil
+	})
+
+	// Register durable subagent link in manager index (as a2aStart / a2aLaunched does).
+	ft.s.recordA2ASubagent(&a2aTask{
+		A2ARow:  db.A2ARow{ID: "task-cross-1", SourceMachine: "mac", SourceSession: "lead", TargetMachine: "box", TargetSession: "sub-box"},
+		a2aBody: a2aBody{Launch: &a2aLaunch{CWD: "/code/app", Subagent: true}},
+	})
+	child := proto.Session{SessionID: "sub-box", Status: proto.StatusWorking, Cwd: "/code/app", Agent: "codex"}
+	ft.sessions("box", child)
+
+	waitFor(t, "cross-machine child tagged and folded on box", func() bool {
+		k := rowNamed(ft.lastList("box"), "sub-box")
+		return k != nil && k.IsSubagent && k.ParentSessionID == "lead" && k.ParentMachineID() == "mac" &&
+			k.A2ATaskID() == "task-cross-1" && k.SubagentOrigin() == proto.SubagentOriginA2A &&
+			k.FoldedUnder() == "lead" && k.FoldedUnderMachineID() == "mac"
+	})
+	waitFor(t, "parent rollup updated on mac", func() bool {
+		l := rowNamed(ft.lastList("mac"), "lead")
+		return l != nil && l.Children() == (proto.SessionChildren{Total: 1, Working: 1}) && l.FoldedState() == proto.StateWorking
+	})
+	if ix := ft.s.withTask(proto.Interaction{MachineID: "box", SessionID: "sub-box"}); ix.FoldedUnder != "lead" || ix.FoldedUnderMachineID != "mac" {
+		t.Fatalf("cross-machine interaction: under=%q underMachine=%q, want lead/mac", ix.FoldedUnder, ix.FoldedUnderMachineID)
+	}
+
+	// Child becomes blocked -> parent rollup flips to needs_you.
+	child.Status = proto.StatusBlocked
+	ft.sessions("box", child)
+	waitFor(t, "parent rollup flips to needs_you", func() bool {
+		l := rowNamed(ft.lastList("mac"), "lead")
+		return l != nil && l.Children() == (proto.SessionChildren{Total: 1, NeedsYou: 1}) && l.FoldedState() == proto.StateNeedsYou
+	})
+
+	// Child disappears from box -> mac's parent rollup clears cleanly without leaving stale counts.
+	ft.sessions("box")
+	waitFor(t, "parent rollup clears when cross-machine child is gone", func() bool {
+		l := rowNamed(ft.lastList("mac"), "lead")
+		return l != nil && l.Children() == (proto.SessionChildren{}) && l.FoldedState() == proto.StateIdle
+	})
 }

@@ -45,6 +45,9 @@ type Item struct {
 	HiddenByDirectory bool
 	// Assistant marks a Persona conversation, excluded from the Agents list and active Agent aggregate.
 	Assistant bool
+	// Subagent marks a delegated subagent session. Under Options.Roots, subagents (including orphans whose parent is
+	// archived or not listed) are excluded from the main Agents list so they never leak as top-level rows.
+	Subagent bool
 	// Fold is the item's optional per-row metadata: its place in the session hierarchy (#5120) and its open to-do
 	// (#6662). Nil for an item with neither, which shows its own State and BackgroundWaiting. It sits behind a pointer
 	// to keep Item in its allocation size class: an adapter builds a whole batch as one []Item, as the hub does on every
@@ -57,20 +60,22 @@ type Item struct {
 }
 
 // Fold is how an Item folds and the open to-do it is on. Root is the session id (as parent_session_id names it, not the
-// composite ID) of the item on the same Machine this one is folded under (a child session under its topmost listed
-// ancestor), only when that item is in the same batch; State is the state the item shows with the items folded under it
-// ("" for its own); BackgroundWaiting is Item.BackgroundWaiting for Options.Roots: none of the items folded under it
-// works or needs the user either. Todo is the id of the open to-do the row is on ("" for none): what Options.Todo
-// selects and Counts.Todo counts. The adapter knows which to-dos are open; the index only compares ids. Options.Roots
-// leaves out the items with a Root and filters and counts the others by their folded state; Options.Under selects the
-// items folded under one. SearchAs is the ID of the item (Root's) a search with Options.Roots returns a hit in this
-// item as, and SearchSession the session id the hit names it by (SearchHit.HitSessionID): the adapter sets both on a
-// side session folded under Root (#7944), whose chat is reached from Root's. Like the rest of an Item it is immutable
-// once handed to Replace: copies of the item share it.
+// composite ID) of the listed parent this item is folded under; RootMachine is that parent's machine id when it lives
+// on another computer (empty means the same Machine as this item). State is the state the item shows with the items
+// folded under it ("" for its own); BackgroundWaiting is Item.BackgroundWaiting for Options.Roots: none of the items
+// folded under it works or needs the user either. Todo is the id of the open to-do the row is on ("" for none): what
+// Options.Todo selects and Counts.Todo counts. The adapter knows which to-dos are open; the index only compares ids.
+// Options.Roots leaves out the items with a Root (and Subagent orphans) and filters and counts the others by their
+// folded state; Options.Under (with UnderMachine) selects the items folded under one parent across machines. SearchAs
+// is the ID of the item (Root's) a search with Options.Roots returns a hit in this item as, and SearchSession the
+// session id the hit names it by (SearchHit.HitSessionID): the adapter sets both on a side session folded under Root
+// (#7944), whose chat is reached from Root's. Like the rest of an Item it is immutable once handed to Replace: copies
+// of the item share it.
 type Fold struct {
-	Root, State, Todo       string
-	SearchAs, SearchSession string
-	BackgroundWaiting       bool
+	Root, RootMachine, State, Todo    string
+	DirectParent, DirectParentMachine string
+	SearchAs, SearchSession           string
+	BackgroundWaiting                 bool
 }
 
 // root is the session v is folded under ("" for none).
@@ -79,6 +84,37 @@ func (v *Item) root() string {
 		return ""
 	}
 	return v.Fold.Root
+}
+
+// rootMachine is the machine of the session v is folded under ("" when not folded).
+func (v *Item) rootMachine() string {
+	if v.Fold == nil || v.Fold.Root == "" {
+		return ""
+	}
+	if v.Fold.RootMachine != "" {
+		return v.Fold.RootMachine
+	}
+	return v.Machine
+}
+
+// matchesUnder reports whether v belongs under parent (machine, session): either folded under it
+// (all depths) or, for an orphan subagent whose parent is no longer listed (e.g. archived), directly
+// naming that parent so the parent's Session Overview can still inspect its subagents.
+func (v *Item) matchesUnder(machine, session string) bool {
+	if v.Fold == nil {
+		return false
+	}
+	if v.Fold.Root != "" {
+		return v.Fold.Root == session && v.rootMachine() == machine
+	}
+	if v.Subagent && v.Fold.DirectParent != "" {
+		pm := v.Fold.DirectParentMachine
+		if pm == "" {
+			pm = v.Machine
+		}
+		return v.Fold.DirectParent == session && pm == machine
+	}
+	return false
 }
 
 // todo is the open to-do v is on ("" for none).
@@ -110,13 +146,15 @@ type Options struct {
 	// cursor is bound to it. It is the adapter's to set (not a key Parse reads): the adapter knows which owners exist
 	// and who may ask for which.
 	Manager string
-	// Roots (roots=1) leaves the items folded under another (Fold.Root) out of the rows, the totals and every count,
-	// and filters and counts the rest by their folded state (Fold.State). Under (parent_session_id, which needs Machine) selects the
-	// items of Machine folded under that session, all depths; the two cannot be combined. Both bind a cursor, as the
-	// other filters do.
-	Roots   bool
-	Under   string
-	Summary bool
+	// Roots (roots=1) leaves the items folded under another (Fold.Root) and orphan subagents (Item.Subagent) out of
+	// the rows, the totals and every count, and filters and counts the rest by their folded state (Fold.State). Under
+	// (parent_session_id, with UnderMachine from parent_machine_id or machine_id) selects the items folded under that
+	// parent across machines, all depths; optional Machine filters child rows to one machine when UnderMachine is given.
+	// Roots and Under cannot be combined. Both bind a cursor, as the other filters do.
+	Roots        bool
+	Under        string
+	UnderMachine string
+	Summary      bool
 	// NoPrivate leaves the Private items out of the rows, the totals and every count; like Manager it is the adapter's
 	// to set (who asks), not a key Parse reads, and it binds a cursor as the other filters do.
 	NoPrivate bool
@@ -228,7 +266,7 @@ type journalEntry struct {
 }
 
 type filters struct {
-	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, Todo, Waiting, ExcludePaneSource, JustFinished string
+	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, UnderMachine, Todo, Waiting, ExcludePaneSource, JustFinished string
 	// Places and Spaces are Options' as placesKey spells them, Providers as
 	// providersKey spells the set: filters stay comparable.
 	Places, Spaces, Providers                   string

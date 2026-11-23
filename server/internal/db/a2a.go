@@ -218,6 +218,31 @@ func (d *DB) A2AClaim(ctx context.Context, limit int) ([]A2ARow, error) {
 	return out, rows.Err()
 }
 
+// A2ALaunches lists recent and active A2A-launched tasks (body ? 'launch') so the
+// manager can restore subagent parent attribution across restarts.
+func (d *DB) A2ALaunches(ctx context.Context, since time.Time) ([]A2ARow, error) {
+	rows, err := d.pool.Query(ctx, `SELECT `+a2aColumns+` FROM a2a_tasks
+		WHERE body ? 'launch'
+		  AND source_session <> ''
+		  AND target_session <> ''
+		  AND (created_at >= $1 OR state IN ('queued','submitted','working','input_required','auth_required'))
+		ORDER BY created_at DESC,id DESC
+		LIMIT 2000`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []A2ARow
+	for rows.Next() {
+		r, err := scanA2A(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
 // A2ADispatches lists recent launches and all active launches for the caller's
 // dispatch tools, concurrency limit, and delegation depth check.
 func (d *DB) A2ADispatches(ctx context.Context, owner, machine, session string, since time.Time) ([]A2ARow, error) {

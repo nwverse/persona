@@ -271,6 +271,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	if tracker == nil {
 		s.addDispatched(ctx, dispatchTask{FromMachine: machine, FromSession: session, Machine: s.canonical(am.ID),
 			Session: res.Session.SessionID, Cwd: a.Cwd, Title: title, At: now})
+		s.recordSubagentLink(s.canonical(am.ID), res.Session.SessionID, machine, session, proto.SubagentOriginDispatch)
 	}
 	s.logf("dispatch %s/%s -> %s/%s in %s", machine, short(session), am.ID, short(res.Session.SessionID), a.Cwd)
 	child := res.Session
