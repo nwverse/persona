@@ -333,6 +333,16 @@ Rebuild shortcuts that used Run Extension Action with the built-in Log Water act
 extension's Android water page disappears when it is off. The iPhone/iPad migration card
 warns about these changes before the user requests import; web and Android do not offer the card.
 
+On iPhone and iPad, a notice card above **Today** offers **Move into Health** only when the
+intake response includes `water_extension:"pending"`. Demo mode and responses without that
+field show no card. It explains that records and settings move into Health, the extension
+is turned off, and its Android water page disappears. Nothing imports automatically.
+Tapping the single-line button sends `POST /api/v1/assistant/health/intake/import?space=health`
+through the default manager. Intake actions are disabled while it runs. Success refreshes
+Today, removes the card and shows the imported count and extension-disabled confirmation,
+with a reminder to replace widgets, watch faces and shortcuts. A failed import shows the
+reason in a toast and keeps the card available for a safe retry.
+
 The mock hub's intake domain starts with `water_extension:"pending"`. POST import adds two
 synthetic drinks (200 ml and 250 ml) once, alongside its seeded intake records, and removes the
 flag. `MOCK_WATER_EXTENSION=none` or `migrated` starts without it; `none` returns 404 on import,
