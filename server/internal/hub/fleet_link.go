@@ -821,7 +821,7 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 	switch n.Kind {
 	case assistantwire.NotifyPush: // one with an id shows once, sent again however late (a day recap's push)
 		policy := pushPolicy{level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, !n.Asked),
-			depth: n.Depth, track: n.Track}
+			depth: n.Depth, track: n.Track, cardID: n.CardID}
 		policy.level = h.pushGradingNotifyLevel(n, policy.level)
 		o := h.notifyDoneUnder(from, "assistant", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, pushWants{}, managerPushCollapseID(from, n.ID),
 			pushRecordingID(n.RecordingID), policy)
@@ -839,6 +839,8 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 			return nil, errors.New("a decision's push needs its to-do, when it was asked and the option its OK takes")
 		}
 		h.notifyDecide(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, *n.Todo)
+	case assistantwire.NotifyHealthWater:
+		return h.notifyHealthWater(from, n)
 	default:
 		return nil, fmt.Errorf("unknown notification kind %q", n.Kind)
 	}

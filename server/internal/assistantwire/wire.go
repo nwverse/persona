@@ -302,6 +302,8 @@ type Notification struct {
 	LongMS int64 `json:"long_ms,omitempty"`
 	// Todo is a NotifyDecide push's to-do and the round of its decision.
 	Todo *NotifyTodo `json:"todo,omitempty"`
+	// Health is a NotifyHealthWater reminder's button context.
+	Health *NotifyHealth `json:"health,omitempty"`
 	// LinkCovered: a NotifyInput push's card is what the manager's Persona Link summary shows for its agent and rings
 	// for (the card that stands for it, notifying, among the listed items), so a Persona Link desktop of the manager's
 	// may stand in for the phone's push ("Phone Muted", docs/operations/link.md "Presence"). Older managers leave it
@@ -321,6 +323,10 @@ type Notification struct {
 	// immersive mode lets through when it is the track in focus. Older hubs drop both.
 	Depth string `json:"depth,omitempty"`
 	Track string `json:"track,omitempty"`
+	// CardID is the card a NotifyPush push stands for (a plan's id) when that card is answered elsewhere: the push
+	// carries it as `interaction_id`, and once the manager says the card is over (EventFleetResolved with it) the hub
+	// takes the push back from the devices it went to, as an interaction's (#4349). Older hubs drop it.
+	CardID string `json:"card_id,omitempty"`
 }
 
 // Push levels a Notification may carry (hub low-distraction mode, docs/server/server.md "Push policy").

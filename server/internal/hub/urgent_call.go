@@ -80,7 +80,7 @@ func (p *Pusher) callRouteOf(d Device) pushRoute {
 		return pushRoute{Route: pushRelay}
 	case d.VoIPError != "":
 		return pushRoute{Route: pushNone, Reason: pushRelayFailed, Detail: d.VoIPError}
-	case d.RelayURL == "":
+	case d.RelayURL == "" || d.RelayGrant == "":
 		return pushRoute{Route: pushNone, Reason: pushNoRelay}
 	default:
 		return pushRoute{Route: pushNone, Reason: pushRelayFailed, Detail: "no grant"}
@@ -96,7 +96,8 @@ func (p *Pusher) callRouteOfID(id string) (pushRoute, bool) {
 	return p.callRouteOf(d), true
 }
 
-// callable: a ring can reach d (its PushKit token, and the relay's grant for it when the hub has no key).
+// callable: a ring can reach d (its PushKit token, the ordinary relay registration, and the relay's grant for that
+// token when the hub has no key). A relay URL kept only to diagnose a refused ordinary registration is not enough.
 func (p *Pusher) callable(d Device) bool {
 	if d.VoIPToken == "" {
 		return false
@@ -104,7 +105,7 @@ func (p *Pusher) callable(d Device) bool {
 	if p.direct != nil {
 		return !p.privateOnly || d.PushKey != "" // office network mode rings only sealed
 	}
-	return !p.privateOnly && d.RelayURL != "" && d.VoIPGrant != "" && d.PushKey != ""
+	return p.relayed(d) && d.VoIPGrant != ""
 }
 
 // pushTypeVoIP is the APNs push type of a ring (an APNs header, not a message the apps get).

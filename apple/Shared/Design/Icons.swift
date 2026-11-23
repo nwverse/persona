@@ -663,6 +663,9 @@ extension Theme {
         static let quickCommands = "slash.circle"
         /// The day's Today card at the top of the assistant's conversation (docs/assistant/unified-entry.md).
         static let today = "sun.max.fill"
+        /// To-dos' Today place (#10465, DESIGN_SYSTEM 3.5 "To-dos places"): an outline among the sidebar's outlined
+        /// places, and its empty state.
+        static let todoToday = "sun.min"
         /// Something done on the phone from the conversation: an event added to its calendar, a reminder.
         static let addedEvent = "calendar.badge.plus"
         static let addedReminder = "checklist.checked"
@@ -731,6 +734,10 @@ extension Theme {
         /// Health: the health space (docs/assistant/health.md), its entry and its conversations' mark.
         static let health = "heart"
         static let healthFilled = "heart.fill"
+        /// Health intake and the iPhone's Activity summary.
+        static let water = pluginDroplet
+        static let protein = "fork.knife"
+        static let fitness = "figure.run"
         /// What stays private (Health's note on where its conversations and memory are kept).
         static let privacy = "checkmark.shield"
         /// A tool the app has no symbol for.
