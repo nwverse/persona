@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { initI18n } from "../i18n";
 import { balanceAccounts, balanceEmpty, balanceText } from "./usage-balance";
-import { accountPace, countdown, fullest, groupByProvider, isBalanceAccount, liveAccounts, pace, parsePinnedUsageAccounts, planNote, providerTimeline, providerTitle, remainingText, resetLabel, sampleAge, selectSidebarUsageAccounts, sortedWindows, sortForCard, sourceNames, timelinePosition, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { countdown, fullest, groupByProvider, isBalanceAccount, liveAccounts, parsePinnedUsageAccounts, planNote, providerTimeline, providerTitle, remainingText, resetLabel, sampleAge, selectSidebarUsageAccounts, sortedWindows, sortForCard, sourceNames, timelinePosition, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { accountPace, pace } from "./usage-pace";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime(); // local time, so same-day checks do not depend on the zone
 const at = (ms: number) => new Date(NOW + ms).toISOString();
