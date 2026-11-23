@@ -257,7 +257,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	// wrong lead, so until the owner writes there, "the user asked for this" is no Start for writable work it plans
 	// outside the kinds the owner already let this lead start (heldOutsideOwnKinds, #12953).
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.handedOver(sessionID) {
-		s.heldOutsideOwnKinds(ctx, sessionID, a.Tasks)
+		s.heldOutsideOwnKinds(ctx, machine, sessionID, a.Tasks)
 	}
 	// A plan from a conversation hands its prompts to agents outside it (scene 3): what it says, titles first (they are
 	// what its push shows), decides once whether it waits for "Start" and what its push says (health.go). A leader's
