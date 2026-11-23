@@ -10,11 +10,11 @@ import {
   hasPostCommandError,
   resolveFailedTurnPayload,
   snapshotTerminalCompaction,
-  waitForAssistantCompaction,
   waitForTerminalCompaction,
   watchTerminalCompaction,
   type OutgoingPayload,
 } from "./compact-resend";
+import { waitForAssistantCompaction } from "./wait-for-assistant-compaction";
 import { openPickerCommand } from "./composer-commands";
 import { onModelPicker } from "./model-switch";
 import { onPermissionPicker } from "./permissions-command";
