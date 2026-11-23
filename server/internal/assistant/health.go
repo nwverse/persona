@@ -144,18 +144,13 @@ func (s *Service) redactedNotice(ctx context.Context, l i18n.Lang, space string)
 // its own categories and its track's default categories).
 func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text, summary string, input json.RawMessage) (bool, error) {
 	space, _ := s.selfSpace(ctx, self)
-	if leadOwnAgentTools[tool] && s.isLeader(ctx, self) {
-		// A direction lead driving its own Agents on the owner's computers: the owner confirmed the work once, when it
-		// reached the lead (a2a_send, the main conversation's hand-off). A track whose rules confirm every hand-off
-		// (health) still asks; the lead's track is its recorded space when known (a row the node no longer lists
-		// keeps it), decided by the track alone as an owner-confirmed text is.
-		leadSpace := space
-		if sp, known := s.conversationSpace(ctx, self); known {
-			leadSpace = sp
-		}
-		if !s.exitPolicy(ctx, "", self, leadSpace).ConfirmOutbound {
-			return true, nil
-		}
+	if s.supervises(ctx, self) {
+		// Decision rights (docs/designs/decision-rights-20261123.md): a supervisor (a direction lead or the main
+		// conversation) handing work or words to the owner's own Agents, sessions and to-dos is none of the six kinds
+		// of thing only the owner decides: nothing leaves the owner's computers in their name. The supervisor decides it
+		// itself; no phone card, whatever the track or the words. Speaking for the owner to other people goes through
+		// tools of its own, not this gate.
+		return true, nil
 	}
 	if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok {
 		text = "" // the owner just confirmed these very words: only the track decides, as before tagging
@@ -179,9 +174,6 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 		return r.Allow != nil && *r.Allow, nil
 	})
 }
-
-// leadOwnAgentTools are the tools a direction lead drives its own Agents with: no phone card for them (confirmOutbound).
-var leadOwnAgentTools = map[string]bool{"agent_start": true, "agent_send": true, "agent_interrupt": true, "agent_switch": true, "agents_switch": true}
 
 // ownerConfirmedKey marks a tool call carrying words the owner confirmed on the phone just before (an Inbox
 // suggestion's instruction): confirmOutbound does not ask about them again by what they say.

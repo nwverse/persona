@@ -9,45 +9,45 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A direction lead driving its own Agents is not asked on the phone about what its words say: the owner confirmed the
-// work once, when it reached the lead. Its other hand-offs (a2a_send) still are, and a lead in a track whose rules
-// confirm every hand-off (health) still is.
-func TestLeadDrivesItsOwnAgentsWithoutAPhoneCard(t *testing.T) {
+// Decision rights: a supervisor (a direction lead, the main conversation) handing work or words to the owner's own
+// Agents and sessions is none of the six kinds of thing only the owner decides, so no phone card is raised for it,
+// whatever its track (health included) and whatever the words carry. An ordinary conversation is still asked.
+func TestSupervisorsHandOffWithoutAPhoneCard(t *testing.T) {
 	ctx := context.Background()
 	s, f, _ := infoUseService(t)
 	setSettings(t, s, func(v *Settings) {
 		v.Main, v.Leaders, v.MachineID = "qa-main-chat", []string{"qa-main", "qa-health-1"}, "qa-machine"
 	})
 	f.setSessions("qa-machine", proto.Session{SessionID: "qa-main", MachineID: "qa-machine", Assistant: true},
-		proto.Session{SessionID: "qa-health-1", MachineID: "qa-machine", Assistant: true, Space: SpaceHealth})
+		proto.Session{SessionID: "qa-health-1", MachineID: "qa-machine", Assistant: true, Space: SpaceHealth},
+		proto.Session{SessionID: "qa-main-chat", MachineID: "qa-machine", Assistant: true},
+		proto.Session{SessionID: "qa-side", MachineID: "qa-machine", Assistant: true})
 	f.mu.Lock()
-	f.infoTag = `{"categories":["legal_id"]}`
+	f.infoTag = `{"categories":["legal_id","health"]}`
 	f.mu.Unlock()
-	for _, tool := range []string{"agent_start", "agent_send", "agent_interrupt"} {
-		done := make(chan bool, 1)
-		go func() {
-			ok, err := s.confirmOutbound(ctx, "qa-machine", "qa-main", tool, "qa: a placeholder passport number", "summary", nil)
-			done <- ok && err == nil
-		}()
-		select {
-		case ok := <-done:
-			if !ok {
-				t.Fatalf("%s: the lead's hand-off to its own Agent was refused", tool)
+	for _, self := range []string{"qa-main", "qa-health-1", "qa-main-chat"} {
+		for _, tool := range []string{"agent_start", "agent_send", "agent_interrupt", "a2a_send", "todo_create"} {
+			done := make(chan bool, 1)
+			go func() {
+				ok, err := s.confirmOutbound(ctx, "qa-machine", self, tool, "qa: a placeholder passport number", "summary", nil)
+				done <- ok && err == nil
+			}()
+			select {
+			case ok := <-done:
+				if !ok {
+					t.Fatalf("%s %s: the supervisor's hand-off was refused", self, tool)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s %s: the supervisor's hand-off waits on a phone card", self, tool)
 			}
-		case <-time.After(2 * time.Second):
-			t.Fatalf("%s: the lead's hand-off to its own Agent waits on a phone card", tool)
-		}
-		if qs := s.pendingQuestions(); len(qs) != 0 {
-			t.Fatalf("%s: a phone card was raised: %+v", tool, qs)
+			if qs := s.pendingQuestions(); len(qs) != 0 {
+				t.Fatalf("%s %s: a phone card was raised: %+v", self, tool, qs)
+			}
 		}
 	}
-	answerOutboundIn(t, s, "qa-main", "a2a_send", "summary", "", false)
-	if ok, err := s.confirmOutbound(ctx, "qa-machine", "qa-main", "a2a_send", "qa: a placeholder passport number", "summary", nil); err != nil || ok {
-		t.Fatalf("the lead's a2a_send was not asked about: %v %v", ok, err)
-	}
-	answerOutboundIn(t, s, "qa-health-1", "agent_send", "summary", "", false)
-	if ok, err := s.confirmOutbound(ctx, "qa-machine", "qa-health-1", "agent_send", "qa: a step count", "summary", nil); err != nil || ok {
-		t.Fatalf("a lead in the health track was not asked about: %v %v", ok, err)
+	answerOutboundIn(t, s, "qa-side", "agent_send", "summary", "", false)
+	if ok, err := s.confirmOutbound(ctx, "qa-machine", "qa-side", "agent_send", "qa: a placeholder passport number", "summary", nil); err != nil || ok {
+		t.Fatalf("an ordinary conversation's hand-off was not asked about: %v %v", ok, err)
 	}
 }
 
