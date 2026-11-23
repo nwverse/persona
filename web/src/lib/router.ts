@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 import { takeOverlayEntry } from "./back-close";
 import { BASE, stripBase } from "./base";
 import { decodeURIComponentSafe } from "./uri";
-import { modulePath, moduleRouteAt } from "../core/module-host";
+import { moduleExtensionAt, modulePath, moduleRouteAt } from "../core/module-host";
 
 // Persona's main conversation is the front door (like the app, which opens on the assistant): `/` and `/persona` open it, `/persona/<id>` is
 // one conversation, `/persona/new` starts a one-off one, and "Overview" lives at `/overview`. `/extension/<id>/<ui>` is an extension's page
@@ -134,7 +134,10 @@ export function parse(path: string, search = ""): Route {
   if (p[0] === "settings") return { name: "settings" };
   if (p[0] === "subscriptions") return { name: "subscriptions" };
   // /plugin/<id>/<ui>: the same page under its name before #1845 (bookmarks)
-  if ((p[0] === "extension" || p[0] === "plugin") && p[1] && p[2]) return { name: "extension", extension: p[1], ui: p[2] };
+  if ((p[0] === "extension" || p[0] === "plugin") && p[1] && p[2]) {
+    // a reserved id a feature module draws is unknown while the module is off (core/module-host.ts)
+    return moduleExtensionAt(p[1]) === "absent" ? notFound(path, search) : { name: "extension", extension: p[1], ui: p[2] };
+  }
   if (p[0] === "todos") {
     // the link's own query (#9930): reading the page's made routeAt() on a /todos?id= link open the to-do on screen
     const q = new URLSearchParams(search);

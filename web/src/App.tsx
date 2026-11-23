@@ -64,8 +64,8 @@ import { AttentionSignals } from "./lib/attention-signals";
 import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
 import { openStartPage } from "./lib/start-page";
 import { useTrackTitle } from "./lib/tracks";
-import { connectModuleHub, moduleTitle, useModuleStates } from "./core/module-host";
-import { ModulePage } from "./core/ModulePage";
+import { connectModuleHub, moduleExtensionAt, moduleTitle, useModuleStates } from "./core/module-host";
+import { ModuleExtensionPage, ModulePage } from "./core/ModulePage";
 
 // The feature modules follow the hub's hello (its features say which it serves): docs/web/web.md "Modules".
 connectModuleHub(getState, subscribe);
@@ -607,7 +607,10 @@ function Shell() {
       main = <SubscriptionsPage onToggleSidebar={toggle} />;
       break;
     case "extension":
-      main = <ExtensionNavPage key={`${route.extension}/${route.ui}`} extension={route.extension} ui={route.ui} onToggleSidebar={toggle} />;
+      // a reserved extension-page id a feature module draws (the health module's water and protein pages, #13176)
+      main = moduleExtensionAt(route.extension)
+        ? <ModuleExtensionPage key={`${route.extension}/${route.ui}${location.search}`} extension={route.extension} ui={route.ui} onToggleSidebar={toggle} />
+        : <ExtensionNavPage key={`${route.extension}/${route.ui}`} extension={route.extension} ui={route.ui} onToggleSidebar={toggle} />;
       break;
     case "not-found":
       main = <NotFound onToggleSidebar={toggle} />;

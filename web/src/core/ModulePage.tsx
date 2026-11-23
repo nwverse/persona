@@ -9,7 +9,7 @@
 import { createElement } from "react";
 import { lazyPage, preloadOnIntent, type LazyPageComponent } from "../lib/lazy-page";
 import type { Route } from "../lib/router";
-import { loadModule, moduleById, moduleState, type ModuleDescriptor, type ModulePageProps } from "./module-host";
+import { loadModule, moduleById, moduleExtensionAt, moduleState, type ModuleDescriptor, type ModuleExtensionPageProps, type ModulePageProps } from "./module-host";
 
 // by descriptor: a module registered again (a test) gets a page of its own
 const pages = new WeakMap<ModuleDescriptor, LazyPageComponent<ModulePageProps>>();
@@ -44,4 +44,31 @@ export function ModulePage({ route, onToggleSidebar }: { route: Extract<Route, {
   const d = moduleById(route.module);
   if (!d || moduleState(d) !== "on") return null;
   return createElement(pageOf(d), { path: route.path, onToggleSidebar });
+}
+
+const extensionPages = new WeakMap<ModuleDescriptor, LazyPageComponent<ModuleExtensionPageProps>>();
+
+function extensionPageOf(d: ModuleDescriptor): LazyPageComponent<ModuleExtensionPageProps> {
+  let page = extensionPages.get(d);
+  if (!page) {
+    const id = d.id;
+    page = lazyPage(
+      () =>
+        loadModule(id).then((code) => {
+          if (!code.ExtensionPage) throw new Error(`module "${id}" has no extension page`);
+          return code.ExtensionPage;
+        }),
+      { listed: false },
+    );
+    extensionPages.set(d, page);
+  }
+  return page;
+}
+
+/** A reserved extension-page id's page, drawn by the module that claims it (the health module's water and protein
+ *  pages); nothing while that module is not on. */
+export function ModuleExtensionPage(props: ModuleExtensionPageProps) {
+  const d = moduleExtensionAt(props.extension);
+  if (!d || d === "absent" || moduleState(d) !== "on") return null;
+  return createElement(extensionPageOf(d), props);
 }

@@ -12,8 +12,8 @@ vi.hoisted(() => {
 });
 // the page as a mark: what matters here is whether its chunk is requested, and what it is given
 vi.mock("./Health", () => ({ HealthPage: ({ path }: { path: readonly string[] }) => <div data-testid="health-page">{path.join("/")}</div> }));
-import { connectModuleHub, registerModule, resetModulesForTest, type ModuleDescriptor } from "../../core/module-host";
-import { ModulePage } from "../../core/ModulePage";
+import { connectModuleHub, moduleExtensionAt, registerModule, resetModulesForTest, type ModuleDescriptor } from "../../core/module-host";
+import { ModuleExtensionPage, ModulePage } from "../../core/ModulePage";
 import { preloadPages } from "../../lib/lazy-page";
 import { forgetModuleSwitches, setModuleSwitchedOff } from "../../core/module-switch";
 import { t } from "../../i18n";
@@ -170,6 +170,20 @@ describe("the health module", () => {
       Object.assign(getState(), { loaded: true, features: ["other"] });
       expect(await warm()).toEqual(none);
     });
+  });
+
+  it("draws its water and protein pages (/extension/-health-intake/…) while on; off, they are unknown addresses", async () => {
+    registerModule(counted());
+    expect(parse("/extension/-health-intake/pages")).toEqual({ name: "extension", extension: "-health-intake", ui: "pages" });
+    expect(moduleExtensionAt("-health-intake")).toMatchObject({ id: "health" });
+    resetModulesForTest();
+    setModuleSwitchedOff("health", true);
+    registerModule(counted());
+    expect(parse("/extension/-health-intake/pages")).toEqual({ name: "not-found", path: "/extension/-health-intake/pages" });
+    act(() => root.render(<ModuleExtensionPage extension="-health-intake" ui="pages" />));
+    await flush();
+    expect(chunk).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
   });
 
   it("declares what it contributes and nothing it does not serve yet", () => {

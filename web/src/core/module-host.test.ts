@@ -7,7 +7,7 @@ import { parse } from "../lib/router";
 import { getState, reset, subscribe } from "../lib/store";
 
 const setState = (patch: Partial<ReturnType<typeof getState>>) => Object.assign(getState(), patch);
-import { connectModuleHub, MODULE_API, enabledNavItems, loadModule, moduleNavKey, moduleRouteAt, moduleState, moduleTitle, registeredModules, registerModule, resetModulesForTest, subscribeModules, type ModuleDescriptor } from "./module-host";
+import { connectModuleHub, MODULE_API, enabledNavItems, moduleExtensionAt, loadModule, moduleNavKey, moduleRouteAt, moduleState, moduleTitle, registeredModules, registerModule, resetModulesForTest, subscribeModules, type ModuleDescriptor } from "./module-host";
 import { forgetModuleSwitches, moduleSwitchedOff, setModuleSwitchedOff } from "./module-switch";
 
 const code = vi.fn(async () => ({ Page: () => null }));
@@ -81,6 +81,19 @@ describe("registering", () => {
     // empty lists and the current API are fine
     registerModule(garden({ chatSlots: [], wants: [], api: MODULE_API }));
     expect(registeredModules().map((d) => d.id)).toEqual(["garden"]);
+  });
+
+  it("draws a reserved extension-page id while on, answers it as unknown while off, and refuses an unreserved or taken id", () => {
+    expect(() => registerModule(garden({ extensionPages: ["garden-ui"] }))).toThrow(/not a reserved one/);
+    registerModule(garden({ feature: undefined, extensionPages: ["-garden-ui"] }));
+    expect(() => registerModule(garden({ id: "yard", routes: [], extensionPages: ["-garden-ui"] }))).toThrow(/"garden" has/);
+    expect(moduleExtensionAt("-garden-ui")).toMatchObject({ id: "garden" });
+    expect(moduleExtensionAt("weather")).toBeNull();
+    expect(parse("/extension/-garden-ui/pages")).toEqual({ name: "extension", extension: "-garden-ui", ui: "pages" });
+    setModuleSwitchedOff("garden", true);
+    expect(moduleExtensionAt("-garden-ui")).toBe("absent");
+    expect(parse("/extension/-garden-ui/pages?state=x")).toEqual({ name: "not-found", path: "/extension/-garden-ui/pages?state=x" });
+    expect(parse("/extension/weather/pages")).toEqual({ name: "extension", extension: "weather", ui: "pages" });
   });
 
   it("tells subscribers about a registration", () => {

@@ -2318,7 +2318,7 @@ code. Its fields use the names of the module contract in #13430 section 4, in ca
 | `feature` | `feature` (a hello feature flag; none for a module every hub has served) | yes |
 | `needs` | `needs` (other modules it may import; ESLint holds it to them) | yes (guard) |
 | `wants` | `wants` (modules it uses when they are there) | declared, not yet served |
-| `shell_places` | `routes` (a page: a base segment, its aliases, its title) and `navItems` (a sidebar entry and the page it follows) | yes |
+| `shell_places` | `routes` (a page: a base segment, its aliases, its title), `extensionPages` (reserved `/extension/-<id>/…` pages the module draws, such as the health module's water and protein pages, #13176) and `navItems` (a sidebar entry and the page it follows) | yes |
 | `i18n_namespaces` | `i18nNamespaces` and `locales` (its catalog loaders) | yes |
 | `settings` | `settingsTabs` | declared, not yet served |
 | `chat_card_kinds` | `cardRenderers` | declared, not yet served |
@@ -2373,7 +2373,8 @@ fails when a module's id, route base or sidebar key appears in the `Route` union
 colors or the Settings tabs, and when a module namespace is on the first screen.
 
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
-route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its sidebar entry (right after Inbox, pink with
+route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
+extension-page id `-health-intake`, which routes as unknown while the module is off), its sidebar entry (right after Inbox, pink with
 Colored icons) and its `health` namespace come from its descriptor instead of the `Route` union, `App.tsx` and
 `SidebarParts.tsx`. The hub has no flag for it and the page was always there, so it names none and stays on unless a
 browser switches it off. Core code that needs one of its addresses writes the path (`/health/<id>`), which routes as
@@ -2922,6 +2923,14 @@ and Android follow in #5117.
   MOCK_NEW_AGENT_PANEL=1 MOCK_ULTRACODE=1` (codex also lists glm-5.3; the Mac Studio has no codex launcher; the
   ultracode feature for the switch): `node web/e2e/new-agent-model.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`
   (wide / 390 × light / dark in Chinese, and wide light in English).
+
+## Health Today (#13176)
+
+The Health home (`web/src/modules/health/Health.tsx`) opens with **Today** when the hub's hello lists `health_intake`: a water ring and a protein ring with today's amount and the goal under each, **Drank a glass** and **Other amount** under water and **Log grams** under protein (`HealthToday.tsx`, state in `useHealthIntake.ts`, requests in `intake.ts`). Without the feature the block is not drawn and nothing is asked. The requests are `GET` and `POST /api/v1/assistant/health/intake` and `DELETE …/intake/{id}`, always with `space=health` and never the shown manager's header: the health space stays the default manager's whichever assistant the Persona page shows (`lib/manager-choice.ts` `managerHeaderFor`; `intake.manager.test.ts` keeps it).
+
+A press adds its amount to the ring at once and the hub's answer, which carries today's totals, replaces the local sum; a refusal takes the amount back out and says why, with Retry sending the same record number (`crypto.randomUUID()` per record, so a retry is logged once). A logged record's toast has **Undo**, which calls the DELETE route. Writes go one at a time, in the order they were made; a read (the hub's `health_intake` message, a hello, the page coming back to the front) waits for the writes in flight and is run once they are done, so an older read cannot undo a newer answer.
+
+A ring links to its page: the hub's declarative water or protein page, drawn by the extension pages' renderer under the reserved id `-health-intake` (`lib/health-intake-ui.ts`), the way the subscription pages are, over HTTP only. `lib/extension-ui.ts` maps the reserved ids to their paths (`/subscriptions/-/ui`, `/assistant/health/intake/ui?space=health`), and `HealthIntakePage.tsx` is a full page at `/extension/-health-intake/pages?state={"kind":"water"}` (or `"protein"`), the route the renderer already opens pushed pages on ([deep-links.md](../protocol/deep-links.md) "Route table"), so it adds no route. The page draws again on the same `health_intake` message, so a record logged or undone there, or a goal saved, shows on Today at once. The ring colors and their reasons are in `docs/design/DESIGN_SYSTEM.md`.
 
 ## Sources (#9132)
 

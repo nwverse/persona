@@ -11,11 +11,12 @@
 //
 // Field names follow the module contract of #13430 section 4 (`id`, `api`, `needs`, `wants`, `feature`, `shell_places`,
 // `settings`, `chat_card_kinds`, `composer_actions`, `chat_accessories`, `i18n_namespaces`), in this codebase's camelCase:
-//   id → id · api → api · needs → needs · wants → wants · feature → feature · shell_places → routes + navItems
+//   id → id · api → api · needs → needs · wants → wants · feature → feature
+//   shell_places → routes + extensionPages + navItems
 //   settings → settingsTabs · chat_card_kinds → cardRenderers · composer_actions + chat_accessories → chatSlots
 //   i18n_namespaces → i18nNamespaces (+ locales)
 // Served today: id, api (checked against MODULE_API), needs (the ESLint boundary), feature, routes, navItems,
-// i18nNamespaces / locales. Declared but not yet served: wants, settingsTabs, chatSlots (#13431 wires them),
+// extensionPages (reserved `/extension/<id>/…` pages, also shell_places), i18nNamespaces / locales. Declared but not yet served: wants, settingsTabs, chatSlots (#13431 wires them),
 // cardRenderers. registerModule refuses a descriptor that fills one of those, so nothing is silently dropped.
 // The other contract fields (hub_routes, mcp_tools, prompt_sections, background_jobs, …) belong to the server.
 import type { ComponentType } from "react";
@@ -71,10 +72,19 @@ export interface ModulePageProps {
   onToggleSidebar?: () => void;
 }
 
+/** What a module's page drawn under a reserved extension-page id receives (`/extension/<id>/<ui>`). */
+export interface ModuleExtensionPageProps {
+  extension: string;
+  ui: string;
+  onToggleSidebar?: () => void;
+}
+
 /** A module's code, loaded on first use. */
 export interface ModuleCode {
   /** The page its routes open. */
   Page?: ComponentType<ModulePageProps>;
+  /** The page its `extensionPages` ids open. */
+  ExtensionPage?: ComponentType<ModuleExtensionPageProps>;
 }
 
 /** A module's static descriptor: small, imported at start by the module list, naming what it contributes. */
@@ -93,6 +103,9 @@ export interface ModuleDescriptor {
   title: () => string;
   description: () => string;
   routes?: readonly ModuleRoute[];
+  /** Reserved extension-page ids it draws (`/extension/<id>/<ui>`, #13430 `shell_places`): a page the hub serves as a
+   *  declarative extension page of its own, under an id no extension can have (ids starting with "-"). */
+  extensionPages?: readonly string[];
   navItems?: readonly ModuleNavItem[];
   /** Declared, not yet served. */
   settingsTabs?: readonly ModuleSettingsTab[];
@@ -175,6 +188,11 @@ export function registerModule(d: ModuleDescriptor): void {
       }
     }
   }
+  for (const id of d.extensionPages ?? []) {
+    if (!/^-[a-z][a-z0-9-]*$/.test(id)) throw new Error(`module "${d.id}" claims the extension page id "${id}", which is not a reserved one (it must start with "-")`);
+    const other = [...registry.values()].find((m) => m.extensionPages?.includes(id));
+    if (other) throw new Error(`module "${d.id}" claims the extension page id "${id}", which "${other.id}" has`);
+  }
   registry.set(d.id, d);
   changed();
 }
@@ -217,6 +235,16 @@ export function moduleRouteAt(segments: readonly string[]): Extract<Route, { nam
       if (moduleState(d) === "off") return "absent";
       return { name: "module", module: d.id, base: r.base, path: segments.slice(prefix.length) };
     }
+  }
+  return null;
+}
+
+/** The module that draws an extension-page id: its descriptor while it is on (or pending), "absent" while it is off
+ *  (the router answers the address as an unknown one), null for an id no module has. */
+export function moduleExtensionAt(extension: string): ModuleDescriptor | "absent" | null {
+  for (const d of registry.values()) {
+    if (!d.extensionPages?.includes(extension)) continue;
+    return moduleState(d) === "off" ? "absent" : d;
   }
   return null;
 }

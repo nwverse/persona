@@ -20,6 +20,7 @@ import { ChatView } from "../../views/chat/ChatView";
 import { Composer, type Outgoing } from "../../views/chat/Composer";
 import { conversationTitle, newestFirst } from "../../views/assistant/conversations";
 import { HealthReports } from "./HealthReports";
+import { HealthToday } from "./HealthToday";
 import { REPORT_FILES, startHealthConversation, uploadReports } from "./reports";
 import { spaceEntry } from "../../views/spaces/entry";
 import { Empty, SectionTitle } from "../../views/assistant/parts";
@@ -199,6 +200,7 @@ function HealthHome({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[760px] px-4 py-6 sm:px-8" style={{ animation: `fade-up 320ms ${EASE} both` }}>
+          <HealthToday />
           <div className="mb-5 flex flex-col items-center text-center">
             <span className="mb-3 flex size-12 items-center justify-center rounded-full bg-inset text-accent-ink shadow-raised">
               <Icon name="heart" size={22} />
