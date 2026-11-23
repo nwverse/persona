@@ -36,6 +36,23 @@ func checkPlacementGolden(t *testing.T, p *placement, want string) {
 	}
 }
 
+// The test store keeps placement rows under their IDs. A reconciliation must
+// finish the row written at bind, so a second row is also a test failure.
+func onlyStoredPlacement(t *testing.T, store settingsPrefixStore) placement {
+	t.Helper()
+	records, err := store.SettingsPrefix(context.Background(), "placement.")
+	if err != nil || len(records) != 1 {
+		t.Fatalf("got %d placement records, %v", len(records), err)
+	}
+	var p placement
+	for key, raw := range records {
+		if err := json.Unmarshal(raw, &p); err != nil || key != "placement."+p.ID {
+			t.Fatalf("invalid placement %s: %s, %v", key, raw, err)
+		}
+	}
+	return p
+}
+
 func TestPlacementFixedAndFlexible(t *testing.T) {
 	for _, policy := range []string{machineFixed, machineFlexible} {
 		t.Run(policy, func(t *testing.T) {

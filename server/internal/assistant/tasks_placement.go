@@ -726,10 +726,13 @@ func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t Pl
 	launch := t.storedLaunch()
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
-		if t.Placement != nil && t.Placement.Choice != "" {
-			pt.Why = t.Placement.Reason
+		if t.Placement != nil {
+			pt.Placement = t.Placement
+			if t.Placement.Choice != "" {
+				pt.Why = t.Placement.Reason
+			}
 		}
-		pt.Reroute, pt.Ultracode, pt.Placement = t.Reroute, launch.ultracode, t.Placement
+		pt.Reroute, pt.Ultracode = t.Reroute, launch.ultracode
 		pt.Workspace, pt.WorkspaceResolved, pt.MachinePolicy = t.Workspace, t.WorkspaceResolved, t.MachinePolicy
 		pt.WorkspaceInferred, pt.ReservedTodoID = t.WorkspaceInferred, t.ReservedTodoID
 		pt.Launcher, pt.Model, pt.Effort, pt.Speed, pt.Tier = launch.launcher, launch.model, launch.effort, launch.speed, launch.tier

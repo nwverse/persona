@@ -801,9 +801,15 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		s.logf("task %s: queued launch eligibility unconfirmed: %v", t.TodoID, quotaState)
 		return
 	}
+	// The admission and workspace queues publish the refusal together with its
+	// retry time. A changed launch target still follows the usual plan update.
+	planUpdate := t
+	if isAdmissionDenied(err) || errors.As(err, &wsWait) {
+		planUpdate.Placement = nil
+	}
 	if t.Machine != placed || t.Why != placedWhy || t.Permission != placedPermission {
-		s.updatePlanTask(ctx, planID, i, t)
-	} else if t.Placement != nil {
+		s.updatePlanTask(ctx, planID, i, planUpdate)
+	} else if planUpdate.Placement != nil {
 		// Recording the decision must not pin launch defaults or overwrite a workspace saved at admission.
 		write, stop := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
 		if err := s.patchPlanTask(write, planID, i, func(pt *PlanTask) {
