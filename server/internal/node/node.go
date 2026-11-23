@@ -405,9 +405,12 @@ type Node struct {
 	// assistantLife: a conversation's process is taken, compacted or closed by one of assistantSend,
 	// assistantCompact, compactIdle, restoreModel, a queue edit (assistantEditQueue) and a round's process retiring
 	// (roundSettled) at a time (model_restore.go, #2528)
-	assistantLife typingLocks
-	restores      restoreMarks // "back to the configured model" asked, until newer model evidence (model_restore.go)
-	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
+	assistantLife  typingLocks
+	restores       restoreMarks     // "back to the configured model" asked, until newer model evidence (model_restore.go)
+	hookFlights    hookFlights      // hook calls in progress by session: their process waits on them (model_restore.go)
+	activeAsks     activeAskTracker // blocking interaction.create RPCs in progress by session and question call (hooks.go)
+	outsideListed  map[string]bool  // sessions last listed by claudeSessions (guarded by mu; claudebg.go)
+	outsideListGen atomic.Uint64    // bumped when outside approval state changes so pollAgents drops stale snapshots
 
 	// dialogWait: first messages waiting for the dialog that kept them out to be answered (firstprompt.go).
 	dialogWait sync.WaitGroup
