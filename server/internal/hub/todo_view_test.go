@@ -577,6 +577,10 @@ func TestTodoRevisionMergedWithoutFullReads(t *testing.T) {
 	if unsupported.StatusCode != http.StatusConflict {
 		t.Fatalf("mixed managers: %d, want 409 so the client falls back", unsupported.StatusCode)
 	}
+	mixed, _ := todoViewGet(t, h, srv, "/api/v1/todos", nil)
+	if got := mixed.Header.Get("X-Persona-Todos-Revision"); got != "" {
+		t.Fatalf("mixed full list passed off the base manager's token as hub-wide: %q", got)
+	}
 }
 
 func TestTodoRevisionFeatureNeedsEveryManager(t *testing.T) {

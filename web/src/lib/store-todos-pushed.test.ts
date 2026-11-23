@@ -28,8 +28,14 @@ class FakeSocket {
 }
 
 const todo = (title: string) => ({ id: "t1", title, created_at: "", updated_at: "", spaces: [] });
-const settle = () => vi.advanceTimersByTimeAsync(0);
-const pushedSettle = () => vi.advanceTimersByTimeAsync(200);
+const settle = async () => {
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(0);
+};
+const pushedSettle = async () => {
+  await settle(); // the lazy push module's import, before its 200 ms timer
+  await vi.advanceTimersByTimeAsync(200);
+};
 
 let reads: ((title: string) => void)[] = [];
 let revision = 1;
@@ -109,6 +115,7 @@ describe("to-do pushes", () => {
     const fullBefore = todoReads();
     const revisionBefore = revisionReads();
     for (let i = 0; i < 10; i++) s.push({ type: "todos" });
+    await settle(); // load the push module before measuring its settle window
     await vi.advanceTimersByTimeAsync(199);
     expect(revisionReads() - revisionBefore).toBe(0);
     await vi.advanceTimersByTimeAsync(1);

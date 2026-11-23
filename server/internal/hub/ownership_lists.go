@@ -211,6 +211,7 @@ func writeTaggedList(w http.ResponseWriter, r *http.Request, key string, answers
 	}
 	if status == http.StatusOK {
 		if key == "todos" {
+			hd.Del(assistantwire.TodoRevisionHeader) // the base answer's manager token is not a hub-wide one
 			if revision, complete := todoRevisionOfAnswers(answers); complete {
 				hd.Set(assistantwire.TodoRevisionHeader, revision)
 			}
