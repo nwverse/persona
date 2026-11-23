@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 const (
@@ -105,6 +107,18 @@ func NewConn(ctx context.Context, ws *websocket.Conn) *Conn { return newConn(ctx
 func newConn(ctx context.Context, ws *websocket.Conn, limit int64) *Conn {
 	ws.SetReadLimit(limit)
 	return &Conn{ws: ws, ctx: ctx, limit: limit}
+}
+
+// NewPeer applies the bus budget to each encoded RPC line before it reaches the WebSocket.
+func (c *Conn) NewPeer(prefix string, logf func(string, ...any)) *rpc.Peer {
+	p := rpc.New(prefix, c)
+	p.Limits.FrameBytes = int(c.limit)
+	if logf != nil {
+		p.OnFrameTooLarge = func(operation string, size, limit int) {
+			logf("bus: rejected oversized RPC line for %.80q (%d bytes, limit %d)", operation, size, limit)
+		}
+	}
+	return p
 }
 
 // Read hands on the current text message, then a newline; binary messages are skipped. A message that fails part-way
