@@ -25,7 +25,7 @@ func currentRecoveryCLI(h *Manager) cliport.Connector {
 
 func recoveryCLI(t *testing.T, w *botLoadWorld) string {
 	t.Helper()
-	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	bin, err := filepath.Abs(filepath.Join("..", "modules", "lark", "larkcli", "testdata", "fake-lark-cli.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}

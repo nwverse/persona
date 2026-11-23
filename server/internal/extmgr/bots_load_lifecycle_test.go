@@ -134,7 +134,7 @@ func TestBotLoadReadKeepsEarlierCallerDeadline(t *testing.T) {
 func TestBotLoadLiveCLIProfileRecovery(t *testing.T) {
 	needsLarkModule(t)
 	w := newBotLoadWorld(t, true, false)
-	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	bin, err := filepath.Abs(filepath.Join("..", "modules", "lark", "larkcli", "testdata", "fake-lark-cli.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newBotLoadWorld(t, true, false)
-			bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+			bin, err := filepath.Abs(filepath.Join("..", "modules", "lark", "larkcli", "testdata", "fake-lark-cli.sh"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -280,7 +280,7 @@ func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
 func TestBotLoadManagedCLIRecoverySynchronizes(t *testing.T) {
 	needsLarkModule(t)
 	w := newBotLoadWorld(t, true, false)
-	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	bin, err := filepath.Abs(filepath.Join("..", "modules", "lark", "larkcli", "testdata", "fake-lark-cli.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
