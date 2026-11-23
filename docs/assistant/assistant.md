@@ -2856,12 +2856,20 @@ starts it. The manager attests it on every send it makes into an existing conver
 messages, relays, a leader's supervision digests and Inbox continuations alike. Any
 value a caller put there is replaced. A cold compaction restart reads the current role
 from `assistant.model`. A process started without the role (by an older manager)
-runs unproxied until its next start. Ordinary API requests and streamed replies
+runs unproxied until its next start. The manager reads a node's retained inventory to
+revoke ids that are no longer root assistant conversations; a node never sets
+`Session.Assistant` in its own rows (only the hub's decorated list does), so the row is
+judged by its directory, as agent naming does (#13879). Ordinary API requests and streamed replies
 are forwarded without changing payload bytes. Provider errors are returned as-is;
 transport failures return a generic 502 without logging upstream error text.
 
 Only a successful request with a reported cache read/write and exclusively one-hour
-cache declarations can be retained. Mixed TTL requests
+cache declarations can be retained. Claude Code declares a one-hour cache only for a
+subscriber or with `ENABLE_PROMPT_CACHING_1H`; on an API key or a gateway it sends a
+bare five-minute `{"type":"ephemeral"}`. A start that mounts the proxy therefore also
+sets `ENABLE_PROMPT_CACHING_1H=1` in its settings env; other starts keep the CLI's
+default. The proxy asks the provider for identity encoding on `/messages`, since a
+compressed event stream would hide `message_start` from the response tap. Mixed TTL requests
 are skipped to avoid rewriting an expired five-minute history behind a cache hit on
 the system prefix.
 The provider response's message id must also appear on the CLI's root `message_start`;

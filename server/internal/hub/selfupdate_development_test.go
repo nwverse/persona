@@ -16,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/operations/backup"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -202,10 +203,11 @@ func TestDevelopmentBackupSettingsAreValidatedAndExposed(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 	v, raw := getUpdate(t, u)
-	if v.Development.BackupDirectory != dir || v.Development.BackupRetain != 5 || !v.Development.BuiltinQuiesce {
+	// Directories come back with symlinks resolved (on macOS /tmp and /var are /private/…): compare them as the hub does.
+	if !backup.SamePath(v.Development.BackupDirectory, dir) || v.Development.BackupRetain != 5 || !v.Development.BuiltinQuiesce {
 		t.Fatalf("settings not exposed: %+v", v.Development)
 	}
-	if v.Development.BackupDefaultDirectory != filepath.Join(h.cfg.dir, "update", "development-backups") {
+	if !backup.SamePath(v.Development.BackupDefaultDirectory, filepath.Join(h.cfg.dir, "update", "development-backups")) {
 		t.Fatalf("recommended directory = %q", v.Development.BackupDefaultDirectory)
 	}
 	if raw["development"].(map[string]any)["backup_retain"] != float64(5) {
@@ -297,7 +299,7 @@ func TestDevelopmentFolderChangeRefusedWhileRecoveryPending(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("folder changed with a coordination marker: %d %s", w.Code, w.Body.String())
 	}
-	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != current {
+	if v, _ := getUpdate(t, u); !backup.SamePath(v.Development.BackupDirectory, current) {
 		t.Fatalf("refused change moved the folder: %q", v.Development.BackupDirectory)
 	}
 	if err := os.Remove(filepath.Join(current, "coordination-pending.json")); err != nil {
@@ -315,7 +317,7 @@ func TestDevelopmentFolderChangeRefusedWhileRecoveryPending(t *testing.T) {
 	if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, other)); w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
-	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != other {
+	if v, _ := getUpdate(t, u); !backup.SamePath(v.Development.BackupDirectory, other) {
 		t.Fatalf("folder after recovery = %q", v.Development.BackupDirectory)
 	}
 }

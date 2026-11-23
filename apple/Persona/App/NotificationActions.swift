@@ -63,7 +63,7 @@ nonisolated enum NotificationActions {
             ],
             intentIdentifiers: [], options: [])
         // Pairing receipts (#4199): Not you? Revoke, It's Mine / Not Mine (PairReceiptActions).
-        var all = Set([permission, plan, question, screen, elicitation, done, decide] + PairReceiptActions.categories)
+        var all = Set([permission, plan, question, screen, elicitation, done, decide, WaterReminderActions.notificationCategory] + PairReceiptActions.categories)
         #if os(iOS)
         // A calendar meeting's reminder (#8731 G2): Start (MeetingReminders).
         all.insert(MeetingReminders.notificationCategory)

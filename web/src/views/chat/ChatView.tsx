@@ -1535,10 +1535,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     [earlier.liveItems, lastLive, outgoing, foldBackground, isMain],
   );
   lastLines.current = allLines;
+  // The timeline split and the assistant display use the same history boundary: one feed walk per items change.
+  const historyFrom = useMemo(() => (tr.hasMore ? loadedFrom(tr.items) : undefined), [tr.hasMore, tr.items]);
   // A canonical, completed silent round leaves no empty row or feed card in the main timeline. Its full projection is
   // retained for Background activity; running, legacy quiet and every promoted round keep their existing rendering.
-  // The oldest loaded transcript time while older pages remain: read once for both the split and the feed's gate.
-  const historyFrom = useMemo(() => (tr.hasMore ? loadedFrom(tr.items) : undefined), [tr.hasMore, tr.items]);
   const quiet = useMemo(() => splitBackgroundActivity(allLines, feed, historyFrom), [allLines, feed, historyFrom]);
   const lines = quiet.timeline;
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and
