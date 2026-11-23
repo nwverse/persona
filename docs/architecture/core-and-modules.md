@@ -59,7 +59,8 @@ not loaded. Each of those parts of the contract holds from the PR that serves it
 | --- | --- | --- |
 | Module API | `server/internal/modapi` | Pure types: `Info` (the manifest), `Module` (`Info()` + `Register(Host)`), `Host` (everything a module may use of the core) and the contribution types. A contract package (`server/internal/archguard/testdata/contracts.txt`) |
 | Modules | `server/internal/modules/<id>` | One package per module, with its `module.json` (embedded: `Info()` reads it). No nested Go modules |
-| Composition root | `server/internal/modules/all` | The one list of built-in modules, one file per module with its build constraint. `internal/manager` and `internal/managercli` link it |
+| Composition root | `server/internal/modules/all` | The one list of built-in modules, one file per module with its build constraint. `internal/manager`, `internal/managercli` and the binaries `cmd/personad` and `cmd/persona-manager` link it |
+| Provider seams | `server/internal/builtinext` | What the core needs of a module that runs as a built-in extension program, declared by the core and provided by the composition root (see "Provider seams") |
 | Host | `server/internal/assistant/kernel` | Loads the modules compiled in and switched on, serves `modapi.Host` to each, and answers the core's questions about what they added |
 
 The core asks the kernel (`s.modules` in package assistant, `server/internal/assistant/modules.go`), never a module's
@@ -101,6 +102,23 @@ missing quietly.
   start. A module switched off is absent exactly as one left out of the build. There is no screen or tool for the row
   yet: the settings registry of #13395 is its intended home.
 
+### Provider seams
+
+Some modules are not code the manager runs but a built-in extension's program: `volc` is `personad volc`, which the
+extension host (`internal/extmgr`) starts and which reaches the hub only through its API. The core needs two things of
+such a module, and it declares them in `server/internal/builtinext` in its own terms, never as the module's types:
+
+- the program a subcommand runs (`builtinext.AddProgram`, `LookupProgram`; `personad`'s usage lists the programs the
+  build has);
+- what the extension host shows of the extension: for `volc` its ids and its form's choices (`builtinext.Volc`).
+
+The module's file in `server/internal/modules/all` provides them in its `init`, under the module's build constraint.
+With the module left out nothing is provided: the subcommand is unknown and the extension host registers no such
+extension, exactly as before the extension existed (`TestNoVolcWithoutItsModule`). Such a module registers nothing
+with the kernel yet; its `module.json` declares no slot. `scripts/ci/server.sh build` builds and tests the binaries,
+`builtinext`, the modules, the guards and the extension host's tests of them with `persona_core_only` and with
+`persona_without_volc`.
+
 ### Guards
 
 `server/internal/archguard` keeps the boundary. Both module guards read the import lines of every `.go` file under
@@ -109,13 +127,20 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
 
 - **`TestCoreImportsNoModule`**: no package outside `internal/modules` imports `internal/modules/…`, except the composition
   roots listed in `testdata/module_roots.txt`, which import only `internal/modules/all`. A core package's tests may
-  import `internal/modules/all` to run as the manager does (`internal/assistant/modules_link_test.go`), and nothing
-  else of `internal/modules`. Known violations would go into `testdata/module_imports_baseline.txt`, which only shrinks
+  import `internal/modules/all` to run as the manager does (`internal/assistant/modules_link_test.go`), and a module's
+  stand-in, `internal/modules/<id>/<id>test`, a fake of the outside service the module's program talks to (the
+  extension host's tests run `personad volc` against `volctest`); nothing else of `internal/modules`. Known violations would go into `testdata/module_imports_baseline.txt`, which only shrinks
   (a stale line fails); it is empty.
-- **`TestModulesUseOnlyTheSPI`**: every file of a module, tests included, imports only the standard library, `modapi` and
-  the other contract packages (pure, so nothing more comes with them), its own packages, and the modules its
-  `module.json` needs. A module it only wants may be left out of the build (`persona_without_<id>`), so it is reached
+- **`TestModulesUseOnlyTheSPI`**: every file of a module, tests included, imports only the standard library, third-party
+  packages, `modapi` and the other contract packages (pure, so nothing more comes with them), the leaf libraries, its
+  own packages, and the modules its `module.json` needs. A module it only wants may be left out of the build (`persona_without_<id>`), so it is reached
   through the kernel, never imported. Each module directory has a `module.json` whose id is the directory's name.
+- **`TestLibrariesAreLeaves`**: the leaf libraries (`testdata/libraries.txt`) are the core's packages a module may use
+  that hold no state and own no feature (localization, the extension SDK, small helpers). Each depends only on the
+  standard library, third-party packages, the contracts and the other libraries, so a module that uses one reaches no
+  manager, hub, node, store or module. A library is added only when a module needs it and it passes this test.
+- **`TestStandInsHoldNoModuleCode`**: a stand-in imports only what a library may, never its module, so the core tests
+  that use it reach none of the module's code.
 - **`TestContractsArePure`** covers `modapi` like every contract package, and the hub's
   `TestHubDoesNotImportTheManager` (`server/internal/hub/architecture_guard_test.go`) forbids `internal/modules`.
 - `scripts/test/test_module_schema.py` checks every `module.json` against `schema/module.schema.json`, refuses invalid
@@ -137,6 +162,14 @@ assistant and move as the host learns to serve them.
   star's lines alone; the acceptance reminders wait for no briefing; `assistant.briefing_waits` is hidden from
   `persona_settings` but stays stored. `server/internal/assistant/modules_test.go` covers each of these.
 
+### Volcengine speech
+
+`volc` (`server/internal/modules/volc`, #13431) is the Volcengine speech provider module, apart from voice (#13430
+section 2): the program `personad volc` and its stand-in service `volctest` (docs/extensions/volcengine-speech.md). The
+extension host keeps the extension's manifest, its meetings switch and its settings text (`internal/extmgr/volc_extension.go`),
+from what the module provides through `builtinext`; its catalog strings (`hub-volc_extension.*`, `volc-*`) stay in the
+hub's locales.
+
 ### How to add a module
 
 1. Pick the id from #13430 section 2 and check its manifest needs only slots the kernel serves; if it needs another,
@@ -144,8 +177,9 @@ assistant and move as the host learns to serve them.
 2. Create `server/internal/modules/<id>/` with `module.json` (validated by `schema/module.schema.json`), a `Module` whose
    `Info()` reads it and whose `Register` adds what it declares. Import only `modapi`, contract packages and the modules
    it needs (never one it only wants).
-3. Add `server/internal/modules/all/<id>.go` with `//go:build !persona_without_<id> && !persona_core_only`, and the id to
-   `want_default_test.go` there.
+3. Add `server/internal/modules/all/<id>.go` with `//go:build !persona_without_<id> && !persona_core_only`, and
+   `want_<id>_test.go` there under the same constraint, adding the id to `wantModules`. A module that runs as a
+   built-in extension program provides what the core needs of it there too ("Provider seams").
 4. In the core, replace each direct call with a question to the kernel (`s.modules`), and define what happens when the
    module is absent; test both.
 5. Run the archguard tests, the tagged builds and `scripts/test/test_module_schema.py`.

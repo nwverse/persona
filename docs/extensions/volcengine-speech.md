@@ -9,7 +9,9 @@ Who it serves: everyday owners who already pay for, or want, a Chinese-first spe
 switches; models, voice ids and the old console's App ID are under **Advanced**.
 
 Code: `server/internal/modules/volc` (the program), `server/internal/extmgr/volc_extension.go` (the manifest, the switch), the assistant's
-`meeting_transcription_choice.go`; the stand-in service for tests is `server/internal/modules/volc/volctest`.
+`meeting_transcription_choice.go`; the stand-in service for tests is `server/internal/modules/volc/volctest`. The program
+is the `volc` module (docs/architecture/core-and-modules.md "Volcengine speech"): a build with `persona_without_volc` or
+`persona_core_only` has neither `personad volc` nor the extension.
 
 ## Setting it up
 
