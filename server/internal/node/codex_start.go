@@ -229,7 +229,11 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if execution.CodexEffortFallback == proto.CodexFallbackAnnounced {
 		runs.Effort = execution.Effort
 	} else if runs.Effort != "" {
-		prepared = n.prepareCodexEffort(ctx, launch, argv, cwd, execution)
+		var err error
+		prepared, err = n.prepareCodexEffort(ctx, launch, argv, cwd, execution)
+		if err != nil {
+			return nil, err
+		}
 		if err := ctx.Err(); err != nil {
 			if prepared != nil {
 				prepared.unsubscribe()

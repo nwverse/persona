@@ -160,11 +160,14 @@ func (n *Node) herdrCodexLauncher(name string) string {
 		if _, managed := n.managedLauncher(name); managed {
 			return dquote(n.bin) + " launch " + dquote(name)
 		}
+		if name == "codex" {
+			return "codex" // codex-start resolves the stock CLI even before discovery
+		}
 	}
 	if name == "codex" && len(words) == 1 && (words[0] == "codex" || filepath.IsAbs(words[0])) {
 		return dquote(words[0])
 	}
-	// Includes a restore before the first discovery after a node restart.
+	// Rediscover custom launcher words in the marked shell on restore.
 	return "--launcher " + dquote(name)
 }
 

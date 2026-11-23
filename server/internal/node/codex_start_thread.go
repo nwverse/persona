@@ -137,34 +137,34 @@ func (t *codexPreparedThread) unsubscribe() {
 	_ = t.server.wire.call(ctx, "thread/unsubscribe", map[string]any{"threadId": t.raw}, nil)
 }
 
-// No prompt is sent during preparation. A refused start or setting can fall
-// back before opening a terminal, without replaying anyone's first turn.
-func (n *Node) prepareCodexEffort(ctx context.Context, launch host.Launcher, argv []string, cwd string, e modelExecution) *codexPreparedThread {
+// A nil thread and nil error allow terminal fallback. An ambiguous creation error
+// stops the start: retrying could create a second conversation.
+func (n *Node) prepareCodexEffort(ctx context.Context, launch host.Launcher, argv []string, cwd string, e modelExecution) (*codexPreparedThread, error) {
 	if n.codices == nil {
-		return nil
+		return nil, nil
 	}
 	params, endpoint := codexStartParams(argv, cwd, e)
 	if params == nil {
-		return nil
+		return nil, nil
 	}
 	if owner, ok := launch.(interface{ Kind() string }); ok && owner.Kind() == host.Orca && endpoint == "" {
-		return nil
+		return nil, nil
 	}
 	pane := codexPaneEnv(launch)
 	exe, home := n.codexStartCLI(ctx, argv, pane, nil, cwd)
 	if exe == "" || !sameDir(home, n.codexHome()) {
-		return nil
+		return nil, nil
 	}
 	// Process-specific attribution headers depend on environment bindings that a
 	// shared daemon cannot inherit. Preserve that launcher's native configuration.
 	if sourced, _ := codexModelSource(argv, append(os.Environ(), modelSourceEnvironment(e.Source, n.bin)...), cwd, n.home); len(sourced) != len(argv) {
-		return nil
+		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	c := n.startEffortRemote(ctx, home, endpoint, exe, cwd, pane)
 	if c == nil {
-		return nil
+		return nil, nil
 	}
 	var reply struct {
 		Thread      remoteThreadData
@@ -175,38 +175,58 @@ func (n *Node) prepareCodexEffort(ctx context.Context, launch host.Launcher, arg
 	params["config"] = map[string]any{"model_reasoning_effort": e.Effort}
 	err := c.wire.call(ctx, "thread/start", params, &reply)
 	var re *codexError
-	if errors.As(err, &re) && re.Code == -32602 {
-		// Some versions only take effort after creating the thread.
-		delete(params, "config")
-		err = c.wire.call(ctx, "thread/start", params, &reply)
+	if errors.As(err, &re) && re.Code == -32601 {
+		return nil, nil // the server has no thread/start method
 	}
-	if err != nil || !validID(reply.Thread.ID) {
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	if !validID(reply.Thread.ID) {
+		return nil, errors.New("Codex thread/start returned no valid thread ID")
 	}
 	t := &codexPreparedThread{server: c, raw: reply.Thread.ID}
 	tier := codexServiceTier(reply.ServiceTier)
 	if e.ServiceTier != "" && e.ServiceTier != tier {
 		t.unsubscribe()
-		return nil
+		return nil, nil
 	}
-	if err := c.wire.call(ctx, "thread/settings/update", map[string]any{"threadId": t.raw, "effort": e.Effort}, nil); err != nil &&
-		!(reply.Effort == e.Effort && errors.As(err, &re) && (re.Code == -32601 || re.Code == -32602)) {
+	effort := reply.Effort
+	err = c.wire.call(ctx, "thread/settings/update", map[string]any{"threadId": t.raw, "effort": e.Effort}, nil)
+	switch {
+	case errors.As(err, &re) && re.Code == -32601:
+		// Older servers can confirm the start configuration in the creation reply.
+	case err == nil || (errors.As(err, &re) && re.Code == -32602):
+		// An acknowledgement has no settings. Read the live thread before opening
+		// the pane, including after a rejection that may have partially applied.
+		var read struct {
+			Thread remoteThreadData
+		}
+		if err := c.wire.call(ctx, "thread/read", map[string]any{"threadId": t.raw, "includeTurns": false}, &read); err != nil || read.Thread.ID != t.raw {
+			t.unsubscribe()
+			return nil, nil
+		}
+		effort = read.Thread.Effort
+	default:
 		t.unsubscribe()
-		return nil
+		return nil, nil
+	}
+	if effort != e.Effort {
+		t.unsubscribe()
+		return nil, nil
 	}
 	t.public = n.registerCodex(c.spec.Home, t.raw, reply.Thread.Path)
 	if t.public == "" || n.codexBlocked(t.public) {
 		t.unsubscribe()
-		return nil
+		return nil, nil
 	}
 	c.mu.Lock()
 	thread := c.threads[t.raw]
 	thread.id, thread.publicID, thread.cwd, thread.path = t.raw, t.public, cwd, reply.Thread.Path
-	thread.model, thread.effort, thread.joined, thread.status = reply.Model, e.Effort, true, proto.StatusDone
+	thread.model, thread.effort, thread.joined, thread.status = reply.Model, effort, true, proto.StatusDone
 	thread.serviceTier = tier
 	thread.created = time.Now()
 	thread.revision++
 	c.threads[t.raw] = thread
 	c.mu.Unlock()
-	return t
+	return t, nil
 }

@@ -19,13 +19,18 @@ func TestCodexStartsWithEffortOnSharedDaemon(t *testing.T) {
 		t.Skip("Unix control socket fixture")
 	}
 	for _, tc := range []struct {
-		name, prompt, initialEffort string
-		legacy, refuse              bool
+		name, prompt, initialEffort                    string
+		legacy, refuse                                 bool
+		rejectAfterCreation, ignoreUpdate, wrongReadID bool
 	}{
-		{"settings update", "first task", "low", false, false},
-		{"empty thread", "", "low", false, false},
-		{"start config only", "use the configured effort", "high", true, false},
-		{"neither method", "work", "low", true, true},
+		{name: "settings update", prompt: "first task", initialEffort: "low"},
+		{name: "empty thread", initialEffort: "low"},
+		{name: "start config only", prompt: "use the configured effort", initialEffort: "high", legacy: true},
+		{name: "neither method", prompt: "work", initialEffort: "low", legacy: true, refuse: true},
+		{name: "invalid params after creation", prompt: "work", rejectAfterCreation: true},
+		{name: "acknowledged but ignored", prompt: "work", initialEffort: "low", ignoreUpdate: true, refuse: true},
+		{name: "effort missing from readback", prompt: "work", ignoreUpdate: true, refuse: true},
+		{name: "readback is for another thread", prompt: "work", wrongReadID: true, refuse: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, f, _, _ := codexStartHerdr(t, 0)
@@ -65,6 +70,12 @@ func TestCodexStartsWithEffortOnSharedDaemon(t *testing.T) {
 						t.Errorf("first turn used %q", effort)
 					}
 				}
+				if tc.ignoreUpdate && method == "thread/settings/update" {
+					return map[string]any{}, true
+				}
+				if tc.wrongReadID && method == "thread/read" {
+					return map[string]any{"thread": map[string]any{"id": startID, "reasoningEffort": "high"}}, true
+				}
 				if method != "thread/start" {
 					return nil, false
 				}
@@ -72,6 +83,9 @@ func TestCodexStartsWithEffortOnSharedDaemon(t *testing.T) {
 				rf.threads = []string{remoteRaw}
 				rf.threadEffort = tc.initialEffort
 				rf.mu.Unlock()
+				if tc.rejectAfterCreation {
+					return &codexError{Code: -32602, Message: "fixture rejected parameters after creation"}, true
+				}
 				return map[string]any{"thread": map[string]any{"id": remoteRaw}, "reasoningEffort": tc.initialEffort, "model": "example"}, true
 			}
 			if tc.legacy {
@@ -93,6 +107,12 @@ func TestCodexStartsWithEffortOnSharedDaemon(t *testing.T) {
 			})
 			f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", remoteRaw, proto.StatusDone, "w1:p2", "w1:t2", "w1", cwd, "")}, nil))
 			result, err := request(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "codex", "prompt": tc.prompt, "effort": "high", "model": "example", "codex_effort_fallback": proto.CodexFallbackNotify})
+			if tc.rejectAfterCreation {
+				if err == nil || !strings.Contains(err.Error(), "rejected parameters after creation") || rf.count("thread/start") != 1 || rf.count("thread/settings/update") != 0 || rf.count("turn/start") != 0 || len(f.trace("tab.create")) != 0 {
+					t.Fatalf("ambiguous creation must stop before retry or delivery: %v", err)
+				}
+				return
+			}
 			if tc.refuse {
 				if rpcCode(err) != proto.CodeCodexEffortTerminal || rf.count("thread/unsubscribe") != 1 || rf.count("turn/start") != 0 || len(f.trace("tab.create")) != 0 {
 					t.Fatalf("unexpected failed preparation: %v", err)

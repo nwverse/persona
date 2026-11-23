@@ -126,6 +126,14 @@ exec `+shellQuote(os.Args[0])+" -test.run=^TestCodexStartHelper$ -- \"$@\"\n")
 				}
 				runPane(argv[1], append(tc.want, "-c", codexTaskConfig(rules), "resume", startID))
 			}
+			// A node can rebuild the persisted command before its first launcher scan.
+			withCodexLaunchers(t, nil)
+			argv, ok := n.agentResumeArgv(agentLaunch{Agent: "codex", Launcher: "codex"}, startID)
+			if !ok || len(argv) != 2 || !strings.Contains(argv[1], "codex-start --herdr-resume codex resume "+startID) {
+				t.Fatalf("cold stock restore depends on discovery: %q", argv)
+			}
+			runPane(argv[1], []string{"1", "codex", "unset", "resume", startID})
+
 		})
 	}
 }

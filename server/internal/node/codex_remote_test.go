@@ -130,7 +130,11 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if response != nil {
 			if value, handled := response(m.Method, p); handled {
-				f.push(map[string]any{"id": m.ID, "result": value})
+				if rpcErr, ok := value.(*codexError); ok {
+					f.push(map[string]any{"id": m.ID, "error": rpcErr})
+				} else {
+					f.push(map[string]any{"id": m.ID, "result": value})
+				}
 				continue
 			}
 		}
