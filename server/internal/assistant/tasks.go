@@ -74,6 +74,17 @@ type PlanTask struct {
 	Speed              string `json:"speed,omitempty"`
 	Tier               string `json:"tier,omitempty"`
 	Permission         string `json:"permission,omitempty"`
+	// StartPermission is the effective mode of the last started assignment, not a caller choice. It lets task_spawn
+	// recover that mode when an older node omits the live parent permission.
+	StartPermission string `json:"start_permission,omitempty"`
+	// CallerPermission is the permission the caller actually named: empty when it named none, before the card or a
+	// start settles Permission. Nil is an opaque legacy row whose Permission is retained rather than guessing its source.
+	// The hub owns this pointer; tool input cannot set it directly.
+	CallerPermission *string `json:"caller_permission,omitempty"`
+	// RetryFromAgent and RetryFromAllowAll describe the failed start's actual agent. They are hub-owned, refreshed for
+	// every retry, and persisted so queueing or a cross-machine reroute cannot reinterpret a machine-local launcher name.
+	RetryFromAgent    string `json:"retry_from_agent,omitempty"`
+	RetryFromAllowAll bool   `json:"retry_from_allow_all,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`
@@ -149,6 +160,9 @@ type PlanTask struct {
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
 	Project string `json:"project,omitempty"`
+	// SkipProjectMemory omits the automatic project/direction handoff for this start only. It is persisted so queued
+	// starts, retries and reloads keep the caller's choice; the assignment and to-do decisions are unaffected (#13538).
+	SkipProjectMemory bool `json:"skip_project_memory,omitempty"`
 	// Attachments: pictures and files the user gave the assistant for this task, by their paths on AttachFrom, the
 	// assistant's computer (#2437, attachments.go); Mentioned: those of them the prompt names by path without listing
 	// them. Checked when the plan is made; copied to the task's computer when it starts. AttachFrom and Mentioned are
@@ -198,8 +212,10 @@ type PlanTask struct {
 	rememberKind bool
 	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
 	preservePermission bool
-	// A spawned session can inherit a known launcher default even when agent.new configures another model.
-	launcherDefaultModel bool
+	// LauncherDefaultModel selects the launcher's own model instead of a matching Agents binding. It is hub-owned:
+	// task_spawn sets it for an explicitly empty parent model, and a launcher-only retry override sets it too. Its
+	// absence on a legacy plan keeps that row's opaque launch unchanged.
+	LauncherDefaultModel bool `json:"launcher_default_model,omitempty"`
 	// planFirst: start defaults asked for the self-planning constraint in the prompt (start_defaults.go); never
 	// serialized, this try only.
 	planFirst bool
@@ -447,7 +463,15 @@ func planFromRow(row db.TaskPlanRow) *TaskPlan {
 }
 
 // movePlan moves p from state from to its State with its Tasks; false when someone else moved it first.
-func (s *Service) movePlan(ctx context.Context, p *TaskPlan, from string) (bool, error) {
+func (s *Service) movePlan(ctx context.Context, p *TaskPlan, from string) (moved bool, err error) {
+	if from == planOpen && p.State != planOpen {
+		// the card is decided (started, not started, withdrawn): its push leaves the phones it went to (planPushOver)
+		defer func() {
+			if moved && err == nil {
+				s.planPushOver(p.ID)
+			}
+		}()
+	}
 	p.UpdatedAt = time.Now().UTC()
 	st := s.store()
 	if st == nil {

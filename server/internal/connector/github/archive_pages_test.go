@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // longStart is a cursor from before both fake threads.
@@ -76,7 +76,7 @@ func fakeLongThread(t *testing.T, comments, reviews, inline int) (*Connector, *a
 }
 
 // longThread is issue 7's batch from one Changes call (nil when it has none), the next cursor and more.
-func longThread(t *testing.T, c *Connector, cursor string) (*connector.ChatBatch, string, bool) {
+func longThread(t *testing.T, c *Connector, cursor string) (*connectorwire.ChatBatch, string, bool) {
 	t.Helper()
 	batches, next, more, err := c.Changes(context.Background(), cursor, 20)
 	if err != nil {
@@ -91,7 +91,7 @@ func longThread(t *testing.T, c *Connector, cursor string) (*connector.ChatBatch
 }
 
 // counted counts a batch's messages by kind (the first letter of their IDs) and fails unless they are in time order.
-func counted(t *testing.T, b *connector.ChatBatch) map[byte]int {
+func counted(t *testing.T, b *connectorwire.ChatBatch) map[byte]int {
 	t.Helper()
 	n := map[byte]int{}
 	for i, m := range b.Messages {
@@ -165,7 +165,7 @@ func TestChangesLongListGoesOnInTheNextCall(t *testing.T) {
 		if call > 5 {
 			t.Fatalf("still more after %d calls", call-1)
 		}
-		var b *connector.ChatBatch
+		var b *connectorwire.ChatBatch
 		b, cursor, more = longThread(t, c, cursor)
 		if b == nil {
 			t.Fatalf("call %d archived nothing", call)
@@ -196,7 +196,7 @@ func TestChangesLongReviewsDoNotHoldTheArchive(t *testing.T) {
 		if call > 5 {
 			t.Fatalf("still more after %d calls", call-1)
 		}
-		var b *connector.ChatBatch
+		var b *connectorwire.ChatBatch
 		if b, cursor, more = longThread(t, c, cursor); b != nil {
 			reviews += counted(t, b)['r']
 		}

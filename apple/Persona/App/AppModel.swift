@@ -643,6 +643,7 @@ final class AppModel {
     /// Counts the current hub's hellos (its socket connecting again): a page that reads on reconnect follows it, so it
     /// reads on that alone and not on every push (#11516's page).
     private(set) var hubHellos = 0
+    private(set) var healthIntakeRevision = 0
     /// Numbers the tree reads in the order they were asked; `directionTreeLanded` is the newest one whose answer was
     /// taken. An answer older than that is dropped; a read that fails moves neither, so it never makes an earlier
     /// good answer count as stale.
@@ -1510,6 +1511,9 @@ final class AppModel {
 
     /// The health space's open conversations the hub has pushed, newest first (Health; `HealthModel` adds the hub's list).
     var healthConversations: [Session] { assistantLists(for: hub?.group ?? "").health }
+
+    /// The domain spaces' open conversations the hub has pushed, newest first (`SpaceHomeModel` adds each space's list).
+    var spaceConversations: [Session] { assistantLists(for: hub?.group ?? "").spaces }
 
     /// The two lists as of the last push, set only when they changed: a push about the agents (most of them) leaves
     /// the Persona page's conversations alone (`AssistantSidebar` was drawn again twice for each one, #390). For a group
@@ -3098,6 +3102,11 @@ final class AppModel {
         case .hello(let hello):
             let previousSurfaceCapabilities = extensionSurfaceCapabilities
             link(group)?.received(hello)
+            // The hub may turn modules off, or on again (#13849, docs/apple/ios.md "Modules"); kept per hub.
+            ModuleState.shared.heard(Set(hello.features), from: group, isHub: isHub)
+            #if os(iOS)
+            if isHub { Task { await HealthIntakeSync.shared.refresh(model: self) } }
+            #endif
             refoldSides() // this hub may fold side sessions now, or no longer (#7944)
             if let page = sessionLists.lists[group], page.loaded, !page.query.legacy, page.paged != hello.features.contains("sessions_list"), let link = link(group) {
                 page.cancel()
@@ -3113,6 +3122,7 @@ final class AppModel {
             DirectionFilings.shared.hello(group)
             if isHub { hubHellos += 1 }
             #if os(iOS)
+            if isHub { HomeWidgetData.shared.intakeChanged() }
             // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
             if isHub { MeetingConversation.shared.reconnected() }
             // The meeting flags a start without the app in front reads follow every hello, not only the Recordings page.
@@ -3239,6 +3249,13 @@ final class AppModel {
             // The direction tree changed (#4352): read it again. Its answer is the default manager's alone, so another
             // manager's page keeps what GET leaders gave it (docs/assistant/managers.md "Clients").
             if isHub, let hubAPI = api, assistantShows(nil) { Task { await refreshDirectionTree(hubAPI) } }
+        case .healthIntake:
+            if isHub { healthIntakeRevision += 1 }
+            #if os(iOS)
+            if isHub { HomeWidgetData.shared.intakeChanged() }
+            if isHub { Task { await HealthIntakeSync.shared.refresh(model: self) } }
+            #endif
+            ExtensionUIRegistry.shared.invalidate(extension: HealthIntakeUI.id, ui: nil, group: group)
         case .assistantFeed(let item):
             if isHub { TasksStore.shared.received(item, group: group) }
         case .assistantView(let view):
@@ -3391,6 +3408,7 @@ final class AppModel {
         case .look: "look"
         case .managers: "managers"
         case .directions: "directions"
+        case .healthIntake: "health_intake"
         case .assistantFeed: "assistant_feed"
         case .assistantView: "assistant_view"
         case .assistantViewAction: "assistant_view_action"
@@ -4792,6 +4810,7 @@ final class AppModel {
 
     /// Another group was picked for the hub-level pages: their data starts over from that group's.
     func hubChanged() {
+        ModuleState.shared.follow(hub?.group ?? "", features: hub?.features ?? []) // the modules this hub allows (#13849)
         if let g = hub?.group {
             assistantConfig = heldAssistant(g)
         }
@@ -4854,7 +4873,7 @@ final class AppModel {
         refreshStarred(reset: switched)
         #endif
         if switched {
-            if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
+            if let a = assistantCurrent, let s = session(a), s.assistant, !s.inSpace, !assistantShows(s.manager) { assistantCurrent = assistantMain }
             assistantSwitches += 1
             // the "/" list offers the new assistant's saved prompts, never the one before's (#9436)
             SavedPromptStore.shared.forget()
@@ -4922,7 +4941,8 @@ final class AppModel {
         }
         // A directory-hidden session's cards count nowhere, as the pages leave them out (`directoryVisibleInteractions`).
         let session = cardSessionResolver()
-        for ix in interactions.values where session(ix.sessionKey)?.hiddenByDirectory != true {
+        // A card its task's supervisor holds is the supervisor's until it passes it up (`Interaction.supervisorHeld`).
+        for ix in interactions.values where session(ix.sessionKey)?.hiddenByDirectory != true && !ix.supervisorHeld {
             guard scope.has(ix.manager ?? session(ix.sessionKey)?.manager, group: ix.group) else { continue }
             // A quiet task's agent asking is the main conversation's to tell (#1731): its count goes there, not on Agents.
             switch place(ix.sessionKey) {
@@ -5475,13 +5495,16 @@ nonisolated struct TabBadges: Equatable, Sendable {
 }
 
 /// The Persona conversations of one group, newest first: open and archived (`AppModel.assistantConversations`), and
-/// apart from them the health space's open ones (Health, docs/assistant/health.md), which the sidebar never lists.
+/// apart from them the health space's open ones (Health, docs/assistant/health.md) and the other spaces' (#13500), which
+/// the sidebar never lists.
 nonisolated struct AssistantLists: Equatable {
     let group: String
     let shown: Shown?
     let open: [Session]
     let archived: [Session]
     let health: [Session]
+    /// The open conversations of the domain spaces (every space but health's), the default manager's.
+    let spaces: [Session]
 
     /// The manager the Persona page shows on a hub with several, and the roster that says whose a conversation is
     /// (sessions carry their computer's `manager`): the lists are that manager's, and the health space the default's.
@@ -5497,9 +5520,10 @@ nonisolated struct AssistantLists: Equatable {
         let all = sessions.filter { $0.assistant && $0.group == group }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
         func owned(_ s: Session, by manager: (Shown) -> String) -> Bool { shown.map { $0.roster.owner(s.manager) == manager($0) } ?? true }
-        let mine = all.filter { !$0.isHealth && owned($0, by: \.manager) }
+        let mine = all.filter { !$0.inSpace && owned($0, by: \.manager) }
         open = mine.filter { $0.archived != true }
         archived = mine.filter { $0.archived == true }
         health = all.filter { $0.isHealth && $0.archived != true && owned($0, by: \.roster.defaultID) }
+        spaces = all.filter { $0.isDomainSpace && $0.archived != true && owned($0, by: \.roster.defaultID) }
     }
 }

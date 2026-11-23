@@ -188,6 +188,7 @@ class ShardTests(unittest.TestCase):
         self.assertEqual(len(selected), len(set(selected)))
         self.assertEqual(server.select_packages(packages, "node"), [packages[0], packages[-3]])
         self.assertIn("example/server/internal/hubedge", server.select_packages(packages, "other"))
+        self.assertIn("example/server/internal/modules/voice", server.select_packages(packages + ["example/server/internal/modules/voice"], "managers"))
         with self.assertRaises(ValueError):
             server.select_packages(packages, "typo")
 
@@ -237,7 +238,8 @@ class ShardTests(unittest.TestCase):
         self.assertIn('scripts/ci/server.sh "$CI_SERVER_SHARD"', workflow)
         script = (ROOT / "scripts/ci/server.sh").read_text()
         for label in ("Go formatting", "Server vet", "Server build", "Windows node build and vet", "Go SDK tests",
-                      "Server programs with build-tags.txt", "Tunnel tests with build-tags.txt"):
+                      "Server programs with build-tags.txt", "Tunnel tests with build-tags.txt", "Core-only hub smoke",
+                      "Builds without each module", "Server $shard tests with Postgres, core only"):
             self.assertIn(label, script)
         self.assertIn('lane="${1:-all}"', script)
 

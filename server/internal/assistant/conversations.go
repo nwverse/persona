@@ -865,6 +865,8 @@ func (msg relayMsg) source() *proto.MessageSource {
 		return &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: msg.From, Title: msg.FromTitle}
 	case superviseTool:
 		return &proto.MessageSource{Kind: proto.SourceSupervision}
+	case prFollowupTool, taskEndTool, relayRefusedTool, spawnNoticeTool, chatReplyTool:
+		return &proto.MessageSource{Kind: proto.SourceNotice, Title: "Persona"}
 	default:
 		return nil
 	}
@@ -900,7 +902,7 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
 	}
-	s.availInput(machine, to, relayKind(msg), time.Now()) // a notice has no message source of its own
+	s.availInput(machine, to, relayKind(msg), time.Now())
 	if msg.Tool == superviseTool {
 		// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
 		s.holdPushes(ctx, to)
@@ -1657,6 +1659,10 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 	if err := s.dispatchSendGuard(ctx, self, c.MachineID, c.SessionID, a.Text); err != nil {
 		return "", err
 	}
+	fanned := ""
+	if !later && strings.TrimSpace(a.Quote) == "" && !s.sendFanout.admit(self, c.SessionID, time.Now()) {
+		later, fanned = true, fmt.Sprintf(fanoutNote, fanoutWide, int(fanoutWindow/time.Minute)) // conversation_fanout.go
+	}
 	if later {
 		// Kept for the receiver, not delivered: no turn, no hop, no place in the rate (relay_later.go, #11614).
 		from, err := s.relayFrom(ctx, self)
@@ -1669,8 +1675,8 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 		}
 		s.spawnReported(self, c.SessionID) // a quiet report still answers the conversation that opened this one
 		s.publish(ctx)                     // the receiver shows it waiting above its composer
-		return fmt.Sprintf("Kept for %q without waking it (%d kept there): it goes in with the next message that conversation gets for anything else. No reply will come from it; no need to send it again.",
-			conversationName(c, s.settings(ctx).Main), n), nil
+		return fmt.Sprintf("Kept for %q without waking it (%d kept there): it goes in with the next message that conversation gets for anything else. No reply will come from it; no need to send it again.%s",
+			conversationName(c, s.settings(ctx).Main), n, fanned), nil
 	}
 	from, err := s.relayFrom(ctx, self)
 	if err != nil {

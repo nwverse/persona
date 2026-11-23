@@ -121,7 +121,7 @@
 
 Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
-- Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel. Taking a sleep out does not need the baseline lowered in the same change: only a rise fails, and with a base a changed file may not rise above its count at the merge base either (`docs/operations/testing.md`, "Count ratchets"). When the strict direction failed a fall too, a forgotten lowering broke `main` again and again (#2761, #5635), and baseline edits were the commonest conflict between parallel PRs.
+- Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero (a file git sees as moved keeps its entry under the new path), and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel. Taking a sleep out does not need the baseline lowered in the same change: only a rise fails, and with a base a changed file may not rise above its count at the merge base either (`docs/operations/testing.md`, "Count ratchets"). When the strict direction failed a fall too, a forgotten lowering broke `main` again and again (#2761, #5635), and baseline edits were the commonest conflict between parallel PRs.
 
 - To keep a fake hub answer out (a press past `cardAnswerWait`), block it on a channel the test closes, not a fixed sleep (2026-11-11, #4274). The assistant's `fakeHub` runs app answers under its lock, so a held answer blocks every other fake call: close the channel before the test touches the hub again, and register the close with `t.Cleanup` so a failed assertion cannot leave it blocked (`heldAnswer` in `server/internal/assistant/feishu_answer_ended_test.go`). Then wait for the last effect of the late path (its note), not for a fixed time.
 
@@ -758,6 +758,11 @@ first, and the old copy's state goes its own way.
 - **With the keyboard up, `app.collectionViews.firstMatch` is not the list** (2026-11-05, #2189). The 44pt candidate/input accessory strip is itself a collection view,
   ordered before the list, outside `app.keyboards` frame (SE keyboard starts at 451, strip is 407–451). `swipeUp` there leaves the list still,
   looking like pinned filters and once described as "keyboard blocks element swipes". Find the list by its elements (`collectionViews.containing(.button, identifier:)`).
+- **A swipe on a system menu that does not scroll chooses the item under the finger** (2026-11-23, #13396). `AgentMenuParityUITests`
+  read the Agent menu with `menu.swipeDown()` between reads, which only scrolled while the menu ran past the screen. Once its top level
+  fit, the swipe became a drag-to-select and chose the last item, Close Agent…, whose confirmation then covered the menu ("no More in
+  the Agent menu"). Read what a menu shows without a swipe; where a submenu runs past the screen, compare what both menus show, the
+  shorter list as a prefix of the longer.
   Element swipes start at whole-frame center and can fail next to the keyboard on small screens; coordinate-drag within the visible row segment (`AgentsListTests.dragListUp`).
 - Simulators and Mac share loopback: an app listening on simulator `127.0.0.1:<port>` conflicts with Mac processes on that port (port forwarding falls back to a random port, testing that path).
 - **Scripts executed by tests really run on the development machine** (2026-11-01). `TestDeployScriptInstallsTheBinary` runs hub deployment, whose final

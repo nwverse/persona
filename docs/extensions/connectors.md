@@ -34,7 +34,7 @@ does not admit every chat or watch any document; the connector's `doc` Inbox ite
 
 ### Interfaces: one manifest, dispatched by declaration
 
-`server/internal/connector/connector.go`: `Connector` has `ID()`, `Name()`, `Manifest()`. The manifest (`manifest.go`, since v2 · V1) declares what it can do in one place:
+`server/internal/connectorwire/connector.go`: `Connector` has `ID()`, `Name()`, `Manifest()`. The manifest (`connectorwire/manifest.go`, since v2 · V1) declares what it can do in one place. These interfaces and types are the connector SPI: they live in the contract package `connectorwire`, which `internal/connector` aliases, so a connector built as a module needs only the contract and the leaf libraries (#13936). The framework that runs connectors (the registry, the gate, `As` and `Check`) stays in `internal/connector`:
 
 | Manifest field | Meaning |
 | --- | --- |
@@ -46,6 +46,8 @@ does not admit every chat or watch any document; the connector's `doc` Inbox ite
 | `Poll` | How often to query `Archive` (0 is the hub default; mail is 6 minutes) |
 | `Kinds` | Inbox item kinds; each needs a description in `prompts/inbox/kinds/<id>.md` (`connector.CheckKinds`, each connector's `TestKindsAreDescribed`); an undeclared kind received is logged |
 | `Proxy` | Answers on behalf of another program (subprocess `proc.Conn`): implements every interface, but only declared ones are real |
+
+A connector contributed by an extension that declares `memory_sources` (a memory extension) has its read tools withheld from the assistant's conversations: not listed, and a call there is refused with a pointer to `decisions_query`, since the hub reads that extension's memory itself and grades it by scene (`server/internal/extmgr/memory_sources.go`, `docs/extensions/extensions.md` "Memory sources"). Its writes, and the read tools coding Agents get through `AgentTools`, are unchanged.
 
 The hub uses only `connector.As[interface](c)` to discover capabilities: it asserts the interface only when declared. `Registry.Add` checks the manifest with `connector.Check`: declared but unimplemented, implemented but undeclared (except `Proxy`),
 unknown capabilities, or kinds without an Inbox capability all fail registration. Capability interfaces:
@@ -234,7 +236,7 @@ with who did it (#5281); never a credential or a typed value. The actions and th
 3. Writes must be `Actions`; the `Describe` card must say who will see the result.
 4. `Status` answers only from memory (queried on every tool listing); errors get a one-sentence `Error`, and self-service fixes get a `Guide`.
 5. No body text, phone numbers or tokens in logs/errors.
-6. For external services, embed `connector.Egress` (`connector/egress.go`) in config to get a `proxy` key (`http://[username:password@]host:port`, empty means direct).
+6. For external services, embed `netproxy.Egress` (`netproxy/egress.go`, also named `connector.Egress`) in config to get a `proxy` key (`http://[username:password@]host:port`, empty means direct).
    Build every HTTP client with `Egress.HTTPClient`: use the proxy when configured, direct otherwise; invalid config errors rather than silently connecting directly. This is how `github.proxy` works (#1106);
    proxy-address parsing lives in `netproxy`, also used by `google.proxy`. Not yet wired: Telegram (MTProto, not HTTP), subprocess / third-party connectors (proxy must be passed to the program), see #1106.
 

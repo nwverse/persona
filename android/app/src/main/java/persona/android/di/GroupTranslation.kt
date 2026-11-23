@@ -7,7 +7,7 @@ import persona.feature.agents.AgentsDraftSource
 import persona.feature.agents.AgentsOperationsBindings
 import persona.feature.agents.AgentsWiringState
 import persona.feature.chat.ChatAppBindings
-import persona.feature.inbox.InboxSnapshot
+import persona.core.inbox.InboxSnapshot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.JsonElement
@@ -344,6 +344,17 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
             })
         }
         override suspend fun revokeStandingAuthorization(id: String) = source.revokeStandingAuthorization(id)
+        override suspend fun tracks() = source.tracks()
+        override suspend fun trackKinds() = source.trackKinds()
+        override suspend fun createTrack(track: persona.core.contracts.api.TrackCreate) = source.createTrack(track)
+        override suspend fun changeTrack(slug: String, change: persona.core.contracts.api.TrackChange) = source.changeTrack(slug, change)
+        override suspend fun spaceMd(slug: String) = source.spaceMd(slug)
+        override suspend fun writeSpaceMd(slug: String, content: String, baseDigest: String) = source.writeSpaceMd(slug, content, baseDigest)
+        override suspend fun conversationCategories(session: SessionKey) = source.conversationCategories(names.raw(session))
+        override suspend fun changeConversationCategories(session: SessionKey, add: List<String>, remove: List<String>) =
+            source.changeConversationCategories(names.raw(session), add, remove)
+        override suspend fun extensionTrust() = source.extensionTrust()
+        override suspend fun setExtensionTrust(id: String, trust: persona.core.contracts.api.ExtensionTrust) = source.setExtensionTrust(id, trust)
     }
 }
 

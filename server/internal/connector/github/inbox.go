@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -22,13 +22,13 @@ import (
 
 type inboxState struct {
 	mu           sync.Mutex
-	things       map[string]*connector.InboxThing // by thread
-	seen         map[string]string                // notification id -> the updated_at already read
-	lastModified string                           // of the last notifications answer, for If-Modified-Since
-	fullAt       time.Time                        // the last read without If-Modified-Since
-	ci           map[string]*ciMeta               // CI items, by thread (rules.go)
-	repos        map[string]repoMeta              // repositories' default branches (rules.go)
-	marks        map[string]*readMark             // by thread: whether its thing was read on GitHub
+	things       map[string]*connectorwire.InboxThing // by thread
+	seen         map[string]string                    // notification id -> the updated_at already read
+	lastModified string                               // of the last notifications answer, for If-Modified-Since
+	fullAt       time.Time                            // the last read without If-Modified-Since
+	ci           map[string]*ciMeta                   // CI items, by thread (rules.go)
+	repos        map[string]repoMeta                  // repositories' default branches (rules.go)
+	marks        map[string]*readMark                 // by thread: whether its thing was read on GitHub
 	// epoch is the account epoch (account.go) everything above was read under: what a poll that began under
 	// another one read is dropped (enter).
 	epoch uint64
@@ -56,7 +56,7 @@ func (st *inboxState) reset(epoch uint64, unsettled bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.epoch, st.unsettled, st.polled, st.left = epoch, unsettled, false, st.left || len(st.things) > 0 || unsettled
-	st.things, st.seen = map[string]*connector.InboxThing{}, map[string]string{}
+	st.things, st.seen = map[string]*connectorwire.InboxThing{}, map[string]string{}
 	st.ci, st.repos, st.marks = nil, nil, nil
 	st.lastModified, st.fullAt = "", time.Time{}
 }
@@ -139,7 +139,7 @@ type notification struct {
 }
 
 // Watch polls the notifications until ctx ends, saying ScopeInbox when a thing changed.
-func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) error {
+func (c *Connector) Watch(ctx context.Context, changed func(connectorwire.Scope)) error {
 	for {
 		wait, moved := pollDefault, false
 		if c.signedIn() {
@@ -151,7 +151,7 @@ func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) er
 		}
 		// Another account's things left since the last look (retire): the hub closes their items.
 		if c.inbox.takeLeft() || moved {
-			changed(connector.ScopeInbox)
+			changed(connectorwire.ScopeInbox)
 		}
 		select {
 		case <-ctx.Done():
@@ -173,7 +173,7 @@ func (c *Connector) poll(ctx context.Context) (time.Duration, bool, error) {
 	st := &c.inbox
 	st.mu.Lock()
 	if st.things == nil {
-		st.things, st.seen = map[string]*connector.InboxThing{}, map[string]string{}
+		st.things, st.seen = map[string]*connectorwire.InboxThing{}, map[string]string{}
 	}
 	hdr := http.Header{}
 	// A thing missing from the last list read is settled by the next one: read in full, not answered with a 304.
@@ -298,7 +298,7 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, c
 			continue
 		}
 		budget--
-		var thing connector.InboxThing
+		var thing connectorwire.InboxThing
 		var err error
 		switch {
 		case kind == "ci_failed" && !run.failed():
@@ -376,7 +376,7 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, c
 // new activity, while the poll is between pages shifts the rest, so one still unread can be on no page once (the next
 // poll reads the list in full at once: unsure). A thing the CI follow-up moved past its notification never counts:
 // GitHub sent no notification of the later run, so reading an earlier one says nothing of it. st.mu is held.
-func (m *readMark) missedAgain(t *connector.InboxThing, gone, complete bool, oldest time.Time) bool {
+func (m *readMark) missedAgain(t *connectorwire.InboxThing, gone, complete bool, oldest time.Time) bool {
 	listed := complete || !oldest.IsZero() && m.notified.After(oldest)
 	if !gone || !listed || m.notified.IsZero() || t.At.After(m.notified) {
 		m.missing = 0
@@ -402,14 +402,14 @@ func (st *inboxState) unsure() bool {
 
 // tagsOf is what a notification's thing is about: its repository, who made the newest move (a person's PR / issue
 // move; CI has nobody), a CI failure's branch.
-func tagsOf(n notification, run ciRun, kind, sender string) []connector.Tag {
+func tagsOf(n notification, run ciRun, kind, sender string) []connectorwire.Tag {
 	repo := n.Repository.FullName
-	tags := []connector.Tag{{Key: connector.TagRepo, Value: strings.ToLower(repo), Name: repo}}
+	tags := []connectorwire.Tag{{Key: connectorwire.TagRepo, Value: strings.ToLower(repo), Name: repo}}
 	if kind == "ci_failed" {
-		return append(tags, connector.Tag{Key: connector.TagBranch, Value: run.branch, Name: run.branch})
+		return append(tags, connectorwire.Tag{Key: connectorwire.TagBranch, Value: run.branch, Name: run.branch})
 	}
 	if sender != "" {
-		tags = append(tags, connector.Tag{Key: connector.TagSender, Value: strings.ToLower(sender), Name: sender})
+		tags = append(tags, connectorwire.Tag{Key: connectorwire.TagSender, Value: strings.ToLower(sender), Name: sender})
 	}
 	return tags
 }
@@ -466,8 +466,8 @@ func isBot(u user) bool { return u.Type == "Bot" || strings.HasSuffix(u.Login, "
 
 // describe reads what the notification is about: the PR / issue, its newest comments and reviews, whether it is
 // over (merged, closed, the review request withdrawn) or the user has answered.
-func (c *Connector) describe(ctx context.Context, n notification, me string) (connector.InboxThing, error) {
-	t := connector.InboxThing{Title: n.Subject.Title, At: n.UpdatedAt}
+func (c *Connector) describe(ctx context.Context, n notification, me string) (connectorwire.InboxThing, error) {
+	t := connectorwire.InboxThing{Title: n.Subject.Title, At: n.UpdatedAt}
 	m := subjectURL.FindStringSubmatch(n.Subject.URL)
 	if m == nil { // a CI run: there is nothing to read or answer, only the failure to look at
 		t.Sender, t.Preview, t.URL = "GitHub Actions", n.Subject.Title, n.Repository.HTMLURL+"/actions"
@@ -593,15 +593,15 @@ func (c *Connector) describe(ctx context.Context, n notification, me string) (co
 
 	switch {
 	case it.Merged || it.State == "closed":
-		t.Done = connector.DoneRead
+		t.Done = connectorwire.DoneRead
 	case len(moves) > 0 && strings.EqualFold(strings.TrimSuffix(last.who, " (bot)"), me):
-		t.Done = connector.DoneReplied
+		t.Done = connectorwire.DoneReplied
 	case n.Reason == "review_requested" && len(it.Teams) == 0 && !hasLogin(it.Reviewers, me):
 		// no longer asked: reviewed (answered) or the request withdrawn
 		if reviewed {
-			t.Done = connector.DoneReplied
+			t.Done = connectorwire.DoneReplied
 		} else {
-			t.Done = connector.DoneRead
+			t.Done = connectorwire.DoneRead
 		}
 	}
 
@@ -658,11 +658,11 @@ func firstLine(s string) string {
 }
 
 // Collect is every thing seen lately, from memory (Watch keeps it).
-func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
+func (c *Connector) Collect(context.Context) ([]connectorwire.InboxThing, error) {
 	st := &c.inbox
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	out := make([]connector.InboxThing, 0, len(st.things))
+	out := make([]connectorwire.InboxThing, 0, len(st.things))
 	for _, t := range st.things {
 		out = append(out, *t)
 	}
@@ -679,7 +679,7 @@ func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 var threadRef = lazyre.New(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)$`)
 
 // Reply comments the text on the PR / issue (the user pressed send on it).
-func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
+func (c *Connector) Reply(ctx context.Context, r connectorwire.InboxReply) error {
 	thread, text := r.Thread, r.Text
 	m := threadRef.FindStringSubmatch(thread)
 	if m == nil || !validRepo(m[1]) {
@@ -706,7 +706,7 @@ func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
 	c.forget(m[1], n)
 	if st.enter(epoch) {
 		if t := st.things[thread]; t != nil {
-			t.Done = connector.DoneReplied
+			t.Done = connectorwire.DoneReplied
 		}
 		st.mu.Unlock()
 	}
@@ -715,7 +715,7 @@ func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
 
 // tierOf is the tier the rules give a PR / issue notification (reason) by who made the newest move, "" when they
 // cannot tell (a person's ordinary comment on my PR: the model decides).
-func tierOf(reason string, author user, moves []move) (tier connector.Tier, why string) {
+func tierOf(reason string, author user, moves []move) (tier connectorwire.Tier, why string) {
 	var last *move
 	if len(moves) > 0 {
 		last = &moves[len(moves)-1]
@@ -727,28 +727,28 @@ func tierOf(reason string, author user, moves []move) (tier connector.Tier, why 
 	switch reason {
 	case "review_requested":
 		if isBot(author) {
-			return connector.TierFYI, "规则：机器人的 PR 请你 review"
+			return connectorwire.TierFYI, "规则：机器人的 PR 请你 review"
 		}
-		return connector.TierAction, "规则：请你 review"
+		return connectorwire.TierAction, "规则：请你 review"
 	case "mention":
 		if byBot {
-			return connector.TierFYI, "规则：机器人 @ 了你"
+			return connectorwire.TierFYI, "规则：机器人 @ 了你"
 		}
-		return connector.TierAction, "规则：真人 @ 了你"
+		return connectorwire.TierAction, "规则：真人 @ 了你"
 	case "assign":
-		return connector.TierAction, "规则：分配给你"
+		return connectorwire.TierAction, "规则：分配给你"
 	case "team_mention":
-		return connector.TierFYI, "规则：@ 的是你所在的团队"
+		return connectorwire.TierFYI, "规则：@ 的是你所在的团队"
 	case "author":
 		switch {
 		case last == nil:
 			return "", ""
 		case last.bot:
-			return connector.TierFYI, "规则：机器人在你的 PR / issue 上留言"
+			return connectorwire.TierFYI, "规则：机器人在你的 PR / issue 上留言"
 		case last.state == "CHANGES_REQUESTED":
-			return connector.TierAction, "规则：要求修改"
+			return connectorwire.TierAction, "规则：要求修改"
 		case last.state == "APPROVED":
-			return connector.TierFYI, "规则：批准了"
+			return connectorwire.TierFYI, "规则：批准了"
 		}
 	}
 	return "", ""

@@ -3,10 +3,12 @@ package extmgr
 import (
 	"context"
 	"encoding/json"
-	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
 // Obtain status, then change the actual routing snapshot before AppCall: the assistant-side status check alone
@@ -24,7 +26,7 @@ func TestFeishuReminderBindingAtActualRoute(t *testing.T) {
 				t.Fatal(err)
 			}
 			st := status.(assistantwire.FeishuStatus)
-			params := map[string]any{"card": feishubot.NewCard("", "", "Reminder").Markdown("Synthetic notes").JSON(), "uuid": "todo-bound-card0", "todo_reminder_pairing": map[string]any{"owner": st.Owner, "paired_at": st.PairedAt}}
+			params := map[string]any{"card": botcard.NewCard("", "", "Reminder").Markdown("Synthetic notes").JSON(), "uuid": "todo-bound-card0", "todo_reminder_pairing": map[string]any{"owner": st.Owner, "paired_at": st.PairedAt}}
 			h.bots.mu.Lock()
 			switch change {
 			case "owner":

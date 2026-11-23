@@ -642,6 +642,20 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 			delete(queued.Params, key)
 		}
 		queued.Params["launcher"], queued.Params["model"], queued.Params["effort"], queued.Params["permission_mode"] = a.Launcher, a.Model, a.Effort, a.PermissionMode
+		// The active segment's mode is inherited state, not the queued caller's explicit choice. A Claude segment uses
+		// the current default; non-Claude and external segments keep their legacy generic mode without a resume default.
+		delete(queued.Params, assistantwire.PermissionModeExplicitParam)
+		defaultMode, _ := queued.Params[assistantwire.DefaultPermissionModeParam].(string)
+		useDefault := defaultMode != "" && !proto.IsExternalLauncher(a.Launcher) && s.startPermissionModeSupported(ctx, a.MachineID, a.Launcher, defaultMode)
+		if useDefault && a.Launcher != "" && a.Launcher != "claude" {
+			agent := s.launcherAgent(withUnhidden(ctx, a.Launcher), a.MachineID, a.Launcher)
+			useDefault = agent == "" || agent == "claude"
+		}
+		if useDefault {
+			delete(queued.Params, "permission_mode")
+		} else {
+			delete(queued.Params, assistantwire.DefaultPermissionModeParam)
+		}
 	}
 	if c.Switch != nil {
 		raw, _, err := st.ConversationPreparation(ctx, c.MachineID, c.SessionID, c.Switch.OperationID)
@@ -774,7 +788,7 @@ func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStor
 	if err != nil {
 		return h, err
 	}
-	result, err := waitLogicalSummary(ctx, func() (assistantwire.ModelCompleteResult, error) {
+	h, fellBack, err := summarizeLogicalHandoff(ctx, h, previousSummary, func() (assistantwire.ModelCompleteResult, error) {
 		out, err := s.runModelCall(ctx, "kb", "conversation handoff", "conversation handoff", call)
 		if err != nil {
 			return assistantwire.ModelCompleteResult{}, err
@@ -788,8 +802,30 @@ func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStor
 	if err != nil {
 		return h, err
 	}
-	h.Summary = result.Text
+	if fellBack {
+		s.logf("assistant: conversation handoff for %s/%s continues without a new summary: the knowledge-processing model is unavailable", c.MachineID, c.SessionID)
+	}
 	return h, nil
+}
+
+// summarizeLogicalHandoff asks run for the handoff's summary. A paused model is waited out (waitLogicalSummary).
+// A model that is not set up (model_unavailable) does not recover by retrying: the sweep would retry the switch
+// every few seconds and leave it preparing until someone changed Settings. The switch goes ahead with the recent
+// turns already in h, the earlier summary if there was one, and Partial set so the new session is told some
+// history is missing; fellBack reports that. Any other failure is returned for the sweep to retry.
+func summarizeLogicalHandoff(ctx context.Context, h mainHandoff, previousSummary string, run func() (assistantwire.ModelCompleteResult, error)) (mainHandoff, bool, error) {
+	result, err := waitLogicalSummary(ctx, run)
+	if err != nil {
+		var re *rpc.Error
+		if errors.As(err, &re) && re.Code == assistantwire.CodeModelUnavailable {
+			h.Summary = previousSummary
+			h.Partial = true
+			return h, true, nil
+		}
+		return h, false, err
+	}
+	h.Summary = result.Text
+	return h, false, nil
 }
 
 func waitLogicalSummary(ctx context.Context, run func() (assistantwire.ModelCompleteResult, error)) (assistantwire.ModelCompleteResult, error) {
