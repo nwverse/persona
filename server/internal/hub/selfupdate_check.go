@@ -112,6 +112,7 @@ func (u *updater) check(ctx context.Context) (*update.Published, error) {
 		return r, nil
 	}
 	u.checking = true
+	u.opGen++
 	dev := u.developmentLocked()
 	u.mu.Unlock()
 	defer func() { u.mu.Lock(); u.checking = false; u.mu.Unlock() }()

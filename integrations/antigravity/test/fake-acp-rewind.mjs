@@ -11,6 +11,11 @@ const calls = `${directory}/calls.jsonl`
 const loaded = new Set()
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
 const server = createServer(async (req, res) => {
+  // Agent port discovery probes listeners with GET /; it is not a native call and must not kill the fake.
+  if (req.method !== 'POST') {
+    res.writeHead(404).end('{"message":"Unknown native method"}')
+    return
+  }
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
   const params = JSON.parse(Buffer.concat(chunks).toString())
@@ -26,7 +31,34 @@ const server = createServer(async (req, res) => {
       res.writeHead(404).end('{"code":"not_found","message":"Cascade is not loaded"}')
       return
     }
+    const hold = snapshot.holdTrajectoryOnce
+    if (hold) {
+      delete snapshot.holdTrajectoryOnce
+      writeFileSync(`${directory}/trajectory.json`, JSON.stringify(snapshot))
+      writeFileSync(`${directory}/trajectory-held`, '')
+      while (!existsSync(`${directory}/release-trajectory`)) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+    }
+    const holdAfter = snapshot.holdAfterRevertOnce && snapshot.afterRevertArmed
+    if (holdAfter) {
+      delete snapshot.holdAfterRevertOnce
+      delete snapshot.afterRevertArmed
+      writeFileSync(`${directory}/trajectory.json`, JSON.stringify(snapshot))
+      writeFileSync(`${directory}/after-trajectory-held`, '')
+      while (!existsSync(`${directory}/release-after-trajectory`)) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+    }
     if (!snapshot.trajectory.steps?.length) delete snapshot.trajectory.steps
+    if (hold) {
+      res.end(JSON.stringify(snapshot), () => writeFileSync(`${directory}/trajectory-response-sent`, ''))
+      return
+    }
+    if (holdAfter) {
+      res.end(JSON.stringify(snapshot))
+      return
+    }
     res.end(JSON.stringify(snapshot))
     return
   }
@@ -66,6 +98,7 @@ const server = createServer(async (req, res) => {
       delete snapshot.holdRevert
     }
     snapshot.trajectory.steps = (snapshot.trajectory.steps || []).slice(0, params.stepIndex + 1)
+    if (snapshot.holdAfterRevertOnce) snapshot.afterRevertArmed = true
     writeFileSync(`${directory}/trajectory.json`, JSON.stringify(snapshot))
     const db = new DatabaseSync(`${directory}/config/conversation_summaries.db`)
     db.prepare('UPDATE conversation_summaries SET step_count = ?, last_modified_time = ? WHERE conversation_id = ?')
@@ -77,7 +110,10 @@ const server = createServer(async (req, res) => {
   res.writeHead(404).end('{"message":"Unknown native method"}')
 })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-const openService = () => writeFileSync(log, `Language server listening on random port at ${server.address().port} for HTTP\n`)
+const openService = () => {
+  writeFileSync(log, `Language server listening on random port at ${server.address().port} for HTTP\n`)
+  writeFileSync(`${directory}/service-port`, String(server.address().port))
+}
 if (!JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8')).lazyService) openService()
 const input = createInterface({ input: process.stdin })
 let prompts = 0

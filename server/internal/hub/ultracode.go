@@ -36,6 +36,10 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 			return
 		}
 	}
+	if restrictedAgentData(r) && !h.publicSessionForControl(m, r.PathValue("sid")) {
+		writeErr(w, http.StatusNotFound, errDeleteUnknown)
+		return
+	}
 	// Keep speed separate from session.modes, which older nodes ignore unknown fields in.
 	if tier, exists := p["service_tier"]; exists {
 		if value, ok := tier.(string); !ok || value == "" || len(p) != 1 {

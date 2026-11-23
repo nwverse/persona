@@ -40,7 +40,7 @@ nonisolated struct FileContent: Decodable, Sendable {
     }
 }
 
-extension APIClient {
+nonisolated extension APIClient {
     /// A file or a directory on a machine; a text file bigger than a page from `offset` (the page before's `next`).
     /// `stream`: a binary file without its bytes (hub feature `file_stream`, docs/protocol/protocol.md「File preview」).
     func file(machine: String, path: String, cwd: String?, offset: Int64 = 0, stream: Bool = false) async throws -> FileContent {
@@ -55,7 +55,7 @@ extension APIClient {
 }
 
 /// A file mentioned in a conversation, opened on the machine the session runs on.
-struct FileRef: Identifiable, Hashable {
+nonisolated struct FileRef: Identifiable, Hashable, Sendable {
     /// The group of hubs the machine is in (docs/protocol/multi-hub.md).
     var group: String = ""
     var machineID: String
@@ -226,23 +226,12 @@ struct FileViewer: View {
         .environment(\.viewImages, nil)
         .environment(\.openURL, OpenURLAction { url in
             guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
-                #if os(macOS)
-                return LinkPolicy.system(url)
-                #else
                 return .systemAction
-                #endif
             }
             openLink(url)
             return .handled
         })
-        #if os(macOS)
-        .macLinkPanel($link, key: key)
-        // Outside the panel: its GeometryReader takes any size, so a minimum inside it never reached the sheet and the
-        // sheet opened at its toolbar's 470 × 80 (#1502). The stack's bars are the sheet window's, still on top of this.
-        .macLargeSheet(bars: true)
-        #else
         .sheet(item: $link) { target in LinkSheet(target: target, key: key) }
-        #endif
     }
 
     private func openLink(_ url: URL) {

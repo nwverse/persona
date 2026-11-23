@@ -182,6 +182,7 @@ func rowsByThread(rows []proto.Session) map[string]proto.Session {
 // The App's sidebar lists chats whose rollout it deleted after moving their history into its database, and chats whose
 // rollout is older than the two weeks rollouts looks at: both are listed, as the sidebar lists them (#3305).
 func TestCodexAppChatsAreListedLikeTheSidebar(t *testing.T) {
+	noFakeCodexBus(t)
 	n := remoteTestNode(t)
 	home := n.codexHome()
 	project := t.TempDir()
@@ -208,7 +209,7 @@ func TestCodexAppChatsAreListedLikeTheSidebar(t *testing.T) {
 	if chat.AsksRead || chat.Asks != "" {
 		t.Fatalf("chat without a rollout: AsksRead = %t, Asks = %q; want unknown asks", chat.AsksRead, chat.Asks)
 	}
-	if chat.AgentName != "Codex App" || chat.SpaceKind != "codex_app" || chat.SpaceID != "codex-project:"+realPath(project) {
+	if chat.AgentName != "Codex App" || chat.SpaceKind != "codex_app" || chat.SpaceID != codexDesktopProjectID(canonicalCodexHome(home, ""), "p1") {
 		t.Fatalf("chat placed as %q %q %q, want in its project", chat.AgentName, chat.SpaceKind, chat.SpaceID)
 	}
 	if chat.Capabilities.Send {
@@ -223,6 +224,45 @@ func TestCodexAppChatsAreListedLikeTheSidebar(t *testing.T) {
 	}
 	if src, _ := n.codexSource(rows[appOld].SessionID); src.path != resolved(t, old) { // the node names it resolved (#9138)
 		t.Fatalf("the old chat reads %q, want its rollout", src.path)
+	}
+}
+
+func TestPaginatedOpeningPromptIsOnlyAListTitle(t *testing.T) {
+	n := remoteTestNode(t)
+	home, project := n.codexHome(), t.TempDir()
+	updated := time.Now()
+	want := strings.Repeat("界", 255) + "🙂"
+	prompt := want + strings.Repeat("x", 65<<10)
+	writeCodexApp(t, home, project, codexAppSchema+
+		codexAppRow(appChat, "", project, "", updated, 0)+
+		codexAppRow(appOld, "", project, "Chosen name", updated, 0)+
+		`ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'paginated';
+		UPDATE threads SET title = '`+prompt+`';`)
+	writeCodexHistory(t, home, []historyTurn{{thread: appChat, id: "turn-1", status: "completed",
+		ordinal: 1, items: [][2]string{userItem("u1", prompt)}}})
+
+	live, ok := codexPaginatedThreadOf(codexSource{home: home, thread: appChat})
+	if !ok || live.Title != want {
+		t.Errorf("live title: found %t, got %d bytes, want %d bytes", ok, len(live.Title), len(want))
+	}
+	rows := rowsByThread(n.codexSessions(map[string]bool{}))
+	if got := rows[appChat].Title; got != want {
+		t.Errorf("stored title: got %d bytes, want %d bytes", len(got), len(want))
+	}
+	if got := rows[appOld].Title; got != "Chosen name" {
+		t.Errorf("stored name = %q", got)
+	}
+	f, err := n.file(rows[appChat].SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := f.Refresh()
+	if err != nil || !strings.Contains(historyText(items), "user:text:"+want) {
+		t.Fatalf("opening prompt missing from history: %v", err)
+	}
+	raw, err := os.ReadFile(f.Where())
+	if err != nil || !strings.Contains(string(raw), prompt) {
+		t.Fatalf("full opening prompt missing from materialized history: %v", err)
 	}
 }
 
@@ -371,7 +411,47 @@ func TestCodexAppChatsInNoProjectAreUnderCodexChats(t *testing.T) {
 	if !rows[sub].IsSubagent {
 		t.Fatal("the subagent is not marked as one")
 	}
-	if r := rows[appChat]; r.SpaceID != "codex-project:"+realPath(project) {
+	if r := rows[appChat]; r.SpaceID != codexDesktopProjectID(canonicalCodexHome(home, ""), "p1") {
 		t.Fatalf("the chat in a project is placed in %q", r.SpaceID)
+	}
+}
+
+// The migrated inventory includes subagent origins needed for hierarchy and guardian filtering, while one-shot
+// desktop runs and unrelated CLI rows do not become sidebar conversations.
+func TestCodexAppDatabaseRowsKeepSubagentsAndExcludeProgramRuns(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	project := t.TempDir()
+	const unknownSource = "019a0000-0000-7000-8000-000000009999"
+	updated := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	writeMigratedCodexApp(t, home, migratedAppWithSubagents(project, updated)+
+		codexAppRow(appExec, "", project, "One-shot", updated, 0)+
+		`UPDATE threads SET source = 'exec' WHERE id = '`+appExec+`';`+
+		codexAppRow(appOld, "", project, "CLI chat", updated, 0, "codex_cli_rs")+
+		codexAppRow(unknownSource, "", project, "Unknown run", updated, 0)+
+		`UPDATE threads SET source = 'unknown' WHERE id = '`+unknownSource+`';`)
+	rows, err := readCodexAppThreads(context.Background(), codexAppDBPath(home), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{appMigrated, appSubagent, appGuardian, appReview} {
+		if _, ok := rows[id]; !ok {
+			t.Errorf("desktop chat or subagent %s is missing", id)
+		}
+	}
+	for _, id := range []string{appExec, appOld, unknownSource} {
+		if _, ok := rows[id]; ok {
+			t.Errorf("non-sidebar run %s was included", id)
+		}
+	}
+	visible := rowsByThread(n.codexSessions(map[string]bool{}))
+	chat, sub := visible[appMigrated], visible[appSubagent]
+	if chat.SessionID == "" || !sub.IsSubagent || sub.ParentSessionID != chat.SessionID || sub.Capabilities.Send {
+		t.Fatalf("migrated metadata did not fold a read-only subagent under its chat: chat=%+v, sub=%+v", chat, sub)
+	}
+	for _, id := range []string{appGuardian, appExec, appOld, unknownSource} {
+		if _, ok := visible[id]; ok {
+			t.Errorf("guardian or program run %s appeared as a conversation", id)
+		}
 	}
 }

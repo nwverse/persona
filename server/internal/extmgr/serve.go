@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension/uistream"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -235,6 +236,13 @@ func (w *localeWriter) Lang() i18n.Lang { return w.lang }
 // Unwrap preserves streaming and WebSocket access to the underlying writer.
 func (w *localeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// relayIdleTimeout is longer than the hub's relayIdleFor (90 s) so the hub retires idle relay streams first.
+const relayIdleTimeout = 2 * time.Minute
+
+func (h *Manager) relayServer() *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: relayIdleTimeout}
+}
+
 // Accept is extwire.MethodAccept: the hub holds a request for the manager; it dials the relay with the id and serves
 // the request (and any after it on the same connection) there.
 func (h *Manager) Accept(ctx context.Context, id string) error {
@@ -263,7 +271,7 @@ func (h *Manager) Accept(ctx context.Context, id string) error {
 			// there, losing the answer's tail.
 			cancel()
 		}()
-		srv := &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second}
+		srv := h.relayServer()
 		_ = srv.Serve(&oneConn{c: mine, done: make(chan struct{})})
 	}()
 	return nil
@@ -469,6 +477,11 @@ func (h *Manager) authorize(a extwire.Authorize) extwire.Authorized {
 		}
 	}
 	out.OK, out.Scope = e.opens(pattern, a.Path)
+	// Ledger grants are checked live, even for a credential issued before revocation.
+	if out.Scope == extwire.ScopeAssistantEntriesRead {
+		allowed, _ := h.EntriesReadAccess(e.extension)
+		out.OK = out.OK && allowed
+	}
 	return out
 }
 
@@ -699,6 +712,12 @@ func (h *Manager) AgentTools(ctx context.Context, assistant bool) (agents, assis
 		assistantOnly = append(assistantOnly, h.iphoneTools()...)
 		assistantOnly = append(assistantOnly, h.subscriptionTools()...)
 		assistantOnly = append(assistantOnly, h.connectors.ToolsFor(ctx, false)...)
+	}
+	for _, list := range [][]proto.Tool{agents, assistantOnly} {
+		for i, t := range list {
+			localized := prompts.LocalizeTool(prompts.MCPTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}, string(i18n.From(ctx)))
+			list[i].Description, list[i].InputSchema = localized.Description, localized.InputSchema
+		}
 	}
 	return agents, assistantOnly
 }

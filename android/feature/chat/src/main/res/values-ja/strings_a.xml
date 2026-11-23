@@ -122,6 +122,7 @@
     <string name="chat_source_no_phone_approval">このセッションはスマートフォンで承認できません。コンピューターで対応してください。</string>
     <string name="chat_source_read_only_reason">閲覧のみ：%1$s</string>
     <string name="chat_starting_failed">起動できませんでした：%1$s</string>
+    <string name="chat_start_failed_title">起動できませんでした</string>
     <string name="chat_starting">%1$sを起動中です。準備ができたらメッセージを送信します</string>
     <string name="chat_tabs_tab_description">%1$s、%2$s</string>
     <string name="chat_tabs_launcher_chip">%1$s 起点</string>
@@ -491,6 +492,7 @@
     <string name="chat_review_pending">検収待ち</string>
     <string name="chat_review_rework">差し戻し %1$d 回目</string>
     <string name="chat_review_needs_user">判断待ち</string>
+    <string name="chat_review_user_check">あなたの確認待ち</string>
     <string name="chat_review_accepted">検収済み</string>
     <string name="chat_review_cancelled">取り消し</string>
     <string name="chat_review_line">検収</string>

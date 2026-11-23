@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -228,14 +229,24 @@ func TestGuestConversationRefusals(t *testing.T) {
 		`{"prompt":"x","guest":{"tools":["phone_contacts"]}}`,
 		`{"prompt":"x","guest":{"tools":["lark_agent_reply","lark_agent_reply"]}}`,
 		`{"prompt":"x","main":true,"guest":{"tools":["lark_agent_reply"]}}`,
-		`{"prompt":"x","space":"health","guest":{"tools":["lark_agent_reply"]}}`,
 	} {
 		if w := postConversation(t, s, body); w.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", body, w.Code, w.Body)
 		}
 	}
+	// In the health space: an extension may start nothing there (#12097), and for anyone else a guest is not in a space.
+	inSpace := `{"prompt":"x","space":"health","guest":{"tools":["lark_agent_reply"]}}`
+	if w := postConversation(t, s, inSpace); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "permission_denied") {
+		t.Errorf("an extension's guest in the health space: %d %s", w.Code, w.Body)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/assistant/conversations", strings.NewReader(inSpace))
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "neither the main one nor in a space") {
+		t.Errorf("a guest in the health space: %d %s", w.Code, w.Body)
+	}
 	f.noGuest = true
-	w := postConversation(t, s, `{"prompt":"x","guest":{"tools":["lark_agent_reply"]}}`)
+	w = postConversation(t, s, `{"prompt":"x","guest":{"tools":["lark_agent_reply"]}}`)
 	if w.Code == http.StatusOK || !strings.Contains(w.Body.String(), "personad") {
 		t.Fatalf("an old node: %d %s", w.Code, w.Body)
 	}
@@ -330,7 +341,8 @@ func TestGuestConversationContextAndSends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(params) != 4 || params["text"] != "more" || params["is_main"] != false || params["supervision_instructions"] != "" || params["origin_known"] != true {
+	if len(params) != 5 || params["text"] != "more" || params["is_main"] != false || params["supervision_instructions"] != "" || params["origin_known"] != true ||
+		params["model_source"] != (modelhttp.Source{Role: "main", Session: "g1"}) {
 		t.Fatalf("a guest's send params: %v", params)
 	}
 }

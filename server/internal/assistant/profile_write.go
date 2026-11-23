@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var in struct {
 		Settings
+		ConversationTagFilters json.RawMessage `json:"conversation_tag_filters"`
 		ExpectedWorkGuide      *bool           `json:"expected_work_guide"`
 		WorkspaceRulesPatch    json.RawMessage `json:"workspace_rules"`
 		Permission             json.RawMessage `json:"default_permission_mode"`
@@ -108,6 +110,29 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
 		return
 	}
+	var conversationTagFilters []string
+	tagFiltersWritten := len(in.ConversationTagFilters) > 0
+	if tagFiltersWritten && !bytes.Equal(bytes.TrimSpace(in.ConversationTagFilters), []byte("null")) {
+		if err := json.Unmarshal(in.ConversationTagFilters, &conversationTagFilters); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		var err error
+		conversationTagFilters, err = normalizeConversationTagFilters(conversationTagFilters)
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	conversationOrder, orderErr := normalizeConversationOrder(in.ConversationOrder)
+	if orderErr != nil {
+		apierr.Write(w, http.StatusBadRequest, orderErr)
+		return
+	}
+	if in.CacheKeepaliveMinutes != nil && (*in.CacheKeepaliveMinutes < 1 || *in.CacheKeepaliveMinutes > 55) || in.CacheKeepaliveMax != nil && (*in.CacheKeepaliveMax < 1 || *in.CacheKeepaliveMax > 144) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_cache_keepalive"))
+		return
+	}
 	if m := in.IdleAutoCompactMinutes; m != nil && (*m < minIdleAutoCompactMinutes || *m > maxIdleAutoCompactMinutes) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_minutes"))
 		return
@@ -120,6 +145,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_tokens"))
 		return
 	}
+	if m := in.IdleReleaseMinutes; m != nil && (*m < minIdleReleaseMinutes || *m > maxIdleReleaseMinutes) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_release_minutes"))
+		return
+	}
 	if in.MinutesRetention != nil {
 		if err := json.Unmarshal(in.MinutesRetention, &in.MinutesDays); err != nil || in.MinutesDays == nil ||
 			*in.MinutesDays < minMinutesDays || *in.MinutesDays > maxMinutesDays {
@@ -129,6 +158,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if m := in.MeetingAttendanceDefault; m != nil && !slices.Contains(meetingRoles, *m) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_default_role"))
+		return
+	}
+	if g := in.DeliveryGate; g != nil && !slices.Contains(deliveryGates, *g) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("delivery_gate must be off, merged or live"))
 		return
 	}
 	if code := s.readMeetingTranscriptionSettings(&in.Settings, in.TranscriptionMode, in.Glossary, in.TranscriptionExtension); code != "" {
@@ -154,6 +187,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if err := validateAgentNamingSettings(in.Settings); err != nil {
 		apierr.Write(w, http.StatusBadRequest, err)
 		return
+	}
+	if in.OwnerApprovalPhrases != nil {
+		if _, err := ownerApprovalPhrases(Settings{OwnerApprovalPhrases: in.OwnerApprovalPhrases}); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 	}
 	if (in.AgentAutoNaming != nil || in.AgentAutoNamingMax != nil || in.AgentAutoNamingIntervalHours != nil) && !s.explicitSettingsTarget(w, r) {
 		return
@@ -232,6 +271,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.MainTasksQuiet != nil {
 			v.MainTasksQuiet = in.MainTasksQuiet
 		}
+		if in.CacheKeepalive != nil {
+			v.CacheKeepalive = in.CacheKeepalive
+		}
+		if in.CacheKeepaliveMinutes != nil {
+			v.CacheKeepaliveMinutes = in.CacheKeepaliveMinutes
+		}
+		if in.CacheKeepaliveMax != nil {
+			v.CacheKeepaliveMax = in.CacheKeepaliveMax
+		}
 		if in.IdleAutoCompact != nil {
 			v.IdleAutoCompact = in.IdleAutoCompact
 		}
@@ -240,6 +288,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.IdleAutoCompactTokens != nil {
 			v.IdleAutoCompactTokens = in.IdleAutoCompactTokens
+		}
+		if in.IdleReleaseMinutes != nil {
+			v.IdleReleaseMinutes = in.IdleReleaseMinutes
 		}
 		if in.StartRequestedTasks != nil {
 			v.StartRequestedTasks = in.StartRequestedTasks
@@ -272,6 +323,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.RecentTaskChats != nil {
 			v.RecentTaskChats = in.RecentTaskChats
 		}
+		if in.ConversationOrder != nil {
+			v.ConversationOrder = conversationOrder
+		}
+		if tagFiltersWritten {
+			v.ConversationTagFilters = conversationTagFilters
+		}
 		if in.MeetingAttendanceDefault != nil {
 			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault
 		}
@@ -291,8 +348,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.ArchiveClosedDays != nil {
 			v.ArchiveClosedDays = in.ArchiveClosedDays
 		}
-		if in.DoneNeedsDelivery != nil {
+		if in.DeliveryGate != nil {
+			v.DeliveryGate = in.DeliveryGate
+			v.DoneNeedsDelivery = nil
+		} else if in.DoneNeedsDelivery != nil {
 			v.DoneNeedsDelivery = in.DoneNeedsDelivery
+			v.DeliveryGate = nil
 		}
 		if in.ReviewSamplePercent != nil {
 			v.ReviewSamplePercent = in.ReviewSamplePercent
@@ -303,8 +364,20 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.ClaudeInteractive != nil {
 			v.ClaudeInteractive = in.ClaudeInteractive
 		}
+		if in.OwnerReplyApproval != nil {
+			v.OwnerReplyApproval = in.OwnerReplyApproval
+		}
+		if in.PersistentOwnerActionCards != nil {
+			v.PersistentOwnerActionCards = in.PersistentOwnerActionCards
+		}
+		if in.OwnerApprovalPhrases != nil {
+			v.OwnerApprovalPhrases = in.OwnerApprovalPhrases
+		}
 		if in.AgentTasks != nil {
 			v.AgentTasks = in.AgentTasks
+		}
+		if in.TaskLessons != nil {
+			v.TaskLessons = in.TaskLessons
 		}
 		if in.CloseEndedTerminals != nil {
 			v.CloseEndedTerminals = in.CloseEndedTerminals
@@ -320,6 +393,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.InboxSignals != nil {
 			v.InboxSignals = in.InboxSignals
+		}
+		if in.InboxTodoForward != nil {
+			v.InboxTodoForward = in.InboxTodoForward
+		}
+		if in.PREventsRouteToAgent != nil {
+			v.PREventsRouteToAgent = in.PREventsRouteToAgent
 		}
 		if in.InboxPost != nil {
 			v.InboxPost = in.InboxPost
@@ -364,6 +443,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		s.mcpChanges.notify()
 	}
 	s.settingsChanged(ctx)
+	// Revoke already captured requests as part of a policy edit. Forwarding stays
+	// available; only a subsequent genuine request can rearm the snapshot.
+	if (in.CacheKeepalive != nil || in.CacheKeepaliveMinutes != nil || in.CacheKeepaliveMax != nil) && cacheKeepaliveOf(before) != cacheKeepaliveOf(s.settings(ctx)) {
+		clearCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		for _, ref := range s.cacheKeepaliveRefs(ctx, before) {
+			_ = s.call(clearCtx, ref.MachineID, "assistant.cache_clear", map[string]any{"session_id": ref.SessionID}, nil)
+		}
+	}
 	if in.SupervisionBatchMinutes != nil && supervisionBatchMinutesOf(s.settings(ctx)) != supervisionBatchMinutesOf(before) {
 		s.rescheduleSupervision()
 	}

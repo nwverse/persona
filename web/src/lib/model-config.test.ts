@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  modelPurpose, modelSummary, runtimeFallbackText,
+  modelPurpose, modelProviderTitle, modelSummary, providerName, runtimeFallbackText, runtimeLabel,
   type ModelProvider, type ModelPurpose,
 } from "./model-config";
 import {
   agentsOverride, catalogLists, chooseProvider, claudeCodeOnly, configDirChoices, draftFor, effortOffered, executionForm, followedCategory, modelConfiguration, modelPatch, overridden,
-  ownRecord, parentCategory, providersFor, purposeDescription, purposeGroups, resetPatch, runtimeChoices, saveModelPurpose, setApartFrom, withPurposeAfter,
+  ownRecord, parentCategory, permissionModesForProvider, providersFor, purposeDescription, purposeGroups, resetPatch, runtimeChoices, saveModelPurpose, setApartFrom, withPurposeAfter,
   withUsesAfterCategories,
 } from "./model-config-execution";
 
@@ -24,6 +24,17 @@ const providers: ModelProvider[] = [
 afterEach(() => vi.unstubAllGlobals());
 
 describe("用途配置", () => {
+  it("displays the built-in TRAE CLI provider without changing its saved ID or custom names", () => {
+    for (const launcher of ["traex", "traecli", "trae-cli"]) {
+      const provider = { id: `launcher.${launcher}`, name: launcher, kind: "launcher" as const };
+      expect(modelProviderTitle(provider)).toBe("TRAE CLI");
+      expect(providerName(provider.id)).toBe("TRAE CLI");
+      expect(providerName(provider.id, [{ ...provider, name: "Team relay" }])).toBe("Team relay");
+      expect(runtimeLabel("cli", launcher)).toBe("TRAE CLI");
+    }
+    expect(modelProviderTitle({ id: "api.traecli", name: "traecli" })).toBe("traecli");
+  });
+
   it("uses overrides for editing, never silently fixes a missing provider", () => {
     expect(draftFor(purpose)).toEqual({ provider: "strong", model: "main", effort: "high", runtime: "" });
     expect(draftFor({ ...purpose, override: { provider: "gone" } })).toEqual({ provider: "gone", model: "", effort: "", runtime: "" });
@@ -53,6 +64,21 @@ describe("用途配置", () => {
     expect(modelPatch(purpose, { ...draftFor(purpose), config_dir: "legacy" })).not.toHaveProperty("config_dir");
     expect(resetPatch(main, "", "legacy")).toMatchObject({ revision: 3, config_dir: "legacy" }); // a reset keeps it, as it keeps the runtime
     expect(resetPatch(purpose, "", "legacy")).not.toHaveProperty("config_dir");
+  });
+  it("handles permission_mode on launcher purposes only and clears it when switching providers", () => {
+    const withPerm: ModelPurpose = {
+      ...purpose,
+      override: { provider: "strong", permission_mode: "acceptEdits" },
+      fields: ["provider", "model", "effort", "permission_mode"],
+    };
+    const draft = draftFor(withPerm);
+    expect(draft.permission_mode).toBe("acceptEdits");
+    expect(chooseProvider(draft, "other").permission_mode).toBe("");
+    expect(modelPatch(withPerm, draft)).toMatchObject({ revision: 3, permission_mode: "acceptEdits" });
+    expect(resetPatch(withPerm)).toMatchObject({ revision: 3, permission_mode: null });
+    expect(permissionModesForProvider(withPerm, { id: "launcher.claude", name: "Claude", kind: "launcher", agent: "claude" }, "claude").length).toBeGreaterThan(0);
+    expect(permissionModesForProvider(withPerm, { id: "launcher.omp", name: "OMP", kind: "launcher", agent: "omp" }, "omp")).toEqual([]);
+    expect(permissionModesForProvider({ ...withPerm, kind: "api" }, { id: "api", name: "API", kind: "api" }, "")).toEqual([]);
   });
   it("uses server capability candidates and keeps a referenced hidden provider", () => {
     expect(providersFor(purpose, providers).map((p) => p.id)).toEqual(["strong", "other"]);

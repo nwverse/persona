@@ -178,16 +178,72 @@ func TestAgentSendTaskAgainKeepsOneTask(t *testing.T) {
 	}
 }
 
-// An agent working for the user's own todo or another conversation's task stays theirs, and only the main conversation
-// hands out tasks: refused with why, nothing sent, no todo made.
+// A side conversation may hand new work to an existing agent. The card keeps that origin while main supervises it;
+// another hand-off of the same task and an ordinary reply do not create more cards (#5732).
+func TestAgentSendTaskFromSideIsSupervisedByMain(t *testing.T) {
+	s, f := newQuietService(t)
+	secretary(f)
+	args := map[string]any{"machine": "box", "session_id": "sec00001", "text": "把周报数据拉一下",
+		"task": map[string]any{"title": "拉周报数据", "done_when": []string{"表格链接贴回来"}}}
+	res, err := runJSON(t, s, "conv2", "agent_send", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res, "main conversation") {
+		t.Fatalf("the result does not name main supervision: %s", res)
+	}
+	todo := onlyTodo(s)
+	if todo.Origin != "conv2" || todo.Supervision == nil || todo.Supervision.Supervisor != "conv1" {
+		t.Fatalf("todo = %+v", todo)
+	}
+	if _, err := runJSON(t, s, "conv2", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001", "text": "再加上上周对比",
+		"task": map[string]any{"title": "拉周报数据"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runJSON(t, s, "conv2", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001", "text": "进展如何"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := todoNow(s, todo.ID).Supervision; got == nil || got.Supervisor != "conv1" {
+		t.Fatalf("a repeated side hand-off stole main supervision: %+v", got)
+	}
+	if _, err := runJSON(t, s, "conv2", "task_scope", map[string]any{"todo_id": todo.ID, "change": "do not let the origin accept", "why": "main remains the supervisor", "done_when": []string{"上周对比"}}); err == nil {
+		t.Fatal("the side conversation gained acceptance authority from agent_send")
+	}
+	if todoCount(s) != 1 || todoNow(s, todo.ID).ID != todo.ID {
+		t.Fatalf("duplicate task: %+v", todoNow(s, todo.ID))
+	}
+}
+
+// A direction lead owns its own hand-off even before a main conversation has been configured.
+func TestAgentSendTaskFromLeaderWithoutMainKeepsItsSupervisor(t *testing.T) {
+	s, f := newQuietService(t)
+	secretary(f)
+	f.known["lead1"] = true
+	setSettings(t, s, func(v *Settings) { v.Main, v.Leaders = "", []string{"lead1"} })
+	_, err := runJSON(t, s, "lead1", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001", "text": "把周报数据拉一下",
+		"task": map[string]any{"title": "拉周报数据", "done_when": []string{"表格链接贴回来"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	todo := onlyTodo(s)
+	if todo.Origin != "lead1" {
+		t.Fatalf("the hand-off lost its origin: %+v", todo)
+	}
+	if todo.Supervision == nil || todo.Supervision.Supervisor != "lead1" {
+		t.Errorf("the lead lost supervision without main: %+v", todo.Supervision)
+	}
+	if _, err := runJSON(t, s, "lead1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "cancelled", "note": "Cancel this task"}); err != nil {
+		t.Errorf("the planning lead could not cancel its task: %v", err)
+	}
+}
+
+// An agent working for the user's own todo or another conversation's task stays theirs: refused with why, nothing
+// sent, no todo made.
 func TestAgentSendTaskRefusesWhatIsNotItsOwn(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := t.Context()
 	secretary(f)
 	args := map[string]any{"machine": "box", "session_id": "sec00001", "text": "把周报数据拉一下", "task": map[string]any{"title": "拉周报数据"}}
-	if _, err := runJSON(t, s, "conv2", "agent_send", args); err == nil || !strings.Contains(err.Error(), "only the main conversation") {
-		t.Fatalf("from another conversation: %v", err)
-	}
 	for _, origin := range []string{"", "conv2"} { // the user's own todo, another conversation's task
 		theirs, err := s.createTodo(ctx, "别人的", "x", origin, "")
 		if err != nil {
@@ -495,10 +551,9 @@ func TestAgentSendEmptyTaskIsAReply(t *testing.T) {
 }
 
 // Any real value in title, done_when or expect_minutes makes it a hand-off, and so does anything that is not an object
-// of only those keys, with a hand-off's refusals (each before anything is sent, the tasks unchanged): only the main
-// conversation hands out tasks, the user's own todo stays theirs and another conversation's task stays that
-// conversation's. From the main conversation to an agent on no task it is a hand-off: a supervised task with its
-// receipt.
+// of only those keys, with a hand-off's refusals (each before anything is sent, the tasks unchanged): the user's own
+// todo stays theirs and another conversation's task stays that conversation's. A side conversation may hand out too,
+// with main supervising (#5732).
 func TestAgentSendTaskWithAnyFieldIsAHandOff(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := t.Context()
@@ -513,7 +568,6 @@ func TestAgentSendTaskWithAnyFieldIsAHandOff(t *testing.T) {
 	for i, task := range handOffTasks {
 		free := fmt.Sprintf("free%04d", i)
 		for _, c := range []struct{ self, sid, err string }{
-			{"conv2", free, "only the main conversation hands out tasks: send it without task"},
 			{"conv1", "peer0001", fmt.Sprintf("peer0001 works for task %q (%s) of another conversation: it stays that conversation's; "+
 				"nothing was sent (send it without task to only send it)", theirs.Title, theirs.ID)},
 			{"conv1", "user0001", fmt.Sprintf("user0001 is on the user's own todo %q (%s): it stays theirs; nothing was sent "+
@@ -568,11 +622,11 @@ func onlyOpen(t *testing.T, s *Service, sid string) Todo {
 	return todo
 }
 
-// A reply from the health space still asks on the phone before it goes (an empty task is no reason to refuse it):
+// A reply to an Agent in the same health space still asks on the phone before it goes (an empty task is no reason to refuse it):
 // declined, nothing is sent and the receipt says so; allowed, it goes, and neither makes a task or a feed line.
 func TestAgentSendEmptyTaskAsksBeforeItGoes(t *testing.T) {
 	f := healthHub()
-	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/src/app", Agent: "claude",
+	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/.persona/health/work", Agent: "claude",
 		Status: proto.StatusIdle, Title: "app"})
 	s := newTestService(t, f)
 	setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
@@ -676,7 +730,7 @@ func exitRefusal(sid string, todo Todo, text string) string {
 // From the health space the refusal comes before the phone is asked: no card, nothing sent.
 func TestAgentSendExitToAnotherConversationsAgentAsksNothing(t *testing.T) {
 	f := healthHub()
-	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/src/app", Agent: "claude",
+	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/.persona/health/work", Agent: "claude",
 		Status: proto.StatusIdle, Title: "app"})
 	s := newTestService(t, f)
 	setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
@@ -686,7 +740,7 @@ func TestAgentSendExitToAnotherConversationsAgentAsksNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.superviseTodo(ctx, todo.ID, "main-0000-0000", []string{"a chart"}, 30)
-	if err := s.linkTodoAgent(ctx, todo.ID, "server", "code-0000-0000", todo.Title, "/home/me/src/app", "claude"); err != nil {
+	if err := s.linkTodoAgent(ctx, todo.ID, "server", "code-0000-0000", todo.Title, "/home/me/.persona/health/work", "claude"); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
@@ -717,7 +771,7 @@ func TestAgentSendExitRecheckedAfterThePhone(t *testing.T) {
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			f := healthHub()
-			f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/src/app",
+			f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/.persona/health/work",
 				Agent: "claude", Status: proto.StatusIdle, Title: "app"})
 			s := newTestService(t, f)
 			setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
@@ -740,7 +794,7 @@ func TestAgentSendExitRecheckedAfterThePhone(t *testing.T) {
 				t.Fatal(err)
 			}
 			s.superviseTodo(ctx, todo.ID, "main-0000-0000", []string{"a chart"}, 30)
-			if err := s.linkTodoAgent(ctx, todo.ID, "server", "code-0000-0000", todo.Title, "/home/me/src/app", "claude"); err != nil {
+			if err := s.linkTodoAgent(ctx, todo.ID, "server", "code-0000-0000", todo.Title, "/home/me/.persona/health/work", "claude"); err != nil {
 				t.Fatal(err)
 			}
 			allow := true

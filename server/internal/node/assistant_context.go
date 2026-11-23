@@ -248,18 +248,34 @@ func contextDelta(seen map[string]string, snapshot string) (string, map[string]s
 // check. commit, called once the message is on its way, records the snapshot as seen and acks the view errors (the
 // hub keeps them until then: a message that fails to go out leaves them for the next one).
 func (n *Node) turnContext(id string, c contextAnswer) (block string, commit func()) {
+	// A snapshot may have been prefetched before idle-aware compaction completed.
+	if st, ok := n.state.get(id); ok && st.RecoveryPending != "" && c.requested && st.RecoveryPending != c.requestedRecoveryID && n.peer != nil {
+		c = n.assistantContext(id)
+	}
 	n.mu.Lock()
 	seen := n.ctxSent[id]
 	n.mu.Unlock()
 	block, next := contextDelta(seen, c.Text)
 	snapshot := block != ""
+	st, _ := n.state.get(id)
+	if c.RecoveryID == "" || st.RecoveryPending != c.RecoveryID {
+		c.Recovery, c.RecoveryID = "", ""
+	}
+	if c.Recovery != "" {
+		block = strings.TrimSpace(block + "\n\n" + c.Recovery)
+	}
 	if c.ViewErrors != "" {
 		block = strings.TrimSpace(block + "\n" + c.ViewErrors)
 	}
 	return block, func() {
 		n.state.update(id, func(v *sessionState) bool {
+			changed := false
+			if c.Recovery != "" && c.RecoveryID != "" && v.RecoveryPending == c.RecoveryID {
+				v.RecoveryPending = ""
+				changed = true
+			}
 			if !v.AwaitingFirstMessage {
-				return false
+				return changed
 			}
 			v.AwaitingFirstMessage = false
 			return true
@@ -281,6 +297,14 @@ func (n *Node) turnContext(id string, c contextAnswer) (block string, commit fun
 
 // contextCompacted forgets what conversation id has seen: its old blocks were summarized away.
 func (n *Node) contextCompacted(id string) {
+	n.state.update(id, func(v *sessionState) bool {
+		if v.RecoveryHookPending {
+			v.RecoveryHookPending = false
+			return true
+		}
+		v.RecoveryPending = newUUID()
+		return true
+	})
 	n.mu.Lock()
 	delete(n.ctxSent, id)
 	n.mu.Unlock()
@@ -321,9 +345,15 @@ func (n *Node) toolsAtStart(id string, tools []string) {
 
 // contextAnswer is the hub's assistant.context answer (assistantwire.ContextResult).
 type contextAnswer struct {
-	Text       string          `json:"text"`
-	ViewErrors string          `json:"view_errors"`
-	Receipts   json.RawMessage `json:"view_error_receipts"`
+	// Local request provenance: intentionally empty guest/public input must never trigger a context fetch.
+	requested           bool
+	requestedRecoveryID string
+	RecoveryID          string          `json:"recovery_id,omitempty"`
+	Recovery            string          `json:"recovery,omitempty"`
+	CompactInstructions string          `json:"compact_instructions,omitempty"`
+	Text                string          `json:"text"`
+	ViewErrors          string          `json:"view_errors"`
+	Receipts            json.RawMessage `json:"view_error_receipts"`
 }
 
 // assistantContext asks the hub for the live snapshot (prompts.AssistantContext) and the view errors to report. The
@@ -334,10 +364,20 @@ func (n *Node) assistantContext(id string) contextAnswer {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	var res contextAnswer
-	if err := n.peer.Call(ctx, "assistant.context", map[string]any{"session_id": id}, &res); err != nil {
+	st, _ := n.state.get(id)
+	res := contextAnswer{requested: true, requestedRecoveryID: st.RecoveryPending}
+	if err := n.peer.Call(ctx, "assistant.context", map[string]any{"session_id": id, "recovery_id": st.RecoveryPending, "prepare_recovery": true}, &res); err != nil {
 		n.logger.Printf("assistant context: %v", err)
-		return contextAnswer{}
+		return contextAnswer{requested: true, requestedRecoveryID: st.RecoveryPending}
+	}
+	if res.CompactInstructions != "" {
+		n.state.update(id, func(v *sessionState) bool {
+			if v.CompactInstructions == res.CompactInstructions {
+				return false
+			}
+			v.CompactInstructions = res.CompactInstructions
+			return true
+		})
 	}
 	if string(res.Receipts) == "null" {
 		res.Receipts = nil

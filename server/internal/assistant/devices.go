@@ -116,15 +116,51 @@ func (b *BusHub) keepFromSnapshot(s Snapshot) {
 // NodeAnswer answers the requests of a node that are the assistant's own (devices.Options.Answer): which launcher and
 // model a message the node sends a conversation by itself runs on (assistant.model), and the live snapshot before
 // each message (assistant.context).
-func (s *Service) NodeAnswer(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+func (s *Service) nodeAnswer(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
 	if err := s.conversationParamsAvailable(ctx, machine, params); err != nil {
 		return nil, true, err
 	}
 	var p struct {
-		SessionID string                           `json:"session_id"`
-		Ack       []assistantwire.ViewErrorReceipt `json:"ack"`
+		SessionID       string                           `json:"session_id"`
+		RecoveryID      string                           `json:"recovery_id"`
+		RecoveryOnly    bool                             `json:"recovery_only"`
+		PrepareRecovery bool                             `json:"prepare_recovery"`
+		Ack             []assistantwire.ViewErrorReceipt `json:"ack"`
 	}
 	switch method {
+	case assistantwire.MethodDecisionRaise:
+		var p struct {
+			Decision assistantwire.OutsideDecisionRequest `json:"decision"`
+			Source   string                               `json:"source"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: err.Error()}, true, nil
+		}
+		caller := &outsideCaller{key: "node:" + machine, kind: "script", name: p.Source}
+		rec, inserted, err := s.raiseOutsideDecision(ctx, caller, p.Decision)
+		if err != nil {
+			return outsideErrorReply(err), true, nil
+		}
+		return outsideReply(rec, inserted), true, nil
+	case assistantwire.MethodDecisionGet, assistantwire.MethodDecisionWithdraw:
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.ID == "" {
+			return assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: "a decision id is required"}, true, nil
+		}
+		caller := &outsideCaller{key: "node:" + machine, kind: "script", name: machine}
+		var rec *outsideDecision
+		var err error
+		if method == assistantwire.MethodDecisionGet {
+			rec, err = s.outsideForCaller(ctx, caller, p.ID)
+		} else {
+			rec, err = s.withdrawOutsideDecision(ctx, caller, p.ID)
+		}
+		if err != nil {
+			return outsideErrorReply(err), true, nil
+		}
+		return outsideReply(rec, false), true, nil
 	case NodeLaunchersPull: // a provider's secrets for this computer (models_launchers_scope.go): the connection's machine decides
 		out, err := s.pullLauncher(ctx, machine, params)
 		return out, true, err
@@ -154,7 +190,7 @@ func (s *Service) NodeAnswer(ctx context.Context, machine, method string, params
 		if !s.assistantCaller(ctx, machine, p.SessionID) {
 			return ContextResult{}, true, nil
 		}
-		return s.Context(ctx, ContextParams{SessionID: p.SessionID, MachineID: machine, Ack: p.Ack}), true, nil
+		return s.Context(ctx, ContextParams{SessionID: p.SessionID, MachineID: machine, Ack: p.Ack, RecoveryID: p.RecoveryID, RecoveryOnly: p.RecoveryOnly, PrepareRecovery: p.PrepareRecovery}), true, nil
 	}
 	return nil, false, nil
 }

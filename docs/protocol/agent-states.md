@@ -17,12 +17,31 @@ whether there's a pending interaction, and whether the user has looked at it in 
 | `interrupted` Interrupted by restart | Was running before a restart, and the restart took herdr's panes with it (#1917) | — | The record has a pane, the start time is earlier than this node's start, and there's no live agent now | Light gray, with "Continue" |
 | `unknown` Unknown | The host recognized the agent but can't tell its state | `unknown` | — | Gray |
 
-A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread.
+A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread. A stopped session with `turn_error_code: "upstream_unavailable"` (#13372) keeps its wire `state` (`unread` or `idle`) and client badge counts unchanged, while server-side `agents_list` and the Assistant live snapshot group it under `Needs you` so stalled external `/loop` and coding Agent sessions remain visible.
 
 List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running.
 
 Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply and then Just finished right after Unread on Android.
 iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs you → Unread → Working → Seen → Unknown → Not running.
+
+### Needs you that is not counted
+
+D6 and D11 of `docs/plans/plan-derived-counts.md` ("6. Decisions") decided this; `spec/fixtures/needs-you` pins the
+counts. Each client draws the groups in its own D6 change; until then its fixture replay keeps today's numbers behind
+marks.
+
+- **What the count leaves out**: the Agents count (the tab's badge, and the Needs you section's header and filter)
+  leaves out a muted agent, a quiet task's agent and a session whose only pending cards are held. A held card is a
+  `delegating` one: the assistant is still deciding whether it may answer it, or it waits with its task's supervisor,
+  until it is first handed to the owner. A parsed terminal question routed to a supervisor (kind `screen`) still
+  counts, and so does the terminal dialog behind it, until the owner confirms that case of D11.
+- **The state does not change**: a session whose only cards are held stays `needs_you` (`agentState` in
+  `server/internal/assistant/fleet.go` marks a session with any pending card so). The counts leave it out; the state
+  does not.
+- **How such a row reads**: it stays listed in the Needs you section, answerable, in an uncounted group named for why:
+  Muted, or Assistant is looking (quiet tasks' agents and held cards). Its state word stays Needs you, since it still
+  waits for a person. The group's name says why the number leaves it out, so no other state word is added for it. Any
+  other mark, such as a muted agent's look, stays as it is elsewhere.
 
 ### Awaiting your reply (#5096)
 
@@ -44,8 +63,9 @@ forgotten. So a stopped session carries `awaits_reply` (`state` is unchanged; ol
   `done` with something missing or waited for, and no closeout at all leave the words to decide, as before. The node marks the session `asks_read`; only without it (an older node, a
   host that does not say) the manager reads `last_text` itself, and only when it was not cut.
 - **Still waiting** (`awaits_reply`, the manager's): Unread or Seen, no pending interaction (that is Needs You), no model
-  error, no background work or `/loop`, and either the triage says it waits on the user (not put off on its card:
-  `work.deferred`), or the triage has no word on the turn (off, not yet, unsure) and the turn has `asks`. A turn the triage
+  error, no background work or `/loop`, and either triage found an answerable user wait (not put off on its card:
+  `work.deferred`), or triage has no word on the turn (off, not yet, unsure) and the turn has `asks`. A model's
+  summary alone is not a user wait: it must have a grounded question or an authorization link. A turn the triage
   found done does not count (a closing "shall I also…" is an offer).
 - **Lists**: a Seen, not muted agent with `awaits_reply` gets its own rank, Awaiting Reply, after Unread and before Working;
   it and its space stay out of Idle Spaces and the "N more idle" folds, and its row shows what it asks (the triage's line when
@@ -123,15 +143,15 @@ Deciding "Needs you" / "done" and pushing are the hub's existing logic (based on
 - **Unrecognized agents** (`gemini`, `amp`…): used to be dropped entirely; now listed as a terminal-only row (`docs/integrations/opencode.md` ("Terminal rows for other agents")). The state is herdr's, so when it's stuck in a confirm box the phone shows "Needs you",
   but there's no card to answer (the hub doesn't parse screens of TUIs it doesn't know); answer it on the terminal page.
 
-### Claude in a Tern block
+### Claude in a Tern or Rex block
 
-Tern reports no agent state: every agent it lists is `unknown` (`node/hosttern.go`). For a Claude, node takes the status Claude Code keeps in its own
+Tern and Rex report no agent state: every agent they list is `unknown` (`node/hosttern.go`, `node/hostrex.go`). For a Claude, node takes the status Claude Code keeps in its own
 `sessions/<pid>.json` instead (the file of the block's `claude` process, the one that names its session; `ternClaudeStatus` in `server/internal/node/agent_status.go`),
 before the hook and transcript rules below:
 
 - `busy` → `working`.
 - `waiting` (a question, permission or other dialog of its own has the keyboard) → `blocked`: Needs you, and the manager makes its screen card as for herdr's `blocked`.
-- `idle` → `done` once the session has a transcript (`idle` before its first message). Tern has nothing like herdr's "seen in the terminal", so a finished
+- `idle` → `done` once the session has a transcript (`idle` before its first message). Tern and Rex have nothing like herdr's "seen in the terminal", so a finished
   turn is Unread until it is opened in an app, and its finished push follows the usual rules.
 - `shell` (Claude Code 2.1.31x and later: the turn is over while a background command or Monitor still runs) is read like `idle`: `done` once
   there is a transcript, and the row then shows Working (background) from the transcript's background tasks.
@@ -164,7 +184,7 @@ Global events carry `report_only`, and the hub doesn't take them as meaning the 
 Decisions (when herdr says `done` / `idle` / `unknown`; `blocked` and `working` follow herdr):
 
 - **A dialog is open in the terminal** (#2553, `node/dialogstatus.go`): for a Claude still `done` / `idle` / `unknown` after the checks above (excluding botmux, those in Claude's agents list, and ones where Persona itself is operating a picker)
-  in a herdr or Tern pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
+  in a herdr, Tern or Rex pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
   Why: Claude Code 2.1.309's auto mode billing notice blocked 3 Agents for several minutes; herdr reported done and Persona showed Unread.
 - **An allow Claude did not take** (#3752, `node/allowwatch.go`): whatever herdr says, `working` included. Once node hands a PermissionRequest
   hook an allow (a terminal Agent's, not the assistant's), it reads the pane 1.5 s later; a dialog still at the bottom (`screen.DialogHead`) lists
@@ -246,7 +266,10 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
   WS messages have no acknowledgment and are silently dropped on a half-open connection (#1588), so the App keeps reads the hub hasn't recorded yet in `SeenOutbox`: it counts as recorded only when a list from the hub has this session's
   `seen_at` later than the mark. Meanwhile it still shows as Seen and is resent on reconnect; it stops waiting if the session does another turn, starts working or needs you, disappears from the list,
   or still isn't recorded after 10 minutes.
-- Rule: herdr `done` and `seen_at` earlier than the session's last update time (the transcript's modification time, i.e. when the turn ended) → `unread`, otherwise `idle`.
+  Once a list shows it recorded, the mark still holds the rows of other lists that have not read since (the web: 15 seconds), so a row does not turn Unread again until its own list reads;
+  a count read with such a row leaves it out of Unread too (`web/src/lib/seen-outbox.ts`).
+- Rule: herdr `done` and `seen_at` earlier than the session's last conversational activity → `unread`, otherwise `idle`.
+  Claude Code's trailing metadata (#5967) and a Codex command result recorded after its turn closed do not count as a new turn.
   So if it does another turn after you looked, it becomes Unread again.
 
 ### Ordering

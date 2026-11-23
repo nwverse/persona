@@ -34,6 +34,8 @@ internal class GroupNames(val namespace: String?) {
     /** Interaction ids are the hub's own and two hubs can use the same one: other groups' carry the suffix too. */
     fun interactionId(raw: String) = GroupKeys.machine(raw, namespace)
     fun interaction(value: Interaction) = if (plain) value else value.copy(id = interactionId(value.id), machineId = machineId(value.machineId))
+    fun rawInteraction(value: Interaction) = if (plain) value else
+        value.copy(id = GroupKeys.raw(value.id), machineId = rawMachine(value.machineId))
     fun fleet(value: FleetState) = if (plain) value else value.copy(items = value.items.map { item ->
         // The id is "machine/session": FleetSummary.key opens and answers by its machine part.
         item.copy(id = path(item.id), interaction = item.interaction?.let(::interactionId))
@@ -174,6 +176,8 @@ internal fun ChatActions.inGroup(names: GroupNames): ChatActions {
         override suspend fun isMuted(session: Session) = source.isMuted(names.rawSession(session))
         override suspend fun execute(session: Session, action: ChatAction) = source.execute(names.rawSession(session), action)
         override suspend fun verify(session: Session, action: ChatAction) = source.verify(names.rawSession(session), action)
+        override suspend fun continueStart(session: Session, choice: String) =
+            names.session(source.continueStart(names.rawSession(session), choice))
         override suspend fun editQueue(session: Session, keep: List<Int>) = source.editQueue(names.rawSession(session), keep)
         override suspend fun sendQueuedNow(session: Session) = source.sendQueuedNow(names.rawSession(session))
         override suspend fun retryUndelivered(session: Session, messageId: String) =
@@ -237,6 +241,7 @@ internal fun MachineManagement.inGroup(names: GroupNames): MachineManagement {
         override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
             source.launcherQuota(names.rawMachine(machineId), name, refresh).let { a -> a.copy(machine = a.machine?.takeIf { it.isNotBlank() }?.let(names::machineId)) }
         override suspend fun reconnect(machineId: String) = source.reconnect(names.rawMachine(machineId))
+        override suspend fun startLinkSwitch(machineId: String) = source.startLinkSwitch(names.rawMachine(machineId))
         override suspend fun rename(machineId: String, name: String) = source.rename(names.rawMachine(machineId), name)
         override suspend fun deploy(machineId: String) = source.deploy(names.rawMachine(machineId))
         override suspend fun herdr(machineId: String) = source.herdr(names.rawMachine(machineId))
@@ -291,6 +296,8 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun assistantLauncherList(machineId: String) = source.assistantLauncherList(names.rawMachine(machineId))
         override suspend fun assistantLauncherList(machineId: String, refresh: Boolean) =
             source.assistantLauncherList(names.rawMachine(machineId), refresh)
+        override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean) =
+            source.mainAssistantLauncherList(names.rawMachine(machineId), refresh)
         override suspend fun launcherModels(machineId: String, launcher: String) = source.launcherModels(names.rawMachine(machineId), launcher)
         override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = source.setModelPick(names.raw(session), pick)
         override suspend fun clearModelPick(session: SessionKey) = source.clearModelPick(names.raw(session))
@@ -347,7 +354,9 @@ internal fun MainConversationSender.inGroup(names: GroupNames, scope: CoroutineS
         override val outbox = source.outbox.mapIn(scope) { list -> list.map(names::outbox) }
         override val sendReceipts = source.sendReceipts.mapIn(scope) { list -> list.map(names::receipt) }
         override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) =
-            source.sendToMain(text, clientMessageId, draft?.let(names::rawDraft))
+            sendToMain(text, clientMessageId, draft, null)
+        override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?, via: String?) =
+            source.sendToMain(text, clientMessageId, draft?.let(names::rawDraft), via)
         override suspend fun mainReplaced(previous: SessionKey) = source.mainReplaced(names.raw(previous))
         override suspend fun mainChanged() = source.mainChanged()
     }
@@ -361,7 +370,8 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
             AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId,
                 snapshot.leaders, snapshot.directionNames,
                 directionTree = snapshot.directionTree?.mapMachines(names::machineId),
-                backgroundSupervisor = snapshot.backgroundSupervisor, recentTaskChats = snapshot.recentTaskChats)
+                backgroundSupervisor = snapshot.backgroundSupervisor, recentTaskChats = snapshot.recentTaskChats,
+                externalDirections = snapshot.externalDirections.mapValues { it.value.mapMachine(names::machineId) })
         }
         override val pinned = source.pinned.mapIn(scope) { keys -> keys.mapTo(LinkedHashSet(), names::key) }
         override suspend fun refresh() = source.refresh()
@@ -394,6 +404,7 @@ internal fun AgentOperations.inGroup(names: GroupNames): AgentOperations {
         override suspend fun attachSession(key: SessionKey) = source.attachSession(names.raw(key))
         override suspend fun interruptSession(key: SessionKey) = source.interruptSession(names.raw(key))
         override suspend fun deleteSession(key: SessionKey) = source.deleteSession(names.raw(key))
+        override suspend fun forkSession(key: SessionKey) = source.forkSession(names.raw(key))
     }
 }
 

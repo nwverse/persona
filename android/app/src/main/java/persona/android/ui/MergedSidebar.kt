@@ -45,11 +45,12 @@ internal fun mergedSidebar(
     val machines by session.sessions.machines.collectAsStateWithLifecycle()
     val machineNames = remember(machines) { machines.associate { it.id to it.displayName } }
     return MergedSidebarContent(
-        list = { prefix, footer, search ->
+        list = { listState, prefix, footer, search ->
             CompositionLocalProvider(LocalDetailKey provides agentRoot) {
                 AgentsListHost(
                     navigator, agents, machine, onMachineSelected, terminalsAvailable, listOwner,
                     sidebar = AgentsSidebarLayout(prefix, footer, waiting, search, searchPick) { searchPick = null },
+                    providedListState = listState,
                 )
             }
         },

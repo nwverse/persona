@@ -1,5 +1,18 @@
 # Lessons: hub / node and networking
 
+## An IMAP retry that replays the step that ended the connection fails the same way (2026-11-22, #12808)
+
+go-imap/v2 completes a command when its tagged answer arrives, before it reads on. A server that hangs up right after
+answering (QQ Mail does after a keyword `UID SEARCH`) leaves the command a success and fails the *next* one: the reader
+has already closed the connection, so over TLS the write returns a bare `net.ErrClosed` ("use of closed network
+connection"). Retrying the whole operation on a new login sends the search again, and the server ends that connection
+too: two QQ accounts' `mail_search` failed on every try with `fetch: use of closed network connection`, and nothing
+was logged. What a try already got (the search's UIDs) has to survive into the retry, so the retry only does what
+failed (`listOne` in `server/internal/mail/imap_list.go`). Tell a dead connection by `Client.State() ==
+ConnStateLogout`: the reader sets it before it fails the waiting commands, so a command that failed sees it already,
+and `Client.Close()` then returns the reader's own error, the reason to log. A proxy that closes after a chosen tagged
+answer reproduces it (`server/internal/mail/closed_conn_test.go`).
+
 ## Under a full-tunnel VPN the default route's address is the tunnel's (#11125)
 
 A UDP "connect" towards a far address reports the source address of the route it would take, the usual way to find
@@ -1988,6 +2001,11 @@ For future safety-driven delete/reject decisions, don't rely on error-swallowing
 - Before taking rows out of a list, find every reader of the list, not only the lookups by id: grep the field and every accessor that returns it (`m.sessions`, `keptSessions`, `sessionList`). The hub's lists never showed archived rows, but `Machine.session` (sending, deleting, pins) and the watch-state prune found them, and scans read them too: a port an archived agent listens on allowed `/ports/{port}/connect` and previews (`portAllowed`), the manager's `sessions.list`, the update's busy check, space names, the node's revs and the unknown state while the manager is away. The first version kept only the lookups and narrowed port access without meaning to (review of #6877). Keep the rows apart in the order told and give the scans an accessor for both (`keptWhole`); prove it by comparing each reader against a hub given the whole list, and check the test fails without the change.
 - A cache of derived data needs a key that changes with everything it was derived from. The archive's sorted row index depends on the record set (never changed in place, so its identity is the key) and on which of the node's rows have a record: a session the node lists again moves from the archive's rows into the node's, with no record written. A test that only writes records would pass with a key that misses the second.
 
+## Archive generations outlive close RPCs (2026-11-21, #7789)
+
+- `time.Now` alone is not an archive version: it can tie or move backwards, and deleting a provisional record loses the high-water mark a later archive needs after a restart. Allocate the next marker from the persisted one under the archive gate. An applicable force-close rollback leaves a restored generation; a stale rollback is a no-op, not another write that could fence out a newer close.
+- A close RPC runs outside the archive gate. Carry the generation captured by the archive write into completion, and check it under the gate before writing `ClosedAt` or requesting native archiving. Skip a stale completion's publish; an applicable completion publishes with the archive read marker captured under that gate, so a re-archive between check and publish is not visible as activity to the old close. Publishing a cached blocked row without that fence can automatically restore the newer re-archive even when its record was left untouched. Metadata-write errors are different: preserve the committed archive's normal publish and recheck the generation before the immediate native retry.
+
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 
 At about 30 KB/s from hub to a computer, its link repeatedly disconnected with "no pong within 5s", failing every message. Ping doesn't jump the queue: it follows bytes already given to TCP,
@@ -2173,6 +2191,20 @@ another version renames those unlabelled builds to `.prev`, so the lookup falls 
 Whenever a file's meaning is "the build of whatever version the hub runs now", whatever changes the hub's version without changing that file
 must relabel it or move it.
 
+## A node update left the Windows build behind, and it passed for the new version (2026-11-22, #12958)
+
+The same mistake came back with node updates on: the update replaced only the platforms in the release's `files`, and releases up to v0.9.1
+list no Windows `personad`, so `bin/nodes/personad-windows-amd64.exe` stayed the old build without a `.version`. Every Redeploy to a Windows
+computer then failed with "node executable self-check version or platform mismatch"; `deploy.sh`, which builds only Linux and macOS, left it
+behind the same way. Switching a hub before replacing `bin/nodes` made the new hub push the old builds, labelled as its version, to every
+computer that reconnected.
+Now a node update sets aside unlabelled builds before the release's go in, `deploy.sh` builds the Windows node programs, and the manager takes
+an unlabelled local build for the hub's version only when the version string is in the file: the node's self-check compares the version the
+build was linked with, so the string's absence proves the build is another one (its presence proves nothing). Lookups are looked up again when
+a local build changes, so a build put in place after the switch is used at once.
+Fixing one path that changes the hub's version is not enough: check every writer of the directory (self-update with and without node updates,
+deploy scripts, hand switches), and give the reader a check that does not trust any of them.
+
 ## Generic plans make "empty means no filter" lose indexes (2026-11-06, #4907)
 
 - pgx caches prepared statements by default; after five executions Postgres may choose a generic plan that can't see parameter values.
@@ -2265,9 +2297,18 @@ The same holds on every path that reports a push, not only the API that was fixe
 
 `Pusher.send*` and the WebSocket notify take `wants func(NotifyPrefs) bool`, and nil is not just "every device": `alertWanted` lets it past Phone Muted (`mute_while_desktop`) and the pusher sends it to an open desktop too (an assistant's reminder, an extension's push). Wrapping nil in a filter to add one more condition (a muted manager) silently turns those pushes into ordinary ones, and they stop reaching a phone in Phone Muted mode. Put an extra per-device rule where the devices are walked (`Pusher.sendFrom`, `notifyWSFrom` take the manager) instead of in `wants`.
 
-## A LaunchAgent node is throttled, and a protected folder stalls Claude before any hook (macOS, measured 2026-11; re-check; #5944)
+## A LaunchAgent node is throttled, and a protected folder stalls Claude before any hook (macOS 26 and 27, measured 2026-11; #5944, #13359)
 
-- A plist with no `ProcessType` doesn't get "Standard" scheduling: launchd gives the job the Background policy, low scheduling priority and throttled I/O (`launchctl print gui/<uid>/<label>` shows `spawn type = daemon (3)`). A resident node under it got 15.45 CPU seconds in 139 s (scheduling priority 4 instead of 31), and the Claude Code it started did not become ready in time. Nothing looks wrong in the node's own logs; only the timings are long. When a Mac's Agents start slowly or time out, look at the agent's spawn type before blaming the machine's load.
+What each `ProcessType` gives a LaunchAgent, measured with short-lived test agents on Apple silicon Macs with 18 cores in three 6-core clusters: on macOS 27 (2026-11-21, rechecked on 27.2.1) and on macOS 26.5.1 (2026-11-23), with the same results on both. `launchctl print gui/<uid>/<label>` shows the spawn type, `ps -M` (or `ps -o pri=`) the threads' priority; the cores column is a job of 12 busy children on an otherwise lightly loaded Mac (macOS 26.5.1).
+
+| `ProcessType` | spawn type | thread priority | cores |
+| --- | --- | --- | --- |
+| not set, or `Standard` | `daemon (3)` | 20 (utility clamp) | every cluster: 11 of 12 children ran at once |
+| `Background` | `background (5)` | 4 | one 6-core cluster at a time: about 4.8 |
+| `Interactive` | `interactive (4)` | 31 | every cluster: 12 |
+
+- A plist with no `ProcessType` doesn't get default scheduling: the job and every child run at the utility clamp (priority 20 instead of 31) on every cluster and yield to default-priority work (on macOS 27, a 6-thread default-priority job started beside one got about 5.7 cores at once). `Background` is the throttled one: priority 4 on one cluster, inherited by every child. The priority comes from the spawn type and changes only when launchd starts the job again from a new definition (`bootout`, then `bootstrap`): `taskpolicy -B -p <pid>` returns 0 and leaves the job, and the children it starts afterwards, at 4 (both versions). A background mark set from outside with `taskpolicy -b` is cleared by `-B` at once, which makes the two easy to confuse. `Nice` does not move threads that run with a QoS class (macOS 27).
+- The case behind this lesson (#5944): a resident node got 15.45 CPU seconds in 139 s at scheduling priority 4 instead of 31, and the Claude Code it started did not become ready in time. Priority 4 is what `Background` gives; neither version measured gives it to a job without `ProcessType`, so that node ran under a background policy from somewhere else or on an earlier macOS (which was not recorded). Nothing looks wrong in the node's own logs; only the timings are long. When a Mac's Agents start slowly or time out, look at the agent's spawn type and its threads' priority before blaming the machine's load.
 - `ProcessType=Interactive` gives `spawn type = interactive (4)`. It changes scheduling only and grants no TCC permission: a job that cannot read a protected folder still cannot (`docs/plans/plan-connectors.md` "Full Disk Access (TCC)"). The plists Persona wrote (`scripts/deploy/node-launchd.sh`, `nodePlist` in `cmd/persona-link/nodesvc.go`) did not set it; both write it now, and `personad node doctor` reports an agent without it.
 - Editing the plist isn't enough. `kickstart -k` restarts the job from the definition launchd loaded, so the change needs `bootout` then `bootstrap`. Right after `bootout`, `bootstrap` can briefly fail with `5: Input/output error`, so retry it. Whether a running agent has the key is visible only in `launchctl print`'s spawn type, not in the file.
 - The rename (#277) introduced a new node-agent label, but both installers leave an installed agent as it is. A Mac can have either supported plist, or both. Code that looks for the node's agent has to recognize the installed definitions. With both there, use the one launchd has loaded: the other is a file launchd is not running, and loading it starts a second node next to the running one.
@@ -3101,3 +3142,47 @@ the TLS hello then held it open forever, on the direct route and through the pro
 Whoever writes a `DialTLSContext` gives the handshake its own deadline and closes the raw connection when it runs out.
 Test it by waiting for the far end to see the connection close, not by how long the request took: the request returns
 on its own deadline either way (`TestDirectStalledHandshakeIsClosed`, `TestProxyStallingInsideTheTunnelIsClosed`).
+
+## A script on a proxied machine sends the hub's token to the proxy (2026-11-21, #12493)
+
+- A machine whose environment sets `http_proxy` / `https_proxy` usually has a `no_proxy` that excludes private ranges as
+  CIDRs (`<private range>/8`). Python's `urllib` matches `no_proxy` by host name suffix and ignores CIDR entries; other
+  clients differ on this. A script that calls the hub's API by its LAN address (`http://<hub address>:18660/api/…`)
+  then goes to the proxy, `Authorization: Bearer <token>` included, in plain HTTP.
+- Seen on a hub machine: a one-off `POST /api/v1/machines/{mid}/deploy` got an HTML `403 Forbidden` back. The hub's
+  log had no such request; the proxy had answered, and it had the master token. The token had to be rotated.
+- Call the hub's API from such a machine with proxies off: `urllib.request.build_opener(urllib.request.ProxyHandler({}))`,
+  `curl --noproxy '*'`, or `env -u http_proxy -u https_proxy …`. `127.0.0.1` helps only when the hub listens there; a
+  hub.json `listen` bound to one address does not.
+- Before sending a credential, ask `GET /api/v1/health` without one and check the answer is the hub's JSON (its `commit`,
+  and `features` for a trusted source). An HTML page or any answer that is not the hub's, to a request that carried a
+  credential, means the credential left the machine: rotate it, then retry with proxies off.
+
+## Rich-text mention boundaries are not textual whitespace (#12655)
+
+A received Lark post can place an `at` element immediately before a command's `text` element. Flattening those into
+`@Persona/read` loses the boundary that the whole-word textual mention stripper needs. Retain the structured nodes
+for command extraction, resolve each leading `at` through the event's mention IDs, and stop at unapproved mentions
+or ordinary text. Display names can collide; inserting spaces alone cannot establish which person was mentioned.
+Check both the manager's admission gate and the assistant's reparse of the original event, using a synthetic event,
+a recording handoff and a queue barrier. Such a test proves local handling of that event shape, not whether a live
+client inserts whitespace.
+
+## Required extension isolation must fail closed (#12994)
+
+A proxy URL in an environment variable is voluntary routing, not a sandbox. When
+the sandbox probe fails, reject the host spec before starting a process or egress
+proxy. Container images must carry bubblewrap and allow its nested user namespace
+and mounts; test the actual runtime stage as a non-root user with no outer
+capabilities. Merely finding `bwrap` on PATH or skipping an unavailable real test
+is not evidence of isolation.
+
+## Shared runner mirrors
+
+- Versioned queue output can retain incomplete entries during a rolling upgrade. Preserve empty ticket, tag and commit fields as unknown; do not reject the whole snapshot or deduplicate an empty commit. Track an external lease by its stable run name when present: a legacy waiting ticket may be absent once that same run enters a slot. Keep the original ticket for display. A v1 result with null exit and empty run/finish time means no known result, not exit zero. Cover both transitions with scrubbed fixtures.
+
+- Register relayed resource routes in the domain’s `assistantwire` file instead of expanding the frozen central literal. New CLI tools that bind to a verified process need both forged-caller rejection and a positive process-session test; pane-only fixtures cannot attest process identity. Keep package-level validation regexes lazy so adding a CLI does not add startup work to every hook.
+
+- The hub’s MCP golden harness reconstructs the Agent tool list separately from the manager’s live discovery path. Add new manager-owned Agent tools to that helper as well as the per-tool goldens; otherwise production discovery can match its language snapshots while the hub’s legacy golden test still offers the old list. Full runner logs identify this as an index/leftover-file mismatch.
+
+- Register non-session runner RPCs through `nodeRPC` in the resource domain file. Adding a case to `Node.handleMethod` bypasses the domain registration rule and fails the central-list freeze even when the node package tests pass. Include the architecture-guard shard when adding a node RPC.

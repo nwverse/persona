@@ -60,25 +60,42 @@ func askSummary(l i18n.Lang, a *acceptAsk) string {
 	return a.Changed
 }
 
-// checkOptionTaken says the owner answered a, a recurring check's decision, with one of its options or its
-// recommendation, which went to the task's supervisor (checkDecided). Their own words went to its Agent, as any
-// decision's do (answerDecisionTextLocked).
+// checkOptionTaken identifies a check's recommendation or an explicitly recorded option. Older nonempty Chosen
+// text cannot establish an option selection, even if it spells a label.
 func checkOptionTaken(a *acceptAsk) bool {
-	return a.Check != "" &&
-		(a.Chosen == "" || slices.ContainsFunc(a.Options, func(o DecisionOption) bool { return o.Label == a.Chosen }))
+	return a.Check != "" && (a.Chosen == "" || a.OptionTaken)
 }
 
 // acceptedNote is what the bot answers under a card the owner passed.
 func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 	switch {
+	case a.OutsideID != "" && !a.WithdrawnAt.IsZero():
+		return i18n.T(l, "assistant-reports.outside_withdrawn")
+	case a.OutsideID != "" && a.ByDefault:
+		return i18n.T(l, "assistant-reports.outside_answered_default")
+	case a.OutsideID != "":
+		return i18n.T(l, "assistant-reports.outside_answered")
+	case decideAsk(a) && a.Superseded:
+		if a.SupersededReason != "" {
+			return i18n.T(l, "assistant-reports.decision_superseded_reason", i18n.Args{"reason": a.SupersededReason})
+		}
+		return i18n.T(l, "assistant-reports.decision_superseded")
 	case decideAsk(a) && a.AgentReply != nil && a.AgentReply.Handled:
 		return i18n.T(l, "assistant-reports.decision_handled_in_agent")
 	case decideAsk(a) && a.ByDefault:
 		return i18n.T(l, "assistant-reports.verdict_taken_default")
+	case decideAsk(a) && a.TextDelivery == decisionTextAgent && a.Chosen != "":
+		return i18n.T(l, "assistant-reports.decision_chosen_noted", i18n.Args{"option": a.Chosen})
+	case decideAsk(a) && a.TextDelivery == decisionTextRecorded && a.Chosen != "":
+		return i18n.T(l, "assistant-reports.decision_chosen_for_supervisor", i18n.Args{"option": a.Chosen})
+	case decideAsk(a) && a.TextDelivery != "" && a.Chosen != "": // unknown future outcome: do not invent delivery
+		return i18n.T(l, "assistant-reports.decision_chosen_recorded", i18n.Args{"option": a.Chosen})
 	case decideAsk(a) && checkOptionTaken(a) && a.Chosen != "": // a check's option went to the supervisor
 		return i18n.T(l, "assistant-reports.decision_chosen_supervisor", i18n.Args{"option": a.Chosen})
 	case decideAsk(a) && checkOptionTaken(a) && a.Response == "": // its OK: to the supervisor, not the Agent
 		return i18n.T(l, "assistant-reports.verdict_taken_supervisor")
+	case decideAsk(a) && !a.OptionTaken && a.Chosen != "": // older text has no stored selection or delivery evidence
+		return i18n.T(l, "assistant-reports.decision_chosen_recorded", i18n.Args{"option": a.Chosen})
 	case decideAsk(a) && a.Chosen != "":
 		return i18n.T(l, "assistant-reports.decision_chosen_noted", i18n.Args{"option": a.Chosen})
 	case decideAsk(a) && a.Response != "":
@@ -311,6 +328,14 @@ func (s *Service) conclusionLink(ctx context.Context, t Todo, in conclusionInput
 // dropDecision ends task id's decision still waiting, once its review moved on (rework, cancelled): it is no longer
 // listed, its button takes nothing, and a reply to its card is answered "already handled".
 func (s *Service) dropDecision(ctx context.Context, id string) {
+	s.supersedeDecision(ctx, id, "")
+}
+
+// supersedeDecision clears task id's open needs_user decision ask when supervision transitions the review via
+// task_review, recording the natural-language reason (never fabricating an owner selection), notifying clients so it
+// leaves "Needs you", and redrawing any Lark cards to remove buttons and display the supersession note (#13112).
+func (s *Service) supersedeDecision(ctx context.Context, id, reason string) {
+	reason = clip(oneLine(strings.TrimSpace(reason)), 300)
 	b := &s.accept
 	b.mu.Lock()
 	if !s.loadAcceptLocked(ctx) {
@@ -322,10 +347,20 @@ func (s *Service) dropDecision(ctx context.Context, id string) {
 		b.mu.Unlock()
 		return
 	}
-	a.AcceptedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	a.AcceptedAt = now
+	if !a.Deadline.IsZero() && a.DueAt.IsZero() {
+		a.DueAt = now
+	}
+	a.Superseded = true
+	a.SupersededReason = reason
 	s.saveAcceptLocked(ctx)
+	cp := *a
 	b.mu.Unlock()
 	s.askChanged(ctx)
+	if len(cp.Messages) > 0 {
+		s.updateAskCards(ctx, id, cp)
+	}
 }
 
 // askCopy is task id's ask as it is now (false: none, or a claim still going out).
@@ -365,7 +400,7 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 		row.Reason, row.Source = defaultReason(l, s.location(ctx), a.Deadline), db.DecisionAgent
 	}
 	var sendErr error
-	if a.Check == "" {
+	if a.Check == "" && a.OutsideID == "" {
 		if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
 			return cur.DoneAt == nil && !acceptAskStale(&a, cur)
 		}); err != nil {
@@ -389,6 +424,8 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 		}
 	}
 	switch {
+	case a.OutsideID != "":
+		// An outside caller polls the answer; there is no Agent or supervisor to relay to.
 	case a.Check != "":
 		s.checkDecided(ctx, t, &a, a.Recommend, false)
 	case sendErr != nil:

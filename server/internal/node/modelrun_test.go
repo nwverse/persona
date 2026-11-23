@@ -370,6 +370,174 @@ func TestModelRunRejectsUnsupportedAgent(t *testing.T) {
 	}
 }
 
+// Regression test (#12043 P2): structured NDJSON stdout events whose model text contains "authentication required" or
+// "waiting for authentication" must never trigger early interactive-auth cancellation; once a complete SUCCESS result
+// has been emitted, it also wins deterministically even if a subsequent non-JSON diagnostic triggers early auth cancel.
+func TestModelRunAgyIgnoresAuthPhrasesInStructuredOutput(t *testing.T) {
+	// Phrase in both step_update and final result response.
+	fakeModelRunCLIHome(t, "agy", "agy", `printf '{"event":"init","conversation_id":"c-auth","init":{"model":"gemini-4-hydrogen-low"}}\n'
+printf '{"event":"step_update","step":{"text":"Explaining HTTP 401: waiting for authentication before retry"}}\n'
+printf '{"event":"result","result":{"conversation_id":"c-auth","status":"SUCCESS","response":"HTTP 401 means authentication required; client is waiting for authentication.","num_turns":1,"usage":{"input_tokens":10,"output_tokens":12}}}\n'
+`)
+	got, err := runModel(t, proto.ModelRunParams{Launcher: "agy", Prompt: "explain 401"})
+	wantText := "HTTP 401 means authentication required; client is waiting for authentication."
+	if a, ok := got.(proto.ModelRunAnswer); err != nil || !ok || a.Text != wantText {
+		t.Fatalf("structured auth phrases failed: %#v %v", got, err)
+	}
+
+	// Deterministic result-before-loggedOutFast check (#12120 review 5998639344): emit complete SUCCESS before the
+	// plain-text auth diagnostic so the result is guaranteed buffered before early-auth cancellation kills the process;
+	// trailing sleep proves early-auth cancel actually fired (without hitting TimeoutMS) while SUCCESS still wins.
+	fakeModelRunCLIHome(t, "agy", "agy", `printf '{"event":"init","conversation_id":"c-auth-2","init":{"model":"gemini-4-hydrogen-low"}}\n'
+printf '{"event":"result","result":{"conversation_id":"c-auth-2","status":"SUCCESS","response":"all good","num_turns":1}}\n'
+echo "note: waiting for authentication cache refresh" >&2
+sleep 5
+`)
+	got, err = runModel(t, proto.ModelRunParams{Launcher: "agy", Prompt: "ping", TimeoutMS: 2000})
+	if a, ok := got.(proto.ModelRunAnswer); err != nil || !ok || a.Text != "all good" {
+		t.Fatalf("complete SUCCESS before early-auth diagnostic failed: %#v %v", got, err)
+	}
+}
+
+// A timed-out agy process that emits a complete SUCCESS event and then hangs past TimeoutMS must still return
+// CodeModelRunTimeout rather than accepting the stale output (#12120 P2).
+func TestModelRunAgyTimeoutAfterSuccessReturnsTimeout(t *testing.T) {
+	fakeModelRunCLIHome(t, "agy", "agy", `printf '{"event":"init","conversation_id":"c-to","init":{"model":"gemini-4-hydrogen-low"}}\n'
+printf '{"event":"result","result":{"conversation_id":"c-to","status":"SUCCESS","response":"too slow","num_turns":1}}\n'
+sleep 5
+`)
+	if _, err := runModel(t, proto.ModelRunParams{Launcher: "agy", Prompt: "ping", TimeoutMS: 200}); runCode(err) != proto.CodeModelRunTimeout {
+		t.Fatalf("expected timeout after SUCCESS+sleep, got: %v", err)
+	}
+}
+
+// Runtime provenance (#12043 P1): only the verified built-in Antigravity companion is admitted for runtime-backed
+// model.run; external agy runtimes and other runtimes advertising agy or codex launchers are refused and never fall
+// back to findAgyExecutable() or local CLI logins.
+func TestModelRunRuntimeProvenance(t *testing.T) {
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("no zsh")
+	}
+	home := t.TempDir()
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ranFile := filepath.Join(t.TempDir(), "ran")
+	fakeAgyBin := filepath.Join(binDir, "agy")
+	script := "#!/bin/sh\necho ran >> " + shellQuote(ranFile) + "\n" +
+		`printf '{"event":"init","conversation_id":"c-rt","init":{"model":"gemini-4-hydrogen-low"}}'
+printf '\n'
+printf '{"event":"result","result":{"conversation_id":"c-rt","status":"SUCCESS","response":"builtin-agy-ok","num_turns":1,"usage":{"input_tokens":5,"output_tokens":3}}}'
+printf '\n'
+`
+	if err := os.WriteFile(fakeAgyBin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("export PATH="+shellQuote(binDir)+":$PATH\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	oldFind := findAgyExecutable
+	findAgyExecutable = func() string { return fakeAgyBin }
+	t.Cleanup(func() { findAgyExecutable = oldFind })
+
+	// 1. Verified built-in Antigravity companion is admitted and sets BuiltinCompanion=true.
+	t.Run("builtin Antigravity companion admitted", func(t *testing.T) {
+		withShellLaunchers(t)
+		launcherCache.Lock()
+		launcherCache.list = []proto.Launcher{{Name: "agy", Source: "zshrc", Agent: "agy", RuntimeFallback: true}}
+		launcherCache.Unlock()
+
+		n, _ := runtimeNode(t)
+		n.home = home
+		const builtinInst = "builtin-agy-test-1"
+		n.runtimeHost.agy.mu.Lock()
+		n.runtimeHost.agy.instance = builtinInst
+		n.runtimeHost.agy.bin = fakeAgyBin
+		n.runtimeHost.agy.mu.Unlock()
+
+		dialRuntime(t, n, map[string]any{
+			"runtime":  "agy",
+			"agent":    "agy",
+			"instance": builtinInst,
+			"launcher": "agy",
+			"caps":     map[string]any{"start": true},
+		})
+		ls := n.runtimes.launchers()
+		if len(ls) != 1 || ls[0].Name != "agy" || !ls[0].BuiltinCompanion {
+			t.Fatalf("expected BuiltinCompanion=true for built-in agy, got %+v", ls)
+		}
+		got, err := runModelWithNode(t, n, proto.ModelRunParams{Launcher: "agy", Prompt: "ping"})
+		if a, ok := got.(proto.ModelRunAnswer); err != nil || !ok || a.Text != "builtin-agy-ok" {
+			t.Fatalf("builtin agy model.run: %#v %v", got, err)
+		}
+	})
+
+	// 2. External agy runtime (different instance) is refused even when local agy exists on PATH, and sets BuiltinCompanion=false.
+	t.Run("external agy runtime refused without invoking local agy", func(t *testing.T) {
+		_ = os.Remove(ranFile)
+		withShellLaunchers(t)
+		launcherCache.Lock()
+		launcherCache.list = []proto.Launcher{{Name: "agy", Source: "zshrc", Agent: "agy", RuntimeFallback: true}}
+		launcherCache.Unlock()
+
+		n, _ := runtimeNode(t)
+		n.home = home
+		dialRuntime(t, n, map[string]any{
+			"runtime":  "agy",
+			"name":     "External Agy",
+			"agent":    "agy",
+			"instance": "external-agy-instance",
+			"launcher": "agy",
+			"caps":     map[string]any{"start": true},
+		})
+		ls := n.runtimes.launchers()
+		if len(ls) != 1 || ls[0].Name != "agy" || ls[0].BuiltinCompanion {
+			t.Fatalf("expected BuiltinCompanion=false for external agy, got %+v", ls)
+		}
+		if _, err := runModelWithNode(t, n, proto.ModelRunParams{Launcher: "agy", Prompt: "ping"}); err == nil || !strings.Contains(err.Error(), "can't answer these requests") {
+			t.Fatalf("expected external agy refusal, got %v", err)
+		}
+		if _, err := os.Stat(ranFile); !os.IsNotExist(err) {
+			t.Fatal("external agy runtime unexpectedly invoked local findAgyExecutable()")
+		}
+	})
+
+	// 3. Another runtime advertising agy or codex launchers is refused and sets BuiltinCompanion=false.
+	t.Run("other runtime advertising agy and codex launchers refused", func(t *testing.T) {
+		_ = os.Remove(ranFile)
+		withShellLaunchers(t)
+		n, _ := runtimeNode(t)
+		n.home = home
+		dialRuntime(t, n, map[string]any{
+			"runtime": "other-rt",
+			"name":    "Other Runtime",
+			"launchers": []map[string]any{
+				{"name": "rt-agy", "agent": "agy"},
+				{"name": "rt-codex", "agent": "codex"},
+			},
+			"caps": map[string]any{"start": true},
+		})
+		for _, l := range n.runtimes.launchers() {
+			if l.BuiltinCompanion {
+				t.Fatalf("non-builtin runtime launcher marked BuiltinCompanion: %+v", l)
+			}
+		}
+		for _, name := range []string{"rt-agy", "rt-codex"} {
+			if _, err := runModelWithNode(t, n, proto.ModelRunParams{Launcher: name, Prompt: "ping"}); err == nil || !strings.Contains(err.Error(), "can't answer these requests") {
+				t.Fatalf("expected refusal for runtime launcher %q, got %v", name, err)
+			}
+		}
+		if _, err := os.Stat(ranFile); !os.IsNotExist(err) {
+			t.Fatal("other runtime agy launcher unexpectedly invoked local findAgyExecutable()")
+		}
+	})
+}
+
 // A run waits for one of the computer's slots within its own time: with every slot taken it times out unrun.
 func TestModelRunWaitsForASlot(t *testing.T) {
 	ran := filepath.Join(t.TempDir(), "ran")

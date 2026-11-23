@@ -123,11 +123,7 @@ extension View {
     /// Done for a sheet that only shows things, in a Mac sheet's bottom row (Esc too). Nothing on iOS: there the page
     /// keeps its own Close or the swipe down.
     func macSheetDone(_ done: @escaping () -> Void) -> some View {
-        #if os(macOS)
-        toolbar { ToolbarItem(placement: .cancellationAction) { Button(action: done) { Text("Done [Extension System Presentation c0b3fb]").lineLimit(1) } } }
-        #else
         self
-        #endif
     }
 }
 
@@ -136,12 +132,14 @@ private struct SheetDone: ViewModifier {
     @Environment(\.detailPushed) private var pushed
 
     func body(content: Content) -> some View {
-        #if os(macOS)
-        content.macSheetDone(done)
-        #else
-        if pushed { content } else { content.pageToolbar { SheetClose(action: done) } }
-        #endif
+        if pushed { content } else { content.pageToolbar { SheetClose(action: done) }.environment(\.shownAsSheet, true) }
     }
+}
+
+extension EnvironmentValues {
+    /// The page is a sheet's (`sheetDone`, iOS), not pushed on a stack: what it opens on the stack under it closes it
+    /// first (#12006), where a pushed page stays under what it pushes, for Back.
+    @Entry var shownAsSheet = false
 }
 
 private struct SheetCancel: ViewModifier {
@@ -159,9 +157,6 @@ private struct SheetCancel: ViewModifier {
         content
             .pageToolbar {
                 SheetClose(id: id) {
-                    #if os(macOS)
-                    if unsaved { asking = true; return }
-                    #endif
                     cancel()
                 }
             }
@@ -172,13 +167,5 @@ private struct SheetCancel: ViewModifier {
             } message: {
                 Text("If you close it, the changes you made won't be saved.")
             }
-            #if DEBUG && os(macOS)
-            // `-showDiscardConfirm YES`: the question up as the sheet opens, for screenshots.
-            .task {
-                guard UserDefaults.standard.bool(forKey: "showDiscardConfirm") else { return }
-                try? await Task.sleep(for: .seconds(1))
-                asking = true
-            }
-            #endif
     }
 }

@@ -744,15 +744,15 @@ func nonNil(s []string) []string {
 // task for computer-scoped scheduled-task inheritance, or "New Agent"'s agent.new when absent.
 func (s *Service) pickerDefault(ctx context.Context, r *http.Request, picker []ConfiguredLauncher) map[string]any {
 	purpose := r.URL.Query().Get("purpose")
-	if purpose == "assistant" {
-		return s.assistantPickerDefault(ctx, picker)
+	if purpose == "assistant" || purpose == purposeMain {
+		return s.assistantPickerDefaultFor(ctx, picker, purpose)
 	}
 	if purpose == "" {
 		purpose = "agent.new"
 	}
 	if purpose == "task" && r.PathValue("mid") != "" {
 		if b, err := s.taskModelBaseline(ctx, r.PathValue("mid")); err == nil {
-			return map[string]any{"provider": strings.TrimPrefix(b.Provider, "launcher."), "model": b.Model, "effort": b.Effort}
+			return launcherPickerBinding(b)
 		}
 	}
 	return s.launcherDefault(ctx, purpose)
@@ -771,7 +771,11 @@ func (s *Service) launcherDefault(ctx context.Context, purpose string) map[strin
 // assistantPickerDefault fills the effective default from the choices already read for the picker and the last
 // snapshot. Building the full Settings provider catalog here could wait for another shell scan on a cold manager.
 func (s *Service) assistantPickerDefault(ctx context.Context, picker []ConfiguredLauncher) map[string]any {
-	b, err := s.resolveModel(ctx, "assistant")
+	return s.assistantPickerDefaultFor(ctx, picker, "assistant")
+}
+
+func (s *Service) assistantPickerDefaultFor(ctx context.Context, picker []ConfiguredLauncher, purpose string) map[string]any {
+	b, err := s.resolveModel(ctx, purpose)
 	if err != nil {
 		return nil
 	}
@@ -798,5 +802,9 @@ func (s *Service) assistantPickerDefault(ctx context.Context, picker []Configure
 }
 
 func launcherPickerBinding(b ModelBinding) map[string]any {
-	return map[string]any{"provider": strings.TrimPrefix(b.Provider, "launcher."), "model": b.Model, "effort": b.Effort}
+	out := map[string]any{"provider": strings.TrimPrefix(b.Provider, "launcher."), "model": b.Model, "effort": b.Effort}
+	if b.PermissionMode != "" {
+		out["permission_mode"] = b.PermissionMode
+	}
+	return out
 }

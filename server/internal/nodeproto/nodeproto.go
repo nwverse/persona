@@ -15,6 +15,10 @@ const (
 	CodeRestarting  = "node_restarting"
 )
 
+// RPCReadLimit is the inbound message budget on both ends of an established node RPC connection.
+// Whole snapshots can exceed 64 MiB even on a link that splits them into small frames.
+const RPCReadLimit = 128 << 20
+
 // TaskInstructions separates delegated framework rules from the first user message.
 const TaskInstructions = "task_instructions_v1"
 
@@ -71,6 +75,8 @@ const (
 	SessionSkills = "session_skills_v1"
 	// TaskExecution validates task directories and refuses execution substitutions.
 	TaskExecution = "task_execution"
+	// TaskInput validates structured scheduled prompt selections before save and delivery.
+	TaskInput = "task_input"
 	// OwnerControls separates verified owner actions from legacy RPCs that can carry arbitrary params.
 	OwnerControls = "owner_controls_v1"
 	// SourcePermissions isolates node-attested Agent messages from caller parameters.
@@ -103,6 +109,11 @@ const (
 	// another manager's health space (health-<id>, docs/assistant/managers.md "Directories on a computer"). A node without it
 	// would use the built-in manager's.
 	HealthSpaces = "health_spaces"
+	// DenyDirs: assistant.prepare takes deny_dirs, the track directories (each with its track's slug) the assistant's
+	// other conversations' Read and Edit are denied, and the node tells a conversation in one as that track's
+	// (docs/assistant/health.md "Registry and policy"). A node without it knows the health space only: a conversation
+	// of another track is not started on it.
+	DenyDirs = "deny_dirs_v1"
 	// Preview: preview.servers / preview.start / preview.open, dev server previews in a headless browser on the
 	// computer (docs/web/preview.md).
 	Preview = "preview"
@@ -184,6 +195,13 @@ const (
 	// when the manager comes again with its token (rpc.Peer.EnableResume, docs/protocol/protocol.md "Resuming"). Only
 	// a resident node announces it: one started for the connection ends with it. Without it the manager never asks.
 	NodeResume = "node_resume_v1"
+	// ResumeOutsideHealth: session.start takes resume_outside_health, the hub's mark on a resume an extension's token
+	// asked for of a conversation its computer does not list (#10941): the node resumes it only when it has the
+	// conversation and every directory it knows it by (where it started, where it last was, its record's) is outside
+	// the health space and the Agent folders kept out of Persona, else refuses resume_unknown before anything else
+	// reads the id. Without it the hub refuses such a resume itself: an older node would start a new conversation
+	// under an id it has nothing of.
+	ResumeOutsideHealth = "resume_outside_health"
 )
 
 // ResumeWindowSeconds is how long the manager tries to resume a dropped connection that can resume, from when it
@@ -239,7 +257,7 @@ const TaskWorkspace = "task_workspace_v1"
 const MarkdownCloseout = "closeout.markdown.v1"
 
 // Announced is what a node built from this code announces.
-var Announced = []string{MarkdownCloseout, TaskWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, TaskExecution, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, NodeLanes}
+var Announced = []string{MarkdownCloseout, TaskWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

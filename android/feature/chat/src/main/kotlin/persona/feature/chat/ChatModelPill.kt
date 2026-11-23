@@ -26,6 +26,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.*
 import persona.core.contracts.ModelPick
+import persona.core.contracts.PaseoAgent
 import persona.core.contracts.PendingSwitch
 import persona.core.contracts.Session
 import persona.core.contracts.api.AgentCreationService
@@ -34,6 +35,8 @@ import persona.core.contracts.api.AssistantLaunchers
 import persona.core.contracts.api.AssistantManagement
 import persona.core.contracts.api.ChatAction
 import persona.core.contracts.api.LauncherModels
+import persona.core.contracts.isTraeCliId
+import persona.core.contracts.unknownAgentName
 import persona.core.designsystem.*
 import persona.core.domain.models.AgentModelPanel
 import persona.core.domain.models.ModeStep
@@ -62,23 +65,26 @@ internal class ModelLists(private val scope: CoroutineScope, private val errorTe
     /** A computer's launchers (`agent.new`), by machine; absent until read. */
     val launchers: SnapshotStateMap<String, List<AgentLauncher>> = mutableStateMapOf()
     /** What a computer runs Persona chats on (`?purpose=assistant`), by machine; absent until read. */
-    private val assistantCatalogs = mutableStateMapOf<String, JLoadable<AssistantLaunchers>>()
+    private val assistantCatalogs = mutableStateMapOf<Pair<String, Boolean>, JLoadable<AssistantLaunchers>>()
 
-    fun assistantCatalog(machine: String): JLoadable<AssistantLaunchers> = assistantCatalogs[machine] ?: JLoadable.Loading
+    private fun catalogKey(machine: String, main: Boolean) = machine to main
+    fun assistantCatalog(machine: String, main: Boolean = false): JLoadable<AssistantLaunchers> =
+        assistantCatalogs[catalogKey(machine, main)] ?: JLoadable.Loading
 
-    fun readAssistantCatalog(machine: String, fetch: suspend () -> AssistantLaunchers) {
-        val cached = assistantCatalogs[machine]
+    fun readAssistantCatalog(machine: String, main: Boolean = false, fetch: suspend () -> AssistantLaunchers) {
+        val key = catalogKey(machine, main)
+        val cached = assistantCatalogs[key]
         if (cached == JLoadable.Loading || cached?.isRefreshing == true) return
-        assistantCatalogs[machine] = (cached as? JLoadable.Loaded)?.copy(refreshing = true, failure = null) ?: JLoadable.Loading
+        assistantCatalogs[key] = (cached as? JLoadable.Loaded)?.copy(refreshing = true, failure = null) ?: JLoadable.Loading
         scope.launch {
             try {
-                assistantCatalogs[machine] = JLoadable.Loaded(readAssistantRoute(fetch))
+                assistantCatalogs[key] = JLoadable.Loaded(readAssistantRoute(fetch))
             } catch (cancelled: CancellationException) {
-                if (cached == null) assistantCatalogs.remove(machine) else assistantCatalogs[machine] = cached
+                if (cached == null) assistantCatalogs.remove(key) else assistantCatalogs[key] = cached
                 throw cancelled
             } catch (error: Exception) {
                 val message = errorText(error)
-                assistantCatalogs[machine] = if (cached is JLoadable.Loaded) cached.copy(failure = message) else JLoadable.Failed(message)
+                assistantCatalogs[key] = if (cached is JLoadable.Loaded) cached.copy(failure = message) else JLoadable.Failed(message)
             }
         }
     }
@@ -187,11 +193,16 @@ internal fun rememberPanelPrefs(scope: PanelScope): MutableState<PanelPrefs> {
  * ([knownAgentMark]), else the letter of [name], the name the chat knows the engine by (a Paseo provider's,
  * [AgentModelPanel.engineNames]), or of the engine's id.
  */
-internal fun engineMark(engine: String, name: String? = null): AgentMarkSpec = when (val kind = knownAgentMark(engine)) {
-    AgentMarkKind.Claude -> AgentMarkSpec(kind, "Claude Code", null)
-    AgentMarkKind.Codex -> AgentMarkSpec(kind, "Codex", null)
-    AgentMarkKind.Trae -> AgentMarkSpec(kind, "TRAE", null)
-    else -> AgentMarkSpec(kind, name?.takeIf(String::isNotBlank) ?: engine, null)
+internal fun engineMark(engine: String, name: String? = null): AgentMarkSpec {
+    val kind = knownAgentMark(engine)
+    val title = when {
+        isTraeCliId(engine) -> unknownAgentName(PaseoAgent, name, engine)
+        kind == AgentMarkKind.Claude -> "Claude Code"
+        kind == AgentMarkKind.Codex -> "Codex"
+        kind == AgentMarkKind.Trae -> "TRAE"
+        else -> name?.takeIf(String::isNotBlank) ?: engine
+    }
+    return AgentMarkSpec(kind, title, null)
 }
 
 /** An effort as the pill says it: Very high is "Extra" there (the web's pill-only word), the rest their names. */
@@ -467,6 +478,12 @@ fun PersonaModelPill(
     onConfigure: (() -> Unit)? = null,
     /** An effort on an older hub, which keeps it on the session (`POST …/modes`); null: not offered. */
     onEffort: ((String) -> Unit)? = null,
+    /** A one-off request from this page's model-route remedy to open this same picker. */
+    openRequested: Boolean = false,
+    onOpenHandled: () -> Unit = {},
+    /** A one-off request to follow the default, using the same optimistic clear as the panel's strip. */
+    clearRequested: Boolean = false,
+    onClearHandled: () -> Unit = {},
 ) {
     val res = LocalResources.current
     val features = LocalHubFeatures.current
@@ -477,37 +494,47 @@ fun PersonaModelPill(
     var config by remember(management) { mutableStateOf<persona.core.contracts.api.AssistantConfig?>(null) }
     var drawn by remember(session?.key) { mutableStateOf<DrawnPick?>(null) }
     LaunchedEffect(open) { onOverlay(open) }
+    LaunchedEffect(openRequested) {
+        if (openRequested) { open = true; onOpenHandled() }
+    }
     DisposableEffect(Unit) { onDispose { onOverlay(false) } }
     LaunchedEffect(management) {
         try { config = management?.config() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
     }
+    val loadedConfig = config
+    val isMain = session != null && loadedConfig?.main == session.sessionId
     fun readCatalog(refresh: Boolean = false) {
+        if (session != null && loadedConfig == null) return // Wait until the conversation's role is known.
         val api = management ?: return
-        if (machineId.isNotBlank()) lists.readAssistantCatalog(machineId) { api.assistantLauncherList(machineId, refresh) }
+        if (machineId.isNotBlank()) lists.readAssistantCatalog(machineId, main = isMain) {
+            if (isMain) api.mainAssistantLauncherList(machineId, refresh) else api.assistantLauncherList(machineId, refresh)
+        }
     }
     fun readModels(provider: String, again: Boolean = false) {
         val api = management ?: return
         if (machineId.isNotBlank()) lists.readAssistantModels(machineId, provider, again) { api.launcherModels(machineId, provider) }
     }
-    LaunchedEffect(management, machineId, session?.rev) {
+    LaunchedEffect(management, machineId, session?.rev, isMain) {
         // Hub pushes can change the effective Main chat model even while the panel is closed (#6542).
         readCatalog()
     }
-    LaunchedEffect(management, machineId, open) {
+    LaunchedEffect(management, machineId, open, isMain) {
         if (open) {
-            val previous = lists.assistantCatalog(machineId)
+            val previous = lists.assistantCatalog(machineId, main = isMain)
             readCatalog(refresh = previous is JLoadable.Failed || previous is JLoadable.Loaded && previous.failure != null)
         }
     }
     val kept = PersonaModelPanel.MODEL_PICK in features
     val shownSession = session?.let { s -> drawn?.takeIf { it.rev == s.rev }?.let { s.copy(modelPick = it.pick) } ?: s }
-    val chat = PersonaModelPanel.Chat(shownSession, isMain = session != null && config?.main == session.sessionId, kept = kept,
+    val chat = PersonaModelPanel.Chat(shownSession, isMain = isMain, kept = kept,
         config = config?.launcher, pagePick = pagePick)
     // Only the main conversation has a per-conversation model pick (#6911): a leader, the background supervisor or
     // another assistant conversation draws no pill and follows the default or what it started with. The new-chat page
-    // (session null) keeps its starter pick, which goes with the main conversation's start.
-    if (session != null && !chat.isMain) return
-    val catalog = lists.assistantCatalog(machineId)
+    // (session null) keeps its starter pick, which goes with the main conversation's start. A model-route remedy may
+    // still open this chat's existing panel; once it closes (and after its clear request is handled), the non-main chat
+    // goes back to drawing no pill.
+    if (session != null && !chat.isMain && !open && !clearRequested) return
+    val catalog = lists.assistantCatalog(machineId, main = isMain)
     val info = (catalog as? JLoadable.Loaded)?.value
     val setup = PersonaModelPanel.setup(chat, info)
     LaunchedEffect(management, machineId, setup.provider) {
@@ -520,10 +547,6 @@ fun PersonaModelPill(
     val (content, spoken) = pillContent(view, null, false, res)
     JModelPill(content, spoken, if (management != null) ({ open = true }) else null, modifier.testTag("model-pill"), width = width, open = open,
         enabled = enabled)
-    if (!open) return
-    val running = session?.agent?.isNotBlank() == true
-    val panel = PersonaModelPanel.panel(setup, info, { lists.list(machineId, it) }, typed = PersonaModelPanel.TYPED_MODELS in features,
-        engine = session?.let(AgentModelPanel::engine) ?: "claude", running = running)
     fun keep(pick: ModelPick?, after: () -> Unit = {}) {
         val s = session
         if (s == null || !kept) { onPagePick(pick); after(); return }
@@ -537,6 +560,13 @@ fun PersonaModelPill(
             catch (error: Exception) { drawn = before; onNotice(operationFeedback(error).text.resolve(res)) }
         }
     }
+    LaunchedEffect(clearRequested) {
+        if (clearRequested) { keep(null); onClearHandled() }
+    }
+    if (!open) return
+    val running = session?.agent?.isNotBlank() == true
+    val panel = PersonaModelPanel.panel(setup, info, { lists.list(machineId, it) }, typed = PersonaModelPanel.TYPED_MODELS in features,
+        engine = session?.let(AgentModelPanel::engine) ?: "claude", running = running)
     val named = listOfNotNull(info?.launchers?.firstOrNull { it.name == setup.provider }?.title ?: setup.provider,
         panel.providers.firstOrNull { it.id == setup.provider }?.models?.firstOrNull { it.id == panel.state.current?.model }?.name ?: view.setup.model)
         .joinToString(" · ")

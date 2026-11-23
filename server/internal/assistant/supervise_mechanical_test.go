@@ -258,6 +258,37 @@ func mechanicalPRSet(f *fakeHub, pr map[string]any) {
 	f.answerNode("git.pr", func(string, json.RawMessage) (any, error) { return map[string]any{"pr": pr}, nil })
 }
 
+func TestMechanicalSignalFutureNativeWakeSurvivesTurnError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*proto.Session)
+	}{
+		{name: "turn error", mutate: func(c *proto.Session) { c.TurnError = "synthetic turn failure" }},
+		{name: "needs you", mutate: func(c *proto.Session) {
+			c.State = proto.StateNeedsYou
+			c.PendingInteractions = 1
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, todo, c, now := mechanicalFixture(t)
+			todo.Delivery = nil
+			next := now.Add(time.Hour)
+			tc.mutate(&c)
+			c.Loop = &proto.LoopInfo{Kind: "wakeup", NextAt: next}
+			f.setSessions("box", c)
+			s.todos.mu.Lock()
+			copy := copyTodoLocked(&todo)
+			s.todos.todos[todo.ID] = &copy
+			s.todos.mu.Unlock()
+			g := superviseSignal{Todo: todo.ID, Kind: sigIdle, Machine: c.MachineID, Session: c.SessionID, Key: "turn-1"}
+			handled, retry := s.mechanicalSignal(context.Background(), g, now)
+			if handled || !retry.Equal(next) {
+				t.Fatalf("%s overrode the future native wakeup: handled=%v retry=%v want=%v", tc.name, handled, retry, next)
+			}
+		})
+	}
+}
+
 func TestScreenMechanicalSignalsKeepsMixedInboxAndIdle(t *testing.T) {
 	s, f, todo, c, now := mechanicalFixture(t)
 	list := []superviseSignal{{Todo: todo.ID, Kind: sigInbox, Key: "new-comment", Machine: "box", Session: c.SessionID},
@@ -270,6 +301,107 @@ func TestScreenMechanicalSignalsKeepsMixedInboxAndIdle(t *testing.T) {
 		if call.Method == "git.pr" {
 			t.Fatalf("screen inspected PR despite actionable sibling: calls=%+v", f.calls)
 		}
+	}
+}
+
+func TestScreenMechanicalSignalsDefersIdleWithReportSiblingAndWake(t *testing.T) {
+	s, f, todo, c, now := mechanicalFixture(t)
+	todo.Delivery = nil
+	c.Loop = &proto.LoopInfo{Kind: "wakeup", NextAt: now.Add(4 * time.Minute)}
+	f.setSessions("box", c)
+	s.todos.mu.Lock()
+	copy := copyTodoLocked(&todo)
+	s.todos.todos[todo.ID] = &copy
+	s.todos.mu.Unlock()
+	s.supervise.mu.Lock()
+	s.supervise.init()
+	s.supervise.mu.Unlock()
+	idle := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "turn-1", Machine: "box", Session: c.SessionID}
+	report := superviseSignal{Todo: todo.ID, Kind: sigReport, Key: "report-1", Machine: "box", Session: c.SessionID}
+
+	got := s.screenMechanicalSignals(context.Background(), []superviseSignal{report, idle}, now, now.Add(-time.Minute))
+	if len(got) != 1 || got[0].Kind != sigReport {
+		t.Fatalf("a live wakeup did not defer the report's idle sibling: %+v", got)
+	}
+	for _, call := range f.calls {
+		if call.Method == "git.pr" {
+			t.Fatalf("wake-only screening inspected the PR: calls=%+v", f.calls)
+		}
+	}
+	if state := todoNow(s, todo.ID).Supervision.State; state != "" {
+		t.Fatalf("wake-only screening changed supervision state to %q", state)
+	}
+}
+
+func TestScreenMechanicalSignalsDeferredIdleLeavesDigestBatch(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	shortSupervise(t, s)
+	setSettings(t, s, func(v *Settings) { v.SupervisionBatchMinutes = ptr(45) })
+	sid := todo.Agents[0].SessionID
+	now := time.Now()
+	sess := proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
+		State: proto.StateUnread, LastText: "waiting for the scheduled wakeup", UpdatedAt: now.Add(-time.Minute),
+		Loop: &proto.LoopInfo{Kind: "wakeup", NextAt: now.Add(10 * time.Minute)}}
+	other := Todo{ID: "todo-other", Title: "other work", Agents: []TodoAgent{{MachineID: "box", SessionID: "other-session", Source: "leader"}},
+		Supervision: &Supervision{Supervisor: "conv1", DoneWhen: []string{"finished"}, UpdatedAt: now.Add(-time.Hour)}}
+	s.todos.mu.Lock()
+	copy := copyTodoLocked(&other)
+	s.todos.todos[other.ID] = &copy
+	s.todos.mu.Unlock()
+	f.setSessions("box", sess, proto.Session{SessionID: "other-session", MachineID: "box", Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: now})
+	idle := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "turn-wake", Detail: "waiting for the scheduled wakeup",
+		At: now.Add(-50 * time.Minute), batchTo: "conv1", batchUntil: now.Add(-time.Second)}
+	s.supervise.mu.Lock()
+	s.supervise.init()
+	s.supervise.batch["conv1"] = now.Add(-time.Second)
+	s.supervise.mu.Unlock()
+
+	before := len(assistantSendsTo(f, "conv1"))
+	wakeRound(s, idle, superviseSignal{Todo: other.ID, Kind: sigInterrupted, Key: "other-1", At: now.Add(-50 * time.Minute)})
+	sends := assistantSendsTo(f, "conv1")
+	var text string
+	for _, send := range sends[before:] {
+		part, _ := send["text"].(string)
+		text += part + "\n"
+	}
+	if strings.Contains(text, todo.ID+"，signal=idle") {
+		t.Fatalf("batch release reclaimed the deferred idle: %s", text)
+	}
+	if !strings.Contains(text, "signal=interrupted") {
+		t.Fatalf("the other to-do did not release the digest control: %s", text)
+	}
+	s.supervise.mu.Lock()
+	deferred, ok := s.supervise.pending[idle.id()]
+	s.supervise.mu.Unlock()
+	if !ok || deferred.batchTo != "" || !deferred.batchUntil.IsZero() {
+		t.Fatalf("deferred idle retained its batch: pending=%v signal=%+v", ok, deferred)
+	}
+}
+
+func TestScreenMechanicalSignalsDefersIdleDuringWakeupTurn(t *testing.T) {
+	s, f, todo, c, now := mechanicalFixture(t)
+	todo.Delivery = nil
+	c.Status, c.State = proto.StatusWorking, proto.StateWorking
+	c.Loop = &proto.LoopInfo{Kind: "wakeup", NextAt: now.Add(-5 * time.Second)}
+	f.setSessions("box", c)
+	s.todos.mu.Lock()
+	copy := copyTodoLocked(&todo)
+	s.todos.todos[todo.ID] = &copy
+	s.todos.mu.Unlock()
+	s.supervise.mu.Lock()
+	s.supervise.init()
+	s.supervise.mu.Unlock()
+	idle := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "turn-1", Machine: "box", Session: c.SessionID}
+
+	got := s.screenMechanicalSignals(context.Background(), []superviseSignal{idle}, now, now.Add(-time.Minute))
+	if len(got) != 0 {
+		t.Fatalf("the previous stop's idle was released during its wakeup turn: %+v", got)
+	}
+	s.supervise.mu.Lock()
+	_, deferred := s.supervise.pending[idle.id()]
+	s.supervise.mu.Unlock()
+	if !deferred {
+		t.Fatal("the wakeup turn's stale idle was not restored for rescreening")
 	}
 }
 
@@ -312,18 +444,18 @@ func TestSendDigestRoutesOpenReviewForSupervision(t *testing.T) {
 	b.pending[g.id()] = g
 	b.last = time.Time{}
 	b.mu.Unlock()
+	// signal normally writes the durable outbox before sendDigest. This fixture seeds pending directly, so establish the
+	// same prerequisite rather than testing a direct delivery that production would never attempt (#5732).
+	s.updateSupervisePending(func(pending map[string]superviseSignal) { pending[g.id()] = g })
 	s.sendDigest(context.Background())
 	if got := todoNow(s, todo.ID); got.Supervision.State != "" || len(got.Supervision.Reviews) != 0 || got.DoneAt != nil {
 		t.Fatalf("digest fabricated a park or closed the task: %+v", got)
 	}
-	bg := s.settings(context.Background()).BackgroundSupervisor
-	if bg == "" || bg == "conv1" || len(conversationStarts(f)) != 1 {
-		t.Fatalf("unsupported parking did not reach ordinary background supervision: %q", bg)
+	if bg := s.settings(context.Background()).BackgroundSupervisor; bg != "" || len(conversationStarts(f)) != 0 {
+		t.Fatalf("new work started a legacy background supervisor: %q", bg)
 	}
-	listBackground(t, s, f, bg)
-	waitFor(t, "the external wait's supervision message", func() bool { return len(f.noticesTo(bg)) == 1 })
-	if notices := f.noticesTo(bg); !strings.Contains(notices[0], "signal=idle") || len(f.noticesTo("conv1")) != 0 {
-		t.Fatalf("open review did not reach its responsible supervisor alone: %q", notices)
+	if notices := f.noticesTo("conv1"); len(notices) != 1 || !strings.Contains(notices[0], "signal=idle") {
+		t.Fatalf("open review did not reach main supervision alone: %q", notices)
 	}
 	if len(f.asked) != 0 {
 		t.Fatalf("mechanical screening called a model instead of routing the signal: %d", len(f.asked))

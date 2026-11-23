@@ -115,11 +115,26 @@ def next_version(repository, beta, requested="", runner=subprocess.check_output,
     return version
 
 
+def feature_subject(subject):
+    if re.match(r"(?:feat|feature)(?:\([^)]*\))?\s*:", subject):
+        return True
+    # Some client features use an imperative subject without Conventional Commits. Only recognize an
+    # explicit addition, not every imperative verb: "Fix", "Test" and "Document" remain patch changes.
+    if re.match(r"add(?:s|ed)?\s+\S", subject, re.IGNORECASE):
+        return True
+    client = re.match(r"(?:android|ios|iphone|ipad|watch|watchos|web|desktop)(?:\([^)]*\))?:\s+(.+)", subject, re.IGNORECASE)
+    if not client:
+        return False
+    # Platform-qualified features also use imperative nouns: "saved prompts" or "location sharing".
+    action = client.group(1).split(None, 1)[0].lower().rstrip("s")
+    return action in {"add", "support", "enable", "introduce", "implement", "save", "saved"}
+
+
 def stable_version(stable_tag, subjects):
     match = STABLE.fullmatch(stable_tag)
     if not match:
         raise ReleaseError("latest stable release has no semantic version")
-    if any(re.match(r"(?:feat|feature)(?:\([^)]*\))?\s*:", subject) for subject in subjects):
+    if any(feature_subject(subject) for subject in subjects):
         major, minor, _ = map(int, match.groups())
         return "%d.%d.0" % (major, minor + 1)
     major, minor, patch = map(int, match.groups())
@@ -274,8 +289,13 @@ def verify_artifacts(plan_path, repository, channel, commit, additional=()):
         for path in sorted(Path(directory).iterdir()):
             if path.is_file():
                 item = {"name": path.name, "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-                if path.name in by_name and by_name[path.name] != item:
-                    raise ReleaseError("another platform's artifact already owns this name: " + path.name)
+                existing = by_name.get(path.name)
+                if existing is not None:
+                    # The same verified download may be presented again by another platform's job. A different path
+                    # with the same bytes is fine; changed bytes or a different hash is never a duplicate to ignore.
+                    if existing["sha256"] != item["sha256"]:
+                        raise ReleaseError("another platform's artifact already owns this name: " + path.name)
+                    continue
                 by_name[path.name] = item
     artifacts = sorted(by_name.values(), key=lambda item: item["name"])
     if not artifacts:

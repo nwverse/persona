@@ -6,8 +6,9 @@
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { hubLabel } from "../lib/mesh";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../lib/api";
-import { defaultManager, useKnownDefault } from "../lib/manager-choice";
-import { pickAttachment, releaseAttachments, type LocalAttachment } from "../lib/attachments";
+import { defaultManager, otherManager, useKnownDefault } from "../lib/manager-choice";
+import { base64File, pickAttachment, releaseAttachments, type LocalAttachment } from "../lib/attachments";
+import { MAX_PICTURE_SOURCE } from "../lib/image-limits";
 import { safeDraftRemove, safeDraftWrite, type DraftImage } from "../lib/drafts";
 import { withContexts } from "../lib/context-xml";
 import type { ContextRef } from "../lib/links";
@@ -19,15 +20,18 @@ import { startCompare } from "../lib/compare-runner";
 import { MAX_RUNS } from "../lib/compare-runs";
 import type { WorkspaceTarget } from "../lib/workspace-target";
 import { useWorkspaceCatalog, workspaceTarget, type HostWorkspace } from "../lib/workspace-catalog";
+import { directoryKey } from "../lib/workspace-directory";
 import { startChoices, startGroups } from "../lib/workspace-start";
 import { WorkspaceChoices } from "./NewAgentWorkspaces";
 import { AttachmentTray } from "../ui/AttachmentTray";
+import { agentId, providerAgent } from "../lib/agent-kind";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
+import { formatFollowDetail, resolveFollowBinding, resolvedStartModel } from "../lib/new-agent-follow";
 import {
-  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, takesEffort, tierLeftOut, type LauncherDefault, type PickerTier,
+  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, takesEffort, tierLeftOut, type PickerTier,
   type UnavailableLauncher,
 } from "../lib/launcher-models";
-import { choiceCarries, modelTitle, type ModelChoice } from "../lib/new-agent-panel";
+import { choiceCarries, type ModelChoice } from "../lib/new-agent-panel";
 import { readModels } from "../lib/session-models";
 import { BYPASS_MODE, BYPASS_WARNING, effortTitle, listedModeOption, modeTitle, PERMISSION_MODES } from "../lib/session-actions";
 import {
@@ -59,7 +63,7 @@ import { WorkSessionForm } from "./WorkSessionForm";
 import { NewAgentModel, useModelList } from "./NewAgentModel";
 import { ProjectDocumentContext, ProjectDocumentSource, projectDocumentText, type ProjectDocumentSnapshot } from "./NewAgentProjectDocument";
 
-const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "tern"]);
+const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "tern", "rex"]);
 
 // several forwarded at once (#3838): their bar, from the group's chunk, which Forward to has loaded by then
 const ForwardGroupBar = lazyPage(() => import("./chat/ForwardGroup").then((m) => m.ForwardGroupBar));
@@ -70,12 +74,7 @@ const NewFolderButton = lazyPage(() => import("./NewAgentDesktop").then((m) => m
 const NewFolderNaming = lazyPage(() => import("./NewAgentDesktop").then((m) => m.NewFolderNaming));
 
 /** A forwarded picture (lib/drafts.ts DraftImage, base64) as a file for the first message's tray. */
-function draftImageFile(img: DraftImage): File {
-  const bin = atob(img.data);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new File([bytes], img.name, { type: img.mime });
-}
+const draftImageFile = (img: DraftImage) => base64File(img.name, img.mime, img.data);
 
 interface Dirs {
   path: string;
@@ -123,8 +122,6 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const [providerNames, setProviderNames] = useState<Named[]>([]);
   const [unified, setUnified] = useState(true);
   const [modelDefault, setModelDefault] = useState("");
-  // the hub's "Default: …" for "New agent" (#2455); undefined from an older hub
-  const [hubDefault, setHubDefault] = useState<LauncherDefault | null | undefined>(undefined);
   // "Models"' "New agent" as it applies now (provider, model, effort); null: the hub has no model configuration
   const [configured, setConfigured] = useState<ModelBinding | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -153,6 +150,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // the mode picked for a launcher that lists its own (Paseo's other providers, #8261): its own ("") or Full access,
   // picked on this sheet and never remembered, so a mode left from a Claude Code start never reaches such a start
   const [providerMode, setProviderMode] = useState("");
+  // Pre-preset mode values so dropping or switching away from a preset restores them without leaking across launchers.
+  const presetModeRestore = useRef<{ mode: string; providerMode: string } | null>(null);
+  const chooseMode = (next: string) => {
+    presetModeRestore.current = null;
+    setMode(next);
+  };
+  const chooseProviderMode = (next: string) => {
+    presetModeRestore.current = null;
+    setProviderMode(next);
+  };
   const [host, setHost] = useState(""); // the engine host to open in (#2576); "": the machine's default
   const [dirs, setDirs] = useState<Dirs | null>(null);
   // the listed folder's subfolders kept: those starting with this ("": all), for a typed path naming no folder yet
@@ -193,7 +200,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const promptRevision = useRef(0);
   const credential = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
   const knownDefault = useKnownDefault();
-  const manager = machines.find((m) => m.id === mid)?.manager || knownDefault || defaultManager();
+  const pickedMachine = machines.find((m) => m.id === mid);
+  const manager = pickedMachine?.manager || knownDefault || defaultManager();
+  const purposeManager = otherManager(pickedMachine?.manager);
   const targetOnline = online.some((m) => m.id === mid);
   const workspaceCurrent = !workspace || (workspace.owner === credential && workspace.manager === manager
     && workspace.machineId === mid && workspace.cwd === cwd && Boolean(workspace.host.trim() && workspace.workspaceId.trim()));
@@ -236,9 +245,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const touched = useRef(false);
   // that choice on its way to the computer picked next, until its launchers are read (another pick before then passes it on)
   const carrying = useRef<ModelChoice | null>(null);
+  const formTop = useRef<HTMLDivElement>(null);
   const firstMessage = useRef<HTMLTextAreaElement>(null);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const body = formTop.current?.closest<HTMLElement>("[data-dialog-body]");
+    if (body) body.scrollTop = 0;
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -252,6 +268,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     submitted.current = false;
     setEffort("");
     setProviderMode("");
+    presetModeRestore.current = null;
     setTier(null);
     setDropped(null);
     setRecents(loadRecentSetups());
@@ -277,7 +294,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setWtBusy(false);
     setWtError("");
     return retirePreparation;
-  }, [open, preset, mid, cwd, workspace, manager, credential, targetOnline]);
+  }, [open, preset, mid, cwd, cwdPicked, workspace, manager, credential, targetOnline]);
   useLayoutEffect(() => {
     if (!open) setProjectDocument(null);
   }, [open]);
@@ -351,7 +368,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setInWorktree(false);
       return;
     }
-    if (preset.machineId && preset.cwd && online.some((m) => m.id === preset.machineId)) {
+    if (preset.machineId && preset.cwd !== undefined && online.some((m) => m.id === preset.machineId)) {
       presetCwd.current = { mid: preset.machineId, cwd: preset.cwd };
       setMid(preset.machineId);
       pickCwd(preset.cwd);
@@ -367,7 +384,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const addFiles = (files: FileList | File[]) => {
     const picked: LocalAttachment[] = [];
     for (const file of Array.from(files)) {
-      try { picked.push(pickAttachment(file)); }
+      try { picked.push(pickAttachment(file, MAX_PICTURE_SOURCE)); }
       catch (e) { toast(errorText(e), "error"); }
     }
     setAttachments((current) => [...current, ...picked]);
@@ -387,8 +404,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     if (!card && carry && (carry.launcher || effective !== null) && choiceCarries(carry, ls)) {
       touched.current = true; // still the user's: it goes on to the computer after this one too
       setLauncher(carry.launcher);
-      setModel(carry.model);
-      setEffort(carry.effort);
+      setModel(carry.launcher ? carry.model : "");
+      setEffort(carry.launcher ? carry.effort : "");
       return;
     }
     if (!card && carry?.launcher) {
@@ -399,7 +416,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const own = card && (card.launcher ? ls.some((l) => l.name === card.launcher) : effective !== null);
     const chosen = own ? card.launcher : effective !== null ? "" : initialLauncher(localStorage.getItem(`new.launcher.${machine}`), ls);
     const runs = pickerLauncher(chosen, followedBinding(chosen, effective));
-    const picked = !runs ? "" : own ? card.model : machineModel(loadRecentSetups(), machine, chosen);
+    const picked = !runs ? "" : own ? card.model : chosen ? machineModel(loadRecentSetups(), machine, chosen) : "";
     setLauncher(chosen);
     setModel(picked);
   };
@@ -424,8 +441,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setModel("");
     setTiers([]);
     setTier(null);
+    presetModeRestore.current = null;
     setModelDefault("");
-    setHubDefault(undefined);
     setConfigured(null);
     // A read that fails settles too (#10952): the pill leaves its spinner for its failed state, the line under the box
     // says why, and Start runs the computer's default. Retry reads again with the same card and carried choice.
@@ -435,7 +452,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setLoadingModels(true);
       Promise.all([
         machineLaunchers(mid, { signal }),
-        modelPurpose("agent.new").catch((e) => {
+        modelPurpose("agent.new", purposeManager).catch((e) => {
           if (e instanceof ApiError && e.status === 404) return null;
           throw e;
         }),
@@ -443,21 +460,28 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
         .then(([r, config]) => {
           if (signal.aborted) return;
           const ls = r.launchers ?? [];
+          const hasUnified = config !== null || Boolean(r.default);
+          const effective = hasUnified ? resolveFollowBinding(r.default, config ? (config.purpose.effective ?? {}) : null) : null;
           setLaunchers(ls);
           setSkipped(r.unavailable ?? []);
-          setHubDefault(r.default);
           setTiers(r.tiers ?? []);
           setLaunchersOf(mid);
-          setUnified(config !== null);
+          setUnified(hasUnified);
+          setConfigured(effective);
           if (config) {
             setModelDefault(modelSummary(config.purpose, config.providers));
-            setConfigured(config.purpose.effective ?? {});
             setProviderNames(namesFromProviders(config.providers));
           }
           const card = pendingSetup.current?.machine === mid ? pendingSetup.current : null;
           if (card) pendingSetup.current = null;
           carrying.current = null;
-          restoreLauncher(mid, card, ls, config ? (config.purpose.effective ?? {}) : null, carry);
+          restoreLauncher(mid, card, ls, effective, carry);
+          const expectedSource = preset?.launcher === "codex-app" ? "codex_app" : preset?.launcher === "claude-desktop" ? "claude_desktop" : undefined;
+          if (!card && !carry && !touched.current && preset?.machineId === mid && preset.launcher && ls.some((l) => l.name === preset.launcher && (!expectedSource || l.source === expectedSource))) {
+            setLauncher(preset.launcher);
+            setModel("");
+            setEffort("");
+          }
         })
         // the computer read last only: another one picked meanwhile aborted this read
         .catch((e) => { if (!signal.aborted) setUnread({ mid, reason: errorText(e) }); })
@@ -485,12 +509,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setLaunchersOf("");
       setUnread(null);
     };
-  }, [open, mid]);
+  }, [open, mid, purposeManager]);
   const launchersFailed = unread?.mid === mid ? unread.reason : "";
   // Retry, from the pill or the line under the box: the line goes while it reads, so the caret goes to the message box
   const retryLaunchers = () => {
     readLaunchersAgain.current();
-    firstMessage.current?.focus();
+    firstMessage.current?.focus({ preventScroll: true });
   };
 
   // The model list of the launcher that will run (the chosen one, or the model configuration's), read on each opening and
@@ -500,7 +524,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const listLauncher = launchersOf === mid ? pickerLauncher(launcher, followed) : "";
   const listEntry = launchers.find((l) => l.name === listLauncher);
   const desktopStart = startsInDesktopApp(listEntry);
-  const opensIn = workspace?.host ?? (desktopStart ? undefined : host || undefined);
+  const opensIn = desktopStart ? undefined : workspace?.host ?? (host || undefined);
   const picked = online.find((m) => m.id === mid);
   const hosts = picked ? startHosts(picked) : [];
   const hostDefault = picked ? currentHosts(picked).default : "";
@@ -524,13 +548,44 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     carrying.current = null;
     setHelpFor("");
     setDropped(null);
-    if (preset || c.launcher !== launcher || c.model !== model || c.effort !== effort) setTier(preset);
+    const changed = c.launcher !== launcher || c.model !== model || c.effort !== effort;
+    if (preset || changed) setTier(preset);
+    if (!preset && changed && presetModeRestore.current) {
+      setMode(presetModeRestore.current.mode);
+      setProviderMode(presetModeRestore.current.providerMode);
+      presetModeRestore.current = null;
+    }
     setLauncher(c.launcher);
     setModel(c.model);
     setEffort(c.effort);
   };
-  // a preset: the launcher, model and effort it fills in (the model is checked once the list is in)
-  const pickTier = (x: PickerTier) => pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
+  // a preset: the launcher, model, effort and optional permission mode it fills in (the model is checked once the list is in)
+  const pickTier = (x: PickerTier) => {
+    const base = presetModeRestore.current ?? { mode, providerMode };
+    pickModel({ launcher: x.launcher, model: x.model ?? "", effort: x.effort ?? "" }, x);
+    const targetLauncher = launchers.find((l) => l.name === x.launcher);
+    const targetListed = listedModes(targetLauncher);
+    const targetAgent = launcherAgent(x.launcher, launchers, undefined);
+    const targetClaudeModes = takesEffort(targetAgent) && !targetListed;
+    if (targetListed) {
+      setMode(base.mode);
+      setProviderMode(x.permission_mode && targetListed.includes(x.permission_mode) ? x.permission_mode : "");
+      presetModeRestore.current = base;
+    } else if (targetClaudeModes) {
+      setProviderMode(base.providerMode);
+      if (x.permission_mode) {
+        setMode(x.permission_mode);
+        presetModeRestore.current = base;
+      } else {
+        setMode(base.mode);
+        presetModeRestore.current = null;
+      }
+    } else {
+      setMode(base.mode);
+      setProviderMode(base.providerMode);
+      presetModeRestore.current = null;
+    }
+  };
   const followDefault = () => pickModel({ launcher: "", model: "", effort: "" });
 
   // Where it opens, when the machine enables more than one engine (#2576).
@@ -554,10 +609,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // launcher lists (Paseo's other providers) and the efforts its model lists, or neither (Codex keeps its own)
   const claudeModes = takesEffort(agent) && !listedModes(listEntry);
   const providerModes = claudeModes || nativeOmp ? undefined : listedModes(listEntry);
-  // Codex takes its first message with the start (lib/new-agent.ts); a computer that can opens it without one too
-  // (prompt_optional, docs/integrations/codex.md "Starting without a first message"), an older one needs it
+  // Codex CLI can omit the first message when prompt_optional is advertised. The App needs one to expose its new chat.
   const codex = agent === "codex";
-  const needsFirst = codex && launchers.find((l) => l.name === listLauncher)?.prompt_optional !== true;
+  const needsFirst = codex && (desktopStart || listEntry?.prompt_optional !== true);
   const documentHost = opensIn ?? hostDefault;
   // An explicit launcher family must agree with the catalog. Older Claude entries use launcherAgent's default.
   const documentAgent = listEntry?.agent_type || listEntry?.agent || agent;
@@ -588,8 +642,23 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // A start in a desktop app (lib/desktop-start.ts, #5480 Claude's, #5726 the Codex App): no folder picked is a temporary
   // session, browsing starts in the folder holding the app's projects (worked out when the computer or the launcher
   // changes, not on every push), and a new folder may be named.
-  const codexApp = listEntry?.source === CODEX_APP_SOURCE;
-  const desktopScratch = desktopStart && !cwdPicked && !workspace;
+  const desktopSource = listEntry?.source;
+  const codexApp = desktopSource === CODEX_APP_SOURCE;
+  const desktopScratch = desktopStart && (!cwdPicked || !cwd.trim()) && !workspace;
+  const presetProject = desktopStart && preset?.machineId === mid && preset.launcher === listLauncher ? preset.desktopProjectId : undefined;
+  const projectRoots = catalog.owner === credential && catalog.manager === manager
+    ? catalog.workspaces.filter((w) => w.machine_id === mid && w.source === desktopSource && w.source_id === presetProject).map((w) => w.cwd) : [];
+  const projectForDirectory = (directory: string) => {
+    const selectedDirectory = directoryKey(directory);
+    return presetProject && selectedDirectory && (projectRoots.length ? projectRoots : [preset?.cwd ?? ""]).some((path) => {
+      const root = directoryKey(path);
+      return root !== null && (selectedDirectory === root || selectedDirectory.startsWith(root.endsWith("/") ? root : `${root}/`));
+    }) ? presetProject : undefined;
+  };
+  const desktopProjectId = projectForDirectory(desktopScratch ? "" : cwd.trim());
+  const presetSource = preset?.launcher === "codex-app" ? "codex_app" : preset?.launcher === "claude-desktop" ? "claude_desktop" : undefined;
+  const presetUnavailable = Boolean(presetSource && preset?.machineId === mid && !loadingModels && !touched.current
+    && !launchers.some((l) => l.name === preset.launcher && l.source === presetSource));
   // not for a start handed in for something of its own (Inbox's "New agent…", #5933): that waits for one Agent
   const runsOffered = inWorktree && worktreeOffered && !desktopScratch && !preset?.onStarted;
   const runCount = runsOffered ? runTimes : 1;
@@ -644,21 +713,19 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const effortsKey = efforts.join(" ");
   useEffect(() => { setEffort((e) => fitEffort(e, effortsKey ? effortsKey.split(" ") : [])); }, [effortsKey]);
   // offered with Claude Code whose effort can be set here; grayed when this computer's Claude Code is known to be too old
-  const ultracodeShown = !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
+  const ultracodeShown = !desktopStart && !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
   // what of the picked preset this launcher can't take, said once its list is in
   const startModelOptions = { agent, list: models.list, followed, launcher: listEntry, nativeOmp };
   const tierMissed = tier && listLauncher === tier.launcher && (models.list !== undefined || (agent === "omp" && models.error)) ? tierLeftOut(tier, startModelOptions) : [];
-  // the follow row's second line: what Model settings › New agent runs (the hub's default, by display names)
+  // the follow row's second line: what Model settings › New agent runs (the unified effective binding, by display names)
   const defaultList = useModelList(open ? mid : "", defaultRuns, startCatalogHost(defaultEntry, opensIn, startHost)).list;
-  const followDetail = hubDefault
-    ? [hubDefault.provider && launcherTitle(hubDefault.provider, names), hubDefault.model && modelTitle(defaultList, hubDefault.model), hubDefault.effort && effortTitle(hubDefault.effort)].filter(Boolean).join(" · ")
-    : modelDefault;
+  const followDetail = formatFollowDetail(unified ? configured : null, defaultRuns, defaultList, names) || modelDefault;
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
 
   // The recent setups' cards (#2134): not when another page opened the sheet on a folder of its own (a space's or a
   // knowledge entry's New agent), which a card would replace.
   const cards = useMemo(() => recentCards(recents, machines), [recents, machines]);
-  const presetFolder = Boolean(preset?.machineId && preset.cwd);
+  const presetFolder = Boolean(preset?.machineId && preset.cwd !== undefined);
   const settled = launchersOf === mid && !loadingModels;
   const pickedCard = pickedSetup ? cards.find((c) => setupKey(c.setup) === pickedSetup) : undefined;
   const pickedShown = pickedCard && (!settled || formHolds(pickedCard.setup, { machine: mid, cwd, launcher, model, mode, effort })) ? pickedSetup : "";
@@ -667,6 +734,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     if (!up || !online.some((m) => m.id === setup.machine)) return;
     setPickedSetup(setupKey(setup));
     setTier(null);
+    presetModeRestore.current = null;
     touched.current = false;
     carrying.current = null;
     setEffort(setup.agent_type === "claude" ? setup.effort : "");
@@ -685,11 +753,11 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     }
     setDropped(null);
     setHelpFor("");
-    firstMessage.current?.focus();
+    firstMessage.current?.focus({ preventScroll: true });
   };
 
   const start = () => {
-    if (!open || submitted.current || loadingModels || !workspaceCurrent || !online.some((m) => m.id === mid) || !(cwd.trim() || desktopScratch)) return;
+    if (!open || submitted.current || loadingModels || presetUnavailable || !workspaceCurrent || !online.some((m) => m.id === mid) || !(cwd.trim() || desktopScratch) || (needsFirst && !prompt.trim() && !projectDocument)) return;
     if (documentBlocked || (projectDocument && (projectDocument.owner !== credentialOwner()
       || projectDocument.manager !== (getState().machines.find((m) => m.id === mid)?.manager || defaultManager())))) return;
     // Read ownership at admission too: credential/store changes can precede React's next render.
@@ -716,7 +784,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const picks = startPicks({ ...startModelOptions, model, effort });
     // a Codex keeps its own modes; the choice stays for this computer's next Claude Code. A launcher that lists its own
     // takes one of those alone, never the remembered one (its own goes as no mode).
-    const permissionMode = claudeModes ? mode : providerModes?.includes(providerMode) && providerMode !== "default" ? providerMode : "";
+    const permissionMode = claudeModes ? mode
+      : providerModes ? (providerMode && providerModes.includes(providerMode) ? providerMode : "")
+      : tier && listLauncher === tier.launcher && tier.permission_mode ? tier.permission_mode : "";
     if (claudeModes) {
       if (mode) localStorage.setItem(`new.mode.${mid}`, mode);
       else localStorage.removeItem(`new.mode.${mid}`);
@@ -732,17 +802,22 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       : undefined;
     // what every start of this sheet goes with (each run of a comparison too)
     const launcherDefaultEffort = agent === "agy" && !!launcher && !picks.effort;
-    const target = { launcher: projectDocument ? listLauncher : launcher, ...picks,
+    const target = { launcher: projectDocument || desktopStart ? listLauncher : launcher, ...picks,
       nameHint: projectDocument ? `${projectDocument.snapshot.project}/${projectDocument.snapshot.document} r${projectDocument.snapshot.revision}` : undefined,
       launcherDefaultEffort: launcherDefaultEffort || undefined, permissionMode: permissionMode || undefined,
       host: projectDocument ? documentHost : opensIn, ultracode: ultra,
       ...(codex ? { agentType: "codex", inlinePrompt: true } : inline) };
+    const launchDisplay = {
+      displayLauncher: listLauncher || undefined,
+      displayEngine: listLauncher ? agentId(providerAgent(agent, listLauncher)) : undefined,
+      displayModel: resolvedStartModel({ model: picks.model, followed, launcher: listEntry, list: models.list }),
+    };
     const launch = (dir: string, workspaceId: string | undefined) => {
       if (!current()) return;
       // The launch owns its previews; removing or unmounting the editable draft cannot revoke them.
       const sent = snapshot.attachments.map((a) => ({ ...a, url: a.url ? URL.createObjectURL(a.file) : undefined }));
       rememberSetup({ ...setup, at: setupTime() });
-      const id = launchAgent({ machineId: mid, cwd: dir, workspaceId, ...target, text: snapshot.text, attachments: sent });
+      const id = launchAgent({ machineId: mid, cwd: dir, workspaceId: desktopStart ? undefined : workspaceId, desktopProjectId: projectForDirectory(dir), ...target, ...launchDisplay, text: snapshot.text, attachments: sent });
       if (onStarted) whenStarted(id, onStarted);
       const ids = new Set(snapshot.attachments.map((a) => a.id));
       releaseAttachments(attachmentsRef.current.filter((a) => ids.has(a.id)));
@@ -839,12 +914,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       onAttach: (snapshot) => {
         if (!open || !documentScope || submitted.current || credential !== credentialOwner()) return;
         setProjectDocument((current) => current ?? { snapshot, owner: credential, manager });
-        firstMessage.current?.focus();
+        firstMessage.current?.focus({ preventScroll: true });
       },
       onRemove: () => {
         if (submitted.current) return;
         setProjectDocument(null);
-        firstMessage.current?.focus();
+        firstMessage.current?.focus({ preventScroll: true });
       },
     }}>
       <Dialog
@@ -858,13 +933,15 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
             <Button tone="quiet" onClick={dismiss}>
               {t("common.cancel")}
             </Button>
-            <Button tone="primary" busy={wtBusy} disabled={loadingModels || !workspaceCurrent || !targetOnline || !(cwd.trim() || desktopScratch) || Boolean(documentBlocked) || (needsFirst && !prompt.trim() && !projectDocument)} onClick={start}>
+            <Button tone="primary" busy={wtBusy} disabled={loadingModels || presetUnavailable || !workspaceCurrent || !targetOnline || !(cwd.trim() || desktopScratch) || Boolean(documentBlocked) || (needsFirst && !prompt.trim() && !projectDocument)} onClick={start}>
               {runCount > 1 ? t("newagent.start_runs", { count: runCount }) : t("newagent.start")}
             </Button>
           </>
         }
       >
-        <div className="flex flex-col gap-4">
+        <div ref={formTop} className="flex flex-col gap-4">
+          {presetUnavailable && <p role="alert" className="text-xs text-red">{t("newagent.desktop_unavailable", { app: presetSource === "codex_app" ? "Codex" : "Claude" })}</p>}
+          {presetProject && !desktopProjectId && <p role="status" className="text-xs text-ink-3">{t("newagent.desktop_project_detached")}</p>}
           {cards.length > 0 && !presetFolder && (
             <RecentSetups
               names={names}
@@ -937,7 +1014,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                 </>
               )}
               <div className="flex items-center gap-1 px-2 pt-1.5 pb-0.5 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">
-                {listing && dirs?.parent !== undefined && (
+                {listing && dirs?.parent && (
                   <button type="button" aria-label={t("newagent.parent_folder")} onClick={() => setBrowse(dirs!.parent!)} className="-ml-1 flex size-4.5 items-center justify-center rounded-[4px] hover:bg-hover hover:text-ink">
                     <Icon name="chevronLeft" size={12} stroke={2.4} />
                   </button>
@@ -1003,7 +1080,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
             </div>
           )}
 
-          {!workspace && !desktopStart && hosts.length > 1 && (
+          {!desktopStart && !workspace && hosts.length > 1 && (
             <Field label={t("lib-engines.start_in")}>
               <div role="radiogroup" aria-label={t("lib-engines.start_in")} data-testid="start-host" className="flex flex-wrap gap-1.5">
                 {hosts.map((h) => (
@@ -1019,9 +1096,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           {claudeModes && (
             <Field label={t("newagent.permission_mode")}>
               <div role="radiogroup" aria-label={t("newagent.permission_mode")} className="flex flex-wrap gap-1.5">
-                <Choice radio selected={mode === ""} onClick={() => setMode("")}>{t("newagent.follow_launcher")}</Choice>
+                <Choice radio selected={mode === ""} onClick={() => chooseMode("")}>{t("newagent.follow_launcher")}</Choice>
                 {PERMISSION_MODES.map((m) => (
-                  <Choice key={m.id} radio selected={mode === m.id} onClick={() => setMode(m.id)} title={m.detail}>
+                  <Choice key={m.id} radio selected={mode === m.id} onClick={() => chooseMode(m.id)} title={m.detail}>
                     {m.title}
                   </Choice>
                 ))}
@@ -1037,9 +1114,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           {providerModes && providerModes.some((m) => m !== "default") && (
             <Field label={t("newagent.permission_mode")}>
               <div role="radiogroup" aria-label={t("newagent.permission_mode")} data-testid="new-agent-provider-modes" className="flex flex-wrap gap-1.5">
-                <Choice radio selected={providerMode === "" || !providerModes.includes(providerMode)} onClick={() => setProviderMode("")}>{t("newagent.follow_launcher")}</Choice>
+                <Choice radio selected={providerMode === "" || providerMode === "default" || !providerModes.includes(providerMode)} onClick={() => chooseProviderMode("")}>{t("newagent.follow_launcher")}</Choice>
                 {providerModes.filter((id) => id !== "default").map(listedModeOption).map((m) => (
-                  <Choice key={m.id} radio selected={providerMode === m.id} onClick={() => setProviderMode(m.id)} title={m.detail}>
+                  <Choice key={m.id} radio selected={providerMode === m.id} onClick={() => chooseProviderMode(m.id)} title={m.detail}>
                     {m.title}
                   </Choice>
                 ))}
@@ -1287,7 +1364,7 @@ function RecentSetups({ cards, machines, names, picked, onPick, onForget, onClea
 
 /** What a preset runs on, in a line: its launcher ("Title (id)", #5029), model and effort (its name). */
 function tierRuns(x: PickerTier, names: Named[]): string {
-  return [providerLabel(namedLauncher(x.launcher, names)), x.model, x.effort && effortTitle(x.effort)].filter(Boolean).join(" · ");
+  return [providerLabel(namedLauncher(x.launcher, names)), x.model, x.effort && effortTitle(x.effort), x.permission_mode && modeTitle(x.permission_mode)].filter(Boolean).join(" · ");
 }
 
 function Choice({ selected, onClick, title, radio, children }: { selected: boolean; onClick: () => void; title?: string; /** One of a radiogroup. */ radio?: boolean; children: React.ReactNode }) {

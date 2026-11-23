@@ -73,7 +73,7 @@ func (s *Service) toolAgentSwitch(ctx context.Context, machine, self string, arg
 	if err := s.switchReachable(ctx, am, t.Launcher, nodeproto.LauncherSwitchNow); err != nil {
 		return "", fmt.Errorf("%w. Nothing was done", err)
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, "agent_switch", label+" · "+am.Name+" → "+t.Launcher+"\n\n"+text, args); err != nil {
+	if ok, err := s.confirmOutbound(ctx, machine, self, "agent_switch", strings.TrimSpace(a.Text), label+" · "+am.Name+" → "+t.Launcher+"\n\n"+text, args); err != nil {
 		return "", err
 	} else if !ok {
 		return "The user declined on the phone: the agent was not moved and nothing was sent.", nil
@@ -124,7 +124,7 @@ func switchUnsupported(c proto.Session, launcher string) error {
 // switchReachable says why agents on am cannot be moved to launcher now, nil when they can: this manager connects the
 // computer, its node can (capability), and the launcher is in the computer's scope.
 func (s *Service) switchReachable(ctx context.Context, am Device, launcher, capability string) error {
-	nodes, _ := s.devs.(nodeAnnouncer)
+	nodes, _ := s.physicalDevices().(nodeAnnouncer)
 	if s.devs == nil || nodes == nil || !s.devs.Has(am.ID) {
 		return fmt.Errorf("%s is not connected by this manager: it cannot move agents there", am.Name)
 	}

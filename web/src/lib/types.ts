@@ -321,7 +321,10 @@ export interface Session {
   bypass_pending?: boolean;
   /** What the model saw in the latest reply and the model's window, in tokens (#2430); omitted while the node cannot tell. */
   context_tokens?: number;
+  context_restart_recommended?: boolean;
   context_window?: number;
+  /** Structured context window occupancy split with exact/estimated honesty marker (proto.ContextBreakdown, #12542). */
+  context_breakdown?: ContextBreakdown;
   /** The levels `effort` may be set to when they are not Claude Code's: a Codex thread driven through its app-server (only its effort changes; docs/protocol/protocol.md). */
   efforts?: string[];
   /** Native Codex speed. Absent while the current setting is unknown. */
@@ -497,6 +500,18 @@ export interface Session {
   runtime_fallback?: string;
   /** The last compaction the user asked for in an assistant conversation (POST …/compact, #1727). */
   compaction?: Compaction;
+}
+
+/** Structured context window occupancy split with exact/estimated honesty marker (proto.ContextBreakdown, #12542).
+ *  Omitted categories are unavailable; explicit 0 means genuinely zero. */
+export interface ContextBreakdown {
+  source: "exact" | "estimated";
+  system_and_rules?: number;
+  tools_and_mcp?: number;
+  conversation?: number;
+  tool_outputs?: number;
+  free?: number;
+  auto_compact_threshold?: number;
 }
 
 /** A compaction the user asked for (proto.Compaction): running, done or failed (`error` says why). */
@@ -728,6 +743,9 @@ export interface Item {
    *  a Claude Code request's on its first item, a Codex turn's total on its turn_duration item, a finished subagent's on
    *  its result or notice. Absent from older nodes. lib/turn-usage.ts sums an exchange's into its usage. */
   usage?: TokenUsage[];
+  /** Observed time-to-first-token in milliseconds during live streaming execution (proto.Item.TTFTMS, #12542).
+   *  Absent when not observed (e.g. historical replays); 0 is a valid observed value. */
+  ttft_ms?: number;
   /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by you (lib/injected.ts). */
   injected?: Injected;
   /** Display provenance, independent of the model-facing role. Unknown kinds remain non-user sources. */
@@ -869,6 +887,9 @@ export interface SessionChildren {
 }
 
 export const SESSION_REVIEW_FEATURE = "session_review";
+/** The hub feature that says it has git/review (lib/session-review.ts). Here, not there, so the chat's check for it
+ *  keeps session-review.ts off the first screen. */
+export const REVIEW_FEATURE = "git_review";
 export const SESSION_REVIEW_TOOL = "persona_session_review";
 
 export function isSessionReview(ix: Pick<Interaction, "kind" | "tool_name">): boolean {
@@ -907,6 +928,13 @@ export interface Interaction {
   agent?: string;
   /** Display label supplied by the source (for example a script request). */
   agent_label?: string;
+  /** A manager-owned exact operation or batch. Its reply control supplies the interaction id explicitly; ordinary
+   *  quote replies never acquire approval authority. The phrase list is a display snapshot, not an authorization. */
+  approval_batch_id?: string;
+  approval_item_id?: string;
+  owner_proposal?: boolean;
+  no_expiry?: boolean;
+  owner_approval_phrases?: string[];
   /** What "always allow" allows here; another agent's card offers it only with this. */
   always_label?: string;
   /** Permission scopes remembered by the hub for this conversation. */
@@ -942,6 +970,8 @@ export interface Interaction {
   /** The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
    *  answers questions first"): nothing was pushed yet, and an answer given here wins. The same card comes again without it. */
   delegating?: boolean;
+  /** Hub push-grading urgency ("P0" | "P1" | "P2"): absent defaults to P0. */
+  push_level?: "P0" | "P1" | "P2" | (string & {});
   /** What the assistant filled in when it left the question to the user. */
   delegate?: Delegate;
   /** A rule the hub suggests on a question a supervisor passed up, once the owner gave the same answer three times
@@ -964,6 +994,9 @@ export interface Delegate {
 
 export interface Launcher {
   name: string;
+  /** A verified separate runtime channel, independent of ordinary Assistant support. */
+  supervision_policy?: boolean;
+  assistant?: boolean;
   /** A Persona-managed provider's name for people, any language (#5029), or a runtime's name for a provider it runs
    *  (Paseo's label, "Grok", #8261); absent for an rc alias or from an older hub. Show it through lib/provider-names.ts. */
   display_name?: string;
@@ -1004,6 +1037,8 @@ export interface LauncherHealth {
 }
 
 export interface AssistantInfo {
+  /** The manager that answered, including the default whose request carried no manager header. */
+  manager?: string;
   machine_id: string;
   main_machine_id?: string;
   launcher?: string;
@@ -1012,14 +1047,22 @@ export interface AssistantInfo {
   timezone?: string;
   notes?: string;
   notes_effective?: string;
-  /** The side conversations the user made leaders (docs/assistant/unified-entry.md "Leader conversations"): absent
-   *  when there are none or from an older hub. The sidebar shows them first among the Persona chats, as pinned. */
+  /** The current directions' opaque ids, in hub order: a conversation-backed id indexes `conversations`; an external
+   *  one has no Persona conversation and gets its target from the direction tree or `/assistant/leaders` (#8236). */
   leaders?: string[];
   /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
   main_background_folded?: boolean;
   /** "Show scheduled task chats" in the sidebar's Recent (#8324, lib/recent-task-chats.ts): one value on the hub for all
    *  of the user's devices, off by default; absent from an older hub (no switch, and Recent leaves them out). */
   recent_task_chats?: boolean;
+  /** Exact, one-shot owner replies and persistent proposal cards; off by default and absent from an older hub. */
+  owner_reply_approval?: boolean;
+  persistent_owner_action_cards?: boolean;
+  owner_reply_approval_phrases?: string[];
+  /** User-chosen ordinary conversation order (#12017), shared by every client; absent or empty means activity time. */
+  conversation_order?: string[];
+  /** Exact user-chosen tag filter entries (#12018); null or absent means the automatic all-in-use-tag row. */
+  conversation_tag_filters?: string[] | null;
   /** The background supervisor's conversation (#4927, lib/background-supervisor.ts): its session id once the hub made
    *  it; absent before that and from an older hub. Read-only. */
   background_supervisor?: string;

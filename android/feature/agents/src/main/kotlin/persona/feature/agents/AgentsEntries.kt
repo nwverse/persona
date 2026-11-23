@@ -1,6 +1,7 @@
 package persona.feature.agents
 
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
@@ -107,6 +108,7 @@ fun EntryProviderScope<NavKey>.agentsEntries(
         val wiring by dependencies.wiring().state.collectAsStateWithLifecycle()
         val tasksStore = dependencies.tasks() ?: wiring.tasks
         val sessions by dependencies.sessions().sessions.collectAsStateWithLifecycle()
+        val machines by dependencies.sessions().machines.collectAsStateWithLifecycle()
         val todos by (tasksStore?.todos ?: flowOf(emptyList())).collectAsStateWithLifecycle(emptyList())
         val pending by dependencies.interactions().pending.collectAsStateWithLifecycle()
         // The selected assistant's direction tree (#4352), for grouping the list by direction.
@@ -124,6 +126,7 @@ fun EntryProviderScope<NavKey>.agentsEntries(
             newTodoRequests = newTodo,
             assistant = assistant,
             directions = directionTree,
+            machines = machines,
         )
     }
     entry<TodosRoute> { todosPage(null) }
@@ -155,7 +158,8 @@ fun EntryProviderScope<NavKey>.agentsEntries(
             tasks = tasksStore,
             onBack = { navigator.back() },
             onOpenSession = { key -> navigator.navigate(ChatRoute(key.machineId, key.sessionId)) },
-            onHandOff = { todo -> handOffTodo = todo }
+            onHandOff = { todo -> handOffTodo = todo },
+            onOpenTodo = { todoId -> navigator.navigate(TodoDetailRoute(todoId)) },
         )
         // Kept while the to-do is open, so an unconfirmed start is checked again rather than posted a second time.
         var handOffPending by remember(route.todoId) { mutableStateOf<TodoHandOffOperation?>(null) }
@@ -236,6 +240,7 @@ fun AgentsListHost(
     terminalPanes: kotlinx.coroutines.flow.Flow<Boolean>,
     listOwner: androidx.lifecycle.ViewModelStoreOwner? = null,
     sidebar: AgentsSidebarLayout? = null,
+    providedListState: LazyListState? = null,
 ) {
     val owner = listOwner ?: checkNotNull(androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner.current)
     val context = LocalContext.current.applicationContext
@@ -295,6 +300,6 @@ fun AgentsListHost(
         val groups by dependencies.groups().groups.collectAsStateWithLifecycle()
         val panes by terminalPanes.collectAsStateWithLifecycle(false)
         AgentsScreen(model, navigator, metadata.copy(rows = rows), creationModel, onMachineSelected, groups, panes,
-            sidebar = sidebar)
+            sidebar = sidebar, providedListState = providedListState)
     }
 }

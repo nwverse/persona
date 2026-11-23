@@ -17,14 +17,14 @@ const baseProfile: ModelProfile = {
   name: "Economy",
   description: "Everyday models",
   purposes: {
-    assistant: { provider: "launcher.gw", model: "sonnet-4", effort: "medium" },
+    assistant: { provider: "launcher.gw", model: "sonnet-4", effort: "medium", permission_mode: "acceptEdits" },
     kb: {},
   },
   launchers: {
     gw: { model: "sonnet-4", small_model: "", effort: "low" },
   },
   tiers: {
-    strong: { launcher: "gw", model: "opus-4", effort: "high", speed: "fast", description: "Hard work" },
+    strong: { launcher: "gw", model: "opus-4", effort: "high", permission_mode: "plan", speed: "fast", description: "Hard work" },
   },
   changes: [],
 };
@@ -41,14 +41,14 @@ describe("model-profile-editor", () => {
       name: "Economy",
       description: "Everyday models",
       purposes: {
-        assistant: { provider: "launcher.gw", model: "sonnet-4", effort: "medium" },
+        assistant: { provider: "launcher.gw", model: "sonnet-4", effort: "medium", permission_mode: "acceptEdits" },
         kb: {},
       },
       launchers: {
         gw: { model: "sonnet-4", small_model: "", effort: "low" },
       },
       tiers: {
-        strong: { launcher: "gw", model: "opus-4", effort: "high", speed: "fast", description: "Hard work" },
+        strong: { launcher: "gw", model: "opus-4", effort: "high", permission_mode: "plan", speed: "fast", description: "Hard work" },
       },
     });
     expect(JSON.stringify(input)).not.toContain("config_dir");
@@ -61,7 +61,7 @@ describe("model-profile-editor", () => {
     draft.launchers.gw = {};
     const input = draftToProfileInput(draft, 2);
     expect(input.purposes).toEqual({
-      assistant: { provider: "launcher.gw", model: "sonnet-4", effort: "medium" },
+      assistant: { provider: "launcher.gw", model: "sonnet-4", effort: "medium", permission_mode: "acceptEdits" },
     });
     expect(input.launchers).toBeUndefined();
     expect(isProfileDraftDirty(draft, profileToDraft(baseProfile))).toBe(true);
@@ -77,15 +77,17 @@ describe("model-profile-editor", () => {
       launcher: "",
       model: "bad model id!",
       effort: "extreme",
+      permission_mode: "bogusMode",
       speed: "warp",
       description: "line1\nline2",
     });
     const problems = profileDraftProblems(draft, { gw: "launcher", api_only: "api" });
-    expect(problems.length).toBeGreaterThanOrEqual(6);
+    expect(problems.length).toBeGreaterThanOrEqual(7);
     expect(problems.some((p) => p.includes("Profile name"))).toBe(true);
     expect(problems.some((p) => p.includes("api_only"))).toBe(true);
     expect(problems.some((p) => p.includes("Invalid Name"))).toBe(true);
     expect(problems.some((p) => p.includes("bad model id!"))).toBe(true);
+    expect(problems.some((p) => p.includes("permission_mode"))).toBe(true);
   });
 
   it("detects duplicate tier names and preserves untouched legacy tier model IDs", () => {
@@ -108,6 +110,7 @@ describe("model-profile-editor", () => {
       launcher: "claude",
       model: "valid-model",
       effort: "",
+      permission_mode: "",
       speed: "",
       description: "",
     });

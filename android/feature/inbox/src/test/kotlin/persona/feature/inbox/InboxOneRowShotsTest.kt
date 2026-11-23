@@ -14,6 +14,8 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasAnySibling
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -126,8 +128,9 @@ class InboxOneRowShotsTest {
         inbox.conversationInbox.value = InboxConversations(inbox, "synthetic-pairing", owner, ReplyComposers(inbox, owner))
         rule.setContent { PersonaTheme(reduceMotion = true) { InboxScreen(inbox, navigator) } }
 
-        rule.onNodeWithText("Direct").assertExists()
-        rule.onNodeWithText("Group").assertDoesNotExist()
+        // The source/kind strip has a Direct button too. The row's tag is beside its title (#13243).
+        rule.onNode(hasText("Direct") and hasAnySibling(hasText("Direct matter")), useUnmergedTree = true).assertExists()
+        rule.onNode(hasText("Group") and hasAnySibling(hasText("Direct matter")), useUnmergedTree = true).assertDoesNotExist()
         assertTrue(rule.onAllNodesWithText("2").fetchSemanticsNodes().isNotEmpty())
     }
 

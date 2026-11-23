@@ -5,6 +5,8 @@ struct TodoHandoffSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     var todo: TodoItem
+    /// The to-do page's way to open the Agent (`TodoDetailView.openAgent`): pushed over that page. Nil: as before.
+    var onOpenAgent: ((SessionKey) -> Void)? = nil
 
     @State private var mode: Mode = .newAgent
     @State private var instruction = ""
@@ -109,11 +111,6 @@ struct TodoHandoffSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-        #if os(macOS)
-        // A window sheet does not take the main window's grouped forms: the Mac put the labels in a column of their
-        // own, cut off at the sheet's left edge, and the text past its right (#1248).
-        .macSheet()
-        #endif
         .sheet(isPresented: $showNewChat) {
             // The new-chat form itself, with the todo: its context block goes ahead of the first message, the session
             // takes the todo's title, and only this hub's computers are offered.
@@ -122,9 +119,14 @@ struct TodoHandoffSheet: View {
                 showNewChat = false
                 TodoStore.shared.reload()
                 dismiss()
-                openTodoAgentChat(s.key, in: model)
+                opened(s.key)
             }
         }
+    }
+
+    /// The Agent it was handed to, once this sheet goes.
+    private func opened(_ key: SessionKey) {
+        if let onOpenAgent { onOpenAgent(key) } else { openTodoAgentChat(key, in: model) }
     }
 
     private var canSubmit: Bool {
@@ -180,7 +182,7 @@ struct TodoHandoffSheet: View {
             try await api.send(key, text: fullMessage, clientMsgID: UUID().uuidString, todoID: todo.id)
             TodoStore.shared.reload()
             dismiss()
-            openTodoAgentChat(key, in: model)
+            opened(key)
         } catch {
             errorMessage = error.shown
         }

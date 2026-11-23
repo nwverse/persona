@@ -3,25 +3,19 @@ package assistant
 import (
 	"context"
 
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Every agent Persona starts belongs to a task (#3617, docs/assistant/unified-entry.md "Agent tasks"). While
-// assistant.agent_tasks is on (off by default: a supervised task costs model calls, the judge's when its agent stops
-// and the supervisor's turns), an agent Persona started that names no task gets a quiet, supervised todo, made of the
-// pieces the main conversation's own tasks are made of (quietAgentTask, adoptAgent, the todo_supervision ledger):
+// Assistant-dispatched Agents belong to tasks supervised by their planning lead, or by main for other conversations. The older assistant.agent_tasks switch still
+// covers manually linked user to-dos and reporting agents. agent_start from any assistant conversation makes its to-do
+// at once (prepareAgentTask) independently of this switch; a session opened manually on the Agents page is not adopted.
 //
-//   - agent_start from any conversation makes the todo at once (quietAgentTask);
-//   - an agent an app started (New Agent, POST /api/v1/sessions without todo_id) gets one when a turn of it ends having
-//     done work (agentTaskAtTurnEnd): a session that only answers a question leaves no todo behind;
 //   - a todo the user made by hand gets a supervisor when an agent is linked to it (superviseLinkedTodo), and any open
 //     todo's agent that reports gets one then (superviseOpenTodoOf), so report_to_supervisor has a receiver.
 //
-// The supervisor is the conversation that started the agent when it supervises (the main conversation, a leader), else
-// the main conversation. Agents the user starts by hand in a terminal are not Persona's and are left alone. With the
-// setting off none of this runs.
+// Task-leader workers and explicitly transferred work retain their assigned supervisor.
+// Agents the user starts by hand in a terminal are not Persona's and are left alone.
 
 // agentTasks: assistant.agent_tasks is on (off by default).
 func (s *Service) agentTasks(ctx context.Context) bool {
@@ -45,8 +39,8 @@ func (s *Service) agentTaskSupervisor(ctx context.Context, conversation string) 
 
 // ensureSupervisor gives open todo id a supervisor when it has none (agentTaskSupervisor of the conversation that
 // opened it), with no done_when: the todo with its ledger, false when it stays unsupervised. A reporting
-// conversation's task is left as it is: its notices go back to that conversation, and a ledger would move them into
-// the main conversation's supervision messages (#4101).
+// conversation's task stays unsupervised so its ordinary quiet notices are unchanged; superviseOpenTodoOf routes its
+// Agent's report through the reporter's own delivery path instead.
 func (s *Service) ensureSupervisor(ctx context.Context, id string) (Todo, bool) {
 	t, ok := s.todoNow(id)
 	if !ok || t.DoneAt != nil {
@@ -89,9 +83,10 @@ func (s *Service) superviseLinkedTodo(ctx context.Context, id string) {
 	}
 }
 
-// superviseOpenTodoOf is the open todo agent machine/session works for, whoever opened it, with a supervisor
-// (ensureSupervisor): where its report goes when taskOf finds no supervised task. false: it is on no open todo, or
-// that todo stays unsupervised.
+// superviseOpenTodoOf is the open todo agent machine/session works for, whoever opened it, with a supervisor for its
+// report. An active reporting conversation's todo keeps its stored state unsupervised: only the returned copy names
+// that conversation, and reportNow delivers through the reporter's existing notice path. Other unsupervised todos get
+// a ledger (ensureSupervisor). false: it is on no open todo, or that todo stays unsupervised.
 func (s *Service) superviseOpenTodoOf(ctx context.Context, machine, session string) (Todo, bool) {
 	if !s.agentTasks(ctx) {
 		return Todo{}, false
@@ -100,49 +95,11 @@ func (s *Service) superviseOpenTodoOf(ctx context.Context, machine, session stri
 	if !ok {
 		return Todo{}, false
 	}
+	if _, reports := s.reporterOf(ctx, t.Origin); reports && !s.reporterStopped(ctx, t.Origin) {
+		t.Supervision = &Supervision{Supervisor: t.Origin}
+		return t, true
+	}
 	return s.ensureSupervisor(ctx, t.ID)
-}
-
-// agentTaskAtTurnEnd makes agent sid on machine a task when its turn ended having done work and it is on no todo: a
-// quiet todo of the main conversation, which supervises it (adoptAgent, as agent_supervise makes one, with its card in
-// the conversation). Only an agent Persona started, never one of a terminal, an assistant conversation
-// (assistantsConversation), a runtime's session, a review's reviewer, or an agent that was on a todo before (a closed
-// task's agent stays that task's). The task, false when none was made.
-func (s *Service) agentTaskAtTurnEnd(ctx context.Context, machine, sid string) (Todo, bool) {
-	main, ok := s.agentTaskSupervisor(ctx, "")
-	if !ok {
-		return Todo{}, false
-	}
-	c, ok := s.session(ctx, machine, sid)
-	if !ok || !c.StartedByPersona || c.SourceKind != "" || c.Starting || c.Archived ||
-		c.Status == proto.StatusWorking || s.isReviewer(machine, sid) || s.assistantsConversation(ctx, machine, c) {
-		return Todo{}, false
-	}
-	if s.ensureTodosLoaded(ctx) != nil || s.everOnTodo(machine, sid) {
-		return Todo{}, false
-	}
-	am, ok := s.device(ctx, machine)
-	if !ok {
-		return Todo{}, false
-	}
-	items, read := s.lastTurnItems(ctx, machine, sid)
-	if !read || !turnDidWork(items) {
-		return Todo{}, false
-	}
-	ask, _ := turnExchange(items)
-	notes := ask
-	if notes == "" {
-		notes = i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes", i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd})
-	}
-	todo, made, err := s.adoptAgentAs(ctx, main, am, c, "", ask, notes, nil, 0, false, true)
-	if err != nil || !made {
-		if err != nil {
-			s.logf("agent task %s on %s: %v", short(sid), machine, err)
-		}
-		return Todo{}, false
-	}
-	s.taskCard(ctx, main, todo.ID, wakeActive)
-	return s.taskOf(ctx, machine, sid)
 }
 
 // assistantsConversation: session c on machine is an assistant's conversation, never an agent to make a task of
@@ -170,23 +127,6 @@ func (s *Service) assistantsConversation(ctx context.Context, machine string, c 
 		return true
 	}
 	return s.originNoted(ctx, machine, c.SessionID)
-}
-
-// everOnTodo: agent mid/sid is or was on a todo (open or done, active or released).
-func (s *Service) everOnTodo(mid, sid string) bool {
-	s.todos.mu.RLock()
-	defer s.todos.mu.RUnlock()
-	if _, ok := s.todos.activeBySession[[2]string{mid, sid}]; ok {
-		return true
-	}
-	for _, t := range s.todos.todos {
-		for _, a := range t.Agents {
-			if a.MachineID == mid && a.SessionID == sid {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // workTools are the tools that edit files, run commands or hand work to subagents, by the names Claude Code and

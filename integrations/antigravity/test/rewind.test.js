@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { get } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -18,6 +19,12 @@ const records = [
   { step_index: 2, type: 'USER_INPUT', content: 'Repeat' },
   { step_index: 3, type: 'PLANNER_RESPONSE', content: 'Second answer' },
 ].map((step) => ({ ...step, status: 'DONE', created_at: at }))
+const nativeRecord = (step) => ({
+  type: `CORTEX_STEP_TYPE_${step.type}`,
+  metadata: { source: step.type === 'USER_INPUT' ? 'CORTEX_STEP_SOURCE_USER_EXPLICIT' : 'MODEL', createdAt: step.created_at },
+  ...(step.type === 'USER_INPUT' ? { userInput: { items: [{ text: step.content }] } } : {}),
+  ...(step.type === 'PLANNER_RESPONSE' ? { plannerResponse: { response: step.content } } : {}),
+})
 
 async function fixture(t, extra = {}) {
   const home = mkdtempSync(join(tmpdir(), 'agy-rewind-'))
@@ -29,10 +36,7 @@ async function fixture(t, extra = {}) {
   writeFileSync(join(home, 'calls.jsonl'), '')
   const nativeFile = join(home, 'trajectory.json')
   const snapshot = {
-    status: 'CASCADE_RUN_STATUS_IDLE', trajectory: { cascadeId: RAW, steps: records.map((step) => ({
-      type: `CORTEX_STEP_TYPE_${step.type}`, metadata: { source: step.type === 'USER_INPUT' ? 'CORTEX_STEP_SOURCE_USER_EXPLICIT' : 'MODEL' },
-      ...(step.type === 'USER_INPUT' ? { userInput: { items: [{ text: step.content }] } } : {}),
-    })) }, ...extra,
+    status: 'CASCADE_RUN_STATUS_IDLE', trajectory: { cascadeId: RAW, steps: records.map(nativeRecord) }, ...extra,
   }
   writeFileSync(nativeFile, JSON.stringify(snapshot))
   const db = new DatabaseSync(join(config, 'conversation_summaries.db'))
@@ -75,6 +79,24 @@ test('ACP updates during rewind cannot start autonomous work or restore the old 
   assert.equal(runtime.idle(), true)
   const final = await node.peer.call('session.items', { session_id: SESSION })
   assert.deepEqual(final.items.map((item) => item.text), ['Repeat', 'First answer'])
+})
+
+test('the native fake answers port discovery and keeps serving the conversation', async (t) => {
+  const { home, node, rewind } = await fixture(t)
+  await rewind()
+  await until('native service port', () => existsSync(join(home, 'service-port')))
+  const port = Number(readFileSync(join(home, 'service-port'), 'utf8'))
+  const probe = await new Promise((resolve) => {
+    const req = get({ hostname: '127.0.0.1', port, path: '/', headers: { Connection: 'close', 'User-Agent': 'persona-ports' } }, (res) => {
+      res.resume()
+      res.on('end', () => resolve({ status: res.statusCode }))
+    })
+    req.on('error', (error) => resolve({ error }))
+  })
+  assert.equal(probe.error, undefined)
+  assert.equal(probe.status, 404)
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(page.items.map((item) => item.text), ['Repeat', 'First answer'])
 })
 
 test('native rewind preserves the prefix, resets watched history and persists through replacement exports', async (t) => {
@@ -291,4 +313,184 @@ test('a send changes the history at once when its brain directory is read-only (
   } finally {
     chmodSync(brain, 0o700)
   }
+})
+
+test('an inventory refresh revalidates an existing cut after native work advances', async (t) => {
+  const { node, transcript, rewind, db, nativeFile, calls } = await fixture(t)
+  const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  const fullTrajectory = [...snapshot.trajectory.steps,
+    nativeRecord({ ...records[2], step_index: 4, content: 'New question' }),
+    nativeRecord({ ...records[3], step_index: 5, content: 'Recovered answer' })]
+  await rewind()
+  await until('rewound inventory', () => node.last('runtime.sessions')?.sessions[0]?.last_text === 'First answer')
+
+  appendFileSync(transcript, [
+    { ...records[2], step_index: 4, content: 'New question' },
+    { ...records[3], step_index: 5, content: 'Recovered answer' },
+  ].map((step) => JSON.stringify(step)).join('\n') + '\n')
+  writeFileSync(nativeFile, JSON.stringify({ ...snapshot, trajectory: { ...snapshot.trajectory, steps: fullTrajectory } }))
+  db.prepare('UPDATE conversation_summaries SET step_count = 6, last_modified_time = ?').run(new Date().toISOString())
+  const checks = calls().filter((call) => call.method === 'GetCascadeTrajectory').length
+  await node.peer.call('session.rename', { session_id: SESSION, title: 'Renamed' })
+  await until('recovered last reply in the inventory', () => node.last('runtime.sessions')?.sessions[0]?.last_text === 'Recovered answer')
+  assert.equal(calls().filter((call) => call.method === 'GetCascadeTrajectory').length, checks + 1)
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(page.items.at(-1).text, 'Recovered answer')
+})
+
+test('a changed summary cannot expose the abandoned tail while the native trajectory is still rewound', async (t) => {
+  const { node, transcript, rewind, db, nativeFile, calls } = await fixture(t)
+  await rewind()
+  await until('rewound inventory', () => node.last('runtime.sessions')?.sessions[0]?.last_text === 'First answer')
+  appendFileSync(transcript, [
+    { ...records[2], step_index: 4, content: 'Unexported question' },
+    { ...records[3], step_index: 5, content: 'Abandoned answer' },
+  ].map((step) => JSON.stringify(step)).join('\n') + '\n')
+  db.prepare('UPDATE conversation_summaries SET step_count = 6, last_modified_time = ?').run(new Date().toISOString())
+  const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  assert.equal(snapshot.trajectory.steps.length, 2)
+  const checks = calls().filter((call) => call.method === 'GetCascadeTrajectory').length
+  const before = node.all('runtime.sessions').length
+  await node.peer.call('session.rename', { session_id: SESSION, title: 'Renamed' })
+  await until('inventory refreshed', () => node.all('runtime.sessions').length > before)
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(page.items.map((item) => item.text), ['Repeat', 'First answer'])
+  assert.equal(calls().filter((call) => call.method === 'GetCascadeTrajectory').length, checks + 1)
+  assert.equal(node.last('runtime.sessions').sessions[0].last_text, 'First answer')
+})
+
+test('native progress cannot clear a cut until the replacement export catches up', async (t) => {
+  const { node, transcript, rewind, db, nativeFile } = await fixture(t)
+  const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  const replacement = [
+    records[0], records[1],
+    { ...records[2], content: 'Replacement question', created_at: '2026-01-02T00:00:00Z' },
+    { ...records[3], content: 'Replacement answer', created_at: '2026-01-02T00:00:01Z' },
+  ]
+  await rewind()
+  await until('rewound inventory', () => node.last('runtime.sessions')?.sessions[0]?.last_text === 'First answer')
+  writeFileSync(nativeFile, JSON.stringify({ ...snapshot, trajectory: { ...snapshot.trajectory, steps: replacement.map(nativeRecord) } }))
+  db.prepare('UPDATE conversation_summaries SET step_count = 4, last_modified_time = ?').run(new Date().toISOString())
+  const before = node.all('runtime.sessions').length
+  await node.peer.call('session.rename', { session_id: SESSION, title: 'Renamed' })
+  await until('inventory refreshed', () => node.all('runtime.sessions').length > before)
+  const lagging = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(lagging.items.map((item) => item.text), ['Repeat', 'First answer'])
+  assert.ok(lagging.history.endsWith(':cut:2'))
+  assert.equal(node.last('runtime.sessions').sessions[0].last_text, 'First answer')
+
+  writeFileSync(transcript, replacement.map((step) => JSON.stringify(step)).join('\n') + '\n')
+  await node.peer.call('session.rename', { session_id: SESSION, title: 'Renamed again' })
+  await until('replacement export is visible', () => node.last('runtime.sessions')?.sessions[0]?.last_text === 'Replacement answer')
+  const caughtUp = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(caughtUp.items.map((item) => item.text), replacement.map((step) => step.content))
+})
+
+test('a stale native check cannot erase a cut installed by a newer rewind', async (t) => {
+  const { node, home, transcript, rewind, db, nativeFile } = await fixture(t)
+  await rewind()
+  await until('first rewound inventory', () => node.last('runtime.sessions')?.sessions[0]?.last_text === 'First answer')
+  const watching = await node.peer.call('session.items', { session_id: SESSION })
+  await node.peer.call('session.watch', { session_id: SESSION, since_seq: watching.to_seq })
+  const abandoned = [
+    { ...records[2], step_index: 4, content: 'Abandoned question' },
+    { ...records[3], step_index: 5, content: 'Abandoned answer' },
+  ]
+  appendFileSync(transcript, abandoned.map((step) => JSON.stringify(step)).join('\n') + '\n')
+  const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  writeFileSync(nativeFile, JSON.stringify({ ...snapshot, holdTrajectoryOnce: true,
+    trajectory: { ...snapshot.trajectory, steps: [...records.map(nativeRecord), ...abandoned.map(nativeRecord)] } }))
+  db.prepare('UPDATE conversation_summaries SET step_count = 6, last_modified_time = ?').run(new Date().toISOString())
+  await node.peer.call('session.rename', { session_id: SESSION, title: 'Start stale check' })
+  await until('stale native check is held', () => existsSync(join(home, 'trajectory-held')))
+
+  await rewind({ occurrence: 1, prompts_after: 1 })
+  await until('second rewound inventory', () => node.last('runtime.sessions')?.sessions[0]?.last_text === 'First answer')
+  writeFileSync(join(home, 'release-trajectory'), '')
+  await until('stale native response is sent', () => existsSync(join(home, 'trajectory-response-sent')))
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(node.all('session.items').some((event) => event.items?.some((item) => item.text === 'Abandoned answer')), false)
+  assert.equal(node.all('runtime.sessions').some((event) => event.sessions?.[0]?.last_text === 'Abandoned answer'), false)
+  assert.deepEqual(page.items.map((item) => item.text), records.slice(0, 2).map((step) => step.content))
+  assert.equal(node.last('runtime.sessions').sessions[0].last_text, 'First answer')
+})
+
+test('a stale check cannot publish while a newer rewind is installing its cut', async (t) => {
+  const { node, home, transcript, rewind, db, nativeFile } = await fixture(t)
+  await rewind()
+  await until('first rewound inventory', () => node.last('runtime.sessions')?.sessions[0]?.last_text === 'First answer')
+  const watching = await node.peer.call('session.items', { session_id: SESSION })
+  await node.peer.call('session.watch', { session_id: SESSION, since_seq: watching.to_seq })
+  const abandoned = [
+    { ...records[2], step_index: 4, content: 'Abandoned question' },
+    { ...records[3], step_index: 5, content: 'Abandoned answer' },
+  ]
+  appendFileSync(transcript, abandoned.map((step) => JSON.stringify(step)).join('\n') + '\n')
+  const snapshot = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  writeFileSync(nativeFile, JSON.stringify({ ...snapshot, holdTrajectoryOnce: true,
+    trajectory: { ...snapshot.trajectory, steps: [...records.map(nativeRecord), ...abandoned.map(nativeRecord)] } }))
+  db.prepare('UPDATE conversation_summaries SET step_count = 6, last_modified_time = ?').run(new Date().toISOString())
+  await node.peer.call('session.rename', { session_id: SESSION, title: 'Start stale check' })
+  await until('stale native check is held', () => existsSync(join(home, 'trajectory-held')))
+
+  const armed = JSON.parse(readFileSync(nativeFile, 'utf8'))
+  writeFileSync(nativeFile, JSON.stringify({ ...armed, holdAfterRevertOnce: true }))
+  const second = rewind({ occurrence: 1, prompts_after: 1 })
+  await until('second rewind is installing its cut', () => existsSync(join(home, 'after-trajectory-held')))
+  writeFileSync(join(home, 'release-trajectory'), '')
+  await until('stale native response is sent', () => existsSync(join(home, 'trajectory-response-sent')))
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  writeFileSync(join(home, 'release-after-trajectory'), '')
+  await second
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.equal(node.all('session.items').some((event) => event.items?.some((item) => item.text === 'Abandoned answer')), false)
+  assert.equal(node.all('runtime.sessions').some((event) => event.sessions?.[0]?.last_text === 'Abandoned answer'), false)
+  assert.deepEqual(page.items.map((item) => item.text), records.slice(0, 2).map((step) => step.content))
+  assert.equal(node.last('runtime.sessions').sessions[0].last_text, 'First answer')
+})
+
+test('native rewind drops rewound-away token usage and model from runtime.sessions while disk still holds the old tail', async (t) => {
+  const { node, transcript, rewind } = await fixture(t)
+  const seeded = [
+    records[0],
+    {
+      ...records[1],
+      model: 'gemini-4-carbon-high',
+      input_tokens: 10000,
+      cache_read_tokens: 2000,
+      output_tokens: 150,
+    },
+    records[2],
+    {
+      ...records[3],
+      model: 'claude-opus-5-5-high',
+      input_tokens: 5000,
+      cache_read_tokens: 40000,
+      cache_write_tokens: 500,
+      output_tokens: 400,
+      context_window: 1000000,
+    },
+  ]
+  writeFileSync(transcript, seeded.map((step) => JSON.stringify(step)).join('\n') + '\n')
+  const row = () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)
+  await node.peer.call('session.rename', { session_id: SESSION, title: 'Usage before rewind' })
+  await until('initial token usage published', () => row()?.context_tokens === 45500 && row()?.output_tokens === 550)
+  assert.equal(row().context_window, 1000000)
+  assert.equal(row().model, 'claude-opus-5-5-high')
+
+  // Partial rewind hides Turn 2 even though transcript_full.jsonl on disk still contains it.
+  await rewind()
+  await until('rewound session drops turn 2 usage', () => row()?.context_tokens === 12000 && row()?.output_tokens === 150)
+  assert.equal(row().context_window, undefined)
+  assert.equal(row().model, 'gemini-4-carbon-high')
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(page.items[1].usage, [{ model: 'gemini-4-carbon-high', in: 10000, out: 150, cache_read: 2000 }])
+  assert.equal(page.items.length, 2)
+
+  // Full rewind clears all projected steps; session row omits usage and model rather than reading stale disk.
+  await rewind({ occurrence: 1, prompts_after: 0 })
+  await until('fully rewound session clears usage', () => row()?.context_tokens === undefined && row()?.output_tokens === undefined)
+  assert.equal(row().context_window, undefined)
+  assert.equal(row().model, undefined)
 })

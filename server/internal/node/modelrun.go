@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/aiwire"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -43,6 +44,9 @@ const (
 // modelRunSlots: at most this many runs at a time on this computer; the others wait within their own time.
 // ponytail: a fixed two, a setting if someone's computer takes more.
 var modelRunSlots = make(chan struct{}, 2)
+
+// An API purpose's request answered by a launcher here; the handler zeroes the params it is handed.
+func init() { nodeRPC(proto.MethodModelRun, (*Node).modelRun) }
 
 // modelRun answers model.run. params are zeroed once read.
 func (n *Node) modelRun(ctx context.Context, params json.RawMessage) (any, error) {
@@ -76,11 +80,17 @@ func (n *Node) modelRun(ctx context.Context, params json.RawMessage) (any, error
 	}
 	agent := n.launcherAgent(ctx, p.Launcher)
 	_, managed := n.managedLauncher(p.Launcher)
-	_, runtimeBacked := n.runtimeLauncherModels(p.Launcher)
-	// Built-in/companion Antigravity runtimes back the local `agy` CLI directly, so runtime-backed `agy` launchers are
-	// allowed; other non-managed runtime launchers (e.g. external runtimes with no local zero-tool CLI contract) are
-	// refused.
-	if (runtimeBacked && !managed && agent != agyAgent) || (agent != "claude" && agent != "codex" && agent != agyAgent) {
+	rt := n.runtimeOf(p.Launcher)
+	builtinAgyBacked := false
+	// Permit runtime-backed execution only for the verified built-in Antigravity companion (which wraps the local `agy`
+	// CLI directly). Refuse all other non-managed runtimes (external agy runtimes, Paseo, DSH, etc.) so model.run
+	// never silently executes on a different local account or unsupported runtime backend.
+	if rt != nil && !managed {
+		if agent != agyAgent || !n.isBuiltinAgyRuntime(rt) {
+			return nil, fmt.Errorf("model.run: %s runs on runtime %s, which can't answer these requests: choose a Claude Code, Codex, or Antigravity launcher", p.Launcher, rt.label())
+		}
+		builtinAgyBacked = true
+	} else if agent != "claude" && agent != "codex" && agent != agyAgent {
 		return nil, fmt.Errorf("model.run: %s runs %s, which can't answer these requests: choose a Claude Code, Codex, or Antigravity launcher", p.Launcher, agent)
 	}
 	if err := validModesFor(agent, "", p.Effort); err != nil {
@@ -98,10 +108,38 @@ func (n *Node) modelRun(ctx context.Context, params json.RawMessage) (any, error
 	case "codex":
 		return n.modelRunCodex(ctx, p, dir, timedOut)
 	case agyAgent:
-		return n.modelRunAgy(ctx, p, dir, runtimeBacked && !managed, timedOut)
+		return n.modelRunAgy(ctx, p, dir, builtinAgyBacked, timedOut)
 	default:
 		return nil, fmt.Errorf("model.run: unsupported agent %q", agent)
 	}
+}
+
+func (n *Node) isBuiltinAgyRuntime(h *runtimeConn) bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	builtin := h.ready && h.daemon == "" && h.builtinAgy && h.hello.Runtime == agyRuntimeID
+	inst := h.hello.Instance
+	h.mu.Unlock()
+	if !builtin {
+		return false
+	}
+	if n.runtimeHost != nil {
+		if cur := n.runtimeHost.builtinAgyInstance(); cur != "" && cur != inst {
+			return false
+		}
+	}
+	return true
+}
+
+func (n *Node) builtinAgyExecutable() string {
+	if n.runtimeHost != nil {
+		if bin := n.runtimeHost.builtinAgyExecutable(); bin != "" {
+			return bin
+		}
+	}
+	return findAgyExecutable()
 }
 
 func writeTempFile(dir, name, text string) (string, error) {
@@ -144,7 +182,11 @@ func (n *Node) modelRunClaude(ctx context.Context, p proto.ModelRunParams, dir s
 	if err != nil {
 		return proto.ModelRunAnswer{}, err
 	}
-	b.WriteString(scriptSettingsFlag(n.claudeSettings(ctx, p.Launcher, ours, dir)))
+	settings, err := n.sourceClaudeSettings(ctx, p.Launcher, dir, n.claudeSettings(ctx, p.Launcher, ours, dir), "", modelhttp.Source{Role: "background"})
+	if err != nil {
+		return proto.ModelRunAnswer{}, err
+	}
+	b.WriteString(scriptSettingsFlag(settings))
 	in, err := writeTempFile(dir, "prompt.md", p.Prompt)
 	if err != nil {
 		return proto.ModelRunAnswer{}, err
@@ -267,7 +309,8 @@ func (n *Node) modelRunCodex(ctx context.Context, p proto.ModelRunParams, dir st
 	if err != nil {
 		return proto.ModelRunAnswer{}, err
 	}
-	cmd := loginShell(ctx, "cd "+scriptPath(dir)+" && "+n.launcherForScript(p.Launcher)+b.String()+" < "+scriptPath(in))
+	cmd := loginShell(ctx, "cd "+scriptPath(dir)+" && "+codexShellWith(n.launcherForScript(p.Launcher)+b.String(), "")+" < "+scriptPath(in))
+	cmd.Env = append(cmd.Environ(), modelSourceEnvironment(modelhttp.Source{Role: "background"}, n.bin)...)
 	killGroupOnCancel(cmd)
 	raw, runErr := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(raw))
@@ -506,7 +549,7 @@ func (n *Node) prepareAgyIsolatedHome(dir string) (string, error) {
 }
 
 // modelRunAgy executes a single isolated turn via `agy --input-format stream-json --output-format stream-json`.
-func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir string, runtimeBacked bool, timedOut error) (proto.ModelRunAnswer, error) {
+func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir string, builtinAgyBacked bool, timedOut error) (proto.ModelRunAnswer, error) {
 	// Write the workspace-scoped zero-tool custom agent definition (system prompt lives in its Markdown body).
 	agentDir := filepath.Join(dir, ".agents", "agents", agyModelRunAgentName)
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {
@@ -542,10 +585,12 @@ func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir stri
 	}
 
 	launcherCmd := n.launcherForScript(p.Launcher)
-	if runtimeBacked {
-		if bin := findAgyExecutable(); bin != "" {
-			launcherCmd = scriptPath(bin)
+	if builtinAgyBacked {
+		bin := n.builtinAgyExecutable()
+		if bin == "" {
+			return proto.ModelRunAnswer{}, fmt.Errorf("model.run: %s CLI executable not found", p.Launcher)
 		}
+		launcherCmd = scriptPath(bin)
 	}
 
 	var b strings.Builder
@@ -578,13 +623,10 @@ func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir stri
 	cmd := loginShell(runCtx, script)
 	killGroupOnCancel(cmd)
 	raw, loggedOutFast, runErr := runWithEarlyAuthDetect(cancelRun, cmd, isAgyInteractiveAuthPrompt)
-	text := strings.TrimSpace(string(raw))
-	if loggedOutFast {
-		return proto.ModelRunAnswer{}, &rpc.Error{Code: proto.CodeModelRunLoggedOut, Message: "model.run: " + p.Launcher + " is not logged in here"}
-	}
 	if ctx.Err() != nil {
 		return proto.ModelRunAnswer{}, timedOut
 	}
+	text := strings.TrimSpace(string(raw))
 	res := parseAgyStreamOutput(text)
 	if res.hasResult && res.status == "SUCCESS" {
 		return proto.ModelRunAnswer{
@@ -592,6 +634,9 @@ func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir stri
 			Model: cmp.Or(res.model, p.Model),
 			Usage: res.usage,
 		}, nil
+	}
+	if loggedOutFast {
+		return proto.ModelRunAnswer{}, &rpc.Error{Code: proto.CodeModelRunLoggedOut, Message: "model.run: " + p.Launcher + " is not logged in here"}
 	}
 	errText := cmp.Or(res.errMsg, text)
 	if isAgyLoggedOut(errText) || isAgyLoggedOut(text) {
@@ -718,8 +763,22 @@ func parseAgyStreamOutput(out string) agyStreamOut {
 	return res
 }
 
+// isAgyStructuredOutputLine reports whether line is a structured JSON object (e.g. NDJSON init, step_update, or result
+// payload from `agy --output-format stream-json`), which must not be matched by interactive OAuth prompt detection.
+func isAgyStructuredOutputLine(line string) bool {
+	trimmed := strings.TrimSpace(textfmt.StripTerminalEscapes(line))
+	if !strings.HasPrefix(trimmed, "{") {
+		return false
+	}
+	var obj map[string]json.RawMessage
+	return json.Unmarshal([]byte(trimmed), &obj) == nil
+}
+
 func isAgyInteractiveAuthPrompt(line string) bool {
-	low := strings.ToLower(line)
+	if isAgyStructuredOutputLine(line) {
+		return false
+	}
+	low := strings.ToLower(textfmt.StripTerminalEscapes(line))
 	return strings.Contains(low, "authentication required") || strings.Contains(low, "waiting for authentication")
 }
 

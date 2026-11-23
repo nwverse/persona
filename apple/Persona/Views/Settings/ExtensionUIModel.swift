@@ -27,20 +27,16 @@ nonisolated extension ExtensionUIPlace: Identifiable {
 }
 
 nonisolated extension ExtensionUIContext {
-    #if os(macOS)
-    /// The frozen Mac app (docs/apple/mac.md) keeps the versions it reported before #827: new features skip it, so the
-    /// hub goes on turning newer components into ones it has always drawn.
-    static let pageVersion = 4
-    static let cardVersion = version
-    #elseif os(iOS)
+    #if os(iOS)
     /// The UI version a whole page of the app draws (`ExtensionPageView`): 8's columns (#9158), 9's gauge rings
-    /// (`ExtensionTiles.swift`) and 10's native graph canvas (`ExtensionGraph.swift`, #9727).
-    static let pageVersion = 10
+    /// (`ExtensionTiles.swift`), 10's native graph canvas (`ExtensionGraph.swift`, #9727) and 11's 3D scene
+    /// (`ExtensionScene.swift`, #12544).
+    static let pageVersion = 11
 
     /// The UI version the app's cards and sections draw: the same components, with code components read-only and a
-    /// graph as a still preview which opens full screen. Widgets, the watch and the system extensions keep `version`
-    /// (Shared, 3): they draw none of it.
-    static let cardVersion = 10
+    /// graph or 3D scene as a still preview which opens full screen. Widgets, the watch and the system extensions keep
+    /// `version` (Shared, 3): they draw none of it.
+    static let cardVersion = 11
     #else
     /// Other older surfaces keep the version they can actually draw.
     static let pageVersion = 8
@@ -107,6 +103,7 @@ nonisolated extension ExtensionComponent {
         case .grid(let c): c.key
         case .carousel(let c): c.key
         case .graph(let c): c.key
+        case .scene(let c): c.key
         case .unknown: nil
         }
     }
@@ -345,7 +342,7 @@ extension APIClient {
         self.depth = depth
         self.deps = deps
         ExtensionUIRegistry.shared.add(self)
-        #if os(iOS) || os(macOS)
+        #if os(iOS)
         // The source subscription pages (#2041) are the manager's, drawn over HTTP only.
         if isPage, plugin != SubscriptionsUI.id, let connection = deps.connection() {
             let stream = ExtensionPageStream(connection: connection, owner: plugin, contribution: ui,

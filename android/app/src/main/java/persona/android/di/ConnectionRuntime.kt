@@ -204,11 +204,15 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) =
             send(session, text, clientMessageId, clearDraft, null, null)
-        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) {
+        override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) =
+            send(session, text, clientMessageId, clearDraft, launcher, model, null)
+        override suspend fun send(
+            session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?, via: String?,
+        ) {
             gate.withLock {
                 val group = groupOf(session.machineId) ?: throw IllegalStateException(AppText.get(R.string.app_error_pair_first))
                 checkNotNull(group.data) { AppText.get(R.string.app_error_pair_first) }.messages.send(
-                    GroupKeys.rawKey(session), text, clientMessageId, clearDraft, launcher, model)
+                    GroupKeys.rawKey(session), text, clientMessageId, clearDraft, launcher, model, via)
             }
         }
         override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) {
@@ -229,6 +233,9 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         }
         override suspend fun retry(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.retry(clientMessageId) ?: false
+        }
+        override suspend fun retryRefused(session: SessionKey, code: String) = gate.withLock {
+            groupOf(session.machineId)?.data?.messages?.retryRefused(GroupKeys.rawKey(session), code) ?: 0
         }
         override suspend fun confirm(clientMessageId: String, delivered: Boolean) = gate.withLock {
             owner(clientMessageId)?.messages?.confirm(clientMessageId, delivered) ?: false
@@ -283,7 +290,7 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         paired.value = false
         app.showHub(null)
         mutableState.value = ConnectionState.Revoked
-        scope.launch { runCatching { dataStore.publish(null) } }
+        scope.launch { val _ = runCatching { dataStore.publish(null) } }
     }
 
     /** Opens every group the registry lists (the first read migrates a single pairing); false when there is none. */

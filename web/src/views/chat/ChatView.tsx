@@ -23,7 +23,6 @@ import { isPinned } from "../../lib/pins";
 import { acknowledgeLaunch } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
-import { REVIEW_FEATURE } from "../../lib/session-review";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, upsertSession, useStore, viewSession } from "../../lib/store";
 import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
@@ -49,6 +48,7 @@ import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import { foldsBackgroundRounds } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
+import { REVIEW_FEATURE } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
@@ -59,7 +59,10 @@ import { scrollBehavior } from "../../ui/stream/motion";
 import { segmentChanges, shiftAbove } from "./offscreen";
 import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
-import { agentCommands } from "../../lib/composer-commands";
+import { agentCommands, openPickerCommand } from "../../lib/composer-commands";
+import { IMAGE_LIMIT_CODE } from "../../lib/api-errors";
+import { COMPACT_FEATURE, compactBody, compactPath } from "../../lib/compaction";
+import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, snapshotTerminalCompaction, waitForAssistantCompaction, watchTerminalCompaction, type OutgoingPayload } from "../../lib/compact-resend";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
 import { PendingCards, TurnCards } from "./Interactions";
 import { splitTurnAsks } from "../../lib/turn-asks";
@@ -139,7 +142,7 @@ import { codedFailure, knownAction, refreshReadiness, type CodedFailure } from "
 import { FALLBACK_UNAVAILABLE, recoveryExhausted } from "../../lib/model-fallback";
 import { BASE } from "../../lib/base";
 import { usageLimitLabel } from "../../lib/usage-limit";
-import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
+import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type DisplayLine, type FeedItem } from "../../lib/feed";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark, sessionMarkName } from "../../ui/AgentMark";
 import { sessionAgentName } from "../../lib/agent-kind";
@@ -168,6 +171,7 @@ const PlanPill = lazy(() => import("./PlanCard").then((m) => ({ default: m.PlanP
 const LazyWrapUpChips = lazy(() => import("../assistant/HandoffCard").then((m) => ({ default: m.WrapUpChips })));
 // a chat that is nowhere (a stale or mistyped link): rare, so its notice and words are a chunk of their own
 const LazyNotFoundNotice = lazy(() => import("./NotFoundNotice").then((m) => ({ default: m.NotFoundNotice })));
+const ContextRestartNotice = lazyPage(() => import("./ContextRestartNotice").then((m) => m.ContextRestartNotice));
 // a start stopped on its tab's shell question, answered from here (#10365): only then
 const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 // only in a conversation that moved between Claude Code and Codex (#5054): its earlier sessions, read above the live one
@@ -181,6 +185,7 @@ const SessionReviewMenuItem = lazyPage(() => import("./SessionReviewMenuItem").t
 const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
 
 const NO_FEED: FeedItem[] = [];
+const NO_DISPLAY_LINES: DisplayLine[] = [];
 // A worker's card as its own conversation shows it (#5180): without the fold that makes it "From worker" on its lead's page.
 // One copy per card object, so a push that leaves the card alone leaves its copy alone too.
 const ownCopies = new WeakMap<Interaction, Interaction>();
@@ -705,6 +710,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const skillManager = useStore((s) => session?.manager ?? s.machines.find((m) => m.id === mid)?.manager) ?? shownManager;
   const skillEnvironment = JSON.stringify([session?.launcher, session?.model_pick, session?.pending_switch, session?.source_kind, assistantLauncher]);
   const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant),
+    repositories: assistant ? skillManager : undefined,
     skills: { manager: skillManager, session: sid, launcher: assistant ? skillLauncher : undefined, environment: skillEnvironment, agent: !assistant },
   }), [session?.cwd, skillManager, draftKey, assistant, sid, skillLauncher, skillEnvironment]);
 
@@ -816,22 +822,41 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [stopGlide]);
   // something came in since the reader left the end: the pill says "New messages"
   const [newSince, setNewSince] = useState(false);
+  const sessionKey = `${mid}/${sid}`;
+  const readingAnchor = useRef<{ session: string; line: string; offset: number } | null>(null);
+  const captureReadingAnchor = useCallback((el: HTMLDivElement | null) => {
+    if (!el || atEnd.current) {
+      readingAnchor.current = null;
+      return;
+    }
+    const v = firstLineInView(el);
+    if (v.line) readingAnchor.current = { session: sessionKey, line: v.line, offset: v.offset };
+  }, [sessionKey]);
   const follow = useCallback((on: boolean) => {
     atEnd.current = on;
     setAway(!on);
     if (on) {
       setNewSince(false);
       landing.current = null;
+      readingAnchor.current = null;
+    } else {
+      captureReadingAnchor(scroller.current);
     }
-  }, []);
+  }, [captureReadingAnchor]);
   const lastTop = useRef(0);
   const dragging = useRef(false);
   const firstLiveSeq = earlier.liveItems[0]?.seq ?? Infinity;
   const liveFront = useRef(firstLiveSeq);
   liveFront.current = firstLiveSeq;
-  const historyScope = `${mid}/${sid}/${tr.history ?? ""}`;
+  const historyScope = `${sessionKey}/${tr.history ?? ""}`;
   const historyScopeNow = useRef(historyScope);
   historyScopeNow.current = historyScope;
+  const settledHistory = useRef<{ session: string; history: string; replaceEpoch: number }>({
+    session: sessionKey,
+    history: tr.history ?? "",
+    replaceEpoch: tr.replaceEpoch ?? 0,
+  });
+  const suppressAutoEarlier = useRef(false);
   type HistoryScrollAnchor = {
     el: HTMLDivElement; scope: string; front: ReturnType<typeof visibleHistoryFront>;
     h: number; top: number; readers: number; pages: Set<symbol>;
@@ -877,6 +902,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   useEffect(() => {
     lastTop.current = 0;
     before.current = null;
+    readingAnchor.current = null;
+    suppressAutoEarlier.current = false;
     if (kept.current.back) {
       if (kept.current.place) follow(false); // still waiting for its line: not pulled to the end meanwhile
       return;
@@ -907,9 +934,43 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (!el) return;
     const { projectedLivePage, projectedOtherPage } = earlier;
     projectedPages.current = [projectedLivePage, projectedOtherPage];
+    const prevHistory = settledHistory.current;
+    const nextHistory = tr.history ?? "";
+    const nextReplaceEpoch = tr.replaceEpoch ?? 0;
+    const historyRewritten = prevHistory.session === sessionKey && (
+      (prevHistory.history !== "" && nextHistory !== "" && prevHistory.history !== nextHistory) ||
+      nextReplaceEpoch !== prevHistory.replaceEpoch
+    );
+    settledHistory.current = { session: sessionKey, history: nextHistory, replaceEpoch: nextReplaceEpoch };
     let saved = before.current;
     if (saved && (saved.el !== el || saved.scope !== historyScope)) {
       before.current = saved = null;
+    }
+    if (historyRewritten) {
+      before.current = saved = null;
+      suppressAutoEarlier.current = true;
+      if (atEnd.current || first.current) {
+        el.scrollTop = el.scrollHeight;
+        lastTop.current = el.scrollTop;
+        if (tr.items.length) first.current = false;
+      } else {
+        const savedAnchor = readingAnchor.current?.session === sessionKey ? readingAnchor.current : null;
+        const escapedLine = savedAnchor ? (typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(savedAnchor.line) : savedAnchor.line.replace(/["\\]/g, "\\$&")) : "";
+        const anchorRow = savedAnchor && el.querySelector(`[data-line="${escapedLine}"]`)?.firstElementChild;
+        if (savedAnchor && anchorRow) {
+          el.scrollTop += anchorRow.getBoundingClientRect().top - el.getBoundingClientRect().top - savedAnchor.offset;
+          lastTop.current = el.scrollTop;
+          land(anchorRow, savedAnchor.offset);
+        } else {
+          // The replacement page no longer contains the previous anchor (e.g. shortened to latest turns or rewound).
+          // Settle cleanly at the end so a browser-clamped scrollTop (< 300) cannot trigger cascading upward paging.
+          follow(true);
+          el.scrollTop = el.scrollHeight;
+          lastTop.current = el.scrollTop;
+          if (tr.items.length) first.current = false;
+        }
+      }
+      return;
     }
     if (saved) {
       const front = visibleHistoryFront(el, firstLiveSeq);
@@ -941,6 +1002,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (atEnd.current || first.current) {
       el.scrollTop = el.scrollHeight;
       if (tr.items.length) first.current = false;
+    } else if (!saved && (!readingAnchor.current || readingAnchor.current.session !== sessionKey)) {
+      captureReadingAnchor(el);
     }
     // Live updates below the viewport can change the height while a history page is held.
     // Record that change without spending the anchor needed for the eventual prepend.
@@ -948,7 +1011,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       saved.h = el.scrollHeight;
       saved.top = el.scrollTop;
     }
-  }, [tr.items, earlier.stretches, earlier.projectedLivePage, earlier.projectedOtherPage, pending, outbox, tr.streaming, interactions.length, historyScope, firstLiveSeq]);
+  }, [tr.items, earlier.stretches, earlier.projectedLivePage, earlier.projectedOtherPage, pending, outbox, tr.streaming, interactions.length, historyScope, firstLiveSeq, sessionKey, tr.history, tr.replaceEpoch, follow, land, captureReadingAnchor]);
 
   // A card that unfolds (#1124): following holds off for UNFOLD_PAUSE while the clicked row stays where it was on
   // screen (anchoredScroll), then picks up again if the end is still near; a long card opened at the end stays put to
@@ -966,6 +1029,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     };
     const readerMoves = () => {
       moved = true;
+      suppressAutoEarlier.current = false;
       drop();
       stopGlide();
       landing.current = null;
@@ -977,6 +1041,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       clearTimeout(resume);
       const was = atEnd.current;
       atEnd.current = false;
+      captureReadingAnchor(sc);
       moved = false;
       // A disclosure below its contents anchors the card, not the button that moves down when it opens.
       const row = el.closest("[data-disclosure-anchor]") ?? el;
@@ -997,7 +1062,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       sc.removeEventListener("click", onClick, true);
       for (const ev of ["wheel", "touchstart", "keydown", "pointerdown"]) sc.removeEventListener(ev, readerMoves);
     };
-  }, [follow, scrollEl, stopGlide]);
+  }, [follow, scrollEl, stopGlide, captureReadingAnchor]);
 
   // content that grows by itself (images loading, a live group's steps) keeps the end in view; a held row stays put.
   // A ResizeObserver runs after layout and before paint, so the offset moves in the same frame as the height. The view
@@ -1105,7 +1170,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
 
   const loadEarlierNearTop = () => {
     const el = scroller.current;
-    if (!el || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current) return;
+    if (!el || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current || suppressAutoEarlier.current) return;
     void loadWithScrollAnchor(earlier.loadEarlier);
   };
 
@@ -1117,10 +1182,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     const delta = el.scrollTop - lastTop.current;
     lastTop.current = el.scrollTop;
+    if (delta < 0) suppressAutoEarlier.current = false;
     holdLanding(600);
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
     } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
+    captureReadingAnchor(el);
     if (!first.current && !atEnd.current && el.scrollTop < 300) revealLoadedInputs();
     loadEarlierNearTop();
   };
@@ -1141,6 +1208,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   };
 
   // ── sending ──
+  // Recent delivered payloads (keyed by client_msg_id) let compact-and-resend replay the exact text + image bytes;
+  // internalCompactIds tracks only `/compact` messages sent by that recovery flow (not user slash commands).
+  const deliveredPayloads = useRef(new Map<string, OutgoingPayload>());
+  const internalCompactIds = useRef(new Set<string>());
   // true: it went, or it stays in the chat as a failed bubble (`failed`); false: it never went and nothing shows it
   const deliver = useCallback(
     async (out: Outgoing, id: string, clearDraft?: string, attempt = 0, keepInBox = false): Promise<boolean> => {
@@ -1153,6 +1224,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       if (row && !unknownGate.current.gone ? !sessionCan(row, "send") : !unknownGate.current.isMain) {
         toast(isStoppedAgent(row) ? t("chat-chatview.stopped_line") : sourceSubtitle(session) || t("chat-chatview.session_unavailable"), "error");
         return false;
+      }
+      if (!internalCompactIds.current.has(id)) {
+        const recent = deliveredPayloads.current;
+        if (recent.size >= 20) recent.delete(recent.keys().next().value!);
+        recent.set(id, { text: out.text, images: out.images.map((img) => ({ mime: img.mime, data: img.data })) });
       }
       const flight = beginMessageSend(mid, sid, id, out.text);
       // a sending bubble shows picked contexts as quote cards, like the transcript will (not the raw tags)
@@ -1258,7 +1334,25 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     }
   }
 
-  const onSend = async (out: Outgoing): Promise<boolean> => {
+  const compactResendCtl = useRef<AbortController | null>(null);
+  const [compactingToResend, setCompactingToResend] = useState(false);
+  const itemsListeners = useRef(new Set<() => void>());
+  useEffect(() => {
+    itemsListeners.current.forEach((fn) => fn());
+  }, [tr.items]);
+  const cancelCompactResend = useCallback(() => {
+    if (!compactResendCtl.current) return;
+    compactResendCtl.current.abort();
+    compactResendCtl.current = null;
+    setCompactingToResend(false);
+  }, []);
+  useEffect(() => () => {
+    cancelCompactResend();
+    deliveredPayloads.current.clear();
+    internalCompactIds.current.clear();
+  }, [mid, sid, cancelCompactResend]);
+
+  const sendMessage = async (out: Outgoing): Promise<boolean> => {
     // /clear in the main conversation clears its context in place, it is not words for Persona (#5095); an edit of the
     // last message stays an edit (its rewind already ran)
     if (clears && !out.edit && isClearCommand(out.text, out.images.length)) return clearMainContext(sid);
@@ -1288,10 +1382,27 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     }
     return deliver(out, uuid(), out.edit?.clearDraft, 0, Boolean(out.edit));
   };
+  const sendMessageNow = useRef(sendMessage);
+  sendMessageNow.current = sendMessage;
+
+  const onSend = async (out: Outgoing): Promise<boolean> => {
+    cancelCompactResend();
+    return sendMessage(out);
+  };
   // the composer is memoized: one function, running the latest onSend
   const sendNow = useRef(onSend);
   sendNow.current = onSend;
   const send = useCallback((out: Outgoing) => sendNow.current(out), []);
+  // Keep one-click /compact aligned with the composer's send preconditions (no active task route, no setup gate block).
+  const hasTaskRoute = useFeed((s) => Boolean(s.routes[sid]));
+  const compactSession = useCallback(async (): Promise<boolean> => {
+    if (blockedRef.current) {
+      blockedRef.current.onClick?.();
+      return false;
+    }
+    if (getFeedState().routes[sid]) return false;
+    return send({ text: "/compact", images: [] });
+  }, [send, sid]);
   // The assistant's tasks (docs/assistant/unified-entry.md): the conversation's feed, and the main one's "Today" card.
   const taskFeed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
   useEffect(() => {
@@ -1439,6 +1550,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const chatRows: ChatRowWithModes[] = useMemo(
     () => (modes?.scope === `${mid}/${sid}` ? modes.kit.withModeChanges(dayRows, modes.changes, tr.hasMore || earlier.stretches.length > 0 ? earlier.liveItems : undefined) : dayRows),
     [modes, mid, sid, dayRows, tr.hasMore, earlier.stretches.length, earlier.liveItems],
+  );
+  const feedFrom = useMemo(() => (assistant && tr.hasMore ? loadedFrom(tr.items) : undefined), [assistant, tr.hasMore, tr.items]);
+  const assistantLines = useMemo(
+    () => (assistant ? displayLines(lines, feed, feedFrom) : NO_DISPLAY_LINES),
+    [assistant, lines, feed, feedFrom],
   );
   // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
   // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
@@ -1666,6 +1782,24 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [linkedChild, session, tr.loading, tr.loadingEarlier, tr.hasMore, detail.loading, kids.loaded, childRows, places, mid, sid, jump]);
   // what runs its subagents: its own agent (a Paseo provider's subagent cards say "Grok", #8142)
   const harness = session && !assistant ? sessionAgentName(session) : undefined;
+  // Streaming makes the turn live again, but an Agent's existing wait / subagent bar stays as it was while the answer
+  // streams. Only the new command line is withheld there; in a quiet turn the four-kind order decides the bar.
+  const wait = streaming && !outgoing && !awaiting ? backgroundWaitLine(session) : backgroundState?.kind === "waiting" ? backgroundState.line : null;
+  const subtasks = streaming ? waitingOnSubagents(session, subagents) && !outgoing && !awaiting : backgroundState?.kind === "subtasks";
+  const command = backgroundState?.kind === "command" ? backgroundState.line : null;
+  // In a Persona conversation the message stream already carries the turn's state for its whole life — the sending /
+  // preparing feedback while the message is on its way, then the live work line ("Working…", spinner and clock) once the
+  // hub accepts it — so the dock never repeats the foreground turn (#6230). The dock bar stays only for work that outlives
+  // the turn (a background workflow, subagent, wait or working command: `backgroundOnly`, where the stream shows only
+  // quiet fold rows) and, unchanged, for Agent chats, whose dock keeps the full cindy status bar. Gating on the foreground/background
+  // phase (not on the live line being mounted) keeps the bar out even while a transcript loads or a state push is in flight.
+  // A Persona chat on either route — the Persona tab's prop, or on the generic /s route the session's own assistant
+  // flag — so the dock never repeats its foreground turn (#6230). Background work keeps the bar either way.
+  const dockBarShown = !(assistant || session?.assistant) || backgroundOnly;
+  const runningWorking = state === "working" || awaiting || streaming;
+  // When the dock bar renders this foreground turn's own status and elapsed timer, suppress the duplicate in-stream
+  // elapsed timer (and empty non-expandable live row) so only one Working… timer ticks on screen (#12380).
+  const dockTurnClock = Boolean(session && dockBarShown && runningWorking && !backgroundOnly && !wait && !subtasks && !command);
   const ctx = useMemo<ChatContextValue>(
     () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, harness, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin, opened_by: openingBy, manager: openingManager } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded }),
     [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, harness, openingId, openingOrigin, openingBy, openingManager, closeoutSegment, places, embedded],
@@ -1847,6 +1981,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const canRetry =
     lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") &&
     session?.turn_error_code !== FALLBACK_UNAVAILABLE && session?.turn_error_code !== "compaction_sealed" &&
+    session?.turn_error_code !== IMAGE_LIMIT_CODE &&
     session?.turn_error_kind !== "unrecoverable" && !gate.blocked;
   // An exhausted recovery chain (#7824): the last error card names the cause and reset time, and Retry stays offered
   // even for a safeguards-class error the parser calls non-transient. The marker is session-level, so only the last
@@ -1980,23 +2115,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   ) : null;
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);
-  // Streaming makes the turn live again, but an Agent's existing wait / subagent bar stays as it was while the answer
-  // streams. Only the new command line is withheld there; in a quiet turn the four-kind order decides the bar.
-  const wait = streaming && !outgoing && !awaiting ? backgroundWaitLine(session) : backgroundState?.kind === "waiting" ? backgroundState.line : null;
-  const subtasks = streaming ? waitingOnSubagents(session, subagents) && !outgoing && !awaiting : backgroundState?.kind === "subtasks";
-  const command = backgroundState?.kind === "command" ? backgroundState.line : null;
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
   const done = turnDone(state, session, lastLine, tr.items);
-  // In a Persona conversation the message stream already carries the turn's state for its whole life — the sending /
-  // preparing feedback while the message is on its way, then the live work line ("Working…", spinner and clock) once the
-  // hub accepts it — so the dock never repeats the foreground turn (#6230). The dock bar stays only for work that outlives
-  // the turn (a background workflow, subagent, wait or working command: `backgroundOnly`, where the stream shows only
-  // quiet fold rows) and, unchanged, for Agent chats, whose dock keeps the full cindy status bar. Gating on the foreground/background
-  // phase (not on the live line being mounted) keeps the bar out even while a transcript loads or a state push is in flight.
-  // A Persona chat on either route — the Persona tab's prop, or on the generic /s route the session's own assistant
-  // flag — so the dock never repeats its foreground turn (#6230). Background work keeps the bar either way.
-  const dockBarShown = !(assistant || session?.assistant) || backgroundOnly;
-  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting || streaming} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
+  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
@@ -2100,6 +2221,109 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     : undefined, [overviewId, overviewOpen, showOverview]);
   // Its background detail takes the side panel's space, rather than squeezing the mounted overview and losing its place.
   const overviewDetail = panelDrawn && backgroundPanelOf(panel, mid, sid)?.from === "overview";
+  const isAssistant = Boolean(assistant || session?.assistant);
+  const composerDisabled = Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"));
+  const composerBlocked = gate.blocked ?? noRowBlock;
+  const agentCompactBlocked = Boolean(composerDisabled || composerBlocked || hasTaskRoute);
+  // Assistant compaction calls the hub HTTP endpoint directly, so composer send disables (e.g. offlineLine) do not gate it.
+  const compactBlocked = isAssistant ? Boolean(gate.blocked) : agentCompactBlocked;
+  const hubSupportsAssistantCompact = useStore((s) => hubHas(s.features, COMPACT_FEATURE));
+  const compactResend = compactResendSupport(session, {
+    assistant,
+    hubSupportsAssistantCompact,
+    blocked: Boolean(gate.blocked),
+    offline: Boolean(offlineLine),
+    composerDisabled,
+    routed: hasTaskRoute,
+    working,
+    outgoing: outgoing > 0,
+    stopped: Boolean(stoppedLine),
+  });
+  const isBannerImageLimit = Boolean(bannerError && isImageLimitError(bannerError.info.code, session?.turn_error_code));
+  const failedTurnCandidate = useMemo(
+    () =>
+      isBannerImageLimit && bannerError
+        ? failedTurnToResend(lines, bannerError.id, {
+            internalCompactIds: internalCompactIds.current,
+            captured: deliveredPayloads.current,
+          })
+        : null,
+    [isBannerImageLimit, bannerError, lines],
+  );
+  const canOfferCompactResend = Boolean(
+    isBannerImageLimit && compactResend.supported && canResendFailedTurn(failedTurnCandidate),
+  );
+  const compactAndResend = useCallback(async () => {
+    if (!bannerError || !session || !compactResend.supported || !compactResend.mode || compactResendCtl.current) return;
+    const candidate = failedTurnToResend(linesNow.current, bannerError.id, {
+      internalCompactIds: internalCompactIds.current,
+      captured: deliveredPayloads.current,
+    });
+    if (!canResendFailedTurn(candidate)) return;
+    const key = tailKey;
+    const ctl = new AbortController();
+    compactResendCtl.current = ctl;
+    setCompactingToResend(true);
+    try {
+      // Capture/recover full original payload (raw text + contexts/files + image bytes) BEFORE compaction starts.
+      const resolved = await resolveFailedTurnPayload(candidate, mid, sid, undefined, ctl.signal);
+      if (ctl.signal.aborted) return;
+      if (!resolved.ok) {
+        toast(t("chat-lines.compact_resend_unrecoverable"), "error");
+        return;
+      }
+      if (compactResend.mode === "assistant") {
+        const before = getSession(mid, sid)?.compaction;
+        try {
+          await api(compactPath(sid), { method: "POST", json: compactBody(mid) });
+          window.dispatchEvent(new CustomEvent("persona:compact-requested", { detail: { mid, sid } }));
+        } catch (e) {
+          toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(e) }), "error");
+          return;
+        }
+        const outcome = await waitForAssistantCompaction(mid, sid, before, ctl.signal);
+        if (ctl.signal.aborted || outcome !== "done") return;
+      } else {
+        const compactId = uuid();
+        internalCompactIds.current.add(compactId);
+        const snapshot = snapshotTerminalCompaction(items.current, compactId);
+        const watcher = watchTerminalCompaction(
+          mid,
+          sid,
+          snapshot,
+          () => items.current,
+          (fn) => {
+            itemsListeners.current.add(fn);
+            return () => itemsListeners.current.delete(fn);
+          },
+          ctl.signal,
+        );
+        const sent = await deliver({ text: "/compact", images: [] }, compactId);
+        if (!sent || ctl.signal.aborted) {
+          watcher.cancel();
+          return;
+        }
+        watcher.markDelivered();
+        const outcome = await watcher.promise;
+        if (ctl.signal.aborted || outcome !== "done") return;
+      }
+      // Local composer picker commands (/model, /permissions) open their picker without marking errorRetried or posting.
+      if (openPickerCommand(draftKey, resolved.payload.text, resolved.payload.images.length)) {
+        backToComposer();
+        return;
+      }
+      if (key) setErrorRetried(key);
+      backToComposer();
+      const went = await sendMessageNow.current(resolved.payload);
+      if (!went && key) setErrorRetried((k) => (k === key ? undefined : k));
+    } finally {
+      if (compactResendCtl.current === ctl) {
+        compactResendCtl.current = null;
+        setCompactingToResend(false);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- backToComposer reads stable refs and fine media state
+  }, [bannerError, session, compactResend.supported, compactResend.mode, tailKey, mid, sid, draftKey, deliver]);
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
@@ -2132,7 +2356,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
       {!embedded && banner}
-      {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack from={cameFrom} onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
+      {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
       {archivedHere ? <ArchivedNotice session={archivedHere} /> : notFound ? <Suspense fallback={null}><LazyNotFoundNotice assistant={Boolean(assistant)} retry={retryDetail} /></Suspense> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
 
@@ -2195,7 +2419,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               <CardConversation.Provider value={assistant ? sid : ""}>
               {earlier.host && <Suspense fallback={null}><EarlierStretches {...earlier.host} offscreen={offscreen} /></Suspense>}
               {assistant
-                ? displayLines(lines, feed, tr.hasMore ? loadedFrom(tr.items) : undefined).flatMap((d) => [
+                ? assistantLines.flatMap((d) => [
                     ...failedBefore(d.kind === "chat" ? d.id : ""),
                     d.kind === "feed" ? (
                       <FeedLineView key={d.id} item={d.item} simplified />
@@ -2213,11 +2437,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         expandFold={tr.expandFold}
                         launcher={session?.launcher}
                         fix={d.line.id === lastLine?.id ? turnFix : undefined}
+                        turnErrorCode={d.line.id === lastLine?.id ? session?.turn_error_code : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         exhausted={d.line.kind === "apiError" && d.line.id === lastLine?.id ? exhausted : undefined}
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
                         busy={d.line.id === busySegment || undefined}
+                        dockTurnClock={("live" in d.line && d.line.live && dockTurnClock) || undefined}
                       />
                     ),
                   ])
@@ -2236,11 +2462,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   sid={sid}
                   streaming={wordsFor(row.line)}
                   expandFold={tr.expandFold}
+                  turnErrorCode={row.line.id === lastLine?.id ? session?.turn_error_code : undefined}
                   limit={row.line.kind === "apiError" && row.line.id === limitOn ? limitLine : undefined}
                   exhausted={row.line.kind === "apiError" && row.line.id === lastLine?.id ? exhausted : undefined}
                   assistant={assistant}
                   offscreen={offscreen(row.line)}
                   busy={row.line.id === busySegment || undefined}
+                  dockTurnClock={("live" in row.line && row.line.live && dockTurnClock) || undefined}
                 />
               )])}
               </CardConversation.Provider>
@@ -2322,6 +2550,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {pendingCards}
         {!assistant && session?.model_fallback && <Suspense fallback={null}><ModelFallbackCard session={session} headless={false} /></Suspense>}
         {assistant && session && <CompactionStrip session={session} />}
+        {session?.context_restart_recommended && !archivedHere && (
+          <Suspense fallback={null}>
+            <ContextRestartNotice key={JSON.stringify([session.manager, mid, sid])} session={session} assistant={assistant} isMain={isMain} />
+          </Suspense>
+        )}
         {/* the failed bubble above has the one Retry; the card says what to set up first */}
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
@@ -2356,8 +2589,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             launcher={session?.launcher}
             exhausted={exhausted}
             fix={turnFix}
+            turnErrorCode={session?.turn_error_code}
             onRetry={canRetry ? () => void retryError() : undefined}
             onEditLastMessage={onEditLastMessage}
+            onCompactAndResend={canOfferCompactResend ? () => void compactAndResend() : undefined}
+            compactingToResend={compactingToResend || Boolean(isAssistant && session?.compaction?.state === "running")}
             onDismiss={dismissBanner}
           />
         )}
@@ -2381,12 +2617,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           draftKey={draftKey}
           placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
+          agent={session?.agent}
           uploadDest={session?.space === "health" ? "health" : undefined}
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
           onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || (session.agent === "claude" && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
-          disabled={Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"))}
+          disabled={composerDisabled}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
           loadingDraft={editingLast}
@@ -2400,7 +2637,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           autoFocus
           carryDraft={Boolean(assistant)}
           onFocusChange={setTyping}
-          blocked={gate.blocked ?? noRowBlock}
+          blocked={composerBlocked}
           leading={leading}
           trailing={trailing}
           planMode={planMode}
@@ -2409,13 +2646,17 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         />
         )}
         {!stoppedLine && session && (
-          assistant
-            ? sourceSubtitle(session) && <div data-composer-usage className="px-2 pt-0.5"><ComposerSource session={session} assistant /></div>
-            : (
-              <Suspense fallback={null}>
-                <AgentStatusLine key={draftKey} session={session} source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined} />
-              </Suspense>
-            )
+          <Suspense fallback={null}>
+            <AgentStatusLine
+              key={draftKey}
+              session={session}
+              assistant={isAssistant}
+              items={earlier.liveItems}
+              compactBlocked={compactBlocked}
+              onCompact={isAssistant || agentCompactBlocked ? undefined : compactSession}
+              source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined}
+            />
+          </Suspense>
         )}
         </div>
       </div>

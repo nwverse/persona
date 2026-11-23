@@ -161,7 +161,9 @@ describe("where a link opens", () => {
       openLink(`${hub}/s/m1/abc-1`);
       openLink(`${hub}/todos?id=todo_1`);
       expect(getPanel()).toBeNull();
-      expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }], [{ name: "todos", id: "todo_1" }]]);
+      // away from a Persona conversation (this mock's routeAt knows no page) a link's page names nowhere it came from;
+      // from one it names the conversation (lib/handoff.ts openLinkPage, #13164: lib/handoff.test.ts)
+      expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }, false, null], [{ name: "todos", id: "todo_1" }, false, null]]);
     } finally {
       closePanel();
       vi.unstubAllGlobals();
@@ -184,7 +186,7 @@ describe("where a link opens", () => {
         // a task the store does not know yet: its to-do's page (with an Agent on it, that Agent's page; lib/handoff.test.ts)
         openLink(`${hub}/todos?id=todo_1`);
         expect(getPanel()).toBeNull();
-        expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }], [{ name: "todos", id: "todo_1" }]]);
+        expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }, false, null], [{ name: "todos", id: "todo_1" }, false, null]]);
       }
       // a conversation moves there on any screen
       narrow.value = false;

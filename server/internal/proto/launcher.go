@@ -34,6 +34,8 @@ type Launcher struct {
 	PermissionModes PermissionModeSet `json:"permission_modes,omitempty"`
 	// Assistant: a runtime's launcher that may run the Persona assistant (docs/integrations/runtimes.md "Assistant"), whatever its agent.
 	Assistant bool `json:"assistant,omitempty"`
+	// SupervisionPolicy is an explicitly verified runtime instruction channel, independent of Assistant.
+	SupervisionPolicy bool `json:"supervision_policy,omitempty"`
 	// External is a sanitized, machine-local adapter advertisement. It grants no execution authority.
 	External *ExternalLauncher `json:"external,omitempty"`
 	// AssistantFor: on an Assistant launcher, the Agent launcher of this computer it runs the assistant for, as the
@@ -53,6 +55,9 @@ type Launcher struct {
 	// Pi: a Persona-managed provider pi can use on this computer too (ManagedLauncher.PiAPI, docs/integrations/pi.md
 	// "Persona's model providers").
 	Pi bool `json:"pi,omitempty"`
+	// BuiltinCompanion: this runtime launcher is backed by the node's own built-in Antigravity companion (wrapping the
+	// local `agy` CLI), not an external runtime. Set only by the node when the verified built-in companion registers.
+	BuiltinCompanion bool `json:"builtin_companion,omitempty"`
 }
 
 // StartInstead is what a new session's start asked for and does not run with, as an engine runtime that runs only its

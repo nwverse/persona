@@ -139,7 +139,8 @@ func (n *Node) outsideSource(c claudeProc) string {
 func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePanes map[string]bool) []proto.Session {
 	var out []proto.Session
 	listed := map[string]bool{}
-	var desktop *claudeDesktopIndex // read once, when a desktop session rests
+	var desktop *claudeDesktopIndex // read once, when a desktop session is listed
+	projects := map[string]string{}
 	for _, c := range procs {
 		id := c.SessionID
 		if seen[id] || listed[id] {
@@ -163,13 +164,13 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		if !ok {
 			status = proto.StatusUnknown
 		}
-		if status == proto.StatusIdle && source == proto.SourceClaudeDesktop {
-			// Its last turn ended while nobody looked: Unread until it is seen (claudedesktop_unread.go).
+		if source == proto.SourceClaudeDesktop {
 			if desktop == nil {
 				d := readClaudeDesktopIndex(n.home)
 				desktop = &d
 			}
-			if n.desktopTurnUnread(id, *desktop) {
+			// Its last turn ended while nobody looked: Unread until it is seen (claudedesktop_unread.go).
+			if status == proto.StatusIdle && n.desktopTurnUnread(id, *desktop) {
 				status = proto.StatusDone
 			}
 		}
@@ -179,11 +180,14 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		}
 		s.Capabilities, s.ReadOnlyReason = outsideCapabilities(c)
 		if s.Capabilities != nil && s.Capabilities.Send && n.ccPluginInput(id, c.pid) {
-			s.Capabilities.PluginInput = true // the owner's messages go in as their input while it rests (ccplugin.go)
+			s.Capabilities.PluginInput = true // the owner's messages go in as their input (ccplugin.go)
 			if n.ccPluginSettingsCapable(id, c.pid) {
 				s.Capabilities.Model = proto.Bool(true)
 				s.Efforts = slices.Clone(proto.EffortLevels)
 			}
+		}
+		if s.Capabilities != nil && c.Status == "busy" && n.ccPlugins.interruptCapable(id, c.pid) {
+			s.Capabilities.Interrupt = true
 		}
 		// A claude in a tmux pane says where it runs ("tmux":"orc:@11.%11") and no hooks of Persona's run there: the
 		// pane's screen is what its approval shows on, so it gets that screen and the keys into it (#2562).
@@ -197,6 +201,7 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			s.Capabilities.PluginInput = false // this pane, not the plugin, carries the owner's input
 			s.Capabilities.Model = proto.Bool(true)
 			s.Capabilities.Modes = proto.CanModes(true)
+			s.Capabilities.QueueEdit, s.Capabilities.QueueSendNow = proto.Bool(true), proto.Bool(true) // its queue's keys go here
 			s.Efforts = slices.Clone(proto.EffortLevels)
 			s.ReadOnlyReason = ""
 			livePanes[pane] = true // its dialog read is kept while the claude lives (forgetDialogs)
@@ -245,6 +250,9 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		s.BackgroundWaiting = n.backgroundWaits(&s)
 		s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 		s.Subagents = n.subagents(id)
+		if source == proto.SourceClaudeDesktop {
+			n.decorateClaudeDesktop(&s, *desktop, projects)
+		}
 		n.decorate(&s)
 		out = append(out, s)
 	}
@@ -253,19 +261,23 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 
 // outsideCapabilities: read always; send when its peer inbox is one the node can use, with a reason when not. Never
 // modes: the peer inbox carries messages only, and the session has no pane to drive the TUI's pickers in (setModes).
+// Nor the queue's edit or send-now: Claude Code's queue is on its own screen, and both are keys only a pane takes
+// (queue.go); the apps would otherwise offer them to any Claude Code (#12789).
 func outsideCapabilities(c claudeProc) (*proto.SessionCapabilities, string) {
+	caps := &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false), QueueEdit: proto.Bool(false), QueueSendNow: proto.Bool(false)}
 	p, has := peerOf(c)
 	switch {
 	case has && peerReachable(p):
+		caps.Send = true
 		// A turn it runs, or a question it waits on, stops at a message of priority now (interruptOutside).
-		stoppable := c.Status == "busy" || c.Status == "waiting"
-		return &proto.SessionCapabilities{Read: true, Send: true, Interrupt: stoppable, Modes: proto.CanModes(false)}, ""
+		caps.Interrupt = c.Status == "busy" || c.Status == "waiting"
+		return caps, ""
 	case c.Kind == "bg":
-		return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, claudeBgReadOnly
+		return caps, claudeBgReadOnly
 	case !has:
-		return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, proto.ReadOnlyClaudeNoInbox
+		return caps, proto.ReadOnlyClaudeNoInbox
 	}
-	return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, proto.ReadOnlyClaudeInbox
+	return caps, proto.ReadOnlyClaudeInbox
 }
 
 // outsidePane is the tmux pane an outside claude runs in, "" when it runs in none (#2562): Claude Code writes the pane
@@ -364,11 +376,21 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 			}
 		}
 	}
-	// The owner's own message to a session at rest goes in as their input through Persona's plugin when the session has
-	// it (ccplugin.go); otherwise, and when the plugin does not take it, through the inbox, which the answer says.
+	// The owner's own message goes in as their input through Persona's plugin when the session has it (ccplugin.go),
+	// whether idle, queued behind a running turn or behind a dialog; otherwise, and when the plugin does not take it,
+	// through the inbox.
 	if owner := ownerDeliveryOf(ctx); owner != nil && forced == "" && priority == peerNext {
 		if ok, why := n.ccPluginSend(ctx, c, id, text); ok {
 			log.Printf("send %s: claude %d (%s) took it as the user's input through Persona's plugin", id, c.pid, c.Entrypoint)
+			if c.Status == "busy" || c.Status == "waiting" {
+				markSendQueued(ctx) // it runs when the turn ends
+			}
+			// Behind a permission prompt or a plan to approve, it runs only once that is answered at the computer.
+			if now, ok := n.outsideClaude(id); ok && claudeBgStatus[now.Status] == proto.StatusBlocked {
+				if w, ok := ctx.Value(computerWaitKey{}).(*bool); ok {
+					*w = true
+				}
+			}
 			owner.as, owner.reason = deliveredUserInput, ""
 			return true, nil
 		} else {
@@ -467,8 +489,17 @@ func peerSessionModeAt(ctx context.Context, n *Node, c claudeProc, id string) st
 				path, newest = m, st
 			}
 		}
+		var m quickMeta
 		if newest != nil {
-			mode = n.metaNow(path, newest).mode
+			m = n.metaNow(path, newest)
+		}
+		mode = m.mode
+		if c.pid > 0 && c.StartedAt > 0 && (mode == "" || (!m.modeAt.IsZero() && m.modeAt.UnixMilli() < c.StartedAt)) {
+			if args, err := processArgv(c.pid); err == nil {
+				if argMode := argsPermissionMode(args); argMode != "" {
+					mode = argMode
+				}
+			}
 		}
 	}
 	return mode
@@ -500,6 +531,9 @@ func (n *Node) interruptOutside(ctx context.Context, id string) (handled bool, e
 	c, ok := n.outsideClaude(id)
 	if !ok || outsidePane(c) != "" {
 		return false, nil
+	}
+	if ownerDeliveryOf(ctx) != nil && c.Status == "busy" && n.ccPluginInterrupt(ctx, c, id) {
+		return true, nil
 	}
 	p, has := peerOf(c)
 	if !has {
@@ -618,17 +652,18 @@ func (n *Node) enginePaneRefs(env map[string]string) []string {
 	add(host.Orca, env[orcaLegacyPaneEnv])
 	add(host.Botmux, env[botmuxPaneEnv])
 	add(host.Tern, env[ternPaneEnv])
+	add(host.Rex, env[rexPaneEnv])
 	return out
 }
 
 // enginePaneEnvs are the variables Persona's engines set in their panes' processes.
 // herdrSessionEnv and herdrSocketEnv come along to tell which herdr server's pane HERDR_PANE_ID is.
 var enginePaneEnvs = []string{herdrPaneEnv, herdrSessionEnv, herdrSocketEnv, herdrCorePaneEnv, orcaPaneEnv, orcaLegacyPaneEnv,
-	botmuxPaneEnv, ternPaneEnv}
+	botmuxPaneEnv, ternPaneEnv, rexPaneEnv}
 
 // tmuxEnv is tmux's own variable in a pane's processes: "<socket>,<server pid>,<session index>". Its socket names the
 // server the pane belongs to, which a pane id alone does not (tmuxHost).
 const tmuxEnv = "TMUX"
 
 // paneEnvKeys are the variables read from a process's environment: the engines' pane variables, and the tmux server.
-var paneEnvKeys = append(append([]string{}, enginePaneEnvs...), tmuxEnv)
+var paneEnvKeys = append(append([]string{}, enginePaneEnvs...), tmuxEnv, "CODEX_THREAD_ID")

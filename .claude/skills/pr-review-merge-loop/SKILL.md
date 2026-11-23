@@ -89,12 +89,14 @@ files into a private runtime directory and replace every placeholder; restrict t
   prompt echoes, other sessions, additional prose and duplicate marked results are rejected. The response must still
   match the watcher's JSON schema and changed-line validation; transcript text is transport, never approval by itself.
   Each review gets a fresh session ID and is never resumed into another PR. If Herdr's five-second startup observation
-  stalls, the helper checks the same pane before failing: working or blocked states retain the accepted prompt and
-  wait for that session's marked result instead of resubmitting it. An idle or done state is accepted only after the
-  current invocation's transcript proves a valid marked result. Only the first status observation after a stall may
-  tolerate a blocked state; the allowance is consumed after that poll regardless of status, and any later blocked state
-  fails as an unexpected interaction. Otherwise the prompt is failed as unstarted; startup waiting does not weaken the
-  total review deadline or the slot bound. The visible launch ends in
+  stalls, the helper polls the same pane and current-session transcript for a bounded startup grace period (30 seconds
+  by default, configurable from 1 to 120 seconds). Working or blocked states retain the accepted prompt and wait for
+  that session's marked result instead of resubmitting it. An idle or done state is accepted only after the current
+  invocation's transcript proves a valid marked result. Persistent idle state without that result or an exited scope
+  fails the attempt after the grace period; it never passes as review evidence. Only the first status observation after
+  a stall may tolerate a blocked state; the allowance is consumed after that poll regardless of status, and any later
+  blocked state fails as an unexpected interaction. Startup waiting does not weaken the total review deadline or the
+  slot bound. The visible launch ends in
   `zsh -lic cc_k3`; the trusted launcher and `launcher_environment` keep
   safe-mode, Read-only tools, the maintainer's interactive permission policy, per-session identity and any
   cgroup-v1 affinity/rlimit fallback out of the displayed command. Each `pr-review-rNN-PID-TOKEN.scope` has a unique
@@ -165,7 +167,10 @@ review/comment publication. A human approval records human-sourced semantic evid
 (verification and privacy scan, linked issue, mergeability, exact-head/base re-read, the change-request merge block);
 it never merges by itself. A human `CHANGES_REQUESTED` or comment-only head parks without AI review and without
 merging until a new head or a new human state resolves it. Bot/GitHub App reviews never count, and reviews on older
-heads never carry over. See `docs/operations/pr-review-automation.md`, "Respect human reviews on the exact head".
+heads never carry over. Human-sourced evidence is reclassified before a same-head resume or merge retry: a later
+comment or change request parks, while a dismissal restores the normal AI review. A restart before verification is
+recorded still runs verification; valid exact-head verification evidence is reused. See
+`docs/operations/pr-review-automation.md`, "Respect human reviews on the exact head".
 Do not enable the switch in a live configuration without the documented offline `--migrate-config` step; that
 migration preserves existing evidence because the switch is outside the repository-policy fingerprint.
 

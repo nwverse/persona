@@ -4,7 +4,9 @@ import persona.core.contracts.JsonCodec
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AgentSkill
 import persona.core.contracts.api.AlwaysGrant
+import persona.core.contracts.api.AssistantConfigUpdate
 import persona.core.contracts.api.AssistantRefused
+import persona.core.contracts.api.ConversationTagFilters
 import persona.core.contracts.api.AssistantSkills
 import persona.core.contracts.api.NewMainResult
 import persona.core.contracts.api.ScheduledTask
@@ -18,6 +20,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AssistantManagementTest {
+    @Test fun mainAssistantCatalogReadsOwnPurposeWithoutReplacingEligibility() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            val shared = """{"launchers":[{"name":"claude"}],"default":{"provider":"claude","model":"shared","effort":"low"}}"""
+            for ((own, expected) in listOf(
+                MockResponse().setBody("""{"launchers":[{"name":"not-eligible"}],"default":{"provider":"claude","model":"main","effort":"high"}}""") to "main",
+                MockResponse().setBody("""{"launchers":[]}""") to "shared",
+                MockResponse().setResponseCode(404).setBody("""{"error":"unknown purpose"}""") to "shared",
+            )) {
+                server.enqueue(MockResponse().setBody(shared))
+                server.enqueue(own)
+                val result = api.mainAssistantLauncherList("box", refresh = true)
+                assertEquals(listOf("claude"), result.launchers.map { it.name })
+                assertEquals(expected, result.default?.model)
+                assertEquals("assistant", server.takeRequest().requestUrl?.queryParameter("purpose"))
+                assertEquals("assistant.main", server.takeRequest().requestUrl?.queryParameter("purpose"))
+            }
+            server.enqueue(MockResponse().setBody(shared))
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"temporarily unavailable"}"""))
+            val failure = runCatching { api.mainAssistantLauncherList("box") }.exceptionOrNull() as HubFailure
+            assertEquals(503, failure.status)
+        }
+    }
+
     /** "Push when done" travels both ways; a task without it never sends it, so a hub without `task_push` is not sent it. */
     @Test fun taskPushIsReadAndSentOnlyWhenSet() = runBlocking {
         MockWebServer().use { server ->
@@ -128,6 +154,28 @@ class AssistantManagementTest {
             server.enqueue(MockResponse().setBody("""{"ok":true}"""))
             api.setConversationTags(SessionKey("hub", "side-1"), emptyList())
             assertEquals("""{"tags":[]}""", server.takeRequest().body.readUtf8())
+        }
+    }
+
+    @Test fun conversationTagFiltersPutExactNullEmptyAndOrderedSets() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient()).forManager("work")
+            val values = listOf(
+                ConversationTagFilters(null) to """{"conversation_tag_filters":null}""",
+                ConversationTagFilters(emptyList()) to """{"conversation_tag_filters":[]}""",
+                ConversationTagFilters(listOf("second", "first")) to """{"conversation_tag_filters":["second","first"]}""",
+            )
+            for ((value, body) in values) {
+                server.enqueue(MockResponse().setBody("""{"conversation_tag_filters":${body.substringAfter(':').substringBeforeLast('}')}}"""))
+                val answer = api.updateConfig(AssistantConfigUpdate(conversationTagFilters = value))
+                assertEquals(value, answer.conversationTagFilters)
+                val request = server.takeRequest()
+                assertEquals("PUT", request.method)
+                assertEquals("/api/v1/assistant", request.requestUrl?.encodedPath)
+                assertEquals("work", request.requestUrl?.queryParameter(ManagerQuery))
+                assertEquals("work", request.getHeader(ManagerHeader))
+                assertEquals(body, request.body.readUtf8())
+            }
         }
     }
 

@@ -127,6 +127,16 @@ Group-capable connectors submit each thread's new messages as a **batch awaiting
 - **Old hubs**: before #1680, unknown group rejects **entire connector registration**, unknown capability, and `meta_description` prevents manifest load. Extension `engines.persona` must require hub build containing #1680 (`">=YYYYMMDDHHMM"`, build UTC time at merge), so old hubs reject install / upgrade rather than lose connector afterward. Development build 0 skips check.
 - **Future capabilities**: since #1680, unknown **extension-provided** connector capabilities log once per extension / capability, remove that capability, keep running. Built-in connectors remain strict. Future capability additions no longer drop entire connector on old hubs with #1680, but already deployed pre-#1680 hubs still do.
 
+### Call context (#13246)
+
+`tools.call`, `actions.describe` and `actions.do` also say where the call comes from, so a connector can apply limits of its own:
+
+- `track`: the calling conversation's track, its slug (`main` for the main track); absent when the hub cannot tell.
+- `track_kind`: the track's kind; absent when not known (the main track).
+- `categories`: the conversation's information categories (`health`, `finance`, `relationships`, `emotion`, `legal_id`; `docs/assistant/health.md` "Information categories"), `[]` for general. **Absent means not known** (an older hub, a turn not tagged yet): take it for sensitive.
+
+All three are optional and additive (no version change): a program that ignores them works as before. Whether the phone confirms a write stays the hub's decision, never the connector's. A connector built on `server/internal/connector/serve` reads them with `connector.CallContextOf(ctx)` inside `Call`, `Describe` and `Write`; an SDK program reads them from the params (`ConnectorCallParams`, `ConnectorDoParams`).
+
 ### Pictures in a tool's answer (#8484)
 
 A read tool can hand the model pictures to look at (frames of a video, the pictures of a post): `tools.call` answers `{text, images: [{mime, data, caption?}]}` (`ConnectorToolImage` in the schema; the Go SDK's `ext.ToolImage(data, caption)`).
@@ -261,7 +271,7 @@ Connectors may give assistant a CLI (#1704; Telegram tg previously built into pe
 - Default output one JSON line, original tool text. Failure stderr `{error, kind, retry_after?}`, text format `<name>: …`; usage mistakes too, before anything is called (no tool or connector, an unknown option, `--format` without a value, arguments that are not one JSON object: kind `usage`), while `-h` / `--help` prints the usage on stdout, exit 0. Exit codes: 0 success, 1 failure, 2 usage, 3 unavailable (node / hub unreachable, logged out), 4 rate limit with seconds `retry_after`, 5 user / `connector_gate` denial, 130 interrupted (Ctrl-C / SIGTERM before result; pending approval card withdrawn; approved executing write may have happened, verify before retry; not node / hub failure).
   Codes follow hub / node categories in `mcp.call` `error_kind` / `retry_after` (`docs/protocol/protocol.md`), not wording. Gate denial, logged-out connector, `rate_limited` state / program error carry categories.
   Only old hub / node without category uses wording: The user declined / (`connector_gate`) do not allow → 5; is not available / Persona hub error → 3; `限流中，N 秒` / `限流，N 秒` / `还要 N 秒` (“rate limited, N seconds” / “N seconds remaining”) → 4, `retry_after` N. Rate-limited status without seconds also parses state.error this way.
-- `personad tool <tool> [<JSON args> | -]` calls directly, same restrictions / output.
+- `personad tool <tool> [<JSON args> | -]` calls directly, same restrictions / output. The one exception is an Agent's own tools (`task_spawn`, its to-do's `todo_decisions`, a task leader's `task_plan`, …): from an Agent's pane or Codex thread they go as that Agent's call, decided by the hub for it, never as the assistant's and never reaching a connector ([unified-entry.md](../assistant/unified-entry.md) ("Separate sessions within a supervised task (#5751)")).
 
 ## Errors
 

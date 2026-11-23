@@ -1,6 +1,6 @@
 import type { AgentState, Interaction, Session, SessionCapabilities } from "./types";
 import { formatDate, formatRelative, t } from "../i18n";
-import { sessionAgentName } from "./agent-kind";
+import { normalizeTraeCliName, sessionAgentName } from "./agent-kind";
 import { usageLimitLabel } from "./usage-limit";
 import { workLine } from "./work";
 import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
@@ -64,9 +64,9 @@ export function sourceSubtitle(s?: Session): string {
     : s.source_kind === "claude_cli" ? t("lib-format.source_claude_terminal")
     // an agent runtime's session (docs/integrations/runtimes.md): its own name, else its agent's ("Claude Code", a Paseo
     // provider's), never a raw id (#8142)
-    : s.source_kind === "runtime" ? s.agent_label || sessionAgentName(s)
+    : s.source_kind === "runtime" ? normalizeTraeCliName(s.agent_label) || sessionAgentName(s)
     : s.source_kind;
-  const detail = s.source_kind !== "identity_conflict" && s.agent_name ? ` · ${s.agent_name}` : "";
+  const detail = s.source_kind !== "identity_conflict" && s.agent_name ? ` · ${normalizeTraeCliName(s.agent_name)}` : "";
   if (sessionCan(s, "send")) return label + detail;
   const given = s.read_only_reason ?? "";
   const reason = (given.startsWith(NODE_READ_ONLY_PREFIX) ? given.slice(NODE_READ_ONLY_PREFIX.length) : given).trim();
@@ -238,12 +238,17 @@ export function sessionTitleDetail(s: SessionNameFields, preferTab: boolean): st
 
 // A path from a Windows computer: a drive letter or a UNC share. Only there is a backslash a separator; in any other
 // path it is a character of a name.
-const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\/;
+const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\|^\/\/[^\\/]+[\\/]/;
 
 export function baseName(p?: string): string {
   if (!p) return "";
-  const parts = (WINDOWS_PATH.test(p) ? p.replace(/\\/g, "/") : p).replace(/\/+$/, "").split("/");
+  const parts = pathSlashes(p).replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || p;
+}
+
+/** Remote Windows paths use either separator. A backslash inside a POSIX filename stays literal. */
+export function pathSlashes(path: string): string {
+  return WINDOWS_PATH.test(path) ? path.replaceAll("\\", "/") : path;
 }
 
 export function tabLabel(s: Session): string {

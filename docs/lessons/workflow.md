@@ -19,6 +19,10 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
 - Privacy hooks must resolve the tracked default branch, not assume `origin/master` (#733). A new remote branch has an all-zero old SHA, so falling back to that SHA and skipping an unavailable range silently lets its first push through. Test real first pushes to an isolated bare repository, retain existing-ref and deletion controls, and refuse a new branch when no scan base is available.
 
 - PR merges and progress comments must be checked serially (#2024): `gh pr merge` can fail on a new conflict; if a compound shell command does not stop, the "merged" comment after it still goes out. Exit when the merge command fails, and read the PR's `state` again before posting a completion comment; mark it done only on `MERGED`. `mergeable: UNKNOWN` is not confirmation that it can merge, nor proof of a conflict; read back a definite state before acting. On a false report, edit the original comment first, keeping the verified results and the unfinished items; never leave two contradicting progress comments.
+- Lightweight semantic verification is not local build/test evidence. Require a dedicated exact-head runner status
+  at the automatic merge boundary, including cached approvals and merge retries. Baseline exceptions must name the
+  fixed comparison commit; never infer success from an interrupted remote run.
+
 - An unattended PR review service must bind every result to repository + PR + head SHA, and a pre-existing review must not bypass its own checks. Treat model failure, malformed findings, unavailable platform tests and GitHub read failures as not verified. Run manual and automated merges through the same shared-Git-directory lock and exact-head wrapper (`docs/operations/pr-review-automation.md`); an in-process lock alone cannot protect two service instances or a manual merge.
 
 - Migration inventories must distinguish actual extension packages from SDK templates, schema examples and duplicate application worktrees (#5956). Deduplicate real package IDs across repository copies before counting runtime kinds; a manifest with a command under `runtime` is executable even when `runtime.mode` is omitted. Finding and classifying authoring fixtures is not evidence of a third marketplace or additional migrated extensions.
@@ -115,6 +119,14 @@ Node 24 removed `--experimental-default-type=module`; a portable SDK driver that
 SDK synchronization intentionally replaces only the selected SDK subtree (#1471). Keep the destination guard on each recursive deletion (`"${dest:?}/sdk/go"` and `"${dest:?}/sdk/ts"`), even when the entrypoint already rejects an empty destination. Verify that selective synchronization preserves both the unselected SDK and unrelated destination files, and records the source checkout's commit in `sdk/VERSION`. This makes cleanup ownership explicit without changing the official copy contents or release versions.
 
 ## Hosted CI path aggregation
+
+- Repository-wide caller guards should shortlist tracked files with a literal Git search, then inspect non-comment command
+  lines (#12258). An optional greedy prefix in the XcodeGen expression backtracked on long unrelated source lines and
+  exceeded 60 seconds; keep the same path exclusions, inspect working-tree edits, and fail on Git errors rather than
+  returning an empty inventory. Synthetic paths must not look like real dependency literals to the check-fast input
+  inventory; extensionless fixture scripts still exercise the same tracked-path scan. Build-mode guards must check
+  actual arguments per lane: the iOS 18.6 lane intentionally
+  requests only the simulator Rust-core slice, while release and the other Apple CI lanes still require the full framework.
 
 - The web lane's inputs outside `web/` are derived, not listed (#10619): `scripts/ci/paths.py` scans `web/src` and the web tests for the paths they name relative to themselves, and both CI's web lane and `check-fast` use that scan. The hand list it replaced named 6 of the ~25 fixture directories the tests read. Read a fixture by a path relative to the file (an import, `new URL("../…", import.meta.url)`, `join(__dirname, "../…")` or `".."` elements); a path built from the working directory or a variable root is invisible to the scan. Legacy JSON fixture members must be composed from their existing compatibility carrier, not repeated in a new test file or allowed by broadening the identifier registry. Fix the source of failures rather than weakening portable guards.
 
@@ -338,3 +350,7 @@ Apple builds, where a cold build costs the most:
 - After merging `main`, `cannot find 'persona_core_…'` means the Rust core's XCFramework is stale: run
   `native/app-core/scripts/build-apple.sh` first. If `ContinuityFixture` reports a wrong `fold_id` argument, delete the old
   `PersonaCore*.swiftmodule` at the root of `Build/Products/<config>/` in DerivedData.
+
+- Finish static review, generated tool snapshots and fixture corrections before queuing expensive shared-runner verification. A dedupe key prevents repeated submissions of one commit/group set; it cannot coalesce a series of intermediate commits. While a run waits, collect further fixes into one candidate instead of queuing each edit. Reuse an earlier shard result only when its relevant source is unchanged, and record the exact candidate and baseline commits in the PR.
+
+- Inspect test-running Git hooks before remote-only verification: merging upstream can stage token or icon files and trigger local tests even when the feature itself changes server code. Keep privacy scanning enabled and run the triggered test suites through the prescribed remote workflow.

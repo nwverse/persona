@@ -269,16 +269,23 @@ func (h *Hub) lookupToken(ctx context.Context, tok string) (principal, bool, err
 	}
 	touch := time.Since(t.touched[c.p.ID]) > 5*time.Minute
 	if touch {
-		t.touched[c.p.ID] = time.Now()
+		// Account for the async last_seen write under the quiescer before
+		// spawning: paused snapshots skip the touch (without stamping touched,
+		// so the next request after resume updates it), and already-started
+		// touches finish before pause returns.
+		if h.quiesce.begin() {
+			t.touched[c.p.ID] = time.Now()
+			t.mu.Unlock()
+			go func(id string) {
+				defer h.quiesce.end()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = h.store.TouchDeviceToken(ctx, id)
+			}(c.p.ID)
+			return *c.p, true, nil
+		}
 	}
 	t.mu.Unlock()
-	if touch {
-		go func(id string) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = h.store.TouchDeviceToken(ctx, id)
-		}(c.p.ID)
-	}
 	return *c.p, true, nil
 }
 
@@ -490,8 +497,10 @@ func (h *Hub) tokenRoutes(api *http.ServeMux) {
 				return
 			}
 		}
-		// push: per token, the way pushes reach the device it registered (Settings › Devices, #5998)
-		writeJSON(w, map[string]any{"tokens": list, "current": principalOf(r.Context()).ID, "push": h.push.routesByCredential()})
+		// push: per token, the way pushes reach the device it registered (Settings › Devices, #5998); phone: the primary
+		// device for phone calls and the devices that can be it (phone_primary.go)
+		writeJSON(w, map[string]any{"tokens": list, "current": principalOf(r.Context()).ID, "push": h.push.routesByCredential(),
+			"phone": h.phonePrimaryView(list)})
 	})
 	api.HandleFunc("DELETE /api/v1/auth/tokens/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if h.store == nil {
@@ -569,6 +578,7 @@ func (h *Hub) revoked(id string) {
 		}
 	}
 	h.mu.Unlock()
+	h.wakePhoneWrites() // writes queued for a primary device that was this one may go to another now (phone_primary.go)
 	for _, c := range gone {
 		c.conn.CloseNow()
 	}

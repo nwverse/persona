@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0xa548ea53b5d22fc9
+const sessionWireLayout = 0xa8b13db3cab31849
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -41,7 +41,7 @@ const (
 
 // hierarchyWireLayout is the layout hash of SessionHierarchy and SessionChildren, whose members appendSession writes
 // on the row: while either differs, appendSession leaves every session to the reflect encoder, as for sessionWireLayout.
-const hierarchyWireLayout = 0x5c86aa0f845c6013
+const hierarchyWireLayout = 0xec57eb10ec16d2c2
 
 // hierarchyLayout hashes SessionHierarchy's fields, then SessionChildren's.
 func hierarchyLayout() uint64 {
@@ -136,6 +136,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 		w.str(`"pending_effort":`, *s.PendingEffort, false)
 	}
 	w.boolean(`"effort_change_failed":`, s.EffortChangeFailed, true)
+	w.boolean(`"context_restart_recommended":`, s.ContextRestartRecommended, true)
 	w.boolean(`"off_launcher":`, s.OffLauncher, true)
 	if s.Ultracode != nil {
 		w.boolean(`"ultracode":`, *s.Ultracode, false)
@@ -289,6 +290,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 		if !h.StartedAt.IsZero() {
 			w.time(`"started_at":`, h.StartedAt)
 		}
+		w.str(`"creation_id":`, h.CreationID, true)
 		w.str(`"asking_parent_session_id":`, h.AskingParentSessionID, true)
 		w.str(`"folded_under":`, h.FoldedUnder, true)
 		w.str(`"folded_as":`, h.FoldedAs, true)
@@ -317,6 +319,9 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 			} else {
 				w.value(`"background_ended":`, &h.BackgroundEnded)
 			}
+		}
+		if h.ContextBreakdown != nil {
+			w.value(`"context_breakdown":`, h.ContextBreakdown)
 		}
 		w.boolean(`"deleted":`, h.Deleted, true)
 	}

@@ -54,6 +54,11 @@ interface InboxAssistantTransport {
      */
     suspend fun doneDays(manager: String?, tz: String): JsonObject = throw UnsupportedOperationException("Done days unavailable")
     suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String): JsonObject
+    /** A direct Feishu send carries picked recipients; other reply transports keep their text-only contract. */
+    suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String, mentions: List<LarkMention>): JsonObject {
+        require(mentions.isEmpty()) { "Lark mentions unavailable" }
+        return reply(itemId, feedId, text, clientId)
+    }
     /** Hands an item to its manager's main chat (`POST /api/v1/inbox/{id}/handoff`), answering `{item, session}`. */
     suspend fun handOff(itemId: String, text: String, clientId: String): JsonObject =
         throw UnsupportedOperationException("Inbox hand-off route unavailable")
@@ -106,13 +111,15 @@ interface InboxAssistantTransport {
      */
     suspend fun assistantOf(manager: String?): JsonObject = assistant()
     /**
-     * The directions of one manager (null: the default), `GET /api/v1/assistant/leaders`: `{leaders: [{id, name, ended?}]}`
-     * (#3519, #3695). A transport without it answers none, and the drawer shows the leaders' titles.
+     * The directions of one manager (null: the default), `GET /api/v1/assistant/leaders`: `{leaders: [{id, name, ended?,
+     * external?, machine_id?, session_id?}]}`. Explicit outside directions keep their optional Agent target through this
+     * fallback too. A transport without it answers none, and the drawer shows the leaders' titles.
      */
     suspend fun assistantLeadersOf(manager: String?): JsonObject = JsonObject(emptyMap())
     /**
      * The direction tree of the default manager (`GET /api/v1/assistant/directions/tree`, #4352): `{directions: [{id,
-     * name, secretary?, counts: {working, needs_you, stuck, review}}]}`, the current directions in the leaders' order.
+     * name, secretary?, counts: {working, needs_you, stuck, review}, external?, machine_id?, session_id?}]}`, the current
+     * directions in the leaders' order. Outside metadata is additive and absent from older hubs.
      * The hub answers it for the default manager alone. A transport without it says so (as an older hub's 404 does), and
      * the drawer keeps the flat direction rows.
      */
@@ -121,6 +128,11 @@ interface InboxAssistantTransport {
     /** [createConversation] for one manager (null: the default), as [assistantOf]. */
     suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String? = null): JsonObject =
         if (launcher == null) createConversation(main) else createConversation(main, launcher)
+    /** A marked creation must be explicit; legacy transports reject it instead of losing provenance. */
+    suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?, via: String?): JsonObject {
+        require(via == null) { "Message provenance is not supported" }
+        return createConversationOf(manager, main, launcher)
+    }
     /**
      * [createConversationOf] with the model and effort picked on the new-chat page (`POST /api/v1/assistant/conversations`
      * `{launcher, model?, effort?}`), which a hub with `assistant_model_pick` keeps as the chat's `model_pick` (#5033).
@@ -156,6 +168,9 @@ interface InboxAssistantTransport {
         throw UnsupportedOperationException("Document comments unavailable")
     /** People to @ in a document's comment, by name (`GET /api/v1/lark/documents/people?url=&q=`, `{members:[…]}`). */
     suspend fun documentPeople(url: String, query: String): JsonObject = throw UnsupportedOperationException("Document people unavailable")
+    /** Group members to @, searched by name (`GET /api/v1/lark/conversations/{feed}/members?q=&limit=`). */
+    suspend fun larkMembers(feedId: String, query: String, limit: Int = 30): JsonObject =
+        throw UnsupportedOperationException("Conversation members unavailable")
     suspend fun momentsPost(postId: String): JsonObject = throw UnsupportedOperationException("Moments post unavailable")
     suspend fun momentsComments(postId: String): JsonObject = throw UnsupportedOperationException("Moments comments unavailable")
     suspend fun urlPreview(messageId: String, url: String): JsonObject = throw UnsupportedOperationException("URL preview unavailable")

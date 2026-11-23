@@ -26,9 +26,11 @@ import (
 //
 //   - Codex app-server can return the limits together with the account ID. The node sends only a digest of that ID.
 //     When the app-server cannot supply windows, read the newest rollout's token_count event without an account ID.
-//   - Claude Code hands the limits to a status line command (the rate_limits field of its JSON input) and keeps them
-//     nowhere else; the API that has them needs the OAuth token, so it is skipped too. The way in is opt-in: a
-//     status line wrapper drops the JSON into <node dir>/usage/claude*.json, which is read here.
+//   - Claude Code hands the limits to a status line command (the rate_limits field of its JSON input), and in
+//     stream-json to the process that runs it (a rate_limit_event after each reply, usagewindows_claudestream.go,
+//     read for the node's own Claude assistant conversations). It keeps them nowhere else; the API that has them
+//     needs the OAuth token, so it is skipped too. For interactive sessions the way in is opt-in: a status line
+//     wrapper drops the JSON into <node dir>/usage/claude*.json, which is read here.
 //
 // The node polls every usageWindowsEvery, keeps the last sample of every source (a source that goes quiet keeps its
 // number for three days), and answers usage.windows from that. hub.json machines[].usage_windows false turns it off.
@@ -146,6 +148,72 @@ func mergeUsage(kept, found map[string]proto.UsageNodeAccount, now time.Time) ma
 		out[k] = a
 	}
 	return out
+}
+
+// runtimeUsageWindows stores one local runtime's subscription snapshot beside the file and app-server sources. The
+// runtime id, rather than a process instance, is the source key so a companion restart replaces its previous report.
+func (n *Node) runtimeUsageWindows(h *runtimeConn, params json.RawMessage, now time.Time) {
+	if h.isDaemon() {
+		return
+	}
+	var a proto.UsageAccount
+	if json.Unmarshal(params, &a) != nil {
+		return
+	}
+	var required struct {
+		Windows []struct {
+			UsedPercent *float64 `json:"used_percent"`
+		} `json:"windows"`
+	}
+	// A missing or null number becomes a float64 zero, so check its presence at the raw event boundary too.
+	if json.Unmarshal(params, &required) != nil || len(required.Windows) != len(a.Windows) {
+		return
+	}
+	a.Provider = strings.TrimSpace(a.Provider)
+	a.Name = strings.TrimSpace(a.Name)
+	a.Plan = strings.TrimSpace(a.Plan)
+	if a.Provider == "" || len(a.Provider) > 64 || a.Name == "" || len(a.Name) > 128 || len(a.Plan) > 128 ||
+		a.SampledAt.IsZero() || now.Sub(a.SampledAt) > usageWindowsMaxAge || a.SampledAt.After(now.Add(5*time.Minute)) ||
+		a.Windows == nil || len(a.Windows) > 32 {
+		return
+	}
+	windows := make([]proto.UsageWindow, 0, len(a.Windows))
+	for i, w := range a.Windows {
+		if required.Windows[i].UsedPercent == nil || w.WindowMinutes <= 0 || len(w.Model) > 256 {
+			return
+		}
+		w.Label = proto.WindowLabel(w.WindowMinutes)
+		w.UsedPercent = clampPercent(w.UsedPercent)
+		if w.ResetsAt != nil {
+			t := w.ResetsAt.UTC()
+			w.ResetsAt = &t
+		}
+		windows = append(windows, w)
+	}
+	a.Windows = liveWindows(windows, now)
+	a.SampledAt = a.SampledAt.UTC()
+
+	h.mu.Lock()
+	source := "runtime:" + h.hello.Runtime
+	h.mu.Unlock()
+	st := &n.usageWin
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.off {
+		return
+	}
+	if st.accounts == nil {
+		st.accounts = map[string]proto.UsageNodeAccount{}
+	}
+	if previous, ok := st.accounts[source]; ok && a.SampledAt.Before(previous.SampledAt) {
+		return
+	}
+	if len(a.Windows) == 0 {
+		delete(st.accounts, source)
+	} else {
+		st.accounts[source] = proto.UsageNodeAccount{UsageAccount: a, SourceKey: source}
+	}
+	st.at = now
 }
 
 // collectUsageWindows reads the local files of every source once.

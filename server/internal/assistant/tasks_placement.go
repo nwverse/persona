@@ -97,10 +97,11 @@ func (t *PlanTask) noteWhy(note string) {
 }
 
 // fitTaskLauncher holds t's resolved launcher (params, resolveStart's) to what m has (fitLauncher): a default m lacks
-// is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so. It also
-// reports what the resolved launcher runs (startAgent: its agent type, and whether it runs with Allow all), using the same
-// launcher list rather than another probe. A read-only task whose launcher has no read-only mode is refused here
-// (readonlyLauncherRefusal), when it is planned and again before it starts.
+// is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so. An
+// explicit tier (or a policy preset) whose launcher m lacks is refused there instead, with no swap and no start
+// (#12032). It also reports what the resolved launcher runs (startAgent: its agent type, and whether it runs with
+// Allow all), using the same launcher list rather than another probe. A read-only task whose launcher has no read-only
+// mode is refused here (readonlyLauncherRefusal), when it is planned and again before it starts.
 func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (startAgent, error) {
 	note, agent, err := s.fitNewLauncher(ctx, m, own, params)
 	if err != nil {
@@ -119,6 +120,7 @@ func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, ow
 	t.Effort, _ = params["effort"].(string)
 	t.Speed, _ = params["speed"].(string)
 	t.Tier = ""
+	t.startNamed.launcher, t.startNamed.noModel = true, t.Model == ""
 	t.noteWhy(note)
 	return agent, nil
 }
@@ -198,8 +200,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		return "", "", err
 	}
 	// What the task itself named, kept from its first try in this process. The task as stored never carries what a
-	// start-defaults policy filled in (storedLaunch), so a task read back from the store (a remedy, a queued start, a
-	// retry from the card, a manager restart) names only its own.
+	// tier, Model configuration › Agents or a start-defaults policy filled in (storedLaunch, #12618), so a task read
+	// back from the store (task_retry, a remedy, a queued start, a retry from the card, a manager restart) names only
+	// its own and is resolved again against the current defaults.
 	if t.callerPick == nil {
 		own := t.launchPick()
 		t.callerPick = &own
@@ -211,10 +214,10 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		t.Launcher, t.Model, t.Effort, t.Speed, t.Tier = caller.launcher, caller.model, caller.effort, caller.speed, caller.tier
 		t.Permission, t.Ultracode = caller.permission, copyBool(caller.ultracode)
 	}
-	t.startFilled = startFill{}
+	t.startFilled, t.startNamed = startFill{}, startNamed{}
 	// A self-planning constraint applies only while a policy rule asks for it on this try.
 	t.planFirst = false
-	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
+	params := map[string]any{"model_source": planModelSource(*t), "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
 	// The start-defaults policy: its preset goes in before the start is resolved, as if the task had named that tier;
 	// its effort and ultracode after the launcher fit, and the goal (a rule's or the Codex default) after that.
 	defaults, withDefaults := s.taskStartDefaults(ctx, t)
@@ -240,6 +243,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	// The last look, on the machine it will really start on (a retry, a remedy, a recovered start and a flexible task moved
 	// by the health check all pass here): a task leader never starts on a work-trust computer.
+	if assistantWorkspace(m, t.Cwd) {
+		return "", "", i18n.Err("rpc-errors.agent_assistant_workspace")
+	}
 	if err := s.leaderOnWorkMachine(t, m); err != nil {
 		return "", "", err
 	}
@@ -288,8 +294,21 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := checkStartSpeed(params, fit, ""); err != nil {
 		return "", "", err
 	}
-	if fit.allowAll() && !t.preservePermission {
-		t.Permission = "bypassPermissions"
+	configuredMode, _ := params["permission_mode"].(string)
+	delete(params, "permission_mode")
+	if !t.preservePermission {
+		switch {
+		case t.Readonly:
+			if fit.allowAll() {
+				t.Permission = "bypassPermissions"
+			}
+		case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
+			if t.Permission == "" {
+				t.Permission = configuredMode
+			}
+		case fit.allowAllOver(t.Permission):
+			t.Permission = "bypassPermissions"
+		}
 	}
 	modes := startTakesModes(fit.agent)
 	if !modes { // traex, omp…: no mode and no effort, whatever a default or a tier filled in (launcher_modes.go)
@@ -360,12 +379,15 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
 		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
 	}
+	var entry prompts.TaskHandoff // none verified: a work machine, no to-do
 	if t.TodoID != "" && !s.isWorkMachine(m.ID) {
-		rules = append(rules, s.taskHandoff(ctx, m.ID, fit))
+		entry = s.taskEntry(ctx, m.ID, fit)
+		rules = append(rules, prompts.RenderTaskHandoff(entry))
 	}
 	switch {
 	case t.Role == roleLeader: // what it may hand out, and how its workers reach it (task_leader.go)
-		rules = append(rules, prompts.RenderTaskLeader())
+		// Through the terminal entry the handoff note above names, for an Agent without the Persona MCP (#12136).
+		rules = append(rules, prompts.RenderTaskLeader(prompts.TaskLeader{Terminal: entry.Terminal()}))
 	case t.Parent != "":
 		rules = append(rules, prompts.RenderTaskWorker())
 	}
@@ -382,9 +404,10 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		rules = append(rules, brief)
 	}
 	// The project background, and the decisions of the todo and its continuation ancestors (a task started again may
-	// have some), follow the assignment; they remain user context, never framework policy.
-	supervisor := s.taskSupervisorOf(t)
-	background := s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, supervisor, s.todoForPlanContext(t))
+	// have some), follow the assignment; they remain user context, never framework policy. Direction notes are prompt
+	// context, separate from the main supervision ledger (#10623, #5732).
+	direction := s.taskDirectionOf(ctx, t)
+	background := s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, direction, s.todoForPlanContext(t))
 	var repoPaths []string
 	if t.backendWorkspace() {
 		for _, repo := range t.WorkspaceResolved.Repositories {
@@ -392,7 +415,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 				continue
 			}
 			repoPaths = append(repoPaths, repo.AbsolutePath)
-			if info := s.projectHandoffContext(ctx, m.ID, repo.AbsolutePath, supervisor); info != "" {
+			if info := s.projectHandoffContext(ctx, m.ID, repo.AbsolutePath, direction); info != "" {
 				background = strings.TrimSpace(background + "\n\n" + repo.AbsolutePath + "\n" + info)
 			}
 		}
@@ -440,8 +463,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if t.WaitInputID != "" {
 		params["client_msg_id"] = t.WaitInputID
 	}
-	if t.WorkspaceResolved != nil && t.WorkspaceResolved.WorkspaceID != "" {
-		params["workspace_id"] = t.WorkspaceResolved.WorkspaceID
+	if w := t.WorkspaceResolved; w != nil && w.WorkspaceID != "" {
+		params["workspace_id"] = w.WorkspaceID
+		if w.Created || w.Reused {
+			params["reopen_worktree_workspace"] = true
+		}
 	}
 	ctx, unlockTaskSpace, err := s.withTaskSpaceStart(ctx, *t, m, params)
 	if err != nil {
@@ -618,12 +644,15 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if note := s.startInsteadNote(ctx, m, res.Instead, res.Session); note != "" {
 		if res.Instead.Launcher != "" && ran != picked {
 			t.Launcher, t.Tier = ran, ""
+			t.startNamed.launcher = true
 		}
 		if res.Instead.Model != "" {
 			t.Model = ""
+			t.startNamed.noModel = true
 		}
 		if res.Instead.Effort != "" {
 			t.Effort = res.Session.Effort
+			t.startNamed.effort = true
 		}
 		t.noteWhy(note)
 	}
@@ -695,9 +724,9 @@ func (s *Service) adoptTaskStartSessionUntil(ctx context.Context, m Device, laun
 }
 
 // updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now, its actual launch
-// permission, and its ultracode when the start went without it. For whatever a start-defaults policy filled in on
-// this try (a preset's launcher, model, effort, tier and permission mode, the policy's effort or ultracode) it keeps
-// the task's own value (storedLaunch): a later start reading the task back must not take the policy's for its own.
+// permission, and its ultracode when the start went without it. Of its launcher, model, effort, speed and tier it keeps
+// the task's own (storedLaunch), not what a tier, Model configuration › Agents or a start-defaults policy filled in on
+// this try: a later start reading the task back must not take those for its own choice (#12618).
 func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t PlanTask) {
 	launch := t.storedLaunch()
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {

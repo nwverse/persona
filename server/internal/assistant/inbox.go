@@ -82,6 +82,8 @@ type InboxItem struct {
 	Connector *InboxConnector `json:"connector,omitempty"`
 	// Agent is the AI twin's work on the item: judged by model 2, handled and drafted by the agent (inbox_agent.go).
 	Agent *InboxAgent `json:"agent,omitempty"`
+	// TodoForward records deterministic PR/Issue auto-forwarding of this item to a bound open to-do (#12492, inbox_forward.go).
+	TodoForward *InboxTodoForward `json:"todo_forward,omitempty"`
 	// Mutes are what it can be muted by (listed only; inbox_mutes.go).
 	Mutes []MuteOption `json:"mutes,omitempty"`
 	// Version names what the item holds now (listed only): a bulk "Done" sends it back, so an item that took new
@@ -282,8 +284,14 @@ func (it *InboxItem) listed() InboxItem {
 		}
 		a.Pending, a.Wake, a.SentOf, a.Lost = nil, false, "", nil
 		a.ProcessingTurn = ""
+		a.InterruptedByDisable = false
 		a.DeferredAt, a.WakeSlot = nil, false
 		c.Agent = &a
+	}
+	if it.TodoForward != nil {
+		tf := *it.TodoForward
+		tf.Last = ""
+		c.TodoForward = &tf
 	}
 	if it.Mail != nil {
 		m := *it.Mail

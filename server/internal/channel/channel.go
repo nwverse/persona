@@ -83,16 +83,21 @@ const (
 
 // Capabilities are what a channel can do (docs/extensions/channels.md "Capabilities"). Taking text is a given.
 type Capabilities struct {
-	ImagesIn bool   `json:"images_in,omitempty"`
-	FilesIn  bool   `json:"files_in,omitempty"`
-	VoiceIn  bool   `json:"voice_in,omitempty"`
-	Format   Format `json:"format,omitempty"`
+	ImagesIn bool `json:"images_in,omitempty"`
+	// ImagesOut: it can send pictures; an answer's pictures go in SendParams.Images (at most ImagesMost of ImageMost).
+	ImagesOut bool   `json:"images_out,omitempty"`
+	FilesIn   bool   `json:"files_in,omitempty"`
+	VoiceIn   bool   `json:"voice_in,omitempty"`
+	Format    Format `json:"format,omitempty"`
 	// MaxText is how many characters one message holds (0: no limit): the hub splits an answer to fit.
 	MaxText int  `json:"max_text,omitempty"`
 	Asks    Asks `json:"asks,omitempty"`
 	// Push: it can send to the owner unprompted (pushes, sync, what is asked).
-	Push   bool `json:"push,omitempty"`
-	Typing bool `json:"typing,omitempty"`
+	Push bool `json:"push,omitempty"`
+	// ReplyOnly: it only replies to incoming messages or triggers and never sends unsolicited proactive messages
+	// (without reply_to); testing checks connectivity instead of calling channel.send.
+	ReplyOnly bool `json:"reply_only,omitempty"`
+	Typing    bool `json:"typing,omitempty"`
 	// Progress: it can post a message and change it (a progress card the answer goes into).
 	Progress bool `json:"progress,omitempty"`
 	// Threads: a reply to one of the bot's messages goes to that message's conversation (the Feishu bot); an
@@ -166,7 +171,7 @@ func PluginFeatures(l i18n.Lang, c Capabilities, on map[string]bool) []Feature {
 		add(FeatureAsks)
 		add(FeatureAllAsks)
 	}
-	if c.Push {
+	if c.Push && !c.ReplyOnly {
 		add(FeaturePushes)
 		add(FeatureSync)
 	}
@@ -311,6 +316,9 @@ func (c Capabilities) Validate() error {
 	if c.MaxText > 0 && c.MaxText < 200 {
 		return errors.New("capabilities.max_text below 200: an answer would come in too many pieces")
 	}
+	if c.ReplyOnly && c.Push {
+		return errors.New("capabilities.reply_only cannot be combined with capabilities.push")
+	}
 	return nil
 }
 
@@ -405,6 +413,8 @@ type (
 		Text    string `json:"text"`
 		Kind    string `json:"kind"`
 		ReplyTo string `json:"reply_to,omitempty"`
+		// Images are sent after Text, only to a channel with ImagesOut.
+		Images []Blob `json:"images,omitempty"`
 	}
 	SendResult struct {
 		MessageID string `json:"message_id,omitempty"`

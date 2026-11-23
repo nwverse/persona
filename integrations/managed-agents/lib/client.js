@@ -1,4 +1,4 @@
-// The Managed Agents REST API, as far as this runtime uses it (docs/integrations/managed-agents.md "API used"):
+// The Managed Agents REST API, as far as this runtime uses it (docs/integrations/managed-agents.md "Mapping"):
 // sessions (list, get, create), a session's event log (list, send, stream). One client per profile; every request
 // carries the profile's key in its auth header, and the model credentials (BYOK Direct providers) go only on event
 // POSTs. Nothing here logs; errors are redacted before they leave.

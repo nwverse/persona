@@ -6,6 +6,7 @@ import java.time.ZoneId
 import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -32,8 +33,15 @@ data class PlanTask(
     val why: String? = null,
     @SerialName("todo_id") val todoId: String? = null,
     val error: String? = null,
+    /** Why the start failed; its arguments carry a launcher name or a terminal question. */
+    @SerialName("error_code") val errorCode: String? = null,
+    @SerialName("error_args") val errorArgs: Map<String, String>? = null,
+    /** Other launchers the hub can try, in its suggested order (feature `task_retry_launcher`). */
+    @SerialName("retry_with") val retryWith: List<String>? = null,
     /** The Agent preset to resolve when this planned task starts; null on an older hub. */
     val tier: String? = null,
+    /** The hub-owned brief Start confirms; decoded for the card, never sent back by PlanTaskSerializer. */
+    val brief: TaskBrief? = null,
 ) {
     /** The directory's last part: how the user names a project. */
     val project get() = cwd.trimEnd('/').substringAfterLast('/')
@@ -141,6 +149,23 @@ data class TodoAgent(
     val isCurrent: Boolean get() = releasedAt == null
 }
 
+/** One to-do in a task's takeover history; links point to the previous and next cards (#5732). */
+@KeepGeneratedSerializer
+@Serializable(with = TodoLineageStepSerializer::class)
+data class TodoLineageStep(
+    @SerialName("todo_id") val todoId: String,
+    val title: String = "",
+    val agent: String? = null,
+    val machine: String? = null,
+    @SerialName("session_id") val sessionId: String? = null,
+    @WireTime val started: String? = null,
+    @WireTime val ended: String? = null,
+    val why: String? = null,
+    val continues: String? = null,
+    @SerialName("superseded_by") val supersededBy: String? = null,
+    val current: Boolean = false,
+)
+
 /** A todo (docs/assistant/todos.md); a task is one whose [origin] is an assistant conversation. */
 @KeepGeneratedSerializer
 @Serializable(with = TodoSerializer::class)
@@ -188,6 +213,8 @@ data class Todo(
      *  that review (web #4874, docs/protocol/protocol.md `GET /api/v1/todos`); null otherwise and from an older hub. */
     @SerialName("decision_review") val decisionReview: DecisionReview? = null,
     @SerialName("pr_url") val prUrl: String? = null,
+    @SerialName("pr_status") val prStatus: TodoPRStatus? = null,
+    @SerialName("other_prs") val otherPrs: List<TodoPRStatus>? = null,
     /** "code" or "general" (#3380): general work draws no stage bar, its status already says how it goes; null from an
      *  older hub, which keeps the bar for any stage. */
     @SerialName("stage_kind") val stageKind: String? = null,
@@ -195,6 +222,9 @@ data class Todo(
      *  that went out or waits to, and from an older hub. */
     @SerialName("stage_done") val stageDone: Boolean = false,
     @WireTime @SerialName("cancelled_at") val cancelledAt: String? = null,
+    @SerialName("cancelled_reason") val cancelledReason: String? = null,
+    /** Takeover history, oldest first; null from an older hub or for a task with no lineage. */
+    val lineage: List<TodoLineageStep>? = null,
     /** The manager it belongs to, as the merged list stamps it (docs/assistant/managers.md "Ownership"); null: the default manager's. */
     val manager: String? = null,
     /** Nobody is working on it (#3618): every agent of this open to-do is gone and nothing brings one back; null otherwise
@@ -204,6 +234,9 @@ data class Todo(
     val kind: String = "",
 ) {
     val isDone: Boolean get() = doneAt != null
+    /** Closed by cancellation, including the legacy supervision-only representation; never counted as completed (#5732). */
+    val isCancelled: Boolean get() = cancelledAt != null || doneBy == "cancelled" || doneBy == "review" && doneAt != null && supervision?.state == "cancelled"
+    val cancellationReason: String? get() = if (isCancelled) cancelledReason ?: doneReason else null
     val activeAgents get() = agents.filter { it.releasedAt == null }
     val currentAgents: List<TodoAgent> get() = activeAgents
     val releasedAgents: List<TodoAgent> get() = agents.filter { it.releasedAt != null }
@@ -291,6 +324,19 @@ data class TodoAsk(
 /** One option of a decision: its [label], which is the answer, and what choosing it leads to. */
 @Serializable
 data class AskOption(val label: String = "", @SerialName("leads_to") val leadsTo: String? = null)
+
+/** Fresh observed facts for one PR of a task (#7935); older hubs omit them. */
+@KeepGeneratedSerializer
+@Serializable(with = TodoPRStatusSerializer::class)
+data class TodoPRStatus(
+    val url: String = "",
+    val state: String = "",
+    val draft: Boolean = false,
+    val review: String = "",
+    val checks: String = "",
+    val conflicts: Boolean = false,
+    @WireTime @SerialName("checked_at") val checkedAt: String? = null,
+)
 
 /**
  * How far a task's finished work went out (#3306, docs/assistant/todos.md"Delivery"): [state] live, pr, merged, off or none (kept as
@@ -526,11 +572,15 @@ data class AssistantViewActionEvent(val conversation: String = "", val action: J
 @Serializable(with = AssistantViewBlockEventSerializer::class)
 data class AssistantViewBlockEvent(val conversation: String = "", val key: String = "") : ServerEvent
 
-object PlanTaskSerializer : WireSerializer<PlanTask>(PlanTask.generatedSerializer())
+object PlanTaskSerializer : WireSerializer<PlanTask>(PlanTask.generatedSerializer()) {
+    override fun serialize(encoder: Encoder, value: PlanTask) = super.serialize(encoder, value.copy(brief = null))
+}
 object TaskPlanSerializer : WireSerializer<TaskPlan>(TaskPlan.generatedSerializer())
 object FeedItemSerializer : WireSerializer<FeedItem>(FeedItem.generatedSerializer())
 object TodoSpaceSerializer : WireSerializer<TodoSpace>(TodoSpace.generatedSerializer())
 object TodoAgentSerializer : WireSerializer<TodoAgent>(TodoAgent.generatedSerializer())
+object TodoLineageStepSerializer : WireSerializer<TodoLineageStep>(TodoLineageStep.generatedSerializer())
+object TodoPRStatusSerializer : WireSerializer<TodoPRStatus>(TodoPRStatus.generatedSerializer())
 object TodoSerializer : WireSerializer<Todo>(Todo.generatedSerializer())
 object ReviewCheckSerializer : WireSerializer<ReviewCheck>(ReviewCheck.generatedSerializer())
 object TaskReviewSerializer : WireSerializer<TaskReview>(TaskReview.generatedSerializer())

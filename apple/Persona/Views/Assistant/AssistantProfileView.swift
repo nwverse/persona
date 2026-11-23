@@ -42,6 +42,8 @@ struct AssistantProfileView: View {
 
     var body: some View {
         Group { if AppStyle.current.usesBeautifulUI { cards } else { list } }
+        // Keep both style trees out of every page modifier's opaque type (`MainPagesStackTests`, #10288).
+        .stackSegment()
         .pageTitle("Persona")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
@@ -181,6 +183,16 @@ struct AssistantProfileView: View {
                     Text(Self.recentFooter)
                 }
             }
+            if ownerApprovalOffered {
+                Section {
+                    NavigationLink { OwnerApprovalSettingsView() } label: {
+                        row("Exact Approval Replies", Theme.Icon.standingAuthorization, detail: nil)
+                    }
+                    .accessibilityIdentifier("assistant-owner-approval-settings")
+                } footer: {
+                    Text("Approve one displayed batch with an exact reply. No standing permission.")
+                }
+            }
             #if os(iOS)
             if let suggestions = nextSuggestions {
                 Section {
@@ -298,6 +310,14 @@ struct AssistantProfileView: View {
                         }
                     }
                 }
+                if ownerApprovalOffered {
+                    BUIListSection(String(localized: "Exact Approval Replies")) {
+                        NavigationLink { OwnerApprovalSettingsView() } label: {
+                            buiRow("Exact Approval Replies", Theme.Icon.standingAuthorization, detail: nil)
+                        }
+                        .accessibilityIdentifier("assistant-owner-approval-settings")
+                    }
+                }
                 #if os(iOS)
                 if let suggestions = nextSuggestions {
                     BUIListSection(footer: Self.nextSuggestionsFooter) {
@@ -413,6 +433,12 @@ struct AssistantProfileView: View {
     static let recentTitle = String(localized: "Show Scheduled Task Chats")
     private static let recentFooter = String(localized: "Chats your scheduled tasks and the background supervisor start also appear in the sidebar's Recent, by time. All your devices follow.")
 
+    /// An older hub omits all three fields, so it gets no new settings entry or local-only switch.
+    private var ownerApprovalOffered: Bool {
+        model.assistantConfig?.ownerReplyApproval != nil && model.assistantConfig?.persistentOwnerActionCards != nil &&
+            model.assistantConfig?.ownerReplyApprovalPhrases != nil
+    }
+
     /// JSON-object probe payload; the UI-test reader cannot encode a top-level Bool back to JSON.
     private struct NextSuggestionsProbe: Equatable, Encodable {
         var loaded: Bool
@@ -432,15 +458,9 @@ struct AssistantProfileView: View {
     private static let nextSuggestionsTitle = String(localized: "Suggest the Next Message")
     private static let nextSuggestionsFooter = String(localized: "After a reply in a chat you have open, a small model suggests what you might send next, above the empty message box. Claude Code in a terminal keeps its own suggestions. Uses one extra model call per reply; the model is set under Model configuration › Next-message suggestions.")
 
-    // Where Persona asks before acting on your behalf: the Mac app asks in the app, iOS asks on the phone (#4068).
-    // The push itself still goes to the iPhone, so "notify you" stays in both.
-    #if os(macOS)
-    private static let reachApprovalLine = String(localized: "Ask you and notify you in the app")
-    private static let reachApprovalFooter = String(localized: "Anything that acts on your behalf, like sending Lark messages, sending email, or creating events, asks you in the app first.")
-    #else
+    // Where Persona asks before acting on your behalf: on the phone, where its push goes too (#4068).
     private static let reachApprovalLine = String(localized: "Ask you and notify you on your phone")
     private static let reachApprovalFooter = String(localized: "Anything that acts on your behalf, like sending Lark messages, sending email, or creating events, asks you on your phone first.")
-    #endif
 
     private var upcoming: [AssistantUpcoming] {
         AssistantUpcoming.merge(tasks ?? []).prefix(3).map { $0 }
@@ -486,7 +506,8 @@ struct AssistantProfileView: View {
         async let s = try? api.standingAuthorizations()
         // The switch shows once the hub says it has the setting (#1731): a hub updated since the app read it, too.
         let held = model.assistantConfig
-        if held?.mainTasksQuiet == nil || held?.mainBackgroundFolded == nil || held?.mainSupervisesOwnTasks == nil || held?.recentTaskChats == nil {
+        if held?.mainTasksQuiet == nil || held?.mainBackgroundFolded == nil || held?.mainSupervisesOwnTasks == nil || held?.recentTaskChats == nil ||
+            held?.ownerReplyApproval == nil || held?.persistentOwnerActionCards == nil || held?.ownerReplyApprovalPhrases == nil {
             await model.refreshAssistant()
         }
         tasks = await r

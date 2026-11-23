@@ -146,6 +146,7 @@ enum AddComputerText {
     /// The card's lines for a computer that is not online: a known error code in words, a pending one's request, the hub's
     /// error read in plain words (why, then what to do) with the raw error under it, else the raw error itself.
     static func machineLines(_ m: Machine) -> (line: String, detail: String?)? {
+        if m.linkSwitchRunning { return nil } // the switch's own card explains this expected disconnect (#10671)
         if let p = machineProblem(m.errorCode) { return (p, nil) }
         if m.isPending { return m.online ? (String(localized: "A computer wants to join. Confirm whether it's yours."), nil) : nil }
         if let reason = NodeHealth.offlineReason(m) { return (reason, m.error) }
@@ -496,9 +497,6 @@ private struct AddComputerSheetModifier: ViewModifier {
         content.sheet(item: $request) { r in
             AddComputerSheet(request: r)
                 .environment(model)
-                #if os(macOS)
-                .macSheet()
-                #endif
         }
     }
 }
@@ -509,12 +507,7 @@ private struct AppAddComputerPresentation: ViewModifier {
     func body(content: Content) -> some View {
         @Bindable var model = model
         content
-            #if os(macOS)
-            // On a view of its own: a second sheet on the Mac's root next to New Agent's broke the window's layout.
-            .background { Color.clear.addComputerSheet($model.addComputer) }
-            #else
             .addComputerSheet($model.addComputer)
-            #endif
             #if DEBUG
             // `-showAddComputer YES | add:<mac|linux|windows>:<name> | <machine id>`: Add Computer (filled in and sent with add:…),
             // or Confirm Computer for that computer, as the app opens: for screenshots.
@@ -814,9 +807,7 @@ struct AddComputerSheet: View {
                 .accessibilityIdentifier("addComputer.reject")
             }
         }
-        #if !os(macOS)
         .listRowSeparator(.hidden) // two buttons on clear rows: no line between them
-        #endif
     }
 
     // MARK: Confirming one that is not here

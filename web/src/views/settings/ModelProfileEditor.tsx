@@ -5,7 +5,7 @@ import { t } from "../../i18n";
 import { api } from "../../lib/api";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { providerAgent, type ModelBinding, type ModelProvider, type ModelPurpose } from "../../lib/model-config";
-import { chooseProvider, effortOffered, modelConfiguration } from "../../lib/model-config-execution";
+import { chooseProvider, effortOffered, modelConfiguration, permissionModesForLauncher, permissionModesForProvider } from "../../lib/model-config-execution";
 import {
   draftToProfileInput,
   isProfileDraftDirty,
@@ -28,7 +28,7 @@ import {
 } from "../../lib/model-profiles";
 import { namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle, type Named } from "../../lib/provider-names";
 import { EFFORT_LEVELS, type ProviderView } from "../../lib/providers";
-import { effortTitle } from "../../lib/session-actions";
+import { BYPASS_MODE, BYPASS_WARNING, effortTitle, modeTitle } from "../../lib/session-actions";
 import { Button, cx, Switch } from "../../ui/atoms";
 import {
   ApiModelSelect,
@@ -57,7 +57,7 @@ function fallbackCategoryPurpose(id: string): ModelPurpose {
     override: {},
     effective: {},
     revision: 0,
-    fields: ["provider", "model", "effort"],
+    fields: isLauncher ? ["provider", "model", "effort", "permission_mode"] : ["provider", "model", "effort"],
   };
 }
 
@@ -259,7 +259,7 @@ export function ModelProfileEditor({
       ...prev,
       tiers: [
         ...prev.tiers,
-        { key, name: "", launcher: defaultLauncher, model: "", effort: "", speed: "", description: "" },
+        { key, name: "", launcher: defaultLauncher, model: "", effort: "", permission_mode: "", speed: "", description: "" },
       ],
     }));
   };
@@ -521,6 +521,8 @@ function PurposeBindingCard({
   });
   const apiModels = useDiscoveredApiModels(entry.included && expanded && isDirectApi ? chosen : undefined, manager);
   const effortAllowed = effortOffered(purpose, chosen, effectiveProvider, false, chatEffortKnown);
+  const chosenAgent = launcherList.list?.agent || providerAgent(chosen, runsOn);
+  const permissionModes = !isDirectApi ? permissionModesForProvider(purpose, chosen, chosenAgent) : [];
   const followed: ModelBinding = !entry.provider && purpose.effective?.model ? { model: purpose.effective.model } : {};
 
   const summary = !entry.included
@@ -531,6 +533,7 @@ function PurposeBindingCard({
           : t("settings-modelprofiles.purpose_follow_default"),
         entry.model,
         entry.effort && effortTitle(entry.effort),
+        entry.permission_mode && modeTitle(entry.permission_mode),
       ]
         .filter(Boolean)
         .join(" · ");
@@ -573,10 +576,10 @@ function PurposeBindingCard({
               ariaLabel={`${title} ${t("settings-modelconfiguration.model_provider")}`}
               onChange={(nextProvider) => {
                 const updated = chooseProvider(
-                  { provider: entry.provider, model: entry.model, effort: entry.effort, runtime: "" },
+                  { provider: entry.provider, model: entry.model, effort: entry.effort, permission_mode: entry.permission_mode, runtime: "" },
                   nextProvider,
                 );
-                onChange({ provider: updated.provider, model: updated.model, effort: updated.effort });
+                onChange({ provider: updated.provider, model: updated.model, effort: updated.effort, permission_mode: updated.permission_mode ?? "" });
               }}
             />
           </label>
@@ -631,6 +634,37 @@ function PurposeBindingCard({
               allowOff={purpose.kind === "api" || id === "inbox.triage"}
               onChange={(effort) => onChange({ effort })}
             />
+          )}
+
+          {permissionModes.length > 0 && (
+            <label className="block">
+              <span className="mb-1 block text-label font-medium text-ink-2">
+                {t("settings-modelconfiguration.permission_mode")}
+              </span>
+              <select
+                data-permission-mode-select
+                aria-label={`${title} ${t("settings-modelconfiguration.permission_mode")}`}
+                className={pickerInputClass}
+                value={entry.permission_mode}
+                disabled={busy}
+                onChange={(e) => onChange({ permission_mode: e.target.value })}
+              >
+                <option value="">{t("settings-modelconfiguration.follow_default")}</option>
+                {entry.permission_mode && !permissionModes.some((m) => m.id === entry.permission_mode) && (
+                  <option value={entry.permission_mode}>{modeTitle(entry.permission_mode)}</option>
+                )}
+                {permissionModes.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.title}
+                  </option>
+                ))}
+              </select>
+              <span className={`mt-1 block text-submeta ${entry.permission_mode === BYPASS_MODE ? "text-red" : "text-ink-3"}`}>
+                {entry.permission_mode === BYPASS_MODE
+                  ? BYPASS_WARNING
+                  : permissionModes.find((m) => m.id === entry.permission_mode)?.detail ?? t("settings-modelconfiguration.permission_mode_hint")}
+              </span>
+            </label>
           )}
         </div>
       )}
@@ -861,6 +895,7 @@ function TierEditorCard({
         : t("settings-modelprofiles.tier_speed_default");
 
   const chosenAgent = launcherList.list?.agent || providerAgent(chosenProvider, providerId);
+  const permissionModes = permissionModesForLauncher(chosenProvider, chosenAgent);
 
   return (
     <div data-testid={`profile-tier-edit-${tier.name || tier.key}`} className="flex flex-col gap-3 rounded-control bg-field p-3 shadow-hairline">
@@ -897,7 +932,7 @@ function TierEditorCard({
           onChange={(e) => {
             const nextLauncher = e.target.value;
             if (nextLauncher === tier.launcher) return;
-            onChange({ launcher: nextLauncher, model: "", effort: "" });
+            onChange({ launcher: nextLauncher, model: "", effort: "", permission_mode: "" });
           }}
         >
           <option value="">{t("settings-modelprofiles.tier_launcher_placeholder")}</option>
@@ -956,6 +991,37 @@ function TierEditorCard({
           </select>
         </label>
       </div>
+
+      {permissionModes.length > 0 && (
+        <label className="block">
+          <span className="mb-1 block text-label font-medium text-ink-2">
+            {t("settings-modelconfiguration.permission_mode")}
+          </span>
+          <select
+            data-permission-mode-select
+            aria-label={t("settings-modelconfiguration.permission_mode")}
+            className={pickerInputClass}
+            value={tier.permission_mode}
+            disabled={busy}
+            onChange={(e) => onChange({ permission_mode: e.target.value })}
+          >
+            <option value="">{t("settings-modelconfiguration.follow_default")}</option>
+            {tier.permission_mode && !permissionModes.some((m) => m.id === tier.permission_mode) && (
+              <option value={tier.permission_mode}>{modeTitle(tier.permission_mode)}</option>
+            )}
+            {permissionModes.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.title}
+              </option>
+            ))}
+          </select>
+          <span className={`mt-1 block text-submeta ${tier.permission_mode === BYPASS_MODE ? "text-red" : "text-ink-3"}`}>
+            {tier.permission_mode === BYPASS_MODE
+              ? BYPASS_WARNING
+              : permissionModes.find((m) => m.id === tier.permission_mode)?.detail ?? t("settings-modelconfiguration.permission_mode_hint")}
+          </span>
+        </label>
+      )}
 
       <label className="block">
         <span className="mb-1 block text-label font-medium text-ink-2">

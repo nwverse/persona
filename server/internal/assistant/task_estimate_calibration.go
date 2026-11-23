@@ -69,7 +69,7 @@ func (s *Service) estimateNewPlanTask(ctx context.Context, conversation string, 
 	evidence := TaskEstimateEvidence{Minutes: defaultTaskEstimateMinutes, Cohort: estimateUnavailable}
 	t.EstimateEvidence = &evidence
 	store := s.taskEstimateDB()
-	if store == nil || s.inHealth(ctx, conversation) {
+	if store == nil || s.selfPolicy(ctx, conversation).NoKBWrite {
 		return
 	}
 	cohort := s.taskEstimateCohort(*t)
@@ -77,7 +77,14 @@ func (s *Service) estimateNewPlanTask(ctx context.Context, conversation string, 
 	query, cancel := context.WithTimeout(ctx, estimateReadTimeout)
 	defer cancel()
 	since := now.Add(-estimateHistoryAge)
-	if err := store.ReconcileTaskEstimateRounds(query, cohort, since, now, estimateRepairLimit); err != nil {
+	// Recovery runs first so this plan can use what it restores, but it may
+	// spend only half of the remaining deadline: the history read that follows
+	// always starts with a live context.
+	deadline, _ := query.Deadline()
+	repair, cancelRepair := context.WithTimeout(query, time.Until(deadline)/2)
+	err := store.ReconcileTaskEstimateRounds(repair, cohort, since, now, estimateRepairLimit)
+	cancelRepair()
+	if err != nil {
 		s.logf("task estimate reconcile: %v", err)
 	}
 	samples, err := store.RecentTaskEstimateSamples(query, cohort, since, now, estimateHistoryLimit)
@@ -135,7 +142,7 @@ func chooseTaskEstimate(cohort db.TaskEstimateCohort, samples []db.TaskEstimateS
 // event reached the brief store. There is no reconstruction for legacy rounds.
 func (s *Service) estimateDispatch(ctx context.Context, p *TaskPlan, t *PlanTask, todo, brief, round string, at time.Time) {
 	store := s.taskEstimateDB()
-	if store == nil || s.inHealth(ctx, p.Conversation) {
+	if store == nil || s.selfPolicy(ctx, p.Conversation).NoKBWrite {
 		return
 	}
 	if err := store.CreateTaskEstimateRound(ctx, db.TaskEstimateRound{

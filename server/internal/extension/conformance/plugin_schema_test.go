@@ -26,6 +26,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extmgr/storage"
 	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const schemaDir = "../../../../schema/extension"
@@ -126,6 +127,9 @@ var goTypes = map[string]any{
 	"AssistantConversationsResult": assistantwire.AssistantConversationsResult{},
 	"AssistantMessagesParams":      assistantwire.AssistantMessagesParams{},
 	"AssistantMessagesResult":      assistantwire.AssistantMessagesResult{},
+	"AssistantEntriesParams":       proto.AssistantEntriesParams{},
+	"AssistantEntriesResult":       proto.AssistantEntriesResult{},
+	"AssistantEntriesChangedEvent": proto.AssistantEntriesChanged{},
 	"AssistantMemoryParams":        assistantwire.AssistantMemoryParams{},
 	"AssistantMemoryResult":        assistantwire.AssistantMemoryResult{},
 	"AssistantDataStatusParams":    assistantwire.AssistantDataStatusParams{},
@@ -159,6 +163,15 @@ var goTypes = map[string]any{
 	"RepoLinkResult":     wire.RepoLinkResult{},
 	"RepoDescribeParams": wire.RepoDescribeParams{},
 	"RepoDescribeResult": wire.RepoDescribeResult{},
+	"RepoPRStatusParams": wire.RepoPRStatusParams{},
+	"RepoPRStatusResult": wire.RepoPRStatusResult{},
+
+	// The manager decodes an extension's browser calls into the generated wire types and answers with them
+	// (extmgr/extension_browser.go).
+	"BrowserMachinesParams": wire.BrowserMachinesParams{},
+	"BrowserMachinesResult": wire.BrowserMachinesResult{},
+	"BrowserRunParams":      wire.BrowserRunParams{},
+	"BrowserRunResult":      wire.BrowserRunResult{},
 
 	// Storage params are the actual manager-engine decoder types. Dynamic result
 	// objects are validated against these wire DTOs before committing/acknowledging.
@@ -176,6 +189,7 @@ var goTypes = map[string]any{
 	"StorageJobResult":         wire.StorageJobResult{},
 	"StorageClaimParams":       storage.Claim{},
 	"StorageClaimResult":       wire.StorageClaimResult{},
+	"StorageRenewParams":       storage.Renew{},
 	"StorageSettleParams":      storage.Settle{},
 	"StorageDeleteResult":      wire.StorageDeleteResult{},
 	"StorageRetryParams":       storage.Retry{},
@@ -224,7 +238,7 @@ var transcriptionCalls = []string{assistantwire.MethodTranscriptionStart, assist
 // assistant.memory.read (assistant.schema.json), and what it reads back of an extension's data contributions
 // (assistant_data.schema.json).
 var assistantCalls = []string{assistantwire.MethodAssistantConversations, assistantwire.MethodAssistantMessages,
-	assistantwire.MethodAssistantMemory, assistantwire.MethodAssistantDataStatus}
+	assistantwire.MethodAssistantMemory, assistantwire.MethodAssistantDataStatus, assistantwire.MethodAssistantEntriesList, "event." + assistantwire.EventAssistantEntriesChanged}
 
 // The to-do events the hub tells the extensions granted todos.read (todos.schema.json).
 var todoCalls = []string{"event." + assistantwire.EventTodoChanged, "event." + assistantwire.EventTodoDecision}
@@ -234,10 +248,10 @@ var leaderCalls = []string{"event." + assistantwire.EventLeaderChanged, "event."
 
 // The calls the manager makes to a repository_providers contribution's program (repository.schema.json).
 var repoCalls = []string{ext.RepositoryNamespace + ".parse", ext.RepositoryNamespace + ".check", ext.RepositoryNamespace + ".link",
-	ext.RepositoryNamespace + ".describe"}
+	ext.RepositoryNamespace + ".describe", ext.RepositoryNamespace + ".pr_status"}
 
 var storageCalls = []string{"storage.request", "storage.get", "storage.list", "storage.transaction",
-	"storage.queue.list", "storage.queue.enqueue", "storage.queue.claim", "storage.queue.ack", "storage.queue.forget", "storage.queue.retry",
+	"storage.queue.list", "storage.queue.enqueue", "storage.queue.claim", "storage.queue.renew", "storage.queue.ack", "storage.queue.forget", "storage.queue.retry",
 	"storage.blob.create", "storage.blob.write", "storage.blob.finish", "storage.blob.delete", "storage.blob.read"}
 
 func TestPluginSchemasListTheServersCalls(t *testing.T) {
@@ -471,6 +485,18 @@ func (s schemas) compare(t *testing.T, at string, node map[string]any, g reflect
 		seen[key] = true
 		s.compare(t, at+"→"+name, target, g, seen)
 		return
+	}
+	if choices, ok := node["oneOf"].([]any); ok && len(choices) == 2 {
+		a, _ := choices[0].(map[string]any)
+		b, _ := choices[1].(map[string]any)
+		if a["type"] == "null" {
+			s.compare(t, at, b, g, seen)
+			return
+		}
+		if b["type"] == "null" {
+			s.compare(t, at, a, g, seen)
+			return
+		}
 	}
 	kind := func(want ...reflect.Kind) {
 		t.Helper()

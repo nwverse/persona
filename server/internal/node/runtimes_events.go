@@ -59,6 +59,8 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 	switch event {
 	case "usage.report":
 		n.runtimeUsageReport(h, params, time.Now())
+	case "usage.windows":
+		n.runtimeUsageWindows(h, params, time.Now())
 	case proto.EventModeSet:
 		var e proto.ModeSetEvent
 		if json.Unmarshal(params, &e) == nil && n.runtimes.owns(h, e.SessionID) && n.peer != nil {
@@ -87,14 +89,20 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 		}
 		n.runtimes.pushed(p.SessionID, last, p.History, p.FromSeq != nil && *p.FromSeq == 0)
 		if n.peer != nil {
-			_ = n.peer.Notify("session.items", n.echoedRaw(p.SessionID, params, "items")) // echo.go
+			raw := n.echoedRaw(p.SessionID, params, "items") // echo.go
+			raw = n.ttft.annotateRaw(p.SessionID, raw, "items", true)
+			_ = n.peer.Notify("session.items", raw)
 		}
 	case "session.delta":
 		var p struct {
 			SessionID string `json:"session_id"`
+			Text      string `json:"text"`
 		}
 		if json.Unmarshal(params, &p) != nil || !n.runtimes.owns(h, p.SessionID) || n.peer == nil {
 			return
+		}
+		if p.Text != "" {
+			n.ttft.firstToken(p.SessionID, time.Now(), "")
 		}
 		n.deltaMu.Lock()
 		_ = n.peer.Notify("session.delta", params)
@@ -170,8 +178,8 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		if s.Agent == "" {
 			s.Agent = agent
 		}
-		if s.AgentLabel == "" && (s.Agent == rt || daemon && s.Agent != "claude") {
-			// The runtime runs its own agent (DSH): the apps call it by the runtime's name. A daemon is called by the
+		if s.AgentLabel == "" && (s.Agent == rt || (agent != "" && s.Agent == agent && agent != "claude") || daemon && s.Agent != "claude") {
+			// The runtime runs its own agent (DSH, opencode-<pid>): the apps call it by the runtime's name. A daemon is called by the
 			// name its config gives, whatever agent it runs (a platform running DSH), unless that is Claude Code.
 			s.AgentLabel = label
 		}
@@ -182,7 +190,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		// sending, interrupting, answering cards and every terminal control on capabilities, the hub guards sends.
 		// What a runtime declared, never more: no terminal, no attach, cards always answerable (they are its own asks).
 		s.SourceKind, s.SourceInstanceID, s.SourceThreadID, s.ParentThreadID = proto.SourceRuntime, rt, "", ""
-		if rt == paseoRuntimeID || rt == cindyRuntimeID {
+		if rt == paseoRuntimeID || rt == cindyRuntimeID || rt == t3codeRuntimeID {
 			s.Host = rt // an engine host, though no terminal (#2576)
 		} else {
 			s.Host = ""
@@ -209,12 +217,13 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		}
 		// The permission modes it lists for an agent that is not Claude Code (#8261) go with its modes too, and only where
 		// the apps' Claude Code chips do not stand (claudeModes): the apps switch between those instead.
-		claudeModes := modes && runtimeModes(caps.Modes, rt, s)
+		claudeModes := modes && runtimeModes(caps.Modes, rt, agent, s)
 		permissionModes := own.PermissionModes
 		if !modes || claudeModes {
 			permissionModes = 0
 		}
 		rowCaps := proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,
+			A2AWakeOnSend:     caps.Send && own.A2AWakeOnSend && !sub && !s.Archived,
 			SupervisionPolicy: caps.Assistant && caps.SupervisionPolicy && !sub,
 			Close:             capBool(caps.Close), Rename: capBool(caps.Rename && !sub), Modes: capBool(claudeModes),
 			Rewind: capBool(rewind), RewindCode: capBool(rewindCode), Fork: caps.Fork && !sub,
@@ -259,6 +268,14 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 			s.UpdatedAt = time.Now().UTC()
 		}
 		s.UpdatedAt = s.UpdatedAt.UTC()
+		if bd := s.ContextBreakdown().Sanitized(); bd != nil {
+			if bd.Free == nil && s.ContextWindow > 0 && s.ContextTokens > 0 {
+				bd.Free = proto.Int(max(int(s.ContextWindow)-int(s.ContextTokens), 0))
+			}
+			s.SetContextBreakdown(bd)
+		} else if s.ContextBreakdown() != nil {
+			s.SetContextBreakdown(nil)
+		}
 		runtimeWork(&s)
 		out = append(out, s)
 	}
@@ -361,13 +378,13 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 	// the runtime's — one key for this runtime's tool, which the manager keeps under this session id, so it never
 	// reaches another session or another tool. Only for a runtime that asked for it in its hello (caps.keep_always: it
 	// keeps no rule itself; a runtime whose always is a narrower rule of its own must not get the whole tool), only
-	// when the card offers it (an always_label), and never in the health space or on a card with fields.
+	// when the card offers it (an always_label), and never in a space or on a card with fields.
 	h.mu.Lock()
 	keepAlways := h.hello.Caps.KeepAlways
 	h.mu.Unlock()
 	ix.AlwaysKeys = nil
 	if keepAlways && ix.Kind == proto.IxPermission && strings.TrimSpace(ix.AlwaysLabel) != "" && strings.TrimSpace(ix.ToolName) != "" &&
-		len(ix.Fields) == 0 && !runtimeHealth(h, ix) {
+		len(ix.Fields) == 0 && !runtimeInSpace(h, ix) {
 		ix.AlwaysKeys = []string{"runtime:" + rt + ":tool:" + ix.ToolName}
 	}
 	ix.CreatedAt = now
@@ -404,15 +421,15 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 	return res, nil
 }
 
-// runtimeHealth: the card's session is in the health space (its cwd or the row's), where every write is confirmed
+// runtimeInSpace: the card's session is in a space (its cwd or the row's), where every write is confirmed
 // (docs/assistant/health.md "Outbound"). A directory inside the space counts: a tool's `cd` may have left either there
-// (identity.InHealthSpace, #2368).
-func runtimeHealth(h *runtimeConn, ix proto.Interaction) bool {
-	if identity.InHealthSpace(ix.Cwd) {
+// (identity.InSpace, #2368).
+func runtimeInSpace(h *runtimeConn, ix proto.Interaction) bool {
+	if identity.InSpace(ix.Cwd) {
 		return true
 	}
 	s, ok := h.row(ix.SessionID)
-	return ok && (s.Space == identity.SpaceHealth || identity.InHealthSpace(s.Cwd))
+	return ok && (s.Space != "" || identity.InSpace(s.Cwd))
 }
 
 // runtimeModes is a runtime row's modes capability, the apps' Claude Code chips: the runtime declared caps.modes (the
@@ -422,7 +439,7 @@ func runtimeHealth(h *runtimeConn, ix proto.Interaction) bool {
 // takes only its own approval and Allow all for those and for Codex (bridge.js modes). So a Paseo row running Codex,
 // opencode or any other agent gets none, and older apps show no chips there; its row lists the modes it takes instead
 // (capabilities.permission_modes, #8261).
-func runtimeModes(declared bool, rt string, s proto.Session) bool {
-	own := s.Agent == rt && rt != paseoRuntimeID
+func runtimeModes(declared bool, rt, rtAgent string, s proto.Session) bool {
+	own := (s.Agent == rt || (rtAgent != "" && s.Agent == rtAgent)) && rt != paseoRuntimeID
 	return declared && !strings.Contains(s.SessionID, subagentSep) && (s.Agent == "claude" || own)
 }

@@ -31,6 +31,9 @@ import kotlinx.coroutines.flow.*
 private fun <T> GroupStack.mapped(flow: Flow<T>, transform: GroupNames.(T) -> T): Flow<T> =
     if (names.plain) flow else flow.map { names.transform(it) }
 
+internal suspend fun refreshOwnedSessions(machineId: String, call: suspend (namespace: String?, rawMachineId: String) -> Unit) =
+    call(GroupKeys.namespaceOf(machineId), GroupKeys.raw(machineId))
+
 internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : SessionsRepository, VerifiedSessionsRepository {
     override fun supportsFeature(machineId: String, feature: String) =
         feature in stacks.of(machineId)?.connection?.serverFeatures?.value.orEmpty()
@@ -92,6 +95,10 @@ internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : 
         }
     }
     override suspend fun refresh() = stacks.forEach { it.repositories.sessions.refresh() }
+    override suspend fun refreshMachine(machineId: String) = refreshOwnedSessions(machineId) { namespace, raw ->
+        // Unlike the all-hubs refresh, this read proves this machine's own hub answered (#10671).
+        stacks.use(namespace) { it.repositories.sessions.refreshMachine(raw) }
+    }
     override fun verifiedSessions(): Map<String, List<Session>> = stacks.stacks.value.flatMap { stack ->
         stack.repositories.sessions.verifiedSessions().map { (machine, sessions) ->
             stack.names.machineId(machine) to sessions.map { stack.names.session(it) }
@@ -125,7 +132,13 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolve(GroupKeys.raw(id), resolution) }
     }
     override suspend fun resolveOutcome(id: String, resolution: Resolution) =
-        stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution) }
+        resolveOutcome(id, resolution, handoffCard = false)
+    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean) =
+        stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution, handoffCard) }
+    override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) =
+        stacks.use(GroupKeys.namespaceOf(interaction.id)) {
+            it.repositories.interactions.replyOwnerApproval(it.names.rawInteraction(interaction), phrase)
+        }
     override suspend fun discardLocal(id: String) =
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.discardLocal(GroupKeys.raw(id)) }
     override val delegated = stacks.merged(emptyList<DelegatedAnswer>(), { s ->
@@ -216,6 +229,7 @@ internal fun mergedMachineManagement(
     override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
         routes.on(machineId) { it.launcherQuota(machineId, name, refresh) }
     override suspend fun reconnect(machineId: String) = routes.on(machineId) { it.reconnect(machineId) }
+    override suspend fun startLinkSwitch(machineId: String) = routes.on(machineId) { it.startLinkSwitch(machineId) }
     override suspend fun rename(machineId: String, name: String) = routes.on(machineId) { it.rename(machineId, name) }
     override suspend fun deploy(machineId: String) = routes.on(machineId) { it.deploy(machineId) }
     override suspend fun herdr(machineId: String) = routes.on(machineId) { it.herdr(machineId) }
@@ -325,6 +339,7 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
         override suspend fun isMuted(session: Session) = of(session).isMuted(session)
         override suspend fun execute(session: Session, action: ChatAction) = of(session).execute(session, action)
         override suspend fun verify(session: Session, action: ChatAction) = of(session).verify(session, action)
+        override suspend fun continueStart(session: Session, choice: String) = of(session).continueStart(session, choice)
         override suspend fun editQueue(session: Session, keep: List<Int>) = of(session).editQueue(session, keep)
         override suspend fun sendQueuedNow(session: Session) = of(session).sendQueuedNow(session)
         override suspend fun retryUndelivered(session: Session, messageId: String) = of(session).retryUndelivered(session, messageId)
@@ -442,7 +457,9 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
             operationsFor(machineId).renameSpace(machineId, workspaceId, name)
         override suspend fun closeSession(key: SessionKey) = operationsFor(key.machineId).closeSession(key)
         override suspend fun attachSession(key: SessionKey) = operationsFor(key.machineId).attachSession(key)
+        override suspend fun interruptSession(key: SessionKey) = operationsFor(key.machineId).interruptSession(key)
         override suspend fun deleteSession(key: SessionKey) = operationsFor(key.machineId).deleteSession(key)
+        override suspend fun forkSession(key: SessionKey) = operationsFor(key.machineId).forkSession(key)
     }
     val assistant = states[chosen].operations?.assistant ?: states.firstNotNullOfOrNull { it.operations?.assistant }
     val creations = states.map { it.creation }

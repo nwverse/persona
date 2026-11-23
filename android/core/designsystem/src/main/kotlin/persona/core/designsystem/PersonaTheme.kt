@@ -6,6 +6,7 @@ import android.os.Looper
 import android.provider.Settings
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -15,6 +16,7 @@ import dev.chrisbanes.haze.HazePerformanceMode
 import dev.chrisbanes.haze.LocalHazePerformanceMode
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
@@ -68,6 +70,8 @@ data class IosMassSpring(val mass: Float = 1f, val stiffness: Float, val damping
  * these (Brief and Board keep their own tweens only for the style-local state/layout springs in [PersonaMotion]).
  */
 object SharedMotion {
+    /** The immediate change Reduce Motion requests, without a page choosing its own animation spec. */
+    fun <T> instant(): FiniteAnimationSpec<T> = snap()
     /** Theme.Motion.expand (`Theme.swift:769`): smooth 0.4 s. */
     fun <T> expand(): FiniteAnimationSpec<T> =
         IosSpring(Tokens.Motion.Expand.duration, Tokens.Motion.Expand.bounce).spec()
@@ -144,6 +148,9 @@ internal object Motions {
     }
 }
 
+/** Android's xxxLarge-equivalent interface font scale; reading content keeps the system's chosen scale. */
+const val InterfaceFontScaleCap = 1.35f
+
 val LocalAppStyle = compositionLocalOf { AppStyle.Default }
 val LocalGlassLevel = compositionLocalOf { GlassLevel.Liquid }
 val LocalReduceMotion = compositionLocalOf { false }
@@ -183,7 +190,11 @@ fun PersonaTheme(
         ?: accent?.let { ThemeColors.palette(Palettes.of(style, darkTheme), it) } ?: Palettes.of(style, darkTheme)
     val type = Types.of(style)
     val shapes = Shapes.of(style)
+    val chosenDensity = LocalDensity.current
+    val readingDensity = LocalReadingDensity.current ?: chosenDensity
     CompositionLocalProvider(
+        LocalReadingDensity provides readingDensity,
+        LocalDensity provides chosenDensity.atInterfaceCap(),
         LocalAppStyle provides style,
         LocalPersonaDarkTheme provides darkTheme,
         LocalReduceMotion provides reduceMotion,
