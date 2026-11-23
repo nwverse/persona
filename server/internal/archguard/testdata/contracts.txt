@@ -5,10 +5,12 @@
 # protocol's schema, another module) are named by their full import path.
 internal/aiwire
 internal/assistantwire
+internal/cliwire
 internal/connectorwire
 internal/devicewire
 internal/dialogwire
 internal/extwire
+internal/githubwire
 internal/kbwire
 internal/mailwire
 internal/modapi
