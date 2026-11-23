@@ -158,7 +158,7 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 	if c, ok := s.session(ctx, machine, self); ok {
 		ix.Cwd = c.Cwd
 	}
-	r, err := s.ask(ctx, ix)
+	r, err := s.ask(withCard(ctx, cardConfirmOutbound), ix)
 	if err != nil {
 		return false, err
 	}
