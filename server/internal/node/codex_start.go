@@ -20,6 +20,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/osproc"
@@ -316,10 +317,15 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 			n.mu.Unlock()
 		}
 		message := fmt.Sprintf("%v\n%s", err, lastLines(shown, 12))
+		var coded *rpc.Error
 		if cleanupErr != nil {
+			// A start that met Codex's sign-in screen stays that refusal: what stopped it is the launcher's sign-in,
+			// whatever became of its tab (the cleanup's words follow).
+			if errors.As(err, &coded) && coded.Code == proto.CodeCodexNotLoggedIn {
+				return nil, &rpc.Error{Code: coded.Code, Message: message + "\n" + cleanupErr.Error(), Data: coded.Data}
+			}
 			return nil, &rpc.Error{Code: proto.CodeAgentStartStalled, Message: message + "\n" + cleanupErr.Error()}
 		}
-		var coded *rpc.Error
 		if errors.As(err, &coded) {
 			return nil, &rpc.Error{Code: coded.Code, Message: message, Data: coded.Data}
 		}
@@ -444,6 +450,9 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 		if i := strings.LastIndex(text, codexStartError); i >= 0 {
 			return "", errors.New(strings.TrimSpace(strings.SplitN(text[i:], "\n", 2)[0]))
 		}
+		if codexSignInScreen(text) {
+			return "", codexNotLoggedIn()
+		}
 		if keys := codexTrustKeys(text); keys != nil {
 			_ = n.sendKeys(ctx, pane, keys...)
 			select { // the dialog goes before the next look, which would otherwise answer it again
@@ -496,6 +505,33 @@ func codexTrustKeys(text string) []string {
 		keys = append(keys, "up")
 	}
 	return append(keys, "enter")
+}
+
+// codexSignInScreen: the screen is Codex's sign-in screen, which it shows in place of its input box when it has no
+// login on this computer. Nothing a start may answer (only a person can sign in) and nothing a wait outlasts, so a
+// start ends on it at once (codexNotLoggedIn) instead of waiting out codexStartWait. Known by what it offers, not by
+// its numbers, its heading or the other options: every version lists a "Sign in with …" choice ("Sign in with
+// ChatGPT", later also "Sign in with Device Code"), next to "Provide your own API key" in older ones and "Sign in
+// another way" in newer ones. Only a choice under the cursor counts, and never with the input box drawn: a message
+// quoting those words in the conversation is no dialog.
+func codexSignInScreen(text string) bool {
+	d := screen.ParseDialog(text)
+	if d == nil || d.Cursor == "" || len(d.Options) < 2 || screen.ReadCodex(text).View == screen.CodexComposer {
+		return false
+	}
+	for _, o := range d.Options {
+		if strings.HasPrefix(strings.ToLower(o.Label), "sign in with ") {
+			return true
+		}
+	}
+	return false
+}
+
+// codexNotLoggedIn is the refusal of a start that met Codex's sign-in screen (codexSignInScreen). Its code is what the
+// hub words in the user's language and counts as the launcher's sign-in (launcher health's auth), never as a stalled
+// start.
+func codexNotLoggedIn() error {
+	return refusal(proto.CodeCodexNotLoggedIn, i18n.T(i18n.Default, "node-codex-start.not_logged_in"), nil)
 }
 
 // codexThreadStart is when a rollout's thread began (its session_meta) and the text of its first user message ("" when

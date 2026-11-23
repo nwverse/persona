@@ -273,6 +273,7 @@ var rpcFailureKeys = map[string]string{
 	"prompt_changed":           "rpc-errors.prompt_changed",
 	"attach_busy":              "rpc-errors.attach_busy",
 	proto.CodeTerminalNotReady: "rpc-errors.terminal_not_ready",
+	proto.CodeCodexNotLoggedIn: "rpc-errors.codex_not_logged_in", // a start that met Codex's sign-in screen (node/codex_start.go)
 	// a start's new tab stopped on its shell (node/shellsettle.go, #2570)
 	proto.CodeShellWaiting:      "rpc-errors.shell_waiting",
 	proto.CodeStartLineRejected: "rpc-errors.start_line_rejected",
@@ -569,7 +570,8 @@ func Sentence(l i18n.Lang, code string, data map[string]any) string {
 	case "readonly_unsupported", proto.CodeDirectoryUntypable, "omp_options": // refusal needs no request parameters
 		return i18n.T(l, rpcFailureKeys[code])
 	}
-	if code == proto.CodeShellWaiting || code == proto.CodeStartLineRejected { // a start's new tab (node/shellsettle.go, #2570)
+	// a start's new tab (node/shellsettle.go, #2570), or the Codex in it on its sign-in screen (node/codex_start.go)
+	if code == proto.CodeShellWaiting || code == proto.CodeStartLineRejected || code == proto.CodeCodexNotLoggedIn {
 		machine, _ := data["machine_name"].(string)
 		line, _ := data["line"].(string)
 		key := "apierr-apierr." + code
