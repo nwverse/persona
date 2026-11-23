@@ -93,7 +93,7 @@ func (s *Service) planTaskSupervisor(ctx context.Context, conversation string, t
 // That topology is not the manual-Agent exception and rehomes to main. An unavailable or non-matching plan proves
 // nothing, so an explicit leader assignment is left alone rather than guessed away.
 func (s *Service) legacyLeaderPlanSupervision(ctx context.Context, t Todo) bool {
-	if t.PlanID == "" || t.Supervision == nil || !s.isLeader(ctx, t.Supervision.Supervisor) {
+	if t.PlanID == "" || t.Supervision == nil || t.Supervision.SupervisorSource == "explicit" || !s.isLeader(ctx, t.Supervision.Supervisor) {
 		return false
 	}
 	p, err := s.loadPlan(ctx, t.PlanID)
@@ -106,6 +106,21 @@ func (s *Service) legacyLeaderPlanSupervision(ctx context.Context, t Todo) bool 
 		}
 	}
 	return false
+}
+
+// effectiveSupervisor resolves persisted assignment provenance before legacy plan policy. New plans still
+// receive main in defaultPlanSupervisor; a later explicit move is authoritative, including in needs_user.
+func (s *Service) effectiveSupervisor(ctx context.Context, cfg Settings, t Todo) string {
+	if t.Supervision == nil || t.Supervision.Supervisor == "" {
+		return cfg.Main
+	}
+	if t.Supervision.SupervisorSource == "explicit" {
+		return t.Supervision.Supervisor
+	}
+	if s.legacyLeaderPlanSupervision(ctx, t) {
+		return cfg.Main
+	}
+	return t.Supervision.Supervisor
 }
 
 // rehomeSupervisedTodos brings open legacy side-supervised tasks under main without rewriting their review state or
@@ -127,8 +142,11 @@ func (s *Service) rehomeSupervisedTodos(ctx context.Context) {
 			continue
 		}
 		sup := t.Supervision.Supervisor
+		if t.Supervision.SupervisorSource == "explicit" {
+			continue
+		}
 		_, _, worker := parseLeaderRef(sup)
-		manualLeader := s.isLeader(ctx, sup) && !s.legacyLeaderPlanSupervision(ctx, t)
+		manualLeader := s.isLeader(ctx, sup) && s.effectiveSupervisor(ctx, s.settings(ctx), t) == sup
 		capableRuntime := sup != "" && t.Origin == sup && s.runtimeWithSupervisionPolicy(ctx, s.settings(ctx).MachineID, sup)
 		if sup == main || worker || manualLeader || capableRuntime || s.isBackground(ctx, sup) {
 			continue
@@ -281,6 +299,11 @@ func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids m
 // keep their special target; a manually started Agent the owner explicitly put under a leader keeps that leader. Task
 // leaders' Agent-supervised workers are handled by leaderRoute before this function.
 func (s *Service) digestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
+	// Explicit escalations keep their destination; needs_user alone is not an escalation.
+	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.SupervisorSource == "explicit" &&
+		g.Kind != sigAsk && g.Kind != sigEscalated && g.Kind != sigLeaderStuck {
+		return s.effectiveSupervisor(ctx, cfg, t)
+	}
 	own := s.ownSupervisor(cfg)
 	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
 		// Dependent readiness and parent closeout wakes go to the owning supervisor conversation (Leader or Main chat),

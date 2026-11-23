@@ -208,6 +208,10 @@ func (s *Service) sendDigest(ctx context.Context) {
 	b.last = now
 	b.mu.Unlock()
 	for _, g := range list {
+		if next := s.currentAskSignal(g); next.To != g.To {
+			s.replaceSupervisePending(g, next)
+			g = next
+		}
 		original := g
 		if lead, handled, reachable := s.leaderRoute(g); handled { // never digestTo: a session is no conversation
 			if reachable {

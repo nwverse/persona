@@ -71,11 +71,12 @@ func isStalledReworkKind(kind string) bool {
 
 // Supervision is a supervised task's ledger, as the apps get it on the todo (supervision).
 type Supervision struct {
-	Supervisor    string             `json:"supervisor"` // the conversation that handed it out
-	DoneWhen      []string           `json:"done_when"`
-	Criteria      []db.TodoCriterion `json:"criteria"`
-	ExpectMinutes int                `json:"expect_minutes,omitempty"`
-	State         string             `json:"state"` // "" going on, or one of review*
+	Supervisor       string             `json:"supervisor"`                  // the conversation currently supervising it
+	SupervisorSource string             `json:"supervisor_source,omitempty"` // "explicit" after an owner or supervisor move
+	DoneWhen         []string           `json:"done_when"`
+	Criteria         []db.TodoCriterion `json:"criteria"`
+	ExpectMinutes    int                `json:"expect_minutes,omitempty"`
+	State            string             `json:"state"` // "" going on, or one of review*
 	// Parked: what a parked task waits for (parked.go); nil unless State is parked. Read off its latest review each time
 	// the ledger is copied, not kept on its own.
 	Parked              *Parked      `json:"parked,omitempty"`
@@ -304,7 +305,7 @@ func (s *Service) supervisionDB() supervisionStore {
 }
 
 func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
-	v := &Supervision{Supervisor: r.Supervisor, DoneWhen: r.DoneWhen, Criteria: r.Criteria, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
+	v := &Supervision{Supervisor: r.Supervisor, SupervisorSource: r.SupervisorSource, DoneWhen: r.DoneWhen, Criteria: r.Criteria, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
 		PendingSince: r.PendingSince, UpdatedAt: r.UpdatedAt}
 	_ = json.Unmarshal(r.Reviews, &v.Reviews)
 	v.StalledReworkRounds = v.stalledReworkRounds()
@@ -395,7 +396,7 @@ func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
 	if v.Waits != nil {
 		waits, _ = json.Marshal(v.Waits)
 	}
-	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
+	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, SupervisorSource: v.SupervisorSource, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
 		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, PendingSince: v.PendingSince, UpdatedAt: v.UpdatedAt}
 }
 

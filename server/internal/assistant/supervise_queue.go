@@ -58,6 +58,9 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 // recheckDigestTo preserves the supervisor already persisted for a queued signal. New dispatch uses digestTo's
 // main-supervision policy; revalidating an existing relay must not rehome it merely because that policy changed.
 func (s *Service) recheckDigestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
+	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.SupervisorSource == "explicit" {
+		return s.digestTo(ctx, cfg, g)
+	}
 	if g.To != "" {
 		return s.digestTo(ctx, cfg, g)
 	}
@@ -109,6 +112,7 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	groups := map[string][]superviseSignal{}
 	entries := map[string][]prompts.SuperviseEntry{}
 	for _, g := range signals {
+		g = s.currentAskSignal(g)
 		if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil && g.Kind == sigNeedsYou {
 			if _, known := s.taskNeedsRecheck(ctx, t); !known {
 				return msg, false, true

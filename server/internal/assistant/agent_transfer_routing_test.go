@@ -1,0 +1,211 @@
+package assistant
+
+import (
+	"encoding/json"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
+)
+
+func transferPlannedTask(t *testing.T, s *Service, f *fakeHub, task Todo, destination string) {
+	t.Helper()
+	a := task.Agents[0]
+	f.setSessions(a.MachineID, proto.Session{SessionID: a.SessionID, MachineID: a.MachineID, Status: proto.StatusWorking})
+	if _, err := s.toolAgentTransfer(t.Context(), "conv1", transferArgs(a.MachineID, a.SessionID, destination)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Exercise the issue's actual topology: a lead's plan defaults to main, then main explicitly transfers it back
+// to that same lead. The saved plan must no longer be evidence of a legacy assignment after this move.
+func TestAgentTransferPlanSignalsAndReload(t *testing.T) {
+	database := todoTestDB(t)
+	s, f, task := newLeaderServiceOn(t, database)
+	if task.Origin != "lead1" || task.PlanID == "" || task.Supervision.Supervisor != "conv1" || task.Supervision.SupervisorSource != "" {
+		t.Fatalf("new lead plan changed its default: %+v", task)
+	}
+	settleService(t, s)
+	transferPlannedTask(t, s, f, task, "lead1")
+	transferPlannedTask(t, s, f, task, "lead1") // same assignment also persists its provenance
+	kinds := append(slices.Clone(backgroundSignals), sigEstimateDue, sigStarted, sigFailed, sigParentCloseout)
+	kinds = slices.DeleteFunc(kinds, func(kind string) bool { return kind == sigAsk })
+	check := func(s *Service) {
+		t.Helper()
+		for _, state := range []string{"", reviewNeedsUser, reviewPending} {
+			if _, _, err := s.updateSupervision(t.Context(), task.ID, func(v *Supervision) bool { v.State = state; return true }); err != nil {
+				t.Fatal(err)
+			}
+			for _, kind := range kinds {
+				for _, pinned := range []string{"", "conv1"} {
+					g := superviseSignal{Todo: task.ID, Kind: kind, To: pinned}
+					cfg := s.settings(t.Context())
+					if got := s.digestTarget(t.Context(), cfg, g); got != "lead1" {
+						t.Errorf("immediate %s/%s pinned=%s: %s", state, kind, pinned, got)
+					}
+					if got := s.recheckDigestTarget(t.Context(), cfg, g); got != "lead1" {
+						t.Errorf("queued %s/%s pinned=%s: %s", state, kind, pinned, got)
+					}
+				}
+			}
+		}
+		for _, kind := range []string{sigEscalated, sigLeaderStuck} {
+			if got := s.digestTo(t.Context(), s.settings(t.Context()), superviseSignal{Todo: task.ID, Kind: kind}); got != "conv1" {
+				t.Errorf("explicit escalation %s went to %s", kind, got)
+			}
+		}
+	}
+	check(s)
+	again, _ := newQuietServiceOn(t, database)
+	if err := again.ensureTodosLoaded(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := todoNow(again, task.ID).Supervision; got.Supervisor != "lead1" || got.SupervisorSource != "explicit" {
+		t.Fatalf("reload overwrote explicit assignment: %+v", got)
+	}
+	check(again)
+}
+
+// Actual sends and queue drains must agree with the route table and must not repeat a queued card on restore.
+func TestAgentTransferPendingCardsBeforeAfterAndRestart(t *testing.T) {
+	for _, kind := range []string{proto.IxQuestion, proto.IxPermission, proto.IxPlan} {
+		t.Run(kind, func(t *testing.T) {
+			database := todoTestDB(t)
+			e := newRouteEnv(t, database, true)
+			s := e.s
+			// Start on main, as a new plan does; hold the digest there while its turn is busy.
+			if _, _, err := s.updateSupervision(t.Context(), e.todo.ID, func(v *Supervision) bool { v.Supervisor = "conv1"; return true }); err != nil {
+				t.Fatal(err)
+			}
+			e.supervisorState(proto.StatusWorking, proto.StatusWorking)
+			card := func(id string) proto.Interaction {
+				ix := askQuestion(id, "worker-1")
+				if kind != proto.IxQuestion {
+					ix = askPermission(id, "worker-1")
+					ix.Kind = kind
+				}
+				ix.Resumable = true
+				return ix
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			waits := make(chan struct{}, 2)
+			raise := func(ix proto.Interaction) {
+				go func() { _, _ = s.waitInteraction(ctx, ix); waits <- struct{}{} }()
+				e.waitPendingID(ix.ID)
+			}
+			raise(card("before"))
+			waitFor(t, "main's queued card", func() bool { return s.queuedFor("conv1") == 1 })
+			transferPlannedTask(t, s, e.f, todoNow(s, e.todo.ID), "lead1")
+			transferPlannedTask(t, s, e.f, todoNow(s, e.todo.ID), "lead1")
+			if _, ok := s.routedTo("before", "lead1", false); !ok {
+				t.Fatal("card pending before transfer kept its old route")
+			}
+			raise(card("after"))
+			waitFor(t, "new card's route", func() bool { _, ok := s.routedTo("after", "lead1", false); return ok })
+			// Let any gather finish while both supervisors are still busy, then restart with the durable queue.
+			e.settle()
+			cancel()
+			<-waits
+			<-waits
+			s2 := newRestartedService(t, Options{Hub: e.f, Store: func() Store { return database }, Devices: e.d, Logf: t.Logf})
+			shortSupervise(t, s2)
+			noDirectionsTimers(s2)
+			s2.FleetUp(t.Context())
+			for _, id := range []string{"before", "after"} {
+				if _, ok := s2.routedTo(id, "lead1", false); !ok {
+					t.Fatalf("restored %s did not keep the transferred supervisor", id)
+				}
+			}
+			drain := func(id string) {
+				idle := proto.Session{SessionID: id, MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+				e.f.setSessions("server", idle, proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+				s2.drainRelays("server", []proto.Session{idle})
+				waitFor(t, "drain "+id, func() bool { s2.relays.mu.Lock(); defer s2.relays.mu.Unlock(); return !s2.relays.draining[id] })
+			}
+			drain("conv1")
+			drain("lead1")
+			settleService(t, s2)
+			drain("conv1")
+			drain("lead1")
+			if got := e.f.noticesTo("conv1"); len(got) != 0 {
+				t.Fatalf("old supervisor received transferred cards: %q", got)
+			}
+			notices := strings.Join(e.f.noticesTo("lead1"), "\n")
+			for _, id := range []string{"before", "after"} {
+				if n := strings.Count(notices, "interaction_id="+id); n != 1 {
+					t.Fatalf("card %s delivered %d times: %s", id, n, notices)
+				}
+			}
+			if n := e.pushesOf("before", "after"); n != 0 {
+				t.Fatalf("transfer pushed %d cards to the owner", n)
+			}
+		})
+	}
+}
+
+func TestAgentTransferKeepsDeliveredAndEscalatedCards(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	e.raise(askQuestion("delivered", "worker-1"))
+	e.noticeWith("lead1", "interaction_id=delivered")
+	e.settle()
+	e.s.fleet.mu.Lock()
+	r := e.s.fleet.interactions["delivered"].route
+	since, deadline := r.since, r.routedAt
+	e.s.fleet.mu.Unlock()
+	transferPlannedTask(t, e.s, e.f, todoNow(e.s, e.todo.ID), "conv1")
+	if _, ok := e.s.routedTo("delivered", "lead1", false); !ok {
+		t.Fatal("already delivered card was replayed to a new supervisor")
+	}
+	e.s.fleet.mu.Lock()
+	if !r.since.Equal(since) || !r.routedAt.Equal(deadline) {
+		t.Error("transfer extended the card deadline")
+	}
+	e.s.fleet.mu.Unlock()
+	e.s.ringAsks(e.todo.ID, []string{"delivered"}, nil, escalation{})
+	transferPlannedTask(t, e.s, e.f, todoNow(e.s, e.todo.ID), "lead1")
+	if _, ok := e.s.routedTo("delivered", "lead1", false); ok {
+		t.Fatal("owner-escalated card was taken back")
+	}
+	e.settle()
+}
+
+func TestAgentTransferQueuedOrdinarySignalOnlyReachesNewSupervisor(t *testing.T) {
+	s, f, tasks := queuedDigestFixture(t, "Transferred task", "Unchanged task")
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	if _, _, err := s.updateSupervision(t.Context(), tasks[0].ID, func(v *Supervision) bool {
+		v.Supervisor, v.SupervisorSource, v.State = "lead1", "explicit", reviewNeedsUser
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	drainQueuedDigest(t, s, f)
+	if got := strings.Join(f.noticesTo("conv1"), "\n"); strings.Contains(got, "Transferred task") || !strings.Contains(got, "Unchanged task") {
+		t.Fatalf("old supervisor's mixed digest: %s", got)
+	}
+	idle := proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	f.setSessions("server", idle)
+	for range 2 {
+		drainRelayTest(t, s, idle)
+	}
+	got := strings.Join(f.noticesTo("lead1"), "\n")
+	if strings.Count(got, "Transferred task") != 2 || strings.Contains(got, "Unchanged task") {
+		// The fixture has two distinct signals for each task, carried in one message.
+		t.Fatalf("new supervisor's signals: %s", got)
+	}
+	if len(f.noticesTo("lead1")) != 1 {
+		t.Fatal("queued signals were delivered more than once")
+	}
+}
+
+// Persisted provenance has a stable JSON name and is carried by the database row, not a process-local flag.
+func TestAgentTransferAssignmentRowRoundTrip(t *testing.T) {
+	v := &Supervision{Supervisor: "lead1", SupervisorSource: "explicit", UpdatedAt: time.Now()}
+	back := supervisionFromRow(v.row("task"))
+	raw, err := json.Marshal(back)
+	if err != nil || back.SupervisorSource != "explicit" || !strings.Contains(string(raw), `"supervisor_source":"explicit"`) {
+		t.Fatalf("assignment lost: %s %v", raw, err)
+	}
+}
