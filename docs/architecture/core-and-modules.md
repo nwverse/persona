@@ -117,6 +117,11 @@ missing quietly.
   ScheduledConfiguration, NorthStar, Accept, Later, Golden): the assistant's tests of the briefing itself skip
   (`needsBriefingModule`), and `TestBuildWithoutBriefingLoadsNone` checks the core without it. The whole package passes
   with both tags too (about 9 minutes each, too long for the lane).
+  `scripts/ci/core-only-smoke.py` (the lane's 'Core-only hub smoke') starts the core alone: it builds the programs
+  with `persona_core_only`, runs `persona-hub run` and its `persona-manager` against a disposable Postgres from a
+  temporary home, and checks health, the manager's `modules: loaded none`, and that every module's program
+  (`builtinext.AddProgram` in `internal/modules/all`), extension and extension route is absent; `--full` checks the
+  opposite on a default build.
 - **At run time**: the settings row `modules` (the `settings` table, as every other setting; no state file) holds
   `{"disabled": ["<id>", …]}`. The manager reads it once where it starts (`server/internal/assistant/main.go`,
   `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so a change takes effect at the next

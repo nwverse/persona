@@ -127,6 +127,8 @@ struct PersonaApp: App {
                 // Refresh the health summary snapshot while unlocked, so a locked-phone phone_health_summary
                 // call later can serve it instead of HealthKit's inaccessible-database error.
                 Task { await HealthTool.refreshSnapshot() }
+                // And the watched health types' sample snapshots (phone_health_watch, #13740); throttled.
+                Task { await HealthSampleWatcher.shared.foreground() }
                 Task { await HealthIntakeSync.shared.refresh(model: model) }
                 SiriCalls.askOnce(paired: model.hub != nil) // a build with app.siri_calls only (#9290)
                 BackgroundLocation.shared.cameToFront() // offers Always once after a read refused in the background
@@ -192,6 +194,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the
         // reports' small state file this early.
         if WorkoutReports.deliversInBackground { WorkoutReports.shared.observe() }
+        // The observers of the types phone_health_watch keeps current (#13740), for the same reason; a small defaults list.
+        HealthSampleWatcher.shared.start()
         // Here too, for a launch iOS made for a significant location change: the Always session and the service are kept
         // only a few seconds after a relaunch (#13200). Asks nothing; one manager whose level arrives in a callback.
         BackgroundLocation.shared.launch()
