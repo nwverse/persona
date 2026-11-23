@@ -1,6 +1,6 @@
 //go:build iphonesimlive
 
-package iphone
+package nodeiphone
 
 import (
 	"context"

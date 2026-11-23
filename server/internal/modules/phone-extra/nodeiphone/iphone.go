@@ -1,4 +1,4 @@
-package iphone
+package nodeiphone
 
 // Operating the iPhones this computer reaches over RemotePairing, for the assistant (the built-in extension iphone,
 // docs/extensions/iphone.md). The built-in program iphone answers the manager: status (which iPhones there are and

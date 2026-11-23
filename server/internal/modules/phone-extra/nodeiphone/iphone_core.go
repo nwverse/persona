@@ -1,4 +1,4 @@
-package iphone
+package nodeiphone
 
 // The iphone program's driver on a real computer: the core of internal/iphonectl (element numbers, reading the screen,
 // limits, whether an input took effect, the owner's approval), reaching the iPhone through the bridge's operations on
