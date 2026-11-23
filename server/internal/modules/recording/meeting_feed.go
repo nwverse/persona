@@ -62,11 +62,21 @@ type attendTimer struct {
 	stop func() bool
 }
 
+// hostNow is the Host's clock (Host.FeedClock), else the real one.
+func (s *Recordings) hostNow() time.Time {
+	if s.h != nil {
+		if now, _ := s.h.FeedClock(); now != nil {
+			return now()
+		}
+	}
+	return time.Now()
+}
+
 func (s *Recordings) attendNow() time.Time {
 	if f := s.attend.feed.now; f != nil {
 		return f()
 	}
-	return time.Now()
+	return s.hostNow()
 }
 
 // meetingKick: recording id changed in the knowledge base (an upload, new live lines): it is looked at soon.
@@ -121,6 +131,9 @@ func (s *Recordings) attendLookAt(id string, at time.Time) {
 		f.timers = map[string]attendTimer{}
 	}
 	after := f.after
+	if after == nil && s.h != nil {
+		_, after = s.h.FeedClock()
+	}
 	if after == nil {
 		after = func(d time.Duration, fn func()) func() bool { return time.AfterFunc(d, fn).Stop }
 	}

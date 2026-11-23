@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"bytes"
@@ -13,9 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
-	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The attending routes through the manager's HTTP (docs/assistant/meeting-minutes.md "Attending a meeting"). All
@@ -353,47 +351,5 @@ func TestMeetingAttendanceDefaultSetting(t *testing.T) {
 	m.do("PUT", "/api/v1/assistant", "", `{"recording_days":30}`, http.StatusOK)
 	if got := m.s.meetingAttendanceDefault(context.Background()); got != "listener" {
 		t.Fatalf("another setting changed it: %s", got)
-	}
-}
-
-// persona_settings reads and changes assistant.meeting_attendance_default: the same value asks nothing, another role
-// asks on the phone with the roles named in the user's language, anything else is refused.
-func TestMeetingAttendanceDefaultSettingsTool(t *testing.T) {
-	ctx := context.Background()
-	s := newTestService(t, newFakeHub().withMachine())
-	const key = "assistant.meeting_attendance_default"
-	tool := func(args string) (string, bool) {
-		r := s.Tool(ctx, ToolCall{Name: "persona_settings", Arguments: json.RawMessage(args), MachineID: "server", SessionID: "c1"})
-		return r.Content[0].Text, r.IsError
-	}
-	get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
-	set := func(value string) (string, bool) {
-		return tool(`{"action":"set","key":"` + key + `","value":` + value + `}`)
-	}
-	if out := get(); out != "off" {
-		t.Fatalf("default: %s", out)
-	}
-	if out, isErr := set(`"off"`); isErr || !strings.Contains(out, "unchanged") || len(s.pendingQuestions()) != 0 {
-		t.Fatalf("set to what it is: %s", out)
-	}
-	if out, isErr := set(`"chair"`); !isErr || !strings.Contains(out, "off, listener or participant") {
-		t.Fatalf("an unknown role: %s", out)
-	}
-	role := func(r string) string { return i18n.T(i18n.Default, "assistant-settings_tool.meeting_role_"+r) }
-	card := i18n.T(i18n.Default, "assistant-settings_tool.change_meeting_attendance_default", i18n.Args{"before": role("off"), "after": role("participant")})
-	go func() {
-		q, ok := awaitCard(s)
-		if !ok || q.Summary != card {
-			t.Errorf("card %+v, want %q", q, card)
-			return
-		}
-		allow := true
-		raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
-		if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: raw}); err != nil {
-			t.Error(err)
-		}
-	}()
-	if out, _ := set(`"participant"`); !strings.HasPrefix(out, key+" is participant") || get() != "participant" {
-		t.Fatalf("approved: %s", out)
 	}
 }

@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"bytes"
@@ -616,86 +616,6 @@ func TestMeetingPhotoSendInDoubt(t *testing.T) {
 	}
 }
 
-// meeting_photo_note: the room's note on a photo of its own meeting that went into it, within 1000 characters;
-// refused for an unknown photo, one not forwarded, one withdrawn, another meeting's, and by a room started before the
-// tool existed.
-func TestMeetingPhotoNoteTool(t *testing.T) {
-	r := newRoomFixture(t)
-	sid := r.roomUp(meetingRec, "listener")
-	other := r.roomUp(meetingOther, "listener")
-	r.addPhoto(meetingRec, photoBody(t, photoOne, 5, nil))
-	for _, id := range []string{photoOne, photoTwo, photoThree} {
-		r.addPhoto(meetingOther, photoBody(t, id, 5, nil))
-	}
-	r.look(meetingRec)
-	for range 3 {
-		r.look(meetingOther)
-	}
-	r.addPhoto(meetingRec, photoBody(t, photoTwo, 6, nil)) // queued, not in the room yet
-	d := newFleetDevs()
-	d.add("server", "Server")
-	r.s.devs = d
-	call := func(session, args string) proto.ToolResult {
-		t.Helper()
-		out, ok, err := r.s.NodeRequest(context.Background(), "server", "mcp.call",
-			json.RawMessage(`{"name":"meeting_photo_note","args":`+args+`,"session_id":"`+session+`","assistant":true,"guest":true}`))
-		if !ok || err != nil {
-			t.Fatalf("call: %v %v", ok, err)
-		}
-		return out.(proto.ToolResult)
-	}
-	text := func(res proto.ToolResult) string {
-		var b strings.Builder
-		for _, c := range res.Content {
-			b.WriteString(c.Text)
-		}
-		return b.String()
-	}
-	rev := r.engine().PhotosRev(meetingRec)
-	if res := call(sid, `{"photo":1,"text":"  The Q3 budget on the board is 40k.  "}`); res.IsError {
-		t.Fatalf("note: %s", text(res))
-	}
-	if ps := r.photosOf(meetingRec); ps[0]["note"] != "The Q3 budget on the board is 40k." || r.engine().PhotosRev(meetingRec) != rev+1 {
-		t.Fatalf("noted %v", ps[0])
-	}
-	for name, c := range map[string]struct{ args, want string }{
-		"too long":      {`{"photo":1,"text":"` + strings.Repeat("字", kb.MaxPhotoNote+1) + `"}`, "1000"},
-		"empty":         {`{"photo":1,"text":"  "}`, "empty"},
-		"no text":       {`{"photo":1}`, "required"},
-		"not a number":  {`{"photo":"one","text":"x"}`, "number"},
-		"unknown":       {`{"photo":9,"text":"x"}`, "no photo 9"},
-		"not forwarded": {`{"photo":2,"text":"x"}`, "no photo 2"},
-		"another's":     {`{"photo":3,"text":"x"}`, "no photo 3"}, // the other meeting's photo 3 went into its own room
-	} {
-		if res := call(sid, c.args); !res.IsError || !strings.Contains(text(res), c.want) {
-			t.Errorf("%s: %v %s", name, res.IsError, text(res))
-		}
-	}
-	if ps := r.photosOf(meetingOther); ps[2]["note"] != nil {
-		t.Fatalf("another meeting's photo noted %v", ps[2])
-	}
-	r.do("DELETE", photosPath(meetingRec)+"/1", "", nil, http.StatusOK)
-	if res := call(sid, `{"photo":1,"text":"again"}`); !res.IsError || !strings.Contains(text(res), "withdrawn") {
-		t.Fatalf("withdrawn: %s", text(res))
-	}
-
-	// A room started before the tool existed keeps the tools it started with: not listed, refused.
-	if err := r.s.guestPut(context.Background(), other, &guestConv{MachineID: "server", Tools: []string{"meeting_lines", "meeting_earlier"},
-		Kind: guestKindMeeting, Recording: meetingOther}); err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, tl := range r.s.sessionMCPTools(context.Background(), "server", other, true, true) {
-		names = append(names, tl.Name)
-	}
-	if !slices.Equal(names, []string{"meeting_lines", "meeting_earlier"}) {
-		t.Fatalf("an older room's tools %v", names)
-	}
-	if res := call(other, `{"photo":1,"text":"x"}`); !res.IsError || !strings.Contains(text(res), "unknown tool") {
-		t.Fatalf("an older room noted: %s", text(res))
-	}
-}
-
 // GET …/live has the photos' revision (none before the first photo) and ?parts=photos only that; detail.meta has
 // neither the photos nor their revision; the meeting_live event says photos changed with their revision.
 func TestMeetingPhotosLive(t *testing.T) {
@@ -846,32 +766,5 @@ func TestMeetingPhotoDeletedBeforeTheFollowup(t *testing.T) {
 	if strings.Contains(seed, "PHOTO-ONLY") || strings.Contains(block, "[ ]") || strings.Contains(block, "[x]") || strings.Contains(block, "## Board") ||
 		strings.Contains(block, "## "+i18n.T(lang, "kb-minutes.decisions")) {
 		t.Fatalf("seed:\n%s", seed)
-	}
-	if out, _ := runTool(m.s, "c1", "kb_get", map[string]any{"kind": "recordings", "id": meetingRec}); strings.Contains(out, "PHOTO-ONLY") {
-		t.Fatalf("kb_get:\n%s", out)
-	}
-}
-
-// kb_get prints a recording's photos (photos.md) after the minutes' action items and before the transcript; a deleted
-// photo is not there.
-func TestMeetingPhotosInKBGet(t *testing.T) {
-	m := newMeetingFixture(t)
-	m.upload(meetingRec, 1, map[string]any{"title": "Design review", "complete": true, "ended_at": time.Now().UTC().Format(time.RFC3339),
-		"segments": []map[string]any{{"start": 0, "end": 9, "text": "Bo adds the test."}}})
-	m.addPhoto(meetingRec, photoBody(t, photoOne, 5, map[string]any{"caption": "Whiteboard", "text": "Q3 budget"}))
-	m.addPhoto(meetingRec, photoBody(t, photoTwo, 6, map[string]any{"text": "DELETED-PHOTO-TEXT"}))
-	m.do("DELETE", photosPath(meetingRec)+"/2", "", nil, http.StatusOK)
-	m.minutesFor(meetingRec, `{"title":"Design review","actions":[{"who":"Bo","what":"Add the test","line":1}]}`)
-	out, err := runTool(m.s, "c1", "kb_get", map[string]any{"kind": "recordings", "id": meetingRec})
-	if err != nil {
-		t.Fatal(err)
-	}
-	actions, photos, transcript := strings.Index(out, "Action items as they stand"), strings.Index(out, "\nphotos.md:\n[P1] "), strings.Index(out, "\ntranscript.md:")
-	if actions < 0 || photos < actions || transcript < photos || !strings.Contains(out, "photo: Whiteboard · Q3 budget\n") || strings.Contains(out, "DELETED-PHOTO") {
-		t.Fatalf("kb_get:\n%s", out)
-	}
-	m.do("DELETE", photosPath(meetingRec)+"/1", "", nil, http.StatusOK)
-	if out, _ := runTool(m.s, "c1", "kb_get", map[string]any{"kind": "recordings", "id": meetingRec}); strings.Contains(out, "photos.md") {
-		t.Fatalf("kb_get without photos:\n%s", out)
 	}
 }

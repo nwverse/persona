@@ -59,7 +59,7 @@ var (
 // finalPasses looks at the hub-mode recordings every finalEvery, and when kicked (a complete upload, a socket's end,
 // the last gap uploaded), until ctx ends; restarted, it resumes the passes that were running.
 func (s *Recordings) finalPasses(ctx context.Context) {
-	t := time.NewTicker(s.tm.finalEvery)
+	t := time.NewTicker(s.tm().finalEvery)
 	defer t.Stop()
 	s.kickFinal() // makes the channel
 	s.hubTr.mu.Lock()
@@ -147,7 +147,7 @@ func (s *Recordings) finalLook(ctx context.Context, e *kb.Engine, id string, now
 		}
 		run := s.hubRunOf(rec.ID)
 		open := run != nil && run.socketOpen()
-		waited := complete && now.Sub(t.CompleteAt) >= s.tm.finalGapWait
+		waited := complete && now.Sub(t.CompleteAt) >= s.tm().finalGapWait
 		if !stale && !waited && (open || len(t.Gaps) > 0) {
 			return // waits for the socket's end and the gap uploads
 		}
@@ -265,7 +265,7 @@ func (s *Recordings) finalPass(ctx context.Context, e *kb.Engine, id string, st 
 		}
 		t = u
 	}
-	if wait, ok := finalRetryAfter(&s.tm, t, unreachable); ok {
+	if wait, ok := finalRetryAfter(s.tm(), t, unreachable); ok {
 		s.hubTr.mu.Lock()
 		st.nextAt = time.Now().Add(wait)
 		s.hubTr.mu.Unlock()
@@ -277,7 +277,7 @@ func (s *Recordings) finalPass(ctx context.Context, e *kb.Engine, id string, st 
 // finalRetryAfter is how long after a failed try of the final pass the next one starts, false when none is left. A try
 // that never reached the upstream (unreachable: counted in FinalUnreachable) waits by finalUnreachableRetries; any
 // other failed try by finalRetries, counted among the tries that were not unreachable (#9535).
-func finalRetryAfter(tm *timings, t kb.MeetingTranscription, unreachable bool) (time.Duration, bool) {
+func finalRetryAfter(tm timings, t kb.MeetingTranscription, unreachable bool) (time.Duration, bool) {
 	waits, n := tm.finalRetries, t.FinalTries-t.FinalUnreachable
 	if unreachable {
 		waits, n = tm.finalUnreachableRetries, t.FinalUnreachable
@@ -357,7 +357,7 @@ func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [
 	if err != nil {
 		return err
 	}
-	ictx, cancel := context.WithTimeout(ctx, s.tm.jobReadyWait)
+	ictx, cancel := context.WithTimeout(ctx, s.tm().jobReadyWait)
 	info, err := s.h.TranscriptionInfo(ictx, ref)
 	cancel()
 	if err != nil {
@@ -389,7 +389,7 @@ func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [
 	}
 	jctx, jcancel := context.WithCancel(ctx)
 	defer jcancel()
-	rctx, rcancel := context.WithTimeout(jctx, s.tm.jobReadyWait)
+	rctx, rcancel := context.WithTimeout(jctx, s.tm().jobReadyWait)
 	defer rcancel()
 	jc, err := s.dialJob(rctx, ref)
 	if err != nil {
@@ -523,7 +523,7 @@ func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [
 	}()
 
 	buf := make([]byte, replayFrame)
-	ahead := int64(s.tm.replayAhead.Seconds() * kb.AudioRate)
+	ahead := int64(s.tm().replayAhead.Seconds() * kb.AudioRate)
 	for {
 		for {
 			mu.Lock()
@@ -532,7 +532,7 @@ func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [
 			if behind <= ahead {
 				break
 			}
-			left := s.tm.jobDoneWait - time.Since(time.Unix(0, heard.Load()))
+			left := s.tm().jobDoneWait - time.Since(time.Unix(0, heard.Load()))
 			if left <= 0 {
 				return errNoDone // the job stopped answering: tried again
 			}
@@ -575,7 +575,7 @@ func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [
 	if err := jc.Send(jctx, extwire.TranscriptionFrame{Type: extwire.TFEnd}); err != nil {
 		return sendFailed(err)
 	}
-	done := time.NewTimer(s.tm.jobDoneWait)
+	done := time.NewTimer(s.tm().jobDoneWait)
 	defer done.Stop()
 	select {
 	case err := <-result:

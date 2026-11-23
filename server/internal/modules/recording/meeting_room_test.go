@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"context"
@@ -343,62 +343,6 @@ func isCode(err error, code string) bool {
 	return errors.As(err, &e) && e.Code == code
 }
 
-// The room's tools: its meeting tools only, bound to its recording; meeting_lines reads its lines, meeting_earlier
-// only earlier meetings marked not private; any other tool is refused.
-func TestMeetingRoomTools(t *testing.T) {
-	r := newRoomFixture(t)
-	r.engine().EarlierMeetingsInAnswers = true
-	r.earlierMeeting("Exports over four megabytes are dropped")
-	sid := r.roomUp(meetingRec, "listener")
-	r.do("POST", livePath(meetingRec), "", `{"from":0,"segments":[{"start":61,"end":64,"text":"Ada: keep the cap."},{"start":3700,"end":3705,"text":"Bo: later."}]}`, http.StatusOK)
-	rec, _ := r.engine().Store.Recording(meetingRec)
-	loc := zoneApart(t, rec.StartedAt) // the user's, neither UTC nor this machine's: the batches' zone
-	setSettings(t, r.s, func(v *Settings) { v.Timezone = loc.String() })
-	tools := r.s.sessionMCPTools(context.Background(), "server", sid, true, true)
-	var names []string
-	for _, tl := range tools {
-		names = append(names, tl.Name)
-	}
-	if !slices.Equal(names, []string{"meeting_lines", "meeting_earlier", "meeting_photo_note", "meeting_topics_set", "meeting_highlights_set"}) {
-		t.Fatalf("tools %v", names)
-	}
-	d := newFleetDevs() // the nodes' requests are the fleet's
-	d.add("server", "Server")
-	r.s.devs = d
-	call := func(name, args string) proto.ToolResult {
-		out, ok, err := r.s.NodeRequest(context.Background(), "server", "mcp.call", json.RawMessage(`{"name":"`+name+`","args":`+args+`,"session_id":"`+sid+`","assistant":true,"guest":true}`))
-		if !ok || err != nil {
-			t.Fatalf("%s: %v %v", name, ok, err)
-		}
-		return out.(proto.ToolResult)
-	}
-	text := func(res proto.ToolResult) string {
-		var b strings.Builder
-		for _, c := range res.Content {
-			b.WriteString(c.Text)
-		}
-		return b.String()
-	}
-	// Each line's offset, then the clock time a batch gives it in the user's zone (what a highlight's said_at copies).
-	clock := func(sec float64) string { return kb.LiveClock(*rec, sec, loc) }
-	if got := text(call("meeting_lines", `{"to":100}`)); got != "[1:01 · "+clock(61)+"] Ada: keep the cap." {
-		t.Fatalf("lines %q", got)
-	}
-	if got := text(call("meeting_lines", `{"from":3000}`)); got != "[1:01:40 · "+clock(3700)+"] Bo: later." {
-		t.Fatalf("lines past an hour %q", got)
-	}
-	if got := text(call("meeting_earlier", `{"query":"export cap"}`)); !strings.Contains(got, "Keep the cap for this release") {
-		t.Fatalf("earlier %q", got)
-	}
-	r.do("PUT", "/api/v1/recordings/"+earlier+"/private", "", map[string]any{"private": true}, http.StatusOK)
-	if got := text(call("meeting_earlier", `{"query":"export cap"}`)); strings.Contains(got, "Keep the cap") {
-		t.Fatalf("a private meeting was material: %q", got)
-	}
-	if res := call("kb_search", `{"query":"x"}`); !res.IsError {
-		t.Fatalf("another tool ran: %v", res)
-	}
-}
-
 // Asking the room: a typed question goes to the room as the owner's own message under ask-<id>-1, and its answer is
 // the room's reply, Markdown removed (via room); asked again after a failure it goes under ask-<id>-2. A heard
 // question goes with source meeting and keeps question "" with its lines. While the room is unavailable the ask is
@@ -486,25 +430,6 @@ func TestMeetingRoomAsk(t *testing.T) {
 	}
 	// The same id with another spoken flag is another request.
 	wantCode(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?"}, http.StatusConflict), codeOpIDReused)
-}
-
-// A main chat an older hub stored on the Agent SDK does not keep its room from starting: the room takes the main chat's
-// launcher and model, and neither names a runtime.
-func TestMeetingRoomRunsOnTheCLI(t *testing.T) {
-	r := newRoomFixture(t)
-	ctx := context.Background()
-	if err := r.s.store().PutSetting(ctx, modelRecordKey("assistant"), json.RawMessage(`{"revision":1,"binding":{"runtime":"agentsdk"}}`)); err != nil {
-		t.Fatal(err)
-	}
-	main := map[string]any{}
-	if err := r.s.applyModel(ctx, "assistant", main); err != nil || main["runtime"] != nil {
-		t.Fatalf("the main chat %v %v", main, err)
-	}
-	r.roomUp(meetingRec, "participant")
-	sends := r.sends()
-	if len(sends) != 1 || sends[0]["runtime"] != nil || sends[0]["launcher"] != main["launcher"] {
-		t.Fatalf("room start %v, main chat %v", sends, main)
-	}
 }
 
 // A room whose turn ended in Claude Code's own words for a failed request (signed out) gives no answer: the ask fails
@@ -711,36 +636,4 @@ func TestMeetingRoomDeleted(t *testing.T) {
 	other := r.roomUp(meetingOther, "listener")
 	r.do("DELETE", "/api/v1/recordings/"+meetingOther, "", nil, http.StatusOK)
 	waitFor(t, "the deleted recording's room deleted", func() bool { return !r.s.isRoom(other) })
-}
-
-// A room's row in the lists the apps and the extensions read (GET /api/v1/sessions) is the assistant's (its
-// guest-meeting/<recording id> directory counts as the assistant's since #6077) and says its origin meeting, its
-// recording and its title, so that the voice extension refuses an ordinary call bound to it (meeting_room) and the apps
-// leave its voice button out. Another row the book has an origin for is not an assistant's conversation and says none.
-func TestMeetingRoomRowSaysItsOrigin(t *testing.T) {
-	ft := newFleetTest(t)
-	machine, _ := ft.s.fleetMachine("mac")
-	sid := meetingSessionID(meetingRec, partRoom)
-	room := proto.Session{SessionID: sid, Agent: "claude", Status: proto.StatusIdle, Title: "The meeting is starting.",
-		Cwd: path.Join(path.Dir(machine.assistantCwd()), "guest-meeting", meetingRec)}
-	agent := proto.Session{SessionID: "agent", Agent: "claude", Cwd: "/home/u/src", PaneID: "p1", Status: proto.StatusIdle, Title: "Fix the build"}
-	ft.d.setSessions("mac", []proto.Session{room, agent})
-	ctx := context.Background()
-	started := time.Date(2026, 11, 13, 14, 0, 0, 0, time.UTC)
-	ft.s.originSet(ctx, "mac", sid, OriginMeeting, meetingRec, "")
-	ft.s.titleFixed("mac", sid, started, titleMeeting, "Design review")
-	ft.s.originSet(ctx, "mac", "agent", OriginTask, "task1", "")
-	rows := map[string]proto.Session{}
-	for _, sess := range ft.s.decoratedUnarchived("mac") {
-		rows[sess.SessionID] = sess
-	}
-	if r := rows[sid]; !r.Assistant || r.Origin != OriginMeeting || r.OriginRef != meetingRec || !strings.Contains(r.Title, "Design review") {
-		t.Fatalf("the room's row: assistant %v, origin %q %q, title %q", r.Assistant, r.Origin, r.OriginRef, r.Title)
-	}
-	if r := rows["agent"]; r.Origin != "" || r.OriginRef != "" || r.Title != "Fix the build" {
-		t.Fatalf("an agent's row: origin %q %q, title %q", r.Origin, r.OriginRef, r.Title)
-	}
-	if r, ok := ft.s.decoratedSession("mac", sid); !ok || r.Origin != OriginMeeting || r.OriginRef != meetingRec {
-		t.Fatalf("the room's row alone: %v %q %q", ok, r.Origin, r.OriginRef)
-	}
 }

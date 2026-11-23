@@ -238,7 +238,7 @@ func newHubRun(s *Recordings, e *kb.Engine, id string) *hubRun {
 
 // loop is the run's clock: spans open too long, the hub's transcript, idle jobs, the fallback.
 func (r *hubRun) loop() {
-	t := time.NewTicker(r.s.tm.hubTick)
+	t := time.NewTicker(r.s.tm().hubTick)
 	defer t.Stop()
 	for {
 		select {
@@ -256,17 +256,17 @@ func (r *hubRun) tick(now time.Time) {
 	if r.stopped {
 		return
 	}
-	if r.openFrom != nil && !r.openAssumed && now.Sub(r.openAt) >= r.s.tm.echoHoldMost {
+	if r.openFrom != nil && !r.openAssumed && now.Sub(r.openAt) >= r.s.tm().echoHoldMost {
 		r.releaseHoldLocked()
 	}
-	if r.hubDirty && now.Sub(r.hubPutAt) >= r.s.tm.hubSegmentsEvery {
+	if r.hubDirty && now.Sub(r.hubPutAt) >= r.s.tm().hubSegmentsEvery {
 		r.putHubLocked()
 	}
 	if j := r.job; j != nil && !j.ending && !r.audioAt.IsZero() && now.Sub(r.audioAt) >= r.idleLimitLocked() {
 		r.s.logf("recording %s: transcription job idle (socket up: %t), ended", r.id, r.phone != nil)
 		r.endJobLocked(j)
 	}
-	if j := r.job; j != nil && j.ready && !j.ending && j.behind && now.Sub(j.behindAt) >= r.s.tm.jobStall && now.Sub(j.ackAt) >= r.s.tm.jobStall {
+	if j := r.job; j != nil && j.ready && !j.ending && j.behind && now.Sub(j.behindAt) >= r.s.tm().jobStall && now.Sub(j.ackAt) >= r.s.tm().jobStall {
 		r.s.logf("recording %s: transcription job stalled (nothing acknowledged), closed", r.id)
 		r.jobStalledLocked(j)
 	}
@@ -280,9 +280,9 @@ func (r *hubRun) tick(now time.Time) {
 // new job with its next audio, as after a dropped job, resending what the hub lacks from ready.from.
 func (r *hubRun) idleLimitLocked() time.Duration {
 	if r.phone == nil {
-		return r.s.tm.jobAwayIdle
+		return r.s.tm().jobAwayIdle
 	}
-	return r.s.tm.jobIdle
+	return r.s.tm().jobIdle
 }
 
 // notifyLocked wakes the waiters (hubFlush, awaitHeard).
@@ -781,7 +781,7 @@ func (s *Recordings) hubInterim(id string) *liveInterim {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	in := r.interim
-	if in == nil || !r.phoneReady || r.ended || time.Since(in.At) > s.tm.interimShown ||
+	if in == nil || !r.phoneReady || r.ended || time.Since(in.At) > s.tm().interimShown ||
 		r.timeline.RoleAt(in.Start, r.role) == kb.AttendanceOff {
 		return nil
 	}
@@ -847,10 +847,10 @@ func (s *Recordings) awaitHeard(ctx context.Context, e *kb.Engine, id string, a 
 		return l, err
 	}
 	if !rec.HubTranscribed() || a.At == nil {
-		return awaitLive(ctx, &s.tm, e, id, a.LiveNext)
+		return awaitLive(ctx, s.tm(), e, id, a.LiveNext)
 	}
 	if r := s.hubRunOf(id); r != nil {
-		wctx, cancel := context.WithTimeout(ctx, s.tm.askLiveWait)
+		wctx, cancel := context.WithTimeout(ctx, s.tm().askLiveWait)
 		if r.inFallback() {
 			r.awaitDevice(wctx, *a.At)
 		} else {

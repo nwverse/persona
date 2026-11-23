@@ -46,6 +46,12 @@ func (s *Recordings) TranscriptionChanged() {
 
 func (s *Recordings) TranscriptionJobsCheck(ctx context.Context) { s.transcriptionJobsCheck(ctx) }
 
+// MeetingTurnSent marks that a meeting's batch went to machine's session (recording's; persona: an assistant
+// conversation): its turn, once started, is the meeting's (meeting_turns.go).
+func (s *Recordings) MeetingTurnSent(machine, session, recording string, persona bool) (time.Time, error) {
+	return s.meetingTurnSent(machine, session, recording, persona)
+}
+
 func (s *Recordings) JustMeNow(machine, session string) bool { return s.justMeNow(machine, session) }
 func (s *Recordings) JustMeSent(machine, session string)     { s.justMeSent(machine, session) }
 func (s *Recordings) JustMeStarted(machine, session string, newTurn, woken bool) {
@@ -90,9 +96,18 @@ func (s *Recordings) RoomToolCall(ctx context.Context, recording, name string, a
 func (s *Recordings) RoomTools() []proto.Tool { return meetingRoomTools() }
 func (s *Recordings) RoomToolNames() []string { return meetingRoomToolNames() }
 
-// Wait waits until the module's background work has ended (hub transcription's goroutines, the questions being
-// answered), or ctx ends.
+// Wait ends the live hub transcription runs and waits until the module's background work has ended (hub
+// transcription's goroutines, the questions being answered), or ctx ends: the service stops.
 func (s *Recordings) Wait(ctx context.Context) error {
+	s.hubTr.mu.Lock()
+	runs := make([]*hubRun, 0, len(s.hubTr.by))
+	for _, r := range s.hubTr.by {
+		runs = append(runs, r)
+	}
+	s.hubTr.mu.Unlock()
+	for _, r := range runs { // the service stops: the live runs end with it (their sockets, clocks and jobs)
+		r.stop("")
+	}
 	done := make(chan struct{})
 	go func() {
 		s.hubTr.wg.Wait()

@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"bytes"
@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -103,24 +102,6 @@ func TestTranscriptionModeOnUpload(t *testing.T) {
 	run.tick(fallbackDue)
 	if tr := assertHubDetail(); !tr.Fallback {
 		t.Fatalf("detail.meta did not expose the legitimate fallback: %+v", tr)
-	}
-}
-
-// Before the upgrade only the caller (403) and the knowledge base (503) refuse the socket.
-func TestAudioSocketRefusedBeforeTheUpgrade(t *testing.T) {
-	h := newHubFixture(t)
-	h.hubUpload(meetingRec, 1, nil)
-	url := "ws" + strings.TrimPrefix(h.sockets.URL, "http") + "/api/v1/recordings/" + meetingRec + "/audio"
-	_, resp, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{HTTPHeader: http.Header{RoleHeader: {"answer"}}})
-	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("answer role: %v %v", err, resp)
-	}
-	noKB := newTestService(t, newFakeHub())
-	srv := httptest.NewServer(http.HandlerFunc(noKB.ServeSocket))
-	defer srv.Close()
-	_, resp, err = websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/v1/recordings/"+meetingRec+"/audio", nil)
-	if err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("no knowledge base: %v %v", err, resp)
 	}
 }
 

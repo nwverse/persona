@@ -105,7 +105,7 @@ func (r *hubRun) runJob(j *liveJob) {
 	}
 	start := extwire.TranscriptionFrame{Type: extwire.TFStart, Mode: extwire.TranscriptionLive, Language: recordingLanguage(rec),
 		Glossary: s.transcriptionGlossary(ctx, rec), At: extwire.F(float64(j.startS) / kb.AudioRate)}
-	rctx, cancel := context.WithTimeout(j.ctx, r.s.tm.jobReadyWait)
+	rctx, cancel := context.WithTimeout(j.ctx, r.s.tm().jobReadyWait)
 	defer cancel()
 	ref, choice, err := s.transcriptionTarget(ctx)
 	if err != nil {
@@ -237,7 +237,7 @@ func (j *liveJob) feedLocked(from int64, pcm []byte) {
 	if j.ending {
 		return
 	}
-	if j.ready && j.sentS-j.ackedS > int64(j.run.s.tm.liveAhead.Seconds()*kb.AudioRate) {
+	if j.ready && j.sentS-j.ackedS > int64(j.run.s.tm().liveAhead.Seconds()*kb.AudioRate) {
 		if !j.behind {
 			j.run.s.logf("recording %s: transcription job behind, audio skipped", j.run.id)
 		}
@@ -314,7 +314,7 @@ func (r *hubRun) endJobLocked(j *liveJob) {
 		r.dropJobLocked(j)
 		return
 	}
-	time.AfterFunc(r.s.tm.audioEndWait, func() {
+	time.AfterFunc(r.s.tm().audioEndWait, func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.dropJobLocked(j)
@@ -370,7 +370,7 @@ func (r *hubRun) jobFailed(j *liveJob, code string, err error) {
 	if r.dropped {
 		p = problemUpstreamFailed
 	}
-	r.jobRetryAt = time.Now().Add(r.s.tm.jobRetry)
+	r.jobRetryAt = time.Now().Add(r.s.tm().jobRetry)
 	r.setUpstreamLocked(p)
 	r.notifyLocked()
 }
@@ -388,7 +388,7 @@ func (r *hubRun) jobFatal(j *liveJob, code string) {
 		return
 	}
 	r.fatal = true
-	r.jobRetryAt = time.Now().Add(r.s.tm.jobRetry)
+	r.jobRetryAt = time.Now().Add(r.s.tm().jobRetry)
 	r.setUpstreamLocked(problemOfJob(code))
 	r.fallbackCheckLocked(time.Now())
 	r.notifyLocked()

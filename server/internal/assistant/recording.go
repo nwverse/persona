@@ -3,9 +3,13 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"slices"
+	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -34,6 +38,7 @@ func (s *Service) loadRecording() {
 
 // recordingOptions are Options' knobs of the recording module (Options.RecordingTimings).
 type recordingOptions struct {
+	mu      sync.Mutex // tests change them while the module runs
 	timings map[string]time.Duration
 	lists   map[string][]time.Duration
 	now     func() time.Time
@@ -50,6 +55,26 @@ func (s *Service) recordingWait(d time.Duration) {
 	if err := s.rec.Wait(ctx); err != nil {
 		s.logf("recording: background work still running at the end: %v", err)
 	}
+}
+
+// recordingCapabilities are the capabilities of the manager's hello that the recording module serves: the hub
+// announces the meeting features only while the default manager's hello names them (hub/extensions_link.go).
+var recordingCapabilities = []string{assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation,
+	assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView, assistantwire.CapabilityMeetingHighlights,
+	assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
+	assistantwire.CapabilityRecordingDay}
+
+// withRecording is caps without the recording module's capabilities when svc has no recording layer (none yet: when
+// the build has no recording module), in their order.
+func withRecording(caps []string, svc *Service) []string {
+	on := recordinghost.InBuild()
+	if svc != nil {
+		on = svc.recordingOn()
+	}
+	if on {
+		return caps
+	}
+	return slices.DeleteFunc(caps, func(c string) bool { return slices.Contains(recordingCapabilities, c) })
 }
 
 // recordingOn says whether the module is loaded.
@@ -233,4 +258,13 @@ func (s *Service) meetingRoomToolNames() []string {
 		return nil
 	}
 	return s.rec.RoomToolNames()
+}
+
+// meetingTurnSent marks that a meeting's batch went to machine's session (the module's meeting turns); an error
+// without the module.
+func (s *Service) meetingTurnSent(machine, session, recording string, persona bool) (time.Time, error) {
+	if s.rec == nil {
+		return time.Time{}, errors.New("no recording module")
+	}
+	return s.rec.MeetingTurnSent(machine, session, recording, persona)
 }

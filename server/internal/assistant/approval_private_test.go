@@ -88,7 +88,7 @@ func TestPrivateApprovalQueuedResultRenewsJustMeAfterRestart(t *testing.T) {
 	ft.f.known["s1"] = true
 	ft.f.mu.Unlock()
 	now := time.Now().Add(justMeMax + time.Minute)
-	restarted.justMe.now = func() time.Time { return now }
+	recClock(restarted, func() time.Time { return now })
 	if err := restarted.deliverRelay(context.Background(), "mac", "s1", queued); err != nil {
 		t.Fatal(err)
 	}

@@ -244,7 +244,7 @@ func (s *Recordings) askRoute() {
 			return
 		}
 		if done != nil {
-			hold := time.NewTimer(s.tm.askHold - time.Since(start))
+			hold := time.NewTimer(s.tm().askHold - time.Since(start))
 			select {
 			case <-done:
 			case <-hold.C:
@@ -462,7 +462,7 @@ func (s *Recordings) answerAsk(e *kb.Engine, id string, a kb.LiveAsk, done chan 
 	if _, rec, err := e.LiveRead(id); err == nil && rec.RoomMeeting() {
 		out = s.answerInRoom(ctx, e, id, a) // the room answers it (meeting_room_ask.go)
 	} else {
-		tctx, cancel := context.WithTimeout(ctx, s.tm.askTimeout)
+		tctx, cancel := context.WithTimeout(ctx, s.tm().askTimeout)
 		out = s.answerMeetingAsk(tctx, e, id, a)
 		cancel()
 	}
@@ -563,7 +563,7 @@ func (s *Recordings) answerMeetingAsk(ctx context.Context, e *kb.Engine, id stri
 }
 
 // awaitLive is recording id's live log once it holds next positions, waiting at most askLiveWait; without next at once.
-func awaitLive(ctx context.Context, tm *timings, e *kb.Engine, id string, next *int) (kb.Live, error) {
+func awaitLive(ctx context.Context, tm timings, e *kb.Engine, id string, next *int) (kb.Live, error) {
 	l, _, err := e.LiveRead(id)
 	if err != nil || next == nil {
 		return l, err

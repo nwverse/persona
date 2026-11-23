@@ -54,6 +54,7 @@ type Layer interface {
 	JustMeSent(machine, session string)
 	JustMeStarted(machine, session string, newTurn, woken bool)
 	JustMeEnded(machine, session string, held bool)
+	MeetingTurnSent(machine, session, recording string, persona bool) (time.Time, error)
 	MeetingTurnNow(machine, session string) bool
 	MeetingTurnStarted(machine, session string, newTurn bool) bool
 	MeetingTurnEnded(machine, session string) bool
@@ -174,6 +175,9 @@ func Provide(new func(Host) Layer) {
 	}
 	provided = new
 }
+
+// InBuild says whether the recording module is in this build.
+func InBuild() bool { return provided != nil }
 
 // New is the module's layer for h; false when the module is not in this build.
 func New(h Host) (Layer, bool) {

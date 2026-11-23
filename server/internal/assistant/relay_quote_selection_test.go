@@ -128,7 +128,7 @@ func TestQuoteExactWordsAndItemIDs(t *testing.T) {
 func TestQuoteMeetingBoundary(t *testing.T) {
 	d := newDispatchPolicyHarness(t)
 	now := time.Now()
-	d.s.justMe.now = func() time.Time { return now }
+	recClock(d.s, func() time.Time { return now })
 	public := ownerItem("trail-map", "prepare the trail map")
 	question := ownerItem("meeting-question", "choose a sample color")
 	question.ClientMsgID = "just-me-example"

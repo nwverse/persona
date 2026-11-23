@@ -7,8 +7,7 @@ import (
 
 // Recordings is the recording module's state in one manager: what the assistant's Service held of it before.
 type Recordings struct {
-	h  Host
-	tm timings // the module's times (timings.go)
+	h Host
 
 	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
 	// confirmation at a time reads and records what the others made.
@@ -29,14 +28,13 @@ type Recordings struct {
 
 // New is the module's state, reaching the core through h.
 func New(h Host) *Recordings {
-	s := &Recordings{h: h, tm: defaultTimings()}
-	if h == nil {
-		return s
-	}
-	one, lists := h.Timings()
-	s.tm = timingsWith(one, lists, h.Logf)
-	if now, after := h.FeedClock(); now != nil || after != nil {
-		s.attend.feed.now, s.attend.turns.now, s.attend.feed.after = now, now, after
+	s := &Recordings{h: h}
+	// The meeting turns' clock is the feeder's, and the Just me turns' the Host's (a test's, else the real one).
+	s.attend.turns.now = s.attendNow
+	s.justMe.now = s.hostNow
+	if h != nil {
+		one, lists := h.Timings()
+		timingsWith(one, lists, h.Logf) // says once what it does not know
 	}
 	return s
 }

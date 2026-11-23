@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
@@ -402,7 +403,8 @@ func New(o Options) *Service {
 		s.logf = func(string, ...any) {}
 	}
 	s.loadModules(o.Modules, o.ModulesOff) // before anything a module adds to is set up
-	s.recOpts = recordingOptions{o.RecordingTimings, o.RecordingTimingLists, o.RecordingFeedNow, o.RecordingFeedAfter}
+	s.recOpts.timings, s.recOpts.lists = maps.Clone(o.RecordingTimings), maps.Clone(o.RecordingTimingLists)
+	s.recOpts.now, s.recOpts.after = o.RecordingFeedNow, o.RecordingFeedAfter
 	s.loadRecording() // the recording module, when the kernel loaded it (recording.go)
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)

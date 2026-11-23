@@ -114,12 +114,12 @@ func (s *Recordings) audioSocket(w http.ResponseWriter, r *http.Request) {
 	helpers.Add(1)
 	go func() {
 		defer helpers.Done()
-		p.keepAlive(heard, s.tm.audioPingEvery)
+		p.keepAlive(heard, s.tm().audioPingEvery)
 	}()
 
 	// start, within audioStartWait; no audio before ready.
 	var start phoneFrame
-	timer := time.AfterFunc(s.tm.audioStartWait, func() { p.fail(codeBadFrame) })
+	timer := time.AfterFunc(s.tm().audioStartWait, func() { p.fail(codeBadFrame) })
 	for {
 		typ, raw, err := c.Read(ctx)
 		if err != nil {
@@ -159,7 +159,7 @@ func (s *Recordings) audioSocket(w http.ResponseWriter, r *http.Request) {
 	helpers.Add(1)
 	go func() {
 		defer helpers.Done()
-		t := time.NewTicker(s.tm.audioAckEvery)
+		t := time.NewTicker(s.tm().audioAckEvery)
 		defer t.Stop()
 		for {
 			select {
@@ -281,7 +281,7 @@ func (r *hubRun) finishLive(p *phoneSocket, end float64) {
 		r.endJobLocked(j)
 	}
 	r.mu.Unlock()
-	deadline := time.NewTimer(r.s.tm.audioEndWait)
+	deadline := time.NewTimer(r.s.tm().audioEndWait)
 	defer deadline.Stop()
 	for j != nil {
 		r.mu.Lock()

@@ -60,6 +60,22 @@ func defaultTimings() timings {
 	}
 }
 
+// defaults are defaultTimings, made once: read only.
+var defaults = defaultTimings()
+
+// tm are the module's times now: the defaults with what the core's Host.Timings overrides at the moment (a test may
+// change them between calls).
+func (s *Recordings) tm() timings {
+	if s.h == nil {
+		return defaults
+	}
+	one, lists := s.h.Timings()
+	if len(one) == 0 && len(lists) == 0 {
+		return defaults
+	}
+	return timingsWith(one, lists, nil)
+}
+
 // byName are tm's times by their names, which Host.Timings uses.
 func (tm *timings) byName() map[string]*time.Duration {
 	return map[string]*time.Duration{

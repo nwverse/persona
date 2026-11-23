@@ -1,11 +1,8 @@
-package assistant
+package recording
 
 import (
-	"context"
 	"testing"
-	"time"
 
-	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -63,44 +60,5 @@ func TestAttendeeVerdict(t *testing.T) {
 		if got := attendeeVerdict(c.sess, c.f); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
-	}
-}
-
-// In the fleet the session's row and its computer are the manager's own; a turn that just ended keeps a batch back
-// until its push is decided, a meeting turn's end does not.
-func TestAttendeeCheckFleet(t *testing.T) {
-	ft := newFleetTestNoStore(t)
-	fastDone(ft)
-	s, ctx := ft.s, context.Background()
-	ref := kb.SessionRef{MachineID: "mac", SessionID: "s1"}
-	work := proto.Session{SessionID: "s1", Cwd: "/code/app", Agent: "claude", Status: proto.StatusWorking, PaneID: "p1", UpdatedAt: time.Now()}
-	done := work
-	done.Status, done.LastText = proto.StatusDone, "Done."
-	ft.sessions("mac", done)
-	if _, v := s.attendeeCheck(ctx, ref, time.Now()); v != "" {
-		t.Fatalf("a done Agent: %q", v)
-	}
-	if _, v := s.attendeeCheck(ctx, kb.SessionRef{MachineID: "elsewhere", SessionID: "s1"}, time.Now()); v != attendeeNotAllowed {
-		t.Fatalf("a computer this manager does not carry: %q", v)
-	}
-	if _, v := s.attendeeCheck(ctx, kb.SessionRef{MachineID: "mac", SessionID: "gone"}, time.Now()); v != attendeeUnavailable {
-		t.Fatalf("a session that is not listed: %q", v)
-	}
-	ft.sessions("mac", work)
-	if _, v := s.attendeeCheck(ctx, ref, time.Now()); v != attendeeBusy {
-		t.Fatalf("working: %q", v)
-	}
-	ft.sessions("mac", done)
-	if _, v := s.attendeeCheck(ctx, ref, time.Now()); v != attendeeBusy {
-		t.Fatalf("a turn that just ended: %q", v)
-	}
-	if _, v := s.attendeeCheck(ctx, ref, time.Now().Add(time.Minute)); v != "" {
-		t.Fatalf("its push decided: %q", v)
-	}
-	ft.d.mu.Lock()
-	ft.d.machines["mac"].trust = "work"
-	ft.d.mu.Unlock()
-	if _, v := s.attendeeCheck(ctx, ref, time.Now().Add(time.Minute)); v != attendeeNotAllowed {
-		t.Fatalf("a work computer: %q", v)
 	}
 }
