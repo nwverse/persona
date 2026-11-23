@@ -107,6 +107,9 @@ func TestAgentTransferPendingCardsBeforeAfterAndRestart(t *testing.T) {
 			if _, ok := s.routedTo("before", "lead1", false); !ok {
 				t.Fatal("card pending before transfer kept its old route")
 			}
+			if _, _, err := s.updateSupervision(t.Context(), e.todo.ID, func(v *Supervision) bool { v.State = reviewNeedsUser; return true }); err != nil {
+				t.Fatal(err)
+			}
 			raise(card("after"))
 			waitFor(t, "new card's route", func() bool { _, ok := s.routedTo("after", "lead1", false); return ok })
 			// Let any gather finish while both supervisors are still busy, then restart with the durable queue.
