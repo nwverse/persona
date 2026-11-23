@@ -246,8 +246,8 @@ func TestHeldDecisionStaysHeldWhenItsBriefingIsSwitchedOff(t *testing.T) {
 	}
 }
 
-// A held decision no briefing will list is pushed after all, once, with its card: the routine was switched off, or
-// none ran within 24 hours.
+// A held decision the briefing that is on did not list is pushed after all, once, with its card: none ran within 24
+// hours.
 func TestHeldDecisionIsPushedWhenNoBriefingListsIt(t *testing.T) {
 	for _, c := range []struct {
 		name  string
