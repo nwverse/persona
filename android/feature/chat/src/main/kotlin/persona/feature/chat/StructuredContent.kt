@@ -79,7 +79,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
             }
         }
         StarredChatMark(item)
-        if (cut) FullTextButton(item) { whole = it } else ReaderEntry(text)
+        if (cut) FullTextButton(item) { whole = it } else ReadingContent { ReaderEntry(text) }
         if (update?.streaming == true) StreamingCursor()
         // An answer's documents as cards with their first page (iOS #1543), the rest as chips.
         if (user) FileChips(model.files, alignEnd = true)
@@ -118,7 +118,7 @@ private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, on
     }
     parts.forEachIndexed { index, part ->
         when (part) {
-            is MessagePart.Text -> if (user) {
+            is MessagePart.Text -> if (user) ReadingContent {
                 val annotated = messageLinkAnnotations(part.text)
                 val layoutState = remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
                 Text(annotated, Modifier.chatLinkLongPress(annotated) { layoutState.value }, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink,
@@ -127,8 +127,7 @@ private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, on
                         if (index == parts.lastIndex && layout.lineCount > 0)
                             onLastLine?.invoke((layout.size.height - layout.getLineTop(layout.lineCount - 1)).toInt() + bottomPadding)
                     })
-            }
-                else AssistantAnswerFrame(boxed) {
+            } else AssistantAnswerFrame(boxed) {
                     ReplyMarkdown(part.text, "$id/$index", ownReply,
                         viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) }, streaming = streaming)
                 }
