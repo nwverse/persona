@@ -13,9 +13,9 @@ MOCK_TODO_VIEW=1      features todo_view and todo_places. GET /api/v1/todos: eve
                       the hub's rules for a tick on a failed start (closed now) and a reopen (out of Someday, no longer
                       failed) are applied. The Widget run's plan is a card (GET /api/v1/interactions); answering it
                       sets the run working. The views follow every write. With the hello's todo_asks (unless
-                      MOCK_TODO_ASKS=0), POST /api/v1/todos/{id}/asks/{ask}/answer answers the asks the views list as
-                      the hub does: T01's decision (an option, the plain press, a fixed answer, later, decline and its
-                      undo with the receipt) and T03's retry; 409 ask_stale with the row once an ask no longer waits,
+                      MOCK_TODO_VIEW_ASKS=0), POST /api/v1/todos/{id}/asks/{ask}/answer answers the asks the views list
+                      as the hub does: T01's decision (an option, a fixed answer, later, decline and its undo with the
+                      receipt; 400 for no answer at all) and T03's retry; 409 ask_stale with the row once an ask no longer waits,
                       answer_in_session for a run's ask (answered through its card), 404 ask_not_found for an id of no
                       known form. Each ask says its risk and lock-screen rule (T01's decision and T03's retry safe, the
                       Widget's plan open, with its card's id).
@@ -101,10 +101,12 @@ PLAN_CARD = "ix_todo_widget_plan"
 
 HELP = ["MOCK_TODO_VIEW=1|old|late  the To-dos view from the design prototype's to-dos (#10465, "
         "scripts/mock/todo_view_mock.py): rows with view, counts and an ETag, the item and places routes, Someday and "
-        "restore, today's answers to its asks, and the send receipts (message_send_state, and except under old "
-        "todo_send_state under X-Persona-Op-Id, with the hello's markers); old: a hub from before it (405); late: the "
-        "hello names it only after a reconnect (MOCK_TODO_VIEW_LATE_SECONDS apart, default 5; /mock/reset starts it "
-        "again)",
+        "restore, today's answers to its asks and the asks route (feature todo_asks), and the send receipts "
+        "(message_send_state, and except under old todo_send_state under X-Persona-Op-Id, with the hello's markers); "
+        "old: a hub from before it (405); late: the hello names it only after a reconnect (MOCK_TODO_VIEW_LATE_SECONDS "
+        "apart, default 5; /mock/reset starts it again)",
+        "MOCK_TODO_VIEW_ASKS=0  with MOCK_TODO_VIEW=1: the hello leaves out todo_asks and the asks route is not there "
+        "(404), a hub whose managers answer only through today's accept and retry routes",
         "MOCK_TODO_MANAGERS=2  with MOCK_TODO_VIEW: the Weather App's to-dos are a second manager's (stamped rows, "
         "counts added up, places merged)"]
 
@@ -882,9 +884,9 @@ ASKS = re.compile(r"/api/v1/todos/([^/]+)/asks/([^/]+)/answer")
 
 
 def asks_listed():
-    """Whether the hello names todo_asks now: with the view, unless MOCK_TODO_ASKS=0 (a hub whose managers are of stage
-    1, which answer through today's routes)."""
-    return listed() and os.environ.get("MOCK_TODO_ASKS") != "0"
+    """Whether the hello names todo_asks now: with the view, unless MOCK_TODO_VIEW_ASKS=0 (a hub whose managers answer
+    only through today's routes)."""
+    return listed() and os.environ.get("MOCK_TODO_VIEW_ASKS") != "0"
 
 
 def answer_ask(h, tid, ask):
@@ -963,6 +965,9 @@ def answer_now(h, tid, ask):
     if outcome:
         return h.send_json({"error": "outcome must be later, decline or undo", "delivered": "none"}, 400)
     option, response = str(body.get("option") or ""), str(body.get("response") or "")
+    if not (option or response or body.get("text")):
+        # As the hub's errAnswerNeeded: a decision has no one action, so it takes an option, a fixed answer or words.
+        return h.send_json({"error": "a decision takes an option, a fixed answer or your words", "delivered": "none"}, 400)
     if response and response not in RESPONSES:
         return h.send_json({"error": "no such fixed answer", "delivered": "none"}, 400)
     if option and option not in [o["label"] for o in legacy.get("options", [])]:

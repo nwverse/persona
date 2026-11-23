@@ -1,6 +1,6 @@
 import XCTest
 
-/// Answering a to-do's asks on its V1 row (#10465, stage-2 plan PR 14; docs/apple/ios.md "To-dos (V1, #10465)") against
+/// Answering a to-do's asks on its V1 row (#10465; docs/apple/ios.md "To-dos (V1, #10465)") against
 /// the mock hub's To-dos view (`MOCK_TODO_VIEW=1`, `PERSONA_TODOS_HUB`). `-showTodosV1 YES` stands for the release.
 ///
 /// - OK on Plan the Kyoto trip takes it out of N at once: the Needs you header, the Filter's Needs you, the drawer's
@@ -88,11 +88,53 @@ final class TodosV1AnswersTests: XCTestCase {
         XCTAssertEqual(tally.value as? String, String(n - 1), "the folded Pages heading")
         places.tap() // unfolded again, as the next run expects
         // After the window the answer has gone, and the hub's view says the same: the decision taken, N as it was said.
-        sleep(6)
-        let answered = try JSONSerialization.jsonObject(with: mock(base, "GET", "api/v1/todos")) as? [String: Any]
-        let counts = try XCTUnwrap(answered?["counts"] as? [String: Any])
-        XCTAssertEqual(counts["needs_you"] as? Int, n - 1, "the hub has the answer")
+        XCTAssertEqual(try hubN(base, n - 1, timeout: 20), n - 1, "the hub has the answer")
         XCTAssertEqual(number(row.label), n - 1, "the drawer after the hub's answer: \(row.label)")
+    }
+
+    /// The mock hub's own N (`GET /api/v1/todos`), polled until it is `expected` (nil: as it is now) or `timeout` passes.
+    @MainActor private func hubN(_ base: URL, _ expected: Int? = nil, timeout: TimeInterval = 0) throws -> Int? {
+        let deadline = Date.now.addingTimeInterval(timeout)
+        var n: Int?
+        repeat {
+            let listed = try JSONSerialization.jsonObject(with: mock(base, "GET", "api/v1/todos")) as? [String: Any]
+            n = (listed?["counts"] as? [String: Any])?["needs_you"] as? Int
+            if expected == nil || n == expected { return n }
+            usleep(250_000)
+        } while Date.now < deadline
+        return n
+    }
+
+    /// The mock hub's section for to-do `id`, polled until it is `expected` or `timeout` passes.
+    @MainActor private func hubSection(_ base: URL, _ id: String, _ expected: String, timeout: TimeInterval) throws -> String? {
+        let deadline = Date.now.addingTimeInterval(timeout)
+        var section: String?
+        repeat {
+            let listed = try JSONSerialization.jsonObject(with: mock(base, "GET", "api/v1/todos")) as? [String: Any]
+            let row = (listed?["todos"] as? [[String: Any]])?.first { $0["id"] as? String == id }
+            section = (row?["view"] as? [String: Any])?["section"] as? String
+            if section == expected { return section }
+            usleep(250_000)
+        } while Date.now < deadline
+        return section
+    }
+
+    /// Waits for `id` and taps it; a frame whose element never came fails rather than shooting the wrong screen.
+    @MainActor private func tap(_ id: String, timeout: TimeInterval = 10) {
+        let e = element(id)
+        XCTAssertTrue(e.waitForExistence(timeout: timeout), "no \(id):\n\(app.debugDescription)")
+        e.tap()
+    }
+
+    /// Waits for `id`, the state a frame draws.
+    @MainActor private func waitFor(_ id: String, timeout: TimeInterval = 10) {
+        XCTAssertTrue(element(id).waitForExistence(timeout: timeout), "no \(id):\n\(app.debugDescription)")
+    }
+
+    /// Waits until `id` is gone (the row moved on, the answer sent).
+    @MainActor private func awaitGone(_ id: String, timeout: TimeInterval = 15) {
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: element(id))
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: timeout), .completed, "\(id) still there:\n\(app.debugDescription)")
     }
 
     @MainActor func testAnswerFrames() throws {
@@ -119,8 +161,9 @@ final class TodosV1AnswersTests: XCTestCase {
         let frames = Set((env["PERSONA_TODOS_FRAMES_ONLY"] ?? "").split(separator: ",").map(String.init))
         let wants = { (frame: String) in frames.isEmpty || frames.contains(frame.isEmpty ? "list" : frame) }
         let suffix = env["PERSONA_TODOS_SUFFIX"].map { "-" + $0 } ?? ""
-        let shot = { (frame: String, settle: UInt32) in
-            sleep(settle)
+        // Shot once the state it draws is there, after the unfold or fade that brought it (Theme.Motion.state, 0.25 s).
+        let shot = { (frame: String) in
+            usleep(600_000)
             let png = XCUIScreen.main.screenshot().pngRepresentation
             try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("iphone-list\(frame)\(suffix)-\(style)-\(scheme).png"))
         }
@@ -130,58 +173,65 @@ final class TodosV1AnswersTests: XCTestCase {
             self.app?.terminate()
             self.launch(hub, extra, layout: "separate")
             if !self.element("todos.v1").waitForExistence(timeout: 60) { XCTFail("no V1 list:\n\(self.app.debugDescription)") }
-            _ = self.element("todos.answer.ok.t01").waitForExistence(timeout: 20)
-            sleep(1)
+            self.waitFor("todos.answer.ok.t01", timeout: 20)
         }
         if wants("") {
             fresh()
-            shot("", 1)
+            shot("")
         }
         if wants("~kyoto-answered") || wants("~kyoto-booking") {
             fresh()
-            element("todos.answer.ok.t01").tap()
-            if wants("~kyoto-answered") { shot("~kyoto-answered", 1) } // inside the Undo window
+            let before = try XCTUnwrap(try hubN(base))
+            tap("todos.answer.ok.t01")
+            // The row says the answer in place of its buttons ("✓ You chose … · Undo", inside the row's one element).
+            awaitGone("todos.answer.ok.t01", timeout: 3)
+            if wants("~kyoto-answered") { shot("~kyoto-answered") } // inside the Undo window
+            // Gone to the hub once its window ends: a held answer outlives a relaunch, so the next frame waits for it
+            // before the mock starts again.
+            XCTAssertEqual(try hubN(base, before - 1, timeout: 20), before - 1, "the hub has the answer")
             if wants("~kyoto-booking") {
-                shot("~kyoto-booking", 7) // gone to the hub, the row filed where it now is
-            } else {
-                // Taken back: a held answer outlives a relaunch, and the next frame starts from the mock as it began.
-                let undo = element("ask.undo")
-                if undo.waitForExistence(timeout: 2) { undo.tap() }
+                usleep(1_500_000) // the hub's push, and the row filed where it now is once the list rests
+                shot("~kyoto-booking")
             }
         }
         if wants("~options") || wants("~options-t03") {
             fresh()
             if wants("~options") {
-                element("todos.answer.options.t01").tap()
-                shot("~options", 2)
+                tap("todos.answer.options.t01")
+                waitFor("ask.card.t01")
+                shot("~options")
             }
             if wants("~options-t03") {
                 let options = element("todos.answer.options.t03")
                 for _ in 0..<4 where !(options.exists && options.isHittable) {
                     app.collectionViews.firstMatch.swipeUp(velocity: .slow)
-                    sleep(1)
+                    usleep(500_000)
                 }
-                options.tap()
-                shot("~options-t03", 2)
+                tap("todos.answer.options.t03")
+                waitFor("ask.retry.t03")
+                shot("~options-t03")
             }
         }
         if wants("~later") {
             fresh()
-            element("todos.answer.options.t01").tap()
-            let later = element("ask.later.t01")
-            if later.waitForExistence(timeout: 5) { later.tap() }
-            shot("~later", 2)
+            tap("todos.answer.options.t01")
+            tap("ask.later.t01", timeout: 5)
+            waitFor("todos.answer.later.t01")
+            shot("~later")
         }
         if wants("~back") {
             fresh()
-            element("todos.answer.retry.t03").tap()
-            shot("~back", 7)
+            tap("todos.answer.retry.t03")
+            // Started again once its window ends, and Working on the hub.
+            XCTAssertEqual(try hubSection(base, "t03", "working", timeout: 20), "working", "the hub started it again")
+            usleep(1_500_000) // the hub's push, and the row filed where it now is once the list rests
+            shot("~back")
         }
         if wants("~can-wait") {
             fresh()
-            let fold = element("todos.fold.can_wait")
-            if fold.waitForExistence(timeout: 10) { fold.tap() }
-            shot("~can-wait", 2)
+            tap("todos.fold.can_wait")
+            usleep(300_000)
+            shot("~can-wait")
         }
     }
 
@@ -210,7 +260,7 @@ final class TodosV1AnswersTests: XCTestCase {
             let option = element("decision.option.1")
             if !option.waitForExistence(timeout: 10) { app.expandTrayRows(timeout: 3) }
             XCTAssertTrue(option.waitForExistence(timeout: 20), "no decision in the tray:\n\(app.debugDescription)")
-            sleep(2)
+            sleep(2) // the tray's own unfold and the breathing dot's settle, as the before and after shots both wait
             save(dir, "iphone-tray~decision\(suffix)-\(style)-\(scheme)")
             if v1 {
                 option.tap()

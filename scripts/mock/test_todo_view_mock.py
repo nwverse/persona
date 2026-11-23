@@ -278,6 +278,7 @@ class ViewTests(Case):
         before = self.hub.get("/api/v1/todos")["counts"]
         self.assertEqual(self.post(path, {"option": "Kaede", "outcome": "later"})[0], 400, "one answer")
         self.assertEqual(self.post(path, {"option": "Elsewhere"})[0], 400)
+        self.assertEqual(self.post(path, {})[0], 400, "a decision takes an option, a fixed answer or words (errAnswerNeeded)")
         status, _, body = self.post(path, {"outcome": "later"})
         self.assertEqual((status, body["outcome"]), (200, "later"))
         self.assertEqual(self.row("t01")["view"]["section"], "needs_you", "later writes nothing")
@@ -622,8 +623,8 @@ class ViewTests(Case):
 
 
 class NoAsksTests(Case):
-    """MOCK_TODO_ASKS=0: a hub whose managers are of stage 1, which answer through today's routes."""
-    ENV = {"MOCK_TODO_VIEW": "1", "MOCK_TODO_ASKS": "0"}
+    """MOCK_TODO_VIEW_ASKS=0: a hub whose managers answer only through today's routes."""
+    ENV = {"MOCK_TODO_VIEW": "1", "MOCK_TODO_VIEW_ASKS": "0"}
 
     def test_no_asks_route(self):
         self.assertNotIn("todo_asks", self.hub.get("/api/v1/health")["features"])
@@ -747,11 +748,11 @@ class ReceiptTests(Case):
         ask = self.row("t01")["view"]["asks"][0]["id"]
         path = "/api/v1/todos/t01/asks/%s/answer" % quote(ask, safe="")
         op = "0A1B2C3D-0000-4000-8000-0000000000AC"
-        status, _, first = self.post(path, {}, **{"X-Persona-Op-Id": op})
+        status, _, first = self.post(path, {"option": "Ryokan Hanami"}, **{"X-Persona-Op-Id": op})
         self.assertEqual((status, first["outcome"]), (200, "answered"))
         self.assertEqual(ws.message(receipt("todo_send_state", client_op_id=op.lower()))["state"], "processing")
         self.assertEqual(ws.message(receipt("todo_send_state", client_op_id=op.lower()))["state"], "delivered")
-        status, _, again = self.post(path, {}, **{"X-Persona-Op-Id": op})
+        status, _, again = self.post(path, {"option": "Ryokan Hanami"}, **{"X-Persona-Op-Id": op})
         self.assertEqual((status, again), (200, first), "the same op id gets the first answer, not ask_stale")
 
     def test_a_todos_message_under_an_op_id(self):

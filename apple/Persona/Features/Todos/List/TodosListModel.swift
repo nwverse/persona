@@ -23,11 +23,6 @@ struct TodosListDeps {
     /// What answers the rows' asks (`AskCardModel`): what each row says of its ask's answer, and its OK, Retry and card.
     /// None: the rows draw their asks' answers as the hub's view has them.
     var asks: AskCardModel? = nil
-    /// A run's pending card by the hub's id (`OwnerAsk.interaction`): what a row's unfolded card answers a run's question
-    /// with. nil while the app holds none for it.
-    var interaction: @MainActor (String) -> Interaction? = { _ in nil }
-    /// Opens a run's session, where its ask lives: an unfolded card's Review › when the app holds no card for it.
-    var openRun: @MainActor (TodoRunRef) -> Void = { _ in }
 }
 
 /// The V1 To-dos list (#10465; docs/design/proposals/todos-redesign.md 3.3, 3.4; DESIGN_SYSTEM 3.4 "To-dos list"): the
@@ -363,7 +358,7 @@ final class TodosListModel {
         return (held.id, held.title, held.write)
     }
 
-    // MARK: The rows' answers (OK, Retry, Options ⌄; stage-2 plan PR 14)
+    // MARK: The rows' answers (OK, Retry, Options ⌄; DESIGN_SYSTEM 3.4 "To-dos list")
 
     /// What answers the rows' asks: the deps', else the app's.
     var asks: AskCardModel { deps.asks ?? .shared }
@@ -383,7 +378,7 @@ final class TodosListModel {
     }
 
     /// Options ⌄ on row `key`: its ask's card unfolds in place under it (another row's folds); again, it folds. Back from
-    /// Later, it opens again.
+    /// Later, it opens again. Unfolded, the list brings the card into sight (`cardUnfolded`).
     func toggleOptions(_ key: String) {
         guard let row = cells[key], let answers = row.content.answers else { return }
         Haptics.tap()
@@ -391,29 +386,29 @@ final class TodosListModel {
         let open = !row.optionsOpen
         for cell in cells.values where cell.optionsOpen && cell.id != key { cell.optionsOpen = false }
         row.optionsOpen = open
+        cardUnfolded = open ? CardUnfolded(key: key) : nil
     }
 
     /// Folds row `key`'s card (an answer or Later on it).
     func closeOptions(_ key: String) {
         guard let row = cells[key], row.optionsOpen else { return }
         row.optionsOpen = false
+        if cardUnfolded?.key == key { cardUnfolded = nil }
     }
+
+    /// The row whose card the owner just unfolded, once per tap: the list scrolls only as far as brings the card's foot
+    /// above the toolbar, answering the owner's own tap (rows never move under a finger otherwise).
+    struct CardUnfolded: Equatable {
+        var key: String
+        var id = UUID()
+    }
+
+    private(set) var cardUnfolded: CardUnfolded?
 
     /// Undo on row `key`'s answer, while it is held.
     func undoAnswer(_ key: String) {
         guard let row = cells[key], let answers = row.content.answers else { return }
         asks.undo(answers.ask, todo: row.inputs.item)
-    }
-
-    /// The run's own card for `ask`, while the app holds it: read only while a row's card is unfolded.
-    func interaction(_ ask: OwnerAsk) -> Interaction? {
-        ask.interaction.flatMap { deps.interaction($0) }
-    }
-
-    /// Review › on row `key`'s unfolded card: the run's session, where its ask lives.
-    func openRun(_ key: String) {
-        guard let run = cells[key]?.content.answers?.ask.run else { return }
-        deps.openRun(run)
     }
 
     /// Today: due today, at the time of day it was due at if it had one.

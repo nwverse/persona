@@ -35,8 +35,9 @@ final class TodoOutbox {
         case delete
         /// `POST /api/v1/todos`, under the to-do's own id here (`newID`) until the hub answers with its own.
         case create(title: String, notes: String?)
-        /// An answer to one of the to-do's own asks (S2-7): the asks route while the hub lists `todo_asks`, else today's
-        /// accept and retry routes. Nothing undoes a decision on the hub, so it waits out its Undo window here.
+        /// An answer to one of the to-do's own asks (proposal 3.7, "Three outcomes"): the asks route while the hub lists
+        /// `todo_asks`, else today's accept and retry routes. Nothing undoes a decision on the hub, so it waits out its Undo
+        /// window here.
         case answer(AskAnswer)
 
         /// The write that takes this one back once the hub has it; none for a delete or an answer.
@@ -69,6 +70,9 @@ final class TodoOutbox {
         var response: String?
         /// What the row says while it is held ("You chose …").
         var label: String
+        /// The step whose ask this is, lifted onto its parent's row (`step:<id>/…`): today's routes answer it on the step,
+        /// and the device keeps it by the step's round, as the tray does.
+        var step: String? = nil
 
         /// The asks route's body: none for a retry, which is the ask's one action.
         var body: TodoAskAnswer { TodoAskAnswer(option: option, response: response) }
@@ -128,6 +132,11 @@ final class TodoOutbox {
         /// An answer whose ask no longer waits (answered elsewhere, a newer round, the to-do gone): the first answer
         /// anywhere wins, so it is let go without a word here; the row says "Answered elsewhere".
         case elsewhere
+        /// An answer nobody can say reached the Agent: the hub said so (502 `send_in_doubt`, `delivered: "unknown"`, which
+        /// its receipt says again to a repeat), or `tries` sends ended unanswered. Never sent again, and never said as not
+        /// sent, since the words may be with the Agent: the row says it is not sure, and the next read of the view shows
+        /// whether the ask still waits.
+        case inDoubt
     }
 
     /// A to-do as the list last read it: what a write sent again is checked against.
@@ -136,17 +145,18 @@ final class TodoOutbox {
         var updatedAt: Date?
         var done: Bool
         var someday: Bool
-        /// The asks its view lists: an answer to one it no longer lists is moot.
-        var asks: Set<String> = []
+        /// The asks its view lists: an answer to one it no longer lists is moot. nil while the row has no view (a manager
+        /// reconnecting): nothing is known of its asks then.
+        var asks: Set<String>? = nil
 
         /// The to-do is already as `write` asks (the write landed before, or someone did the same); for an answer, its
-        /// ask no longer waits.
+        /// view no longer lists the ask.
         func has(_ write: Write) -> Bool {
             switch write {
             case .done(let d): done == d
             case .someday(let on): someday == on
             case .delete, .create: false
-            case .answer(let a): !asks.contains(a.ask)
+            case .answer(let a): asks.map { !$0.contains(a.ask) } ?? false
             }
         }
     }
@@ -202,7 +212,7 @@ final class TodoOutbox {
                      return Standing(title: item.title, updatedAt: item.updatedAt,
                                      done: view.map { $0.phase == TodoPhase.done } ?? item.isDone,
                                      someday: view?.section == TodoListSection.someday,
-                                     asks: Set(view?.asks?.map(\.id) ?? []))
+                                     asks: view.map { Set($0.asks?.map(\.id) ?? []) })
                  },
                  listed: { TodoStore.shared.todos },
                  followsScene: true)
@@ -298,11 +308,11 @@ final class TodoOutbox {
         return out
     }
 
-    /// The latest answer still here to an ask of to-do `todo` on hub `hub`.
-    func answer(todo: String, hub: String) -> Entry? {
-        entries.last { entry in
-            guard entry.hub == hub, entry.todo == todo, !takenBack.contains(entry.id), case .answer = entry.write else { return false }
-            return true
+    /// The answers still here on hub `hub`, in the order they were made: `DecisionAnswers` finds a round's by its key.
+    func answers(hub: String) -> [(entry: Entry, answer: AskAnswer)] {
+        entries.compactMap { entry in
+            guard entry.hub == hub, !takenBack.contains(entry.id), case .answer(let a) = entry.write else { return nil }
+            return (entry, a)
         }
     }
 
@@ -424,6 +434,7 @@ final class TodoOutbox {
         }
         changed = settleUnsure() || changed
         changed = expire() || changed
+        changed = settleAnsweredElsewhere() || changed
         if changed { save() }
         let now = deps.now()
         sendPicked { !$0.answered && !$0.unsure && !$0.undone && $0.due <= now }
@@ -456,6 +467,7 @@ final class TodoOutbox {
         if !loaded {
             if let groups { forgetOnLoad.groups.formUnion(groups) } else { forgetOnLoad.all = true }
         }
+        for entry in entries where gone(entry) { if case .answer = entry.write { deps.settled(entry, .refused("")) } }
         entries.removeAll(where: gone)
         landed = landed.filter { !gone($0.value.entry) }
         takenBack = takenBack.filter { id in entries.contains { $0.id == id } }
@@ -520,15 +532,15 @@ final class TodoOutbox {
     /// owner made it is let go: what the owner saw is not what is there now. Said, unless the to-do is already as it
     /// asks. One whose to-do is gone from the list is let go quietly: there is nothing left to change.
     private func stillWanted(_ entry: Entry) -> Bool {
-        if case .answer(let a) = entry.write, !a.ask.isEmpty {
-            // An answer goes only while its ask still waits: one answered meanwhile (a push, another device, the to-do
-            // gone) is let go and said as answered elsewhere, whether it waited out its window or the hub's answer.
-            guard let now = deps.standing(entry.todo), !now.has(entry.write) else {
-                drop(entry.id)
-                deps.settled(entry, .elsewhere)
-                return false
-            }
-            return true
+        if case .answer = entry.write {
+            // An answer goes unless it never left and a read shows its ask answered meanwhile (`answeredElsewhere`). One
+            // whose send began may have reached the hub, so it goes again with its op id and the receipt says the first
+            // answer; with the row or its view missing (a manager reconnecting), the hub's own answer says whether the ask
+            // still waits.
+            guard answeredElsewhere(entry) else { return true }
+            drop(entry.id)
+            deps.settled(entry, .elsewhere)
+            return false
         }
         guard entry.waits, entry.write.edits else { return true }
         guard let now = deps.standing(entry.todo) else {
@@ -541,6 +553,27 @@ final class TodoOutbox {
             deps.refused(entry, String(localized: "“\(now.title)” changed in the meantime, so your change wasn't saved. [To-dos Toast]"))
         }
         return false
+    }
+
+    /// An answer none of whose sends began, to an ask the to-do's view (read since) no longer lists: answered on another
+    /// device, asked again, or the to-do closed. Not one without the ask's id, whose row or view is missing, or that may
+    /// have reached the hub: those go, and the hub's answer says.
+    private func answeredElsewhere(_ entry: Entry) -> Bool {
+        guard case .answer(let a) = entry.write, !a.ask.isEmpty, !entry.sent, !sending.contains(entry.id) else { return false }
+        return deps.standing(entry.todo)?.has(entry.write) == true
+    }
+
+    /// A read landed: the answers held on the shown hub whose ask it shows answered meanwhile say so now, not when their
+    /// window ends. true: some were let go.
+    private func settleAnsweredElsewhere() -> Bool {
+        let hub = deps.hub()
+        let gone = entries.filter { $0.hub == hub && answeredElsewhere($0) }
+        guard !gone.isEmpty else { return false }
+        for entry in gone {
+            entries.removeAll { $0.id == entry.id }
+            deps.settled(entry, .elsewhere)
+        }
+        return true
     }
 
     /// The hub answered write `id`: kept as answered (never sent again) until a later read shows it. One taken back
@@ -578,10 +611,10 @@ final class TodoOutbox {
         switch sent {
         case .done:
             return
-        case .elsewhere:
+        case .elsewhere, .inDoubt:
             entries.remove(at: i)
             save()
-            deps.settled(entry, .elsewhere)
+            deps.settled(entry, sent)
         case .notSent:
             if back {
                 entries.remove(at: i) // it never reached the hub: nothing went, so nothing goes
@@ -602,9 +635,12 @@ final class TodoOutbox {
                 if let reverse = taken.write.reverse() { add(reverse, todo: taken.todo, manager: taken.manager, hub: taken.hub) }
             } else if entries[i].unknown + 1 >= Self.tries {
                 let given = entries.remove(at: i)
-                let said = String(localized: "Couldn't save your change to “\(deps.standing(given.todo)?.title ?? "")”. [To-dos Toast]")
-                deps.refused(given, said)
-                if case .answer = given.write { deps.settled(given, .refused(said)) }
+                if case .answer = given.write {
+                    // It may be with the Agent: never said as not sent.
+                    deps.settled(given, .inDoubt)
+                } else {
+                    deps.refused(given, String(localized: "Couldn't save your change to “\(deps.standing(given.todo)?.title ?? "")”. [To-dos Toast]"))
+                }
             } else {
                 entries[i].unknown += 1
                 entries[i].waits = true
@@ -668,15 +704,19 @@ final class TodoOutbox {
         return changed
     }
 
-    /// Writes whose hub never came back in time are let go (`keepFor`, `keepNewFor`). true: some were.
+    /// Writes whose hub never came back in time are let go (`keepFor`, `keepNewFor`); an answer's buttons come back.
+    /// true: some were.
     private func expire() -> Bool {
         let now = deps.now()
-        let before = entries.count
-        entries.removeAll { entry in
+        let gone = entries.filter { entry in
             !entry.answered && !sending.contains(entry.id)
                 && now.timeIntervalSince(entry.made) >= (entry.write.edits ? Self.keepFor : Self.keepNewFor)
         }
-        return entries.count != before
+        guard !gone.isEmpty else { return false }
+        let ids = Set(gone.map(\.id))
+        entries.removeAll { ids.contains($0.id) }
+        for entry in gone { if case .answer = entry.write { deps.settled(entry, .refused("")) } }
+        return true
     }
 
     /// What the last run kept, in: a write sent then is one nobody knows the hub took (a new to-do: "Not sure it was
@@ -768,6 +808,8 @@ final class TodoOutbox {
             if let api {
                 // The words reached the Agent and what followed failed: taken, and never sent again.
                 if api.fields["delivered"] == "yes" { return .done(created: nil) }
+                // Nobody can say whether they did: the receipt says the same to a repeat, so it is not sent again.
+                if api.fields["delivered"] == "unknown" { return .inDoubt }
                 // A refusal the hub's assistant gave (a node's 423, 502 `accept_not_taken`): the receipt says the same to
                 // a repeat, so it is dropped and said rather than sent again. Not one that reached no assistant at all.
                 let away = api.status == 0 || [408, 425, 429].contains(api.status) || api.code == "assistant_offline"

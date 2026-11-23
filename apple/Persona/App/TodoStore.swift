@@ -875,10 +875,11 @@ final class TodoStore {
         return created
     }
 
-    /// An answer to one of to-do `id`'s own asks (S2-7): through the asks route while the hub lists `todo_asks`, else
-    /// today's accept route (a decision, by its round) or retry route. A manager that reconnected at an older version
-    /// answers the asks route 404 or 405 without the route's codes (`TodoAskRefusal.routeMissing`): today's routes then,
-    /// which take no op id. The view that shows it comes with the read after it.
+    /// An answer to one of to-do `id`'s own asks (#10465; proposal 3.7): through the asks route while the hub lists
+    /// `todo_asks`, else today's accept route (a decision, by its round) or retry route. A manager that reconnected at an
+    /// older version answers the asks route 404 or 405 without the route's codes (`TodoAskRefusal.routeMissing`): today's
+    /// routes then, which take no op id. A step's ask lifted onto its parent's row goes to the asks route on the parent,
+    /// which names it, and to today's routes on the step itself. The view that shows it comes with the read after it.
     private func answer(_ a: TodoOutbox.AskAnswer, todo id: String, opID: UUID, api: APIClient) async throws {
         if v1.features().asks, !a.ask.isEmpty {
             do {
@@ -886,15 +887,33 @@ final class TodoStore {
                 return
             } catch where TodoAskRefusal.routeMissing(error) {}
         }
+        let target = a.step ?? id
         if a.kind == OwnerAskKind.retry {
-            _ = try await api.retryTodo(id)
+            _ = try await api.retryTodo(target)
             return
         }
         guard let round = a.round else {
             // No round to answer by (an ask from a newer manager the accept route cannot name): nothing went.
             throw APIError(status: 409, message: String(localized: "Already handled"), fields: ["code": TodoAskRefusal.stale])
         }
-        try await api.acceptTodo(id, askedAt: round, option: a.option, response: a.response)
+        try await api.acceptTodo(target, askedAt: round, option: a.option, response: a.response)
+    }
+
+    /// A fixed answer from the Needs You tray ("You Decide", …) to to-do `id`'s decision asked at `round`, which is not
+    /// held: through the asks route with an op id of its own while the hub lists `todo_asks` and the view names the
+    /// decision, else (or where the manager lacks the route) today's accept route.
+    func respond(todo id: String, round: String, response: String, api injected: APIClient? = nil) async throws {
+        guard let api = (injected ?? AppModel.shared.api)?.manager(managers.naming(byID[id]?.manager)) else {
+            throw APIError(status: 0, message: String(localized: "Not connected to a hub [Todo Store 04f822]"))
+        }
+        let ask = askID(todo: id, round: round)
+        if v1.features().asks, !ask.isEmpty {
+            do {
+                _ = try await api.answerAsk(todo: id, ask: ask, TodoAskAnswer(response: response), opID: UUID())
+                return
+            } catch where TodoAskRefusal.routeMissing(error) {}
+        }
+        try await api.acceptTodo(id, askedAt: round, response: response)
     }
 
     /// `item` in its row's place, a new one first; a read already in flight cannot put the old one back.

@@ -3,10 +3,11 @@ import Testing
 @testable import Persona
 import PersonaWire
 
-/// The Needs You tray's decision row on V1 (#10465, stage-2 plan S2-7; `DecisionAnswers.Hold`): it holds an answer as the
-/// to-do's row does, so the tray and the row answer one way on one device. Old hubs answer at once as before; the
-/// two-tap arm for irreversible decisions stays; an answer elsewhere during the hold says so and sends nothing; leaving
-/// the foreground sends it at once; a launch sends it again with the same op id.
+/// The Needs You tray's decision row on V1 (#10465; `DecisionAnswers.Hold`): it holds an answer as the to-do's row does,
+/// so the tray and the row answer one way on one device. Old hubs answer at once as before; the two-tap arm for
+/// irreversible decisions stays; an answer elsewhere during the hold says so as the read shows it and sends nothing;
+/// leaving the foreground sends it at once; a launch sends it again with the same op id, also one whose first send may
+/// have reached the hub.
 @MainActor
 struct DecisionAnswersHoldTests {
     private func hub(_ rows: [String] = [TodoAnswersHarness.kyoto(), TodoAnswersHarness.plain]) -> FakeHub {
@@ -67,10 +68,10 @@ struct DecisionAnswersHoldTests {
     }
 
     /// The round ended elsewhere while the answer was held (a push lists the ask no more): nothing is sent, and the row
-    /// says "Answered elsewhere".
+    /// says "Answered elsewhere" as that read lands, long before its window would end.
     @Test func anAnswerElsewhereDuringTheHoldSendsNothing() async throws {
         let hub = hub()
-        let h = try await TodoAnswersHarness.make(hub, window: .milliseconds(500))
+        let h = try await TodoAnswersHarness.make(hub, window: .seconds(30))
         defer { h.store.forget() }
         let ask = try legacy(h)
         await h.answers.choose(0, of: ask, todo: "t01", group: "g")
@@ -115,5 +116,30 @@ struct DecisionAnswersHoldTests {
         try await waitForAnswers { !hub.sent("POST", path).isEmpty }
         #expect(hub.sent("POST", path).first?.headers[OpRetry.header] == kept.id.uuidString.lowercased())
         #expect(h.store.countsSource.needsYou == 0, "it counts as answered all along")
+    }
+
+    /// An answer whose send began before the app was ended may have reached the hub: once a read shows its ask gone, it
+    /// still goes again with its op id, and the receipt's answer settles it as chosen, never as answered elsewhere.
+    @Test func aLaunchAfterASendThatMayHaveLandedAsksTheReceipt() async throws {
+        let first = try await TodoAnswersHarness.make(hub(), window: .milliseconds(50))
+        await first.answers.choose(0, of: try legacy(first), todo: "t01", group: "g")
+        var kept = try #require(first.saved.first)
+        first.store.forget()
+        kept.sent = true
+        try await Task.sleep(for: .milliseconds(150)) // the launch after its window, as `aLaunchSendsItAgainWithTheSameOpID`
+
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: TodoAnswersHarness.answered)
+        hub.on("GET", "/api/v1/todos/places", json: #"{"places":[{"id":"all","kind":"all","title":"","needs_you":1}],"counts":{}}"#)
+        let path = TodoAnswersHarness.route("t01", TodoAnswersHarness.decision)
+        hub.on("POST", path, json: #"{"ask":"\#(TodoAnswersHarness.decision)","outcome":"answered"}"#)
+        let h = try await TodoAnswersHarness.make(hub, loading: [kept])
+        defer { h.store.forget() }
+        try await waitForAnswers { !hub.sent("POST", path).isEmpty }
+        #expect(hub.sent("POST", path).first?.headers[OpRetry.header] == kept.id.uuidString.lowercased())
+        try await waitForAnswers { h.outbox.entries.isEmpty }
+        guard case .chosen? = h.answers.state(todo: "t01", round: TodoAnswersHarness.asked, group: "g") else {
+            Issue.record("not settled as chosen"); return
+        }
     }
 }

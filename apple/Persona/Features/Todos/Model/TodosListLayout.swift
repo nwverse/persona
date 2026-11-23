@@ -490,6 +490,7 @@ nonisolated enum TodoRowContentLogic {
         switch c.answers?.mark {
         case .chosen(let label, _)?: parts.append(label)
         case .elsewhere?: parts.append(words("Answered elsewhere [To-dos Answers]"))
+        case .unsure?: parts.append(words("Not sure your answer went through [To-dos Answers]"))
         default: if let said = c.said { parts.append(said.spoken(separator: separator)) }
         }
         if let caption = c.caption { parts.append(caption) }

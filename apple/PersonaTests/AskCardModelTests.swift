@@ -3,7 +3,7 @@ import Testing
 @testable import Persona
 import PersonaWire
 
-/// A store, its outbox, the answers' state and the card's model wired as the app wires them (#10465, PR 14), against a
+/// A store, its outbox, the answers' state and the card's model wired as the app wires them (#10465), against a
 /// `FakeHub`: what the tests of answering a to-do's asks share.
 @MainActor
 final class TodoAnswersHarness {
@@ -22,7 +22,8 @@ final class TodoAnswersHarness {
     var holds = true
     var toasts: [Toast] = []
     var refusals: [String] = []
-    var laterInTray: [String] = []
+    /// The to-dos declined through today's `decision-dismiss`.
+    var declinedToday: [String] = []
     /// What the outbox last kept on disk.
     var saved: [TodoOutbox.Entry] = []
 
@@ -93,7 +94,7 @@ final class TodoAnswersHarness {
             standing: { id in
                 store.byID[id].map { item in
                     .init(title: item.title, updatedAt: item.updatedAt, done: item.isDone, someday: false,
-                          asks: Set(store.views[id]?.asks?.map(\.id) ?? []))
+                          asks: store.views[id].map { Set($0.asks?.map(\.id) ?? []) })
                 }
             },
             listed: { store.todos }))
@@ -105,17 +106,18 @@ final class TodoAnswersHarness {
                                         return DecisionAnswers.Hold(outbox: h.outbox, counts: store.countsSource,
                                                                     askID: { store.askID(todo: $0, round: $1) },
                                                                     manager: { store.byID[$0]?.manager }, window: { window },
-                                                                    toast: { [weak h] in h?.toasts.append($0) })
+                                                                    toast: { [weak h] in h?.toasts.append($0) },
+                                                                    respond: { try await store.respond(todo: $0, round: $1, response: $2,
+                                                                                                       api: hub.client) })
                                     })
         h.model = AskCardModel(deps: AskCardDeps(answers: h.answers, store: store, api: { hub.client }, group: { "g" },
                                                  features: { [weak h] in h?.features ?? TodoFeatures() },
                                                  toast: { [weak h] in h?.toasts.append($0) },
-                                                 laterInTray: { [weak h] in h?.laterInTray.append($0.id) },
-                                                 declineToday: { _ in true }))
+                                                 declineToday: { [weak h] in h?.declinedToday.append($0.id); return true }))
         await store.refresh(api: hub.client)
         // What was kept on disk is in once the hub has answered a read (the store tells the outbox).
         await h.outbox.ready()
-        try await waitForAnswers { store.viewsRead && store.views["t01"] != nil }
+        try await waitForAnswers { store.viewsRead && !store.views.isEmpty }
         return h
     }
 
@@ -144,10 +146,11 @@ func waitForAnswers(_ condition: @MainActor () -> Bool) async throws {
     try #require(condition(), "it did not happen in time")
 }
 
-/// Answering a to-do's own asks from its row and its card (#10465, stage-2 plan PR 14; `AskCardModel`): OK and Retry
-/// are held through their Undo window and then go through the asks route with their op id, or today's accept and retry
-/// routes on a hub without `todo_asks`; N drops at the tap; an ask answered elsewhere says so; a refusal is said and
-/// the buttons come back; Later and Don't handle; the OK's words.
+/// Answering a to-do's own asks from its row and its card (#10465; `AskCardModel`): OK and Retry are held through their
+/// Undo window and then go through the asks route with their op id, or today's accept and retry routes on a hub without
+/// `todo_asks` (a step's ask on the step); N drops at the tap; an ask answered elsewhere says so, and one nobody can say
+/// reached the Agent says that and is never sent again; a refusal is said and the buttons come back; a row or view
+/// missing at send time sends all the same; Later and Don't handle; the OK's words and the card's options.
 @MainActor
 struct AskCardModelTests {
     private func hub(_ rows: [String] = [TodoAnswersHarness.kyoto(), TodoAnswersHarness.photos, TodoAnswersHarness.plain],
@@ -271,6 +274,138 @@ struct AskCardModelTests {
         #expect(h.outbox.entries.isEmpty)
     }
 
+    /// The hub could not say whether the answer reached the Agent (502 `send_in_doubt`, `delivered: "unknown"`): the row
+    /// says it is not sure, nothing is sent again (the receipt would say the same), the buttons stay away, and the ask
+    /// stays out of N until the view says.
+    @Test func anAnswerInDoubtIsNeverSentAgain() async throws {
+        let hub = hub()
+        let h = try await TodoAnswersHarness.make(hub)
+        defer { h.store.forget() }
+        let ask = h.kyotoAsk, item = h.kyotoItem
+        let path = TodoAnswersHarness.route("t01", TodoAnswersHarness.decision)
+        hub.on("POST", path) { _ in
+            throw APIError(status: 502, message: "The answer may have reached the Agent",
+                           fields: ["code": "send_in_doubt", "delivered": "unknown"])
+        }
+        await h.model.ok(ask, todo: item)
+        try await waitForAnswers { h.model.mark(ask, todo: "t01") == .unsure }
+        #expect(h.refusals.isEmpty, "never said as not sent")
+        await h.store.refresh(api: hub.client)
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(hub.sent("POST", path).count == 1, "never sent again")
+        #expect(h.outbox.entries.isEmpty && h.store.countsSource.needsYou == 1)
+    }
+
+    /// A read during the hold that lists the row without its view (a manager reconnecting), or not at all, says nothing
+    /// of the ask: the answer still goes when its window ends, and the hub's answer says where it stands.
+    @Test func anAnswerGoesWhenTheRowOrItsViewIsMissing() async throws {
+        let without = [TodoAnswersHarness.list([TodoViewJSON.row("t01", title: "Plan the Kyoto trip"), TodoAnswersHarness.photos,
+                                                TodoAnswersHarness.plain], needsYou: 1),
+                       TodoAnswersHarness.list([TodoAnswersHarness.photos, TodoAnswersHarness.plain], needsYou: 1)]
+        for list in without {
+            let hub = hub()
+            let h = try await TodoAnswersHarness.make(hub, window: .milliseconds(500))
+            let ask = h.kyotoAsk, item = h.kyotoItem
+            let path = TodoAnswersHarness.route("t01", TodoAnswersHarness.decision)
+            hub.on("POST", path, json: #"{"ask":"\#(TodoAnswersHarness.decision)","outcome":"answered"}"#)
+            await h.model.ok(ask, todo: item)
+            hub.on("GET", "/api/v1/todos", json: list)
+            await h.store.refresh(api: hub.client)
+            try await waitForAnswers { !hub.sent("POST", path).isEmpty }
+            try await waitForAnswers { h.outbox.entries.isEmpty }
+            guard case .chosen? = h.answers.state(todo: "t01", round: TodoAnswersHarness.asked, group: "g") else {
+                Issue.record("not taken: \(String(describing: h.answers.state(todo: "t01", round: TodoAnswersHarness.asked, group: "g")))")
+                h.store.forget()
+                return
+            }
+            h.store.forget()
+        }
+    }
+
+    /// A step's decision lifted onto its parent's row, on a hub without `todo_asks`: today's accept route on the step,
+    /// with the step's round; kept on the device by the step's round, as the tray keeps it.
+    @Test func aStepsAskGoesToTheStepThroughTodaysRoute() async throws {
+        let round = "2026-11-18T09:40:00Z"
+        let stepAsk = "step:s1/todo:decision@" + round
+        let parent = TodoViewJSON.row("p1", title: "Move flat", view:
+            #"{"phase":"needs_you","section":"needs_you","reason":"owner_decides","line":{"key":"decision","args":{"text":"Which van?"}},"#
+            + #""rank":0,"asks":[{"id":"\#(stepAsk)","kind":"decision","home":"todo","round":"\#(round)","text":"Which van?","#
+            + #""recommend":"Small van","options":[{"label":"Small van"},{"label":"Large van"}],"risk":"safe"}]}"#)
+        let hub = hub([parent, TodoAnswersHarness.plain], needsYou: 1)
+        let h = try await TodoAnswersHarness.make(hub, asks: false)
+        defer { h.store.forget() }
+        let ask = try #require(h.store.views["p1"]?.asks?.first)
+        let item = try #require(h.store.byID["p1"])
+        #expect(ask.step == "s1")
+        hub.on("POST", "/api/v1/todos/s1/accept", json: "{}")
+        await h.model.ok(ask, todo: item)
+        #expect(h.answers.canUndo(todo: "s1", round: round, group: "g"), "kept by the step's round")
+        try await waitForAnswers { !hub.sent("POST", "/api/v1/todos/s1/accept").isEmpty }
+        #expect(h.bodies("/api/v1/todos/s1/accept").first == ["asked_at": round, "option": "Small van"])
+        #expect(hub.sent("POST", "/api/v1/todos/p1/accept").isEmpty, "never on the parent")
+    }
+
+    /// Two answers held on one to-do (its own decision and a step's) each keep their own Undo.
+    @Test func twoAnswersHeldOnOneToDoEachKeepTheirUndo() async throws {
+        let round = "2026-11-18T09:40:00Z"
+        let own = #"{"id":"todo:decision@\#(TodoAnswersHarness.asked)","kind":"decision","home":"todo","round":"\#(TodoAnswersHarness.asked)","#
+            + #""recommend":"A","options":[{"label":"A"},{"label":"B"}],"risk":"safe"}"#
+        let step = #"{"id":"step:s1/todo:decision@\#(round)","kind":"decision","home":"todo","round":"\#(round)","#
+            + #""recommend":"C","options":[{"label":"C"},{"label":"D"}],"risk":"safe"}"#
+        let parent = TodoViewJSON.row("p1", title: "Move flat", view:
+            #"{"phase":"needs_you","section":"needs_you","reason":"owner_decides","line":{"key":"decision"},"rank":0,"asks":[\#(own),\#(step)]}"#)
+        let hub = hub([parent, TodoAnswersHarness.plain], needsYou: 1)
+        let h = try await TodoAnswersHarness.make(hub, window: .seconds(30))
+        defer { h.store.forget() }
+        let asks = try #require(h.store.views["p1"]?.asks)
+        let item = try #require(h.store.byID["p1"])
+        await h.model.ok(asks[0], todo: item)
+        await h.model.ok(asks[1], todo: item)
+        #expect(h.outbox.entries.count == 2)
+        #expect(h.model.mark(asks[0], todo: "p1") == .chosen(String(localized: "You chose \("A") [To-dos Answers]"), undo: true))
+        #expect(h.model.mark(asks[1], todo: "p1") == .chosen(String(localized: "You chose \("C") [To-dos Answers]"), undo: true))
+        h.model.undo(asks[0], todo: item)
+        #expect(h.model.mark(asks[0], todo: "p1") == nil && h.outbox.entries.count == 1, "the other still held")
+        #expect(h.model.mark(asks[1], todo: "p1") != nil)
+    }
+
+    /// A manager without the asks route answers Don't handle with a 405: today's `decision-dismiss` takes it instead.
+    @Test func declineFallsBackToTodayWhenTheRouteIsMissing() async throws {
+        let hub = hub()
+        let h = try await TodoAnswersHarness.make(hub)
+        defer { h.store.forget() }
+        let ask = h.kyotoAsk, item = h.kyotoItem
+        hub.on("POST", TodoAnswersHarness.route("t01", TodoAnswersHarness.decision)) { _ in
+            throw APIError(status: 405, message: "method not allowed")
+        }
+        await h.model.decline(ask, todo: item)
+        #expect(h.declinedToday == ["t01"] && h.toasts.isEmpty)
+        #expect(h.store.countsSource.needsYou == 1)
+    }
+
+    /// The tray's fixed answers on V1 go at once through the asks route while the hub lists it; without it, the accept
+    /// route as before.
+    @Test func theTraysFixedAnswersGoThroughTheAsksRoute() async throws {
+        for asks in [true, false] {
+            let hub = hub()
+            let h = try await TodoAnswersHarness.make(hub, asks: asks)
+            let path = TodoAnswersHarness.route("t01", TodoAnswersHarness.decision)
+            hub.on("POST", path, json: #"{"ask":"\#(TodoAnswersHarness.decision)","outcome":"answered"}"#)
+            hub.on("POST", "/api/v1/todos/t01/accept", json: "{}")
+            let ask = try #require(h.kyotoItem.openAsk)
+            await h.answers.respond(.decideYourself, to: ask, todo: "t01", group: "g")
+            if asks {
+                #expect(h.bodies(path).first == ["response": TodoAsk.Response.decideYourself.rawValue])
+                #expect(hub.sent("POST", path).first?.headers[OpRetry.header] != nil, "with an op id")
+                #expect(hub.sent("POST", "/api/v1/todos/t01/accept").isEmpty)
+            } else {
+                #expect(h.bodies("/api/v1/todos/t01/accept").first?["response"] == TodoAsk.Response.decideYourself.rawValue)
+            }
+            #expect(h.answers.state(todo: "t01", ask: ask, group: "g") == .sentBack)
+            h.store.forget()
+        }
+    }
+
     /// Retry on a failed start: held, then the asks route with no answer in its body; on a hub without `todo_asks`,
     /// today's retry route.
     @Test func retryIsHeldThenStartsItAgain() async throws {
@@ -290,7 +425,8 @@ struct AskCardModelTests {
         }
     }
 
-    /// Later: nothing sent, the ask still counts, a decision put off in the tray too; brought back, it is open again.
+    /// Later: nothing sent, the ask still counts everywhere (the tray keeps it too: one number); brought back, it is open
+    /// again.
     @Test func laterPutsTheAskOffForThisSession() async throws {
         let hub = hub()
         let h = try await TodoAnswersHarness.make(hub)
@@ -298,7 +434,7 @@ struct AskCardModelTests {
         let ask = h.kyotoAsk, item = h.kyotoItem // read once: the view moves on as the hub answers
         h.model.putOff(ask, todo: item)
         #expect(h.model.mark(ask, todo: "t01") == .later)
-        #expect(h.laterInTray == ["t01"] && h.store.countsSource.needsYou == 2)
+        #expect(h.store.countsSource.needsYou == 2, "still counted")
         try await Task.sleep(for: .milliseconds(400))
         #expect(hub.requests.allSatisfy { $0.method == "GET" }, "nothing written")
         h.model.bringBack(ask, todo: item)
@@ -354,26 +490,69 @@ struct AskCardModelTests {
                 "only where it needs the owner")
     }
 
-    /// A run's safe question whose card the hub names offers Options ⌄ alone (its card is the run's own); without the
-    /// card's id, or open, nothing; a failed start offers Retry and Options.
-    @Test func aRunsQuestionOffersItsCardAlone() throws {
+    /// A run's ask offers nothing on the row, a safe question with its card included: its home is its session, and the
+    /// row's tap opens the to-do, where it is. A failed start offers Retry and Options; nothing on a closed row.
+    @Test func aRunsAskOffersNothingOnTheRow() throws {
         let run = TodoRunRef(machineId: "macbook", sessionId: "s1", title: "Widget")
-        var ask = OwnerAsk(id: "run:macbook/s1@x", kind: OwnerAskKind.question, home: OwnerAskHome.run, text: "Which icon set?",
-                           run: run, risk: OwnerAskRisk.safe, interaction: "ix1")
+        let question = OwnerAsk(id: "run:macbook/s1@x", kind: OwnerAskKind.question, home: OwnerAskHome.run, text: "Which icon set?",
+                                run: run, risk: OwnerAskRisk.safe, interaction: "ix1")
         let view = { (ask: OwnerAsk) in
             TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "agent_asks", asks: [ask])
         }
-        let answers = try #require(TodoRowAnswersLogic.answers(view(ask), section: TodoListSection.needsYou, closed: false, mark: nil))
-        #expect(answers.primary == nil && answers.options)
-        ask.interaction = nil
-        #expect(TodoRowAnswersLogic.answers(view(ask), section: TodoListSection.needsYou, closed: false, mark: nil) == nil)
-        ask.interaction = "ix1"
-        ask.risk = OwnerAskRisk.open
-        #expect(TodoRowAnswersLogic.answers(view(ask), section: TodoListSection.needsYou, closed: false, mark: nil) == nil)
+        #expect(TodoRowAnswersLogic.answers(view(question), section: TodoListSection.needsYou, closed: false, mark: nil) == nil)
         let retry = OwnerAsk(id: "todo:retry@x", kind: OwnerAskKind.retry, home: OwnerAskHome.todo, risk: OwnerAskRisk.safe)
         let started = try #require(TodoRowAnswersLogic.answers(view(retry), section: TodoListSection.needsYou, closed: false, mark: nil))
         #expect(started.primary == .retry && started.options)
         #expect(TodoRowAnswersLogic.answers(view(retry), section: TodoListSection.needsYou, closed: true, mark: nil) == nil,
                 "nothing on a closed row")
+    }
+
+    /// A decision without a recommendation offers Options alone, its card draws every option alike, two to a row, and
+    /// says "Persona decides …", never taking the first option for the recommended one; with one, the others, a fourth
+    /// included, are all on the card.
+    @Test func everyOptionIsOnTheCardAndOnlyTheHubsRecommendationIsMarked() throws {
+        let labels = ["Ryokan Hanami", "Kaede", "Tsuki", "Hoshi"]
+        var ask = OwnerAsk(id: "a", kind: OwnerAskKind.decision, home: OwnerAskHome.todo, round: "r", recommend: "Ryokan Hanami",
+                           options: labels.map { .init(label: $0) }, risk: OwnerAskRisk.safe)
+        #expect(AskCard.optionRows(ask) == [["Kaede", "Tsuki"], ["Hoshi"]], "the fourth too")
+        ask.recommend = nil
+        #expect(ask.recommendedOption == nil)
+        #expect(AskCard.optionRows(ask) == [["Ryokan Hanami", "Kaede"], ["Tsuki", "Hoshi"]])
+        let view = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "owner_decides", asks: [ask])
+        let answers = try #require(TodoRowAnswersLogic.answers(view, section: TodoListSection.needsYou, closed: false, mark: nil))
+        #expect(answers.primary == nil && answers.options)
+        ask.recommend = "Somewhere else"
+        #expect(ask.recommendedOption == nil, "a recommendation that is none of the options")
+    }
+
+    /// The card says what every option leads to, and what happens when nobody answers, as two paragraphs; kept per
+    /// to-do, so two to-dos asked at the same moment never share theirs.
+    @Test func theCardSaysWhatEachOptionLeadsTo() async throws {
+        let hub = hub()
+        let h = try await TodoAnswersHarness.make(hub)
+        defer { h.store.forget() }
+        var ask = h.kyotoAsk
+        ask.options = [.init(label: "Ryokan Hanami", leadsTo: "¥58k a night"), .init(label: "Kaede", leadsTo: "¥52k a night")]
+        let now = try #require(JSON.parseDate("2026-11-18T10:14:00Z"))
+        let about = h.model.about(ask, todo: "t01", now: now)
+        #expect(about.count == 2)
+        #expect(about.first == String(localized: "\("Ryokan Hanami"): \("¥58k a night") [To-dos Answers]") + TodoTimeWords.separator
+                + String(localized: "\("Kaede"): \("¥52k a night") [To-dos Answers]"))
+        var other = ask
+        other.options = [.init(label: "Tea", leadsTo: "calm")]
+        #expect(h.model.about(other, todo: "t02", now: now).first != about.first, "kept per to-do")
+    }
+
+    /// A safe decision's OK estimates its width generously for capitals, so a label in capitals says "OK" sooner.
+    @Test func capitalsCountWider() {
+        #expect(TodoRowAnswers.width("RYOKAN HANAMI") > TodoRowAnswers.width("ryokan hanami"))
+        #expect(TodoRowAnswers.width("WWW") > TodoRowAnswers.width("AAA"))
+    }
+
+    /// A retry's round is its id, which is never parsed as a time: the key keeps it as it is.
+    @Test func aRoundThatIsNoTimeIsNeverParsed() {
+        #expect(DecisionAnswers.key(todo: "t03", round: TodoAnswersHarness.retry, group: "g") == "g|t03|" + TodoAnswersHarness.retry)
+        let a = DecisionAnswers.key(todo: "t01", round: "2026-11-18T10:11:00Z", group: "g")
+        #expect(a == DecisionAnswers.key(todo: "t01", round: "2026-11-18T10:11:00.000Z", group: "g"), "however the hub spells it")
     }
 }

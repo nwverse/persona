@@ -32,6 +32,8 @@ struct TodoListRow: View {
                         AskChosenLine(text: label, undo: undo ? { model.undoAnswer(row.id) } : nil)
                     case .elsewhere?:
                         AskChosenLine(text: String(localized: "Answered elsewhere [To-dos Answers]"), elsewhere: true)
+                    case .unsure?:
+                        AskChosenLine(text: String(localized: "Not sure your answer went through [To-dos Answers]"), elsewhere: true)
                     default:
                         if let said = c.said { lineTwo(said, mark: c.mark, unsaved: c.unsaved, markDone: c.markDone) }
                     }
@@ -50,12 +52,9 @@ struct TodoListRow: View {
                 if let answers = c.answers, Self.answersShown(answers) {
                     TodoRowAnswersLine(row: row, answers: answers, model: model)
                     if row.optionsOpen, let item = model.item(row.id) {
-                        // A run's question answers in the run's own card; without one, Review › opens its session.
-                        AskCard(ask: answers.ask, todo: item, model: model.asks, showsTitle: false,
-                                review: answers.ask.run == nil ? nil : { model.openRun(row.id) },
-                                interaction: model.interaction(answers.ask), done: {
-                                    withAnimation(Theme.Motion.reduced ? nil : Theme.Motion.state) { model.closeOptions(row.id) }
-                                })
+                        AskCard(ask: answers.ask, todo: item, model: model.asks, showsTitle: false, done: {
+                            withAnimation(Theme.Motion.reduced ? nil : Theme.Motion.state) { model.closeOptions(row.id) }
+                        })
                         .transition(.opacity)
                     }
                 }
@@ -104,7 +103,7 @@ struct TodoListRow: View {
     /// Whether the answers' line is drawn: not once the answer was given here (line 2 says so).
     static func answersShown(_ answers: TodoRowAnswers) -> Bool {
         switch answers.mark {
-        case .chosen?, .elsewhere?: false
+        case .chosen?, .elsewhere?, .unsure?: false
         case .later?, .busy?, nil: answers.primary != nil || answers.options
         }
     }

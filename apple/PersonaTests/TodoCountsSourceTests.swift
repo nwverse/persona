@@ -124,7 +124,7 @@ struct TodoCountsSourceTests {
         #expect(source.needsYou == 1, "the hub's number, nothing taken off twice")
     }
 
-    /// An answer held on this device (`TodoOutbox.answering`, PR 14) moves every reader in one update: N (the drawer and
+    /// An answer held on this device (`TodoOutbox.answering`) moves every reader in one update: N (the drawer and
     /// sidebar row, the folded Pages tally, the guard line), the Needs you header's count and All's place change in the
     /// same recount, at the tap, before the hub has it; undone or refused, all of them are back together.
     @Test func anAnswerHeldHereMovesEveryReaderInOneUpdate() async throws {

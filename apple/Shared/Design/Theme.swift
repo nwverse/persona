@@ -599,10 +599,13 @@ nonisolated enum Theme {
         static let workflowShare: CGFloat = 0.38
         /// The smallest thing a finger should hit.
         static let tapTarget: CGFloat = 44
-        /// The widest a To-dos row's "OK: ‹option›" is drawn (#10465, stage-2 plan S2-25): past it, at the text size in use,
+        /// The widest a To-dos row's "OK: ‹option›" is drawn (#10465; DESIGN_SYSTEM 2.5): past it, at the text size in use,
         /// it says "OK" alone, since line 2 already names the recommendation and a button's words are never cut. Not
         /// scaled: the label's length and the text size decide (`TodoRowAnswers.okTitle`).
         static let todoAnswerMax: CGFloat = 260
+        /// The em that estimate counts in: `Font.secondary`'s size (subheadline, 15 pt) at the default text size, the
+        /// answers' words. Not scaled either: the text size multiplies the whole estimate.
+        static let todoAnswerEm: CGFloat = 15
         /// A search field's band under a navigation bar, as the system's drawer draws it (`AgentsHeader`).
         static let searchBand: CGFloat = 54
         /// The field in it, at its top.

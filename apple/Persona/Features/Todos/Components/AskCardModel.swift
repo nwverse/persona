@@ -8,20 +8,24 @@ nonisolated enum TodoAnswerMark: Equatable, Sendable {
     case chosen(String, undo: Bool)
     /// The round ended before this device's answer reached it.
     case elsewhere
+    /// Nobody can say whether this device's answer reached the Agent: never sent again, said in its place.
+    case unsure
     /// Put off with Later for this app session.
     case later
     /// An answer of it is on its way (Don't handle): its buttons wait.
     case busy
 }
 
-/// What a To-dos row offers at its foot for its most urgent ask (#10465; DESIGN_SYSTEM 3.4 "To-dos list", the row; the
-/// owner's row R, 11-21): one prominent choice and Options ⌄, after line 3. Worked out with the row's content in the
-/// list's model, never in a view's body (P4); the view picks the OK's words from `okWidth` and the text size alone (P6).
+/// What a To-dos row offers at its foot for its most urgent ask (#10465; DESIGN_SYSTEM 3.4 "To-dos list", the row;
+/// `docs/design/DECISIONS.md` 11-21, "The To-dos list"): one prominent choice and Options ⌄, after line 3. Worked out
+/// with the row's content in the list's model, never in a view's body (P4); the view picks the OK's words from `okWidth`
+/// and the text size alone (P6).
 nonisolated struct TodoRowAnswers: Equatable, Sendable {
     nonisolated enum Primary: Equatable, Sendable {
         /// "OK: ‹option›": a safe decision's recommendation, by its option's label.
         case ok(option: String)
-        /// Retry: a start that failed, on a to-do Persona handed out (the hub lists the ask only then, S2-8).
+        /// Retry: a start that failed, on a to-do Persona handed out (the hub lists the ask only then: `retryTask` refuses
+        /// the others).
         case retry
     }
 
@@ -38,8 +42,8 @@ nonisolated struct TodoRowAnswers: Equatable, Sendable {
     /// The round answers are kept by on the device (`DecisionAnswers.key`): the decision's, else the ask's id.
     var round: String { ask.round ?? ask.id }
 
-    /// "OK: ‹option›", or "OK" when that would not fit `Theme.Size.todoAnswerMax` at text scale `scale` (S2-25): line 2
-    /// already names the recommendation, and a button's words are never cut.
+    /// "OK: ‹option›", or "OK" when that would not fit `Theme.Size.todoAnswerMax` at text scale `scale` (DESIGN_SYSTEM
+    /// 2.5): line 2 already names the recommendation, and a button's words are never cut.
     func okTitle(scale: CGFloat) -> String {
         guard case .ok(let option)? = primary else { return "" }
         return okWidth * scale <= Theme.Size.todoAnswerMax ? Self.okLong(option) : String(localized: "OK [To-dos Answers]")
@@ -47,15 +51,22 @@ nonisolated struct TodoRowAnswers: Equatable, Sendable {
 
     static func okLong(_ option: String) -> String { String(localized: "OK: \(option) [To-dos Answers]") }
 
-    /// The answers' font size at the default text size (subheadline) and their capsule's padding on each side.
-    static let em: CGFloat = 15
-    static let padding: CGFloat = 14
-
-    /// About how wide `text` is in the answers' font: a wide character (Chinese, Japanese, a full-width form) an em, any
-    /// other 0.6 of one, generous for a semibold Latin face. Never measured: it is worked out once per row content.
+    /// About how wide `text` is in the answers' font (`Theme.Size.todoAnswerEm` an em at the default text size), with
+    /// the style's button around it (`Theme.Space.l` a side, more than any style pads): a wide character (Chinese,
+    /// Japanese, a full-width form) an em, a capital or a lowercase m or w 0.8 of one (W and M nearer a whole one), any
+    /// other 0.6, generous for a semibold Latin face. Never measured: it is worked out once per row content.
     static func width(_ text: String) -> CGFloat {
-        let units = text.unicodeScalars.reduce(CGFloat.zero) { sum, scalar in sum + (wide(scalar) ? 1 : 0.6) }
-        return units * em + 2 * padding
+        let units = text.unicodeScalars.reduce(CGFloat.zero) { sum, scalar in sum + ems(scalar) }
+        return units * Theme.Size.todoAnswerEm + 2 * Theme.Space.l
+    }
+
+    private static func ems(_ s: Unicode.Scalar) -> CGFloat {
+        if wide(s) { return 1 }
+        switch s {
+        case "M", "W": return 0.95
+        case "A"..."Z", "m", "w": return 0.8
+        default: return 0.6
+        }
     }
 
     private static func wide(_ s: Unicode.Scalar) -> Bool {
@@ -68,11 +79,10 @@ nonisolated struct TodoRowAnswers: Equatable, Sendable {
 }
 
 nonisolated enum TodoRowAnswersLogic {
-    /// The row's answers for `view`'s first ask, while the row is in Needs you or Can wait and open: a safe decision with a
-    /// recommendation among its options, OK and Options; a failed start's retry, Retry and Options; a run's safe question
-    /// whose card the hub holds, Options alone (its card is the run's own form). Plans, tools, forms, secrets, open
-    /// decisions and an ask without a risk (an older manager's, read as open) offer none: the row's tap opens the to-do,
-    /// where the ask is. `mark`: what this device did with it.
+    /// The row's answers for `view`'s first ask, while the row is in Needs you or Can wait and open: a safe decision, OK
+    /// (with a recommendation among its options) and Options; a failed start's retry, Retry and Options. A run's asks
+    /// (questions, plans, tools, forms, secrets), open decisions and an ask without a risk (an older manager's, read as
+    /// open) offer none: the row's tap opens the to-do, where the ask is. `mark`: what this device did with it.
     static func answers(_ view: TodoSummary?, section: String, closed: Bool, mark: TodoAnswerMark?) -> TodoRowAnswers? {
         guard let view, !closed, [TodoListSection.needsYou, TodoListSection.canWait].contains(section),
               let ask = view.asks?.first else { return nil }
@@ -81,7 +91,7 @@ nonisolated enum TodoRowAnswersLogic {
         switch ask.kind {
         case OwnerAskKind.decision where safe:
             let labels = (ask.options ?? []).map(\.label)
-            if let recommend = ask.recommend, labels.isEmpty || labels.contains(recommend) {
+            if let recommend = ask.recommendedOption {
                 out.primary = .ok(option: recommend)
                 out.okWidth = TodoRowAnswers.width(TodoRowAnswers.okLong(recommend))
             }
@@ -89,13 +99,29 @@ nonisolated enum TodoRowAnswersLogic {
         case OwnerAskKind.retry where safe:
             out.primary = .retry
             out.options = true
-        case OwnerAskKind.question where safe && ask.home == OwnerAskHome.run && ask.interaction != nil:
-            out.options = true
         default:
             break
         }
         guard out.primary != nil || out.options || mark != nil else { return nil }
         return out
+    }
+}
+
+nonisolated extension OwnerAsk {
+    /// The step whose ask this is, lifted onto its parent's row (`step:<id>/…`, the hub's projection): today's routes
+    /// answer it on the step, and the device keeps it by the step's round. nil for the to-do's own.
+    var step: String? {
+        guard id.hasPrefix("step:"), let slash = id.firstIndex(of: "/") else { return nil }
+        let start = id.index(id.startIndex, offsetBy: 5)
+        return start < slash ? String(id[start..<slash]) : nil
+    }
+
+    /// A decision's recommendation when it is one of its options (or it lists none): the one an OK takes and the card
+    /// marks Recommended. nil when the hub recommends nothing; the first option is never taken for it.
+    var recommendedOption: String? {
+        guard kind == OwnerAskKind.decision, let recommend, !recommend.isEmpty else { return nil }
+        let labels = (options ?? []).map(\.label)
+        return labels.isEmpty || labels.contains(recommend) ? recommend : nil
     }
 }
 
@@ -110,8 +136,6 @@ struct AskCardDeps {
     var group: @MainActor () -> String?
     var features: @MainActor () -> TodoFeatures
     var toast: @MainActor (Toast) -> Void
-    /// Later on a decision also puts it off in the Needs You tray, for the same app session.
-    var laterInTray: @MainActor (TodoItem) -> Void = { _ in }
     /// Don't handle through today's route (a hub without `todo_asks`): its toast offers Undo itself.
     var declineToday: @MainActor (TodoItem) async -> Bool = { _ in false }
 
@@ -119,15 +143,15 @@ struct AskCardDeps {
         let app = AppModel.shared
         return AskCardDeps(answers: .shared, store: .shared, api: { app.api }, group: { app.hub?.group },
                            features: { app.todoFeatures }, toast: { app.toast = $0 },
-                           laterInTray: { TasksStore.shared.laterDecision($0) },
                            declineToday: { await TasksStore.shared.dismissDecision($0) })
     }
 }
 
-/// Answering a to-do's own asks from its row and its card (#10465, stage-2 plan PR 14; proposal 3.7): OK, an option and
-/// Retry are held through their Undo window (`DecisionAnswers`, S2-7); Later puts an ask off for this app session; Don't
-/// handle goes at once and is undone with its receipt. Every answer moves the numbers once, through the store's
-/// `TodoCountsSource`. One for the app (`shared`), so a row and its card say the same thing.
+/// Answering a to-do's own asks from its row and its card (#10465; proposal 3.7, "Three outcomes"): OK, an option and
+/// Retry are held through their Undo window (`DecisionAnswers`); Later puts an ask off on this row for this app session;
+/// Don't handle goes at once and is undone with its receipt. Every answer moves the numbers once, through the store's
+/// `TodoCountsSource`. One for the app (`shared`), so a row and its card say the same thing. A step's ask lifted onto
+/// its parent's row is kept by the step's round (`OwnerAsk.step`), as the tray keeps it.
 @MainActor @Observable
 final class AskCardModel {
     static let shared = AskCardModel(deps: .live)
@@ -137,43 +161,54 @@ final class AskCardModel {
     /// Don't handle on its way, by the same key: the card's buttons wait.
     private(set) var busy: Set<String> = []
     @ObservationIgnored private let deps: AskCardDeps
-    @ObservationIgnored private var abouts: [String: String?] = [:]
+    @ObservationIgnored private var abouts: [String: [String]] = [:]
 
     init(deps: AskCardDeps) {
         self.deps = deps
     }
 
-    private func key(_ ask: OwnerAsk, _ todo: TodoItem) -> String? {
-        deps.group().map { DecisionAnswers.key(todo: todo.id, round: ask.round ?? ask.id, group: $0) }
+    /// The round's key on this device (`DecisionAnswers.key`): a step's ask by the step's.
+    private func key(_ ask: OwnerAsk, _ todo: String) -> String? {
+        deps.group().map { DecisionAnswers.key(todo: ask.step ?? todo, round: ask.round ?? ask.id, group: $0) }
     }
 
-    /// What a card says its ask is about: the recommendation's consequence, then what happens when nobody answers. Kept
-    /// by ask and day (the default's day is said from today), never worked out in a view's body (P4).
-    func about(_ ask: OwnerAsk, now: Date = .now, calendar: Calendar = .current) -> String? {
-        let key = ask.id + "|" + String(calendar.startOfDay(for: now).timeIntervalSince1970)
+    /// What a card says its ask is about, a paragraph each: what each option leads to ("Ryokan Hanami: ¥58k a night ·
+    /// Kaede: ¥52k a night"), then what happens when nobody answers. Kept by to-do, ask and day (the default's day is said
+    /// from today), never worked out in a view's body (P4).
+    func about(_ ask: OwnerAsk, todo: String, now: Date = .now, calendar: Calendar = .current) -> [String] {
+        let key = todo + "|" + ask.id + "|" + String(calendar.startOfDay(for: now).timeIntervalSince1970)
         if let kept = abouts[key] { return kept }
-        let pick = ask.kind == OwnerAskKind.decision ? ask.recommend ?? ask.options?.first?.label : nil
-        let leads = ask.options?.first { $0.label == pick }?.leadsTo
-        let fallback = ask.defaultAt.flatMap(JSON.parseDate).map { DecisionDefaultLine.text(at: $0, pick: pick, now: now, calendar: calendar) }
-        let lines = [leads, fallback].compactMap { $0 }.filter { !$0.isEmpty }
-        let text = lines.isEmpty ? nil : lines.joined(separator: "\n")
+        let words = TodoWords()
+        let leads = (ask.options ?? []).compactMap { option in
+            option.leadsTo.flatMap { $0.isEmpty ? nil : words("\(option.label): \($0) [To-dos Answers]") }
+        }
+        var lines = leads.isEmpty ? [] : [leads.joined(separator: TodoTimeWords.separator)]
+        if let at = ask.defaultAt.flatMap(JSON.parseDate) {
+            let when = TodoTimeWords.day(at, now: now, words: words, calendar: calendar)
+            if let line = TodoLineText.decisionDefault(pick: ask.recommendedOption, when: when,
+                                                       today: calendar.isDate(at, inSameDayAs: now), words: words) {
+                lines.append(line)
+            }
+        }
         if abouts.count >= 64 { abouts.removeAll() }
-        abouts[key] = text
-        return text
+        abouts[key] = lines
+        return lines
     }
 
-    /// What this device did with `ask` (`TodoAnswerMark`): what the row and the card say in its place.
+    /// What this device did with `ask` on to-do `todo`'s row (`TodoAnswerMark`): what the row and the card say in its
+    /// place.
     func mark(_ ask: OwnerAsk, todo: String) -> TodoAnswerMark? {
         guard let group = deps.group() else { return nil }
-        let round = ask.round ?? ask.id
-        switch deps.answers.state(todo: todo, round: round, group: group) {
-        case .chosen(let label)?: return .chosen(label, undo: deps.answers.canUndo(todo: todo, round: round, group: group))
+        let target = ask.step ?? todo, round = ask.round ?? ask.id
+        switch deps.answers.state(todo: target, round: round, group: group) {
+        case .chosen(let label)?: return .chosen(label, undo: deps.answers.canUndo(todo: target, round: round, group: group))
         case .answered(let label)?: return .chosen(label, undo: false)
         case .elsewhere?, .alreadyHandled?: return .elsewhere
+        case .unsure?: return .unsure
         case .busy?: return .busy
         case .sentBack?, nil: break
         }
-        let key = DecisionAnswers.key(todo: todo, round: round, group: group)
+        let key = DecisionAnswers.key(todo: target, round: round, group: group)
         if busy.contains(key) { return .busy }
         return later.contains(key) ? .later : nil
     }
@@ -181,7 +216,7 @@ final class AskCardModel {
     /// The option of an open decision a first tap armed ("Confirm: …"), by its index in the ask's options.
     func armed(_ ask: OwnerAsk, todo: String) -> Int? {
         guard let group = deps.group() else { return nil }
-        return deps.answers.armedOption(todo: todo, round: ask.round ?? ask.id, group: group)
+        return deps.answers.armedOption(todo: ask.step ?? todo, round: ask.round ?? ask.id, group: group)
     }
 
     /// OK: the recommendation.
@@ -196,52 +231,53 @@ final class AskCardModel {
         guard let group = deps.group() else { return }
         let arm = ask.risk == OwnerAskRisk.safe ? nil : (ask.options ?? []).firstIndex { $0.label == option }
         let answer = TodoOutbox.AskAnswer(ask: ask.id, kind: OwnerAskKind.decision, round: ask.round, option: option,
-                                          label: String(localized: "You chose \(option) [To-dos Answers]"))
-        later.remove(DecisionAnswers.key(todo: todo.id, round: ask.round ?? ask.id, group: group))
+                                          label: String(localized: "You chose \(option) [To-dos Answers]"), step: ask.step)
+        if let key = key(ask, todo.id) { later.remove(key) }
         await deps.answers.answer(answer, todo: todo.id, group: group, arm: arm)
     }
 
     /// Retry on a start that failed: started again once its Undo window ends.
     func retry(_ ask: OwnerAsk, todo: TodoItem) async {
         guard let group = deps.group() else { return }
-        let answer = TodoOutbox.AskAnswer(ask: ask.id, kind: OwnerAskKind.retry, label: String(localized: "Starting again [To-dos Answers]"))
-        later.remove(DecisionAnswers.key(todo: todo.id, round: ask.round ?? ask.id, group: group))
+        let answer = TodoOutbox.AskAnswer(ask: ask.id, kind: OwnerAskKind.retry, label: String(localized: "Starting again [To-dos Answers]"),
+                                          step: ask.step)
+        if let key = key(ask, todo.id) { later.remove(key) }
         await deps.answers.answer(answer, todo: todo.id, group: group)
     }
 
     /// Undo on the answer chosen for `ask`, while it is held: nothing is sent, and the ask counts again.
     func undo(_ ask: OwnerAsk, todo: TodoItem) {
         guard let group = deps.group() else { return }
-        deps.answers.undo(todo: todo.id, round: ask.round ?? ask.id, group: group)
+        deps.answers.undo(todo: ask.step ?? todo.id, round: ask.round ?? ask.id, group: group)
     }
 
-    /// Later: not now, for this app session (proposal 3.7, "Three outcomes"). Nothing is written; the ask still counts,
-    /// and a decision is put off in the Needs You tray too.
+    /// Later: not now, on this row for this app session (proposal 3.7, "Three outcomes"). Nothing is written, and the ask
+    /// still counts everywhere, so the tray still lists it: one number for one ask.
     func putOff(_ ask: OwnerAsk, todo: TodoItem) {
-        guard let key = key(ask, todo) else { return }
+        guard let key = key(ask, todo.id) else { return }
         Haptics.tap()
         later.insert(key)
-        if ask.kind == OwnerAskKind.decision { deps.laterInTray(todo) }
     }
 
     /// Back from Later: the card opens again.
     func bringBack(_ ask: OwnerAsk, todo: TodoItem) {
-        guard let key = key(ask, todo) else { return }
+        guard let key = key(ask, todo.id) else { return }
         later.remove(key)
     }
 
-    /// Whether Don't handle is offered: on a decision, through the asks route or today's (which needs its review round).
+    /// Whether Don't handle is offered: on a decision, through the asks route or today's (which needs the to-do's own
+    /// review round, so never for a step's ask on its parent's row).
     func declinable(_ ask: OwnerAsk, todo: TodoItem) -> Bool {
-        ask.kind == OwnerAskKind.decision && (deps.features().asks || todo.decisionReview != nil)
+        ask.kind == OwnerAskKind.decision && (deps.features().asks || (ask.step == nil && todo.decisionReview != nil))
     }
 
     /// Don't handle: declined and kept by the hub at once (nothing waits for Undo, since the hub undoes it with its
     /// receipt), the ask out of the numbers, and a toast with Undo. Through the asks route while the hub lists
     /// `todo_asks`, else today's `decision-dismiss`, whose own toast offers Undo.
     func decline(_ ask: OwnerAsk, todo: TodoItem) async {
-        guard let key = key(ask, todo), !busy.contains(key) else { return }
+        guard let key = key(ask, todo.id), !busy.contains(key) else { return }
         guard deps.features().asks, let api = deps.api()?.manager(deps.store.named(todo.id)) else {
-            if await deps.declineToday(todo) { deps.store.countsSource.answered(ask.id, of: todo.id) }
+            await declineToday(ask, todo: todo)
             return
         }
         busy.insert(key)
@@ -258,15 +294,25 @@ final class AskCardModel {
                              }, duration: Theme.Motion.draftUndo))
         } catch where TodoAskRefusal.answeredElsewhere(error) {
             deps.store.reload(api: api)
+        } catch where TodoAskRefusal.routeMissing(error) {
+            // A manager that reconnected at an older version: today's route, as the answers fall back.
+            busy.remove(key)
+            await declineToday(ask, todo: todo)
         } catch {
             Haptics.error()
             deps.toast(Toast(String(localized: "Couldn't dismiss: \(error.localizedDescription)"), style: .error))
         }
     }
 
+    /// Don't handle through today's `decision-dismiss`, whose own toast offers Undo; only for the to-do's own review round.
+    private func declineToday(_ ask: OwnerAsk, todo: TodoItem) async {
+        guard ask.step == nil else { return }
+        if await deps.declineToday(todo) { deps.store.countsSource.answered(ask.id, of: todo.id) }
+    }
+
     /// Undo of Don't handle, with its receipt: the ask waits again and counts again.
     func undoDecline(_ ask: OwnerAsk, todo: TodoItem, receipt: String) async {
-        guard let key = key(ask, todo), !busy.contains(key), let api = deps.api()?.manager(deps.store.named(todo.id)) else { return }
+        guard let key = key(ask, todo.id), !busy.contains(key), let api = deps.api()?.manager(deps.store.named(todo.id)) else { return }
         busy.insert(key)
         defer { busy.remove(key) }
         do {

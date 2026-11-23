@@ -2,18 +2,18 @@ import PersonaWire
 import SwiftUI
 
 /// One of a to-do's asks as a card (#10465; DESIGN_SYSTEM 3.3 and 4.8, "To-dos"; proposal 3.7; task cards P1 and P4).
-/// It answers through `AskCardModel` (the to-do's own asks, held through their Undo window by `DecisionAnswers`) and the
-/// run's own card (a run's question), so a row's card, the tray and the to-do's page answer one way on one device.
+/// It answers through `AskCardModel` (the to-do's own asks, held through their Undo window by `DecisionAnswers`), so a
+/// row's card, the tray and the to-do's page answer one way on one device.
 ///
 /// - **The home** (a to-do's own ask: a decision, a start that failed): its title (left to line 2 on a row), what it is
-///   about, at most two other answers side by side, the recommended answer on a line of its own across the card, then
-///   Later · Don't handle · Discuss… (Discuss… only where the page's composer can take "Answer: …"). An open decision
-///   takes two taps on an option, the first arming it.
-/// - **The door** (a run's ask, at home in its session): "From ‹run› · ‹ask›", then the run's own card for a question it
-///   holds (which draws the style's own form, BeautifulUI's included), else Review Plan › or Review ›, which opens the
-///   session where the ask lives.
+///   about (what each option leads to, then what happens when nobody answers), the other answers two side by side, the
+///   recommended answer on a line of its own across the card, then Later · Don't handle · Discuss… (Discuss… only where
+///   the page's composer can take "Answer: …"). A decision the hub recommends nothing for draws every option alike, two
+///   side by side. An open decision takes two taps on an option, the first arming it.
+/// - **The door** (a run's ask, at home in its session): "From ‹run› · ‹ask›", then Review Plan › or Review ›, which opens
+///   the session where the ask lives. A list row offers no answers for a run's ask, so only the to-do's page draws it.
 /// - Answered here, it says so in its place ("✓ You chose … · Undo", "Answered elsewhere"); put off with Later, it folds
-///   to one line, "‹ask› · later today ›", which opens it again.
+///   to one line, "‹ask› · later today ⌄", which opens it again.
 struct AskCard: View {
     var ask: OwnerAsk
     var todo: TodoItem
@@ -24,8 +24,6 @@ struct AskCard: View {
     var discuss: (() -> Void)? = nil
     /// A run's ask: opens the session it lives in (Review Plan ›, Review ›).
     var review: (() -> Void)? = nil
-    /// The run's own card for a run's question, when the app holds it.
-    var interaction: Interaction? = nil
     /// After an answer or Later: its row folds the card away.
     var done: () -> Void = {}
 
@@ -37,6 +35,8 @@ struct AskCard: View {
                 AskChosenLine(text: label, undo: undo ? { model.undo(ask, todo: todo) } : nil)
             case .elsewhere?:
                 AskChosenLine(text: String(localized: "Answered elsewhere [To-dos Answers]"), elsewhere: true)
+            case .unsure?:
+                AskChosenLine(text: String(localized: "Not sure your answer went through [To-dos Answers]"), elsewhere: true)
             case .later?:
                 laterLine
             case .busy?, nil:
@@ -49,11 +49,17 @@ struct AskCard: View {
 
     // MARK: The home
 
-    private var recommended: String? { ask.kind == OwnerAskKind.decision ? ask.recommend ?? ask.options?.first?.label : nil }
+    /// The recommendation, only when the hub gives one among the options: never the first option in its place.
+    private var recommended: String? { ask.recommendedOption }
 
-    /// The options besides the recommended one, at most two on the card's row.
-    private var others: [String] {
-        (ask.options ?? []).map(\.label).filter { $0 != recommended }
+    private var otherRows: [[String]] { Self.optionRows(ask) }
+
+    /// The options besides the recommended one (every one without a recommendation), two to a row: every one reachable,
+    /// none squeezed (task cards P1).
+    static func optionRows(_ ask: OwnerAsk) -> [[String]] {
+        let recommended = ask.recommendedOption
+        let others = (ask.options ?? []).map(\.label).filter { $0 != recommended }
+        return stride(from: 0, to: others.count, by: 2).map { Array(others[$0..<min($0 + 2, others.count)]) }
     }
 
     private func home(busy: Bool) -> some View {
@@ -63,15 +69,20 @@ struct AskCard: View {
                     .font(Theme.Font.bodyStrong)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let about {
-                Text(about)
-                    .font(Theme.Font.secondary)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            let about = model.about(ask, todo: todo.id)
+            if !about.isEmpty {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    ForEach(about, id: \.self) { line in
+                        Text(line)
+                            .font(Theme.Font.secondary)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
-            if !others.isEmpty {
+            ForEach(otherRows, id: \.self) { row in
                 StackingButtonRow {
-                    ForEach(others.prefix(2), id: \.self) { option in
+                    ForEach(row, id: \.self) { option in
                         answerButton(option, prominent: false)
                     }
                 }
@@ -91,10 +102,6 @@ struct AskCard: View {
             : String(localized: "A decision for you [To-dos Line]")
     }
 
-    /// What the ask is about: the recommendation's consequence, then what happens when nobody answers (worked out once
-    /// per ask and day, `AskCardModel.about`).
-    private var about: String? { model.about(ask) }
-
     @ViewBuilder private var primaryButton: some View {
         if ask.kind == OwnerAskKind.retry {
             Button { act { await model.retry(ask, todo: todo) } } label: {
@@ -102,6 +109,7 @@ struct AskCard: View {
             }
             .font(Theme.Font.secondaryStrong)
             .themedButton(prominent: true)
+            .accessibilityLabel(String(localized: "Retry \(todo.title) [To-dos Answers]"))
             .accessibilityIdentifier("ask.retry." + todo.id)
         } else if let recommended {
             answerButton(recommended, prominent: true)
@@ -141,13 +149,13 @@ struct AskCard: View {
     /// Later · Don't handle · Discuss…: the ask's other outcomes (task cards P4), as words in the accent.
     private var exits: some View {
         FlowLayoutRow(spacing: Theme.Space.s) {
-            exit(String(localized: "Later [Task Views 9d2ca2]"), id: "later") {
+            exit(String(localized: "Later [To-dos Answers]"), id: "later") {
                 model.putOff(ask, todo: todo)
                 done()
             }
             if model.declinable(ask, todo: todo) {
                 separator
-                exit(String(localized: "Do not handle [Task Draft]"), id: "dont") { act { await model.decline(ask, todo: todo) } }
+                exit(String(localized: "Don't handle [To-dos Answers]"), id: "dont") { act { await model.decline(ask, todo: todo) } }
             }
             if let discuss {
                 separator
@@ -161,22 +169,23 @@ struct AskCard: View {
         Text(verbatim: "·").foregroundStyle(.tertiary).accessibilityHidden(true)
     }
 
+    /// Words that are a button: hit as a finger's height, and at least as wide.
     private func exit(_ words: String, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(words).lineLimit(1).foregroundStyle(Theme.accent).tapTargetOutset()
+            Text(words).lineLimit(1).foregroundStyle(Theme.accent).scaledFrame(minWidth: Theme.Size.tapTarget).tapTargetOutset()
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("ask.\(id)." + todo.id)
     }
 
-    /// Put off: one line that opens the card again.
+    /// Put off: one line that opens the card again, with the folds' ⌄.
     private var laterLine: some View {
         Button { model.bringBack(ask, todo: todo) } label: {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
                 Text(String(localized: "\(title) · later today [To-dos Answers]"))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                ThemedIcon(Theme.Icon.forward)
+                ThemedIcon(Theme.Icon.expand)
                     .font(Theme.Font.labelHeavy)
                     .foregroundStyle(.tertiary)
                     .accessibilityHidden(true)
@@ -185,6 +194,7 @@ struct AskCard: View {
             .tapTargetOutset()
         }
         .buttonStyle(.plain)
+        .accessibilityValue(String(localized: "Collapsed [To-dos Answers]"))
         .accessibilityIdentifier("ask.laterLine." + todo.id)
     }
 
@@ -206,9 +216,7 @@ struct AskCard: View {
                 .font(Theme.Font.secondaryMedium)
                 .foregroundStyle(StatusPalette.needsYou.text)
                 .fixedSize(horizontal: false, vertical: true)
-            if let interaction, ask.kind == OwnerAskKind.question {
-                InteractionPanel(interaction: interaction)
-            } else if let review {
+            if let review {
                 Button(action: review) {
                     HStack(spacing: Theme.Space.xs) {
                         Text(ask.kind == OwnerAskKind.plan ? String(localized: "Review Plan [To-dos Answers]")
@@ -247,52 +255,64 @@ private extension Text {
     }
 }
 
-/// "✓ You chose Ryokan Hanami · Undo" where an ask was: the answer given on this device, in the positive ink with its
-/// check, and Undo in the accent while it is held (`DecisionAnswers`); "Answered elsewhere" in the secondary ink, with no
-/// check, when the round ended before it reached the hub. One paragraph, wrapping as one line of text.
+/// "✓ You chose Ryokan Hanami · Undo" where an ask was: the answer given on this device, its check in the positive ink and
+/// its words in the primary (green words fall under 4.5:1 on white, DESIGN_SYSTEM 6.3), and Undo in the accent while it
+/// is held (`DecisionAnswers`); "Answered elsewhere" and "Not sure your answer went through" in the secondary ink, with no
+/// check. One paragraph: on one line while it fits, else the words wrap beside the check and Undo takes a line of its
+/// own under them (each candidate measured once, P7).
 struct AskChosenLine: View {
     var text: String
     var undo: (() -> Void)? = nil
     var elsewhere = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
-            if !elsewhere {
-                ThemedIcon(Theme.Icon.done)
-                    .font(Theme.Font.labelHeavy)
-                    .foregroundStyle(Theme.positive)
-                    .accessibilityHidden(true)
-            }
-            Text(text)
-                .foregroundStyle(elsewhere ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.positive))
-                .lineLimit(2)
-            if let undo {
-                Text(verbatim: "·").foregroundStyle(.tertiary).accessibilityHidden(true)
-                Button(action: undo) {
-                    Text("Undo").foregroundStyle(Theme.accent).lineLimit(1).fixedSize().tapTargetOutset()
+        ViewThatFits(in: .horizontal) {
+            MeasuredOnce {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
+                    check
+                    words.lineLimit(1)
+                    if undo != nil {
+                        Text(verbatim: "·").foregroundStyle(.tertiary).accessibilityHidden(true)
+                        undoButton
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("ask.undo")
+            }
+            MeasuredOnce {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
+                        check
+                        words.fixedSize(horizontal: false, vertical: true)
+                    }
+                    if undo != nil { undoButton }
+                }
             }
         }
         .font(Theme.Font.secondary)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(elsewhere ? "ask.elsewhere" : "ask.chosen")
     }
-}
 
-/// "Persona picks Ryokan Hanami on Fri unless you answer": what happens when nobody answers an ask with a default, in
-/// the line keys' words (`TodoLineText`).
-nonisolated enum DecisionDefaultLine {
-    static func text(at: Date, pick: String?, now: Date = .now, calendar: Calendar = .current) -> String {
-        let words = TodoWords()
-        let today = calendar.isDate(at, inSameDayAs: now)
-        let when = TodoTimeWords.day(at, now: now, words: words, calendar: calendar)
-        switch (pick, today) {
-        case let (pick?, true): return words("Persona picks \(pick) at \(when) unless you answer [To-dos Line]")
-        case let (pick?, false): return words("Persona picks \(pick) on \(when) unless you answer [To-dos Line]")
-        case (nil, true): return words("Persona decides at \(when) unless you answer [To-dos Line]")
-        case (nil, false): return words("Persona decides on \(when) unless you answer [To-dos Line]")
+    @ViewBuilder private var check: some View {
+        if !elsewhere {
+            ThemedIcon(Theme.Icon.done)
+                .font(Theme.Font.labelHeavy)
+                .foregroundStyle(Theme.positive)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var words: Text {
+        Text(text).foregroundStyle(elsewhere ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+    }
+
+    @ViewBuilder private var undoButton: some View {
+        if let undo {
+            Button(action: undo) {
+                Text("Undo").foregroundStyle(Theme.accent).lineLimit(1).fixedSize()
+                    .scaledFrame(minWidth: Theme.Size.tapTarget, alignment: .leading).tapTargetOutset()
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("ask.undo")
         }
     }
 }

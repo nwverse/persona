@@ -67,8 +67,7 @@ final class TodoCountsSource {
     @ObservationIgnored private let pending: @MainActor () -> [String: Pending]
     @ObservationIgnored private let answering: @MainActor () -> [String: Set<String>]
     @ObservationIgnored private var watchesScope = false
-    @ObservationIgnored private var watchesPending = false
-    @ObservationIgnored private var watchesAnswering = false
+    @ObservationIgnored private var watchesOutbox = false
     /// The Agents of the rows filed by the app's own rules whose sessions are watched, and the watch's token: a session
     /// of theirs changing files them again (an older manager sends no push for it).
     @ObservationIgnored private var watched: (agents: Set<String>, token: Int)?
@@ -139,7 +138,8 @@ final class TodoCountsSource {
 
     private func recount() {
         let scope = watchedScope()
-        let pending = watchedPending()
+        let outbox = watchedOutbox()
+        let pending = outbox.pending
         let rows = scope.map { s in input.rows.filter { s.has($0.manager) } } ?? input.rows
         let hubCounts = scope == nil ? input.counts : nil
         let ruled = rows.filter { row in input.views[row.id].map(TodoFiling.knows) != true }
@@ -163,7 +163,7 @@ final class TodoCountsSource {
         } else {
             next = TodoCountsFallback.counts(filed)
         }
-        let given = overlay.merging(watchedAnswering()) { $0.union($1) }
+        let given = overlay.merging(outbox.answering) { $0.union($1) }
         let carried = given.isEmpty ? [] : TodoCountsFallback.carried(filed)
         for row in filed where row.section == TodoListSection.needsYou && !carried.contains(row.id) && !row.asks.isEmpty
             && Set(row.asks).isSubset(of: given[row.id] ?? []) {
@@ -265,27 +265,16 @@ final class TodoCountsSource {
         }
     }
 
-    /// The owner's writes still on this device, followed: a tick, a delete or a new to-do moves the numbers at once.
-    private func watchedPending() -> [String: Pending] {
-        guard !watchesPending else { return pending() }
-        watchesPending = true
-        return withObservationTracking { pending() } onChange: { [weak self] in
+    /// The owner's writes and answers still on this device, followed under one observation, since both are read from
+    /// the outbox's entries: a tick, a delete, a new to-do, or an answer held, undone or refused moves the numbers at
+    /// once, in one recount per change.
+    private func watchedOutbox() -> (pending: [String: Pending], answering: [String: Set<String>]) {
+        guard !watchesOutbox else { return (pending(), answering()) }
+        watchesOutbox = true
+        return withObservationTracking { (pending(), answering()) } onChange: { [weak self] in
             // Called once, before the change lands: counted again once it has.
             Task { @MainActor [weak self] in
-                self?.watchesPending = false
-                self?.recount()
-            }
-        }
-    }
-
-    /// The answers still on this device, followed: an answer held, undone or refused moves the numbers at once.
-    private func watchedAnswering() -> [String: Set<String>] {
-        guard !watchesAnswering else { return answering() }
-        watchesAnswering = true
-        return withObservationTracking { answering() } onChange: { [weak self] in
-            // Called once, before the change lands: counted again once it has.
-            Task { @MainActor [weak self] in
-                self?.watchesAnswering = false
+                self?.watchesOutbox = false
                 self?.recount()
             }
         }
