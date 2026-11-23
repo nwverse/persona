@@ -171,16 +171,6 @@ struct PromptComposer: View {
     }
     #endif
 
-    #if os(macOS)
-    private func toggleDictation() {
-        if dictation.isListening { stopDictation(); return }
-        let base = text.isEmpty || text.last?.isWhitespace == true ? text : text + " "
-        dictation.start(hints: [text], update: { heard in text = base + heard }) { problem in
-            AppModel.shared.toast = Toast(problem, style: .error)
-        }
-    }
-    #endif
-
     /// Ends dictation, and a start still asking for permission with it (#3407).
     private func stopDictation() { dictation.stop() }
 

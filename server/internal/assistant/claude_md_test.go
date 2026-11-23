@@ -24,17 +24,14 @@ func claudeMDHub(devices ...Device) *fakeHub {
 	return f
 }
 
-// The secretary's instructions never send new task_plan work to a leader for acceptance (#5732).
-func TestAssistantInstructionsKeepNewTaskReviewWithMain(t *testing.T) {
-	f := claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"})
+// Shared platform instructions keep ordinary work with its planning lead and escalate only owner decisions.
+func TestAssistantInstructionsKeepTaskReviewWithItsPlanningLead(t *testing.T) {
+	f := claudeMDHub(Device{ID: "server", Name: "Server", Kind: "local"})
 	s := newTestService(t, f)
 	s.kb.dir = "<hub>/data"
 	text := s.claudeMD(context.Background(), "server", false)
-	if strings.Contains(text, "交给那个主管督办") || strings.Contains(text, "任务的验收和返工由它做") {
-		t.Fatal("the assistant is still told to delegate new task_plan acceptance to a leader")
-	}
-	if !strings.Contains(text, "新任务统一由主对话督办") {
-		t.Fatal("the assistant instructions do not state universal main supervision")
+	if strings.Contains(text, "新任务统一由主对话督办") || !strings.Contains(text, "主管派的任务归该主管") || !strings.Contains(text, "主对话不直接指挥主管的 Agent") {
+		t.Fatal("the platform instructions disagree with direction ownership")
 	}
 }
 

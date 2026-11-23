@@ -49,15 +49,18 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 		ParkedDue:           slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkedDue }),
 		ParkDecided:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkDecided }),
 		Decisions: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool {
-			return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot
+			return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot || e.Kind == sigCardlessWait
 		}),
 		Inbox: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigInbox }),
 		Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), PushGrading: askedIn(list) && s.quietModeOn(ctx)})
 }
 
-// recheckDigestTo preserves the supervisor already persisted for a queued signal. New dispatch uses digestTo's
-// main-supervision policy; revalidating an existing relay must not rehome it merely because that policy changed.
+// recheckDigestTo honors explicit moves through the same policy as immediate dispatch. Otherwise it preserves
+// a queued legacy supervisor: a default-policy change alone is not permission to rehome an existing relay.
 func (s *Service) recheckDigestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
+	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.assigned() {
+		return s.digestTo(ctx, cfg, g)
+	}
 	if g.To != "" {
 		return s.digestTo(ctx, cfg, g)
 	}
@@ -108,6 +111,10 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	here, web := s.settings(ctx), s.webBase(ctx)
 	groups := map[string][]superviseSignal{}
 	entries := map[string][]prompts.SuperviseEntry{}
+	for i, g := range signals {
+		signals[i] = s.currentSupervisorSignal(g)
+	}
+	signals = mergeSignals(nil, signals)
 	for _, g := range signals {
 		if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil && g.Kind == sigNeedsYou {
 			if _, known := s.taskNeedsRecheck(ctx, t); !known {
@@ -136,6 +143,9 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 			}
 		}
 		if e, ok := s.digestEntry(ctx, g, web); ok {
+			if g.Kind == sigAsk {
+				g.Cards = e.Asks
+			}
 			// A worker reassigned to an Agent needs the ordinary dispatcher, not assistant.send to its old conversation.
 			if _, handled, _ := s.leaderRoute(g); handled {
 				return msg, false, true
