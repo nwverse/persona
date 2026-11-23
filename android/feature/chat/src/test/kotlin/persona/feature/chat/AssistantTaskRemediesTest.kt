@@ -29,6 +29,9 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
+import java.time.Duration
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -428,7 +431,9 @@ class AssistantTaskRemediesTest {
         const val TASK = "task"
         const val PLAN = "plan"
         const val TITLE = "Prepare the release"
-        const val AT = "2026-11-20T10:00:00Z"
+        // An hour ago on the real clock: the tray reads the triage at the current time, and a failed start shelves after
+        // 48 hours (`SHELVE_AFTER_MS`), so a fixed date stops listing these rows two days after it was written.
+        val AT: String = Instant.now().minus(Duration.ofHours(1)).truncatedTo(ChronoUnit.SECONDS).toString()
         const val RETRY = "Retry"
         const val USE_LAUNCHER = "Use claude instead"
         const val LAUNCHER_SHORT = "claude can't start in this computer's terminal"
