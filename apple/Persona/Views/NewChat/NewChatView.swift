@@ -331,15 +331,8 @@ struct NewChatView: View {
     }
 
     @ViewBuilder private var promptField: some View {
-        #if os(macOS)
-        // A grouped Mac form shows a titled field as label + trailing value: the prompt took the right half.
-        TextField(promptHint, text: $prompt, prompt: Text(promptHint), axis: .vertical)
-            .labelsHidden()
-            .lineLimit(3...10)
-        #else
         TextField(promptHint, text: $prompt, axis: .vertical)
             .lineLimit(3...10)
-        #endif
     }
 
     var body: some View {
@@ -611,14 +604,6 @@ struct NewChatView: View {
                     attachments.cancelUploads()
                     dismiss()
                 }
-                #if os(macOS)
-                // A Mac sheet's primary button sits beside Cancel and answers ⏎ (docs/apple/mac.md「Mapping from iOS」).
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(starting ? startingLabel : String(localized: "Start Chat")) { Task { await start() } }
-                        .lineLimit(1)
-                        .disabled(starting || loading || presetNeedsModels || !ready)
-                }
-                #endif
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: Theme.Space.s) {
@@ -770,12 +755,6 @@ struct NewChatView: View {
                 childSource = nil
             }
         }
-        #if os(macOS)
-        // On the stack, not its root: with the minimum size on the form, pushing Launcher / Folder shrank a sheet opened
-        // from Agents' New Session to the pushed list's own height, zero (#303). Also gives the grouped form to sheets
-        // that miss macLook's (Knowledge › Start Agent).
-        .macSheet()
-        #endif
     }
 
     private var launcherByHand: Binding<String> {

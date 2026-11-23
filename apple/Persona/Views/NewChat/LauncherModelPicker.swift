@@ -413,9 +413,6 @@ struct TypedModelSheet: View {
                 }
             }
         }
-        #if os(macOS)
-        .macSheet()
-        #endif
         .presentationDetents([.medium, .large])
         .onAppear {
             if text.isEmpty { text = initial }

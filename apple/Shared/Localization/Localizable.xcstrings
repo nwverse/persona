@@ -197,6 +197,121 @@
         }
       }
     },
+    "The hub isn't transcribing right now." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub isn't transcribing right now."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 暂时没有在转写。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブは今、文字起こしできていません。"
+          }
+        }
+      }
+    },
+    "The hub stopped transcribing this meeting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub stopped transcribing this meeting."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 已停止转写这场会议。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブはこの会議の文字起こしを止めました。"
+          }
+        }
+      }
+    },
+    "This iPhone can't transcribe %@ on the device either, so no lines show until the hub transcribes again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone can't transcribe %1$@ on the device either, so no lines show until the hub transcribes again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 iPhone 也没法在本机转写%1$@，hub 恢复转写之前，这里不会有文字。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone でも%1$@を端末上で文字起こしできないため、ハブが文字起こしを再開するまで文字は表示されません。"
+          }
+        }
+      }
+    },
+    "This iPhone can't transcribe %@ on the device, so it shows no lines for this meeting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone can't transcribe %1$@ on the device, so it shows no lines for this meeting."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 iPhone 没法在本机转写%1$@，所以这场会议在这里不会显示文字。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone は%1$@を端末上で文字起こしできないため、この会議の文字は表示されません。"
+          }
+        }
+      }
+    },
+    "This iPhone needs iOS 26 or later to transcribe on the device, so no lines show until the hub transcribes again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone needs iOS 26 or later to transcribe on the device, so no lines show until the hub transcribes again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 iPhone 需要 iOS 26 或更高版本才能在本机转写，hub 恢复转写之前，这里不会有文字。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone で端末上の文字起こしをするには iOS 26 以降が必要なため、ハブが文字起こしを再開するまで文字は表示されません。"
+          }
+        }
+      }
+    },
     "To Decide [Question Pager]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -604,6 +719,29 @@
         "en": {"stringUnit": {"state": "translated", "value": "Delivered · awaiting review"}},
         "zh-Hans": {"stringUnit": {"state": "translated", "value": "已交付·待看"}},
         "ja": {"stringUnit": {"state": "translated", "value": "交付済み・レビュー待ち"}}
+      }
+    },
+    "Waiting for Wi-Fi to send the audio to the hub." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for Wi-Fi to send the audio to the hub."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等连上 Wi-Fi 再把音频发给 hub。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wi-Fi につながったら音声をハブに送ります。"
+          }
+        }
       }
     },
     "When you move a long way, iOS may wake Persona in the background, but it doesn't record where you go." : {

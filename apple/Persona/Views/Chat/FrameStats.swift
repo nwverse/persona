@@ -1,9 +1,6 @@
 #if DEBUG
 import Foundation
 import QuartzCore
-#if os(macOS)
-import AppKit
-#endif
 
 /// Simulator profiling (`-showAutoScroll YES`, ChatView): measures every frame while the chat list sweeps end to end
 /// and writes the hitches (frames late by more than half a frame) to Documents/frames.json for scripts to read.
