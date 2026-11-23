@@ -2637,7 +2637,8 @@ Each committed add or first undo broadcasts `{"type":"health_intake"}` through t
 It contains no measurement, note or entry ID. Open apps reload intake. The hub increments a
 widget-only revision: a closed iPhone with widgets is woken at most once per 15 minutes for
 ordinary changes; a held revision is checked again by the existing widget tick. An open phone
-is not woken. Needs You retains its immediate wake path. Intake does not change fleet state or
+is not woken; when its app leaves, the hub counts its widgets as written only up to the last
+revision it was sent. Needs You retains its immediate wake path. Intake does not change fleet state or
 generate a Live Activity update.
 
 ### Intake detail pages

@@ -229,7 +229,6 @@ go server/internal/workspacenaming core
 go server/plugins core
 
 # Module code still in core paths.
-go server/internal/voice/... voice
 go server/internal/transcribelive voice
 go server/internal/lark lark
 go server/internal/larkcli lark

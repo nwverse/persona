@@ -17,7 +17,8 @@ AFFECTED = "affected"
 
 
 def shard_for(package):
-    for name in ("node", "hub", "voice", "assistant"):
+    # modules/voice: the voice module (#13431), in the managers shard as internal/voice was.
+    for name in ("node", "hub", "voice", "modules/voice", "assistant"):
         suffix = "/internal/" + name
         if package.endswith(suffix) or suffix + "/" in package:
             return "node" if name == "node" else "managers"

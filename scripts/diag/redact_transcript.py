@@ -222,9 +222,14 @@ def parse_spec(spec: str):
     if not path or not re.fullmatch(r"[0-9,\-]+", ranges):
         return spec, None
     want = []
-    for r in ranges.split(","):
-        a, _, b = r.partition("-")
-        want.append(range(int(a), int(b or a) + 1))
+    for selection in ranges.split(","):
+        match = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", selection)
+        if not match:
+            raise ValueError("expected comma-separated line numbers or START-END ranges")
+        start, end = int(match[1]), int(match[2] or match[1])
+        if not 1 <= start <= end:
+            raise ValueError("line numbers must be positive and each range must be in ascending order")
+        want.append(range(start, end + 1))
     want.sort(key=lambda interval: interval.start)
     return path, want
 
@@ -235,9 +240,12 @@ def main():
     ap.add_argument("--words", action="store_true", help="print the words kept as is, for review")
     ap.add_argument("--skip-type", action="append", default=["api-request", "api-request-blob", "api-request-shape"],
                     help="drop lines of this type (default: the big api-request blobs)")
-    ap.add_argument("src", nargs="+", help="file.jsonl[:ranges] (1-based line numbers)")
+    ap.add_argument("src", nargs="+", help="file.jsonl[:ranges] (comma-separated 1-based lines or ascending START-END ranges)")
     args = ap.parse_args()
-    sources = [parse_spec(spec) for spec in args.src]
+    try:
+        sources = [parse_spec(spec) for spec in args.src]
+    except ValueError as error:
+        ap.error(f"invalid line selection: {error}")
     if os.path.exists(args.out) and any(os.path.samefile(args.out, path) for path, _ in sources):
         ap.error("output must not refer to an input transcript")
 

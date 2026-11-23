@@ -1,6 +1,6 @@
 # Lessons: real-time voice (GPT-Live upstream, `personad voice`)
 
-Read before changing `server/internal/voice`, `server/internal/prompts/voice/`, or voice-mode timing constants (`docs/assistant/voice.md` 4.5 / 4.9).
+Read before changing `server/internal/modules/voice`, `server/internal/prompts/voice/`, or voice-mode timing constants (`docs/assistant/voice.md` 4.5 / 4.9).
 Current protocol: `docs/extensions/extensions.md`, "Voice" and "Built-in voice extension". Voice-mode design: `docs/assistant/voice.md` (#3496).
 
 ## How we tested (2026-11-06)
@@ -485,13 +485,13 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   connected in about 0.2 s and its TLS handshake never got an answer; the IPv6 address finished TLS in about 0.4 s.
 - **Why Go never tried the other address**: Go orders addresses by RFC 6724, which ranks ULA IPv6 below IPv4, and `net.Dialer` moves on to
   the next address only when TCP fails. TCP to the IPv4 address succeeded, so every attempt sat out the handshake timeout there.
-- **Fix**: providers without `ssh` dial through `dialTLS` (`server/internal/voice/dial.go`), the `DialTLSContext` of the client used for
+- **Fix**: providers without `ssh` dial through `dialTLS` (`server/internal/modules/voice/dial.go`), the `DialTLSContext` of the client used for
   `GET /models`, `GET /voices` and the session WebSocket. It resolves the host, keeps the resolver's order and tries one address at a time
   at the TLS level: 4 s for TCP plus the handshake (the last address 15 s, so a slow host with one address is not cut short), the first
   completed handshake wins, and that address is tried first next time, so only the first connection after a restart waits on the dead one.
   When every address fails, the error names each address and why. ALPN offers only `http/1.1`: the WebSocket upgrade needs HTTP/1.1.
   Providers with `ssh` still dial through that machine.
-- **Checking it**: `server/internal/voice/dial_test.go` points a name at a local listener that accepts TCP and never speaks, then a working
+- **Checking it**: `server/internal/modules/voice/dial_test.go` points a name at a local listener that accepts TCP and never speaks, then a working
   TLS server, for both `GET /models` and the session dial.
 
 - **Opaque CONNECT tunnels** (#2745): the egress proxy can replay a bounded, complete ClientHello while no server byte has arrived; TCP success alone is insufficient. Preserve record/TCP fragments and stop before early application data. Observe both directions so server-first protocols are not delayed, and resume ordinary relay when the client sniff window expires.
