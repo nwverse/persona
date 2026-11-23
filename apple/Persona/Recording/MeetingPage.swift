@@ -839,7 +839,8 @@ struct MeetingPage: View {
         if case .ready = minutes.state { true } else { false }
     }
 
-    /// Where the minutes are, in the wrap-up's words: a spinner while they are written, a check once ready.
+    /// Where the minutes are, in the wrap-up's words: a spinner while they are written (or while the hub checks the
+    /// whole recording first, with how far it is: #13461), a check once ready.
     @ViewBuilder private var minutesLine: some View {
         if minutesAsked {
             Group {
@@ -847,7 +848,7 @@ struct MeetingPage: View {
                 case .writing:
                     HStack(spacing: Theme.Space.s) {
                         ProgressView()
-                        Text("Writing the minutes…")
+                        Text(MinutesWaitLine.of(minutes.transcription).title)
                     }
                 case .ready:
                     Label { Text("Minutes ready") } icon: { ThemedIcon(Theme.Icon.successFilled).foregroundStyle(Theme.positive) }
