@@ -337,12 +337,13 @@ final class TodoOutbox {
         return out
     }
 
-    /// The answers still here on hub `hub`, in the order they were made: `DecisionAnswers` finds a round's by its key.
-    func answers(hub: String) -> [(entry: Entry, answer: AskAnswer)] {
-        entries.compactMap { entry in
-            guard entry.hub == hub, !takenBack.contains(entry.id), case .answer(let a) = entry.write else { return nil }
-            return (entry, a)
+    /// The latest answer still here on hub `hub` that `matches`: `DecisionAnswers` finds a round's by its key. Read on
+    /// every draw of a decision row, so it walks the entries from the newest without building a list (P4).
+    func lastAnswer(hub: String, where matches: (Entry, AskAnswer) -> Bool) -> (entry: Entry, answer: AskAnswer)? {
+        for entry in entries.reversed() where entry.hub == hub && !takenBack.contains(entry.id) {
+            if case .answer(let a) = entry.write, matches(entry, a) { return (entry, a) }
         }
+        return nil
     }
 
     /// What the list's rows and every number show of the shown hub's writes (`TodoCountsSource`): a deleted to-do is

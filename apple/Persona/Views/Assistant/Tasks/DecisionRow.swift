@@ -268,7 +268,7 @@ import SwiftUI
     /// (two rounds, or a step's ask and its parent's) each keep their own.
     private func heldAnswer(_ key: String, group: String) -> (id: UUID, answer: TodoOutbox.AskAnswer)? {
         guard let hold = hold() else { return nil }
-        return hold.outbox.answers(hub: group).last { Self.key($0.entry, $0.answer) == key }.map { ($0.entry.id, $0.answer) }
+        return hold.outbox.lastAnswer(hub: group) { Self.key($0, $1) == key }.map { ($0.entry.id, $0.answer) }
     }
 
     private func send(_ key: String, group: String, answer: String, done: State, _ call: (APIClient) async throws -> Void) async {
