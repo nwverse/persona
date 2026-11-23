@@ -247,7 +247,7 @@ func TestAcceptedIsRefusedWhileTheWorkWaitsOnTheOwner(t *testing.T) {
 
 	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "草稿写好了"})
 	_, err := s.runTool(ctx, "server", "conv1", "task_review", raw)
-	if err == nil || !strings.Contains(err.Error(), "decision only the owner can make") || !strings.Contains(err.Error(), "needs_user") ||
+	if err == nil || !strings.Contains(err.Error(), "only the owner can make") || !strings.Contains(err.Error(), "needs_user") ||
 		!strings.Contains(err.Error(), "两版草稿等用户挑一版再发") {
 		t.Fatalf("accepted while the work waits on the owner: %v", err)
 	}
