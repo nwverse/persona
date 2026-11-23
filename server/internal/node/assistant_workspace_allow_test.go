@@ -10,20 +10,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// linkedStateDir makes <root>/.jarvis/assistant and the link <root>/.persona -> .jarvis, as on a computer whose state
-// directory was renamed: the node starts the assistant in .persona/assistant, Claude Code names the files it writes by
-// the path it resolved (.jarvis/assistant/...). It returns both spellings of the assistant's directory.
+// linkedStateDir makes <root>/<compat.StateDir>/assistant and the link <root>/.persona -> compat.StateDir, as on a
+// computer whose state directory was renamed: the node starts the assistant in .persona/assistant, Claude Code names the
+// files it writes by the path it resolved (<legacy>/assistant/...). It returns both spellings of the assistant's directory.
 func linkedStateDir(t *testing.T) (configured, real string) {
 	t.Helper()
 	root := t.TempDir()
-	real = filepath.Join(root, ".jarvis", "assistant")
+	real = filepath.Join(root, compat.StateDir, "assistant")
 	if err := os.MkdirAll(real, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(".jarvis", filepath.Join(root, ".persona")); err != nil {
+	if err := os.Symlink(compat.StateDir, filepath.Join(root, ".persona")); err != nil {
 		t.Skipf("symlink: %v", err)
 	}
 	return filepath.Join(root, ".persona", "assistant"), real
@@ -61,7 +62,7 @@ func TestInWorkspaceResolvesLinks(t *testing.T) {
 
 // An assistant conversation's own directory is written without a card, the path spelled through the link or
 // resolved; a file elsewhere, its own agent's settings and a call in plan mode still ask the phone
-// (ix_2d0efa1b033728ef: the main conversation's Write to ~/.jarvis/assistant/designs/... went to the phone).
+// (ix_2d0efa1b033728ef: the main conversation's Write to <legacy state directory>/assistant/designs/... went to the phone).
 func TestAssistantWorkspaceWritesWithoutCard(t *testing.T) {
 	configured, real := linkedStateDir(t)
 	outside := t.TempDir()
@@ -140,10 +141,10 @@ func TestGuestWorkspaceWriteStillAsks(t *testing.T) {
 // A health conversation's reports rule names the directory both ways: Claude Code names the file by the resolved one.
 func TestHealthReportRulesBothSpellings(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".jarvis", "health"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, compat.StateDir, "health"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(".jarvis", filepath.Join(root, ".persona")); err != nil {
+	if err := os.Symlink(compat.StateDir, filepath.Join(root, ".persona")); err != nil {
 		t.Skipf("symlink: %v", err)
 	}
 	t.Setenv("HOME", root)
