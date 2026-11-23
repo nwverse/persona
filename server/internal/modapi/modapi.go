@@ -155,3 +155,13 @@ type WaitRow struct {
 	Since time.Time
 	Key   string
 }
+
+// ClientModules are the ids of the feature modules that live only in the clients (web, iOS, Android): the server has
+// no module of that id, so no manifest announces their flag. The manager announces module.<id> for each of them beside
+// the built-in modules' flags unless the modules setting switches it off, so a client that gates one on the hello
+// (docs/architecture/core-and-modules.md "Hub flags") keeps it on by default and the owner can turn it off from the
+// hub. An id leaves this list in the PR that gives the module a server half with its own feature
+// (internal/modules/all checks that no built-in module is listed).
+func ClientModules() []string {
+	return []string{"glasses", "health", "knowledge-ui", "recording", "screen-share"}
+}

@@ -72,6 +72,7 @@ type Options struct {
 type Service struct {
 	// modules are the feature modules loaded (modules.go); nil, none.
 	modules         *kernel.Kernel
+	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).
 	sendFanout       sendFanout

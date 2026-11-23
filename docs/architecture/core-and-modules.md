@@ -125,6 +125,17 @@ no hello, or no `modules` marker from an older hub, leaves it on. This keeps the
 marker and the module flags disappear from the hub hello when their default manager disconnects. Extension reports cannot
 publish `modules` or anything in the `module.` namespace.
 
+Because a missing flag means off, every flag a client gates on has to be announced by a publishing manager:
+
+- **Every built-in module declares `feature`** (`module.<id>`), also one that registers nothing with the kernel
+  (`voice`, `volc`, `mail`): `TestEveryBuiltinModuleAnnouncesItsFlag` in `server/internal/modules/all`. Built out or
+  switched off, its flag is gone and the clients hide their half.
+- **Client-only modules** (`modapi.ClientModules`: `glasses`, `health`, `knowledge-ui`, `recording`, `screen-share`)
+  have no server half, so the manager announces their flags itself. The `modules` settings row switches one off the
+  same way (`{"disabled": ["health"]}`), which is how the owner turns a client module off from the hub without a new
+  build. An id leaves the list in the PR that gives the module a server half (`TestNoBuiltinModuleIsListedAsClientOnly`).
+  A client that starts gating a new module adds its id here in the same PR, or the module disappears on current hubs.
+
 ### The switch
 
 - **At build time**: the build tag `persona_without_<id>` leaves one module out, `persona_core_only` leaves every module
