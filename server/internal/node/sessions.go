@@ -274,17 +274,13 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.LastText == "" && runtimeRow.LastText != "" {
 						s.LastText = runtimeRow.LastText
 					}
-					if s.Rev == 0 && runtimeRow.Rev > 0 {
-						s.Rev = runtimeRow.Rev
-					}
+					// Not its Rev: the companion's counts steps, the pane's is its transcript's size (agyPaneActivity).
 				}
 			}
 			if a.Agent == agyAgent {
 				if hasRuntimeRow {
 					n.resolveAgyContextWindow(&s)
-					if s.UpdatedAt.IsZero() || s.Rev == 0 {
-						n.mergeAgyTranscriptActivity(&s, agyConversations[id])
-					}
+					n.mergeAgyTranscriptActivity(&s, agyConversations[id])
 				} else {
 					n.mergeAgyTranscript(&s, agyConversations[id])
 				}

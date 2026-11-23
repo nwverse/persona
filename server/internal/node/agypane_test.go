@@ -1288,39 +1288,35 @@ func TestAgyPaneUpdatedAtAndOrdering(t *testing.T) {
 		t.Fatalf("session %s not found in %d rows", id, len(rows))
 		return proto.Session{}, -1
 	}
+	// The companion's rev counts steps (7 here); the pane's is always its transcript's size.
+	companion := proto.Session{
+		SessionID: "agy-" + agyTestID,
+		Agent:     agyAgent,
+		Cwd:       home,
+		Status:    proto.StatusIdle,
+		Model:     "gemini-test",
+		UpdatedAt: newer,
+		LastText:  "Ready to ship.",
+		Rev:       7,
+	}
+	offline := proto.Session{SessionID: offlineID, Agent: agyAgent, Cwd: home, Status: proto.StatusOffline, UpdatedAt: older}
 
-	// 1. Live agy herdr pane with companion row inherits UpdatedAt, LastText, and Rev, sorting ahead of older rows.
-	n.runtimes.setSessions(rt, []proto.Session{
-		{
-			SessionID: "agy-" + agyTestID,
-			Agent:     agyAgent,
-			Cwd:       home,
-			Status:    proto.StatusIdle,
-			Model:     "gemini-test",
-			UpdatedAt: newer,
-			LastText:  "Ready to ship.",
-			Rev:       7,
-		},
-		{
-			SessionID: offlineID,
-			Agent:     agyAgent,
-			Cwd:       home,
-			Status:    proto.StatusOffline,
-			UpdatedAt: older,
-		},
-	})
+	// 1. A live agy herdr pane the companion lists takes its UpdatedAt and LastText and sorts ahead of older rows, but
+	// not its Rev: with no transcript on this computer yet, the pane has none.
+	n.runtimes.setSessions(rt, []proto.Session{companion, offline})
 	herdr.reply("session.snapshot", snapshot(nil, nil, []any{agyTestAgent(agyTestPane, home, agyTestID)}, nil))
 	rows := listSessions(t, n)
 	paneRow, paneIdx := findRow(rows, agyTestRow)
 	_, offlineIdx := findRow(rows, offlineID)
-	if !paneRow.UpdatedAt.Equal(newer) || paneRow.LastText != "Ready to ship." || paneRow.Rev != 7 {
-		t.Fatalf("companion merge = UpdatedAt=%v LastText=%q Rev=%d, want %v / Ready to ship. / 7", paneRow.UpdatedAt, paneRow.LastText, paneRow.Rev, newer)
+	if !paneRow.UpdatedAt.Equal(newer) || paneRow.LastText != "Ready to ship." || paneRow.Rev != 0 {
+		t.Fatalf("companion merge = UpdatedAt=%v LastText=%q Rev=%d, want %v / Ready to ship. / 0", paneRow.UpdatedAt, paneRow.LastText, paneRow.Rev, newer)
 	}
 	if paneIdx >= offlineIdx {
 		t.Fatalf("live agy pane ranked %d behind older offline row %d", paneIdx, offlineIdx)
 	}
 
-	// 2. Companion row with zero UpdatedAt and Rev falls back to the verified local transcript's ModTime and Size.
+	// 2. A companion row with no UpdatedAt: the verified local transcript's ModTime, and its size as Rev, not the
+	// companion's.
 	transcriptFile := agyTestFile(t, n.agyDataRoot(), agyTestID, `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":"Check status"}`+"\n")
 	if err := os.Chtimes(transcriptFile, fileTime, fileTime); err != nil {
 		t.Fatal(err)
@@ -1329,10 +1325,9 @@ func TestAgyPaneUpdatedAtAndOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n.runtimes.setSessions(rt, []proto.Session{
-		{SessionID: "agy-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusIdle, Model: "gemini-test"},
-		{SessionID: offlineID, Agent: agyAgent, Cwd: home, Status: proto.StatusOffline, UpdatedAt: older},
-	})
+	undated := companion
+	undated.UpdatedAt, undated.LastText = time.Time{}, ""
+	n.runtimes.setSessions(rt, []proto.Session{undated, offline})
 	rows = listSessions(t, n)
 	paneRow, paneIdx = findRow(rows, agyTestRow)
 	_, offlineIdx = findRow(rows, offlineID)
@@ -1344,9 +1339,7 @@ func TestAgyPaneUpdatedAtAndOrdering(t *testing.T) {
 	}
 
 	// 3. Standalone herdr pane (no companion row) takes UpdatedAt and Rev from its local transcript.
-	n.runtimes.setSessions(rt, []proto.Session{
-		{SessionID: offlineID, Agent: agyAgent, Cwd: home, Status: proto.StatusOffline, UpdatedAt: older},
-	})
+	n.runtimes.setSessions(rt, []proto.Session{offline})
 	rows = listSessions(t, n)
 	paneRow, paneIdx = findRow(rows, agyTestRow)
 	_, offlineIdx = findRow(rows, offlineID)
@@ -1356,8 +1349,24 @@ func TestAgyPaneUpdatedAtAndOrdering(t *testing.T) {
 	if paneIdx >= offlineIdx {
 		t.Fatalf("standalone agy pane ranked %d behind older offline row %d", paneIdx, offlineIdx)
 	}
+	standaloneRev := paneRow.Rev
 
-	// 4. Unresolved pane with no companion row and no transcript keeps zero UpdatedAt and Rev.
+	// 4. The companion back after the transcript grew (3 → 1): the pane's rev moves on with the transcript and never
+	// falls back to the companion's step count.
+	agyTestAppend(t, transcriptFile, `{"step_index":1,"type":"PLANNER_RESPONSE","content":"Ready to ship."}`+"\n")
+	grown, err := os.Stat(transcriptFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.runtimes.setSessions(rt, []proto.Session{companion, offline})
+	rows = listSessions(t, n)
+	paneRow, _ = findRow(rows, agyTestRow)
+	if paneRow.Rev != grown.Size() || paneRow.Rev <= standaloneRev || !paneRow.UpdatedAt.Equal(newer) {
+		t.Fatalf("companion back = Rev=%d UpdatedAt=%v, want %d (after %d) / %v", paneRow.Rev, paneRow.UpdatedAt, grown.Size(), standaloneRev, newer)
+	}
+
+	// 5. Unresolved pane with no companion row and no transcript keeps zero UpdatedAt and Rev.
+	n.runtimes.setSessions(rt, []proto.Session{offline})
 	herdr.reply("session.snapshot", snapshot(nil, nil, []any{agyTestAgent(agyTestPane, home, "")}, nil))
 	rows = listSessions(t, n)
 	paneRow, _ = findRow(rows, agyTestRow)

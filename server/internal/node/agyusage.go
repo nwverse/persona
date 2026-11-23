@@ -370,6 +370,35 @@ func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool)
 	return usage, ok
 }
 
+// agyTranscriptFile stats a conversation's transcript in its brain directory (transcript.jsonl, else
+// transcript_full.jsonl) and says which of the two it took.
+func agyTranscriptFile(root *os.Root) (string, os.FileInfo, bool) {
+	rel := agyTranscriptPath
+	info, err := root.Stat(rel)
+	if err != nil || !info.Mode().IsRegular() {
+		rel = agyFullTranscriptPath
+		info, err = root.Stat(rel)
+		if err != nil || !info.Mode().IsRegular() {
+			return "", nil, false
+		}
+	}
+	return rel, info, true
+}
+
+// agyTranscriptStat stats the transcript agyTranscriptMetaFile reads, without reading it.
+func (n *Node) agyTranscriptStat(conversation string) (os.FileInfo, bool) {
+	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
+		return nil, false
+	}
+	root, err := agyBrain(n.agyDataRoot(), conversation)
+	if err != nil {
+		return nil, false
+	}
+	defer root.Close()
+	_, info, ok := agyTranscriptFile(root)
+	return info, ok
+}
+
 // agyTranscriptMetaFile returns the cached transcript usage summary along with the stat'd transcript file info.
 func (n *Node) agyTranscriptMetaFile(conversation string) (agyTranscriptUsage, os.FileInfo, bool) {
 	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
@@ -381,14 +410,9 @@ func (n *Node) agyTranscriptMetaFile(conversation string) (agyTranscriptUsage, o
 		return agyTranscriptUsage{}, nil, false
 	}
 	defer root.Close()
-	rel := agyTranscriptPath
-	info, err := root.Stat(rel)
-	if err != nil || !info.Mode().IsRegular() {
-		rel = agyFullTranscriptPath
-		info, err = root.Stat(rel)
-		if err != nil || !info.Mode().IsRegular() {
-			return agyTranscriptUsage{}, nil, false
-		}
+	rel, info, ok := agyTranscriptFile(root)
+	if !ok {
+		return agyTranscriptUsage{}, nil, false
 	}
 	key := filepath.Join(dir, conversation)
 	n.mu.Lock()
@@ -417,19 +441,26 @@ func (n *Node) agyTranscriptMetaFile(conversation string) (agyTranscriptUsage, o
 	return usage, info, true
 }
 
-// mergeAgyTranscriptActivity fills UpdatedAt and Rev on a herdr-pane agy row from its local transcript file's stat
-// when still unset (for example when the companion row carries no timestamp or no companion is connected).
+// agyPaneActivity fills a herdr-pane agy row's UpdatedAt, while still unset, and its Rev from its transcript file.
+// Rev is always the file's size, as on every transcript-backed row (proto.Session.Rev), never the companion's rev,
+// which counts steps: the companion's own row hides behind the pane's (sessionListIn), so taking it while the
+// companion lists the conversation would switch the pane's one row between two scales as the companion comes and
+// goes, and a reader that orders revs (the web's taskSessionLookup) would keep a stale snapshot of it (#13710).
+func agyPaneActivity(s *proto.Session, info os.FileInfo) {
+	if s.UpdatedAt.IsZero() {
+		s.UpdatedAt = info.ModTime().UTC()
+	}
+	s.Rev = info.Size()
+}
+
+// mergeAgyTranscriptActivity is agyPaneActivity for a herdr-pane agy row the companion also lists: it supplies the
+// rest, so the transcript is only stat'ed, not read.
 func (n *Node) mergeAgyTranscriptActivity(s *proto.Session, conversation string) {
 	if s == nil {
 		return
 	}
-	if _, info, ok := n.agyTranscriptMetaFile(conversation); ok {
-		if s.UpdatedAt.IsZero() {
-			s.UpdatedAt = info.ModTime().UTC()
-		}
-		if s.Rev == 0 && info.Size() > 0 {
-			s.Rev = info.Size()
-		}
+	if info, ok := n.agyTranscriptStat(conversation); ok {
+		agyPaneActivity(s, info)
 	}
 }
 
@@ -440,12 +471,7 @@ func (n *Node) mergeAgyTranscript(s *proto.Session, conversation string) {
 		return
 	}
 	if u, info, ok := n.agyTranscriptMetaFile(conversation); ok {
-		if s.UpdatedAt.IsZero() {
-			s.UpdatedAt = info.ModTime().UTC()
-		}
-		if s.Rev == 0 && info.Size() > 0 {
-			s.Rev = info.Size()
-		}
+		agyPaneActivity(s, info)
 		if s.Model == "" && u.model != "" {
 			s.Model = u.model
 		}
