@@ -1203,6 +1203,7 @@
         "JARVIS_GUEST",
         "JARVIS_SESSION_ID",
         "JARVIS_SPACE",
+        "JARVIS_TRACK_KIND",
         "mcp__jarvis__report_to_supervisor",
         "mcp__jarvis__task_plan",
         "mcp__jarvis__task_review",

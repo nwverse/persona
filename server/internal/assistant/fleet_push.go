@@ -554,6 +554,7 @@ func (s *Service) deliver(n Notification) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		s.capTrackPush(ctx, &n) // a track's push_cap (track_attention.go); never a card's
 		if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 			s.logf("assistant: push: %v", err)
 		}

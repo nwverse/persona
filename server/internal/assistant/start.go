@@ -193,6 +193,9 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	if tmpl == trackTemplateSpace {
 		params["space"] = map[string]any{"slug": track.Slug, "initial_space_md": s.initialSpaceMD(ctx, track)}
 	}
+	if kind := s.trackKindOf(ctx, space); kind != "" {
+		params["track_kind"] = kind // the node's PERSONA_TRACK_KIND for the directory's processes (an older node ignores it)
+	}
 	var prep struct {
 		Cwd           string   `json:"cwd"`
 		Need          []string `json:"plugin_skills_need"`
