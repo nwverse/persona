@@ -1,6 +1,6 @@
 # Mail
 
-`server/internal/modules/mail`: lets both Claude and the App send and receive the user's email. It uses standard IMAP + SMTP with no third-party relay service.
+`server/internal/modules/mail` (a feature module: `persona_without_mail` builds the manager without it; `docs/architecture/core-and-modules.md` "Provider seams"): lets both Claude and the App send and receive the user's email. It uses standard IMAP + SMTP with no third-party relay service.
 Gmail uses "Sign In with Google" (OAuth2 + XOAUTH2) and additionally supports searching with Gmail search syntax (`X-GM-RAW`). Credentials are encrypted and stored in the hub's `dataDir` (default `~/.persona`).
 
 ## Capabilities

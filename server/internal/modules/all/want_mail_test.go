@@ -2,4 +2,4 @@
 
 package all
 
-const wantMail = true
+func init() { wantModules = append(wantModules, "mail") }

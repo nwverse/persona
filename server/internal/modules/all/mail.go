@@ -7,6 +7,9 @@ import (
 	"github.com/nwverse/persona/server/internal/modules/mail"
 )
 
-// Mail reaches the extension manager through its port, not the kernel: its routes and tools are the extension
-// manager's (docs/architecture/core-and-modules.md "Mail").
-func init() { mailport.Provide(mail.Open) }
+// The mail module: its service reaches the extension manager through its port (docs/architecture/core-and-modules.md
+// "Provider seams"); it registers nothing with the kernel yet.
+func init() {
+	modules = append(modules, mail.Module{})
+	mailport.Provide(mail.Open)
+}

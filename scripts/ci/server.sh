@@ -26,6 +26,10 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # The built-in modules that run as extension programs (docs/architecture/core-and-modules.md "Provider seams"): left
   # out, the binaries build without their subcommands and the extension host registers no such extension.
   ci_run 'Builds without the speech modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_volc; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/builtinext/... ./internal/modules/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=6m -run "Volc|Transcription" ./internal/extmgr/ || exit 1; done'
+  # Mail (docs/architecture/core-and-modules.md "Provider seams"): the extension manager reaches it through its port, so
+  # the core without it builds and the manager's mail, inbox, connector and settings tests pass (those of mail itself
+  # skip; TestManagerWithoutMail checks it is absent).
+  ci_run 'Builds without the mail module' 900 bash -c 'cd server && for t in persona_core_only persona_without_mail; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/... ./internal/archguard/... ./internal/mailwire/... && go test -tags "$t" -count=1 -timeout=6m -run "Mail|Inbox|Connector|SelfSettings|Sent|Recall|Golden|SourceMove" ./internal/extmgr/ || exit 1; done'
   ci_run 'Extension schema and SDK bundle' 300 bash -c 'python3 scripts/test/test_extension_schema.py && python3 scripts/test/test_module_schema.py && python3 scripts/test/test_sdk_bundle.py'
   ci_run 'Go SDK tests' 300 bash -c 'cd sdk/go && go test -count=1 -timeout=4m ./...'
 fi

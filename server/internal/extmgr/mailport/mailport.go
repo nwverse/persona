@@ -1,4 +1,4 @@
-// Package mailport is how the mail module reaches the extension manager (docs/architecture/core-and-modules.md "Mail"):
+// Package mailport is how the mail module reaches the extension manager (docs/architecture/core-and-modules.md "Provider seams"):
 // the composition root (internal/modules/all) provides the module's factory, and extmgr opens mail with it when the
 // manager runs. A build without the module (persona_without_mail, persona_core_only) provides none, and the manager
 // runs without mail. It is its own package so that the composition root need not import extmgr.
