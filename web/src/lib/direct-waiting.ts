@@ -27,8 +27,9 @@ function ownerDecision(item: Extract<NeedsYouItem, { kind: "task" }>, deferred: 
 export function directUserWaiting(items: NeedsYouItem[], deferred: Record<string, unknown> = {}): NeedsYouItem[] {
   const out: NeedsYouItem[] = [];
   for (const item of items) {
-    // A plan is unstarted work. A message draft still needs its owner's explicit Send authorization.
-    if (item.kind === "plan") continue;
+    // A plan waiting for Start is the owner's decision (one is carded only when it needs the owner); a message draft
+    // still needs its owner's explicit Send authorization.
+    if (item.kind === "plan") { out.push(item); continue; }
     if (item.kind === "message") { out.push(item); continue; }
     if (item.kind === "task" && (item.status === "failed" || (item.status === "not_started" && heldDelivery(item.todo)?.unblock !== "user"))) continue;
     const asks = item.asks.filter(directUserInteraction);

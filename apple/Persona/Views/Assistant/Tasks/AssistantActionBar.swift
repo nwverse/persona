@@ -368,7 +368,9 @@ nonisolated enum AssistantEntries {
             }
         }
 
-        let waitingPlans = directAttention ? [] : plans.values.filter { $0.conversation == conversation && $0.state == .open }
+        // a plan waiting for Start is the owner's own decision: Main lists every open one but Health's (as the web's
+        // assistant-entries), another conversation its own
+        let waitingPlans = plans.values.filter { ($0.conversation == conversation || isMain && $0.space != "health") && $0.state == .open }
             .sorted { ($0.createdAt ?? .distantPast, $0.id) < ($1.createdAt ?? .distantPast, $1.id) }
             .map { Row.plan(id: $0.id) }
         let messages = feed.filter(messageWaits).compactMap { item in item.ref.map { Row.message(feedID: item.id, itemID: $0) } }

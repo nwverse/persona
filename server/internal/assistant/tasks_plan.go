@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -358,7 +359,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if policy.Redact {
 			title, body = s.redactedNotice(ctx, l, space)
 		}
-		s.push(withCard(ctx, cardPlanWaiting), Notification{Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
+		s.push(withCard(ctx, cardPlanWaiting), Notification{ID: "plan:" + p.ID, CardID: p.ID, Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
 		if lead != "" || s.isLeader(ctx, sessionID) {
 			s.lreports.plansDue.Store(true)
 			s.directionsSoon() // a leader's plan waiting for Start is a decision for the owner (leader_reports.go)
@@ -516,4 +517,14 @@ func (t *PlanTask) checkRole(byLeader bool) error {
 		return errors.New(`a task leader plans workers only: role must be "worker"`)
 	}
 	return nil
+}
+
+// planPushOver takes a plan card's push back once the card is decided anywhere (Start, Don't start, a withdrawal):
+// the hub withdraws the push it sent with the plan's id as its card (Notification.CardID) from the devices it went to,
+// as it does an answered interaction's (#4349), and the apps drop the card. A plan that was never pushed costs a no-op.
+func (s *Service) planPushOver(id string) {
+	if s.hub == nil {
+		return
+	}
+	s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
 }
