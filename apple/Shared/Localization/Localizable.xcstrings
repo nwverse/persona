@@ -177799,6 +177799,75 @@
         }
       }
     },
+    "Checking the whole recording (%lld of %lld min)…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking the whole recording (%1$lld of %2$lld min)…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在复核整场录音（%1$lld/%2$lld 分钟）…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音全体を確認しています（%1$lld/%2$lld分）…"
+          }
+        }
+      }
+    },
+    "Checking the whole recording…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking the whole recording…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在复核整场录音…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "録音全体を確認しています…"
+          }
+        }
+      }
+    },
+    "For a more accurate transcript, the hub is listening to the whole recording again. The minutes come right after." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "For a more accurate transcript, the hub is listening to the whole recording again. The minutes come right after."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为了转写更准，hub 正在把整场录音再听一遍，听完就写纪要。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "より正確な文字起こしのため、hubが録音全体をもう一度聞いています。終わるとすぐに議事録を作成します。"
+          }
+        }
+      }
+    },
     "The hub is out of date; some features won't work" : {
       "localizations" : {
         "en" : {
