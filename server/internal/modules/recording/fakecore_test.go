@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcribejob"
 )
@@ -191,6 +192,9 @@ func (s *Service) Logf(format string, args ...any) {
 	s.mu.Lock()
 	s.logs = append(s.logs, fmt.Sprintf(format, args...))
 	s.mu.Unlock()
+	if os.Getenv("RECORDING_TEST_LOG") != "" {
+		s.t.Logf(format, args...)
+	}
 }
 func (s *Service) Handle(pattern string, fn http.HandlerFunc) { s.mux.HandleFunc(pattern, fn) }
 func (s *Service) RunCtx() context.Context                    { return s.ctx }
@@ -255,10 +259,20 @@ func (s *Service) MeetingGlossary(context.Context) []string {
 func (s *Service) KB(context.Context) (*kb.Engine, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.kbOff {
+	h := s.Hello(context.Background())
+	if s.kbOff || h.KB != nil && h.KB.Off {
 		return nil, errKBOff
 	}
-	if s.eng != nil {
+	ro := h.KB != nil && h.KB.ReadOnly
+	if s.eng != nil && s.eng.Store.ReadOnly() == ro {
+		return s.eng, nil
+	}
+	if ro { // the settings made it read-only: opened so, as the core's kbOpenLocked does
+		st, err := kb.OpenReadOnly(s.kbDir)
+		if err != nil {
+			return nil, err
+		}
+		s.eng = &kb.Engine{Store: st}
 		return s.eng, nil
 	}
 	if err := os.MkdirAll(filepath.Join(s.kbDir), 0o700); err != nil {
@@ -277,7 +291,10 @@ func (s *Service) KB(context.Context) (*kb.Engine, error) {
 }
 func (s *Service) KBOff(err error) bool { return errors.Is(err, errKBOff) }
 func (s *Service) KBWake()              {}
-func (s *Service) KBReadOnly(context.Context) bool {
+func (s *Service) KBReadOnly(ctx context.Context) bool {
+	if h := s.Hello(ctx); h.KB != nil && h.KB.ReadOnly {
+		return true
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.readOnly
@@ -369,6 +386,19 @@ var errModelUnavailable = errors.New("no model configured")
 
 // Call is a call to a computer, through the fake hub (the core's call, without its conversation guards).
 func (s *Service) Call(ctx context.Context, device, method string, params, out any) error {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend || method == DeviceSessionSendOnce) {
+		// What the core's call does to a message the tests read: its source in its text, and is_main for a send.
+		if text, ok := p["text"].(string); ok {
+			if src, _ := p["message_source"].(*proto.MessageSource); src != nil {
+				p["text"] = prompts.MessageSourceText(text, src)
+			}
+		}
+		if _, set := p["is_main"]; !set && method == DeviceAssistantSend {
+			m, main := s.MainSession(ctx)
+			id, _ := p["session_id"].(string)
+			p["is_main"] = id != "" && id == main && device == m
+		}
+	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err
@@ -382,7 +412,10 @@ func (s *Service) Call(ctx context.Context, device, method string, params, out a
 func (s *Service) SendOnce(ctx context.Context, machine string, params map[string]any) error {
 	return s.Call(ctx, machine, assistantwire.DeviceSessionSendOnce, params, nil)
 }
-func (s *Service) SendParams(_ context.Context, p assistantwire.SendParams) (map[string]any, error) {
+func (s *Service) SendParams(ctx context.Context, p assistantwire.SendParams) (map[string]any, error) {
+	if err := s.Recordings.roomRefusesSend(ctx, p.MachineID, p.SessionID, ""); err != nil {
+		return nil, err
+	}
 	out := maps.Clone(p.Params)
 	if out == nil {
 		out = map[string]any{}
@@ -397,13 +430,18 @@ func (s *Service) Start(ctx context.Context, p assistantwire.StartParams) (proto
 	if machine == "" {
 		machine, _ = s.MainSession(ctx)
 	}
-	var res struct{ Session proto.Session }
-	err := s.Call(ctx, machine, DeviceSessionStart, p, &res)
-	sess := res.Session
-	if sess.MachineID == "" {
-		sess.MachineID = machine
+	params := map[string]any{"text": p.Text, "new_session_id": p.NewSessionID, "client_msg_id": p.ClientMsgID, "is_main": p.Main}
+	if p.ConfigDir != "" {
+		params["config_dir"] = p.ConfigDir
 	}
-	return sess, err
+	if len(p.Images) > 0 {
+		params["images"] = p.Images
+	}
+	var res struct {
+		SessionID string `json:"session_id"`
+	}
+	err := s.Call(ctx, machine, DeviceAssistantSend, params, &res)
+	return proto.Session{MachineID: machine, SessionID: res.SessionID, Assistant: true}, err
 }
 func (s *Service) StartSignedIn(ctx context.Context, p assistantwire.StartParams) (proto.Session, error) {
 	p.ConfigDir = meetingProfile
@@ -454,21 +492,25 @@ func (s *Service) IsWorkMachine(machine string) bool {
 
 // AttendeeMachine: a computer the fake hub lists (devices.list, else one per machine with sessions).
 func (s *Service) AttendeeMachine(ctx context.Context, machine string) (bool, bool) {
-	var list []Device
+	var list struct{ Devices []Device }
 	if err := s.Call(ctx, DeviceAll, DeviceDevicesList, map[string]any{}, &list); err != nil {
 		return false, false
 	}
-	for _, d := range list {
+	for _, d := range list.Devices {
 		if d.ID == machine {
 			return true, d.Online && d.Reachable
 		}
 	}
 	return false, false
 }
-func (s *Service) AttendeeRow(_ context.Context, machine, id string) (proto.Session, bool, error) {
-	s.f.mu.Lock()
-	defer s.f.mu.Unlock()
-	for _, c := range s.f.sessions[machine] {
+func (s *Service) AttendeeRow(ctx context.Context, machine, id string) (proto.Session, bool, error) {
+	var listed struct{ Sessions []proto.Session }
+	if err := s.Call(ctx, machine, DeviceSessionsList, map[string]any{}, &listed); err != nil {
+		return proto.Session{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range listed.Sessions {
 		if c.SessionID == id {
 			if o, ok := s.origins[id]; ok {
 				c.Origin = o.Origin
@@ -477,9 +519,6 @@ func (s *Service) AttendeeRow(_ context.Context, machine, id string) (proto.Sess
 		}
 	}
 	return proto.Session{}, false, nil
-}
-func (s *Service) AttendeeNeverOrigin(origin string) bool {
-	return slices.Contains([]string{"lark_agent", "channel", "extension", "inbox"}, origin)
 }
 func (s *Service) TurnSettling(string, string, time.Time) bool { return false }
 func (s *Service) Session(ctx context.Context, machine, id string) (proto.Session, bool) {

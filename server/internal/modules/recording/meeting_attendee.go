@@ -2,6 +2,7 @@ package recording
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kb"
@@ -23,6 +24,10 @@ const (
 // phone shows it catching up).
 const attendeeBusy = "busy"
 
+// attendeeNeverOrigins are the origins of assistant conversations whose replies leave the apps: they never attend
+// (the core names the same origins so: its origins.go).
+var attendeeNeverOrigins = []string{"lark_agent", "channel", "extension", "inbox"}
+
 // attendeeTarget is the session a batch goes to: ref by its real ids (the main chat's too), persona when it is one of
 // the assistant's conversations (assistant.send resumes one that stopped) rather than an Agent (session.send).
 type attendeeTarget struct {
@@ -38,7 +43,6 @@ type attendeeFacts struct {
 	found   bool // the session is listed there
 	guest   bool // a guest conversation (guest.go)
 	unknown bool // whether it is a guest, or where it comes from, cannot be told now
-	never   bool // its origin is one whose replies leave the apps (the core's list of origins that never attend)
 	// settling: its last turn ended moments ago and that turn's push and hooks are not decided yet; a batch now would
 	// pass for that turn's end. running: a batch's turn is under way there.
 	settling, running bool
@@ -54,7 +58,7 @@ func attendeeVerdict(sess proto.Session, f attendeeFacts) string {
 	}
 	if sess.Assistant {
 		switch {
-		case spaceOf(sess) != "", f.never, sess.OpenedBy != "", f.guest:
+		case spaceOf(sess) != "", slices.Contains(attendeeNeverOrigins, sess.Origin), sess.OpenedBy != "", f.guest:
 			return attendeeNotAllowed
 		case f.unknown:
 			return attendeeUnavailable
@@ -153,7 +157,5 @@ func (s *Recordings) attendeeCheckRead(ctx context.Context, ref kb.SessionRef, n
 		f.running = f.running || running || err != nil
 		f.settling = s.turnSettling(machine, ref.SessionID, now)
 	}
-	// The origins of assistant conversations whose replies leave the apps never attend (the core's list).
-	f.never = s.h.AttendeeNeverOrigin(sess.Origin)
 	return t, attendeeVerdict(sess, f)
 }

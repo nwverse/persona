@@ -53,7 +53,7 @@ func meetingAskOf(t *testing.T, body map[string]any) map[string]any {
 var liveTwo = []fakeLine{{0.5, 1.5, "Live one."}, {4.2, 5.0, "Live two."}}
 
 // transcriptionProblemFixtures are the cases the hub and the iOS app share (spec/fixtures/meeting-transcription-problems).
-const transcriptionProblemFixtures = "../../../spec/fixtures/meeting-transcription-problems/cases.json"
+const transcriptionProblemFixtures = "../../../../spec/fixtures/meeting-transcription-problems/cases.json"
 
 func waitFor(t testing.TB, what string, ok func() bool) {
 	t.Helper()

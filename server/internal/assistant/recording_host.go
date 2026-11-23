@@ -9,7 +9,6 @@ import (
 	"errors"
 	"maps"
 	"net/http"
-	"slices"
 	"strconv"
 	"time"
 
@@ -278,9 +277,6 @@ func (h recordingHost) AttendeeMachine(ctx context.Context, machine string) (our
 }
 func (h recordingHost) AttendeeRow(ctx context.Context, machine, id string) (proto.Session, bool, error) {
 	return h.s.attendeeRow(ctx, machine, id)
-}
-func (h recordingHost) AttendeeNeverOrigin(origin string) bool {
-	return slices.Contains(attendeeNeverOrigins, origin)
 }
 func (h recordingHost) TurnSettling(machine, id string, now time.Time) bool {
 	return h.s.turnSettling(machine, id, now)

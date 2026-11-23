@@ -135,7 +135,6 @@ type Host interface {
 	IsWorkMachine(machine string) bool
 	AttendeeMachine(ctx context.Context, machine string) (ours, online bool)
 	AttendeeRow(ctx context.Context, machine, id string) (proto.Session, bool, error)
-	AttendeeNeverOrigin(origin string) bool
 	TurnSettling(machine, id string, now time.Time) bool
 	Session(ctx context.Context, machine, id string) (proto.Session, bool)
 	SessionsChanged(machine string)

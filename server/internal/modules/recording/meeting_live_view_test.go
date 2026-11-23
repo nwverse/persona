@@ -332,7 +332,12 @@ func (r *roomFixture) roomCall(session, tool, args string) (proto.ToolResult, st
 	r.t.Helper()
 	// The core routes a room's mcp.call to its meeting (the assistant's TestMeetingRoomTools); here it goes straight in.
 	rec, _, _ := r.s.RoomOf(context.Background(), "server", session)
-	out := r.s.roomToolCall(context.Background(), rec, tool, json.RawMessage(args))
+	var out proto.ToolResult
+	if tools, _, _ := r.s.GuestOf(context.Background(), "server", session); !slices.Contains(tools, tool) {
+		out = proto.TextResult("unknown tool "+tool, true) // the core's guest filter (guest.go)
+	} else {
+		out = r.s.roomToolCall(context.Background(), rec, tool, json.RawMessage(args))
+	}
 	res := out
 	var b strings.Builder
 	for _, c := range res.Content {
