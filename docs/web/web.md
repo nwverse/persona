@@ -3112,6 +3112,7 @@ The defaults add nothing to the page (no attribute, no stylesheet), so the defau
   Both terminal modes read the selected mono stack when opened, keeping their separate font size and local CJK width correction. A retained Full UI feed also reads it when another terminal surface attaches.
 - **Recent chats in the sidebar** (`persona.sidebar-recent`, #5146): 5 / 10 / 15 / 25, default 5 (#6228), how many of the latest chats the sidebar's Persona chats › 最近 lists before **Show N more**. iOS and Android list 5 and have no such setting yet. The fold of the 最近 group itself is `fold:recent-chats` (#6228).
 - **Sidebar icons** (`persona.sidebar-icons`, #10822): Monochrome (stores nothing, the default) or Colored (`colored`), a color for each page's icon in the sidebar ("The sidebar's pages", **Icon colors**). Other tabs follow through the `storage` event.
+- **Launcher quota in the sidebar** (`persona.sidebar-usage`, #13493): on by default (stores nothing); off (`0`) stops the sidebar mounting its usage card (`lib/sidebar-usage.ts`, `views/UsageBars.tsx`). Settings › General › Appearance. Other tabs follow through the `storage` event.
 
 ## New versions
 
