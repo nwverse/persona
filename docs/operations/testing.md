@@ -2143,6 +2143,8 @@ Compare same real pushes before/after hub session-list/Live Activity timing chan
    counts/bytes per minute; timestamped Live Activity changes pass through coalescing/throttling, report notifications/hour with App closed and longest island/hub mismatch, fail beyond limits.
 3. Real `broadcastSessions` decides sends, matches byte-comparison results (decode retains fields); parallel incremental App (`sessions_delta`) counted.
 4. Background `AgentSync` fetches: `python3 scripts/diag/agentsync_replay.py ~/push.jsonl`, recorded rev/state (45/min→9/min, `docs/apple/ios.md` ("Information architecture")).
+   The replay uses recorded session state and falls back to status for older recordings. A session that stops working
+   releases its pending pull without adding a transcript change to the rate window.
 
 19-minute recording 2026-11-02 (battery investigation, `docs/apple/live-activity.md` ("Push cadence"), `docs/server/server.md` ("Traffic pushed to the app")):
 

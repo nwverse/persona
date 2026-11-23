@@ -19,9 +19,9 @@ const agyTrustScreen = "Accessing workspace:\n\n/work/example-project\n\nDo you 
 // withAgyTrustWait shortens how long a start watches for agy's trust dialog.
 func withAgyTrustWait(t *testing.T, wait time.Duration) {
 	t.Helper()
-	oldWait, oldPoll := agyTrustWait, agyTrustPoll
-	agyTrustWait, agyTrustPoll = wait, 10*time.Millisecond
-	t.Cleanup(func() { agyTrustWait, agyTrustPoll = oldWait, oldPoll })
+	oldWait, oldInit, oldPoll := agyTrustWait, agyInitWait, agyTrustPoll
+	agyTrustWait, agyInitWait, agyTrustPoll = wait, wait, 10*time.Millisecond
+	t.Cleanup(func() { agyTrustWait, agyInitWait, agyTrustPoll = oldWait, oldInit, oldPoll })
 }
 
 // isEnter: c is a send_keys whose keys include enter.
@@ -194,6 +194,75 @@ func TestAgyStartDismissesTheNoticeBeforeTheFirstMessage(t *testing.T) {
 	calls := x.f.trace("pane.send_keys", "agent.prompt")
 	if len(calls) != 2 || !strings.Contains(calls[0], `"escape"`) || !strings.Contains(calls[1], "agent.prompt") {
 		t.Fatalf("want one Esc, then the first message:\n%s", strings.Join(calls, "\n"))
+	}
+}
+
+// agy draws "? for shortcuts" before it finishes loading its model and start notices (herdr reports status unknown).
+// agyTrustFolder waits for status unknown to settle before typing the first message, and dismisses any notice that
+// arrives during that window (#11345).
+func TestAgyStartWaitsForUnknownStatusToSettle(t *testing.T) {
+	withAgyTrustWait(t, 5*time.Second)
+	var polls atomic.Int32
+	var settled atomic.Bool
+	x := newWorkFirstFixture(t, agyAgent, func(submissions int, home string) any {
+		if submissions >= 1 {
+			return agentWithStatus(agyAgent, proto.StatusWorking)(submissions, home)
+		}
+		if settled.Load() {
+			return agentWithStatus(agyAgent, proto.StatusIdle)(submissions, home)
+		}
+		return agentWithStatus(agyAgent, proto.StatusUnknown)(submissions, home)
+	})
+	x.f.setScreen("w1:p2", agyIdleScreen)
+	var early atomic.Bool
+	x.f.after(func(c herdrCall) {
+		switch c.Method {
+		case "agent.get":
+			n := polls.Add(1)
+			if n == 2 {
+				x.f.setScreen("w1:p2", agyNoticeScreen)
+			}
+		case "pane.send_keys":
+			if slices.Contains(keysOf(c), "escape") {
+				x.f.setScreen("w1:p2", agyIdleScreen)
+				settled.Store(true)
+			}
+		case "agent.prompt":
+			if !settled.Load() {
+				early.Store(true)
+			}
+		}
+	})
+	id := x.start(t, agyAgent)
+	if early.Load() {
+		t.Fatal("first message sent while agy status was still unknown")
+	}
+	calls := x.f.trace("pane.send_keys", "agent.prompt")
+	if len(calls) != 2 || !strings.Contains(calls[0], `"escape"`) || !strings.Contains(calls[1], "agent.prompt") {
+		t.Fatalf("want Esc for late notice then first message, got:\n%s", strings.Join(calls, "\n"))
+	}
+	if p, ok := x.n.lostFirst.get(id); ok {
+		t.Errorf("listed as lost: %q", p.why)
+	}
+}
+
+// Waiting for status unknown to clear is bounded by agyInitWait so a host that never reports idle does not stall starts.
+func TestAgyStartUnknownStatusWaitIsBounded(t *testing.T) {
+	withAgyTrustWait(t, 5*time.Second)
+	agyInitWait = 120 * time.Millisecond
+	x := newWorkFirstFixture(t, agyAgent, func(submissions int, home string) any {
+		if submissions >= 1 {
+			return agentWithStatus(agyAgent, proto.StatusWorking)(submissions, home)
+		}
+		return agentWithStatus(agyAgent, proto.StatusUnknown)(submissions, home)
+	})
+	began := time.Now()
+	x.start(t, agyAgent)
+	if took := time.Since(began); took > 2*time.Second {
+		t.Errorf("start waited %s on permanent unknown status; want bounded by agyInitWait", took)
+	}
+	if got := x.f.trace("agent.prompt"); len(got) != 1 {
+		t.Errorf("prompted %d times, want 1", len(got))
 	}
 }
 
