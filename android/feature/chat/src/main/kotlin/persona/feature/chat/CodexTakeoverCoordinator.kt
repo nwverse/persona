@@ -143,18 +143,22 @@ class InMemoryContinuationReceiptStore(
         true
     }
 
-    override suspend fun clearScope(scope: String?) = lock.withLock {
-        if (scope == null) {
-            map.clear()
-        } else {
-            val prefix = "$scope|"
-            map.keys.removeAll { it.startsWith(prefix) }
+    override suspend fun clearScope(scope: String?) {
+        lock.withLock {
+            if (scope == null) {
+                map.clear()
+            } else {
+                val prefix = "$scope|"
+                map.keys.removeAll { it.startsWith(prefix) }
+            }
         }
     }
 
-    override suspend fun retainScopes(validScopes: Set<String>) = lock.withLock {
-        if (validScopes.isEmpty()) map.clear()
-        else map.keys.removeAll { continuationReceiptScopeOf(it) !in validScopes }
+    override suspend fun retainScopes(validScopes: Set<String>) {
+        lock.withLock {
+            if (validScopes.isEmpty()) map.clear()
+            else map.keys.removeAll { continuationReceiptScopeOf(it) !in validScopes }
+        }
     }
 }
 
