@@ -8,9 +8,6 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 )
 
-// transcriptionProblemFixtures are the cases the hub and the iOS app share (spec/fixtures/meeting-transcription-problems).
-const transcriptionProblemFixtures = "../../../spec/fixtures/meeting-transcription-problems/cases.json"
-
 // A job's fatal code becomes the phone's problem by the shared cases (#13446): the kind of the upstream's failure
 // (refused, busy, out of reach, anything else) reaches the phone, which says why and what to do.
 func TestTranscriptionProblemsFollowTheSharedCases(t *testing.T) {
@@ -65,7 +62,7 @@ func TestTranscriptionProblemKindReachesThePhone(t *testing.T) {
 			}
 			waitFor(t, "the problem kept", func() bool { return h.transcription(meetingRec)["problem"] == tc.problem })
 			h.stopRuns()
-			r := newHubRun(h.s, h.engine(), meetingRec) // as after a restart: from meeting.json
+			r := newHubRun(h.s.Recordings, h.engine(), meetingRec) // as after a restart: from meeting.json
 			if r == nil {
 				t.Fatal("no run")
 			}

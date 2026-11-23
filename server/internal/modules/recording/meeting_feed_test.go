@@ -12,6 +12,73 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+func newFeedTest(t *testing.T) *feedTest {
+	t.Helper()
+	f := newFakeHub().withMachine()
+	f.hello.Locale = "en"
+	f.settings = &Settings{MachineID: "server", Main: "main1", Timezone: "UTC"}
+	f.known["main1"] = true
+	f.sessions["server"] = []proto.Session{
+		{SessionID: "main1", Assistant: true, Status: proto.StatusIdle, State: proto.StateIdle},
+		{SessionID: "agent1", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone, State: proto.StateUnread, PermissionMode: "acceptEdits"},
+	}
+	ft := &feedTest{t: t, f: f, now: time.Now().UTC().Truncate(time.Second)}
+	ft.start = ft.now.Add(-10 * time.Minute)
+	ft.s = newCore(t, f)
+	ft.s.attend.feed.now = func() time.Time { return ft.now }
+	ft.s.attend.turns.now = ft.s.attend.feed.now
+	ft.s.attend.feed.after = func(d time.Duration, _ func()) func() bool {
+		ft.timed = append(ft.timed, d)
+		return func() bool { return true }
+	}
+	ft.e = ft.s.engine()
+	return ft
+}
+
+func (ft *feedTest) look() time.Time { return ft.s.attendLook(context.Background(), feedRec) }
+
+// A batch holds at most feedBatchRunes of live text, the latest; the older lines are counted as left out. Empty
+// positions are never fed.
+func TestMeetingFeedBatchOf(t *testing.T) {
+	long := strings.Repeat("a", feedBatchRunes/2)
+	l := kb.Live{Segments: []kb.LiveSegment{{Text: "first"}, {Text: long}, {Text: ""}, {Text: long}, {Text: "last"}}, Fed: 1}
+	b := feedBatchOf(l, false, false)
+	if b.upto != 5 || b.leftOut != 1 || len(b.lines) != 2 || b.lines[0].Text != long || b.lines[1].Text != "last" {
+		t.Fatalf("batch %+v", b)
+	}
+	if b := feedBatchOf(l, true, false); b.leftOut != 2 || !b.soFar {
+		t.Fatalf("so far %+v", b)
+	}
+	if b := feedBatchOf(kb.Live{Segments: []kb.LiveSegment{{Text: ""}}}, false, false); !b.empty() || b.upto != 1 {
+		t.Fatalf("only an empty position: %+v", b)
+	}
+}
+
+// After a restart the meetings still attended are picked up; a kick is looked at once, and the look asks for the next.
+func TestMeetingFeedSchedules(t *testing.T) {
+	ft := newFeedTest(t)
+	ft.upload(kb.AttendanceListener, nil, false, false)
+	ft.timed = nil
+	ft.s.attend.feed.mu.Lock()
+	ft.s.attend.feed.timers = nil
+	ft.s.attend.feed.mu.Unlock()
+	ft.s.attendResume(ft.e)
+	if len(ft.timed) != 1 || ft.timed[0] != feedKickDelay {
+		t.Fatalf("timers %v", ft.timed)
+	}
+	ft.say(0, "Ada: hello.") // a kick while one is due as early already: no second timer
+	if len(ft.timed) != 1 {
+		t.Fatalf("timers %v", ft.timed)
+	}
+	ft.s.attendRun(feedRec)
+	if chats, _ := ft.sent(); len(chats) != 1 {
+		t.Fatalf("the look sent %d", len(chats))
+	}
+	if len(ft.timed) != 2 || ft.timed[1] != feedBatchEvery {
+		t.Fatalf("timers %v", ft.timed)
+	}
+}
+
 const feedRec = "a0000000-0000-4000-8000-0000000000a1"
 
 // feedTest is an assistant with a knowledge base whose main chat main1 (on "server") attends recordings, a clock the
@@ -25,29 +92,6 @@ type feedTest struct {
 	start time.Time
 	rev   int64
 	timed []time.Duration // what the feeder asked its timers for
-}
-
-func newFeedTest(t *testing.T) *feedTest {
-	t.Helper()
-	f := newFakeHub().withMachine()
-	f.hello.Locale = "en"
-	f.settings = &Settings{MachineID: "server", Main: "main1", Timezone: "UTC"}
-	f.known["main1"] = true
-	f.sessions["server"] = []proto.Session{
-		{SessionID: "main1", Assistant: true, Status: proto.StatusIdle, State: proto.StateIdle},
-		{SessionID: "agent1", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone, State: proto.StateUnread, PermissionMode: "acceptEdits"},
-	}
-	ft := &feedTest{t: t, f: f, now: time.Now().UTC().Truncate(time.Second)}
-	ft.start = ft.now.Add(-10 * time.Minute)
-	ft.s = newKBService(t, f)
-	ft.s.attend.feed.now = func() time.Time { return ft.now }
-	ft.s.attend.turns.now = ft.s.attend.feed.now
-	ft.s.attend.feed.after = func(d time.Duration, _ func()) func() bool {
-		ft.timed = append(ft.timed, d)
-		return func() bool { return true }
-	}
-	ft.e = kbEng(t, ft.s)
-	return ft
 }
 
 // upload stores the phone's whole state of feedRec: a meeting attended in role by session (nil: the main chat).
@@ -76,8 +120,6 @@ func (ft *feedTest) say(from int, texts ...string) {
 		ft.t.Fatal(err)
 	}
 }
-
-func (ft *feedTest) look() time.Time { return ft.s.attendLook(context.Background(), feedRec) }
 
 func (ft *feedTest) live() kb.Live {
 	ft.t.Helper()
@@ -343,47 +385,5 @@ func TestMeetingFeedEnd(t *testing.T) {
 	chats, _ = at.sent()
 	if text := chats[len(chats)-1]["text"].(string); len(chats) != 2 || !strings.Contains(text, "Bo: two.") || !strings.Contains(text, "has ended") {
 		t.Fatalf("%d batches, the last %q", len(chats), text)
-	}
-}
-
-// A batch holds at most feedBatchRunes of live text, the latest; the older lines are counted as left out. Empty
-// positions are never fed.
-func TestMeetingFeedBatchOf(t *testing.T) {
-	long := strings.Repeat("a", feedBatchRunes/2)
-	l := kb.Live{Segments: []kb.LiveSegment{{Text: "first"}, {Text: long}, {Text: ""}, {Text: long}, {Text: "last"}}, Fed: 1}
-	b := feedBatchOf(l, false, false)
-	if b.upto != 5 || b.leftOut != 1 || len(b.lines) != 2 || b.lines[0].Text != long || b.lines[1].Text != "last" {
-		t.Fatalf("batch %+v", b)
-	}
-	if b := feedBatchOf(l, true, false); b.leftOut != 2 || !b.soFar {
-		t.Fatalf("so far %+v", b)
-	}
-	if b := feedBatchOf(kb.Live{Segments: []kb.LiveSegment{{Text: ""}}}, false, false); !b.empty() || b.upto != 1 {
-		t.Fatalf("only an empty position: %+v", b)
-	}
-}
-
-// After a restart the meetings still attended are picked up; a kick is looked at once, and the look asks for the next.
-func TestMeetingFeedSchedules(t *testing.T) {
-	ft := newFeedTest(t)
-	ft.upload(kb.AttendanceListener, nil, false, false)
-	ft.timed = nil
-	ft.s.attend.feed.mu.Lock()
-	ft.s.attend.feed.timers = nil
-	ft.s.attend.feed.mu.Unlock()
-	ft.s.attendResume(ft.e)
-	if len(ft.timed) != 1 || ft.timed[0] != feedKickDelay {
-		t.Fatalf("timers %v", ft.timed)
-	}
-	ft.say(0, "Ada: hello.") // a kick while one is due as early already: no second timer
-	if len(ft.timed) != 1 {
-		t.Fatalf("timers %v", ft.timed)
-	}
-	ft.s.attendRun(feedRec)
-	if chats, _ := ft.sent(); len(chats) != 1 {
-		t.Fatalf("the look sent %d", len(chats))
-	}
-	if len(ft.timed) != 2 || ft.timed[1] != feedBatchEvery {
-		t.Fatalf("timers %v", ft.timed)
 	}
 }

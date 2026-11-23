@@ -30,9 +30,6 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// earlier is an earlier meeting's recording.
-const earlier = "55555555-5555-4555-8555-555555555555"
-
 const (
 	meetingRec   = "33333333-3333-4333-8333-333333333333"
 	meetingOther = "44444444-4444-4444-8444-444444444444"
@@ -569,4 +566,11 @@ func (r *roomFixture) meeting(id string) kb.Meeting {
 func today8(loc *time.Location) (time.Time, string) {
 	n := time.Now().In(loc)
 	return time.Date(n.Year(), n.Month(), n.Day(), 8, 0, 0, 0, loc), n.Format(time.DateOnly)
+}
+
+// sentOnce are the once-only sends the fake hub took (session.send_once).
+func (r *roomFixture) sentOnce() []map[string]any {
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	return slices.Clone(r.f.sentOnce)
 }

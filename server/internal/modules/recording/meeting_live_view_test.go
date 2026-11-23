@@ -14,125 +14,6 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The live view (#3862 phase 2, docs/assistant/meeting-minutes.md "Phase 2: live view"): lines and topics on
-// GET …/live, the room's meeting_topics_set, lines and topics in meeting_live; and the highlights (phase 2b, "Phase 2b:
-// highlights"). All names and texts are placeholders.
-
-// topicsCall is the room session's meeting_topics_set with args, and its text.
-func (r *roomFixture) topicsCall(session, args string) (proto.ToolResult, string) {
-	r.t.Helper()
-	return r.roomCall(session, toolTopicsSet, args)
-}
-
-// highlightsCall is the room session's meeting_highlights_set with args, and its text.
-func (r *roomFixture) highlightsCall(session, args string) (proto.ToolResult, string) {
-	r.t.Helper()
-	return r.roomCall(session, toolHighlightsSet, args)
-}
-
-// roomCall is the room session's call of tool with args, as its MCP server makes it, and its text.
-func (r *roomFixture) roomCall(session, tool, args string) (proto.ToolResult, string) {
-	r.t.Helper()
-	d := newFleetDevs() // the nodes' requests are the fleet's; only for the call, so the feeder keeps the fake hub's
-	d.add("server", "Server")
-	r.s.devs = d
-	defer func() { r.s.devs = nil }()
-	out, ok, err := r.s.NodeRequest(context.Background(), "server", "mcp.call",
-		json.RawMessage(`{"name":"`+tool+`","args":`+args+`,"session_id":"`+session+`","assistant":true,"guest":true}`))
-	if !ok || err != nil {
-		r.t.Fatalf("call: %v %v", ok, err)
-	}
-	res := out.(proto.ToolResult)
-	var b strings.Builder
-	for _, c := range res.Content {
-		b.WriteString(c.Text)
-	}
-	return res, b.String()
-}
-
-// GET …/live?from=: the live log's positions from n (a placeholder's text "" included), at most 500 with more when
-// there are more; none without from; a from that is not a whole number of 0 or more is 400, after 404. The lines'
-// revision is the live log's length; ?parts=lines gives the lines only beside from. POST …/live's 200 has neither
-// lines nor topics.
-func TestMeetingLiveLines(t *testing.T) {
-	r := newRoomFixture(t)
-	r.do("GET", livePath(meetingRec)+"?from=x", "", nil, http.StatusNotFound)
-	r.roomUp(meetingRec, "listener")
-	segs := make([]map[string]any, 0, 200)
-	for i := range 200 {
-		text := fmt.Sprintf("line %d", i)
-		if i == 1 {
-			text = ""
-		}
-		segs = append(segs, map[string]any{"start": i, "end": i + 1, "text": text})
-	}
-	for from := 0; from < 600; from += 200 {
-		for i := range segs {
-			segs[i]["text"] = fmt.Sprintf("line %d", from+i)
-			if from+i == 1 {
-				segs[i]["text"] = ""
-			}
-		}
-		out := r.do("POST", livePath(meetingRec), "", map[string]any{"from": from, "segments": segs}, http.StatusOK)
-		if _, has := out["lines"]; has || out["topics"] != nil {
-			t.Fatalf("POST …/live: %v", out)
-		}
-	}
-
-	view := r.do("GET", livePath(meetingRec), "", nil, http.StatusOK)
-	if _, has := view["lines"]; has || view["revs"].(map[string]any)["lines"] != float64(600) {
-		t.Fatalf("without from: %v", view)
-	}
-	page := r.do("GET", livePath(meetingRec)+"?from=0", "", nil, http.StatusOK)
-	lines, _ := page["lines"].([]any)
-	if len(lines) != maxLiveLines || page["more"] != true {
-		t.Fatalf("first page: %d lines, more %v", len(lines), page["more"])
-	}
-	first, second := lines[0].(map[string]any), lines[1].(map[string]any)
-	if first["n"] != float64(0) || first["text"] != "line 0" || first["start"] != float64(0) || first["end"] != float64(1) ||
-		second["n"] != float64(1) || second["text"] != "" {
-		t.Fatalf("lines %v %v", first, second)
-	}
-	last := lines[len(lines)-1].(map[string]any)["n"].(float64)
-	rest := r.do("GET", livePath(meetingRec)+fmt.Sprintf("?from=%d", int(last)+1), "", nil, http.StatusOK)
-	if lines, _ := rest["lines"].([]any); len(lines) != 100 || rest["more"] != nil || lines[0].(map[string]any)["n"] != float64(500) {
-		t.Fatalf("second page: %v", rest["more"])
-	}
-	if end := r.do("GET", livePath(meetingRec)+"?from=900", "", nil, http.StatusOK); len(end["lines"].([]any)) != 0 || end["more"] != nil {
-		t.Fatalf("past the end: %v", end)
-	}
-	for _, bad := range []string{"-1", "1.5", "abc", "", "+3", "99999999999999999999"} {
-		wantCode(t, r.do("GET", livePath(meetingRec)+"?from="+bad, "", nil, http.StatusBadRequest), "bad_request")
-	}
-
-	only := r.do("GET", livePath(meetingRec)+"?parts=lines", "", nil, http.StatusOK)
-	if raw, _ := json.Marshal(only); string(raw) != `{"revs":{"lines":600}}` {
-		t.Fatalf("parts=lines without from: %s", raw)
-	}
-	only = r.do("GET", livePath(meetingRec)+"?parts=lines&from=599", "", nil, http.StatusOK)
-	if raw, _ := json.Marshal(only); string(raw) != `{"lines":[{"end":200,"n":599,"start":199,"text":"line 599"}],"revs":{"lines":600}}` {
-		t.Fatalf("parts=lines from 599: %s", raw)
-	}
-	waitFor(t, "a meeting_live event for the lines", func() bool {
-		r.f.mu.Lock()
-		defer r.f.mu.Unlock()
-		for _, ev := range r.f.liveEvents {
-			changed, _ := ev["changed"].([]any)
-			if slices.Contains(changed, any("lines")) && ev["revs"].(map[string]any)["lines"] == float64(600) {
-				return true
-			}
-		}
-		return false
-	})
-	d, err := r.engine().Get(kb.KindRecording, meetingRec, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(d.Meta), "line 1") || strings.Contains(string(d.Meta), "topics") || strings.Contains(string(d.Meta), "lines") {
-		t.Fatalf("detail.meta %s", d.Meta)
-	}
-}
-
 // meeting_topics_set: the room replaces its meeting's topics whole; GET …/live has them ([] before the first) with
 // topics_at and their revision, which goes up only when they change; a list over a limit is refused naming it, and
 // changes nothing; meeting_live says topics changed; the next batch shows the room the topics so far, and the
@@ -434,20 +315,111 @@ func TestMeetingHighlights(t *testing.T) {
 	}
 }
 
-// zoneApart is a time zone whose offset at t is neither UTC's nor this machine's, for a test that a clock time is
-// written in the user's zone (Settings.Timezone) and not in the fallback.
-func zoneApart(t *testing.T, at time.Time) *time.Location {
-	t.Helper()
-	_, local := at.In(time.Local).Zone()
-	for _, name := range []string{"Asia/Kathmandu", "America/St_Johns", "Australia/Eucla"} {
-		loc, err := time.LoadLocation(name)
-		if err != nil {
-			continue
+// topicsCall is the room session's meeting_topics_set with args, and its text.
+func (r *roomFixture) topicsCall(session, args string) (proto.ToolResult, string) {
+	r.t.Helper()
+	return r.roomCall(session, toolTopicsSet, args)
+}
+
+// highlightsCall is the room session's meeting_highlights_set with args, and its text.
+func (r *roomFixture) highlightsCall(session, args string) (proto.ToolResult, string) {
+	r.t.Helper()
+	return r.roomCall(session, toolHighlightsSet, args)
+}
+
+// roomCall is the room session's call of tool with args, as its MCP server makes it, and its text.
+func (r *roomFixture) roomCall(session, tool, args string) (proto.ToolResult, string) {
+	r.t.Helper()
+	// The core routes a room's mcp.call to its meeting (the assistant's TestMeetingRoomTools); here it goes straight in.
+	rec, _, _ := r.s.RoomOf(context.Background(), "server", session)
+	out := r.s.roomToolCall(context.Background(), rec, tool, json.RawMessage(args))
+	res := out
+	var b strings.Builder
+	for _, c := range res.Content {
+		b.WriteString(c.Text)
+	}
+	return res, b.String()
+}
+
+// GET …/live?from=: the live log's positions from n (a placeholder's text "" included), at most 500 with more when
+// there are more; none without from; a from that is not a whole number of 0 or more is 400, after 404. The lines'
+// revision is the live log's length; ?parts=lines gives the lines only beside from. POST …/live's 200 has neither
+// lines nor topics.
+func TestMeetingLiveLines(t *testing.T) {
+	r := newRoomFixture(t)
+	r.do("GET", livePath(meetingRec)+"?from=x", "", nil, http.StatusNotFound)
+	r.roomUp(meetingRec, "listener")
+	segs := make([]map[string]any, 0, 200)
+	for i := range 200 {
+		text := fmt.Sprintf("line %d", i)
+		if i == 1 {
+			text = ""
 		}
-		if _, off := at.In(loc).Zone(); off != 0 && off != local {
-			return loc
+		segs = append(segs, map[string]any{"start": i, "end": i + 1, "text": text})
+	}
+	for from := 0; from < 600; from += 200 {
+		for i := range segs {
+			segs[i]["text"] = fmt.Sprintf("line %d", from+i)
+			if from+i == 1 {
+				segs[i]["text"] = ""
+			}
+		}
+		out := r.do("POST", livePath(meetingRec), "", map[string]any{"from": from, "segments": segs}, http.StatusOK)
+		if _, has := out["lines"]; has || out["topics"] != nil {
+			t.Fatalf("POST …/live: %v", out)
 		}
 	}
-	t.Fatal("no time zone apart from UTC and this machine's")
-	return nil
+
+	view := r.do("GET", livePath(meetingRec), "", nil, http.StatusOK)
+	if _, has := view["lines"]; has || view["revs"].(map[string]any)["lines"] != float64(600) {
+		t.Fatalf("without from: %v", view)
+	}
+	page := r.do("GET", livePath(meetingRec)+"?from=0", "", nil, http.StatusOK)
+	lines, _ := page["lines"].([]any)
+	if len(lines) != maxLiveLines || page["more"] != true {
+		t.Fatalf("first page: %d lines, more %v", len(lines), page["more"])
+	}
+	first, second := lines[0].(map[string]any), lines[1].(map[string]any)
+	if first["n"] != float64(0) || first["text"] != "line 0" || first["start"] != float64(0) || first["end"] != float64(1) ||
+		second["n"] != float64(1) || second["text"] != "" {
+		t.Fatalf("lines %v %v", first, second)
+	}
+	last := lines[len(lines)-1].(map[string]any)["n"].(float64)
+	rest := r.do("GET", livePath(meetingRec)+fmt.Sprintf("?from=%d", int(last)+1), "", nil, http.StatusOK)
+	if lines, _ := rest["lines"].([]any); len(lines) != 100 || rest["more"] != nil || lines[0].(map[string]any)["n"] != float64(500) {
+		t.Fatalf("second page: %v", rest["more"])
+	}
+	if end := r.do("GET", livePath(meetingRec)+"?from=900", "", nil, http.StatusOK); len(end["lines"].([]any)) != 0 || end["more"] != nil {
+		t.Fatalf("past the end: %v", end)
+	}
+	for _, bad := range []string{"-1", "1.5", "abc", "", "+3", "99999999999999999999"} {
+		wantCode(t, r.do("GET", livePath(meetingRec)+"?from="+bad, "", nil, http.StatusBadRequest), "bad_request")
+	}
+
+	only := r.do("GET", livePath(meetingRec)+"?parts=lines", "", nil, http.StatusOK)
+	if raw, _ := json.Marshal(only); string(raw) != `{"revs":{"lines":600}}` {
+		t.Fatalf("parts=lines without from: %s", raw)
+	}
+	only = r.do("GET", livePath(meetingRec)+"?parts=lines&from=599", "", nil, http.StatusOK)
+	if raw, _ := json.Marshal(only); string(raw) != `{"lines":[{"end":200,"n":599,"start":199,"text":"line 599"}],"revs":{"lines":600}}` {
+		t.Fatalf("parts=lines from 599: %s", raw)
+	}
+	waitFor(t, "a meeting_live event for the lines", func() bool {
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		for _, ev := range r.f.liveEvents {
+			changed, _ := ev["changed"].([]any)
+			if slices.Contains(changed, any("lines")) && ev["revs"].(map[string]any)["lines"] == float64(600) {
+				return true
+			}
+		}
+		return false
+	})
+	d, err := r.engine().Get(kb.KindRecording, meetingRec, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(d.Meta), "line 1") || strings.Contains(string(d.Meta), "topics") || strings.Contains(string(d.Meta), "lines") {
+		t.Fatalf("detail.meta %s", d.Meta)
+	}
 }

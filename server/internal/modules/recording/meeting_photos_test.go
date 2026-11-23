@@ -7,9 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/jpeg"
-	"image/png"
 	"io"
 	"net/http"
 	"slices"
@@ -22,70 +19,148 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Meeting photos (#3862 phase 3, docs/assistant/meeting-minutes.md "Phase 3: photos"). All names and texts are
-// placeholders.
+// A photo whose send went in but whose answer was lost (or a restart cut it off) is forwarded from before the send:
+// the room may note it, a delete withdraws it there, and while it is listed it is sent again under its id (the hub's
+// guard answers delivered) until a send succeeds.
+func TestMeetingPhotoSendInDoubt(t *testing.T) {
+	r := newRoomFixture(t)
+	r.roomUp(meetingRec, "listener")
+	r.addPhoto(meetingRec, photoBody(t, photoOne, 5, nil))
+	r.addPhoto(meetingRec, photoBody(t, photoTwo, 6, nil))
+	lost := func(string) (bool, error) { return true, context.DeadlineExceeded }
+	taken := func(string) (bool, error) { return false, nil }
+	r.photoNode(lost)
+	r.look(meetingRec)
+	if sent := r.photoSends(); len(sent) != 1 || sent[0]["client_msg_id"] != "photo-"+photoOne {
+		t.Fatalf("sent %v", sent)
+	}
+	if ps := r.photosOf(meetingRec); ps[0]["forwarded"] != true || ps[1]["forwarded"] != false {
+		t.Fatalf("listed %v", ps)
+	}
+	e := r.engine()
+	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 2 {
+		t.Fatalf("queued %+v", queued)
+	}
+	if out := photoNoteTool(e, meetingRec, json.RawMessage(`{"photo":1,"text":"The Q3 budget"}`)); out.IsError {
+		t.Fatalf("a note on a photo in doubt: %+v", out)
+	}
+	r.photoNode(taken)
+	r.look(meetingRec)
+	if sent := r.photoSends(); len(sent) != 2 || sent[1]["client_msg_id"] != "photo-"+photoOne {
+		t.Fatalf("sent again %v", sent)
+	}
+	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 1 || queued[0].N != 2 {
+		t.Fatalf("queued %+v", queued)
+	}
 
-const (
-	photoOne   = "b0000000-0000-4000-8000-000000000001"
-	photoTwo   = "b0000000-0000-4000-8000-000000000002"
-	photoThree = "b0000000-0000-4000-8000-000000000003"
-	photoFour  = "b0000000-0000-4000-8000-000000000004"
-)
+	// Photo 2's answer lost too, then deleted: withdrawn there, not sent again.
+	r.photoNode(lost)
+	r.look(meetingRec)
+	r.do("DELETE", photosPath(meetingRec)+"/2", "", nil, http.StatusOK)
+	if _, withdraw := e.PhotosForRoom(meetingRec); len(withdraw) != 1 || withdraw[0].N != 2 {
+		t.Fatalf("withdraw %+v", withdraw)
+	}
+	r.photoNode(taken)
+	r.look(meetingRec)
+	r.look(meetingRec)
+	if sent := r.photoSends(); len(sent) != 4 || sent[2]["client_msg_id"] != "photo-"+photoTwo || sent[3]["client_msg_id"] != "photo-withdrawn-"+photoTwo {
+		t.Fatalf("sent %v", sent)
+	}
+}
 
-func photosPath(id string) string { return "/api/v1/recordings/" + id + "/photos" }
+// The follow-up's seed has the words of the photos still listed (after the minutes) and the room's notes on them
+// (with the room thread), never a deleted photo's or an image; a trimmed recording seeds its minutes only.
+func TestMeetingPhotosInTheFollowup(t *testing.T) {
+	r := newRoomFixture(t)
+	r.roomUp(meetingRec, "listener")
+	body := photoBody(t, photoOne, 65, map[string]any{"caption": "Whiteboard", "text": "PHOTO-ONE-TEXT"})
+	r.addPhoto(meetingRec, body)
+	r.addPhoto(meetingRec, photoBody(t, photoTwo, 70, map[string]any{"text": "PHOTO-TWO-TEXT"}))
+	r.look(meetingRec)
+	r.look(meetingRec)
+	e := r.engine()
+	if err := e.PhotoNote(meetingRec, 1, "PHOTO-ONE-NOTE"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.PhotoNote(meetingRec, 2, "PHOTO-TWO-NOTE"); err != nil {
+		t.Fatal(err)
+	}
+	r.do("DELETE", photosPath(meetingRec)+"/2", "", nil, http.StatusOK)
+	end := time.Now().UTC().Format(time.RFC3339)
+	r.upload(meetingRec, 2, map[string]any{"room": map[string]any{"attendance": "listener"}, "ended_at": end, "complete": true, "title": "Design review",
+		"segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}})
+	if _, err := e.MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error { m.Room.State = kb.RoomEnded; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	r.do("POST", "/api/v1/recordings/"+meetingRec+"/followup", "", map[string]any{"id": callOne, "text": "Draft the email."}, http.StatusOK)
+	sends := r.sends()
+	seed, _ := sends[len(sends)-1]["text"].(string)
+	photos, notes, transcript := strings.Index(seed, "PHOTO-ONE-TEXT"), strings.Index(seed, "PHOTO-ONE-NOTE"), strings.Index(seed, "We keep the cap.")
+	if photos < 0 || notes < photos || transcript < notes || !strings.Contains(seed, "Photo 1 (1:05): Whiteboard") ||
+		strings.Contains(seed, "PHOTO-TWO") || strings.Contains(seed, body["data"].(string)) {
+		t.Fatalf("seed:\n%s", seed)
+	}
+
+	// Trimmed: the minutes only, though they cite a photo that stays.
+	r.minutesFor(meetingRec, `{"title":"Design review","decisions":[{"text":"Keep the budget","photo":1}]}`)
+	if ps := r.photosOf(meetingRec); len(ps) != 1 || ps[0]["cited"] != true {
+		t.Fatalf("cited %v", ps)
+	}
+	e.PruneRecordings(time.Now().AddDate(0, 0, 30))
+	m, rec, err := e.MeetingRead(meetingRec)
+	if err != nil || !rec.Trimmed() {
+		t.Fatalf("not trimmed: %v", err)
+	}
+	if ps := r.photosOf(meetingRec); len(ps) != 1 {
+		t.Fatalf("the cited photo went: %v", ps)
+	}
+	wantCode(t, r.do("POST", photosPath(meetingRec), "", photoBody(t, photoThree, 1, nil), http.StatusConflict), codeTranscriptExpired)
+	if seed := r.s.followupSeed(context.Background(), e, rec, m, "x"); strings.Contains(seed, "PHOTO-ONE") || !strings.Contains(seed, "Keep the budget") {
+		t.Fatalf("trimmed seed:\n%s", seed)
+	}
+}
+
+// A follow-up made right after a photo's delete was answered has none of its words, though the minutes were not made
+// again yet: the delete took the items citing it out of them, the summary card's too (#6563). The seed reads the
+// minutes in the card's layout, in their language: the core conclusions, each decision after "Decided:", the action
+// items without a checkbox (the minutes do not know a to-do's state), the AI note. kb_get has none of the photo either.
+func TestMeetingPhotoDeletedBeforeTheFollowup(t *testing.T) {
+	m := newMeetingFixture(t)
+	m.upload(meetingRec, 1, map[string]any{"title": "Design review", "complete": true, "ended_at": time.Now().UTC().Format(time.RFC3339),
+		"segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}})
+	m.addPhoto(meetingRec, photoBody(t, photoOne, 5, map[string]any{"text": "PHOTO-ONLY-WORDS"}))
+	m.minutesFor(meetingRec, `{"title":"Design review","headline":"The cap stays","conclusions":[{"text":"We **keep** the cap","line":1}],`+
+		`"topics":[{"title":"Board","points":[{"text":"PHOTO-ONLY-WORDS","photo":1}]},`+
+		`{"title":"Export","points":[{"text":"Entries over the cap are **dropped**","line":1}],"decisions":[{"text":"We keep the cap","line":1}]}],`+
+		`"actions":[{"what":"Send the release note","line":1}]}`)
+	m.do("DELETE", photosPath(meetingRec)+"/1", "", nil, http.StatusOK)
+	e := m.engine()
+	meeting, rec, err := e.MeetingRead(meetingRec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mins, err := e.Store.ReadMinutes(meetingRec)
+	if err != nil || mins.Overview == nil {
+		t.Fatalf("minutes %+v: %v", mins, err)
+	}
+	lang := i18n.Lang(mins.Language).Or(i18n.ZhHans)
+	seed := m.s.followupSeed(context.Background(), e, rec, meeting, "Draft a summary.")
+	_, block, _ := strings.Cut(seed, "\nMinutes:\n")
+	for _, want := range []string{"The cap stays", "## " + i18n.T(lang, "kb-minutes.conclusions"), "We **keep** the cap",
+		"## Export", "Entries over the cap are **dropped**", i18n.T(lang, "kb-minutes.decided") + "We keep the cap",
+		"## " + i18n.T(lang, "kb-minutes.actions"), "] Send the release note", i18n.T(lang, "kb-minutes.ai_note")} {
+		if !strings.Contains(block, want) {
+			t.Errorf("the seed's minutes lack %q", want)
+		}
+	}
+	if strings.Contains(seed, "PHOTO-ONLY") || strings.Contains(block, "[ ]") || strings.Contains(block, "[x]") || strings.Contains(block, "## Board") ||
+		strings.Contains(block, "## "+i18n.T(lang, "kb-minutes.decisions")) {
+		t.Fatalf("seed:\n%s", seed)
+	}
+}
 
 // errMeetingTest is a node's failure to take a message.
 var errMeetingTest = errors.New("the message was not taken")
-
-// pngData is a w × h PNG in base64.
-func pngData(t *testing.T, w, h int) string {
-	t.Helper()
-	var b bytes.Buffer
-	if err := png.Encode(&b, image.NewGray(image.Rect(0, 0, w, h))); err != nil {
-		t.Fatal(err)
-	}
-	return base64.StdEncoding.EncodeToString(b.Bytes())
-}
-
-// jpegData is a w × h JPEG in base64.
-func jpegData(t *testing.T, w, h int) string {
-	t.Helper()
-	var b bytes.Buffer
-	if err := jpeg.Encode(&b, image.NewGray(image.Rect(0, 0, w, h)), nil); err != nil {
-		t.Fatal(err)
-	}
-	return base64.StdEncoding.EncodeToString(b.Bytes())
-}
-
-// photoBody is a POST …/photos body: a 16 × 9 PNG taken at seconds into the recording, with fields over it.
-func photoBody(t *testing.T, id string, at float64, fields map[string]any) map[string]any {
-	t.Helper()
-	body := map[string]any{"id": id, "at": at, "mime": "image/png", "data": pngData(t, 16, 9)}
-	for k, v := range fields {
-		body[k] = v
-	}
-	return body
-}
-
-// addPhoto POSTs a photo of recording id; the photo the answer carries.
-func (m *meetingFixture) addPhoto(id string, body map[string]any) map[string]any {
-	m.t.Helper()
-	p, ok := m.do("POST", photosPath(id), "", body, http.StatusOK)["photo"].(map[string]any)
-	if !ok {
-		m.t.Fatalf("no photo for %v", body["id"])
-	}
-	return p
-}
-
-// photosOf are the photos GET …/photos lists.
-func (m *meetingFixture) photosOf(id string) []map[string]any {
-	m.t.Helper()
-	var out []map[string]any
-	for _, p := range m.do("GET", photosPath(id), "", nil, http.StatusOK)["photos"].([]any) {
-		out = append(out, p.(map[string]any))
-	}
-	return out
-}
 
 // raw sends a request with full credentials and wants status; the response and its body as they are.
 func (m *meetingFixture) raw(method, path string, want int) (*http.Response, []byte) {
@@ -567,55 +642,6 @@ func TestMeetingPhotoSendFailing(t *testing.T) {
 	}
 }
 
-// A photo whose send went in but whose answer was lost (or a restart cut it off) is forwarded from before the send:
-// the room may note it, a delete withdraws it there, and while it is listed it is sent again under its id (the hub's
-// guard answers delivered) until a send succeeds.
-func TestMeetingPhotoSendInDoubt(t *testing.T) {
-	r := newRoomFixture(t)
-	r.roomUp(meetingRec, "listener")
-	r.addPhoto(meetingRec, photoBody(t, photoOne, 5, nil))
-	r.addPhoto(meetingRec, photoBody(t, photoTwo, 6, nil))
-	lost := func(string) (bool, error) { return true, context.DeadlineExceeded }
-	taken := func(string) (bool, error) { return false, nil }
-	r.photoNode(lost)
-	r.look(meetingRec)
-	if sent := r.photoSends(); len(sent) != 1 || sent[0]["client_msg_id"] != "photo-"+photoOne {
-		t.Fatalf("sent %v", sent)
-	}
-	if ps := r.photosOf(meetingRec); ps[0]["forwarded"] != true || ps[1]["forwarded"] != false {
-		t.Fatalf("listed %v", ps)
-	}
-	e := r.engine()
-	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 2 {
-		t.Fatalf("queued %+v", queued)
-	}
-	if out := photoNoteTool(e, meetingRec, json.RawMessage(`{"photo":1,"text":"The Q3 budget"}`)); out.IsError {
-		t.Fatalf("a note on a photo in doubt: %+v", out)
-	}
-	r.photoNode(taken)
-	r.look(meetingRec)
-	if sent := r.photoSends(); len(sent) != 2 || sent[1]["client_msg_id"] != "photo-"+photoOne {
-		t.Fatalf("sent again %v", sent)
-	}
-	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 1 || queued[0].N != 2 {
-		t.Fatalf("queued %+v", queued)
-	}
-
-	// Photo 2's answer lost too, then deleted: withdrawn there, not sent again.
-	r.photoNode(lost)
-	r.look(meetingRec)
-	r.do("DELETE", photosPath(meetingRec)+"/2", "", nil, http.StatusOK)
-	if _, withdraw := e.PhotosForRoom(meetingRec); len(withdraw) != 1 || withdraw[0].N != 2 {
-		t.Fatalf("withdraw %+v", withdraw)
-	}
-	r.photoNode(taken)
-	r.look(meetingRec)
-	r.look(meetingRec)
-	if sent := r.photoSends(); len(sent) != 4 || sent[2]["client_msg_id"] != "photo-"+photoTwo || sent[3]["client_msg_id"] != "photo-withdrawn-"+photoTwo {
-		t.Fatalf("sent %v", sent)
-	}
-}
-
 // GET …/live has the photos' revision (none before the first photo) and ?parts=photos only that; detail.meta has
 // neither the photos nor their revision; the meeting_live event says photos changed with their revision.
 func TestMeetingPhotosLive(t *testing.T) {
@@ -658,58 +684,6 @@ func TestMeetingPhotosLive(t *testing.T) {
 	}
 }
 
-// The follow-up's seed has the words of the photos still listed (after the minutes) and the room's notes on them
-// (with the room thread), never a deleted photo's or an image; a trimmed recording seeds its minutes only.
-func TestMeetingPhotosInTheFollowup(t *testing.T) {
-	r := newRoomFixture(t)
-	r.roomUp(meetingRec, "listener")
-	body := photoBody(t, photoOne, 65, map[string]any{"caption": "Whiteboard", "text": "PHOTO-ONE-TEXT"})
-	r.addPhoto(meetingRec, body)
-	r.addPhoto(meetingRec, photoBody(t, photoTwo, 70, map[string]any{"text": "PHOTO-TWO-TEXT"}))
-	r.look(meetingRec)
-	r.look(meetingRec)
-	e := r.engine()
-	if err := e.PhotoNote(meetingRec, 1, "PHOTO-ONE-NOTE"); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.PhotoNote(meetingRec, 2, "PHOTO-TWO-NOTE"); err != nil {
-		t.Fatal(err)
-	}
-	r.do("DELETE", photosPath(meetingRec)+"/2", "", nil, http.StatusOK)
-	end := time.Now().UTC().Format(time.RFC3339)
-	r.upload(meetingRec, 2, map[string]any{"room": map[string]any{"attendance": "listener"}, "ended_at": end, "complete": true, "title": "Design review",
-		"segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}})
-	if _, err := e.MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error { m.Room.State = kb.RoomEnded; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	r.do("POST", "/api/v1/recordings/"+meetingRec+"/followup", "", map[string]any{"id": callOne, "text": "Draft the email."}, http.StatusOK)
-	sends := r.sends()
-	seed, _ := sends[len(sends)-1]["text"].(string)
-	photos, notes, transcript := strings.Index(seed, "PHOTO-ONE-TEXT"), strings.Index(seed, "PHOTO-ONE-NOTE"), strings.Index(seed, "We keep the cap.")
-	if photos < 0 || notes < photos || transcript < notes || !strings.Contains(seed, "Photo 1 (1:05): Whiteboard") ||
-		strings.Contains(seed, "PHOTO-TWO") || strings.Contains(seed, body["data"].(string)) {
-		t.Fatalf("seed:\n%s", seed)
-	}
-
-	// Trimmed: the minutes only, though they cite a photo that stays.
-	r.minutesFor(meetingRec, `{"title":"Design review","decisions":[{"text":"Keep the budget","photo":1}]}`)
-	if ps := r.photosOf(meetingRec); len(ps) != 1 || ps[0]["cited"] != true {
-		t.Fatalf("cited %v", ps)
-	}
-	e.PruneRecordings(time.Now().AddDate(0, 0, 30))
-	m, rec, err := e.MeetingRead(meetingRec)
-	if err != nil || !rec.Trimmed() {
-		t.Fatalf("not trimmed: %v", err)
-	}
-	if ps := r.photosOf(meetingRec); len(ps) != 1 {
-		t.Fatalf("the cited photo went: %v", ps)
-	}
-	wantCode(t, r.do("POST", photosPath(meetingRec), "", photoBody(t, photoThree, 1, nil), http.StatusConflict), codeTranscriptExpired)
-	if seed := r.s.followupSeed(context.Background(), e, rec, m, "x"); strings.Contains(seed, "PHOTO-ONE") || !strings.Contains(seed, "Keep the budget") {
-		t.Fatalf("trimmed seed:\n%s", seed)
-	}
-}
-
 // meeting.answer reads the photos' words as this meeting's material, never a deleted photo's or an image.
 func TestMeetingAnswerReadsPhotos(t *testing.T) {
 	m := newMeetingFixture(t)
@@ -727,44 +701,5 @@ func TestMeetingAnswerReadsPhotos(t *testing.T) {
 	if !strings.Contains(in, "[1:10] photo 1 · caption: Whiteboard · text: Cap: 4 MB per entry") || strings.Contains(in, "DELETED-PHOTO") ||
 		strings.Contains(in, body["data"].(string)) {
 		t.Fatalf("input:\n%s", in)
-	}
-}
-
-// A follow-up made right after a photo's delete was answered has none of its words, though the minutes were not made
-// again yet: the delete took the items citing it out of them, the summary card's too (#6563). The seed reads the
-// minutes in the card's layout, in their language: the core conclusions, each decision after "Decided:", the action
-// items without a checkbox (the minutes do not know a to-do's state), the AI note. kb_get has none of the photo either.
-func TestMeetingPhotoDeletedBeforeTheFollowup(t *testing.T) {
-	m := newMeetingFixture(t)
-	m.upload(meetingRec, 1, map[string]any{"title": "Design review", "complete": true, "ended_at": time.Now().UTC().Format(time.RFC3339),
-		"segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}})
-	m.addPhoto(meetingRec, photoBody(t, photoOne, 5, map[string]any{"text": "PHOTO-ONLY-WORDS"}))
-	m.minutesFor(meetingRec, `{"title":"Design review","headline":"The cap stays","conclusions":[{"text":"We **keep** the cap","line":1}],`+
-		`"topics":[{"title":"Board","points":[{"text":"PHOTO-ONLY-WORDS","photo":1}]},`+
-		`{"title":"Export","points":[{"text":"Entries over the cap are **dropped**","line":1}],"decisions":[{"text":"We keep the cap","line":1}]}],`+
-		`"actions":[{"what":"Send the release note","line":1}]}`)
-	m.do("DELETE", photosPath(meetingRec)+"/1", "", nil, http.StatusOK)
-	e := m.engine()
-	meeting, rec, err := e.MeetingRead(meetingRec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mins, err := e.Store.ReadMinutes(meetingRec)
-	if err != nil || mins.Overview == nil {
-		t.Fatalf("minutes %+v: %v", mins, err)
-	}
-	lang := i18n.Lang(mins.Language).Or(i18n.ZhHans)
-	seed := m.s.followupSeed(context.Background(), e, rec, meeting, "Draft a summary.")
-	_, block, _ := strings.Cut(seed, "\nMinutes:\n")
-	for _, want := range []string{"The cap stays", "## " + i18n.T(lang, "kb-minutes.conclusions"), "We **keep** the cap",
-		"## Export", "Entries over the cap are **dropped**", i18n.T(lang, "kb-minutes.decided") + "We keep the cap",
-		"## " + i18n.T(lang, "kb-minutes.actions"), "] Send the release note", i18n.T(lang, "kb-minutes.ai_note")} {
-		if !strings.Contains(block, want) {
-			t.Errorf("the seed's minutes lack %q", want)
-		}
-	}
-	if strings.Contains(seed, "PHOTO-ONLY") || strings.Contains(block, "[ ]") || strings.Contains(block, "[x]") || strings.Contains(block, "## Board") ||
-		strings.Contains(block, "## "+i18n.T(lang, "kb-minutes.decisions")) {
-		t.Fatalf("seed:\n%s", seed)
 	}
 }

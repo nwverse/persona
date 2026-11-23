@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"maps"
 	"net/http"
-	"path"
 	"slices"
 	"strings"
 	"testing"
@@ -14,109 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
-
-// The meeting's room conversation (#3862, docs/assistant/meeting-minutes.md "The room conversation"). All names and
-// texts are placeholders.
-
-// roomFixture is a meetingFixture whose node starts rooms, with the feeder's timers off: the test looks itself.
-type roomFixture struct {
-	*meetingFixture
-	prepared []map[string]any
-}
-
-func newRoomFixture(t *testing.T) *roomFixture {
-	t.Helper()
-	m := newMeetingFixture(t)
-	r := &roomFixture{meetingFixture: m}
-	m.s.attend.feed.after = func(time.Duration, func()) func() bool { return func() bool { return true } }
-	m.f.mu.Lock()
-	m.f.nodes = map[string]nodeAnswer{DeviceAssistantGuestPrepare: func(_ string, params json.RawMessage) (any, error) {
-		var a map[string]any
-		_ = json.Unmarshal(params, &a)
-		r.prepared = append(r.prepared, a)
-		return map[string]any{"cwd": "/home/me/.persona/guest-meeting/" + path.Base(a["dir"].(string)), "kind": "meeting", "start_ids": true}, nil
-	}}
-	m.f.sessions["server"] = []proto.Session{{SessionID: "c-main", Assistant: true, Status: proto.StatusIdle, State: proto.StateIdle}}
-	m.f.known["c-main"] = true
-	m.f.hello.Locale = "en"
-	m.f.mu.Unlock()
-	shortRoomAsks(t)
-	return r
-}
-
-// shortRoomAsks makes the room asks' polls short for one test.
-func shortRoomAsks(t *testing.T) {
-	t.Helper()
-	p := askRoomPoll
-	askRoomPoll = 5 * time.Millisecond
-	t.Cleanup(func() { askRoomPoll = p })
-}
-
-// look looks at recording id once, as the feeder's timer would.
-func (r *roomFixture) look(id string) time.Time { return r.s.attendLook(context.Background(), id) }
-
-// meeting is recording id's meeting.json now.
-func (r *roomFixture) meeting(id string) kb.Meeting {
-	r.t.Helper()
-	m, _, err := r.engine().MeetingRead(id)
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	return m
-}
-
-// roomUp uploads id as a room meeting in role and starts its room; the room's session id, listed idle.
-func (r *roomFixture) roomUp(id, role string) string {
-	r.t.Helper()
-	return r.roomUpWith(id, role, nil)
-}
-
-// roomUpWith is roomUp with more fields on the upload (its started_at, say).
-func (r *roomFixture) roomUpWith(id, role string, more map[string]any) string {
-	r.t.Helper()
-	fields := map[string]any{"room": map[string]any{"attendance": role}, "title": "Design review", "private": false}
-	maps.Copy(fields, more)
-	out := r.upload(id, 1, fields)
-	if room, _ := out["room"].(map[string]any); room["state"] != "none" || out["attendance"] != role {
-		r.t.Fatalf("upload: %v", out)
-	}
-	r.look(id)
-	m := r.meeting(id)
-	if m.Room == nil || m.Room.State != kb.RoomReady {
-		r.t.Fatalf("room %+v", m.Room)
-	}
-	r.f.mu.Lock()
-	r.f.sessions["server"] = append(r.f.sessions["server"], proto.Session{SessionID: m.Room.SessionID, Assistant: true, Status: proto.StatusIdle,
-		State: proto.StateIdle, Origin: OriginMeeting})
-	r.f.mu.Unlock()
-	return m.Room.SessionID
-}
-
-// olderRoom makes recording id's room one an older manager started (before #8253): a batch a minute with the rules and
-// the lists in each, never compacted.
-func (r *roomFixture) olderRoom(id string) {
-	r.t.Helper()
-	if _, err := r.engine().MeetingUpdate(id, func(m *kb.Meeting, _ kb.Recording) error {
-		m.Room.Batching, m.Room.Lean = 0, kb.MeetingRoomLean{}
-		return nil
-	}); err != nil {
-		r.t.Fatal(err)
-	}
-}
-
-func (r *roomFixture) sends() []map[string]any {
-	r.f.mu.Lock()
-	defer r.f.mu.Unlock()
-	return slices.Clone(r.f.sends)
-}
-
-func (r *roomFixture) sentOnce() []map[string]any {
-	r.f.mu.Lock()
-	defer r.f.mu.Unlock()
-	return slices.Clone(r.f.sentOnce)
-}
 
 // The room starts once the role is not off, after the upload answered: in its own directory with the meeting
 // CLAUDE.md, under the session id derived from the recording, as a guest of kind meeting with the meeting tools,
@@ -161,7 +57,7 @@ func TestMeetingRoomStarts(t *testing.T) {
 	if o := origins[sid]; o.origin != OriginMeeting || o.ref != meetingRec {
 		t.Fatalf("origin %+v", o)
 	}
-	if by, _ := r.s.titleOf(sid); by != titleByTask {
+	if by := r.s.titleOf(sid); by != titleByTask {
 		t.Fatalf("titled by %q", by)
 	}
 	raw, err := json.Marshal(r.meeting(meetingRec).RoomView())
@@ -229,6 +125,175 @@ func TestMeetingRoomUnavailable(t *testing.T) {
 	if room := view["room"].(map[string]any); room["state"] != "unavailable" || room["problem"] != "start_failed" || room["session_id"] != nil {
 		t.Fatalf("view %v", view)
 	}
+}
+
+// Asking the room: a typed question goes to the room as the owner's own message under ask-<id>-1, and its answer is
+// the room's reply, Markdown removed (via room); asked again after a failure it goes under ask-<id>-2. A heard
+// question goes with source meeting and keeps question "" with its lines. While the room is unavailable the ask is
+// answered from meeting material (via material), and a room ask asked again then fails with room_unavailable.
+func TestMeetingRoomAsk(t *testing.T) {
+	r := newRoomFixture(t)
+	sid := r.roomUp(meetingRec, "participant")
+	r.do("POST", livePath(meetingRec), "", `{"from":0,"segments":[{"start":10,"end":14,"text":"Persona, who owns the test?"}]}`, http.StatusOK)
+	r.f.mu.Lock()
+	r.f.items = []proto.Item{
+		{ID: "u1", Seq: 1, Role: "user", Kind: proto.KindText, Text: "Who owns the test?", ClientMsgID: askMsgID(askOne, 1)},
+		{ID: "a1", Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "**Bo** owns it. See [the minutes](https://example.com)."},
+	}
+	r.f.mu.Unlock()
+	a := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?", "spoken": true}, http.StatusOK))
+	if a["state"] != "answered" || a["via"] != "room" || a["answer"] != "Bo owns it. See the minutes." || a["question_source"] != "spoken" || a["speak"] != true {
+		t.Fatalf("ask %v", a)
+	}
+	once := r.sentOnce()
+	if len(once) != 1 || once[0]["session_id"] != sid || once[0]["client_msg_id"] != askMsgID(askOne, 1) || once[0]["text"] != "Who owns the test?" ||
+		once[0]["message_source"] != nil {
+		t.Fatalf("sent %v", once)
+	}
+	if calls := r.model.called(); len(calls) != 0 {
+		t.Fatalf("meeting.answer was asked: %d", len(calls))
+	}
+
+	r.f.mu.Lock()
+	r.f.items = append(r.f.items, proto.Item{ID: "u2", Seq: 3, Role: "user", Kind: proto.KindText, Text: "heard", ClientMsgID: askMsgID(askTwo, 1)},
+		proto.Item{ID: "a2", Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "Bo owns the test."})
+	r.f.mu.Unlock()
+	at := 15.0
+	h := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askTwo, "at": at}, http.StatusOK))
+	heard, _ := h["heard"].([]any)
+	if h["state"] != "answered" || h["question"] != "" || h["question_source"] != "heard" || len(heard) != 1 || h["answer"] != "Bo owns the test." {
+		t.Fatalf("heard %v", h)
+	}
+	once = r.sentOnce()
+	if text, _ := once[1]["text"].(string); !strings.Contains(text, `"kind":"meeting"`) || !strings.Contains(text, "Persona, who owns the test?") {
+		t.Fatalf("heard message %v", once[1])
+	}
+
+	// The room unavailable: meeting.answer answers at once.
+	if _, err := r.engine().MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error {
+		m.Room.State, m.Room.Problem = kb.RoomUnavailable, kb.RoomMachineOffline
+		m.Room.RetryAt = time.Now().Add(time.Hour)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askThree, "question": "Anything else?"}, http.StatusOK))
+	if m["via"] != "material" || m["state"] != "answered" || len(r.model.called()) != 1 {
+		t.Fatalf("material %v", m)
+	}
+
+	// A failed room ask asked again while the room is unavailable: room_unavailable; once ready, attempt 2.
+	if _, err := r.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
+		for i := range l.Asks {
+			if l.Asks[i].ID == askOne {
+				l.Asks[i] = failAsk(l.Asks[i], askNoAnswer)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	again := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?", "spoken": true}, http.StatusOK))
+	if again["state"] != "failed" || again["error"] != askRoomUnavailble || again["via"] != "room" {
+		t.Fatalf("asked again while unavailable: %v", again)
+	}
+	if _, err := r.engine().MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error {
+		m.Room.State, m.Room.Problem = kb.RoomReady, ""
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.f.mu.Lock()
+	r.f.items = append(r.f.items, proto.Item{ID: "u5", Seq: 5, Role: "user", Kind: proto.KindText, Text: "Who owns the test?", ClientMsgID: askMsgID(askOne, 2)},
+		proto.Item{ID: "a5", Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "Still Bo."})
+	r.f.mu.Unlock()
+	third := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?", "spoken": true}, http.StatusOK))
+	once = r.sentOnce()
+	if third["answer"] != "Still Bo." || once[len(once)-1]["client_msg_id"] != askMsgID(askOne, 2) {
+		t.Fatalf("attempt 2: %v %v", third, once[len(once)-1])
+	}
+	// The same id with another spoken flag is another request.
+	wantCode(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?"}, http.StatusConflict), codeOpIDReused)
+}
+
+// At the transcript's cut the room is deleted: the node's assistant.guest_delete with its directory and session, the
+// room forgotten (guest and origin) and deleted in meeting.json. A node that cannot be asked keeps it ended, asked
+// again at the next pass. A room whose recording is gone is found by its origin and deleted too.
+func TestMeetingRoomDeleted(t *testing.T) {
+	r := newRoomFixture(t)
+	sid := r.roomUp(meetingRec, "listener")
+	e := r.engine()
+	if _, err := e.MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error { m.Room.State = kb.RoomEnded; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var deletes []map[string]any
+	fail := errors.New("unknown method assistant.guest_delete")
+	r.f.mu.Lock()
+	r.f.nodes[DeviceAssistantGuestDelete] = func(_ string, params json.RawMessage) (any, error) {
+		var a map[string]any
+		_ = json.Unmarshal(params, &a)
+		deletes = append(deletes, a)
+		if fail != nil {
+			return nil, fail
+		}
+		return map[string]any{"deleted": true}, nil
+	}
+	r.f.mu.Unlock()
+	// Trimmed: its transcript cut (minutes kept).
+	r.upload(meetingRec, 2, map[string]any{"room": map[string]any{"attendance": "listener"}, "complete": true,
+		"ended_at": time.Now().UTC().Format(time.RFC3339), "segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap"}}})
+	r.minutesFor(meetingRec, `{"title":"Design review","decisions":[{"text":"Keep the cap","line":1}]}`)
+	e.PruneRecordings(time.Now().AddDate(0, 0, 30))
+	if rec, _ := e.Store.Recording(meetingRec); rec == nil || !rec.Trimmed() {
+		t.Fatal("not trimmed")
+	}
+	r.s.meetingRoomsSweep(context.Background(), e)
+	if len(deletes) != 1 || deletes[0]["session_id"] != sid || deletes[0]["dir"] != meetingRoomDir+"/"+meetingRec {
+		t.Fatalf("deletes %v", deletes)
+	}
+	if m := r.meeting(meetingRec); m.Room.State != kb.RoomEnded || m.Room.SessionID != sid {
+		t.Fatalf("a node too old: %+v", m.Room)
+	}
+	fail = nil
+	r.s.meetingRoomsSweep(context.Background(), e)
+	if m := r.meeting(meetingRec); m.Room.State != kb.RoomDeleted || m.Room.SessionID != "" {
+		t.Fatalf("deleted: %+v", m.Room)
+	}
+	if r.s.isRoom(sid) {
+		t.Fatal("the room is still in the book")
+	}
+	if o, _ := r.s.conversationOrigins(); o[sid].origin != "" {
+		t.Fatal("its origin is still there")
+	}
+
+	// A recording deleted: its room goes with it, found by its origin.
+	other := r.roomUp(meetingOther, "listener")
+	r.do("DELETE", "/api/v1/recordings/"+meetingOther, "", nil, http.StatusOK)
+	waitFor(t, "the deleted recording's room deleted", func() bool { return !r.s.isRoom(other) })
+}
+
+// shortRoomAsks makes the room asks' polls short for one test.
+func shortRoomAsks(t *testing.T) {
+	t.Helper()
+	pendingRec(t, map[string]time.Duration{"askRoomPoll": 5 * time.Millisecond}, nil)
+}
+
+// olderRoom makes recording id's room one an older manager started (before #8253): a batch a minute with the rules and
+// the lists in each, never compacted.
+func (r *roomFixture) olderRoom(id string) {
+	r.t.Helper()
+	if _, err := r.engine().MeetingUpdate(id, func(m *kb.Meeting, _ kb.Recording) error {
+		m.Room.Batching, m.Room.Lean = 0, kb.MeetingRoomLean{}
+		return nil
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+func (r *roomFixture) sentOnce() []map[string]any {
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	return slices.Clone(r.f.sentOnce)
 }
 
 // The room is fed as an attending session is, but exempt for its own meeting from "Sessions that never attend"
@@ -335,101 +400,6 @@ func TestMeetingRoomEnds(t *testing.T) {
 	if m := r.meeting(third); m.Room.State != kb.RoomNone {
 		t.Fatalf("never started: %+v", m.Room)
 	}
-}
-
-// isCode: err is an rpc error with code.
-func isCode(err error, code string) bool {
-	var e *rpc.Error
-	return errors.As(err, &e) && e.Code == code
-}
-
-// Asking the room: a typed question goes to the room as the owner's own message under ask-<id>-1, and its answer is
-// the room's reply, Markdown removed (via room); asked again after a failure it goes under ask-<id>-2. A heard
-// question goes with source meeting and keeps question "" with its lines. While the room is unavailable the ask is
-// answered from meeting material (via material), and a room ask asked again then fails with room_unavailable.
-func TestMeetingRoomAsk(t *testing.T) {
-	r := newRoomFixture(t)
-	sid := r.roomUp(meetingRec, "participant")
-	r.do("POST", livePath(meetingRec), "", `{"from":0,"segments":[{"start":10,"end":14,"text":"Persona, who owns the test?"}]}`, http.StatusOK)
-	r.f.mu.Lock()
-	r.f.items = []proto.Item{
-		{ID: "u1", Seq: 1, Role: "user", Kind: proto.KindText, Text: "Who owns the test?", ClientMsgID: askMsgID(askOne, 1)},
-		{ID: "a1", Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "**Bo** owns it. See [the minutes](https://example.com)."},
-	}
-	r.f.mu.Unlock()
-	a := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?", "spoken": true}, http.StatusOK))
-	if a["state"] != "answered" || a["via"] != "room" || a["answer"] != "Bo owns it. See the minutes." || a["question_source"] != "spoken" || a["speak"] != true {
-		t.Fatalf("ask %v", a)
-	}
-	once := r.sentOnce()
-	if len(once) != 1 || once[0]["session_id"] != sid || once[0]["client_msg_id"] != askMsgID(askOne, 1) || once[0]["text"] != "Who owns the test?" ||
-		once[0]["message_source"] != nil {
-		t.Fatalf("sent %v", once)
-	}
-	if calls := r.model.called(); len(calls) != 0 {
-		t.Fatalf("meeting.answer was asked: %d", len(calls))
-	}
-
-	r.f.mu.Lock()
-	r.f.items = append(r.f.items, proto.Item{ID: "u2", Seq: 3, Role: "user", Kind: proto.KindText, Text: "heard", ClientMsgID: askMsgID(askTwo, 1)},
-		proto.Item{ID: "a2", Seq: 4, Role: "assistant", Kind: proto.KindText, Text: "Bo owns the test."})
-	r.f.mu.Unlock()
-	at := 15.0
-	h := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askTwo, "at": at}, http.StatusOK))
-	heard, _ := h["heard"].([]any)
-	if h["state"] != "answered" || h["question"] != "" || h["question_source"] != "heard" || len(heard) != 1 || h["answer"] != "Bo owns the test." {
-		t.Fatalf("heard %v", h)
-	}
-	once = r.sentOnce()
-	if text, _ := once[1]["text"].(string); !strings.Contains(text, `"kind":"meeting"`) || !strings.Contains(text, "Persona, who owns the test?") {
-		t.Fatalf("heard message %v", once[1])
-	}
-
-	// The room unavailable: meeting.answer answers at once.
-	if _, err := r.engine().MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error {
-		m.Room.State, m.Room.Problem = kb.RoomUnavailable, kb.RoomMachineOffline
-		m.Room.RetryAt = time.Now().Add(time.Hour)
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	m := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askThree, "question": "Anything else?"}, http.StatusOK))
-	if m["via"] != "material" || m["state"] != "answered" || len(r.model.called()) != 1 {
-		t.Fatalf("material %v", m)
-	}
-
-	// A failed room ask asked again while the room is unavailable: room_unavailable; once ready, attempt 2.
-	if _, err := r.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
-		for i := range l.Asks {
-			if l.Asks[i].ID == askOne {
-				l.Asks[i] = failAsk(l.Asks[i], askNoAnswer)
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	again := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?", "spoken": true}, http.StatusOK))
-	if again["state"] != "failed" || again["error"] != askRoomUnavailble || again["via"] != "room" {
-		t.Fatalf("asked again while unavailable: %v", again)
-	}
-	if _, err := r.engine().MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error {
-		m.Room.State, m.Room.Problem = kb.RoomReady, ""
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	r.f.mu.Lock()
-	r.f.items = append(r.f.items, proto.Item{ID: "u5", Seq: 5, Role: "user", Kind: proto.KindText, Text: "Who owns the test?", ClientMsgID: askMsgID(askOne, 2)},
-		proto.Item{ID: "a5", Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "Still Bo."})
-	r.f.mu.Unlock()
-	third := meetingAskOf(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?", "spoken": true}, http.StatusOK))
-	once = r.sentOnce()
-	if third["answer"] != "Still Bo." || once[len(once)-1]["client_msg_id"] != askMsgID(askOne, 2) {
-		t.Fatalf("attempt 2: %v %v", third, once[len(once)-1])
-	}
-	// The same id with another spoken flag is another request.
-	wantCode(t, r.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?"}, http.StatusConflict), codeOpIDReused)
 }
 
 // A room whose turn ended in Claude Code's own words for a failed request (signed out) gives no answer: the ask fails
@@ -580,60 +550,4 @@ func TestMeetingPrivateRoute(t *testing.T) {
 	}
 	r.do("DELETE", "/api/v1/recordings/"+meetingRec, "", nil, http.StatusOK)
 	wantCode(t, r.do("PUT", p, "", map[string]any{"private": false}, http.StatusGone), codeRecordingDeleted)
-}
-
-// At the transcript's cut the room is deleted: the node's assistant.guest_delete with its directory and session, the
-// room forgotten (guest and origin) and deleted in meeting.json. A node that cannot be asked keeps it ended, asked
-// again at the next pass. A room whose recording is gone is found by its origin and deleted too.
-func TestMeetingRoomDeleted(t *testing.T) {
-	r := newRoomFixture(t)
-	sid := r.roomUp(meetingRec, "listener")
-	e := r.engine()
-	if _, err := e.MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error { m.Room.State = kb.RoomEnded; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	var deletes []map[string]any
-	fail := errors.New("unknown method assistant.guest_delete")
-	r.f.mu.Lock()
-	r.f.nodes[DeviceAssistantGuestDelete] = func(_ string, params json.RawMessage) (any, error) {
-		var a map[string]any
-		_ = json.Unmarshal(params, &a)
-		deletes = append(deletes, a)
-		if fail != nil {
-			return nil, fail
-		}
-		return map[string]any{"deleted": true}, nil
-	}
-	r.f.mu.Unlock()
-	// Trimmed: its transcript cut (minutes kept).
-	r.upload(meetingRec, 2, map[string]any{"room": map[string]any{"attendance": "listener"}, "complete": true,
-		"ended_at": time.Now().UTC().Format(time.RFC3339), "segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap"}}})
-	r.minutesFor(meetingRec, `{"title":"Design review","decisions":[{"text":"Keep the cap","line":1}]}`)
-	e.PruneRecordings(time.Now().AddDate(0, 0, 30))
-	if rec, _ := e.Store.Recording(meetingRec); rec == nil || !rec.Trimmed() {
-		t.Fatal("not trimmed")
-	}
-	r.s.meetingRoomsSweep(context.Background(), e)
-	if len(deletes) != 1 || deletes[0]["session_id"] != sid || deletes[0]["dir"] != meetingRoomDir+"/"+meetingRec {
-		t.Fatalf("deletes %v", deletes)
-	}
-	if m := r.meeting(meetingRec); m.Room.State != kb.RoomEnded || m.Room.SessionID != sid {
-		t.Fatalf("a node too old: %+v", m.Room)
-	}
-	fail = nil
-	r.s.meetingRoomsSweep(context.Background(), e)
-	if m := r.meeting(meetingRec); m.Room.State != kb.RoomDeleted || m.Room.SessionID != "" {
-		t.Fatalf("deleted: %+v", m.Room)
-	}
-	if r.s.isRoom(sid) {
-		t.Fatal("the room is still in the book")
-	}
-	if o, _ := r.s.conversationOrigins(); o[sid].origin != "" {
-		t.Fatal("its origin is still there")
-	}
-
-	// A recording deleted: its room goes with it, found by its origin.
-	other := r.roomUp(meetingOther, "listener")
-	r.do("DELETE", "/api/v1/recordings/"+meetingOther, "", nil, http.StatusOK)
-	waitFor(t, "the deleted recording's room deleted", func() bool { return !r.s.isRoom(other) })
 }

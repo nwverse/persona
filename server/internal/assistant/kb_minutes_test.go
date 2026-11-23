@@ -1,4 +1,4 @@
-package recording
+package assistant
 
 import (
 	"bytes"
@@ -13,13 +13,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/kb"
 )
-
-// minutesModel answers every knowledge-base call with reply.
-type minutesModel struct{ reply string }
-
-func (m minutesModel) JSONMax(_ context.Context, _, _ string, _ int, out any) error {
-	return json.Unmarshal([]byte(m.reply), out)
-}
 
 // A meeting recording through the phone's routes: its minutes are written, pushed once, read back by the detail (the
 // summary card's overview too, #6563), the reconciliation and kb_get / kb_list; confirmed action items become to-dos

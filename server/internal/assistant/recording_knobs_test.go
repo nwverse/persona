@@ -60,3 +60,38 @@ func recWait(t testing.TB, s *Service) {
 		t.Errorf("the recording module's background work still runs after the test: %v", err)
 	}
 }
+
+// recTimes are the recording module's times a test sets before its service is made.
+type recTimes struct {
+	one   map[string]time.Duration
+	lists map[string][]time.Duration
+}
+
+// shortRec are the times set for the test running before its service is made (nil: none); the meeting fixture hands
+// them to its service (applyShortRec).
+var shortRec *recTimes
+
+// pendingRec adds one and lists to the times the next meeting fixture's service gets, for one test.
+func pendingRec(t testing.TB, one map[string]time.Duration, lists map[string][]time.Duration) {
+	t.Helper()
+	if shortRec == nil {
+		shortRec = &recTimes{one: map[string]time.Duration{}, lists: map[string][]time.Duration{}}
+		t.Cleanup(func() { shortRec = nil })
+	}
+	maps.Copy(shortRec.one, one)
+	maps.Copy(shortRec.lists, lists)
+}
+
+// applyShortRec hands s the times set before it was made, if any.
+func applyShortRec(t testing.TB, s *Service) {
+	if shortRec != nil {
+		recTimings(t, s, shortRec.one, shortRec.lists)
+	}
+}
+
+// recTiming is the time name s's recording module runs with as the test set it (0: not set).
+func recTiming(s *Service, name string) time.Duration {
+	s.recOpts.mu.Lock()
+	defer s.recOpts.mu.Unlock()
+	return s.recOpts.timings[name]
+}

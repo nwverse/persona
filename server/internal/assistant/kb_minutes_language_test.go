@@ -1,4 +1,4 @@
-package recording
+package assistant
 
 import (
 	"context"

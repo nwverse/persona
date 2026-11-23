@@ -16,26 +16,6 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Long meetings (#8253, docs/assistant/meeting-minutes.md "Long meetings: lean batches and compaction (#8253)"): a
-// room this manager starts gets a batch at most every two minutes, without the rules, with the lists only at the
-// boundaries, and is compacted in place once its batches cover 45 minutes and 10,000 characters. All names and texts are
-// placeholders.
-
-// leanRoom is a room fixture on a clock the test moves, with its room up (lean, unless made older) and a node that
-// takes assistant.compact: it marks the room's compaction running, as a node does, unless compactErr refuses it.
-type leanRoom struct {
-	*roomFixture
-	sid   string
-	start time.Time
-	clock atomic.Int64
-	pos   int // the live log's next position
-	// Under the fake's lock: assistant.compact asked of the node (when, and its params), and its answer.
-	compacts      []time.Time
-	compactParams []map[string]any
-	compactErr    error
-	noMark        bool // the node takes it but its row does not say so (yet)
-}
-
 func newLeanRoom(t *testing.T) *leanRoom {
 	t.Helper()
 	r := newRoomFixture(t)
@@ -60,102 +40,7 @@ func newLeanRoom(t *testing.T) *leanRoom {
 	return lr
 }
 
-func (lr *leanRoom) now() time.Time { return time.Unix(0, lr.clock.Load()).UTC() }
-
-func (lr *leanRoom) advance(d time.Duration) { lr.clock.Add(int64(d)) }
-
-// at is the clock at minute m of the meeting.
-func (lr *leanRoom) at(m float64) time.Time {
-	return lr.start.Add(time.Duration(m * float64(time.Minute)))
-}
-
-// rowLocked changes the room's row; the caller holds the fake's lock.
-func (lr *leanRoom) rowLocked(fn func(c *proto.Session)) {
-	for i := range lr.f.sessions["server"] {
-		if lr.f.sessions["server"][i].SessionID == lr.sid {
-			fn(&lr.f.sessions["server"][i])
-		}
-	}
-}
-
-func (lr *leanRoom) row(fn func(c *proto.Session)) {
-	lr.f.mu.Lock()
-	defer lr.f.mu.Unlock()
-	lr.rowLocked(fn)
-}
-
-// compactCalls are the times assistant.compact was asked of the node.
-func (lr *leanRoom) compactCalls() []time.Time {
-	lr.f.mu.Lock()
-	defer lr.f.mu.Unlock()
-	return append([]time.Time(nil), lr.compacts...)
-}
-
-// say appends the lines said from second from on, each 6 seconds after the last.
-func (lr *leanRoom) say(from float64, texts ...string) {
-	lr.t.Helper()
-	var segs []kb.LiveSegment
-	for i, text := range texts {
-		start := from + float64(6*i)
-		segs = append(segs, kb.LiveSegment{Start: start, End: start + 5.5, Text: text})
-	}
-	if _, _, err := lr.engine().LiveAppend(meetingRec, lr.pos, segs); err != nil {
-		lr.t.Fatal(err)
-	}
-	lr.pos += len(segs)
-}
-
 func (lr *leanRoom) look() time.Time { return lr.roomFixture.look(meetingRec) }
-
-// batches are the texts of the batches the room got (the header and asks excluded).
-func (lr *leanRoom) batches() []string {
-	var out []string
-	for _, s := range lr.sends() {
-		if s["session_id"] == lr.sid && s["resume_only"] == true && s["client_msg_id"] == nil {
-			text, _ := s["text"].(string)
-			out = append(out, text)
-		}
-	}
-	return out
-}
-
-func (lr *leanRoom) lean() kb.MeetingRoomLean { return lr.meeting(meetingRec).Room.Lean }
-
-// setLean changes the room's bookkeeping (a span that is due, say).
-func (lr *leanRoom) setLean(fn func(ln *kb.MeetingRoomLean)) {
-	lr.t.Helper()
-	if _, err := lr.engine().MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error { fn(&m.Room.Lean); return nil }); err != nil {
-		lr.t.Fatal(err)
-	}
-}
-
-// due makes the span of the batches since the last compaction one that is due: lines covering 46 minutes and 12,000
-// characters, given to the room (the live log's feed position past them) as batches would have.
-func (lr *leanRoom) due() {
-	lr.t.Helper()
-	var segs []kb.LiveSegment
-	for i := range 12 {
-		start := float64(i) * 250 // the last ends at 2755.5: 46 minutes from the first's start
-		segs = append(segs, kb.LiveSegment{Start: start, End: start + 5.5, Text: strings.Repeat("字", 1000)})
-	}
-	if _, _, err := lr.engine().LiveAppend(meetingRec, lr.pos, segs); err != nil {
-		lr.t.Fatal(err)
-	}
-	lr.pos += len(segs)
-	if _, err := lr.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error { l.Fed = len(l.Segments); return nil }); err != nil {
-		lr.t.Fatal(err)
-	}
-}
-
-// live is the recording's live log now.
-func (lr *leanRoom) live() kb.Live {
-	lr.t.Helper()
-	l, _, err := lr.engine().LiveRead(meetingRec)
-	if err != nil {
-		lr.t.Fatal(err)
-	}
-	return l
-}
 
 // span is what the batches given since the room's last compaction cover now.
 func (lr *leanRoom) span() (from, to float64, runes int) {
@@ -164,124 +49,6 @@ func (lr *leanRoom) span() (from, to float64, runes int) {
 
 // spanDue: a compaction is due by the span now.
 func (lr *leanRoom) spanDue() bool { return roomCompactDue(lr.live(), lr.lean()) }
-
-func hasLists(text string) bool {
-	return strings.Contains(text, "Topics so far:") || strings.Contains(text, "Highlights so far:")
-}
-
-// A room this manager starts is lean: its CLAUDE.md says batches come every two minutes, and it gets one at most every
-// two minutes (the first showing the lists, "none yet", then none), each with one short line and no rules. A room an
-// older manager started keeps a batch a minute with the rules and the lists in each; #2981 attending sessions keep a
-// batch a minute too.
-func TestRoomLeanBatchesEveryTwoMinutes(t *testing.T) {
-	lr := newLeanRoom(t)
-	if m := lr.meeting(meetingRec); m.Room.Batching != kb.RoomBatchingLean {
-		t.Fatalf("room %+v", m.Room)
-	}
-	if md, _ := lr.prepared[0]["claude_md"].(string); !strings.Contains(md, "Batches of lines come every two minutes") ||
-		!strings.Contains(md, "first read the newest lines with `meeting_lines`") || !strings.Contains(md, "write nothing") {
-		t.Fatalf("CLAUDE.md %s", md)
-	}
-	lr.say(10, "Ada: we keep the cap.")
-	lr.look()
-	b := lr.batches()
-	if len(b) != 1 || !strings.Contains(b[0], "Topics so far: none yet.") || !strings.Contains(b[0], "Highlights so far: none yet.") ||
-		!strings.Contains(b[0], "Update the topics and the highlights if the meeting moved on, as your rules say, then write nothing.") ||
-		strings.Contains(b[0], "meeting_topics_set") {
-		t.Fatalf("first batch %v", b)
-	}
-	fedAt := lr.now()
-	lr.advance(time.Minute)
-	lr.say(70, "Bo: and the tiers.")
-	if next := lr.look(); len(lr.batches()) != 1 || !next.Equal(fedAt.Add(roomLeanEvery)) {
-		t.Fatalf("a batch a minute later: %d batches, next %v", len(lr.batches()), next)
-	}
-	lr.advance(time.Minute)
-	lr.look()
-	b = lr.batches()
-	if len(b) != 2 || hasLists(b[1]) || strings.Contains(b[1], "meeting_highlights_set") || !strings.Contains(b[1], "Bo: and the tiers.") ||
-		!strings.Contains(b[1], "then write nothing.") {
-		t.Fatalf("second batch %v", b)
-	}
-
-	// An older room: a batch a minute, the rules and the lists in each.
-	lr.olderRoom(meetingRec)
-	lr.advance(roomLeanEvery)
-	lr.say(130, "Ada: next.")
-	lr.look()
-	lr.advance(time.Minute)
-	lr.say(190, "Bo: pricing.")
-	lr.look()
-	b = lr.batches()
-	if len(b) != 4 || !strings.Contains(b[3], "meeting_topics_set") || !strings.Contains(b[3], "Topics so far:") {
-		t.Fatalf("an older room's batches %v", b[2:])
-	}
-	if lr.meeting(meetingRec).Room.Lean != (kb.MeetingRoomLean{}) {
-		t.Fatalf("an older room keeps lean bookkeeping: %+v", lr.meeting(meetingRec).Room.Lean)
-	}
-	if feedBatchEvery != time.Minute {
-		t.Fatalf("#2981's batches come every %v", feedBatchEvery)
-	}
-}
-
-// The lists go only at the boundaries: the first batch, the first after the room's conversation was compacted, the
-// first once the last that showed them is 30 minutes old, and the meeting so far after the room was fed afresh. When
-// they last went is kept in meeting.json, so a restart behaves; it raises no revision the apps read.
-func TestRoomLeanListsAtBoundaries(t *testing.T) {
-	lr := newLeanRoom(t)
-	revs := lr.meeting(meetingRec).Revs[kb.PartRoom]
-	var shown []bool
-	for i := range 17 { // a batch every two minutes for 32 minutes
-		lr.say(float64(i*120+10), fmt.Sprintf("Ada: point %d.", i))
-		lr.look()
-		b := lr.batches()
-		if len(b) != i+1 {
-			t.Fatalf("minute %d: %d batches", i*2, len(b))
-		}
-		shown = append(shown, hasLists(b[i]))
-		lr.advance(roomLeanEvery)
-	}
-	for i, s := range shown {
-		if want := i == 0 || i == 15; s != want { // minute 0, and minute 30
-			t.Fatalf("batch %d (minute %d) shows the lists: %v; all %v", i, i*2, s, shown)
-		}
-	}
-	if _, _, runes := lr.span(); !lr.lean().ListsAt.Equal(lr.start.Add(time.Minute+30*time.Minute)) || runes == 0 {
-		t.Fatalf("bookkeeping %+v, %d characters", lr.lean(), runes)
-	}
-	if got := lr.meeting(meetingRec).Revs[kb.PartRoom]; got != revs {
-		t.Fatalf("the room's revision went from %d to %d", revs, got)
-	}
-	// Fed afresh (the role turned off and on again): the meeting so far, with the lists.
-	lr.attendNoteFresh()
-	lr.say(17*120+10, "Bo: later.")
-	lr.look()
-	if b := lr.batches(); !strings.Contains(b[len(b)-1], "Lines so far") || !hasLists(b[len(b)-1]) {
-		t.Fatalf("the meeting so far %s", b[len(b)-1])
-	}
-	// The next one does not; after a compaction ended, the one after it does.
-	lr.advance(roomLeanEvery)
-	lr.say(18*120+10, "Ada: then.")
-	lr.look()
-	if b := lr.batches(); hasLists(b[len(b)-1]) {
-		t.Fatalf("after the meeting so far %s", b[len(b)-1])
-	}
-	lr.setLean(func(ln *kb.MeetingRoomLean) { ln.ListsDue = true })
-	lr.advance(roomLeanEvery)
-	lr.say(19*120+10, "Bo: done.")
-	lr.look()
-	if b := lr.batches(); !hasLists(b[len(b)-1]) || lr.lean().ListsDue {
-		t.Fatalf("after a compaction %s %+v", b[len(b)-1], lr.lean())
-	}
-}
-
-// attendNoteFresh has the room fed afresh, as after its role turned off and on again.
-func (lr *leanRoom) attendNoteFresh() {
-	lr.t.Helper()
-	if _, err := lr.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error { l.FedTo = nil; return nil }); err != nil {
-		lr.t.Fatal(err)
-	}
-}
 
 // A compaction is due once the batches since the room started or was last compacted cover 45 minutes of the meeting
 // and 10,000 characters of lines, both. What they cover is read off the live log: its lines from where the span starts
@@ -319,38 +86,6 @@ func TestRoomCompactionDueRule(t *testing.T) {
 	lr.look()
 	if from, to, runes := lr.span(); from != 10 || to != 135.5 || runes != 13 {
 		t.Fatalf("span %v–%v, %d characters", from, to, runes)
-	}
-}
-
-// A restart between a batch's two writes (the live log's feed position, then the room's record) loses none of the
-// span: it is read off the live log. Here the room's record is as it was before the batch that makes the span due.
-func TestRoomCompactionSpanSurvivesALostNote(t *testing.T) {
-	lr := newLeanRoom(t)
-	lr.say(10, "Ada: we keep the cap.")
-	lr.look()
-	var segs []kb.LiveSegment
-	for i := range 11 { // 40 minutes and 11,000 characters given: not due yet
-		segs = append(segs, kb.LiveSegment{Start: float64(i * 240), End: float64(i*240) + 5.5, Text: strings.Repeat("字", 1000)})
-	}
-	if _, _, err := lr.engine().LiveAppend(meetingRec, lr.pos, segs); err != nil {
-		t.Fatal(err)
-	}
-	lr.pos += len(segs)
-	if _, err := lr.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error { l.Fed = len(l.Segments); return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if lr.spanDue() {
-		t.Fatal("due before the batch")
-	}
-	before := lr.lean()
-	lr.advance(roomLeanEvery)
-	lr.say(46*60, "Bo: and the tiers, at minute 46.")
-	lr.look()
-	lr.setLean(func(ln *kb.MeetingRoomLean) { *ln = before }) // the note after the batch lost
-	lr.advance(feedBusyPoll)
-	lr.look()
-	if n := len(lr.compactCalls()); n != 1 {
-		t.Fatalf("the batch's span lost with its note: %d compactions", n)
 	}
 }
 
@@ -482,6 +217,575 @@ func (r *roomState) free(recording string) bool {
 	return r.turn[recording] == nil
 }
 
+// An assistant.compact whose answer did not come (a link on the way dropped with it out, the manager stopped, the time
+// ran out) may have reached the node: it stays noted as asked for, so no second one starts at the retry and nothing goes
+// into the room meanwhile, and the session's compaction settles it once its row shows it. One that could not be noted
+// first is not asked for.
+func TestRoomCompactionInDoubt(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+	}{
+		{"dropped", rpc.ErrDropped},
+		{"stopped", context.Canceled},
+		{"timed out", context.DeadlineExceeded},
+		{"relayed", &rpc.Error{Code: CodeNodeClosed, Message: rpc.ErrClosed.Error()}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			lr := newLeanRoom(t)
+			lr.say(10, "Ada: we keep the cap.")
+			lr.look()
+			lr.due()
+			lr.f.mu.Lock()
+			lr.compactErr = c.err
+			lr.f.mu.Unlock()
+			lr.advance(30 * time.Second)
+			before := len(lr.batches())
+			lr.say(lr.now().Sub(lr.start).Seconds(), "Bo: more.")
+			lr.advance(roomLeanEvery)
+			lr.look()
+			asked := lr.lean().CompactStartedAt
+			if ln := lr.lean(); len(lr.compactCalls()) != 1 || asked.IsZero() || ln.Attempts != 0 || !ln.RetryAt.IsZero() ||
+				len(lr.batches()) != before {
+				t.Fatalf("no answer: %d calls, %+v, %d batches", len(lr.compactCalls()), ln, len(lr.batches())-before)
+			}
+			// Where a failure would be tried again (5 minutes): none, it may run; nothing went into the room meanwhile.
+			lr.advance(roomCompactRetry + time.Minute)
+			lr.look()
+			if n := len(lr.compactCalls()); n != 1 || len(lr.batches()) != before {
+				t.Fatalf("asked again: %d, %d batches", n, len(lr.batches())-before)
+			}
+			// The node did take it: done, counted, the span starts again where it was asked for, the batch (all that
+			// waited for it) shows the lists.
+			lr.row(func(c *proto.Session) {
+				c.Compaction = &proto.Compaction{State: proto.CompactionDone, StartedAt: asked.Add(time.Second)}
+			})
+			lr.advance(roomLeanEvery)
+			lr.say(lr.now().Sub(lr.start).Seconds(), "Ada: and then.")
+			lr.look()
+			if ln := lr.lean(); ln.Compactions != 1 || !ln.CompactStartedAt.IsZero() || ln.Attempts != 0 || lr.spanDue() {
+				t.Fatalf("settled: %+v", ln)
+			}
+			if b := lr.batches(); len(b) != before+1 || !hasLists(b[len(b)-1]) || !strings.Contains(b[len(b)-1], "Bo: more.") {
+				t.Fatalf("after it: %d batches", len(b)-before)
+			}
+		})
+	}
+
+	// Not in doubt: refused, or never out.
+	for _, err := range []error{&rpc.Error{Code: "busy", Message: "answering"}, &rpc.Error{Code: CodeMachineOffline, Message: "offline"},
+		fmt.Errorf("wrapped: %w", rpc.ErrNotWritten)} {
+		if roomCompactInDoubt(err) {
+			t.Errorf("in doubt: %v", err)
+		}
+	}
+
+	t.Run("not noted", func(t *testing.T) {
+		lr := newLeanRoom(t)
+		lr.say(10, "Ada: we keep the cap.")
+		lr.look()
+		lr.due()
+		lr.advance(30 * time.Second)
+		l, r, err := lr.engine().LiveRead(meetingRec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Its record gone from meeting.json under the look: the mark cannot be written.
+		if _, err := lr.engine().MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error { m.Room = nil; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if _, held, _ := lr.s.roomCompaction(context.Background(), lr.engine(), meetingRec, l, r, lr.now(), true, false, lr.s.roomRowRead(context.Background(), r.Conv.Room)); held ||
+			len(lr.compactCalls()) != 0 || !lr.s.room.free(meetingRec) {
+			t.Fatalf("asked without the mark: held %v, %d calls", held, len(lr.compactCalls()))
+		}
+	})
+}
+
+// An ask waits for a compaction its room's row shows running for as long as one may run (the node's own limit), not
+// only as long as it waits for a turn: it never goes into the compaction, where its own answer time would run out. A
+// turn alone holds it askRoomWait.
+func TestRoomAskWaitsForACompaction(t *testing.T) {
+	lr := newLeanRoom(t)
+	recTimings(lr.s, map[string]time.Duration{"askRoomWait": 20 * time.Millisecond}, nil)
+	lr.row(func(c *proto.Session) {
+		c.Compaction = &proto.Compaction{State: proto.CompactionRunning, StartedAt: lr.now()}
+	})
+	done := make(chan bool, 1)
+	go func() { done <- lr.s.roomWaitFree(context.Background(), lr.engine(), meetingRec, "server", lr.sid) }()
+	select {
+	case <-done:
+		t.Fatal("the ask went into a compaction past its wait for a turn")
+	case <-time.After(10 * lr.s.tmNow().askRoomWait):
+	}
+	lr.row(func(c *proto.Session) { c.Compaction.State = proto.CompactionDone })
+	select {
+	case free := <-done:
+		if !free {
+			t.Fatal("not free once it ended")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waits once it ended")
+	}
+	lr.row(func(c *proto.Session) { c.Status, c.State = proto.StatusWorking, proto.StateWorking })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if !lr.s.roomWaitFree(ctx, lr.engine(), meetingRec, "server", lr.sid) || ctx.Err() != nil {
+		t.Fatal("a turn held the ask past its wait")
+	}
+}
+
+// A compaction asked of the node that its row does not show yet (a row slow to say so, an answer that did not come) is
+// one place everything waits at: no ask, photo or withdrawal goes into the room until the row shows it ended or it
+// counts as ended (10 minutes).
+func TestRoomCompactionAskedHoldsAsksAndPhotos(t *testing.T) {
+	lr := newLeanRoom(t)
+	lr.photoNode(func(string) (bool, error) { return false, nil })
+	lr.say(10, "Ada: we keep the cap.")
+	lr.look()
+	lr.addPhoto(meetingRec, photoBody(t, photoOne, 20, nil)) // forwarded, so its delete is withdrawn in the room
+	lr.look()
+	if sent := lr.photoSends(); len(sent) != 1 {
+		t.Fatalf("photo %v", sent)
+	}
+	lr.due()
+	lr.f.mu.Lock()
+	lr.noMark = true
+	lr.f.mu.Unlock()
+	lr.advance(30 * time.Second)
+	lr.look()
+	asked := lr.lean().CompactStartedAt
+	if len(lr.compactCalls()) != 1 || asked.IsZero() {
+		t.Fatalf("not asked: %+v", lr.lean())
+	}
+	// An ask waits for it.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	if lr.s.roomWaitFree(ctx, lr.engine(), meetingRec, "server", lr.sid) {
+		t.Fatal("an ask went in while the compaction may run")
+	}
+	cancel()
+	// A photo waits for it, and so does a withdrawal, also while the role is off; minutes after it was asked for too, its
+	// row still showing nothing.
+	lr.addPhoto(meetingRec, photoBody(t, photoTwo, 40, nil))
+	lr.advance(2 * time.Minute)
+	lr.look()
+	if _, err := lr.engine().PhotoDelete(meetingRec, 1); err != nil {
+		t.Fatal(err)
+	}
+	lr.upload(meetingRec, 2, map[string]any{"room": map[string]any{"attendance": "off"}, "started_at": lr.start.Format(time.RFC3339)})
+	lr.advance(2 * time.Minute)
+	lr.look()
+	if sent := lr.photoSends(); len(sent) != 1 || len(lr.batches()) != 1 {
+		t.Fatalf("sent while the compaction may run: %v, %d batches", sent[1:], len(lr.batches()))
+	}
+	// Its row shows it ended: the ask goes, and the withdrawal (the role still off).
+	lr.row(func(c *proto.Session) {
+		c.Compaction = &proto.Compaction{State: proto.CompactionDone, StartedAt: asked.Add(time.Second)}
+	})
+	if !lr.s.roomWaitFree(context.Background(), lr.engine(), meetingRec, "server", lr.sid) {
+		t.Fatal("an ask still waits once it ended")
+	}
+	lr.advance(feedBusyPoll)
+	lr.look()
+	if sent := lr.photoSends(); len(sent) != 2 || sent[1]["client_msg_id"] != "photo-withdrawn-"+photoOne {
+		t.Fatalf("after it: %v", sent)
+	}
+	// One never shown counts as ended after 10 minutes: an ask waits no longer.
+	lr.setLean(func(ln *kb.MeetingRoomLean) { ln.CompactStartedAt, ln.CompactSeen = lr.now(), asked.Add(time.Second) })
+	lr.advance(roomCompactLost)
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if !lr.s.roomWaitFree(ctx, lr.engine(), meetingRec, "server", lr.sid) || ctx.Err() != nil {
+		t.Fatal("an ask waits past the compaction's limit")
+	}
+}
+
+// A lean batch without the lists has none of them to render: the topics and highlights are not made up for nothing.
+func TestFeedLeanBatchLeavesOutTheListsItDoesNotShow(t *testing.T) {
+	r := kb.Recording{ID: meetingRec, StartedAt: time.Date(2026, 11, 10, 14, 0, 0, 0, time.UTC)}
+	at := 60.0
+	b := feedBatch{room: true, topics: true, highlights: true, lean: true, topicsSoFar: []kb.LiveTopic{{Title: "Pricing", State: kb.TopicCurrent, At: &at}},
+		highlightsSoFar: []kb.LiveHighlight{{Text: "We keep the cap.", At: 60}}, lines: []kb.LiveSegment{{Start: 60, End: 65, Text: "Ada: we keep the cap."}}}
+	if d := feedData(r, b, "en", time.UTC); d.TopicsSoFar != nil || d.HighlightsSoFar != nil {
+		t.Fatalf("a lean batch without the lists: %+v", d)
+	}
+	b.lists = true
+	if d := feedData(r, b, "en", time.UTC); len(d.TopicsSoFar) != 1 || len(d.HighlightsSoFar) != 1 {
+		t.Fatalf("a lean batch with the lists: %+v", d)
+	}
+	b.lean, b.lists = false, true // an older room's
+	if d := feedData(r, b, "en", time.UTC); len(d.TopicsSoFar) != 1 || len(d.HighlightsSoFar) != 1 {
+		t.Fatalf("an older room's batch: %+v", d)
+	}
+}
+
+// runRoomTwoHours drives a two-hour meeting (10 lines of 28 Chinese characters a minute, 280 characters a minute) through
+// the real roomLook and roomFeed on the test's clock, as the feeder would look (at the time each look asks for, and a
+// moment after new lines): a batch's turn takes 20 seconds, in which the room sets its topics (one more every 6 minutes,
+// up to 20) and its highlights (up to 4); a compaction takes a minute. older: the room an older manager started.
+func runRoomTwoHours(t *testing.T, older bool) roomTwoHourRun {
+	t.Helper()
+	lr := newLeanRoom(t)
+	if older {
+		lr.olderRoom(meetingRec)
+	}
+	var run roomTwoHourRun
+	var turnEnd, compactEnd time.Time
+	since := 0
+	lr.f.mu.Lock()
+	lr.f.onAssistantSend = func(f *fakeHub, p map[string]any) {
+		if p["session_id"] != lr.sid || p["client_msg_id"] != nil {
+			return
+		}
+		text, _ := p["text"].(string)
+		n := utf8.RuneCountInString(text)
+		minute := lr.now().Sub(lr.start).Minutes()
+		run.batches++
+		run.total += n
+		run.largest = max(run.largest, n)
+		since += n
+		run.sinceMost = max(run.sinceMost, since)
+		run.at, run.minutes = append(run.at, lr.now().Sub(lr.start)), append(run.minutes, minute)
+		run.sizes, run.lists = append(run.sizes, n), append(run.lists, hasLists(text))
+		lr.rowLocked(func(c *proto.Session) {
+			c.Status, c.State, c.UpdatedAt = proto.StatusWorking, proto.StateWorking, lr.now()
+		})
+		turnEnd = lr.now().Add(20 * time.Second)
+	}
+	lr.f.mu.Unlock()
+	topicsAt := func(minute float64) []kb.LiveTopic {
+		var out []kb.LiveTopic
+		k := min(kb.MaxTopics, 1+int(minute)/6)
+		for i := range k {
+			at := float64(i * 360)
+			state := kb.TopicDone
+			if i == k-1 {
+				state = kb.TopicCurrent
+			}
+			out = append(out, kb.LiveTopic{Title: fmt.Sprintf("议题%02d：发布计划与测试安排", i+1), State: state, At: &at})
+		}
+		return out
+	}
+	highlightsAt := func(minute float64) []kb.LiveHighlight {
+		var out []kb.LiveHighlight
+		for i, m := range []float64{10, 30, 60, 90} {
+			if minute >= m {
+				out = append(out, kb.LiveHighlight{Text: fmt.Sprintf("要点%d：发布推迟一周，测试先补齐回归用例", i+1), At: m * 60, End: m*60 + 5.5})
+			}
+		}
+		return out
+	}
+	const step = 5 * time.Second
+	var next, floor time.Time
+	line := 0
+	end := lr.at(121)
+	for now := lr.at(1); now.Before(end); now = now.Add(step) {
+		lr.clock.Store(now.UnixNano())
+		minute := now.Sub(lr.start).Minutes()
+		if now.Sub(lr.start)%(30*time.Second) == 0 && minute <= 120 { // the phone's lines of the last half minute
+			from := minute*60 - 30
+			var texts []string
+			for range 5 {
+				texts = append(texts, roomTwoHourLine(line))
+				line++
+			}
+			lr.say(from, texts...)
+			next = feedEarliest(next, feedLatest(now.Add(feedKickDelay), floor))
+		}
+		lr.f.mu.Lock()
+		if !turnEnd.IsZero() && !now.Before(turnEnd) {
+			lr.rowLocked(func(c *proto.Session) { c.Status, c.State, c.UpdatedAt = proto.StatusIdle, proto.StateIdle, turnEnd })
+			turnEnd = time.Time{}
+			lr.f.mu.Unlock()
+			if _, err := lr.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
+				l.Topics, l.Highlights = topicsAt(minute), highlightsAt(minute)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			lr.f.mu.Lock()
+		}
+		if calls := len(lr.compacts); calls > len(run.compactions) {
+			run.compactions = append(run.compactions, minute)
+			compactEnd = now.Add(time.Minute)
+		}
+		if !compactEnd.IsZero() && !now.Before(compactEnd) {
+			lr.rowLocked(func(c *proto.Session) {
+				done := now
+				c.Compaction.State, c.Compaction.FinishedAt = proto.CompactionDone, &done
+			})
+			compactEnd = time.Time{}
+			run.compactd = append(run.compactd, now.Sub(lr.start))
+			since = 0
+		}
+		lr.f.mu.Unlock()
+		if !next.IsZero() && !now.Before(next) {
+			next = lr.look()
+			floor = now.Add(feedBusyPoll)
+		}
+	}
+	return run
+}
+
+// leanRoom is a room fixture on a clock the test moves, with its room up (lean, unless made older) and a node that
+// takes assistant.compact: it marks the room's compaction running, as a node does, unless compactErr refuses it.
+type leanRoom struct {
+	*roomFixture
+	sid   string
+	start time.Time
+	clock atomic.Int64
+	pos   int // the live log's next position
+	// Under the fake's lock: assistant.compact asked of the node (when, and its params), and its answer.
+	compacts      []time.Time
+	compactParams []map[string]any
+	compactErr    error
+	noMark        bool // the node takes it but its row does not say so (yet)
+}
+
+func (lr *leanRoom) now() time.Time { return time.Unix(0, lr.clock.Load()).UTC() }
+
+func (lr *leanRoom) advance(d time.Duration) { lr.clock.Add(int64(d)) }
+
+// at is the clock at minute m of the meeting.
+func (lr *leanRoom) at(m float64) time.Time {
+	return lr.start.Add(time.Duration(m * float64(time.Minute)))
+}
+
+// rowLocked changes the room's row; the caller holds the fake's lock.
+func (lr *leanRoom) rowLocked(fn func(c *proto.Session)) {
+	for i := range lr.f.sessions["server"] {
+		if lr.f.sessions["server"][i].SessionID == lr.sid {
+			fn(&lr.f.sessions["server"][i])
+		}
+	}
+}
+
+func (lr *leanRoom) row(fn func(c *proto.Session)) {
+	lr.f.mu.Lock()
+	defer lr.f.mu.Unlock()
+	lr.rowLocked(fn)
+}
+
+// compactCalls are the times assistant.compact was asked of the node.
+func (lr *leanRoom) compactCalls() []time.Time {
+	lr.f.mu.Lock()
+	defer lr.f.mu.Unlock()
+	return append([]time.Time(nil), lr.compacts...)
+}
+
+// say appends the lines said from second from on, each 6 seconds after the last.
+func (lr *leanRoom) say(from float64, texts ...string) {
+	lr.t.Helper()
+	var segs []kb.LiveSegment
+	for i, text := range texts {
+		start := from + float64(6*i)
+		segs = append(segs, kb.LiveSegment{Start: start, End: start + 5.5, Text: text})
+	}
+	if _, _, err := lr.engine().LiveAppend(meetingRec, lr.pos, segs); err != nil {
+		lr.t.Fatal(err)
+	}
+	lr.pos += len(segs)
+}
+
+// batches are the texts of the batches the room got (the header and asks excluded).
+func (lr *leanRoom) batches() []string {
+	var out []string
+	for _, s := range lr.sends() {
+		if s["session_id"] == lr.sid && s["resume_only"] == true && s["client_msg_id"] == nil {
+			text, _ := s["text"].(string)
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func (lr *leanRoom) lean() kb.MeetingRoomLean { return lr.meeting(meetingRec).Room.Lean }
+
+// setLean changes the room's bookkeeping (a span that is due, say).
+func (lr *leanRoom) setLean(fn func(ln *kb.MeetingRoomLean)) {
+	lr.t.Helper()
+	if _, err := lr.engine().MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error { fn(&m.Room.Lean); return nil }); err != nil {
+		lr.t.Fatal(err)
+	}
+}
+
+// due makes the span of the batches since the last compaction one that is due: lines covering 46 minutes and 12,000
+// characters, given to the room (the live log's feed position past them) as batches would have.
+func (lr *leanRoom) due() {
+	lr.t.Helper()
+	var segs []kb.LiveSegment
+	for i := range 12 {
+		start := float64(i) * 250 // the last ends at 2755.5: 46 minutes from the first's start
+		segs = append(segs, kb.LiveSegment{Start: start, End: start + 5.5, Text: strings.Repeat("字", 1000)})
+	}
+	if _, _, err := lr.engine().LiveAppend(meetingRec, lr.pos, segs); err != nil {
+		lr.t.Fatal(err)
+	}
+	lr.pos += len(segs)
+	if _, err := lr.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error { l.Fed = len(l.Segments); return nil }); err != nil {
+		lr.t.Fatal(err)
+	}
+}
+
+// live is the recording's live log now.
+func (lr *leanRoom) live() kb.Live {
+	lr.t.Helper()
+	l, _, err := lr.engine().LiveRead(meetingRec)
+	if err != nil {
+		lr.t.Fatal(err)
+	}
+	return l
+}
+
+func hasLists(text string) bool {
+	return strings.Contains(text, "Topics so far:") || strings.Contains(text, "Highlights so far:")
+}
+
+// A room this manager starts is lean: its CLAUDE.md says batches come every two minutes, and it gets one at most every
+// two minutes (the first showing the lists, "none yet", then none), each with one short line and no rules. A room an
+// older manager started keeps a batch a minute with the rules and the lists in each; #2981 attending sessions keep a
+// batch a minute too.
+func TestRoomLeanBatchesEveryTwoMinutes(t *testing.T) {
+	lr := newLeanRoom(t)
+	if m := lr.meeting(meetingRec); m.Room.Batching != kb.RoomBatchingLean {
+		t.Fatalf("room %+v", m.Room)
+	}
+	if md, _ := lr.prepared[0]["claude_md"].(string); !strings.Contains(md, "Batches of lines come every two minutes") ||
+		!strings.Contains(md, "first read the newest lines with `meeting_lines`") || !strings.Contains(md, "write nothing") {
+		t.Fatalf("CLAUDE.md %s", md)
+	}
+	lr.say(10, "Ada: we keep the cap.")
+	lr.look()
+	b := lr.batches()
+	if len(b) != 1 || !strings.Contains(b[0], "Topics so far: none yet.") || !strings.Contains(b[0], "Highlights so far: none yet.") ||
+		!strings.Contains(b[0], "Update the topics and the highlights if the meeting moved on, as your rules say, then write nothing.") ||
+		strings.Contains(b[0], "meeting_topics_set") {
+		t.Fatalf("first batch %v", b)
+	}
+	fedAt := lr.now()
+	lr.advance(time.Minute)
+	lr.say(70, "Bo: and the tiers.")
+	if next := lr.look(); len(lr.batches()) != 1 || !next.Equal(fedAt.Add(roomLeanEvery)) {
+		t.Fatalf("a batch a minute later: %d batches, next %v", len(lr.batches()), next)
+	}
+	lr.advance(time.Minute)
+	lr.look()
+	b = lr.batches()
+	if len(b) != 2 || hasLists(b[1]) || strings.Contains(b[1], "meeting_highlights_set") || !strings.Contains(b[1], "Bo: and the tiers.") ||
+		!strings.Contains(b[1], "then write nothing.") {
+		t.Fatalf("second batch %v", b)
+	}
+
+	// An older room: a batch a minute, the rules and the lists in each.
+	lr.olderRoom(meetingRec)
+	lr.advance(roomLeanEvery)
+	lr.say(130, "Ada: next.")
+	lr.look()
+	lr.advance(time.Minute)
+	lr.say(190, "Bo: pricing.")
+	lr.look()
+	b = lr.batches()
+	if len(b) != 4 || !strings.Contains(b[3], "meeting_topics_set") || !strings.Contains(b[3], "Topics so far:") {
+		t.Fatalf("an older room's batches %v", b[2:])
+	}
+	if lr.meeting(meetingRec).Room.Lean != (kb.MeetingRoomLean{}) {
+		t.Fatalf("an older room keeps lean bookkeeping: %+v", lr.meeting(meetingRec).Room.Lean)
+	}
+	if feedBatchEvery != time.Minute {
+		t.Fatalf("#2981's batches come every %v", feedBatchEvery)
+	}
+}
+
+// The lists go only at the boundaries: the first batch, the first after the room's conversation was compacted, the
+// first once the last that showed them is 30 minutes old, and the meeting so far after the room was fed afresh. When
+// they last went is kept in meeting.json, so a restart behaves; it raises no revision the apps read.
+func TestRoomLeanListsAtBoundaries(t *testing.T) {
+	lr := newLeanRoom(t)
+	revs := lr.meeting(meetingRec).Revs[kb.PartRoom]
+	var shown []bool
+	for i := range 17 { // a batch every two minutes for 32 minutes
+		lr.say(float64(i*120+10), fmt.Sprintf("Ada: point %d.", i))
+		lr.look()
+		b := lr.batches()
+		if len(b) != i+1 {
+			t.Fatalf("minute %d: %d batches", i*2, len(b))
+		}
+		shown = append(shown, hasLists(b[i]))
+		lr.advance(roomLeanEvery)
+	}
+	for i, s := range shown {
+		if want := i == 0 || i == 15; s != want { // minute 0, and minute 30
+			t.Fatalf("batch %d (minute %d) shows the lists: %v; all %v", i, i*2, s, shown)
+		}
+	}
+	if _, _, runes := lr.span(); !lr.lean().ListsAt.Equal(lr.start.Add(time.Minute+30*time.Minute)) || runes == 0 {
+		t.Fatalf("bookkeeping %+v, %d characters", lr.lean(), runes)
+	}
+	if got := lr.meeting(meetingRec).Revs[kb.PartRoom]; got != revs {
+		t.Fatalf("the room's revision went from %d to %d", revs, got)
+	}
+	// Fed afresh (the role turned off and on again): the meeting so far, with the lists.
+	lr.attendNoteFresh()
+	lr.say(17*120+10, "Bo: later.")
+	lr.look()
+	if b := lr.batches(); !strings.Contains(b[len(b)-1], "Lines so far") || !hasLists(b[len(b)-1]) {
+		t.Fatalf("the meeting so far %s", b[len(b)-1])
+	}
+	// The next one does not; after a compaction ended, the one after it does.
+	lr.advance(roomLeanEvery)
+	lr.say(18*120+10, "Ada: then.")
+	lr.look()
+	if b := lr.batches(); hasLists(b[len(b)-1]) {
+		t.Fatalf("after the meeting so far %s", b[len(b)-1])
+	}
+	lr.setLean(func(ln *kb.MeetingRoomLean) { ln.ListsDue = true })
+	lr.advance(roomLeanEvery)
+	lr.say(19*120+10, "Bo: done.")
+	lr.look()
+	if b := lr.batches(); !hasLists(b[len(b)-1]) || lr.lean().ListsDue {
+		t.Fatalf("after a compaction %s %+v", b[len(b)-1], lr.lean())
+	}
+}
+
+// attendNoteFresh has the room fed afresh, as after its role turned off and on again.
+func (lr *leanRoom) attendNoteFresh() {
+	lr.t.Helper()
+	if _, err := lr.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error { l.FedTo = nil; return nil }); err != nil {
+		lr.t.Fatal(err)
+	}
+}
+
+// A restart between a batch's two writes (the live log's feed position, then the room's record) loses none of the
+// span: it is read off the live log. Here the room's record is as it was before the batch that makes the span due.
+func TestRoomCompactionSpanSurvivesALostNote(t *testing.T) {
+	lr := newLeanRoom(t)
+	lr.say(10, "Ada: we keep the cap.")
+	lr.look()
+	var segs []kb.LiveSegment
+	for i := range 11 { // 40 minutes and 11,000 characters given: not due yet
+		segs = append(segs, kb.LiveSegment{Start: float64(i * 240), End: float64(i*240) + 5.5, Text: strings.Repeat("字", 1000)})
+	}
+	if _, _, err := lr.engine().LiveAppend(meetingRec, lr.pos, segs); err != nil {
+		t.Fatal(err)
+	}
+	lr.pos += len(segs)
+	if _, err := lr.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error { l.Fed = len(l.Segments); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if lr.spanDue() {
+		t.Fatal("due before the batch")
+	}
+	before := lr.lean()
+	lr.advance(roomLeanEvery)
+	lr.say(46*60, "Bo: and the tiers, at minute 46.")
+	lr.look()
+	lr.setLean(func(ln *kb.MeetingRoomLean) { *ln = before }) // the note after the batch lost
+	lr.advance(feedBusyPoll)
+	lr.look()
+	if n := len(lr.compactCalls()); n != 1 {
+		t.Fatalf("the batch's span lost with its note: %d compactions", n)
+	}
+}
+
 // A compaction refused (busy, already compacting, the computer away) or failed is tried again at a look at least 5
 // minutes later, at most 3 times for the same span; then the room waits for its batches to cover another 45 minutes. A
 // node without assistant.compact, or one that would start the room's process without its restrictions, gets none.
@@ -610,90 +914,6 @@ func TestRoomCompactionRestartSafe(t *testing.T) {
 	}
 }
 
-// An assistant.compact whose answer did not come (a link on the way dropped with it out, the manager stopped, the time
-// ran out) may have reached the node: it stays noted as asked for, so no second one starts at the retry and nothing goes
-// into the room meanwhile, and the session's compaction settles it once its row shows it. One that could not be noted
-// first is not asked for.
-func TestRoomCompactionInDoubt(t *testing.T) {
-	for _, c := range []struct {
-		name string
-		err  error
-	}{
-		{"dropped", rpc.ErrDropped},
-		{"stopped", context.Canceled},
-		{"timed out", context.DeadlineExceeded},
-		{"relayed", &rpc.Error{Code: CodeNodeClosed, Message: rpc.ErrClosed.Error()}},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			lr := newLeanRoom(t)
-			lr.say(10, "Ada: we keep the cap.")
-			lr.look()
-			lr.due()
-			lr.f.mu.Lock()
-			lr.compactErr = c.err
-			lr.f.mu.Unlock()
-			lr.advance(30 * time.Second)
-			before := len(lr.batches())
-			lr.say(lr.now().Sub(lr.start).Seconds(), "Bo: more.")
-			lr.advance(roomLeanEvery)
-			lr.look()
-			asked := lr.lean().CompactStartedAt
-			if ln := lr.lean(); len(lr.compactCalls()) != 1 || asked.IsZero() || ln.Attempts != 0 || !ln.RetryAt.IsZero() ||
-				len(lr.batches()) != before {
-				t.Fatalf("no answer: %d calls, %+v, %d batches", len(lr.compactCalls()), ln, len(lr.batches())-before)
-			}
-			// Where a failure would be tried again (5 minutes): none, it may run; nothing went into the room meanwhile.
-			lr.advance(roomCompactRetry + time.Minute)
-			lr.look()
-			if n := len(lr.compactCalls()); n != 1 || len(lr.batches()) != before {
-				t.Fatalf("asked again: %d, %d batches", n, len(lr.batches())-before)
-			}
-			// The node did take it: done, counted, the span starts again where it was asked for, the batch (all that
-			// waited for it) shows the lists.
-			lr.row(func(c *proto.Session) {
-				c.Compaction = &proto.Compaction{State: proto.CompactionDone, StartedAt: asked.Add(time.Second)}
-			})
-			lr.advance(roomLeanEvery)
-			lr.say(lr.now().Sub(lr.start).Seconds(), "Ada: and then.")
-			lr.look()
-			if ln := lr.lean(); ln.Compactions != 1 || !ln.CompactStartedAt.IsZero() || ln.Attempts != 0 || lr.spanDue() {
-				t.Fatalf("settled: %+v", ln)
-			}
-			if b := lr.batches(); len(b) != before+1 || !hasLists(b[len(b)-1]) || !strings.Contains(b[len(b)-1], "Bo: more.") {
-				t.Fatalf("after it: %d batches", len(b)-before)
-			}
-		})
-	}
-
-	// Not in doubt: refused, or never out.
-	for _, err := range []error{&rpc.Error{Code: "busy", Message: "answering"}, &rpc.Error{Code: CodeMachineOffline, Message: "offline"},
-		fmt.Errorf("wrapped: %w", rpc.ErrNotWritten)} {
-		if roomCompactInDoubt(err) {
-			t.Errorf("in doubt: %v", err)
-		}
-	}
-
-	t.Run("not noted", func(t *testing.T) {
-		lr := newLeanRoom(t)
-		lr.say(10, "Ada: we keep the cap.")
-		lr.look()
-		lr.due()
-		lr.advance(30 * time.Second)
-		l, r, err := lr.engine().LiveRead(meetingRec)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Its record gone from meeting.json under the look: the mark cannot be written.
-		if _, err := lr.engine().MeetingUpdate(meetingRec, func(m *kb.Meeting, _ kb.Recording) error { m.Room = nil; return nil }); err != nil {
-			t.Fatal(err)
-		}
-		if _, held, _ := lr.s.roomCompaction(context.Background(), lr.engine(), meetingRec, l, r, lr.now(), true, false, lr.s.roomRowRead(context.Background(), r.Conv.Room)); held ||
-			len(lr.compactCalls()) != 0 || !lr.s.room.free(meetingRec) {
-			t.Fatalf("asked without the mark: held %v, %d calls", held, len(lr.compactCalls()))
-		}
-	})
-}
-
 // A compaction that is due but cannot start (the room's process not running, its computer away, a photo given up on
 // for now) is not looked at again for itself: a quiet meeting is not looked at every few seconds for hours. The next
 // batch is, once its turn ended, and that look compacts it.
@@ -769,106 +989,6 @@ func TestRoomLeanNoticesItsOwnCompaction(t *testing.T) {
 	lr.look()
 	if b := lr.batches(); !hasLists(b[len(b)-1]) {
 		t.Fatalf("after its own compaction %s", b[len(b)-1])
-	}
-}
-
-// An ask waits for a compaction its room's row shows running for as long as one may run (the node's own limit), not
-// only as long as it waits for a turn: it never goes into the compaction, where its own answer time would run out. A
-// turn alone holds it askRoomWait.
-func TestRoomAskWaitsForACompaction(t *testing.T) {
-	lr := newLeanRoom(t)
-	w := askRoomWait
-	askRoomWait = 20 * time.Millisecond
-	t.Cleanup(func() { askRoomWait = w })
-	lr.row(func(c *proto.Session) {
-		c.Compaction = &proto.Compaction{State: proto.CompactionRunning, StartedAt: lr.now()}
-	})
-	done := make(chan bool, 1)
-	go func() { done <- lr.s.roomWaitFree(context.Background(), lr.engine(), meetingRec, "server", lr.sid) }()
-	select {
-	case <-done:
-		t.Fatal("the ask went into a compaction past its wait for a turn")
-	case <-time.After(10 * askRoomWait):
-	}
-	lr.row(func(c *proto.Session) { c.Compaction.State = proto.CompactionDone })
-	select {
-	case free := <-done:
-		if !free {
-			t.Fatal("not free once it ended")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("still waits once it ended")
-	}
-	lr.row(func(c *proto.Session) { c.Status, c.State = proto.StatusWorking, proto.StateWorking })
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if !lr.s.roomWaitFree(ctx, lr.engine(), meetingRec, "server", lr.sid) || ctx.Err() != nil {
-		t.Fatal("a turn held the ask past its wait")
-	}
-}
-
-// A compaction asked of the node that its row does not show yet (a row slow to say so, an answer that did not come) is
-// one place everything waits at: no ask, photo or withdrawal goes into the room until the row shows it ended or it
-// counts as ended (10 minutes).
-func TestRoomCompactionAskedHoldsAsksAndPhotos(t *testing.T) {
-	lr := newLeanRoom(t)
-	lr.photoNode(func(string) (bool, error) { return false, nil })
-	lr.say(10, "Ada: we keep the cap.")
-	lr.look()
-	lr.addPhoto(meetingRec, photoBody(t, photoOne, 20, nil)) // forwarded, so its delete is withdrawn in the room
-	lr.look()
-	if sent := lr.photoSends(); len(sent) != 1 {
-		t.Fatalf("photo %v", sent)
-	}
-	lr.due()
-	lr.f.mu.Lock()
-	lr.noMark = true
-	lr.f.mu.Unlock()
-	lr.advance(30 * time.Second)
-	lr.look()
-	asked := lr.lean().CompactStartedAt
-	if len(lr.compactCalls()) != 1 || asked.IsZero() {
-		t.Fatalf("not asked: %+v", lr.lean())
-	}
-	// An ask waits for it.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	if lr.s.roomWaitFree(ctx, lr.engine(), meetingRec, "server", lr.sid) {
-		t.Fatal("an ask went in while the compaction may run")
-	}
-	cancel()
-	// A photo waits for it, and so does a withdrawal, also while the role is off; minutes after it was asked for too, its
-	// row still showing nothing.
-	lr.addPhoto(meetingRec, photoBody(t, photoTwo, 40, nil))
-	lr.advance(2 * time.Minute)
-	lr.look()
-	if _, err := lr.engine().PhotoDelete(meetingRec, 1); err != nil {
-		t.Fatal(err)
-	}
-	lr.upload(meetingRec, 2, map[string]any{"room": map[string]any{"attendance": "off"}, "started_at": lr.start.Format(time.RFC3339)})
-	lr.advance(2 * time.Minute)
-	lr.look()
-	if sent := lr.photoSends(); len(sent) != 1 || len(lr.batches()) != 1 {
-		t.Fatalf("sent while the compaction may run: %v, %d batches", sent[1:], len(lr.batches()))
-	}
-	// Its row shows it ended: the ask goes, and the withdrawal (the role still off).
-	lr.row(func(c *proto.Session) {
-		c.Compaction = &proto.Compaction{State: proto.CompactionDone, StartedAt: asked.Add(time.Second)}
-	})
-	if !lr.s.roomWaitFree(context.Background(), lr.engine(), meetingRec, "server", lr.sid) {
-		t.Fatal("an ask still waits once it ended")
-	}
-	lr.advance(feedBusyPoll)
-	lr.look()
-	if sent := lr.photoSends(); len(sent) != 2 || sent[1]["client_msg_id"] != "photo-withdrawn-"+photoOne {
-		t.Fatalf("after it: %v", sent)
-	}
-	// One never shown counts as ended after 10 minutes: an ask waits no longer.
-	lr.setLean(func(ln *kb.MeetingRoomLean) { ln.CompactStartedAt, ln.CompactSeen = lr.now(), asked.Add(time.Second) })
-	lr.advance(roomCompactLost)
-	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if !lr.s.roomWaitFree(ctx, lr.engine(), meetingRec, "server", lr.sid) || ctx.Err() != nil {
-		t.Fatal("an ask waits past the compaction's limit")
 	}
 }
 
@@ -1079,25 +1199,6 @@ func TestRoomLeanLookReadsItsRowOnce(t *testing.T) {
 	}
 }
 
-// A lean batch without the lists has none of them to render: the topics and highlights are not made up for nothing.
-func TestFeedLeanBatchLeavesOutTheListsItDoesNotShow(t *testing.T) {
-	r := kb.Recording{ID: meetingRec, StartedAt: time.Date(2026, 11, 10, 14, 0, 0, 0, time.UTC)}
-	at := 60.0
-	b := feedBatch{room: true, topics: true, highlights: true, lean: true, topicsSoFar: []kb.LiveTopic{{Title: "Pricing", State: kb.TopicCurrent, At: &at}},
-		highlightsSoFar: []kb.LiveHighlight{{Text: "We keep the cap.", At: 60}}, lines: []kb.LiveSegment{{Start: 60, End: 65, Text: "Ada: we keep the cap."}}}
-	if d := feedData(r, b, "en", time.UTC); d.TopicsSoFar != nil || d.HighlightsSoFar != nil {
-		t.Fatalf("a lean batch without the lists: %+v", d)
-	}
-	b.lists = true
-	if d := feedData(r, b, "en", time.UTC); len(d.TopicsSoFar) != 1 || len(d.HighlightsSoFar) != 1 {
-		t.Fatalf("a lean batch with the lists: %+v", d)
-	}
-	b.lean, b.lists = false, true // an older room's
-	if d := feedData(r, b, "en", time.UTC); len(d.TopicsSoFar) != 1 || len(d.HighlightsSoFar) != 1 {
-		t.Fatalf("an older room's batch: %+v", d)
-	}
-}
-
 // roomTwoHourLine is line i of the synthetic meeting: 28 Chinese characters (a number of four digits among them).
 func roomTwoHourLine(i int) string {
 	return fmt.Sprintf("第%04d句我们继续讨论发布计划和测试安排的具体细节问题", i)
@@ -1117,114 +1218,6 @@ type roomTwoHourRun struct {
 	sizes    []int
 	lists    []bool
 	compactd []time.Duration
-}
-
-// runRoomTwoHours drives a two-hour meeting (10 lines of 28 Chinese characters a minute, 280 characters a minute) through
-// the real roomLook and roomFeed on the test's clock, as the feeder would look (at the time each look asks for, and a
-// moment after new lines): a batch's turn takes 20 seconds, in which the room sets its topics (one more every 6 minutes,
-// up to 20) and its highlights (up to 4); a compaction takes a minute. older: the room an older manager started.
-func runRoomTwoHours(t *testing.T, older bool) roomTwoHourRun {
-	t.Helper()
-	lr := newLeanRoom(t)
-	if older {
-		lr.olderRoom(meetingRec)
-	}
-	var run roomTwoHourRun
-	var turnEnd, compactEnd time.Time
-	since := 0
-	lr.f.mu.Lock()
-	lr.f.onAssistantSend = func(f *fakeHub, p map[string]any) {
-		if p["session_id"] != lr.sid || p["client_msg_id"] != nil {
-			return
-		}
-		text, _ := p["text"].(string)
-		n := utf8.RuneCountInString(text)
-		minute := lr.now().Sub(lr.start).Minutes()
-		run.batches++
-		run.total += n
-		run.largest = max(run.largest, n)
-		since += n
-		run.sinceMost = max(run.sinceMost, since)
-		run.at, run.minutes = append(run.at, lr.now().Sub(lr.start)), append(run.minutes, minute)
-		run.sizes, run.lists = append(run.sizes, n), append(run.lists, hasLists(text))
-		lr.rowLocked(func(c *proto.Session) {
-			c.Status, c.State, c.UpdatedAt = proto.StatusWorking, proto.StateWorking, lr.now()
-		})
-		turnEnd = lr.now().Add(20 * time.Second)
-	}
-	lr.f.mu.Unlock()
-	topicsAt := func(minute float64) []kb.LiveTopic {
-		var out []kb.LiveTopic
-		k := min(kb.MaxTopics, 1+int(minute)/6)
-		for i := range k {
-			at := float64(i * 360)
-			state := kb.TopicDone
-			if i == k-1 {
-				state = kb.TopicCurrent
-			}
-			out = append(out, kb.LiveTopic{Title: fmt.Sprintf("议题%02d：发布计划与测试安排", i+1), State: state, At: &at})
-		}
-		return out
-	}
-	highlightsAt := func(minute float64) []kb.LiveHighlight {
-		var out []kb.LiveHighlight
-		for i, m := range []float64{10, 30, 60, 90} {
-			if minute >= m {
-				out = append(out, kb.LiveHighlight{Text: fmt.Sprintf("要点%d：发布推迟一周，测试先补齐回归用例", i+1), At: m * 60, End: m*60 + 5.5})
-			}
-		}
-		return out
-	}
-	const step = 5 * time.Second
-	var next, floor time.Time
-	line := 0
-	end := lr.at(121)
-	for now := lr.at(1); now.Before(end); now = now.Add(step) {
-		lr.clock.Store(now.UnixNano())
-		minute := now.Sub(lr.start).Minutes()
-		if now.Sub(lr.start)%(30*time.Second) == 0 && minute <= 120 { // the phone's lines of the last half minute
-			from := minute*60 - 30
-			var texts []string
-			for range 5 {
-				texts = append(texts, roomTwoHourLine(line))
-				line++
-			}
-			lr.say(from, texts...)
-			next = feedEarliest(next, feedLatest(now.Add(feedKickDelay), floor))
-		}
-		lr.f.mu.Lock()
-		if !turnEnd.IsZero() && !now.Before(turnEnd) {
-			lr.rowLocked(func(c *proto.Session) { c.Status, c.State, c.UpdatedAt = proto.StatusIdle, proto.StateIdle, turnEnd })
-			turnEnd = time.Time{}
-			lr.f.mu.Unlock()
-			if _, err := lr.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
-				l.Topics, l.Highlights = topicsAt(minute), highlightsAt(minute)
-				return nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-			lr.f.mu.Lock()
-		}
-		if calls := len(lr.compacts); calls > len(run.compactions) {
-			run.compactions = append(run.compactions, minute)
-			compactEnd = now.Add(time.Minute)
-		}
-		if !compactEnd.IsZero() && !now.Before(compactEnd) {
-			lr.rowLocked(func(c *proto.Session) {
-				done := now
-				c.Compaction.State, c.Compaction.FinishedAt = proto.CompactionDone, &done
-			})
-			compactEnd = time.Time{}
-			run.compactd = append(run.compactd, now.Sub(lr.start))
-			since = 0
-		}
-		lr.f.mu.Unlock()
-		if !next.IsZero() && !now.Before(next) {
-			next = lr.look()
-			floor = now.Add(feedBusyPoll)
-		}
-	}
-	return run
 }
 
 // TestRoomTwoHourMeeting: a synthetic two-hour meeting, once for a room an older manager started and once for a lean

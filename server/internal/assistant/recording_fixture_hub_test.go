@@ -37,32 +37,15 @@ func shortHubTimes(t *testing.T) {
 		for i, p := range saved {
 			*p = old[i]
 		}
-		shortRec = nil
 	})
 	jobReadyWait, jobDoneWait, replayAhead = 2*time.Second, 5*time.Second, time.Minute
-	shortRec = &recTimes{one: map[string]time.Duration{
+	pendingRec(t, map[string]time.Duration{
 		"audioStartWait": time.Second, "audioAckEvery": 30 * time.Millisecond, "audioPingEvery": time.Minute, "audioEndWait": 3 * time.Second,
 		"fallbackAfter": 300 * time.Millisecond, "jobRetry": 200 * time.Millisecond, "jobReadyWait": 2 * time.Second, "jobIdle": time.Minute,
 		"jobDoneWait": 5 * time.Second, "jobAwayIdle": 10 * time.Second, "echoHoldMost": time.Minute, "hubSegmentsEvery": 50 * time.Millisecond,
 		"hubTick": 10 * time.Millisecond, "interimShown": 10 * time.Second, "finalEvery": time.Hour, "finalGapWait": time.Hour,
 		"askLiveWait": 3 * time.Second, "askLivePoll": 5 * time.Millisecond,
-	}, lists: map[string][]time.Duration{"finalRetries": {0, 0}, "finalUnreachableRetries": {0, 0, 0, 0, 0}}}
-}
-
-// recTimes are the recording module's times a test sets before its service is made.
-type recTimes struct {
-	one   map[string]time.Duration
-	lists map[string][]time.Duration
-}
-
-// shortRec are the times shortHubTimes set for the test running (nil: none).
-var shortRec *recTimes
-
-// applyShortRec hands s the times shortHubTimes set, if any.
-func applyShortRec(t testing.TB, s *Service) {
-	if shortRec != nil {
-		recTimings(t, s, shortRec.one, shortRec.lists)
-	}
+	}, map[string][]time.Duration{"finalRetries": {0, 0}, "finalUnreachableRetries": {0, 0, 0, 0, 0}})
 }
 
 // ---- the contribution ----
@@ -482,6 +465,7 @@ func (p *testPhone) texts() []string {
 // hubFixture is a meeting fixture whose manager reaches a fake transcription contribution, with the audio socket
 // served.
 type hubFixture struct {
+	finalOnce sync.Once // finalState's loop
 	*meetingFixture
 	tr      *fakeTranscriber
 	sockets *httptest.Server
@@ -597,4 +581,17 @@ func (f *fakeHub) liveEventsOf(id string) []map[string]any {
 		}
 	}
 	return out
+}
+
+// finalState waits until recording id's transcription is in state want: the final passes' loop runs, looking every
+// 20 ms (finalEvery), as the manager runs it.
+func (h *hubFixture) finalState(id, want string) {
+	h.t.Helper()
+	h.finalOnce.Do(func() {
+		recTimings(h.t, h.s, map[string]time.Duration{"finalEvery": 20 * time.Millisecond}, nil)
+		ctx, stop := context.WithCancel(context.Background())
+		h.t.Cleanup(stop)
+		go h.s.finalPasses(ctx)
+	})
+	waitFor(h.t, "state "+want, func() bool { return h.transcription(id)["state"] == want })
 }

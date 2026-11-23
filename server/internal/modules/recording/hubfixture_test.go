@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -24,32 +25,48 @@ import (
 // (fakeTranscriber, jobScript), the phone's side of the audio socket (testPhone), and a fixture with both
 // (hubFixture). Every name and text is a placeholder.
 
-// shortHubTimes makes hub transcription's times short for one test.
+// shortHubTimes makes hub transcription's times short for one test: the meeting fixture hands them to its service
+// (applyShortRec).
 func shortHubTimes(t *testing.T) {
 	t.Helper()
-	saved := []*time.Duration{&audioStartWait, &audioAckEvery, &audioPingEvery, &audioEndWait, &fallbackAfter, &jobRetry,
-		&jobReadyWait, &jobIdle, &jobAwayIdle, &jobStall, &jobDoneWait, &echoHoldMost, &hubSegmentsEvery, &hubTick, &interimShown, &finalEvery,
-		&finalGapWait, &liveAhead, &replayAhead, &askLiveWait, &askLivePoll}
-	old := make([]time.Duration, len(saved))
-	for i, p := range saved {
-		old[i] = *p
-	}
-	oldRetries, oldUnreachable := finalRetries, finalUnreachableRetries
-	t.Cleanup(func() {
-		for i, p := range saved {
-			*p = old[i]
-		}
-		finalRetries, finalUnreachableRetries = oldRetries, oldUnreachable
-	})
-	audioStartWait, audioAckEvery, audioPingEvery, audioEndWait = time.Second, 30*time.Millisecond, time.Minute, 3*time.Second
-	fallbackAfter, jobRetry, jobReadyWait, jobIdle, jobDoneWait = 300*time.Millisecond, 200*time.Millisecond, 2*time.Second, time.Minute, 5*time.Second
-	jobAwayIdle = 10 * time.Second
-	echoHoldMost, hubSegmentsEvery, hubTick, interimShown = time.Minute, 50*time.Millisecond, 10*time.Millisecond, 10*time.Second
-	finalEvery, finalGapWait = time.Hour, time.Hour
-	finalRetries = []time.Duration{0, 0}
-	finalUnreachableRetries = []time.Duration{0, 0, 0, 0, 0}
-	askLiveWait, askLivePoll = 3*time.Second, 5*time.Millisecond
+	pendingRec(t, map[string]time.Duration{
+		"audioStartWait": time.Second, "audioAckEvery": 30 * time.Millisecond, "audioPingEvery": time.Minute, "audioEndWait": 3 * time.Second,
+		"fallbackAfter": 300 * time.Millisecond, "jobRetry": 200 * time.Millisecond, "jobReadyWait": 2 * time.Second, "jobIdle": time.Minute,
+		"jobDoneWait": 5 * time.Second, "jobAwayIdle": 10 * time.Second, "echoHoldMost": time.Minute, "hubSegmentsEvery": 50 * time.Millisecond,
+		"hubTick": 10 * time.Millisecond, "interimShown": 10 * time.Second, "finalEvery": time.Hour, "finalGapWait": time.Hour,
+		"askLiveWait": 3 * time.Second, "askLivePoll": 5 * time.Millisecond,
+	}, map[string][]time.Duration{"finalRetries": {0, 0}, "finalUnreachableRetries": {0, 0, 0, 0, 0}})
 }
+
+// recTimes are the module's times a test sets before its service is made.
+type recTimes struct {
+	one   map[string]time.Duration
+	lists map[string][]time.Duration
+}
+
+// shortRec are the times set for the test running before its service is made (nil: none).
+var shortRec *recTimes
+
+// pendingRec adds one and lists to the times the next meeting fixture's service gets, for one test.
+func pendingRec(t testing.TB, one map[string]time.Duration, lists map[string][]time.Duration) {
+	t.Helper()
+	if shortRec == nil {
+		shortRec = &recTimes{one: map[string]time.Duration{}, lists: map[string][]time.Duration{}}
+		t.Cleanup(func() { shortRec = nil })
+	}
+	maps.Copy(shortRec.one, one)
+	maps.Copy(shortRec.lists, lists)
+}
+
+// applyShortRec hands s the times set before it was made, if any.
+func applyShortRec(_ testing.TB, s *Service) {
+	if shortRec != nil {
+		recTimings(s, shortRec.one, shortRec.lists)
+	}
+}
+
+// tm are the times s's module runs with now.
+func (s *Service) tmNow() timings { return s.Recordings.tm() }
 
 // ---- the contribution ----
 
@@ -489,25 +506,11 @@ func newHubFixture(t *testing.T) *hubFixture {
 	return h
 }
 
-// stopRuns ends every run (their clocks and jobs).
+// stopRuns ends every run (their clocks and jobs) and waits for hub transcription's goroutines.
 func (h *hubFixture) stopRuns() {
-	h.s.hubTr.mu.Lock()
-	runs := make([]*hubRun, 0, len(h.s.hubTr.by))
-	for _, r := range h.s.hubTr.by {
-		runs = append(runs, r)
-	}
-	h.s.hubTr.mu.Unlock()
-	for _, r := range runs {
-		r.stop("")
-	}
-	done := make(chan struct{})
-	go func() {
-		h.s.hubTr.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.s.Recordings.Wait(ctx); err != nil {
 		h.t.Error("hub transcription's goroutines still run after the test")
 	}
 }
@@ -603,4 +606,21 @@ func (f *fakeHub) liveEventsOf(id string) []map[string]any {
 		}
 	}
 	return out
+}
+
+// meetingAudio records recording id in hub mode: audio from 0 to 2 and from 4 to 6 (a gap between), liveTwo as its
+// live sentences, the socket's end at 6, then the complete upload.
+func (h *hubFixture) meetingAudio(id string) {
+	h.t.Helper()
+	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: liveTwo} })
+	h.hubUpload(id, 1, nil)
+	p, _ := h.open(id, 0, nil)
+	p.audio(2)
+	p.send(map[string]any{"type": "seek", "at": 4.0})
+	p.audio(2)
+	p.send(map[string]any{"type": "end", "at": 6.0})
+	p.waitClosed()
+	waitFor(h.t, "the live sentences", func() bool { return len(h.hubTexts(id)) == 2 })
+	h.hubUpload(id, 2, map[string]any{"complete": true, "duration": 6.0, "ended_at": time.Now().UTC().Format(time.RFC3339),
+		"segments": phoneSegs(fakeLine{0.4, 1.6, "Phone one."}, fakeLine{2.1, 2.9, "Phone in the gap."})})
 }
