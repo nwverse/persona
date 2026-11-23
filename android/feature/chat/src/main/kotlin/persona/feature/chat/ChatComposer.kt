@@ -553,25 +553,29 @@ fun ChatComposer(
             hint?.let { Text(it.text, style = PersonaTheme.type.caption, color = if (it.missing) PersonaTheme.palette.cautionText else PersonaTheme.palette.ink2) }
         },
     ) {
-        BasicTextField(state.value, { state.beginEdit(); state.value = it },
-            modifier = Modifier.fillMaxWidth().then(if (AdaptiveProbe.enabled) Modifier.semantics { testTagsAsResourceId = true }
-                .testTag("chat-composer-field") else Modifier)
-                .then(if (offersExpand) Modifier.padding(end = ComposerExpandInset) else Modifier)
-                .focusRequester(focusRequester).onFocusChanged {
-                    state.focused = it.isFocused
-                    if (AdaptiveProbe.enabled) AdaptiveProbe.publishComposerFocus(adaptiveProbePage, it.isFocused)
-                },
-            maxLines = growLines, onTextLayout = { lineCount = it.lineCount },
-            enabled = enabled, textStyle = PersonaTheme.type.body.copy(color = PersonaTheme.palette.ink),
-            cursorBrush = SolidColor(PersonaTheme.palette.ink),
-            decorationBox = { field ->
-                Box {
-                    if (state.value.text.isEmpty()) Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
-                        style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (wrapPlaceholder) growLines else if (compactShell) 1 else 2,
-                        overflow = TextOverflow.Ellipsis)
-                    field()
-                }
-            })
+        ReadingContent {
+            BasicTextField(state.value, { state.beginEdit(); state.value = it },
+                modifier = Modifier.fillMaxWidth().then(if (AdaptiveProbe.enabled) Modifier.semantics { testTagsAsResourceId = true }
+                    .testTag("chat-composer-field") else Modifier)
+                    .then(if (offersExpand) Modifier.padding(end = ComposerExpandInset) else Modifier)
+                    .focusRequester(focusRequester).onFocusChanged {
+                        state.focused = it.isFocused
+                        if (AdaptiveProbe.enabled) AdaptiveProbe.publishComposerFocus(adaptiveProbePage, it.isFocused)
+                    },
+                maxLines = growLines, onTextLayout = { lineCount = it.lineCount },
+                enabled = enabled, textStyle = PersonaTheme.type.body.copy(color = PersonaTheme.palette.ink),
+                cursorBrush = SolidColor(PersonaTheme.palette.ink),
+                decorationBox = { field ->
+                    Box {
+                        if (state.value.text.isEmpty()) InterfaceContent {
+                            Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
+                                style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (wrapPlaceholder) growLines else if (compactShell) 1 else 2,
+                                overflow = TextOverflow.Ellipsis)
+                        }
+                        field()
+                    }
+                })
+        }
         if (offersExpand) ComposerExpandButton(expanded = false, onClick = { expandedEditor = true }, modifier = Modifier.align(Alignment.TopEnd))
     }
     // Same draft and caret as the field; collapsing puts the caret back in the field. Sending closes it.

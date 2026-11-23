@@ -21,11 +21,7 @@ extension AppModel {
     /// The kind of this device's own credential at the hub (POST /auth/tokens), shown in Settings › Devices. A Mac is a
     /// desktop, not the phone (AppModel.registration): the hub keeps it as "other" (full rights, a computer's icon).
     nonisolated static var credentialKind: String {
-        #if os(macOS)
-        "desktop"
-        #else
         "phone"
-        #endif
     }
 
     /// Every paired hub trades its pairing token for this device's own (each hub separately), and every group gets
@@ -275,13 +271,8 @@ struct DevicesView: View {
         #endif
     }
 
-    #if os(macOS)
-    private static let upgradeNote = String(localized: "After the hub updates, this Mac switches to its own credentials automatically.")
-    private static let revokeSelfNote = String(localized: "This Mac disconnects right away. Paste the pairing link again to reconnect.")
-    #else
     private static let upgradeNote = String(localized: "After the hub updates, this iPhone switches to its own credentials automatically.")
     private static let revokeSelfNote = String(localized: "This iPhone disconnects right away. Scan the code again to pair.")
-    #endif
 
     private func row(_ t: APIClient.DeviceToken) -> some View {
         HStack(spacing: Theme.Space.m) {

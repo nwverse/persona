@@ -369,8 +369,8 @@ final class InboxStore {
         }
     }
 
-    /// The connectors' items (GitHub…) are drawn on iOS and the Mac (#2611, #2736); the watch fetches its own (WatchModel, #2727).
-    #if os(iOS) || os(visionOS) || os(macOS)
+    /// The connectors' items (GitHub…) are drawn on iOS and visionOS (#2611, #2736); the watch fetches its own (WatchModel, #2727).
+    #if os(iOS) || os(visionOS)
     private static let drawsConnectors = true
     #else
     private static let drawsConnectors = false
