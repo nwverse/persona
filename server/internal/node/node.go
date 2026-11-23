@@ -2004,6 +2004,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, n.stoppedRefusal(p.SessionID)
 		}
 		ctx, sendSpace := withTaskSpace(ctx, opts.TaskID, opts.WorkspaceID, opts.WorkspaceLabel)
+		p.Text = n.withSessionMentions(ctx, p.SessionID, p.Text) // an @-quoted session's address, before the echo records it (#13831)
 		var retry *echoRecord
 		var previous *sendRecord
 		if method == proto.MethodSessionSendUnseen {
