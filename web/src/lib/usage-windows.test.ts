@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { initI18n } from "../i18n";
 import { balanceAccounts, balanceEmpty, balanceText } from "./usage-balance";
-import { countdown, fullest, groupByProvider, isBalanceAccount, liveAccounts, parsePinnedUsageAccounts, planNote, providerTimeline, providerTitle, remainingText, resetLabel, sampleAge, selectSidebarUsageAccounts, sortedWindows, sortForCard, sourceNames, timelinePosition, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { countdown, fullest, groupByProvider, isBalanceAccount, isPinnableUsageAccount, liveAccounts, parsePinnedUsageAccounts, planNote, providerTimeline, providerTitle, remainingText, resetLabel, sampleAge, selectSidebarUsageAccounts, sortedWindows, sortForCard, sourceNames, timelinePosition, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 import { accountPace, pace } from "./usage-pace";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime(); // local time, so same-day checks do not depend on the zone
@@ -128,11 +128,14 @@ describe("which accounts show", () => {
     expect(got.map((a) => a.id)).toEqual(["ok", "mixed"]);
     expect(got[1].windows.map((w) => w.label)).toEqual(["7d"]);
   });
-  it("keeps notice-only accounts in liveAccounts while excluding them from topAccounts bars", () => {
+  it("keeps notice-only accounts in liveAccounts while excluding them from topAccounts bars and pinning", () => {
     const noticeOnly: UsageAccount = { id: "cool", provider: "claude", name: "Cooldown seat", windows: [], sampled_at: at(-60_000), notice: "Cooldown · resumes in 20m" };
     const blankNotice: UsageAccount = { id: "blank", provider: "claude", name: "Blank", windows: [], sampled_at: at(-60_000), notice: "   " };
-    const got = liveAccounts([noticeOnly, blankNotice, account("ok", 40)], NOW);
+    const ok = account("ok", 40);
+    const got = liveAccounts([noticeOnly, blankNotice, ok], NOW);
     expect(got.map((a) => a.id)).toEqual(["cool", "ok"]);
+    expect(isPinnableUsageAccount(noticeOnly)).toBe(false);
+    expect(isPinnableUsageAccount(ok)).toBe(true);
     expect(topAccounts(got).map((a) => a.id)).toEqual(["ok"]);
     expect(selectSidebarUsageAccounts(got, ["cool"])).toEqual({ bars: [expect.objectContaining({ id: "ok" })], balances: [], custom: false });
   });

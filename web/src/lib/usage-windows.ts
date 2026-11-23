@@ -274,8 +274,13 @@ export function usePinnedUsageAccounts(): readonly string[] {
   return useSyncExternalStore(subscribePinned, getPinnedSnapshot, getPinnedSnapshot);
 }
 
+/** Whether an account can be pinned to the collapsed sidebar strip (has usage windows or a prepaid balance). */
+export function isPinnableUsageAccount(a: UsageAccount): boolean {
+  return isBalanceAccount(a) || a.windows.length > 0;
+}
+
 /** Choose which live accounts appear in the collapsed sidebar strip:
- *  when pinned IDs match at least one live account, show those matched accounts in pinned order;
+ *  when pinned IDs match at least one live pinnable account, show those matched accounts in pinned order;
  *  otherwise fall back to the default automatic ranking (`topAccounts(live)` and live balance accounts). */
 export function selectSidebarUsageAccounts(
   live: UsageAccount[],
@@ -286,14 +291,14 @@ export function selectSidebarUsageAccounts(
     const matched: UsageAccount[] = [];
     for (const id of pinnedIds) {
       const a = byId.get(id);
-      if (a) matched.push(a);
+      if (a && isPinnableUsageAccount(a)) matched.push(a);
     }
     if (matched.length > 0) {
-      const bars = matched.filter((a) => !isBalanceAccount(a) && a.windows.length > 0);
-      const balances = matched.filter(isBalanceAccount);
-      if (bars.length > 0 || balances.length > 0) {
-        return { bars, balances, custom: true };
-      }
+      return {
+        bars: matched.filter((a) => !isBalanceAccount(a)),
+        balances: matched.filter(isBalanceAccount),
+        custom: true,
+      };
     }
   }
   return {
