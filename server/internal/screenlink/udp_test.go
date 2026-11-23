@@ -89,15 +89,15 @@ func TestLostPacketsAreRebuiltOrAskedForAgain(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 			l.up.mu.Lock()
-			rebuilt, nacks := l.up.rebuilt, l.up.nacks
+			rebuilt, nacks, askedShards := l.up.rebuilt, l.up.nacks, l.up.askedShards
 			l.up.mu.Unlock()
-			t.Logf("dropped %d packets: %d rebuilt from parity, %d asked for again, %d parity bytes, %d resent bytes",
-				dropped, rebuilt, nacks, parity, resent)
+			t.Logf("dropped %d packets: %d rebuilt from parity, %d distinct shards asked for (%d NACK transmissions), %d parity bytes, %d resent bytes",
+				dropped, rebuilt, askedShards, nacks, parity, resent)
 			if dropped == 0 {
 				t.Fatal("nothing was dropped")
 			}
-			if c.ratio > 0 && (rebuilt == 0 || parity == 0 || nacks >= dropped) {
-				t.Fatalf("parity rebuilt %d and %d were asked for, of %d dropped", rebuilt, nacks, dropped)
+			if c.ratio > 0 && (rebuilt == 0 || parity == 0 || askedShards >= dropped) {
+				t.Fatalf("parity rebuilt %d and %d distinct shards were asked for, of %d dropped", rebuilt, askedShards, dropped)
 			}
 			if c.ratio == 0 && (rebuilt != 0 || resent == 0) {
 				t.Fatalf("without parity: %d rebuilt, %d bytes resent", rebuilt, resent)

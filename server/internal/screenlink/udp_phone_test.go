@@ -35,7 +35,8 @@ type udpPhone struct {
 	dropResets    int
 	dropResetAcks int // resets reach the receiver, but their acknowledgement is lost
 	resetLost     chan struct{}
-	nacks         int
+	nacks         int // raw NACK transmissions, including retries of the same shard
+	askedShards   int // first requests for distinct message/block/shard keys
 	rebuilt       int
 	ctl           chan []byte
 	ratio         int
@@ -481,6 +482,9 @@ func (u *udpPhone) tick() {
 					}
 					key := [2]uint16{uint16(bi), uint16(j)}
 					if at, ok := m.asked[key]; !ok || now.Sub(at) > again {
+						if !ok {
+							u.askedShards++
+						}
 						m.asked[key] = now
 						if nack == nil {
 							nack = []byte{udpNack, u.ch}
