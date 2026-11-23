@@ -145,15 +145,37 @@ func IsManagerDirName(name, base string) bool {
 	return ok && hex != "" && strings.Trim(hex, "0123456789abcdef") == ""
 }
 
-// IsAssistantDir: path is one of the assistant's directories, its own or the health space's, of any manager.
+// IsAssistantDir: path is one of the assistant's directories, its own, the health space's or a track's
+// (tracks/<slug>), of any manager.
 func IsAssistantDir(path string) bool {
-	return isManagerStateDir(path, "assistant") || isManagerStateDir(path, SpaceHealth)
+	return isManagerStateDir(path, "assistant") || isManagerStateDir(path, SpaceHealth) || isTrackDir(path)
 }
 
-// IsAssistantDirOf: path is one of manager id's assistant directories, its own or its health space's (another
-// manager's, left on a computer moved away from it, is not).
+// IsAssistantDirOf: path is one of manager id's assistant directories, its own, its health space's or one of its
+// tracks' (another manager's, left on a computer moved away from it, is not).
 func IsAssistantDirOf(path, id string) bool {
-	return isStateDir(path, AssistantDirName(id)) || isStateDir(path, HealthDirName(id))
+	return isStateDir(path, AssistantDirName(id)) || isStateDir(path, HealthDirName(id)) || isTrackDirOf(path, id)
+}
+
+// isTrackDir: path is a track's directory in a tracks directory of any manager (tracks/<slug>, tracks-<id>/<slug>):
+// where every track whose template is space keeps its directory (#13472).
+func isTrackDir(path string) bool {
+	p := filepath.Clean(NodePath(path))
+	return ValidTrackSlug(filepath.Base(p)) && isManagerStateDir(filepath.Dir(p), "tracks")
+}
+
+// isTrackDirOf: path is a track's directory in manager id's tracks directory.
+func isTrackDirOf(path, id string) bool {
+	p := filepath.Clean(NodePath(path))
+	return ValidTrackSlug(filepath.Base(p)) && isStateDir(filepath.Dir(p), TracksDirName(id))
+}
+
+// TrackDirOf: dir (relative to the state directory, a track's DirName) is a track's directory in manager id's tracks
+// directory: tracks/<slug> (tracks-<id>/<slug>), one level, slug valid. A track whose template is space keeps its
+// directory there, so every process tells its conversations from the path alone (IsAssistantDir, SpaceOf).
+func TrackDirOf(dir, id string) bool {
+	slug, ok := strings.CutPrefix(dir, TracksDirName(id)+"/")
+	return ok && ValidTrackSlug(slug)
 }
 
 // TracksDirName is the name in the state directory of manager id's tracks directory, where a new track's directory
