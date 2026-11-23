@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -231,6 +232,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
 	}
 	if s.ext != nil { // the connectors', Cua's, ego's: ctx is the node's call (its caller going away withdraws a card)
+		if s.ext.ConnectorTool(name) { // a connector is told where the call comes from (connector_context.go)
+			ctx = connector.WithCallContext(ctx, s.connectorCallContext(ctx, session))
+		}
 		if res, ok := s.ext.CallTool(ctx, machine, session, name, args, assistant); ok {
 			return res
 		}
