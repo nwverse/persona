@@ -385,3 +385,40 @@ func TestAMarkedLeadsOwnWritablePlanStartsWithoutAPush(t *testing.T) {
 		t.Fatalf("the lead's plan was pushed: %+v", got[pushed:])
 	}
 }
+
+// markHandedOver puts the hand-over mark of #11699 on conversation id directly, as a hand-over sent into it would.
+func (d *dispatchPolicyHarness) markHandedOver(t *testing.T, id string) {
+	t.Helper()
+	b := &d.s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !d.s.relayLocked(context.Background()) {
+		t.Fatal("the relay state did not load")
+	}
+	if b.st.Handed == nil {
+		b.st.Handed = map[string]time.Time{}
+	}
+	b.st.Handed[id] = time.Now().UTC()
+}
+
+// What still waits for the owner's Start with the hand-over mark on: an ordinary conversation's writable plan (it is not
+// its supervisor's release), and a marked lead's task that spends money, speaks outward as the owner or takes an
+// irreversible step they have not agreed to (owner_step).
+func TestWhatStillWaitsWithTheHandOverMark(t *testing.T) {
+	d := newStartRuleHarness(t, nil)
+	stopHolds(t, d.s)
+	d.markHandedOver(t, d.sideID)
+	d.f.setItems(taskReport())
+	if d.planIn(t, d.sideID, map[string]any{"user_requested": false}) {
+		t.Fatal("an ordinary conversation's writable plan started without the owner's Start")
+	}
+	for _, step := range []string{ownerStepMoney, ownerStepOutward, ownerStepIrreversible} {
+		d := newStartRuleHarness(t, nil)
+		stopHolds(t, d.s)
+		d.handOver(t)
+		d.f.setItems(taskReport())
+		if d.planIn(t, d.leaderID, map[string]any{"user_requested": false, "owner_step": step}) {
+			t.Fatalf("a marked lead's %s task started without the owner's Start", step)
+		}
+	}
+}
