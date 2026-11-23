@@ -209,6 +209,7 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 		Machine       string   `json:"machine"`
 		SessionID     string   `json:"session_id"`
 		Title         string   `json:"title"`
+		Role          string   `json:"role"`
 		DoneWhen      []string `json:"done_when"`
 		ExpectMinutes int      `json:"expect_minutes"`
 	}
@@ -217,6 +218,9 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	}
 	if !s.supervises(ctx, self) {
 		return "", fmt.Errorf("only the main conversation and a direction's lead supervise agents: from here, send it without a task")
+	}
+	if a.Role != "" && a.Role != roleLeader {
+		return "", errors.New(`role must be "leader" or omitted for a worker`)
 	}
 	am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
 	if err != nil {
@@ -228,16 +232,30 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	if err := s.leadTakeAllowed(ctx, self, am, c); err != nil {
 		return "", fmt.Errorf("%w. Nothing changed", err)
 	}
-	todo, made, err := s.adoptAgent(ctx, self, am, c, a.Title, "", i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes",
-		i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd}), a.DoneWhen, a.ExpectMinutes, true)
+	if err := s.leaderOnWorkMachine(&PlanTask{Role: a.Role}, am); err != nil {
+		return "", err
+	}
+	todo, made, err := s.adoptAgentFor(ctx, self, self, am, c, a.Title, "", i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes",
+		i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd}), a.DoneWhen, a.ExpectMinutes, adoptionOptions{update: true, role: a.Role})
 	if err != nil {
 		return "", err
+	}
+	if made {
+		s.taskCard(ctx, self, todo.ID, wakeActive)
+	}
+	if a.Role == roleLeader {
+		entry := s.adoptedTaskEntry(ctx, am.ID, c)
+		note := strings.Join([]string{prompts.RenderTaskHandoff(entry), prompts.RenderTaskLeader(prompts.TaskLeader{Terminal: entry.Terminal()})}, "\n\n")
+		params := map[string]any{"session_id": c.SessionID, "text": note, "client_msg_id": "leader-note:" + todo.ID}
+		if err := s.call(ctx, am.ID, DeviceSessionSendOnce, params, nil); err != nil {
+			return "", fmt.Errorf("task %s has its leader, but delivery of the leader instructions was not confirmed: %w. Retry agent_supervise with the same role", todo.ID, err)
+		}
+		return fmt.Sprintf("%s leads task %s (%q), supervised by %s. Its leader instructions were sent. done_when %s.", agentLabel(c), todo.ID, todo.Title, s.conversationWords(ctx, todo.Supervision.Supervisor), criteriaWords(nil, todo.Supervision)), nil
 	}
 	if !made {
 		return fmt.Sprintf("%s already works for your task %s (%q): you supervise it, done_when %s.", agentLabel(c), todo.ID, todo.Title,
 			criteriaWords(nil, todo.Supervision)), nil
 	}
-	s.taskCard(ctx, self, todo.ID, wakeActive)
 	return fmt.Sprintf("%s on %s is now your task %s (%q, its card is in the conversation): %s. done_when %s. The agent was not told: "+
 		"if it should work to these criteria or report to its supervisor (report_to_supervisor), tell it with agent_send.",
 		agentLabel(c), am.Name, todo.ID, todo.Title, s.followUpWords(ctx, self), criteriaWords(nil, todo.Supervision)), nil
@@ -260,13 +278,18 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 // (assistantsConversation, #10801).
 func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
 	expect int, update, quiet bool) (Todo, bool, error) {
-	return s.adoptAgentFor(ctx, self, self, am, c, title, prompt, notes, doneWhen, expect, update, quiet)
+	return s.adoptAgentFor(ctx, self, self, am, c, title, prompt, notes, doneWhen, expect, adoptionOptions{update: update, quiet: quiet})
+}
+
+type adoptionOptions struct {
+	update, quiet bool
+	role          string
 }
 
 // adoptAgentFor is adoptAgentAs with the todo's origin and supervisor kept separate (#5732). A side conversation
 // keeps its dispatch origin while the main conversation supervises the new task.
 func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
-	expect int, update, quiet bool) (Todo, bool, error) {
+	expect int, opts adoptionOptions) (Todo, bool, error) {
 	if s.assistantsConversation(ctx, am.ID, c) {
 		return Todo{}, false, errors.New("that is an assistant conversation, not a coding agent")
 	}
@@ -281,7 +304,12 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 		if err := othersTask(c, t, self); err != nil {
 			return Todo{}, false, err
 		}
-		if !update {
+		if opts.role == roleLeader {
+			if _, _, leads := s.leaderTask(ctx, am.ID, c.SessionID); !leads {
+				return Todo{}, false, fmt.Errorf("the Agent already works on open task %s as a worker; the leader role is assigned when adopting an Agent on no open task", t.ID)
+			}
+		}
+		if !opts.update {
 			return t, false, nil
 		}
 		// Its criteria change only through the brief's log (task_brief_scope.go): the same rules as task_scope.
@@ -293,17 +321,21 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 		s.restage(ctx, t.ID, nil) // by its new criteria; a read-only start still holds
 		return t, false, nil
 	}
+	// Adoption does not start the Agent with a read-only constraint.
+	if opts.role == roleLeader && len(doneWhen) == 0 {
+		return Todo{}, false, errors.New("a writable task leader needs done_when with at least one checkable result")
+	}
 	previous, continuing := s.closedTodoOfAgent(am.ID, c.SessionID)
 	// Only an explicit adoption/takeover continues the closed card's brief. A newly titled agent_send task is new work,
 	// even when it reuses the same Agent; it must not rewrite the old card's scope or lineage (#5732).
-	continuing = continuing && update
+	continuing = continuing && opts.update
 	if continuing {
 		if succ, ok := s.openSuccessor(previous.ID); ok {
 			return Todo{}, false, errContinued(previous.ID, succ)
 		}
 	}
 	title, retitle := s.adoptedTitle(ctx, c, title, prompt)
-	todo, err := s.newTodo(ctx, title, notes, self, "", quiet || s.quietTask(ctx, self))
+	todo, err := s.newTodo(ctx, title, notes, self, "", opts.quiet || s.quietTask(ctx, self))
 	if err != nil {
 		return Todo{}, false, err
 	}
@@ -333,7 +365,8 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 	}
 	s.restage(ctx, todo.ID, nil)
 	todo.Supervision = &v
-	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
+	source, via := (PlanTask{Role: opts.role}).linkSource()
+	if err := s.linkTodoAgentWithSource(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent, "", source, via); err != nil {
 		if continuing {
 			s.dropContinuation(ctx, todo.ID, rollback, err)
 		} else {
@@ -551,7 +584,7 @@ func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.
 	// Only the configured main supervises an assistant hand-off. With no main, keep the origin but leave Supervisor
 	// empty: the calling leader must not become the acceptance authority for its own assistant-dispatched task (#5732).
 	supervisor := s.settings(ctx).Main
-	todo, made, err := s.adoptAgentFor(ctx, self, supervisor, am, c, task.Title, text, text, task.DoneWhen, task.ExpectMinutes, false, false)
+	todo, made, err := s.adoptAgentFor(ctx, self, supervisor, am, c, task.Title, text, text, task.DoneWhen, task.ExpectMinutes, adoptionOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("%w; nothing was sent", err)
 	}
