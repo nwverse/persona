@@ -188,6 +188,7 @@ class ShardTests(unittest.TestCase):
         self.assertEqual(len(selected), len(set(selected)))
         self.assertEqual(server.select_packages(packages, "node"), [packages[0], packages[-3]])
         self.assertIn("example/server/internal/hubedge", server.select_packages(packages, "other"))
+        self.assertIn("example/server/internal/modules/voice", server.select_packages(packages + ["example/server/internal/modules/voice"], "managers"))
         with self.assertRaises(ValueError):
             server.select_packages(packages, "typo")
 

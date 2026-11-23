@@ -1785,7 +1785,9 @@ every platform are described from #13430; this section is the Apple side.
   without a composer action, into PersonaVision (which compiles all of `Persona/`); the watch and widgets do not include
   it. It is on only in a build with the Meta Wearables SDK (`apple/meta-wearables.yml`). Before the pilot the core named
   its types 8 times in 4 files; now 0.
-- **Adding a module.** Give its sources a directory of their own and add it to `MODULES` in the ratchet; write a type
+- **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
+  `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
+  `GUARDED` in the ratchet; write a type
   conforming to `PersonaModule` there (descriptor, `isAvailable`, `register(into:)`); add it to `Modules.builtIn`; turn
   each core call site into a registry read. If it needs a slot that is not served yet, add the slot's registrar method,
   its registry reader and package tests in the same change. Lower the ratchet's baseline as references go. Folders move
@@ -1822,6 +1824,13 @@ every platform are described from #13430; this section is the Apple side.
   and answers / sends messages / interrupts directly through the hub too.
   UI hierarchy: each row's main content (question, session name, Inbox title) uses headline; type and location use footnote; messages and plans strip Markdown markers (`WatchText.shown`),
   bubbles fit text width, own messages align right; before any data arrives show "Loading"; when the hub is unreachable, a top row says "Can't reach the hub" + "Retry" (with old data, say how old it is).
+- Watch intake complications (#13275): Water and Protein each support circular, rectangular and inline, without a
+  new watch app page, a corner family or a four-item face. The timeline reads the watch's own shared answer-only
+  credential and requests the default manager's intake with `space=health`, about every 15 minutes subject to system
+  budgets. Failures keep a separate pairing-scoped cache; an old hub's 403 says Update the hub and leaves extension
+  credentials and content untouched. A watch intake writer calls `WatchIntakeKind.reloadTimelines()` after success to
+  reload `persona.watch.water` and `persona.watch.protein` at once. See `docs/apple/home-widgets.md` for the cache,
+  hub choice, day-boundary and rendering contracts.
 
 ## Demo mode (see every feature without a hub, 2026-10-30)
 
@@ -2392,6 +2401,41 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
   the To-dos entrance, as before.
+
+## Domain spaces
+
+Who it serves: everyday people who keep one part of their life (family, money, a home) apart from the main chat, as the
+health space does. The iOS / iPadOS app follows the web (`docs/web/web.md`, "Domain spaces"); the server side is in
+`docs/assistant/health.md` ("Tracks and kinds").
+
+- **Model**: `apple/Shared/Tracks.swift` decodes tracks, kinds, `SPACE.md`, a conversation's categories and the extension
+  grants; every field is optional and unknown ones are ignored. Every call goes to the default manager (no
+  `X-Persona-Manager`), as spaces are the default manager's. A hub without `GET /api/v1/assistant/tracks` (404 / 405, or an
+  answer without `tracks`) has no spaces: the section stays out and nothing else changes. `SpaceStore.shared` keeps the
+  list, read again when the hub or its hello changes (`RootView`).
+- **Sidebar and drawer**: a Spaces section lists the tracks of the `spaces` sidebar group by their order (built-in health
+  and archived ones left out), then New space; in the Sidebar layout it is a folding section after Pages. A tap opens the
+  space's latest conversation, else its home (`SpaceHomeModel.entry`). Health keeps its own row and pages unchanged.
+- **Space home** (`apple/Persona/Views/Spaces/SpaceHomeView.swift`): the name, a composer whose conversation starts in the
+  space, a plain privacy line, its conversations (swipe to archive), About this space (the user's part of `SPACE.md` as
+  formatted text, a leading heading repeating the name dropped, folded past a height) with Where things stand (the state
+  block), and the kinds of personal information it holds. Edit and Archive are in the page's menu; built-in spaces have no
+  Archive. Archive confirms first and sends the revision it was read at.
+- **SPACE.md editor**: the parts the user wrote are fields; the `persona:managed` blocks show read-only under "Kept up to
+  date by Persona" and go back byte for byte (`SpaceMarkdown`, which works on UTF-8 bytes, since Swift's `String ==`
+  calls an NFC copy equal and a CRLF line end does not end in `\n`). A save sends the `base_digest` it read; a stale one
+  says another change came first and offers Load latest; a changed block, a missing space and an offline computer each
+  have a plain sentence.
+- **New space**: name, one line about it, an icon from 16 tokens (`SpaceIcon`, never a color or a raw symbol name), the
+  personal information it holds and, only when the assistant offers more than one, its kind (reconciled against the kinds
+  read: the default kind, else the first on offer). The slug is made from the name and never shown; a taken one gets the
+  next number, once more on a 409.
+- **A space conversation's categories**: chips under the top bar (`SpaceConversationCategories`, room added to the
+  chat's top inset through `assistantTopExtra`). A chip the user may take away is a menu with Remove; the space's own
+  carry a lock; removed ones come back from +. Changes are optimistic and roll back with a toast.
+- **Extension grants**: the extension detail page of the default manager shows "Personal information it may read": an
+  owner switch ("This is my own extension") or one switch per kind. Read-only when the extension is set outside the app
+  (`readOnly`, or a dev / config-file source); left out on an assistant without grants and on another manager's page.
 
 ## Quiet supervision rounds (#2092)
 

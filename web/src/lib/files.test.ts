@@ -207,6 +207,19 @@ describe("diff", () => {
   ])("preserves a rename or deletion chunk for %j", (path, diff) => {
     expect(splitDiff(diff)).toEqual({ [path]: diff });
   });
+
+  it("preserves unquoted paths containing ' b/' across edits, deletions, binaries and renames", () => {
+    const edited = "diff --git a/docs/part b/guide.md b/docs/part b/guide.md\n--- a/docs/part b/guide.md\n+++ b/docs/part b/guide.md\n@@ -1 +1,2 @@\n x\n+++ b/not-a-header.md";
+    const deleted = "diff --git a/a b/gone.ts b/a b/gone.ts\ndeleted file mode 100644\n--- a/a b/gone.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-old";
+    const binary = "diff --git a/assets/set b/logo.png b/assets/set b/logo.png\nnew file mode 100644\nBinary files /dev/null and b/assets/set b/logo.png differ";
+    const renamed = "diff --git a/old.md b/docs/part b/renamed.md\nsimilarity index 100%\nrename from old.md\nrename to docs/part b/renamed.md";
+    const parts = splitDiff([edited, deleted, binary, renamed].join("\n"));
+    expect(Object.keys(parts)).toEqual(["docs/part b/guide.md", "a b/gone.ts", "assets/set b/logo.png", "docs/part b/renamed.md"]);
+    expect(parts["docs/part b/guide.md"]).toBe(edited);
+    expect(parts["a b/gone.ts"]).toBe(deleted);
+    expect(parts["assets/set b/logo.png"]).toBe(binary);
+    expect(parts["docs/part b/renamed.md"]).toBe(renamed);
+  });
 });
 
 describe("viewer", () => {

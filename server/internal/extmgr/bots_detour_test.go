@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
@@ -86,7 +87,7 @@ type roundTripFunc2 func(*http.Request) (*http.Response, error)
 func (fn roundTripFunc2) RoundTrip(req *http.Request) (*http.Response, error) { return fn(req) }
 
 func detourCard() string {
-	return feishubot.NewCard("title", "green", "summary").Markdown("card body 4175").JSON()
+	return botcard.NewCard("title", "green", "summary").Markdown("card body 4175").JSON()
 }
 
 func (f *fakeDetourAPI) snapshot() (replies, sends []map[string]any) {
@@ -200,7 +201,7 @@ func TestBotNoteDetoursWithdrawnReplyToSend(t *testing.T) {
 	const note = "note after withdrawn 4457"
 	h.botNote(context.Background(), f.client(false), "chat1", "om_n", note)
 	replies, sends := f.snapshot()
-	wantContent := feishubot.TextContent(note)
+	wantContent := botcard.TextContent(note)
 	if len(replies) != 1 || replies[0]["content"] != wantContent || len(sends) != 1 || sends[0]["content"] != wantContent || sends[0]["msg_type"] != feishubot.TypeText {
 		t.Fatalf("replies=%v sends=%v", replies, sends)
 	}

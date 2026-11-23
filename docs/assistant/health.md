@@ -123,7 +123,7 @@ A track is of a kind (#13472): a config whose every field picks one of the optio
 - **Recordings in a track** (#13501): a recording upload with `space` (`PUT /api/v1/recordings/{id}`, `docs/protocol/protocol.md` "Recording sync") goes to that track instead of the knowledge base. The manager renders its transcript as `recordings/<day>-<id>.md` (front matter with the recording and the track's default categories, then one timed line per sentence) and has the assistant's machine write it there (`assistant.space_recording`, capability `track_recordings_v1`; `server/internal/node/assistant_space_recordings.go`); `assistant_space_recordings` keeps its revision and tombstone. Such a recording is never in the knowledge base (`kb_list`, `kb_search`, summaries, minutes): the track's conversations read the file. Once in a track a recording stays there, whatever a later upload names, and one the knowledge base holds stays in it (409 `recording_in_kb`); an all-day recording cannot go to a track (400). `recording_days` applies to it too: past it, or when deleted, its file is removed (later, when the computer was away) and a tombstone kept until the window ends (`server/internal/assistant/space_recordings.go`).
 - **Reading and writing SPACE.md**: the apps read a track's `SPACE.md` with `GET /api/v1/assistant/tracks/{slug}/space-md` and the user saves it with `PUT` (`content` and the `base_digest` it was read at; a stale one is refused, so two edits never overwrite each other). The user's write may change anything but the blocks between `persona:managed` markers and the markers themselves, compared byte for byte. The track's own conversations, and only they (`spaceTools` in `server/internal/assistant/track_space_md.go`; the main chat's and the health space's tool lists are unchanged), get the MCP tool `space_state_update {text}`, which replaces the text of the state block alone, at most 2048 bytes; the model never edits that block itself. Both go to the node on the assistant's computer (`assistant.space_md`, capability `track_space_md_v1`, `server/internal/node/assistant_space_md.go`), which reads the file without following a link, keeps the file it replaces in `.space/history/` (the latest 20) and writes atomically. After the user's write the track's `CLAUDE.md` and `AGENTS.md` are written again at once; after the state's, at the next refresh.
 - **Who changes them**: `GET` / `POST /api/v1/assistant/tracks`, `PUT /api/v1/assistant/tracks/{slug}`, `GET` / `POST /api/v1/assistant/track-kinds` and `PUT /api/v1/assistant/track-kinds/{slug}` are for full-access clients only; writes check that the caller is the user (403 otherwise), and a built-in track or kind is never changed (403). A change names the revision it was made against (409 when another came first), and a kind change that would leave one of its tracks invalid is refused (409).
-- **In the apps**: the web lists the tracks of the `spaces` sidebar group in a Spaces section, opens each at `/tracks/<slug>`, edits its `SPACE.md` and creates and archives spaces (`docs/web/web.md`, "Domain spaces"). Android does the same in the drawer's Spaces section (`docs/android/android.md`, "Domain spaces (#13500)"). The health space keeps its own entry and pages.
+- **In the apps**: the web lists the tracks of the `spaces` sidebar group in a Spaces section, opens each at `/tracks/<slug>`, edits its `SPACE.md` and creates and archives spaces (`docs/web/web.md`, "Domain spaces"); the iOS and iPadOS app does the same from its sidebar and drawer, and sets which personal information an extension may read on its page (`docs/apple/ios.md`, "Domain spaces"). Android does the same in the drawer's Spaces section (`docs/android/android.md`, "Domain spaces (#13500)"). The health space keeps its own entry and pages.
 
 ## Quick capture
 
@@ -340,6 +340,26 @@ Activity energy remains `active_energy` (kcal), separate from resting energy and
 For today's intake, call `phone_health_summary` with `{"metrics":["dietary_energy","protein","carbs","fat","resting_energy"],"days":1}`. Days start at the phone's local midnight; today's values end at the query time. Missing data or denied read access must not be presented as zero intake. The Health space's generated instructions include these names, units, day boundaries and limitations.
 
 On iOS, `HealthTool` reads the corresponding HealthKit quantity types and requests their read permissions alongside the existing metrics. An existing installation may need authorization for these newly added categories. Open Persona, grant access, and reconnect it to the hub so the registered tool description and schema refresh (`docs/apple/phone-tools.md`, "Daily health summaries").
+
+## Every health type and sample (#13740)
+
+Data a band, ring, scale, glucose meter, ECG or hearing test saves to Apple Health or Health Connect is reachable sample by sample, with
+the app and device that saved it, through `phone_health_types`, `phone_health_samples`, `phone_health_sources` and
+`phone_health_request_access` (iPhone and Android), plus `phone_health_watch` on the iPhone. The audience is everyday users who ask
+about the data they already keep, and Agents that analyse it for them; nothing in the Health page changes, and Apple Health stays named
+where the app uses it (App Review 2.5.1, #13118).
+
+- Start with `phone_health_types` to find the type name and whether Persona was asked for it; ask once with
+  `phone_health_request_access` while Persona is open. A type without access answers its status, not an error, and empty results on an
+  iPhone can still mean the user refused (HealthKit never tells).
+- Read with `phone_health_samples`, keep its `anchor`, and pass it back later to get only what changed. Match samples by `id`.
+- On an iPhone that may be locked when the question comes (an evening review, a scheduled task), watch the types first with
+  `phone_health_watch`; locked answers then come from the phone's snapshot (`source: snapshot`, `as_of`), the last 7 days at most.
+  A build without HealthKit background delivery refreshes those snapshots only when Persona opens or is woken while unlocked.
+- Health data goes back only to the hub that asked and is not written to logs on the phone or the hub; it reaches the model that
+  called the tool like every other tool result.
+
+Details, anchors and platform differences: `docs/apple/phone-tools.md`, "Every health type, sample by sample".
 
 ## Web entry point
 

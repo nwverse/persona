@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
 )
@@ -91,7 +91,7 @@ func TestLarkSupervisedTerminalDialog(t *testing.T) {
 		t.Fatalf("after escalation: %d cards, %d pushes", len(posts), e.pushesOf(id))
 	}
 	raw := posts[0]["card"].(string)
-	var card feishubot.Card
+	var card botcard.Card
 	if err := json.Unmarshal([]byte(raw), &card); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestLarkSupervisionCardTitles(t *testing.T) {
 	it := &reportItem{todo: e.todo.ID, state: reportFailed}
 	reports, _ := e.s.reportCards(ctx, []*reportItem{it})
 	stuck, _ := e.s.goalCard(ctx, []*reportItem{it})
-	cards := map[string]*feishubot.Card{
+	cards := map[string]*botcard.Card{
 		"progress": reports[0], "stuck": stuck,
 		"conclusion": e.s.conclusionCard(ctx, e.todo, acceptAsk{Conclusion: true, Outcome: outcomeDone}),
 		"verify":     e.s.acceptCard(ctx, e.todo, acceptAsk{}, false),
