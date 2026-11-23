@@ -199,6 +199,9 @@ type Config struct {
 	WebURL string `json:"web_url,omitempty"`
 	// TailcatDERPMapURL is hub.json's tailcat.derp_map_url.
 	TailcatDERPMapURL string `json:"tailcat_derp_map_url,omitempty"`
+	// PrivateNetwork is hub.json's security.private_network_only (office network mode): the manager never dials
+	// tailcat and tells every node to stop its tailcat endpoint (node.configure private_network).
+	PrivateNetwork bool `json:"private_network,omitempty"`
 	// NodePackagesURL is where the manager fetches the node builds the hub has none of (docs/operations/node-update.md "Node
 	// packages"): a release's dl/ (hub.json's node_packages.url, else the hub build's update URL; "" none), through
 	// NodePackagesProxy (an http:// proxy, internal/netproxy; "" direct).
