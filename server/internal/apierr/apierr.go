@@ -382,6 +382,8 @@ var openElsewhereKeys = map[string]string{
 	"program":     "rpc-errors.open_elsewhere_program",
 	"other":       "rpc-errors.open_elsewhere_other",
 	"agents_list": "rpc-errors.open_elsewhere_agents_list",
+	// an Antigravity conversation the agy CLI has open in a terminal (the companion's refusal, #13451)
+	"agy_cli": "rpc-errors.open_elsewhere_agy_cli",
 }
 
 func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {

@@ -426,7 +426,7 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 // refusal) keeps its words.
 func TestOpenElsewhereSpeaksTheClientsLanguage(t *testing.T) {
 	const words = "node's own words"
-	for _, where := range []string{"desktop", "terminal", "program", "other", "agents_list"} {
+	for _, where := range []string{"desktop", "terminal", "program", "other", "agents_list", "agy_cli"} {
 		err := &rpc.Error{Code: "open_elsewhere", Message: words, Data: json.RawMessage(`{"delivered":"none","pid":42,"where":"` + where + `"}`)}
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 			rec := httptest.NewRecorder()

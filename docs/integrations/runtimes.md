@@ -554,6 +554,21 @@ response, tool result or error has been exported). A failed summary read is logg
 with SQLite's result-code text only, and once more when reads recover, with the number of failures. The lines carry no
 session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
 
+A conversation the agy CLI has open in a terminal (an Agent in a herdr pane, or one the owner runs) belongs to that
+process, though the companion lists it too (#13451). The CLI holds an exclusive `flock` on
+`presence/<conversation id>.lock` in agy's data directory while the conversation is open and leaves the empty file when
+it exits; ACP sessions take none. The companion only reads that lock: on Linux from `/proc/locks`, and elsewhere it
+cannot tell, so there a conversation with a presence file counts as open while something other than the companion wrote
+its transcript in the last minute. Taking the lock, even for an instant, would make a CLI opening the conversation then
+warn that it is already open and run without the lock. For such a conversation the companion does not resume it for a
+native cut check or read its native tail (where the lock cannot be read, not while its summary lags at all), refuses a
+send, fork, rewind or mode change with `open_elsewhere` (`where: agy_cli`, `delivered: none`) while the CLI has it
+open, and, while agy's summary lags the CLI's transcript, takes the status from the transcript: `working` while another
+process wrote it in the last minute, `done` once its last step is a complete reply and the CLI has closed it or nobody
+wrote for a minute, and `unknown` otherwise (an open tool call or new input never reads idle). A check never installs a
+cut when the transcript changed while the native snapshot was taken, and a session the companion resumed only for a
+check is closed again unless a turn of its own took it meanwhile. Conversations no CLI has opened keep the rules above.
+
 CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
 the result's inline data or local file. The Desktop companion still omits these images.
