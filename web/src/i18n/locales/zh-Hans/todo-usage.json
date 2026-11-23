@@ -1,0 +1,16 @@
+{
+  "card": "{tokens} token · 约 {usd}（按公开价估算）",
+  "section": "用量",
+  "total": "{tokens} token",
+  "estimate": "约 {usd}（估算）",
+  "amount": "{tokens} · 约 {usd}",
+  "kinds": "输入 {input} · 缓存写 {write} · 缓存读 {read} · 输出 {output}",
+  "session": "会话",
+  "subagent": "子 Agent",
+  "no_records": "在它的电脑上没有找到用量记录",
+  "stale": "电脑离线：显示上次的数字",
+  "price_catalog": "每百万 ${input} / ${write} / ${read} / ${output}，公开价",
+  "price_default": "每百万 ${input} / ${write} / ${read} / ${output}，默认价",
+  "price_override": "每百万 ${input} / ${write} / ${read} / ${output}，你设的价",
+  "estimate_note": "按公开价估算（每百万 token 的输入 / 缓存写 / 缓存读 / 输出价格），网关的实际结算价可能不同。"
+}

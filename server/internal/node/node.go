@@ -45,6 +45,8 @@ type Node struct {
 	cacheWarm     *assistantCachePool
 	segmentStarts segmentStarts
 	runtimeUsage  runtimeUsageReports
+	// sessionUsageCache keeps the files usage.sessions read (session_usage.go).
+	sessionUsageCache sessionUsageCache
 
 	// Only the manager's initial node.info can negotiate source delivery on this connection.
 	managerInfoOnce sync.Once

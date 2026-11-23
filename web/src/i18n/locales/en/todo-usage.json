@@ -1,0 +1,16 @@
+{
+  "card": "{tokens} tokens · ≈ {usd} (estimated at public prices)",
+  "section": "Usage",
+  "total": "{tokens} tokens",
+  "estimate": "≈ {usd} (estimated)",
+  "amount": "{tokens} · ≈ {usd}",
+  "kinds": "Input {input} · Cache write {write} · Cache read {read} · Output {output}",
+  "session": "Session",
+  "subagent": "Subagent",
+  "no_records": "No usage records found on its computer",
+  "stale": "Computer offline: showing the last known numbers",
+  "price_catalog": "${input} / ${write} / ${read} / ${output} per M, public price",
+  "price_default": "${input} / ${write} / ${read} / ${output} per M, default rate",
+  "price_override": "${input} / ${write} / ${read} / ${output} per M, your price",
+  "estimate_note": "Estimated at public prices (input / cache write / cache read / output per million tokens). What a gateway actually bills may differ."
+}

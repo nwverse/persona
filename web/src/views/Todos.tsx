@@ -76,6 +76,7 @@ import type { MenuAt } from "../ui/menu-model";
 import { SearchField } from "../ui/SearchField";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
+import { TodoUsageLine, TodoUsageSection } from "./TodoUsage";
 import { FoldAllButton } from "../ui/FoldAllButton";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { formatDate, t } from "../i18n";
@@ -1846,6 +1847,8 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
+        {/* What its Agents used, and the estimate at public prices (#12936) */}
+        <TodoUsageLine todoId={todo.id} hasAgents={(todo.agents?.length ?? 0) > 0} className="mt-1" />
         {showWait && <div className="mt-1" data-testid={openPR ? "todo-pr-line" : undefined}><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} /></div>}
 
         {/* Why its agent did not start, while it waits on the owner (DESIGN_SYSTEM 5.6: what failed, in red) */}
@@ -2639,6 +2642,8 @@ function TodoDetail({
       <ThreadSection todo={todo} />
 
       <DecisionsSection todo={todo} lookup={lookup} />
+
+      <TodoUsageSection todoId={todo.id} hasAgents={(todo.agents?.length ?? 0) > 0} version={todo.updated_at} />
 
       {/* Spaces Section */}
       {spacesSupported !== false && todo.spaces && todo.spaces.length > 0 && (
