@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // More of the connector moving between GitHub accounts (#7832, account_switch_test.go): what a review tried
@@ -52,7 +52,7 @@ func TestRestartAsTheSameAccountKeepsTheInbox(t *testing.T) {
 
 	c2 := f.connectorWith(t, kept, tokenA2)
 	// Before anything is read again: the item is the account's, though the connector holds no thing of it.
-	if err := c2.Reply(ctx, connector.InboxReply{Thread: a.Thread, Last: a.Last, Text: "看过了"}); err != nil {
+	if err := c2.Reply(ctx, connectorwire.InboxReply{Thread: a.Thread, Last: a.Last, Text: "看过了"}); err != nil {
 		t.Fatalf("reply after a restart as the same account: %v", err)
 	}
 	if posted := f.posts(); len(posted) != 1 || !strings.HasPrefix(posted[0], tokenA2+" "+issue12+"/comments ") {
@@ -106,7 +106,7 @@ func TestRestartKeepsTheEpochAndWhatIsUnsettled(t *testing.T) {
 	if over := c3.Settle(ctx, []string{thread7, "example-org/example-repo#99"}); len(over) != 0 {
 		t.Errorf("items closed after the hub had settled: %v", over)
 	}
-	if err := c3.Reply(ctx, connector.InboxReply{Thread: thread7, Last: b.Last, Text: "看过了"}); err != nil {
+	if err := c3.Reply(ctx, connectorwire.InboxReply{Thread: thread7, Last: b.Last, Text: "看过了"}); err != nil {
 		t.Errorf("%s's reply to its own item after two restarts: %v", loginB, err)
 	}
 }
@@ -207,7 +207,7 @@ func TestRepliedThingIsRetiredForTheHub(t *testing.T) {
 	pollOnce(t, c)
 	a := collected(t, c)
 	ctx := context.Background()
-	if err := c.Reply(ctx, connector.InboxReply{Thread: a.Thread, Last: a.Last, Text: "看过了"}); err != nil {
+	if err := c.Reply(ctx, connectorwire.InboxReply{Thread: a.Thread, Last: a.Last, Text: "看过了"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -287,7 +287,7 @@ func TestSameAccountAsksUserOnce(t *testing.T) {
 	if err := c.cachedGet(ctx, api7, &it); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Reply(ctx, connector.InboxReply{Thread: a.Thread, Last: a.Last, Text: "看过了"}); err != nil {
+	if err := c.Reply(ctx, connectorwire.InboxReply{Thread: a.Thread, Last: a.Last, Text: "看过了"}); err != nil {
 		t.Fatal(err)
 	}
 	if n := count("/user"); n != 0 {
@@ -302,7 +302,7 @@ func TestSameAccountAsksUserOnce(t *testing.T) {
 	if n := count("/notifications"); n != 5 { // 3 + the refused one + its retry
 		t.Errorf("/notifications asked %d times", n)
 	}
-	if err := c.Reply(ctx, connector.InboxReply{Thread: a.Thread, Last: a.Last, Text: "再说一句"}); err != nil {
+	if err := c.Reply(ctx, connectorwire.InboxReply{Thread: a.Thread, Last: a.Last, Text: "再说一句"}); err != nil {
 		t.Errorf("reply after the refresh: %v", err)
 	}
 }
@@ -321,8 +321,8 @@ func TestRoundTripReplyAsTheFirstAccount(t *testing.T) {
 	back := collected(t, c)
 	ctx := context.Background()
 	// The hub's item is still the one it made (Last a.Last) until it collects again.
-	errOld := c.Reply(ctx, connector.InboxReply{Thread: a.Thread, Last: a.Last, Text: "old"})
-	errNew := c.Reply(ctx, connector.InboxReply{Thread: a.Thread, Last: back.Last, Text: "new"})
+	errOld := c.Reply(ctx, connectorwire.InboxReply{Thread: a.Thread, Last: a.Last, Text: "old"})
+	errNew := c.Reply(ctx, connectorwire.InboxReply{Thread: a.Thread, Last: back.Last, Text: "new"})
 	t.Logf("A->B->A: Last before %q, after %q; reply to the item as it was: %v; as read again: %v", a.Last, back.Last, errOld, errNew)
 	for _, p := range f.posts() {
 		if !strings.HasPrefix(p, tokenA+" ") {
@@ -450,7 +450,7 @@ func TestThreadPageIsOneAccountsOrFails(t *testing.T) {
 
 	h := f.hold(t, tokenA, repoPath+"/actions/jobs/1/logs")
 	type result struct {
-		page connector.ThreadPage
+		page connectorwire.ThreadPage
 		err  error
 	}
 	late := make(chan result, 1)
@@ -642,7 +642,7 @@ func TestDeviceSignInAsAnotherAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Signed out: A's thing is still listed (nobody else reads), but nothing can be answered.
-	if err := c.Reply(ctx, connector.InboxReply{Thread: a.Thread, Last: a.Last, Text: "x"}); err == nil {
+	if err := c.Reply(ctx, connectorwire.InboxReply{Thread: a.Thread, Last: a.Last, Text: "x"}); err == nil {
 		t.Errorf("a reply went out signed out")
 	}
 	signInDevice(t, c, d, tokenB)
@@ -689,7 +689,7 @@ func TestDeviceAndMachineTakeTurns(t *testing.T) {
 			default:
 			}
 			if th, ok := things(t, c)[thread12]; ok {
-				_ = c.Reply(ctx, connector.InboxReply{Thread: thread12, Last: th.Last, Text: owner[th.Kind]})
+				_ = c.Reply(ctx, connectorwire.InboxReply{Thread: thread12, Last: th.Last, Text: owner[th.Kind]})
 			}
 		}
 	}()
