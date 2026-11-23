@@ -235,11 +235,6 @@ func (s *Service) attachment(ctx context.Context, accountID string, uid uint32, 
 	return file, metadata, nil
 }
 
-// MaxSavedAttachment bounds an attachment FetchAttachment hands over for mail_save_attachment: it crosses the node's
-// connection in one message (base64 in JSON, about 4/3 of it, under the connection's 64 MiB line), and 25 MB is the
-// most most providers let a mail carry.
-const MaxSavedAttachment = 25 << 20
-
 // ErrAttachmentTooLarge: the attachment is over FetchAttachment's limit.
 var ErrAttachmentTooLarge = errors.New("attachment too large")
 

@@ -10,8 +10,6 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/db"
 )
 
 var errAccountWrite = errors.New("injected account write failure")
@@ -22,10 +20,10 @@ func (f accountTokenTransport) RoundTrip(r *http.Request) (*http.Response, error
 
 type accountWriteRecords struct {
 	*memRecords
-	replace func(context.Context, []db.MailAccountRow) error
+	replace func(context.Context, []AccountRow) error
 }
 
-func (r *accountWriteRecords) ReplaceMailAccounts(ctx context.Context, rows []db.MailAccountRow) error {
+func (r *accountWriteRecords) ReplaceMailAccounts(ctx context.Context, rows []AccountRow) error {
 	return r.replace(ctx, rows)
 }
 
@@ -90,7 +88,7 @@ func TestAccountCommitsSerializeSnapshots(t *testing.T) {
 						before := committedAccounts(s)
 						started, release := make(chan struct{}), make(chan struct{})
 						var calls atomic.Int32
-						s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(ctx context.Context, rows []db.MailAccountRow) error {
+						s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(ctx context.Context, rows []AccountRow) error {
 							n := calls.Add(1)
 							if n == 1 {
 								close(started)
@@ -214,7 +212,7 @@ func TestRejectedAccountChangesPreserveHealthAndConnection(t *testing.T) {
 	s.noteLogin(a.ID, errGoogleRevoked)
 	before := committedAccounts(s)
 	recs := s.store.recs
-	s.store.recs = &accountWriteRecords{replace: func(context.Context, []db.MailAccountRow) error { return errAccountWrite }}
+	s.store.recs = &accountWriteRecords{replace: func(context.Context, []AccountRow) error { return errAccountWrite }}
 	for _, kind := range []string{"update", "delete"} {
 		var err error
 		if kind == "update" {
@@ -312,7 +310,7 @@ func TestConcurrentAccountAddRechecksAddressAfterCommit(t *testing.T) {
 				defer s.Close()
 				started, release := make(chan struct{}), make(chan struct{})
 				var calls atomic.Int32
-				s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(ctx context.Context, rows []db.MailAccountRow) error {
+				s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(ctx context.Context, rows []AccountRow) error {
 					if calls.Add(1) == 1 {
 						close(started)
 						<-release
@@ -376,7 +374,7 @@ func TestRefreshRotationOwnsCommittedCredentials(t *testing.T) {
 	s.noteLogin("base", errGoogleRevoked)
 	c := s.accessEntry(a.OAuth)
 	queued, _ := s.account(a.ID)
-	s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(context.Context, []db.MailAccountRow) error { return errAccountWrite }}
+	s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(context.Context, []AccountRow) error { return errAccountWrite }}
 	s.rotateRefresh(a.ID, a.OAuth, "example-next-refresh", c)
 	assertAccountRestart(t, s, recs)
 	if s.accessEntry(a.OAuth) != c {
@@ -409,7 +407,7 @@ func TestRefreshRotationOwnsCommittedCredentials(t *testing.T) {
 	}
 	before := committedAccounts(s)
 	var writes atomic.Int32
-	s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(context.Context, []db.MailAccountRow) error { writes.Add(1); return errAccountWrite }}
+	s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(context.Context, []AccountRow) error { writes.Add(1); return errAccountWrite }}
 	s.rotateRefresh(stale.ID, stale.OAuth, "example-stale-refresh", c)
 	if !reflect.DeepEqual(committedAccounts(s), before) || writes.Load() != 0 {
 		t.Fatal("stale refresh overwrote reauthorization")
@@ -447,7 +445,7 @@ func TestConcurrentAccountRepairsKeepCommittedCredentials(t *testing.T) {
 				}
 				started, release := make(chan struct{}), make(chan struct{})
 				var calls atomic.Int32
-				s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(ctx context.Context, rows []db.MailAccountRow) error {
+				s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(ctx context.Context, rows []AccountRow) error {
 					n := calls.Add(1)
 					if n == 1 {
 						close(started)

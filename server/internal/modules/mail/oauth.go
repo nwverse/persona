@@ -40,14 +40,6 @@ var (
 	httpClient     = &http.Client{Timeout: networkTimeout}
 )
 
-// OAuthCreds is the long-lived credential of an OAuth account, stored encrypted.
-type OAuthCreds struct {
-	// Provider is whose sign-in it is: "" Google, "microsoft" (microsoft.go).
-	Provider     string `json:"provider,omitempty"`
-	ClientID     string `json:"client_id"`
-	RefreshToken string `json:"refresh_token"`
-}
-
 // OAuthStart is the POST /api/v1/mail/oauth/google/start response.
 type OAuthStart struct {
 	AuthURL        string `json:"auth_url"`
@@ -340,7 +332,7 @@ func (s *Service) accessToken(ctx context.Context, id string, creds *OAuthCreds)
 	// the latest committed token and its cache when it finally authenticates.
 	s.mu.Lock()
 	if a := s.accts[id]; a != nil && a.OAuth != nil {
-		creds = a.clone().OAuth
+		creds = cloneAccount(a).OAuth
 	}
 	c := s.accessEntryLocked(creds)
 	s.mu.Unlock()
@@ -384,7 +376,7 @@ func (s *Service) rotateRefresh(id string, creds *OAuthCreds, refresh string, c 
 	s.mu.Lock()
 	var updated *MailAccount
 	if a := s.accts[id]; a != nil && a.OAuth != nil && *a.OAuth == *creds {
-		updated = a.clone()
+		updated = cloneAccount(a)
 		updated.OAuth.RefreshToken = refresh
 	}
 	s.mu.Unlock()

@@ -1306,7 +1306,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "wake":true,                                         // a notice or agent tool result started a new turn after Claude was idle
  "narration":true,                                    // optional Codex commentary, still a text item but not a final reply
  "injected":{"kind":"task_notice","state":"done",…},   // user text only: this is a message Persona sent to the model (task notification, scheduled task, wake-up…), not written by the user; added by the hub when sending, see "Messages Persona injects"
- "source":{"kind":"conversation|patrol|followup|supervision|meeting","conversation_id":"…","title":"…"}, // optional input provenance, independent of role; id/title optional, see "Message source"
+ "source":{"kind":"conversation|patrol|followup|supervision|notice|meeting","conversation_id":"…","title":"…"}, // optional input provenance, independent of role; id/title optional, see "Message source"
  "from":"peer name",                                  // optional native peer sender (another Claude session, a teammate, a Paseo Agent); a display name, not necessarily a conversation id
  "compact":{"trigger":"manual|auto","pre_tokens":151467}, // notice only: the context was compacted here (Claude Code's compact_boundary); the App draws a divider and folds the following "已从压缩的上下文继续" ("continued from compacted context") and the idle-compaction note into it
  "task":{"kind":"shell|monitor|agent|workflow|task",     // task notices; also agent tool results associated with their launching call
@@ -6008,6 +6008,7 @@ On reading back, web only recognizes blocks after the first block whose first li
 | `patrol` | A repeating scheduled run, including daily routines and interval patrols | `title` is the scheduled task title; `conversation_id` is the originating conversation when recorded; `push: "asked"` marks a run whose normal completion stays quiet |
 | `followup` | A one-shot scheduled follow-up, wake, or usage-limit continuation | `title` and originating `conversation_id` when recorded; `push: "asked"` as for `patrol` |
 | `supervision` | A supervision dispatch | Existing `injected.level` and turn-folding behavior still apply |
+| `notice` | A notification relayed by Persona, such as a delivery PR update, task closeout, relay refusal, spawned conversation result, or incoming chat update | `title` labels the source. Persona supplies its own name |
 | `scheduled_task` | An automatic input from an external scheduler, such as a Codex heartbeat | `text` is the visible task instructions, not the runtime envelope; no Persona `injected` follow-up or patrol is implied |
 | `meeting` | A batch from a recorded meeting this session attends: live sentences, questions and answers since the last batch, the end of the meeting (#2981, [meeting-minutes.md](../assistant/meeting-minutes.md) "Feeding the attending session") | `title` is the meeting's name; no `conversation_id` |
 

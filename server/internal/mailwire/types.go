@@ -1,8 +1,9 @@
-// Package mail implements the Persona mail module: encrypted account storage,
-// IMAP reading, SMTP sending and the /api/v1/mail HTTP API.
+// Package mailwire is the contract between the server core and the mail module (server/internal/modules/mail): the
+// values both sides pass, and the Service the extension manager reaches mail through (docs/extensions/mail.md,
+// docs/architecture/core-and-modules.md). Types, constants and sentinel errors only; the module aliases them.
 //
 // The JSON shapes mirror docs/protocol/protocol.md ("Mail API"); keep them in sync.
-package mail
+package mailwire
 
 import (
 	"encoding/json"
@@ -65,6 +66,14 @@ type MailAccount struct {
 	// Secrets. Never marshalled into API responses.
 	Password string      `json:"-"`
 	OAuth    *OAuthCreds `json:"-"`
+}
+
+// OAuthCreds is the long-lived credential of an OAuth account, stored encrypted.
+type OAuthCreds struct {
+	// Provider is whose sign-in it is: "" Google, "microsoft" (the module's microsoft.go).
+	Provider     string `json:"provider,omitempty"`
+	ClientID     string `json:"client_id"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 // AddAccountRequest is the POST /api/v1/mail/accounts body. Fields that the

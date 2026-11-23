@@ -4,29 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
-
-	"github.com/nwverse/persona/server/internal/db"
 )
 
 // memRecords is an in-memory Records for tests (production uses Postgres via internal/db).
 type memRecords struct {
 	mu       sync.Mutex
-	rows     []db.MailAccountRow
+	rows     []AccountRow
 	settings map[string][]byte
 }
 
 func newMemRecords() *memRecords { return &memRecords{} }
 
-func (m *memRecords) MailAccounts(context.Context) ([]db.MailAccountRow, error) {
+func (m *memRecords) MailAccounts(context.Context) ([]AccountRow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]db.MailAccountRow(nil), m.rows...), nil
+	return append([]AccountRow(nil), m.rows...), nil
 }
 
-func (m *memRecords) ReplaceMailAccounts(_ context.Context, rows []db.MailAccountRow) error {
+func (m *memRecords) ReplaceMailAccounts(_ context.Context, rows []AccountRow) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.rows = append([]db.MailAccountRow(nil), rows...)
+	m.rows = append([]AccountRow(nil), rows...)
 	return nil
 }
 

@@ -150,11 +150,6 @@ func parseReferences(refs, inReplyTo string) []string {
 	return out
 }
 
-// ErrMaybeSent is in the error of a send that failed after the SMTP server got the whole message but before it answered
-// it: the server may have taken it, so a caller that sends at most once treats the send as in doubt, not as not sent
-// (#9166).
-var ErrMaybeSent = errors.New("the server got the message but did not answer it, so it may have gone")
-
 // Send composes and delivers a message over SMTP, then appends it to the
 // provider's Sent mailbox when the provider does not do that itself.
 func (s *Service) Send(ctx context.Context, req SendRequest) error {
