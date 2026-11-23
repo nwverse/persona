@@ -217,6 +217,9 @@ struct ChatView: View {
     @State private var previewPicked: PreviewOption?
     /// Where a Model Not Connected card's Fix It goes (`ReadinessSheets`).
     @State private var readinessRoute: ReadinessRoute?
+    /// A Persona conversation's own model picker, shared by its composer (Main chat) and model-route remedy (#10365).
+    @State private var showAssistantModel = false
+    @State private var assistantPanel: AssistantModelPanelModel?
     /// The image viewer, shown by the page rather than the row it was opened from (`viewImages`).
     @State private var viewingImages: ImageViewing?
     @Namespace private var imageZoom
@@ -239,7 +242,8 @@ struct ChatView: View {
 
     /// `sidePage`: the page is a side session's own (`SideSessionPage`), which shows that side; any other Agents page given
     /// a folded side (a Needs You card, a link, a restored chat) opens its parent with the side shown over it (#7944).
-    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil, sidePage: Bool = false) {
+    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil, sidePage: Bool = false,
+         backgroundActivity: Bool = false) {
         // Built again for the same path (a tree swap): the agent its header switched to, not the one it opened with.
         #if os(iOS)
         var start = style == .dev ? AppModel.shared.chatSwitched[key] ?? key : key
@@ -256,7 +260,12 @@ struct ChatView: View {
         opened = key
         self.style = style
         self.itemManager = itemManager
+        self.backgroundActivity = backgroundActivity
     }
+
+    /// Read-only Background activity of the main conversation. It shares the transcript store and every line renderer,
+    /// but never becomes the visible chat and never acknowledges anything as seen.
+    private let backgroundActivity: Bool
 
     /// The session this page was opened with (the path's), which `switchTo` records its switches under.
     private let opened: SessionKey
@@ -385,13 +394,18 @@ struct ChatView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
         .frame(maxWidth: .infinity)
         .background(Theme.pageBackground)
+        .background {
+            if backgroundActivity {
+                Color.clear.accessibilityElement().accessibilityIdentifier("background-activity-page")
+            }
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         // Agents chats draw their own header (devChrome) so it can follow the scroll; the assistant's floats over the
         // chat (AssistantTopBar, drawn by AssistantView over this page and the new-conversation page). Where the system
         // puts bars down the side (iPhone Duo), an Agents chat hands its actions to it instead: they go in that column.
-        .toolbarVisibility(sideBars ? .visible : .hidden, for: .navigationBar)
-        .navigationBarBackButtonHidden(sideBars && !systemBack)
+        .toolbarVisibility(backgroundActivity || sideBars ? .visible : .hidden, for: .navigationBar)
+        .navigationBarBackButtonHidden(backgroundActivity || (sideBars && !systemBack))
         .pageToolbar { if sideBars { sideBarItems } }
         // The system draws that bar's title over the content, not in the column: a second title right above the
         // header's own. Removed while the header shows its title; while typing the header is only fog, and the
@@ -711,6 +725,16 @@ struct ChatView: View {
         .environment(\.openURL, actions.openURL)
         .sheet(item: $link) { t in LinkSheet(target: t, key: key, choosePreview: { openPort($0.link, name: $0.name) }) }
         .readinessSheets($readinessRoute)
+        .onChange(of: showAssistantModel) { _, on in
+            if on, assistantPanel == nil {
+                assistantPanel = AssistantModelPanelModel(key: key, machine: key.machineRef, defaultRule: conversationDefaultRule)
+            }
+        }
+        .sheet(isPresented: $showAssistantModel, onDismiss: { assistantPanel = nil }) {
+            if let assistantPanel {
+                AssistantModelSheet(session: model.session(key), panel: assistantPanel)
+            }
+        }
         #if os(iOS)
         .sheet(isPresented: $previewing, onDismiss: {
             if let o = previewPicked { previewPicked = nil; openPort(o.link, name: o.name) }
@@ -750,7 +774,7 @@ struct ChatView: View {
         }
         // Going to the background is the last chance before iOS may end the app: a cold relaunch (the dev chat is
         // restored, AppModel.rememberChat) then opens at the same line, not only after leaving the chat.
-        .onChange(of: scenePhase) { _, phase in if phase == .background { rememberReadPosition() } }
+        .onChange(of: scenePhase) { _, phase in if !backgroundActivity, phase == .background { rememberReadPosition() } }
         .onDisappear {
             ChatTrace.shared.note(shownKey, "close")
             #if DEBUG
@@ -764,17 +788,21 @@ struct ChatView: View {
         .onTabVisibility(appear: {
             model.subscribe(key, by: owner)
             if viewing != nil { model.subscribe(shownKey, by: owner) }
-            model.show(key, by: owner)
-            model.markSeen(key)
+            if !backgroundActivity {
+                model.show(key, by: owner)
+                model.markSeen(key)
+            }
             #if os(iOS)
-            fullPage.document = { fullPageDocument() }
-            fullPage.setShown(true)
+            if !backgroundActivity {
+                fullPage.document = { fullPageDocument() }
+                fullPage.setShown(true)
+            }
             #endif
         }, disappear: {
-            rememberReadPosition()
+            if !backgroundActivity { rememberReadPosition() }
             if viewing != nil { model.unsubscribe(shownKey, by: owner) }
             model.unsubscribe(key, by: owner)
-            model.hide(by: owner)
+            if !backgroundActivity { model.hide(by: owner) }
             #if os(iOS)
             fullPage.setShown(false)
             fullPage.document = nil // it holds this view, whose state holds the page
@@ -799,7 +827,7 @@ struct ChatView: View {
         }
         #endif
         .onChange(of: session?.needsSeen()) { _, unseen in
-            if unseen == true && model.visibleSession == key { model.markSeen(key) }
+            if !backgroundActivity, unseen == true && model.visibleSession == key { model.markSeen(key) }
         }
     }
 
@@ -825,14 +853,14 @@ struct ChatView: View {
         let items = store.items
         // Frozen: the items up to the snapshot (they are in transcript order); what comes after waits.
         let cut = frozen.map { f in Self.prefixCount(items) { ($0.seq, $0.part) <= (f.seq, f.part) } } ?? items.count
-        let feed = style == .assistant ? ChatLines.drawnFeed(TasksStore.shared.feed(shownKey.sessionID)) : []
+        let allFeed = style == .assistant ? ChatLines.drawnFeed(TasksStore.shared.feed(shownKey.sessionID)) : []
         let kids = model.childRows(shownKey)
         scratch.childRows = kids
         let modes = shownModes(until: frozen == nil ? nil : items[..<cut].last(where: { $0.ts != nil })?.ts ?? .distantPast)
         let childStamp = kids.map { "\($0.sessionID):\($0.rev ?? 0):\($0.state.rawValue):\($0.updatedAt?.timeIntervalSince1970 ?? 0)" }.joined(separator: "|")
         let key = ChatScratch.LinesKey(store: "\(shownKey.machineID)/\(shownKey.sessionID)", version: frozen == nil ? store.version : cut,
                                        first: items.first?.id, live: frozen == nil ? liveTurnID : frozen?.live, open: openWork,
-                                       runs: openRuns, frozen: frozen, feed: ChatLines.feedKey(feed),
+                                       runs: openRuns, frozen: frozen, feed: ChatLines.feedKey(allFeed),
                                        streaming: drawsLive && (frozen.map { !$0.text.isEmpty } ?? liveShown),
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls,
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
@@ -851,7 +879,11 @@ struct ChatView: View {
         model.childIndex.seen = seen
         builder.childSessions = Dictionary(uniqueKeysWithValues: kids.map { ($0.sessionID, $0) })
         builder.historyComplete = store.loadedOnce && !store.hasMore
-        var lines = builder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
+        let presentation: ChatLines.Presentation = backgroundActivity ? .backgroundActivity : .timeline
+        let projection = builder.projection(Self.debugTrim(blocks), live: key.live, streaming: key.streaming,
+                                            presentation: presentation)
+        let feed = projection.feed(allFeed, for: presentation)
+        var lines = backgroundActivity ? projection.activity : projection.timeline
         lines = ModelChanges.mark(lines)
         #if os(iOS)
         // An Agent's long finished answers as several rows: one row many screens tall stuttered whenever it was on
@@ -864,9 +896,13 @@ struct ChatView: View {
             lines = ChatLines.mergeModeChanges(lines, modes, earliest: store.hasMore ? items.lazy.compactMap(\.ts).first ?? .distantFuture : nil)
         }
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
-            // Dispatch links have no instruction list. Keep Persona's hand-offs as their own folded lines instead
-            // of hiding them as though a full task card still rendered them (#3711).
-            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
+            if backgroundActivity {
+                lines = ChatLines.quickResults(ChatLines.mergeActivityFeed(lines, feed))
+            } else {
+                // Dispatch links have no instruction list. Keep Persona's hand-offs as their own folded lines instead
+                // of hiding them as though a full task card still rendered them (#3711).
+                lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
+            }
         }
         lines = ChatLines.sourceRuns(lines)
         // The card in the header says the closeout (#3612): the reply that carried the raw block shows without it.
@@ -1296,18 +1332,55 @@ struct ChatView: View {
         ChatPin.Spot(y: g.frame(in: .global).minY, content: g.frame(in: .named(ChatPin.space)).maxY)
     }
 
+    /// The main Persona conversation's composer can keep its own model pick; its remedy and composer open this same sheet.
+    private var assistantModelPickAvailable: Bool { key == model.assistantMain && model.keepsConversationModelPick(key.group) }
+    private var openAssistantModel: (() -> Void)? {
+        guard assistantModelPickAvailable else { return nil }
+        return { showAssistantModel = true }
+    }
+
+    /// Every Persona conversation's model-route remedy opens its own picker. The new turn-error code gates this remedy;
+    /// the older saved-pick feature gates only the way back, not the choice of a working model.
+    private var openConversationModel: (() -> Void)? {
+        guard style == .assistant else { return nil }
+        return { showAssistantModel = true }
+    }
+
+    private var conversationDefaultRule: AssistantModelChoice.DefaultRule {
+        let supervisor = model.isBackgroundSupervisor(key.sessionID)
+        if supervisor { return .supervise }
+        return AssistantModelChoice.followsDefault(isMain: key == model.assistantMain, supervisor: false,
+                                                   leader: model.assistantLeaders.contains(key.sessionID),
+                                                   origin: session?.origin) ? .main : .own
+    }
+
     /// Persona's last turn ended on a model set-up error the hub named (`turn_error_code`, docs/assistant/onboarding.md 4.4):
     /// the fix to show instead of Claude Code's 「Not logged in」 as an answer. Persona's conversations only, as the web.
-    private var turnFix: TurnErrorFix? { style == .assistant ? TurnErrorFix(code: session?.turnErrorCode, launcher: session?.launcher) : nil }
+    private func turnFix(raw: String? = nil, status: Int? = nil) -> TurnErrorFix? {
+        guard style == .assistant else { return nil }
+        if let fix = TurnErrorFix(code: session?.turnErrorCode, launcher: session?.launcher) { return fix }
+        // A hub that did not code the turn still gets the web's narrow tool-search fallback; any coded kind wins.
+        guard session?.turnErrorCode == nil, let raw else { return nil }
+        return TurnErrorFix.toolSearch(raw: raw, status: status)
+    }
 
     /// The Model Not Connected card for the line, when it is the turn's error: the last line, an answer or an API error.
-    private func turnErrorCard(_ line: ChatLine, raw: String?) -> ReadinessCard? {
-        guard let fix = turnFix, ChatLines.lastOfChat(currentLines())?.id == line.id else { return nil }
+    private func turnErrorCard(_ line: ChatLine, raw: String?, status: Int? = nil) -> ReadinessCard? {
+        guard let fix = turnFix(raw: raw, status: status), ChatLines.lastOfChat(currentLines())?.id == line.id else { return nil }
+        let retry = fix.action == "retry" && !self.status.isActive && session?.canSend == true
+        let canDrop = fix.action == "pick_model" && model.keepsConversationModelPick(key.group) && session?.modelPick != nil
+        let followsDefault = AssistantModelChoice.followsDefault(isMain: key == model.assistantMain,
+                                                                  supervisor: model.isBackgroundSupervisor(key.sessionID),
+                                                                  leader: model.assistantLeaders.contains(key.sessionID), origin: session?.origin)
         return ReadinessCard(title: fix.title, detail: fix.detail, tone: .danger,
-                             actionTitle: String(localized: "Fix it"),
-                             action: {
+                             actionTitle: fix.action == "retry" ? (retry ? String(localized: "Retry") : nil) : String(localized: "Fix it"),
+                             action: fix.action == "retry" && !retry ? nil : {
                                  switch fix.action {
+                                 case "retry":
+                                     guard let current = model.latest(key), !current.status.isActive, current.canSend else { return }
+                                     model.sendNow(key, text: "继续") // i18n-ignore
                                  case "edit_provider": readinessRoute = .provider(session?.launcher)
+                                 case "pick_model": openConversationModel?()
                                  case "connect_model":
                                      let launcher = session?.launcher?.trimmingCharacters(in: .whitespacesAndNewlines)
                                      if let launcher, !launcher.isEmpty {
@@ -1318,6 +1391,8 @@ struct ChatView: View {
                                  default: readinessRoute = .providerWizard
                                  }
                              },
+                             altTitle: canDrop ? String(localized: followsDefault ? "Follow default" : "Undo pick") : nil,
+                             alt: canDrop ? { Task { await model.dropConversationModel(key) } } : nil,
                              details: [raw].compactMap { $0 })
     }
 
@@ -1348,9 +1423,10 @@ struct ChatView: View {
         case .modeChange(_, let change): ModeChangeLine(change: change, session: session)
         case .modelChange(_, let from, let to):
             if let names = line.modelNames { ModelChangeDivider(names: names, rawFrom: from, rawTo: to) }
-        case .apiError(_, let info, _) where turnErrorCard(line, raw: info.raw) != nil:
-            turnErrorCard(line, raw: info.raw)
         case .apiError(let item, let info, let count):
+            if let card = turnErrorCard(line, raw: info.raw, status: info.status) {
+                card
+            } else {
             // Retry only when the error is the last thing, the agent is not working (someone may have retried already) and
             // trying again can help (not a login or a bad request). An exhausted model recovery chain that can send
             // qualifies too (#7824): Retry runs the request again, on the configured model once it is back, even after a
@@ -1363,6 +1439,7 @@ struct ChatView: View {
                              && !status.isActive && ChatLines.lastOfChat(currentLines())?.id == line.id
                              && model.session(key)?.turnErrorCode != ModelFallbackText.unavailableCode
                              ? { model.sendNow(key, text: "继续") } : nil) // i18n-ignore
+            }
         case .userImages(_, let items):
             // Close to the bubble below it, like the photos on a message being sent (the list's spacing is 14).
             SentPhotos(images: items.compactMap(\.image)).padding(.bottom, -8)
@@ -1942,12 +2019,12 @@ struct ChatView: View {
     private var liveShown: Bool { ChatLiveText.shows(store) }
     /// The chat draws live text: the assistant's in the main chat, and an agent's as Claude shows it in any chat of it
     /// (docs/integrations/claude-integration.md "Live replies (MessageDisplay)"), the same way.
-    private var drawsLive: Bool { style == .assistant || store.liveIsAgents }
+    private var drawsLive: Bool { !backgroundActivity && (style == .assistant || store.liveIsAgents) }
 
     /// Local feedback is per conversation, never a speculative change to the runtime's session state.
     private var sendPhase: ChatSendFeedback.Phase? {
         _ = awaitTick
-        guard viewedAgent == nil, let feedback = store.sendFeedback else { return nil }
+        guard !backgroundActivity, viewedAgent == nil, let feedback = store.sendFeedback else { return nil }
         // The queue strip already owns queued messages; do not add another progress home for them.
         if store.pending.contains(where: { $0.id == feedback.id }), !shownPending.contains(where: { $0.id == feedback.id }) { return nil }
         return feedback.visible(now: .now)
@@ -1989,11 +2066,11 @@ struct ChatView: View {
 
     /// Messages sent from here that the transcript does not have yet, minus those Claude holds in its queue (the queue
     /// strip shows them).
-    private var shownPending: [PendingMessage] { pendingPlacement.chat }
+    private var shownPending: [PendingMessage] { backgroundActivity ? [] : pendingPlacement.chat }
 
     /// The row's kept messages (#10194) the transcript does not have yet (the row may lag behind the line).
     private var keptUndelivered: [UndeliveredMessage] {
-        guard let list = session?.undelivered, !list.isEmpty else { return [] }
+        guard !backgroundActivity, let list = session?.undelivered, !list.isEmpty else { return [] }
         return UndeliveredMessage.shown(list, landed: store.items.compactMap(\.clientMsgID),
                                         drawn: (store.pending + store.arriving).map(\.id.uuidString))
     }
@@ -2067,7 +2144,8 @@ struct ChatView: View {
     /// The custom header's full height (Agents; the assistant's floating bar): the other panes sit below it, the chat
     /// list scrolls under it.
     private var headerRoom: CGFloat {
-        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
+        if backgroundActivity { return 0 }
+        return style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
     }
 
     /// Git only for repositories, files only when we know the directory; the assistant has neither.
@@ -2489,7 +2567,9 @@ struct ChatView: View {
     }
 
     @ViewBuilder private var footer: some View {
-        if let a = viewedAgent {
+        if backgroundActivity {
+            EmptyView()
+        } else if let a = viewedAgent {
             SubagentFooter(agent: a) { view(nil) }
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
@@ -2808,7 +2888,8 @@ struct ChatView: View {
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
                     AnyView(Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
-                             covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) })
+                             covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) },
+                             openAssistantModel: openAssistantModel)
                         // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                         // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
                         .layoutIsland(enabled: !usesShellComposer && !AppStyle.current.usesBeautifulUI))
@@ -2989,14 +3070,18 @@ struct ChatView: View {
                         #endif
                 }
             }
-            switch ChatLines.placeholder(lines: lines, hasTranscript: !rows.isEmpty,
+            switch ChatLines.placeholder(lines: lines, hasTranscript: !backgroundActivity && !rows.isEmpty,
                                          hasPending: !kept.isEmpty || !pending.isEmpty || !store.pending.isEmpty || !store.arriving.isEmpty,
                                          hasLiveText: drawsLive && !(frozen?.text ?? store.liveText).isEmpty,
                                          loadedOnce: store.loadedOnce, historyNotFound: store.historyNotFound) {
             case .loading:
                 ChatSkeleton().flippedBack().accessibilityIdentifier("chat-loading-placeholder")
             case .empty:
-                if model.session(key)?.isStopped == true { // read-only (#4754): nothing to start from here
+                if backgroundActivity {
+                    EmptyStateView(symbol: Theme.Icon.recent, title: String(localized: "No background activity"),
+                                   message: String(localized: "Completed quiet rounds stay here for you to inspect."))
+                        .flippedBack().accessibilityIdentifier("background-activity-empty")
+                } else if model.session(key)?.isStopped == true { // read-only (#4754): nothing to start from here
                     EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages"),
                                    message: String(localized: "This Agent stopped before it left any messages."))
                         .flippedBack().accessibilityIdentifier("chat-empty-placeholder")
@@ -3990,7 +4075,7 @@ struct ChatView: View {
     /// (Agents chats, a subagent's transcript, a voice call, which puts the capsules away): there the chat is gone by the
     /// composer's top edge.
     private var underFooter: CGFloat {
-        style == .assistant && viewing == nil && !VoiceCalls.shared.isLive(on: key) ? Self.underDock : 0
+        style == .assistant && !backgroundActivity && viewing == nil && !VoiceCalls.shared.isLive(on: key) ? Self.underDock : 0
     }
 
     /// The fog over the list's end: clear `newestGap` above the footer, where the newest message rests, and solid from
@@ -5092,6 +5177,7 @@ struct ChatView: View {
     }
 
     private var title: String {
+        if backgroundActivity { return String(localized: "Background activity") }
         if style == .dev, let t = host?.title, !t.isEmpty { return t }
         let t = session?.title ?? ""
         if style == .assistant { return t.isEmpty || t == "Claude Code" ? "Persona" : t }
@@ -5452,6 +5538,7 @@ struct Composer: View, Equatable {
         a.key == b.key && a.status == b.status && a.placeholder == b.placeholder && (a.onCleared == nil) == (b.onCleared == nil)
             && a.covered == b.covered
             && (a.pickMode == nil) == (b.pickMode == nil)
+            && (a.openAssistantModel == nil) == (b.openAssistantModel == nil)
     }
 
     @Environment(AppModel.self) private var model
@@ -5481,6 +5568,8 @@ struct Composer: View, Equatable {
     var onFocus: ((Bool) -> Void)? = nil
     /// A permission mode picked in the model menu goes through the page, which asks first where it must (#3719).
     var pickMode: ((String) -> Void)? = nil
+    /// The page owns the conversation model sheet so both this row and a model-route card open the same picker.
+    var openAssistantModel: (() -> Void)? = nil
     private var text: String {
         get { model.drafts[key] ?? "" }
         nonmutating set { model.drafts[key] = newValue }
@@ -5526,9 +5615,6 @@ struct Composer: View, Equatable {
     @State private var voiceNote: VoiceUnavailableNote?
     /// The model menu's "Other Model…" (#1644): a model ID typed by hand, through POST …/modes.
     @State private var typingModel = false
-    /// The main Persona chat's own model sheet (#6542): the conversation-scoped pick (#5033), opened from its model row.
-    @State private var showAssistantModel = false
-    @State private var assistantPanel: AssistantModelPanelModel?
 
     /// The voice call bound to this conversation, live or ended (docs/assistant/voice.md 6.2): the bar takes the box's place while
     /// it is on, and 「语音已结束 · 继续」 sits over the box after it ended by itself.
@@ -5854,7 +5940,7 @@ struct Composer: View, Equatable {
     }
 
     /// The main conversation cannot answer yet: send goes to what is missing, the draft stays.
-    private var gate: SendGate? { isMain && !status.isActive ? model.readinessGate(route: $failureRoute) : nil }
+    private var gate: SendGate? { isMain && !status.isActive ? model.readinessGate(route: $failureRoute, pickModel: openAssistantModel) : nil }
 
     private var composerNotes: some View {
         let call = voiceCall
@@ -5872,6 +5958,8 @@ struct Composer: View, Equatable {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let s = model.session(key), s.starting == true || s.startError != nil {
                 StartingNote(error: s.startError, agent: s.agentLabel, coded: s.startErrorCode?.isEmpty == false)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                SessionShellQuestion(session: s)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let s = model.session(key), let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
                 AttentionNote(reason: reason, link: s.externalLink, key: key)
@@ -5899,7 +5987,7 @@ struct Composer: View, Equatable {
             if isMain {
                 PushHealthNotice(group: key.group)
                 // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
-                ReadinessHomeCard(key: key, route: $failureRoute)
+                ReadinessHomeCard(key: key, pickModel: openAssistantModel, route: $failureRoute)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if model.session(key)?.assistant == true, let f = model.readiness.failure {
                 CodedFailureCard(failure: f, route: $failureRoute)
@@ -6002,7 +6090,7 @@ struct Composer: View, Equatable {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
                                      setsEffortOnly: setsEffortOnly, mainConversation: isMainAssistantChat,
                                      otherModel: canPickModel ? { typingModel = true } : nil,
-                                     assistantPick: assistantModelPickAvailable ? { showAssistantModel = true } : nil,
+                                     assistantPick: openAssistantModel,
                                      assistantModelName: assistantEffectiveName, pick: pickMode)
                 }
             } else if AppStyle.current.usesBeautifulUI {
@@ -6019,7 +6107,7 @@ struct Composer: View, Equatable {
                                models: canPickModel ? PromptItems.composerModels(running: model.session(key)?.model, list: runningModels) : [],
                                modelID: PromptItems.runningModelID(model.session(key)?.model, list: runningModels),
                                assistantModelName: assistantModelPickAvailable ? (assistantEffectiveName ?? String(localized: "Change Model…")) : nil,
-                               assistantPick: assistantModelPickAvailable ? { showAssistantModel = true } : nil,
+                               assistantPick: openAssistantModel,
                                pickModel: { id in
                                    switch PromptItems.modelPick(id, running: model.session(key)?.model, list: runningModels) {
                                    case .typeID: typingModel = true // #1644: through …/modes
@@ -6230,16 +6318,6 @@ struct Composer: View, Equatable {
             pickMode?(mode)
         }) {
             PermissionModeSheet(key: key) { permissionsPick = $0 }
-        }
-        .onChange(of: showAssistantModel) { _, on in
-            if on, assistantPanel == nil {
-                assistantPanel = AssistantModelPanelModel(key: key, machine: key.machineRef)
-            }
-        }
-        .sheet(isPresented: $showAssistantModel, onDismiss: { assistantPanel = nil }) {
-            if let assistantPanel {
-                AssistantModelSheet(session: model.session(key), panel: assistantPanel)
-            }
         }
         // Keep the effective Main chat model fresh so the composer title matches what the next message runs (#6542):
         // re-read when the conversation changes or Model/Assistant settings change. A transcript rev would cancel this

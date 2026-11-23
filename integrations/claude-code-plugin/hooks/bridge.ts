@@ -8,7 +8,7 @@ export const BASE = 'http://persona/claude-plugin/v1'
 /** Optional protocol capabilities this plugin version serves on /poll. */
 export const CAPABILITIES = ['busy_input', 'interrupt', 'settings'] as const
 
-/** How long deliver waits for $.prompt.submit to reject or drop before treating a mid-turn call as queued. */
+/** How long deliver waits before releasing the poll loop while the real submit result continues asynchronously. */
 export const SUBMIT_QUEUE_SETTLE_MS = 250
 
 /** How long the node may hold a poll: under the 30 s after which Claude Code's fetch gives up. */
@@ -103,7 +103,7 @@ function readSettings(raw: unknown): SettingsUpdate | undefined {
   const m = typeof model === 'string' && model !== '' ? model : undefined
   const ef = isEffortChoice(effort) ? effort : undefined
   if (m === undefined && ef === undefined) return undefined
-  return { id, ...(m !== undefined ? { model: m } : {}), ...(ef !== undefined ? { effort: ef } : {})
+  return { id, ...(m !== undefined ? { model: m } : {}), ...(ef !== undefined ? { effort: ef } : {}) }
 }
 
 /** Reads a poll's answer: status and body as `$.http.fetch` resolved them. */

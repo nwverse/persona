@@ -463,7 +463,7 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 type AssistantContext struct {
 	ScheduledWorkPlan bool // Inline instructions for a granted scheduled round when the manager uses persona-work.
 	Main              bool
-	Leader            bool // a leader conversation: explicit manual-Agent tasks only; new task_plan work is main-supervised
+	Leader            bool // a direction lead supervises its planned tasks and explicitly assigned Agents
 	Owner             string
 	Snapshot          string
 	// Directions: for the main conversation, the current leaders used as direction labels;
@@ -550,6 +550,9 @@ type BriefFacts struct {
 	Day *BriefDay
 	// Setup: the lines of the weekly recommended-setup block (#5085), ready to read; none leaves the section out.
 	Setup []string
+	// Captures: the quick-capture lines (#13502), ready to read; a sensitive capture is only counted. None leaves the
+	// section out.
+	Captures []string
 }
 
 // BriefDay is today's all-day recording in the evening routine's facts (#4741), the day's parts merged by time; the

@@ -340,6 +340,9 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - Claude Code 2.1.206 changed `/effort` to a slider ("←/→ to adjust · Enter to confirm", low at the left), removing the old list's "for this session only";
   node's `tuiSetEffort` recognizes both (`effortPicker`). Confirming the slider writes `effortLevel` in `~/.claude/settings.json` ("saved as your default for new sessions"),
   not just this session. `CLAUDE_CODE_EFFORT_LEVEL` in the environment (settings.json `env` or launcher) wins; Claude only replies "… overrides this session" and changes nothing, and the App reports that accurately.
+- Claude Code 2.1.330 advertises the session-only confirmation key in the `/effort` footer (#13534). Read it after moving the slider.
+  Savable levels offer `s`, while a session-only selection such as `max` uses Enter. The effort indicator above the input box
+  can confirm the level when the command's result is outside the visible area.
 - Effort `auto` (Claude Code 2.1.316) works only through `/effort auto`: `--effort auto` warns and is ignored, and settings.json `effortLevel: auto`
   is silently dropped (`max` too; settings accepts only low…xhigh). The picker has no auto position. `/effort auto` clears this model's default in settings;
   phone auto handling must differ by path (`docs/apple/ios.md` ("Effort and permission modes")). Testing `/effort …` on a dev machine also changes real settings.json; don't use your own configuration.
@@ -572,6 +575,10 @@ Measured with `claude plugin … --json` in throwaway `CLAUDE_CONFIG_DIR`s while
   messages in a row taken during one long turn, the thirteenth never written anywhere). Never treat an inbox write as a
   delivery, and prefer the plugin's `$.prompt.submit({ asUser: true })` for the owner's words whenever the session's
   plugin can take them, busy or not (`docs/integrations/claude-integration.md` "Owner input through the Persona plugin").
+- Run `claude plugin validate` and `claude plugin test` on the exact conflict-resolved head, not only the pre-merge
+  branch: one lost `}` kept every hook from loading. A timer that releases a busy poll is only a scheduling boundary,
+  never `submitted: true`; let the real submission continuation ack and cover delayed rejection and `drop`, idle and
+  busy (#11980).
 
 ## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
 

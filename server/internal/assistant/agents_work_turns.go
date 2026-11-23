@@ -565,7 +565,7 @@ func turnErrorTransient(c proto.Session) bool {
 	if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable {
 		return false
 	}
-	if sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable {
+	if code := sessionTurnErrorCode(c); code == proto.TurnErrorModelFallbackUnavailable || code == proto.TurnErrorImagesTooLarge {
 		return false
 	}
 	switch c.TurnErrorKind {
@@ -609,11 +609,12 @@ var (
 	// a request too large (413).
 	userErrorStatus = lazyre.New(`\b(400|401|403|413)\b`)
 	rateLimitStatus = lazyre.New(`\b429\b`)
-	// userErrorWords: the auth words shared with the node's failed-turn check (assistantwire.AuthErrorWords, #4669),
-	// then a request the service refuses as it is, a context too long, an interrupt.
-	userErrorWords = append(slices.Clone(assistantwire.AuthErrorWords),
+	// userErrorWords: the auth and image-limit words shared with the node's failed-turn check
+	// (assistantwire.AuthErrorWords, #4669; assistantwire.ImageLimitErrorWords, #13045), then a request the service
+	// refuses as it is, a context too long, an interrupt.
+	userErrorWords = append(append(slices.Clone(assistantwire.AuthErrorWords), assistantwire.ImageLimitErrorWords...),
 		"invalid_request_error", "invalid request", "prompt is too long", "context length", "context window", "context_length_exceeded",
-		"maximum context", "too many tokens", "request too large", "request_too_large",
+		"maximum context", "too many tokens",
 		"interrupted by user", "request was aborted", "aborted by user", "user aborted")
 )
 

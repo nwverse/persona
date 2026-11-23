@@ -230,7 +230,7 @@ func (ps *extensions) assistantCredentials(ctx context.Context, id, contribution
 	out := map[string]string{}
 	for _, n := range names {
 		if v, ok := res.Env[n]; ok {
-			out[n] = v
+			out[n] = extension.HostLoopbackURL(v) // a sandboxed program says host.persona.internal; a gate outside it dials 127.0.0.1 (#13540)
 		}
 	}
 	return out

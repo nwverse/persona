@@ -355,6 +355,9 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 	} else {
 		v, _, err = s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
 			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, doneWhen, expect
+			if s.isLeader(ctx, supervisor) {
+				v.SupervisorSource = "plan"
+			}
 			return true
 		})
 		if err != nil {
@@ -581,9 +584,11 @@ func (s *Service) adoptedTitle(ctx context.Context, c proto.Session, given, prom
 // todo's notes, and its title when task has none. An agent on a task of self's stays on it, unchanged until the send.
 func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.Session, task sendTask, text string) (*handedTask, error) {
 	// Decided under adoptMu (adoptAgent): another hand-off may have put the agent on a task since sendTaskAllowed.
-	// Only the configured main supervises an assistant hand-off. With no main, keep the origin but leave Supervisor
-	// empty: the calling leader must not become the acceptance authority for its own assistant-dispatched task (#5732).
+	// The calling direction lead owns its hand-off; ordinary side conversations use main.
 	supervisor := s.settings(ctx).Main
+	if s.isLeader(ctx, self) {
+		supervisor = self
+	}
 	todo, made, err := s.adoptAgentFor(ctx, self, supervisor, am, c, task.Title, text, text, task.DoneWhen, task.ExpectMinutes, adoptionOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("%w; nothing was sent", err)
@@ -985,9 +990,13 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 		step = min(step, steps)
 	}
 	// A task leader's worker has no owner briefing to wait for: its report goes to the leader at once, urgent or not.
-	notUrgent := a.Urgent != nil && !*a.Urgent && !s.agentSupervised(t)
+	// Immersive attention mode takes a question that set no urgent and is not about the matter in focus as one that
+	// can wait (attention.go); an explicit urgent:true always goes at once.
+	saidLater := a.Urgent != nil && !*a.Urgent
+	byMode := a.Urgent == nil && a.Kind == upReportQuestion && s.attentionDefersQuestion(ctx, t, machine, session)
+	notUrgent := (saidLater || byMode) && !s.agentSupervised(t)
 	if notUrgent && a.Kind == upReportQuestion {
-		answer, queued := s.reportLater(ctx, t, machine, session, text, evidence, now)
+		answer, queued := s.reportLater(ctx, t, machine, session, text, evidence, byMode, now)
 		if queued {
 			return answer, nil
 		}
@@ -1005,8 +1014,21 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 // reportLater keeps a question the agent said can wait without waking its supervisor. An active reporting conversation
 // gets the deferred report in its own feed, never the main briefing queue. Otherwise the question waits in the queue of
 // questions for the next briefing (later.go). queued false: it could not be kept (no morning or evening briefing would
-// list it, or the queue is full), and the answer says why; the report then goes as an urgent one.
-func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, text string, evidence []string, now time.Time) (answer string, queued bool) {
+// list it, or the queue is full), and the answer says why; the report then goes as an urgent one. byMode: the agent
+// set no urgent and immersive attention mode deferred it, so the answers speak of the mode, not of urgent:false, and
+// tell the agent to ask again with urgent:true when it is blocked.
+func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, text string, evidence []string, byMode bool, now time.Time) (answer string, queued bool) {
+	// notKept is the prefix when the question could not be kept: it goes as an urgent one after all.
+	notKept := func(why string) string {
+		if byMode {
+			return "" // it goes as usual: the agent asked nothing special, so there is nothing to explain
+		}
+		return "urgent:false was ignored: " + why + ", so it is sent as an urgent question. "
+	}
+	retry := "If you cannot go on without the answer, ask it again without urgent:false."
+	if byMode {
+		retry = "The user is in a focus block on other work. If you cannot go on without the answer, ask it again with urgent:true."
+	}
 	if t.Supervision != nil && t.Supervision.Supervisor == t.Origin {
 		if _, reporting := s.reporterOf(ctx, t.Origin); reporting {
 			if s.reporterStopped(ctx, t.Origin) {
@@ -1015,19 +1037,19 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 			body := reportBody{Kind: upReportQuestion, Text: text, Evidence: evidence, Later: true}
 			if _, err := s.appendFeed(ctx, t.Origin, feedReport, t.ID, body); err != nil {
 				s.logf("task %s: reporting question feed: %v", t.ID, err)
-				return "urgent:false was ignored: the reporting conversation could not keep the question, so it is sent as an urgent question. ", false
+				return notKept("the reporting conversation could not keep the question"), false
 			}
 			s.logf("task %s: %s reports a question deferred in its reporting conversation", t.ID, short(session))
 			return "Queued without waking your reporting conversation; it can answer there when it next runs. Go on with other work. " +
-				"If you cannot go on without an answer, ask it again without urgent:false.", true
+				retry, true
 		}
 	}
 	if !s.laterBriefed(ctx) {
-		return "urgent:false was ignored: no morning or evening briefing is switched on to list it, so it is sent as an urgent question. ", false
+		return notKept("no morning or evening briefing is switched on to list it"), false
 	}
 	_, ok, again := s.laterQueue(ctx, t.ID, machine, session, text, now)
 	if !ok {
-		return "urgent:false was ignored: the queue of questions that can wait could not take it, so it is sent as an urgent question. ", false
+		return notKept("the queue of questions that can wait could not take it"), false
 	}
 	if again {
 		return "Already queued: the owner sees this question in the next morning or evening briefing. Go on with other work.", true
@@ -1038,7 +1060,7 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 	}
 	s.logf("task %s: %s reports a question that can wait", t.ID, short(session))
 	return "Queued: the owner sees it in the next morning or evening briefing, under \"Can wait\", and answers it in your chat when they get to it. " +
-		"Nobody is woken and nobody answers right away: go on with other work. If you cannot go on without the answer, ask it again without urgent:false.", true
+		"Nobody is woken and nobody answers right away: go on with other work. " + retry, true
 }
 
 // reportNow sends a report to the supervisor of task t as a signal, and shows it in its conversation.
