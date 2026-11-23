@@ -245,6 +245,7 @@ func skipJSONSpace(line []byte, i int) int {
 // display_completions, each holding an item shaped like event_msg/item_completed's. The rest of the line (the model
 // context, up to a megabyte after a compaction) is not needed.
 type historyMutation struct {
+	TurnID             string `json:"turn_id"`
 	DisplayCompletions []struct {
 		Item *codexItem `json:"item"`
 	} `json:"display_completions"`
@@ -263,7 +264,7 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 		var out []proto.Item
 		for _, c := range h.DisplayCompletions {
 			if c.Item != nil {
-				out = append(out, codexItemLines(seq, l.Timestamp, c.Item, meta)...)
+				out = append(out, codexItemLines(seq, l.Timestamp, h.TurnID, c.Item, meta)...)
 			}
 		}
 		meta.codexWorked(out)
@@ -317,6 +318,7 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 		return nil
 	case "task_started":
 		meta.TurnOpen, meta.TurnClosed = true, false
+		meta.CodexClosedTurnID = ""
 		meta.codexTurnID, meta.codexUserID, meta.codexTurnModel = p.TurnID, "", ""
 		meta.codexUsage = proto.TokenUsage{}
 		meta.clearTurnError()
@@ -326,6 +328,7 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 		return nil
 	case "task_complete":
 		meta.endTurn(seq, l.Timestamp)
+		meta.CodexClosedTurnID = p.TurnID
 		// A turn the model service failed writes no answer: its error is here (Codex 0.166, #2185).
 		meta.clearTurnError()
 		if meta.TurnError, meta.TurnErrorKind = CodexTurnError(p.Error); meta.TurnError != "" {
@@ -348,6 +351,7 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 		return []proto.Item{it}
 	case "turn_aborted":
 		meta.endTurn(seq, l.Timestamp)
+		meta.CodexClosedTurnID = p.TurnID
 		meta.clearTurnError() // stopped by the user: no failure
 		meta.turnWorked = false
 		it := mk(0, "", "system", proto.KindNotice)
@@ -367,7 +371,7 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 	if p.Item == nil {
 		return nil
 	}
-	out := codexItemLines(seq, l.Timestamp, p.Item, meta)
+	out := codexItemLines(seq, l.Timestamp, p.TurnID, p.Item, meta)
 	meta.codexWorked(out)
 	return meta.codexModel(out)
 }
@@ -398,7 +402,20 @@ func (m *Meta) codexWorked(items []proto.Item) {
 }
 
 // codexItemLines maps one finished item (UserMessage, AgentMessage, CommandExecution…) to chat items, once per id.
-func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.Item {
+func codexItemLines(seq int, ts time.Time, turnID string, it *codexItem, meta *Meta) (items []proto.Item) {
+	// A command can finish after its turn, with no new prompt or reply. Keep
+	// the chat items, but do not move the time used for unseen and triage.
+	// Older rollouts can omit the next start marker; a different turn id is
+	// evidence that its command belongs to a new exchange instead.
+	lateCommand := it.Type == "CommandExecution" && meta.TurnClosed &&
+		(turnID == "" || meta.CodexClosedTurnID == "" || turnID == meta.CodexClosedTurnID)
+	if !lateCommand {
+		defer func() {
+			for _, item := range items {
+				meta.observeActivity(item)
+			}
+		}()
+	}
 	if it.Type == "CommandExecution" { // its call and result can be on two lines (backgrounded, then its end)
 		return codexCommandLines(seq, ts, it, meta)
 	}

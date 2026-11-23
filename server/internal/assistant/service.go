@@ -411,6 +411,7 @@ func New(o Options) *Service {
 	s.scheduleGrantRoutes()
 	s.placeRoutes()
 	saved.Register(saved.Host{Store: func() any { return s.store() }, Event: s.event, Handle: s.handle, Full: fullRole, BodyErr: writeBodyErr})
+	s.resourceRoutes()
 	s.repositoryRoutes()
 	s.taskRoutes()
 	s.viewActionRoutes()

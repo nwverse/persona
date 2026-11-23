@@ -1614,3 +1614,9 @@ embedded resource back into native `USER_INPUT.content` with a `Content of perso
 Removing only the snapshot XML leaves that label visible. Check the native export before blaming replay, and clean
 both the companion and pane history projections. Require the complete leading Persona resource envelope so ordinary
 labels and other URI schemes survive; keep embedded-resource transport intact and version the history format.
+
+## A persisted triage wait needs answerable evidence
+
+A read-only session skips card creation, but must not skip evidence validation. Normalize model `blocked / user`
+results with no grounded question or authorization link before storing them and when displaying old records.
+Otherwise a guess appears as "Awaiting your reply" with nothing in the chat to answer.

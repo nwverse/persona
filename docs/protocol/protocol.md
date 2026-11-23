@@ -2503,6 +2503,7 @@ Server → client:
 | `push_grading` | `enabled` (boolean): hub push-grading switch toggled; open web and desktop clients update notifications, sounds, and alert badges immediately |
 | `endpoints` | `endpoints` (the full candidate list, only sent to connections that declared the capability of the same name) |
 | `client_hello_ack` | `heartbeat: {interval, pong_timeout}` (the seconds actually used after this negotiation) |
+| `resources` | `resources`: registered runner definitions, last mirror with `observed_at` / `attempted_at` / `unknown`, versioned queue tickets and durable CI leases; emitted after each mirror refresh. Read once with `GET /api/v1/resources`. |
 | `machines` | `machines` (also after a rename: the whole list, with the new `name`) |
 | `file_transfer` | `transfer` (`FileTransfer`): a computer-to-computer transfer started, progressed (at most once a second) or ended; `manager` identifies a non-default manager. Only full devices that declared `file_transfer` receive it; not in the event log, so clients `GET` the current transfers after reconnecting ([file-transfer.md](file-transfer.md)) |
 | `managers` | No payload: the manager roster changed (created, renamed, connected, disconnected, deleted, new reported bot identities); clients re-read `GET /api/v1/managers` ("Bus" below, [managers.md](../assistant/managers.md) "Clients"). Only sent to connections that asked for feature `managers` (`?features=` or `client_hello.features`), not in the event log |
@@ -4135,6 +4136,7 @@ hub → node requests:
 
 | method | params → result |
 | --- | --- |
+| `resource.queue` / `resource.result` | `{mirror:{machine,target,port?,identity?},project?,commit?,groups?}`: fixed read-only runner SSH commands. Queue returns freshness and v1 JSON or unknown/plain text; result returns a v1 outcome or null. Older nodes return unknown method, preserving stale mirror data. |
 | `node.info` | → `{hostname, os, arch, home, herdr_version, claude_version, version, system, engine, engines}` (`system`: see Machine, read once at node start; `engine` is the engine the node currently uses, `engines` are those it found, see "Engines"; old nodes lack these two). If `claude_version` is empty on connect (the `claude --version` run failed), the hub asks again after 1, 2, 5, 10, 30 minutes and then hourly; once it gets a value it updates the machine and pushes it to the App, and stops when the connection drops (#542) |
 | `engine.use` | `{engine, hosts?, default?}` → `{engine}`: switch to this engine, or to the set in `hosts` / `default` for a node that takes sets ("Engines", "Host sets"; unknown ones error). If it equals the current one, nothing happens; otherwise it swaps the host, drops the old engine's Agents (refresh results started before the switch and returning after it are discarded), ends all terminal streams (each pushes `terminal.end` with an error saying the engine changed), swaps the event stream, and pushes one `sessions.changed`. Multiple `engine.use` calls run in order |
 | `launchers.list` | `{host?, source?, refresh?, cache_only?}` → `{launchers, shell?, rc_file?, host?, host_runtime?, source?}`. `source:"external"` returns only the enabled local adapter's sanitized catalog before shell/host/runtime discovery; `refresh:true` joins its bounded inventory load, and missing registration or refresh failures are typed errors, not a healthy empty source. Without an explicit source or host, the Assistant picker's fallback uses `cache_only:true` to return the last completed shell list and live runtime entries without waiting for a shell. An explicit `refresh:true` takes precedence. Ordinary requests retain their original source errors and last-seen behavior. Without `host`: the machine's own launchers (Settings, the main chat's menu: the assistant runs them on its command line). With `host`, a start's engine host (#8140): what a start there can run; where that host is an engine runtime that runs only its own launchers (`caps.same_kind`, Paseo), its launchers in its own order (its default first), the other runtimes' and the desktop apps', with `host_runtime: true`: the hub adds no managed launcher (but an Antigravity one, which its own runtime runs) and no plain `claude` then, since the engine would run one of its own in their place; any other host answers as without it, saying `host`. A runtime's launcher whose Agents' approval is a switch a start in `bypassPermissions` turns on (Paseo's Auto Accept) has `auto_accept: true` (#8141, "Runtime ↔ node"). A Codex launcher has `agent: "codex"`, `prompt_optional: true` when the node starts it with no first message too (`node/codex_waiting.go`), and `run_here: true` when the node starts it in a shell pane the user picked and keeps that pane when the start fails (`panes.agent`, #5504); a runtime's launcher has `display_name` when the runtime names its provider (Paseo's label: the apps' pickers say "Grok", not `grok`) and, when its agent is not Claude Code, `permission_modes` (#8261): the modes a start on it takes (Paseo: `["default","bypassPermissions"]` where the provider has Auto Accept or full-access, else `["default"]`), from which New Agent offers "Launcher default" (sent as no mode) and Full access, and only the efforts its model lists; `source: "claude_desktop"` is the launcher `claude-desktop`, which starts the session in Claude's desktop app (`docs/integrations/claude-integration.md`, "New sessions in the desktop app"), and `source: "codex_app"` the launcher `codex-app`, which starts the chat in the Codex App (`docs/integrations/codex.md`, "New chats in the Codex App") |
@@ -6212,3 +6214,78 @@ The existing `follows_setting` flag is not sufficient authority.
 | Method | Direction | Params / result |
 | --- | --- | --- |
 | `assistant.cache_clear` | manager → node | `{session_id}` → `{ok: true}`; cancel cache replay and erase its in-memory snapshot without stopping ordinary forwarding; used when archiving a conversation. Older nodes may reject it; the manager's fresh policy check also denies archived conversations. |
+
+
+## Shared CI resources
+
+This advanced interface serves Agent operators sharing a runner. The manager owns
+`resource_leases` in PostgreSQL; the hub only relays routes and events. A fresh
+installation has no registered runners and starts no external polling.
+
+| Method | Route | Contract |
+| --- | --- | --- |
+| GET | `/api/v1/resources?resource=` | `{resources: [...]}`; optional resource filter. Capacity, last queue mirror and durable leases share one source with `resource_status`. |
+| POST | `/api/v1/resources/{action}` | Full-device acquire/get/renew/release/cancel; the request names resource and holder, with lease ID/token for mutations. Operator requests may set priority 1; session tools always use priority 0. |
+| PUT | `/api/v1/resources` | Full devices only. `{resources: [{id,capacity,mirror:{machine,target,port?,identity?},repositories?:{project:gitURL}}]}`. Replace the registry; an empty list disables polling. Existing runner locks remain authoritative. |
+
+Configure the registry in Computers > Shared resources > Configure runners. Values
+are operator-supplied; the node executes fixed SSH commands without a local shell.
+The node reads `queue --json` every 15 seconds. Version 1 carries `v`, `slots`,
+`now`, `running` and `waiting`. Tickets carry `ticket`, `project`, `ref`, `commit`,
+`groups`, optional `tag`, and `started_at` or `enqueued_at`. Unknown schemas and
+legacy text are display-only. An unreachable node preserves the last successful
+mirror and marks it unknown; clients show its age rather than an empty queue.
+Duplicate tickets are marked by project, full commit and sorted unique groups.
+Legacy entries may have empty ticket, tag or commit. They remain visible using the
+run name as their display identity; an absent commit is never eligible for dedupe.
+A result with null exit and empty run/finished_at means no known result.
+
+`personad resource status [resource]` prints the same JSON.
+`personad gate <project> <ref> [groups...]` (or one quoted request) resolves branch
+names through the registered repository URL and submits the immutable commit.
+Exactly one runner must be registered for the gate command. Bundle input is
+bounded to 128 MiB, must expose exactly one reference, and is rewound for SSH.
+
+Admission is serialized by a PostgreSQL transaction advisory lock per resource,
+with a partial unique index on active dedupe keys. Same-key work returns `joined`;
+a successful result no older than 12 hours returns `cached`. Failure or missing
+exit status is never cached. Only the holder can renew, release or cancel; joined
+sessions may read the result. Queue order is priority descending then sequence,
+with at most two queued requests per session. Leases retain state over manager
+restarts. Queued and granted process leases have a 90-second heartbeat; the client renews
+every 20 seconds, including while waiting. A queued lease renews with token 0;
+granted leases require their fencing token. An old fencing token cannot settle a later holder.
+
+Gate output preserves runner stdout and its exit code. Joined callers receive the
+same captured result (bounded to the last 256 KiB); cached external successes print
+`RESULT=` and `EXIT_CODE=`. Unknown outcomes return a nonzero exit, never success.
+If the manager cannot be reached before admission, the explicit
+`PERSONA_GATE_SSH_TARGET`, `PERSONA_GATE_SSH_PORT` and
+`PERSONA_GATE_SSH_IDENTITY` fallback settings allow the original SSH queue with a
+`DEGRADED` notice. Once admitted, uncertainty never triggers a second submission.
+Deployment, browser and rate leases are not implemented by this interface.
+
+### Shared runner rollout checks
+
+After an operator deploys the change, register one runner and verify:
+
+1. With three running and five waiting tickets, compare the page and
+   `resource_status` against the runner JSON: tickets, projects, commits, groups,
+   positions, elapsed time and duplicate markers must match.
+2. Submit one immutable project/commit/group set from two sessions. Only one
+   runner ticket appears; the second returns `joined`; both report the same result
+   and exit code. Submit the successful key again within 12 hours: `cached`, no
+   new ticket. Reordered or repeated groups are the same set.
+3. Queue three different keys from one session while capacity is occupied: the
+   third is refused. Terminate a granted CLI and verify expiry within 90 seconds,
+   queue progress, and rejection of its old fencing token. Restart the manager
+   while work is queued and confirm leases remain.
+4. Disconnect the mirror node: retained rows remain visible with an increasing
+   stale age. Reconnect and confirm fresh data replaces them. A legacy runner
+   shows text/unknown and cannot manufacture a cached success.
+5. Check English, Simplified Chinese and Japanese in light and dark appearance.
+   The page is secondary to Computers, uses existing surfaces and buttons, and
+   does not expose operational details on the main conversation.
+
+Rollback: restore the prior binary and registry. The runner's own locks and
+commands remain compatible; the additive manager table can remain in place.

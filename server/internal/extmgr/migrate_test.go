@@ -31,7 +31,7 @@ func TestAMigratedBuiltinIsReadThroughItsSubscription(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := []subscriptions.Item{{UID: "m1", Thread: "chat-1", Title: "From the subscription", Kind: "sub_message"}}
-	if err := store.CommitRun(ctx, subscriptions.RunCommit{Sub: sub, Revision: 1, Items: items, Now: now.Add(-30 * time.Second)}); err != nil {
+	if _, err := store.CommitRun(ctx, subscriptions.RunCommit{Sub: sub, Revision: 1, Items: items, Now: now.Add(-30 * time.Second)}); err != nil {
 		t.Fatal(err)
 	}
 	h.subs = subscriptions.New(h.subscriptionOptions(store))
@@ -164,7 +164,7 @@ func TestASwitchedSourceShowsItsSubscriptionsReads(t *testing.T) {
 		} else {
 			next.RunState, next.Error, next.FailCount = subscriptions.StateFailing, p, next.FailCount+1
 		}
-		if err := store.CommitRun(ctx, subscriptions.RunCommit{Sub: next, Revision: cur.Revision, Now: at}); err != nil {
+		if _, err := store.CommitRun(ctx, subscriptions.RunCommit{Sub: next, Revision: cur.Revision, Now: at}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -226,7 +226,7 @@ func TestASwitchedSourceKeepsItsBuiltinsAbilities(t *testing.T) {
 	row := connector.InboxThing{Thread: "chat:C1", Kind: "mention", Title: "Made-up: the plan", Last: "m7", At: now.Add(-2 * time.Minute)}
 	raw, _ := json.Marshal(row)
 	items := []subscriptions.Item{{UID: "t:1", Thread: row.Thread, Title: row.Title, Kind: row.Kind, Thing: raw}}
-	if err := store.CommitRun(ctx, subscriptions.RunCommit{Sub: sub, Revision: 1, Items: items, Now: now.Add(-30 * time.Second)}); err != nil {
+	if _, err := store.CommitRun(ctx, subscriptions.RunCommit{Sub: sub, Revision: 1, Items: items, Now: now.Add(-30 * time.Second)}); err != nil {
 		t.Fatal(err)
 	}
 	h.subs = subscriptions.New(h.subscriptionOptions(store))

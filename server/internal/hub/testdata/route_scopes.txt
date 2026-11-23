@@ -347,6 +347,7 @@ notify               GET /api/v1/push/stats/daily
 -                    GET /api/v1/recordings/{id}/photos
 -                    GET /api/v1/recordings/{id}/photos/{n}
 -                    GET /api/v1/remote-image
+-                    GET /api/v1/resources
 agents.read          GET /api/v1/saved-agent-searches
 agents.read          GET /api/v1/sessions
 agents.read          GET /api/v1/sessions/archived
@@ -647,6 +648,7 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/recordings/{id}/minutes/todos
 -                    POST /api/v1/recordings/{id}/photos
 -                    POST /api/v1/recordings/{id}/segments
+-                    POST /api/v1/resources/{action}
 -                    POST /api/v1/saved-agent-searches
 agents.control       POST /api/v1/sessions
 -                    POST /api/v1/sessions/{mid}/{sid}/agent-messages
@@ -801,6 +803,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/recordings/{id}/audio
 -                    PUT /api/v1/recordings/{id}/private
 -                    PUT /api/v1/recordings/{id}/title
+-                    PUT /api/v1/resources
 -                    PUT /api/v1/subscriptions/{id}
 todos.write          PUT /api/v1/todos/{id}/agents/{mid}/{sid}
 todos.write          PUT /api/v1/todos/{id}/repositories

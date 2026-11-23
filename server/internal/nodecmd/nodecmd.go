@@ -34,7 +34,9 @@ type Build struct {
 }
 
 // Usage is the device commands' part of the usage text (the node part is NodeUsage).
-const Usage = `  personad hook             Claude Code hook entry (reads hook JSON on stdin)
+const Usage = `  personad resource status [resource]  shared runner status as JSON
+  personad gate <project> <ref> [groups...]  join or reuse identical gate work
+  personad hook             Claude Code hook entry (reads hook JSON on stdin)
   personad mcp              Claude Code MCP server (stdio)
   personad ask "question" [--options a,b,c] [--timeout 10m] [--require-remote]
                            block until the question is answered on the phone; exit 0 allowed / option chosen (printed),
@@ -75,6 +77,10 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 	}
 	rest := args[1:]
 	switch args[0] {
+	case "resource":
+		return true, resourceCommand(ctx, rest)
+	case "gate":
+		os.Exit(gateCommand(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
 	case sandbox.AgentExecCommand:
 		stop()
 		return true, sandbox.RunAgentExec(rest)
