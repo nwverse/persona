@@ -14,6 +14,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -277,7 +278,8 @@ func TestSendParams(t *testing.T) {
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.conv"})
 	p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "unlisted", Params: map[string]any{"text": "hi"}})
 	_, attested := p["origin_known"]
-	if err != nil || len(p) != 3 || p["is_main"] != false || p["supervision_instructions"] != "" || attested {
+	if err != nil || len(p) != 4 || p["is_main"] != false || p["supervision_instructions"] != "" || attested ||
+		p["model_source"] != (modelhttp.Source{Role: "main", Session: "unlisted"}) {
 		t.Fatalf("unlisted and not yet backfilled must stay unknown: %v %v", p, err)
 	}
 	p, err = s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "side", Params: map[string]any{"text": "hi"}})
@@ -422,7 +424,7 @@ func TestBoolSettingsSet(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		def  bool
-	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"interject_background", false}, {"agent_tasks", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
+	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"interject_background", false}, {"agent_tasks", false}, {"task_lessons", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
 		key := "assistant." + c.name
 		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
 		set := func(value string) (string, bool) {

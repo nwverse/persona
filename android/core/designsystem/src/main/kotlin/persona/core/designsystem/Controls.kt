@@ -68,6 +68,7 @@ import androidx.compose.ui.node.requireDensity
 import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.chrisbanes.haze.HazeState
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
@@ -234,10 +235,32 @@ fun JIconButton(
     }
 }
 
+/** A round floating navigation action, using the same Glass material as the home header actions. */
+@Composable
+fun JHomeNavigationIconButton(
+    icon: PhIcon,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    // A control inside the page body cannot sample the body's ancestor Haze source. Sample the
+    // window-aligned page backdrop just within the circle, without recapturing the transcript.
+    val glass = if (PersonaTheme.style == AppStyle.Glass && PersonaTheme.glass != GlassLevel.Solid &&
+        LocalGlassSource.current != null) remember { HazeState() } else null
+    CompositionLocalProvider(LocalGlassSource provides glass) {
+        HomeNavigationActions {
+            Box(Modifier.clip(CircleShape)) {
+                if (glass != null) PageBackdrop(Modifier.matchParentSize().glassSource())
+                JIconButtonBox(icon, contentDescription, onClick, Modifier, enabled = true, raised = true,
+                    tint = null, badge = false, selected = false, expandOnHomePress = false, circular = true)
+            }
+        }
+    }
+}
+
 @Composable
 private fun JIconButtonBox(
     icon: PhIcon, contentDescription: String?, onClick: () -> Unit, modifier: Modifier, enabled: Boolean, raised: Boolean,
-    tint: Color?, badge: Boolean, selected: Boolean, expandOnHomePress: Boolean,
+    tint: Color?, badge: Boolean, selected: Boolean, expandOnHomePress: Boolean, circular: Boolean = false,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
@@ -265,7 +288,10 @@ private fun JIconButtonBox(
         homeAction -> Modifier.size(Tokens.MinTouch.android).then(feedback).homeNavigationGlassSurface(interactive)
         style == AppStyle.Glass -> Modifier.size(44.dp).floatingSurface(CircleShape)
         style == AppStyle.Brief -> Modifier.size(42.dp).clip(CircleShape).background(palette.surface)
-        else -> Modifier.size(40.dp).clip(RoundedCornerShape(8.dp.corner)).background(palette.surface).border(1.dp, palette.line, RoundedCornerShape(8.dp.corner))
+        else -> {
+            val shape = if (circular) CircleShape else RoundedCornerShape(8.dp.corner)
+            Modifier.size(40.dp).clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
+        }
     }
     Box(
         modifier.size(48.dp).then(if (interactive && expandOnHomePress) Modifier else Modifier.clip(CircleShape))

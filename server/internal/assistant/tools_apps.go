@@ -207,6 +207,13 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		if a.LockLists == nil { // a removal keeps out just that link; locking a whole list is the user's choice in the app
 			a.LockLists = new(false)
 		}
+		if check := kbWriteCheckOf(ctx); check != nil {
+			if text := kbUpdateText(args); text != "" {
+				if err := check(text); err != nil {
+					return "", err
+				}
+			}
+		}
 		ignored := kb.UserUnsupported(a.Kind, a.UserUpdate)
 		id, err := e.ApplyUser(a.Kind, a.ID, a.UserUpdate)
 		if err != nil {

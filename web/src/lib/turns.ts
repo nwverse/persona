@@ -97,6 +97,8 @@ export interface Segment {
    *  Codex turn's duration, a stopped turn's notice); each subagent counts once in the chat, in the exchange that
    *  launched it (chatLines' lineUsage). Absent when none of them carries tokens. */
   usage?: TurnUsage;
+  /** First observed streaming time-to-first-token (ms) in this exchange (proto.Item.TTFTMS, #12542). */
+  ttftMs?: number;
 }
 
 function blockPart(id: string) {
@@ -331,6 +333,9 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
     }
     if (it.ts) cur.end = it.ts;
     countUsage(cur, it);
+    if (cur.ttftMs === undefined && typeof it.ttft_ms === "number" && Number.isFinite(it.ttft_ms) && it.ttft_ms >= 0) {
+      cur.ttftMs = it.ttft_ms;
+    }
     switch (it.kind) {
       case "tool_use": {
         const st: Extract<Step, { kind: "tool" }> = { kind: "tool", id: it.id, use: it, result: it.tool_use_id ? results?.get(it.tool_use_id) : undefined, images: [] };
@@ -954,7 +959,12 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
   // woken and at work with nothing of it here yet: its work row
   if (woke && live && !segs.length) segs.push({ id: `seg:${woke.id}`, steps: [], tools: 0, thoughts: 0, replies: 0, folds: [] });
   // what the background task that woke it used is the work it woke
-  if (woke && segs[0]) countUsage(segs[0], woke);
+  if (woke && segs[0]) {
+    countUsage(segs[0], woke);
+    if (segs[0].ttftMs === undefined && typeof woke.ttft_ms === "number" && Number.isFinite(woke.ttft_ms) && woke.ttft_ms >= 0) {
+      segs[0].ttftMs = woke.ttft_ms;
+    }
+  }
   // stopped after everything it did (not an exchange that went on after it): its last words are not a finished reply
   const end = segs.at(-1), at = t.ordered.at(-1)?.seq ?? 0;
   if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && n.seq > at)) end.cut = true;

@@ -13,14 +13,14 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// spaceMain is PERSONA_SPACE outside the health space: the assistant's main conversations and the ones beside them.
+// spaceMain is PERSONA_SPACE outside any space: the assistant's main conversations and the ones beside them.
 const spaceMain = "main"
 
 // assistantSpace is the space of the conversation an assistant process runs in, from its trusted directory (as
-// healthdeny.go and the gate decide it): identity.SpaceHealth or spaceMain.
+// healthdeny.go and the gate decide it): its slug (identity.SpaceHealth for a health space) or spaceMain.
 func assistantSpace(cwd string) string {
-	if cwd != "" && identity.SpaceOf(cwd) == identity.SpaceHealth {
-		return identity.SpaceHealth
+	if s := identity.SpaceOf(cwd); s != "" {
+		return s
 	}
 	return spaceMain
 }
@@ -31,13 +31,13 @@ func assistantSpace(cwd string) string {
 // its credentials in the node: its BaseEnv is this process's own address at the gate proxy, and neither its Secret
 // nor what Auth puts on the requests is given (gateproxy.go, #1317); release takes the addresses back once the
 // process is gone. session is the conversation the process was started for: the proxy tells the manager of the writes
-// that went out under it. A process started in the health space gets addresses that let a write through only once the
+// that went out under it. A process started in a space gets addresses that let a write through only once the
 // phone confirmed it, whatever the rules allow (larkCheck holds the gated command to the same). Without a config from
 // the hub the commands say their API is not reachable.
 //
 // The process also learns its conversation's space, PERSONA_SPACE (assistantSpace): every gated command reaches every
-// space, and one meant for the health space alone checks this instead of its working directory, which a `cd` in front
-// of the command changes without a confirmation (#6003).
+// space, and one meant for one space alone (the health space's) checks this instead of its working directory, which a
+// `cd` in front of the command changes without a confirmation (#6003).
 func (n *Node) assistantLarkEnv(cwd, session string) (env []string, release func()) {
 	env, release, _ = n.assistantLarkEnvNamed(cwd, session)
 	return env, release
@@ -60,10 +60,10 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 	bin := n.assistantBin(cwd)
 	_ = os.MkdirAll(bin, 0o755)
 	space := assistantSpace(cwd)
-	health := space == identity.SpaceHealth
+	inSpace := identity.SpaceOf(cwd) != ""
 	gp := n.gates()
-	if health {
-		gp.markHealth(session) // larkCheck decides the conversation's space by this, not by the directory a hook runs in
+	if inSpace {
+		gp.markSpace(session) // larkCheck decides the conversation's space by this, not by the directory a hook runs in
 	}
 	var bases []string // the addresses opened for this process
 	env = []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "PERSONA_ASSISTANT_BIN=" + bin,
@@ -92,7 +92,10 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 			for _, m := range gateAuthRef.FindAllStringSubmatch(g.Auth.Value, -1) {
 				held[m[1]] = true
 			}
-			b, done, err := gp.openIn(g.Command, session, health) // the proxy holds a health process's writes to the phone
+			if g.Relay && g.SocketEnv != "" {
+				held[g.SocketEnv] = true // the manager's machine's socket: the proxy relays there (#12904)
+			}
+			b, done, err := gp.openIn(g.Command, session, inSpace) // the proxy holds a space process's writes to the phone
 			if err != nil {
 				// Its credentials stay out all the same: without the base too, the command fails plainly.
 				n.logger.Printf("assistant: %s: gate proxy: %v", g.Command, err)
@@ -140,8 +143,8 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 		for _, b := range bases {
 			gp.nameAddr(b, id)
 		}
-		if health {
-			gp.markHealth(id)
+		if inSpace {
+			gp.markSpace(id)
 		}
 	}
 	return env, release, name

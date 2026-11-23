@@ -133,8 +133,14 @@ class HttpExtensionManagement internal constructor(
     override suspend fun setSecret(id: String, name: String, value: String) =
         detail(call(path(id, "-", "secrets", secret(name)), "PUT", buildJsonObject { put("value", value) }))
 
+    override suspend fun setSecretReference(id: String, name: String, reference: String) =
+        detail(call(path(id, "-", "secrets", secret(name)), "PUT", buildJsonObject { put("reference", reference) }))
+
     override suspend fun clearSecret(id: String, name: String) =
         detail(call(path(id, "-", "secrets", secret(name)), "DELETE"))
+
+    override suspend fun removeHandoffRule(id: String, rule: String) =
+        detail(call(path(id, "-", "handoff-rules", this@HttpExtensionManagement.id(rule)), "DELETE"))
 
     // ---- declarative UI (docs/extensions/extensions.md "Declarative UI")
 
@@ -212,7 +218,7 @@ class HttpExtensionManagement internal constructor(
                 val bytes = body.source().use { source ->
                     // read at most one byte past the limit, so a body without a length cannot run away
                     source.request(MaxImageBytes + 1L)
-                    source.buffer.size.takeIf { it <= MaxImageBytes } ?: throw HubFailure(HubError.Protocol)
+                    if (source.buffer.size > MaxImageBytes) throw HubFailure(HubError.Protocol)
                     source.buffer.readByteArray()
                 }
                 bytes.takeIf { it.isNotEmpty() } ?: throw HubFailure(HubError.Protocol)

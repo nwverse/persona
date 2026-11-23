@@ -161,13 +161,13 @@ class ChatTableShotsTest {
     }
 
     private fun scrollWideToStart() {
-        rule.onAllNodes(horizontalScroll).fetchSemanticsNodes().firstOrNull() ?: return
-        rule.onAllNodes(horizontalScroll)[0].performSemanticsAction(SemanticsActions.ScrollBy) { it(-100_000f, 0f) }
+        if (rule.onAllNodes(horizontalScroll).fetchSemanticsNodes().isEmpty()) return
+        rule.onAllNodes(horizontalScroll)[0].performSemanticsAction(SemanticsActions.ScrollBy) { val _ = it(-100_000f, 0f) }
         rule.waitForIdle()
     }
 
     private fun scrollWideToEnd() {
-        rule.onAllNodes(horizontalScroll)[0].performSemanticsAction(SemanticsActions.ScrollBy) { it(100_000f, 0f) }
+        rule.onAllNodes(horizontalScroll)[0].performSemanticsAction(SemanticsActions.ScrollBy) { val _ = it(100_000f, 0f) }
         rule.waitForIdle()
     }
 

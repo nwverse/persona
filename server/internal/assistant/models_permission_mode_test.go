@@ -89,6 +89,9 @@ func TestModelBindingPermissionModeEditInheritAndValidate(t *testing.T) {
 	if w := modelRequest(s, http.MethodPatch, "agent.new", `{"revision":0,"permission_mode":"yolo"}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("invalid permission_mode accepted: %d %s", w.Code, w.Body.String())
 	}
+	if w := modelRequest(s, http.MethodPatch, purposeAgent, `{"revision":0,"permission_mode":"plan"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("Inbox accepted Plan, which rejects its required Persona MCP calls: %d %s", w.Code, w.Body.String())
+	}
 	if w := modelRequest(s, http.MethodPatch, "agent.new", `{"revision":0,"provider":"launcher.omp","permission_mode":"acceptEdits"}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("omp accepted permission_mode: %d %s", w.Code, w.Body.String())
 	}
@@ -272,6 +275,14 @@ func TestPermissionModeLaunchPropagationAndPrecedence(t *testing.T) {
 		if start := runStart(t, ModelBinding{Provider: "launcher.agy", PermissionMode: "auto"}, nil, map[string]any{}); start["permission_mode"] != "auto" {
 			t.Fatalf("agy agent.new permission_mode: %v", start)
 		}
+		// AGY with no mode anywhere runs in Allow all as Claude Code does: its worker would otherwise stop at agy's own
+		// approval prompt in the pane. A mode the call names stays.
+		if start := runStart(t, ModelBinding{Provider: "launcher.agy"}, nil, map[string]any{}); start["permission_mode"] != "bypassPermissions" {
+			t.Fatalf("agy default permission_mode: %v", start)
+		}
+		if start := runStart(t, ModelBinding{Provider: "launcher.agy"}, nil, map[string]any{"permission_mode": "acceptEdits"}); start["permission_mode"] != "acceptEdits" {
+			t.Fatalf("agy explicit permission_mode: %v", start)
+		}
 		// Tier overrides agent.new
 		if start := runStart(t,
 			ModelBinding{Provider: "launcher.claude", PermissionMode: "acceptEdits"},
@@ -378,13 +389,13 @@ func TestPermissionModeLaunchPropagationAndPrecedence(t *testing.T) {
 			t.Fatalf("lark.agent start mode: sess=%q send=%v", sess.PermissionMode, f.sends[len(f.sends)-1])
 		}
 
-		// OriginInbox (AI twin) MUST stay "default" even when inbox.agent configured bypassPermissions
+		// OriginInbox uses only the AI twin's own saved override, never an inherited Agents mode.
 		sess, err = s.startOn(ctx, "server", StartParams{Text: "triage", Purpose: purposeAgent, Origin: OriginInbox}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sess.PermissionMode != "default" || f.sends[len(f.sends)-1]["permission_mode"] != "default" {
-			t.Fatalf("OriginInbox weakened: sess=%q send=%v", sess.PermissionMode, f.sends[len(f.sends)-1])
+		if sess.PermissionMode != proto.ModeBypass || f.sends[len(f.sends)-1]["permission_mode"] != proto.ModeBypass {
+			t.Fatalf("OriginInbox lost its own saved mode: sess=%q send=%v", sess.PermissionMode, f.sends[len(f.sends)-1])
 		}
 
 		// Guest conversation MUST never inherit or receive a non-empty permission_mode
@@ -717,6 +728,22 @@ func TestHeadlessStartDropsUnsupportedPerMachinePermissionMode(t *testing.T) {
 	}
 	if got := f.sends[len(f.sends)-1]["permission_mode"]; got != "plan" {
 		t.Fatalf("headless start dropped explicit caller permission_mode: got %v, want plan", got)
+	}
+
+	// Inbox uses its own saved mode only when the resolved runtime supports it; otherwise it returns to safe default.
+	setModel(t, s, purposeAgent, ModelBinding{Provider: "launcher.grok", PermissionMode: "plan"})
+	if _, err := s.startOn(ctx, "server", StartParams{Text: "inbox unsupported", Purpose: purposeAgent, Origin: OriginInbox}, false); err != nil {
+		t.Fatalf("inbox.agent unsupported startOn server: %v", err)
+	}
+	if got := f.sends[len(f.sends)-1]["permission_mode"]; got != proto.ModeDefault {
+		t.Fatalf("inbox.agent forwarded unsupported saved mode: got %v, want default", got)
+	}
+	setModel(t, s, purposeAgent, ModelBinding{Provider: "launcher.grok", PermissionMode: "bypassPermissions"})
+	if _, err := s.startOn(ctx, "server", StartParams{Text: "inbox supported", Purpose: purposeAgent, Origin: OriginInbox}, false); err != nil {
+		t.Fatalf("inbox.agent supported startOn server: %v", err)
+	}
+	if got := f.sends[len(f.sends)-1]["permission_mode"]; got != "bypassPermissions" {
+		t.Fatalf("inbox.agent dropped supported saved mode: got %v, want bypassPermissions", got)
 	}
 }
 

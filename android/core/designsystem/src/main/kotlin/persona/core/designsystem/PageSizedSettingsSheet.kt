@@ -82,7 +82,7 @@ internal fun JSettingsPresentationFrame(
     val focusManager = LocalFocusManager.current
     LaunchedEffect(pageSized) {
         if (restoration.shouldRestoreFocus()) {
-            runCatching { focus.requestFocus() }
+            val _ = runCatching { focus.requestFocus() }
             focusManager.moveFocus(FocusDirection.Enter)
         }
     }

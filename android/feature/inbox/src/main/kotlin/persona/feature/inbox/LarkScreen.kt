@@ -56,16 +56,28 @@ val LocalLarkReadOccluded = staticCompositionLocalOf { false }
 
 internal val LocalLarkMessageDisplay = staticCompositionLocalOf { LarkMessageDisplay.Hidden }
 
+/** Messages metadata never overrides an Inbox item's manager-scoped landing or a deep link's established lookup. */
+internal fun larkMessagesSummary(route: LarkRoute, rows: List<LarkChatSummary>?): LarkChatSummary? =
+    if (route.fromMessages) rows?.firstOrNull { it.id == route.feedId } else null
+
 @Composable
 fun LarkScreen(repository: InboxRepository, route: LarkRoute, navigator: Navigator) {
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
     val source = inbox.contentSource
     val manager = itemManager(repository, route.itemId)
+    // A Messages row already carries this chat's opening metadata. Capture it once so reading does not move the landing;
+    // Inbox rows and deep links keep their established lookup fallback.
+    val listed = remember(repository, source, route) {
+        larkMessagesSummary(route, repository.larkMessages.value?.state?.value?.rows)
+    }
     key(source, route, manager) {
         // Where to open (the first unread) is the item's manager's account's read state.
         val opening by produceState<Pair<LarkReadingStore?, LarkListNavigation>?>(null, source, manager) {
             val store = source?.let { repository.readingStore() }
-            val navigation = try { source?.forManager(manager)?.read { larkListNavigation(this, route.feedId) } ?: LarkListNavigation() }
+            val navigation = try {
+                listed?.let { LarkListNavigation(it.readPosition, it.unread > 0 || it.markedUnread, it.mentionPosition) }
+                    ?: source?.forManager(manager)?.read { larkListNavigation(this, route.feedId) } ?: LarkListNavigation()
+            }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { LarkListNavigation() }
             value = store to navigation
@@ -105,7 +117,17 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
     jumpTo: (Long) -> Unit,
 ) {
     val flow = remember(repository, route.feedId, target.around) { repository.conversation(route.feedId, target.around) }
-    val conversation by flow.collectAsStateWithLifecycle(LarkConversation(loading = true))
+    val loadedConversation by flow.collectAsStateWithLifecycle(LarkConversation(loading = true))
+    val listed = remember(repository, route) {
+        larkMessagesSummary(route, repository.larkMessages.value?.state?.value?.rows)
+    }
+    val conversation = remember(loadedConversation, listed) {
+        loadedConversation.copy(
+            title = loadedConversation.title.ifBlank { listed?.name.orEmpty() },
+            isGroup = loadedConversation.isGroup ?: listed?.isGroup,
+            isTopic = loadedConversation.isTopic || listed?.isTopic == true,
+        )
+    }
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
     val record = inbox.records.inboxRecord(route.itemId)
     val feedback = persona.core.designsystem.LocalAppFeedback.current

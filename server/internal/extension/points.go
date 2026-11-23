@@ -149,6 +149,16 @@ type QuotaItem struct {
 	Hosts []string `json:"hosts,omitempty"`
 }
 
+// UsageItem is a contribution to usage: a gateway whose accounts' subscription usage the plugin turns into the usage
+// bars' accounts and windows (docs/extensions/extensions.md "Usage").
+type UsageItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Hosts are the gateways' host names it reads ("*.example.com" allowed); empty: it may be pointed at any launcher's
+	// gateway and answers unsupported for one that is not its.
+	Hosts []string `json:"hosts,omitempty"`
+}
+
 // AgentSourceItem is a contribution to agent_sources: a source of personal agents' sessions in the Agents tab, next
 // to the hub's own (docs/extensions/extensions.md "Personal Agent sources"). Its id is the source part of the sessions' ids
 // (<id>:<sessionKey>).
@@ -262,6 +272,25 @@ type GateFile struct {
 	Tool       *proto.GateTool    `json:"tool,omitempty"`
 	// Auth is how the node's proxy puts the credentials on a request (#1317); without it ProxyAuth decides.
 	Auth *GateFileAuth `json:"auth,omitempty"`
+	// SocketEnv names the one of env holding the extension's unix socket on the manager's machine: the gate is
+	// relayed (proto.CommandGate.Relay, #12904), its calls going node → manager → socket, so that it works from an
+	// assistant on another computer too. It needs base_env (the address the script calls when it is given one) and
+	// one secret (the token, put on the request as Auth, or Authorization: Bearer, says).
+	SocketEnv string `json:"socket_env,omitempty"`
+}
+
+// RelayAuth is how the manager puts a relayed gate's credentials on a call to its socket: the declared auth, or
+// Authorization: Bearer ${<the one secret>}. Nil for a gate that is not relayed.
+func (g *GateFile) RelayAuth() *proto.GateAuth {
+	switch {
+	case g.SocketEnv == "":
+		return nil
+	case g.Auth != nil && !g.Auth.Env:
+		return &proto.GateAuth{Header: g.Auth.Header, Value: g.Auth.Value}
+	case len(g.Secret) == 1:
+		return &proto.GateAuth{Header: "Authorization", Value: "Bearer ${" + g.Secret[0] + "}"}
+	}
+	return nil
 }
 
 // GateFileAuth is a gate file's auth: the header and its value (${NAME} for one of env), or env: the script needs its
@@ -320,6 +349,20 @@ func ParseGate(raw []byte) (*GateFile, error) {
 	}
 	if g.BaseEnv != "" && !slices.Contains(g.Env, g.BaseEnv) {
 		return nil, errors.New("gate base_env is not one of env")
+	}
+	if g.SocketEnv != "" {
+		switch {
+		case !slices.Contains(g.Env, g.SocketEnv):
+			return nil, errors.New("gate socket_env is not one of env")
+		case g.BaseEnv == "" || g.SocketEnv == g.BaseEnv:
+			return nil, errors.New("gate socket_env: needs base_env, the address the script calls instead")
+		case slices.Contains(g.Secret, g.SocketEnv):
+			return nil, errors.New("gate socket_env is a secret")
+		case g.Auth != nil && g.Auth.Env:
+			return nil, errors.New("gate socket_env: the credentials go on the call, not into the environment")
+		case g.Auth == nil && (len(g.Secret) != 1 || !slices.Contains(g.Env, g.Secret[0])):
+			return nil, errors.New("gate socket_env: one secret among env, or an auth saying how they go")
+		}
 	}
 	if a := g.Auth; a != nil {
 		switch {
@@ -440,6 +483,24 @@ var Points = map[string]Point{
 			}
 		}
 		return q.ID, nil
+	}},
+	"usage": {Name: "usage", Namespace: "usage", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var u UsageItem
+		if err := strict(raw, &u); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(u.ID) {
+			return u.ID, fmt.Errorf("usage id %q: a-z0-9_-", u.ID)
+		}
+		if u.Name == "" {
+			return u.ID, errors.New("usage " + u.ID + ": no name")
+		}
+		for _, h := range u.Hosts {
+			if !hostPattern.MatchString(h) {
+				return u.ID, fmt.Errorf("usage %s: %q is not a host name", u.ID, h)
+			}
+		}
+		return u.ID, nil
 	}},
 	"agent_sources": {Name: "agent_sources", Namespace: "agentsrc", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
 		var a AgentSourceItem

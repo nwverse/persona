@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../../spec/fixtures/entries/cases.json";
-import { assistantEntries, decisionLaterKey } from "./assistant-entries";
+import { assistantEntries, decisionLaterKey, needsYouBySupervisor } from "./assistant-entries";
 import { triageTodos } from "./todo-triage";
 import { makeSessionLookup } from "./todos";
 import type { FeedItem, TaskPlan } from "./feed";
@@ -223,14 +223,14 @@ describe("the entries' open-to-do count follows the To-dos page's rule", () => {
     expect(openTaskItems(run([freshTodo]))[0]!.countsOpen).toBe(true);
   });
 
-  it("keeps a seen review visible under Persona reviewing, not Needs you, but counts it only while the page still has it open", () => {
+  it("keeps a seen review under Persona reviewing and counted until it is accepted", () => {
     const review = { at: stale, verdict: "needs_user" as const, note: "Choose the route." };
     const seen = base("review-seen", stale, { seen_at: stale, supervision: { supervisor: "main", state: "pending_review", reviews: [review], updated_at: stale } });
     const got = run([seen]);
     expect(got.needsYou).toEqual([]);
     expect(got.review.map((i) => i.key)).toEqual(["task:review-seen"]);
-    expect(openTaskItems(got)[0]!.countsOpen).toBe(false);
-    // nobody looked at the finished turn yet: the page keeps it in Just finished, so it still counts
+    // #8678 owns the neutral placement; #5732 keeps Seen a receipt, never acceptance or filing.
+    expect(openTaskItems(got)[0]!.countsOpen).toBe(true);
     const unseen = base("review-unseen", stale, { supervision: { supervisor: "main", state: "pending_review", reviews: [review], updated_at: stale } });
     expect(openTaskItems(run([unseen]))[0]!.countsOpen).toBe(true);
   });
@@ -254,7 +254,7 @@ describe("the entries' open-to-do count follows the To-dos page's rule", () => {
     const pageOpen = triageTodos(todos, makeSessionLookup([workingSession, loneAgent]), now).open;
     const chipOpen = openTaskItems(got).filter((i) => i.countsOpen).length;
     expect(chipOpen).toBe(pageOpen);
-    expect(chipOpen).toBe(3); // Working, unexpired parked and the unseen review; inactivity alone does not end an explicit wait.
+    expect(chipOpen).toBe(4); // Working, parked and both unaccepted reviews; stale shelves and done do not count.
     expect(got.review.map((i) => i.key)).toEqual(["task:review-unseen", "task:review-seen"]);
     expect(got.needsYou.some((i) => i.kind === "plan")).toBe(true);
     expect(got.running.some((i) => i.kind === "agent")).toBe(true);
@@ -382,4 +382,45 @@ describe("Persona reviewing in the Assistant's entries", () => {
     expect(got.parked).toEqual([]);
     expect(got.needsYou).toEqual([]);
   });
+});
+
+
+describe("pending plans across Persona conversations", () => {
+  const at = "2026-11-21T01:00:00Z";
+  const plan = (id: string, conversation: string, state: TaskPlan["state"] = "open"): TaskPlan => ({
+    id, conversation, state, created_at: at, tasks: [],
+  });
+  const plans = { local: plan("local", "main"), routine: plan("routine", "routine-chat"),
+    side: plan("side", "side-chat"), done: plan("done", "routine-chat", "dismissed") };
+  const entries = (conversation: string, main?: string) => assistantEntries({
+    conversation, main, plans, todos: [], sessions: [], interactions: [], feed: [],
+  }).needsYou;
+
+  it("shows every open plan in Main, attributed to its source", () => {
+    const items = entries("main", "main");
+    expect(items.map((item) => item.key)).toEqual(["plan:local", "plan:routine", "plan:side"]);
+    expect(needsYouBySupervisor(items, "main").map((group) => [group.supervisor, group.items.map((item) => item.key)]))
+      .toEqual([["main", ["plan:local"]], ["routine-chat", ["plan:routine"]], ["side-chat", ["plan:side"]]]);
+  });
+
+  it("excludes another manager's pending plan from Main", () => {
+    const result = assistantEntries({ conversation: "main", main: "main", manager: "home",
+      plans: { home: { ...plan("home", "routine"), manager: "home" }, work: { ...plan("work", "work-chat"), manager: "work" } },
+      todos: [], sessions: [], interactions: [], feed: [],
+    });
+    expect(result.needsYou.map((item) => item.key)).toEqual(["plan:home"]);
+  });
+
+  it("keeps a side conversation scoped, including before Main is known", () => {
+    expect(entries("side-chat", "main").map((item) => item.key)).toEqual(["plan:side"]);
+    expect(entries("side-chat").map((item) => item.key)).toEqual(["plan:side"]);
+  });
+});
+
+
+it("keeps Health plans out of Main while retaining them in their own conversation", () => {
+ const plans: Record<string, TaskPlan> = { health: {id:"health",conversation:"health-chat",space:"health",state:"open",tasks:[]} };
+ const input = {main:"main",plans,todos:[],sessions:[],interactions:[],feed:[]};
+ expect(assistantEntries({...input,conversation:"main"}).needsYou).toEqual([]);
+ expect(assistantEntries({...input,conversation:"health-chat"}).needsYou.map((item)=>item.key)).toEqual(["plan:health"]);
 });

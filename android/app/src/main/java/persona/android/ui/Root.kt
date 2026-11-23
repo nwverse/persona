@@ -54,6 +54,7 @@ import dev.chrisbanes.haze.HazeState
 import persona.core.designsystem.*
 import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import androidx.compose.foundation.background
 import persona.core.domain.inbox.buildInboxList
 import persona.core.navigation.*
@@ -169,14 +170,21 @@ private fun PersonaRootContent(
                         onDiagnostics = { diagnostics = true }, diagnostics = services.diagnostics,
                         onCredentialsSaved = { MainActivity.pendingPairLink.value = null }, machines = services.machines,
                         attempts = services.pairingAttempts, mainReadiness = services.readiness,
-                        footer = {
-                            if (hub == null) JTextButton(stringResource(R.string.app_try_demo), onClick = { scope.launch {
-                                try { shell.enterDemo(); MainActivity.pendingPairLink.value = null }
-                                catch (error: Exception) {
-                                    android.util.Log.w("PersonaShell", "Unable to start demo", error)
-                                    shell.feedback.failure(error)
+                        footer = { welcome ->
+                            if (hub == null) {
+                                val startDemo: () -> Unit = {
+                                    scope.launch {
+                                        try { shell.enterDemo(); MainActivity.pendingPairLink.value = null }
+                                        catch (error: Exception) {
+                                            android.util.Log.w("PersonaShell", "Unable to start demo", error)
+                                            shell.feedback.failure(error)
+                                        }
+                                    }
                                 }
-                            } })
+                                val title = stringResource(R.string.app_try_demo)
+                                if (welcome) PairingShortcut(title, PersonaIcons.playMedia, startDemo)
+                                else JTextButton(title, onClick = startDemo)
+                            }
                         })
                     if (diagnostics) {
                         val close = { diagnostics = false }
@@ -211,7 +219,9 @@ private fun PersonaRootContent(
                             persona.core.designsystem.LocalViewBlocks provides persona.feature.settings.PersonaViewBlocks.blocks,
                         ) {
                             SavedPromptsHost(displayed.savedPromptsConnection) {
-                                PersonaShell(displayed, openNavigation, services.copy(connection = displayed.connection, sessions = displayed.sessions, demo = displayed.demo != null), remember(shell) { AppShellHost(shell) })
+                                StarredMessagesHost(displayed.savedPromptsConnection) {
+                                    PersonaShell(displayed, openNavigation, services.copy(connection = displayed.connection, sessions = displayed.sessions, demo = displayed.demo != null), remember(shell) { AppShellHost(shell) })
+                                }
                             }
                         }
                     }
@@ -374,8 +384,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // With several hub groups paired the Persona menu's heading ends with the selected group's name, as on iOS.
     val hubGroups by session.groups.groups.collectAsStateWithLifecycle()
     val preferences by session.preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
-    val todos by (session.tasks?.todos ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsStateWithLifecycle()
-    val todosSupported by (session.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
+    val todos by (session.tasks?.todos ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
+    val todosSupported by (session.tasks?.todosSupported ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsStateWithLifecycle()
     // Every page shows the current assistant (docs/assistant/managers.md "Clients"): the counts beside them are its too.
     val currentAssistant = persona.core.designsystem.currentAssistant()
     val counts = remember(currentAssistant, sessions, preferences.mutes) { ShellCounts(currentAssistant, sessions, preferences.mutes) }
@@ -569,6 +579,33 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // The pages extensions draw for their connectors' inbox items (inbox_item, #1683): the inbox list and inbox links
     // open those. An item whose page broke opens its own page, which says so until "Retry" tries the extension's page again.
     val nativeInboxChats = persona.core.designsystem.LocalAppStyleStore.current?.nativeInboxChats?.collectAsState()?.value ?: true
+    val larkHomeMessages = persona.core.designsystem.LocalAppStyleStore.current?.larkHomeMessages?.collectAsState()?.value ?: false
+    val larkMessagesRepository by session.inbox.larkMessages.collectAsStateWithLifecycle()
+    val larkFeatures = persona.core.designsystem.LocalLarkFeatures.current
+    // A real pairing publishes null while DI assembles its repository. That is loading, not demo's unavailable state:
+    // keep a process-restored Messages/chat stack until the real repository arrives.
+    val larkMessagesLoading = session.demo == null && larkHomeMessages && larkFeatures.chats && larkMessagesRepository == null
+    // The saved choice survives a hub without Lark; only the effective destination disappears.
+    val showLarkMessages = larkMessagesVisible(
+        larkHomeMessages,
+        larkFeatures,
+        available = larkMessagesRepository != null,
+        loading = larkMessagesLoading,
+    )
+    LaunchedEffect(showLarkMessages) {
+        if (showLarkMessages) return@LaunchedEffect
+        if (window.pending == LarkMessagesRoute) window.clearPending()
+        val held = hosts.allStacks().any { stack -> LarkMessagesRoute in stack }
+        if (!held) return@LaunchedEffect
+        val visibleRoot = hosts.current.firstOrNull { it != AssistantRoute }
+        if (visibleRoot == LarkMessagesRoute && (window.regular || selected == AppTab.Persona)) {
+            // Regular cleanup only replaces Persona's retained host; it never selects that tab over Agents.
+            leaveDisabledLarkMessages(window.regular, pageRoots, hosts, ::showHost, ::showAssistantHome)
+        }
+        pageRoots.forgetPlace(LarkMessagesRoute)
+        hosts.forgetPlace(LarkMessagesRoute)
+        stacks[AppTab.Persona] = hosts.current
+    }
     val currentNativeInboxChats by rememberUpdatedState(nativeInboxChats)
     val itemPagePlaces = slotsState?.inboxItems.orEmpty()
     val itemPageFailures = remember(session.identity) { mutableStateMapOf<String, String>() }
@@ -690,7 +727,25 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         val demoBadge = if (session.demo != null) stringResource(R.string.app_demo_badge) else null
         val items = navigationItems(badges)
         val extensionPages = slotsState?.navPages.orEmpty()
-        val sidebarPages = listOfNotNull(
+        val starredState = persona.feature.chat.LocalStarredMessagesStore.current?.state?.collectAsStateWithLifecycle()?.value
+        val starredPages = starredState?.count?.let { count ->
+            listOf(
+                NavItem(
+                    "starred",
+                    stringResource(persona.feature.assistant.R.string.assistant_starred_title),
+                    PersonaIcons.pluginStar,
+                    badge = count,
+                ),
+            )
+        }.orEmpty()
+        val messagePages = if (showLarkMessages) listOf(
+            NavItem(
+                "messages",
+                stringResource(persona.feature.inbox.R.string.inbox_lark_messages_title),
+                PersonaIcons.messagesApp,
+            ),
+        ) else emptyList()
+        val sidebarPages = starredPages + messagePages + listOfNotNull(
             NavItem("machines", stringResource(R.string.app_machines), PhIcons.Desktop).takeIf { !merged || session.metrics != null },
         ) +
             extensionPages.map { page ->
@@ -874,9 +929,13 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         inboxCount = inboxUnread, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
                         pages = sidebarPages,
                         onPage = { key ->
-                            if (key == "machines") sidebarDestination(MachinesRoute)
-                            else extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
-                                sidebarDestination(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
+                            when {
+                                key == "starred" -> sidebarDestination(persona.core.navigation.StarredMessagesRoute)
+                                key == "messages" && showLarkMessages -> sidebarDestination(LarkMessagesRoute)
+                                key == "machines" -> sidebarDestination(MachinesRoute)
+                                else -> extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
+                                    sidebarDestination(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
+                                }
                             }
                         },
                         onRetired = { key -> sidebar.retired = sidebar.retired + key },
@@ -898,7 +957,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                     settingsSheetStack.add(SettingsRoute)
                                     settingsSheetStack.add(SettingsPageRoute(SettingsPage.Managers))
                                     settingsOpened = true
-                                }, headModifier = head, trailing = trailing, fallback = fallback)
+                                }, headModifier = head, hubs = session.groups.takeUnless { services.demo },
+                                trailing = trailing, fallback = fallback)
                         },
                         // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
                         fullWindowSearch = regular || merged,
@@ -1088,7 +1148,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             }
             entry<InteractionRoute> { ShellChat(it.chat, session, navigator, shell.feedback, it.requestId, navigator::sessionClosed,
                 { route -> openWithCard(route, fromPage = true) }, navigator::groupGone, chatTerminal(it.chat)) }
-            inboxEntries(navigator, session.inbox, pictureMarkdown = { text, source, modifier ->
+            inboxEntries(navigator, session.inbox, larkMessagesLoading = larkMessagesLoading, pictureMarkdown = { text, source, modifier ->
                 persona.feature.chat.ExternalReplyMarkdown(text, source, modifier)
             }, connectors = services.connectors.takeUnless { services.demo }, onOpenCard = { card ->
                 openWithCard(ResolvedRoute(AppTab.Agents, AgentsRoute, card = card))
@@ -1118,7 +1178,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             session.metrics?.let { machinesEntries(navigator, it, session.sessions, session.machines,
                 launcherPages = services.extensions?.takeUnless { services.demo }?.available ?: kotlinx.coroutines.flow.flowOf(false),
                 extensionSections = { id -> persona.feature.settings.rememberMachineExtensionSections(services.extensionSlots, id, onOpen = navigator::navigate) },
-                computers = session.computers) } ?: run {
+                computers = session.computers, operationScope = session.identity) } ?: run {
                 entry<MachinesRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
                 entry<persona.core.navigation.AddComputerRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
                 entry<MachineDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
@@ -1469,6 +1529,30 @@ private fun Modifier.unplaced(): Modifier = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints)
     layout(placeable.width, placeable.height) {}
 }
+
+/** Return from a disabled Messages place without resetting the conversation's previously retained regular-width path. */
+internal fun leaveDisabledLarkMessages(
+    regular: Boolean,
+    pageRoots: SidebarPageRoots,
+    hosts: SidebarRootHosts,
+    showHost: (NavKey, List<NavKey>) -> Unit,
+    showCompactHome: () -> Unit,
+) {
+    if (!regular) {
+        showCompactHome()
+        return
+    }
+    val step = pageRoots.select(AssistantRoute, hosts.current.drop(1))
+    showHost(step.root, step.stack)
+}
+
+/** Real DI loading keeps a restored place; losing the capability or demo repository hides it without erasing the choice. */
+internal fun larkMessagesVisible(
+    enabled: Boolean,
+    features: LarkFeatures,
+    available: Boolean,
+    loading: Boolean = false,
+): Boolean = enabled && features.chats && (available || loading)
 
 /** The only primary destinations; all other entries live in the shared sidebar. */
 @Composable

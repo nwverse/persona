@@ -24,6 +24,7 @@ newAssistant
 openAbout
 openAgent
 openAgentsFresh
+openAlarms
 openAllWork
 openAppearance
 openAssistant
@@ -94,6 +95,7 @@ openLauncherDetails
 openLauncherEditor
 openLauncherPage
 openLauncherPicker
+openLinkSwitch
 openLinkURL
 openLiveScreenSettings
 openLocalProxy
@@ -188,6 +190,7 @@ openTerminalsPage
 openThreadAt
 openTodoDetail
 openTodoTitled
+openTodosChoice
 openTokenUsage
 openTranslationSettings
 openTriageSettings
@@ -247,6 +250,7 @@ showCloseoutSample
 showCompactChrome
 showComposerPhoto
 showConnection
+showConnectionAddresses
 showConnectionCycle
 showContexts
 showContinuityShadow
@@ -328,6 +332,8 @@ showLauncherCheck
 showLauncherHelp
 showLiftLines
 showListOffset
+showLocationAlwaysOffer
+showLocationLevel
 showLookBlink
 showLoopDraft
 showMacDropCover
@@ -439,6 +445,7 @@ showUnlockWithoutAuth
 showUpcomingSample
 showUrgentCallSample
 showUrgentCallSampleTitle
+showUsageCardsDemo
 showViewerChromeHidden
 showViewerDecodeDelay
 showViewerDecodeDuringPan

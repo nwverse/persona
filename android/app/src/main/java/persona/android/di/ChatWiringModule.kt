@@ -54,7 +54,7 @@ object ChatWiringModule {
     }
 
     @Provides @Singleton
-    fun assistantWiring(owner: ChatDataOwner, services: AppServices, stacks: GroupStacks, conversations: AssistantConversations): AssistantAppWiring = object : AssistantAppWiring {
+    fun assistantWiring(owner: ChatDataOwner, services: AppServices, stacks: GroupStacks, conversations: AssistantConversations, managers: HubManagers): AssistantAppWiring = object : AssistantAppWiring {
         @Composable
         override fun Host(navigator: Navigator, content: @Composable () -> Unit) {
             val wiring by owner.wiring.collectAsStateWithLifecycle()
@@ -86,7 +86,7 @@ object ChatWiringModule {
                     healthChat = options.healthChat,
                     historyFooter = options.readOnlyNote?.let { note -> { persona.core.designsystem.JNotice(note, status = persona.core.designsystem.Status.Offline) } })
             }
-            CompositionLocalProvider(LocalAssistantHost provides host) { key(active.scope.path) { content() } }
+            CompositionLocalProvider(LocalAssistantHost provides host, LocalAssistantManagers provides managers) { key(active.scope.path) { content() } }
         }
     }
 }
@@ -101,6 +101,7 @@ internal suspend fun createChatWiring(
     fun current() = isCurrent()
     val composer = data.messages.connectComposer { transport ->
         HttpChatComposerService(data.scope, transport, connection, data.credentials.deviceToken,
+            onRetryStart = data.messages::beginComposerRetry,
             onRetryDelivery = data.messages::recordComposerDelivery,
             onPairingExpired = { if (current()) connection.revoke() }, isCurrent = ::current,
             onHeld = { session, held -> if (current()) repositories.sessions.showHeld(session, held) })
@@ -155,6 +156,7 @@ private class RoutedAssistantManagement(
     override suspend fun assistantLaunchers(machineId: String) = api().assistantLaunchers(machineId)
     override suspend fun assistantLauncherList(machineId: String) = api().assistantLauncherList(machineId)
     override suspend fun assistantLauncherList(machineId: String, refresh: Boolean) = api().assistantLauncherList(machineId, refresh)
+    override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean) = api().mainAssistantLauncherList(machineId, refresh)
     override suspend fun launcherModels(machineId: String, launcher: String) = api().launcherModels(machineId, launcher)
     override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = api().setModelPick(session, pick)
     override suspend fun clearModelPick(session: SessionKey) = api().clearModelPick(session)

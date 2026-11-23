@@ -126,5 +126,5 @@ fun ExpandedComposer(
             }
         }
     }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    LaunchedEffect(Unit) { val _ = runCatching { focus.requestFocus() } }
 }

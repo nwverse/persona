@@ -7,7 +7,7 @@
     <string name="app_show_list">一覧を表示</string>
     <string name="app_tab_settings">設定</string>
     <string name="app_demo_badge">体験</string>
-    <string name="app_try_demo">ハブがない場合は体験モードへ</string>
+    <string name="app_try_demo">デモ</string>
     <string name="app_back">戻る</string>
     <string name="app_unavailable_phone_tools">このモードではスマートフォンのツールを使えません</string>
     <string name="app_demo_no_terminal">体験モードにはターミナルのデータがありません</string>

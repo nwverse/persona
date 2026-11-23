@@ -124,6 +124,7 @@ type Machine struct {
 	deployPhase     string
 	deployRun       *deployRun
 	deployPreflight *nodeDeployPreflight
+	updateHandoff   bool // grace expired while waiting for idle: no new headless turns until the update settles
 	// via is how the connection runs (local | ssh | tailcat | link | service | hub), path how tailcat's packets go.
 	via, path                  string
 	directFailed, switchedBack time.Time
@@ -526,7 +527,11 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 	m.mu.Lock()
 	p := m.peer
 	info := m.info
+	handoff := m.updateHandoff
 	m.mu.Unlock()
+	if handoff && (method == "assistant.send" || method == "assistant.warm") {
+		return &rpc.Error{Code: nodeproto.CodeRestarting, Message: nodeproto.CodeRestarting}
+	}
 	if p != nil {
 		select {
 		case <-p.Done():
@@ -581,13 +586,30 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
+	if !nodeHas(info, nodeproto.TaskInput) || !nodeHas(info, nodeproto.TaskExecution) {
+		requires := method == "assistant.content" || method == "fs.task.list"
+		if method == "assistant.send" {
+			raw, _ := json.Marshal(params)
+			var send struct {
+				TaskInput bool `json:"task_input"`
+			}
+			_ = json.Unmarshal(raw, &send)
+			requires = send.TaskInput
+		}
+		if requires {
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_input")}
+		}
+	}
 	if method == "assistant.directory" && !nodeHas(info, nodeproto.TaskExecution) {
-		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution")}
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution"), Data: json.RawMessage(`{"capability":"task_execution"}`)}
 	}
 	if method == "assistant.send" {
-		next, allowed := taskExecutionParams(params, nodeHas(info, nodeproto.TaskExecution))
+		next, allowed, legacyFallback := taskExecutionParams(params, nodeHas(info, nodeproto.TaskExecution))
 		if !allowed {
-			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution")}
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution"), Data: json.RawMessage(`{"capability":"task_execution"}`)}
+		}
+		if legacyFallback {
+			devicewire.MarkLegacyTaskExecution(ctx)
 		}
 		params = next
 	}
@@ -739,14 +761,15 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 }
 
 // taskExecutionParams selects the protocol before the first send to the connected node.
-// The scheduler alone can attest that a task uses inherited, ordinary execution.
-func taskExecutionParams(params any, supported bool) (any, bool) {
+// The scheduler alone can attest that a task uses inherited, ordinary execution. The last result reports actual omission.
+func taskExecutionParams(params any, supported bool) (any, bool, bool) {
 	raw, _ := json.Marshal(params)
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil {
-		return params, true
+		return params, true, false
 	}
 	legacy, hinted := fields[devicewire.LegacyTaskExecution]
+	fallback := false
 	if !supported && string(fields["task_execution"]) == "true" {
 		var id, origin string
 		_ = json.Unmarshal(fields["session_id"], &id)
@@ -755,18 +778,19 @@ func taskExecutionParams(params any, supported bool) (any, bool) {
 		if string(legacy) != "true" || (origin != "task" && !(origin == "" && resume)) || string(fields["origin_known"]) != "true" ||
 			string(fields["is_main"]) == "true" || string(fields["public"]) == "true" ||
 			fields["guest"] != nil || fields["external"] != nil || fields["new_session_id"] != nil {
-			return nil, false
+			return nil, false, false
 		}
 		delete(fields, "task_execution")
 		if resume {
 			delete(fields, "cwd") // the traditional resume leaves the existing process's directory alone
 		}
+		fallback = true
 	}
 	if hinted {
 		delete(fields, devicewire.LegacyTaskExecution)
-		return fields, true
+		return fields, true, fallback
 	}
-	return params, true
+	return params, true, fallback
 }
 
 // firstWait bounds how long a call waits for a machine's first try to connect (the manager just started: an answer

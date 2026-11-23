@@ -240,6 +240,17 @@ class AssistantSwitcherShotsTest {
         rule.onNodeWithText("在线 · MacBook").assertExists()
         rule.onAllNodesWithText("新建助手").assertCountEquals(0)
         each("switched")
+        // A manager rename updates the switcher/sidebar head; the main conversation keeps its fixed localized label.
+        val renamed = managers.map { if (it.id == "m-3fa21c") it.copy(name = "公司") else it }
+        rule.runOnIdle {
+            fake.list = renamed
+            roster = ManagerRoster(renamed, "assistant")
+        }
+        rule.onNodeWithText("公司").assertIsDisplayed()
+        rule.onNodeWithContentDescription("公司", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("主对话").assertIsDisplayed()
+        rule.onAllNodesWithText("公司的主对话").assertCountEquals(0)
+        each("renamed-current")
         // An offline one can be picked too.
         tap("在线 · MacBook")
         tap("家里")

@@ -464,7 +464,7 @@ func (n *Node) larkCLIBin(c *proto.LarkCLI) string {
 	}
 	if p, _ = exec.LookPath(bin); p == "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		out, _ := loginShell(ctx, "command -v "+shellQuote(bin)).Output()
+		out := larkShellOutput(ctx, "command -v "+shellQuote(bin))
 		cancel()
 		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 		if last := strings.TrimSpace(lines[len(lines)-1]); filepath.IsAbs(last) {
@@ -480,6 +480,70 @@ func (n *Node) larkCLIBin(c *proto.LarkCLI) string {
 		n.mu.Unlock()
 	}
 	return p
+}
+
+// larkShellOutput is what a login shell printed for script, for the gate's asks (where lark-cli is, the shell's PATH),
+// which run inside a tool call's hook. Output waits for stdout to close, not for the shell to exit, and a background
+// job the user's shell startup leaves running (an update check, a daemon started from ~/.zshrc) inherits stdout: without
+// WaitDelay that job would decide how long the call waits, past ctx's timeout. What the shell printed is kept either way.
+func larkShellOutput(ctx context.Context, script string) []byte {
+	cmd := loginShell(ctx, script)
+	cmd.WaitDelay = time.Second
+	out, _ := cmd.Output()
+	return out
+}
+
+// larkLoginPATHRetry: how long a failed ask of the login shell's PATH stands before another try.
+const larkLoginPATHRetry = 5 * time.Minute
+
+// larkLoginPATHMark starts the line the login shell prints its PATH on, apart from what the user's shell startup
+// prints.
+const larkLoginPATHMark = "__PERSONA_LOGIN_PATH__"
+
+// larkLoginPATH is the login shell's PATH directories: the ones the assistant's Bash resolves programs in. Claude Code
+// runs each command through the user's shell snapshot (larkgate_env.go), which restores that PATH, and an npm global
+// lark-cli and the node it starts live in a version manager's directory that this process's own PATH need not have
+// (#12483). Asked at most once per larkLoginPATHRetry; nil when the shell cannot say.
+func (n *Node) larkLoginPATH() []string {
+	n.mu.Lock()
+	dirs, at := n.larkPATH, n.larkPATHAt
+	n.mu.Unlock()
+	if dirs != nil || time.Since(at) < larkLoginPATHRetry {
+		return dirs
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	out := larkShellOutput(ctx, `printf '\n`+larkLoginPATHMark+`%s\n' "$PATH"`)
+	cancel()
+	dirs = parseLoginPATH(out)
+	n.mu.Lock()
+	n.larkPATHAt = time.Now()
+	if dirs != nil {
+		n.larkPATH = dirs
+	}
+	n.mu.Unlock()
+	return dirs
+}
+
+// parseLoginPATH reads the last marked line of a login shell's output: its PATH directories. Anything else the shell
+// printed (a profile's greeting) counts for nothing, and only absolute directories are kept. nil when the line is not
+// there, so the ask is tried again later.
+func parseLoginPATH(out []byte) []string {
+	path, seen := "", false
+	for _, line := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), larkLoginPATHMark); ok {
+			path, seen = v, true
+		}
+	}
+	if !seen {
+		return nil
+	}
+	dirs := []string{}
+	for _, d := range strings.Split(path, ":") {
+		if d != "" && filepath.IsAbs(d) {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
 }
 
 func larkCLIProfile(c *proto.LarkCLI) []string {

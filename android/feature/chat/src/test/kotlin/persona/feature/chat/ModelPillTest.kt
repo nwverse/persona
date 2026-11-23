@@ -9,6 +9,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
@@ -38,10 +39,14 @@ import persona.core.contracts.PendingSwitch
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
+import persona.core.designsystem.AgentMarkKind
+import persona.core.designsystem.AgentMarkSpec
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.LocalHubFeatures
+import persona.core.designsystem.JLoadable
 import persona.core.designsystem.ModelPillWidth
 import persona.core.designsystem.PersonaTheme
+import persona.core.domain.models.AgentModelPanel
 import persona.core.domain.models.PanelConfig
 import persona.core.domain.models.PanelFavorite
 import persona.core.domain.models.PanelOverride
@@ -58,6 +63,47 @@ class ModelPillTest {
     @get:Rule val rule = createComposeRule()
     private val res = ApplicationProvider.getApplicationContext<Context>().resources
     private val agent = Session("box", "s1", agent = "claude", launcher = "example", status = "idle", state = "idle", paneId = "p1", rev = 7)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun mainAndSharedCatalogCachesStaySeparateAcrossRefreshFailure() = kotlinx.coroutines.test.runTest {
+        val lists = ModelLists(this) { it.message.orEmpty() }
+        val shared = AssistantLaunchers(default = LauncherDefault("claude", "shared", "low"))
+        val main = AssistantLaunchers(default = LauncherDefault("claude", "main", "high"))
+        lists.readAssistantCatalog("box") { shared }
+        lists.readAssistantCatalog("box", main = true) { main }
+        testScheduler.advanceUntilIdle()
+        assertEquals(shared, (lists.assistantCatalog("box") as JLoadable.Loaded<AssistantLaunchers>).value)
+        assertEquals(main, (lists.assistantCatalog("box", main = true) as JLoadable.Loaded<AssistantLaunchers>).value)
+        lists.readAssistantCatalog("box", main = true) { throw SocketTimeoutException("main temporarily unavailable") }
+        testScheduler.advanceUntilIdle()
+        val retained = lists.assistantCatalog("box", main = true) as JLoadable.Loaded<AssistantLaunchers>
+        assertEquals(main, retained.value)
+        assertTrue(retained.failure != null)
+        assertEquals(shared, (lists.assistantCatalog("box") as JLoadable.Loaded<AssistantLaunchers>).value)
+    }
+
+    @Test fun mainPillReadsItsOwnDefaultAndNewChatKeepsTheSharedDefault() {
+        var mainReads = 0
+        val hub = object : Hub() {
+            override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers {
+                mainReads++
+                return assistantLauncherList(machineId, refresh).copy(default = LauncherDefault("team", "sonnet", "low"))
+            }
+        }
+        var showMain by mutableStateOf(true)
+        val main = agent.copy(sessionId = "main", assistant = true, launcher = "claude", model = "opus")
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
+                PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
+                    PersonaModelPill(if (showMain) main else null, "box", hub, ModelPillWidth.Wide,
+                        pagePick = null, onPagePick = {}, onNotice = {})
+                }
+            }
+        }
+        rule.onNodeWithTag("model-pill").assertContentDescriptionContains("Sonnet", substring = true)
+        rule.runOnIdle { assertTrue(mainReads > 0); showMain = false }
+        rule.onNodeWithTag("model-pill").assertContentDescriptionContains("Opus", substring = true)
+    }
 
     @Test fun onlyTheUsersMessageOnGlassCarriesAWaitingSwitchOut() {
         val waiting = agent.copy(pendingSwitch = PendingSwitch("work"))
@@ -115,6 +161,8 @@ class ModelPillTest {
         assertEquals(persona.core.designsystem.AgentMarkSpec(persona.core.designsystem.AgentMarkKind.Grok, "My Grok", null), words.mark("grok"))
         // A provider whose name is a mark the design system has draws it.
         assertEquals(persona.core.designsystem.AgentMarkKind.Trae, words.mark("traecli")?.kind)
+        assertEquals("TRAE CLI", words.engine("traecli"))
+        assertEquals("TRAE CLI", words.engine("traex"))
         assertEquals("Claude Code", words.engine("claude"))
         val (content, spoken) = pillContent(persona.core.domain.models.PillView(persona.core.domain.models.PillSetup("grok", "grok", "Grok 5", null)),
             null, ultracode = false, res, names)
@@ -126,13 +174,34 @@ class ModelPillTest {
             panelWords(res).mark("custom-provider"))
     }
 
+    @Test fun thePaseoCliUsesItsTitleAndKeepsItsMarkForEveryIdentifier() {
+        val cliKinds = mapOf("traex" to null, "traecli" to AgentMarkKind.Trae, "trae-cli" to AgentMarkKind.Trae)
+        for ((engine, kind) in cliKinds) {
+            for ((title, expected) in listOf(null to "TRAE CLI", "TRAEX" to "TRAE CLI", "My CLI" to "My CLI")) {
+                val launcher = AgentLauncher(engine, agentType = "paseo", displayName = title)
+                val words = panelWords(res, AgentModelPanel.engineNames(agent, listOf(launcher)))
+                assertEquals(AgentMarkSpec(kind, expected, null), words.mark(engine))
+                assertEquals(expected, words.engine(engine))
+            }
+            assertEquals(AgentMarkSpec(kind, "TRAE CLI", null), engineMark(engine, " "))
+        }
+        assertEquals(AgentMarkSpec(AgentMarkKind.Trae, "TRAE", null), engineMark("trae"))
+    }
+
     /** Records what the pill asks the hub. */
     private open class Hub : AssistantManagement {
         val asked = mutableListOf<String>()
         val launcherListRefreshes = mutableListOf<Boolean>()
+        var configReads = 0
+            private set
         var launcherListReads = 0
             private set
-        override suspend fun config() = AssistantConfig(machineId = "box", launcher = "claude", main = "main")
+        override suspend fun config(): AssistantConfig {
+            configReads++
+            return AssistantConfig(machineId = "box", launcher = "claude", main = "main")
+        }
+        override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers =
+            assistantLauncherList(machineId, refresh)
         override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
             launcherListReads++
             return AssistantLaunchers(
@@ -348,7 +417,7 @@ class ModelPillTest {
                 }
             }
         }
-        rule.waitUntil(5_000) { hub.launcherListReads >= 1 } // the config is read, but the picker is never drawn
+        rule.waitUntil(5_000) { hub.configReads >= 1 } // the role is known; no picker is drawn for another assistant chat
         rule.onNodeWithTag("model-pill").assertDoesNotExist()
         assertTrue("nothing is written for a conversation without a pick", hub.asked.isEmpty())
     }

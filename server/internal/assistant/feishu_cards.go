@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -56,7 +57,7 @@ func (s *Service) feishuInteraction(ix proto.Interaction) {
 }
 
 // feishuCardWanted: the bot posts a card for ix (feishuInteraction): it is on with the cards switch, and the chat
-// drives the conversation or "all cards" is on (not for a health conversation's).
+// drives the conversation or "all cards" is on (not for a card that says something sensitive).
 func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bool {
 	f, ready := s.feishuFeatures(ctx)
 	if !ready || !f.Cards {
@@ -65,11 +66,38 @@ func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bo
 	if ix.Private {
 		return false // a Just me turn's card: never on Lark (meeting_justme.go)
 	}
-	// "All cards" does not take a health conversation's: only one the chat drives itself (health.go).
-	if drives := s.botDrives(ctx, ix.MachineID, ix.SessionID); !drives && (!f.AllCards || s.ixInHealth(ctx, ix)) {
+	// "All cards" does not take a card that says something sensitive (its words and its track's default categories):
+	// only one the chat drives itself (health.go, info_use.go).
+	if drives := s.botDrives(ctx, ix.MachineID, ix.SessionID); !drives &&
+		(!f.AllCards || s.exitPolicy(ctx, interactionText(ix), ix.SessionID, s.ixSpace(ctx, ix)).Redact) {
 		return false
 	}
 	return true
+}
+
+// interactionText is what a card of ix says, for tagging it on its way out: what it asks first, its titles and the
+// terminal last.
+func interactionText(ix proto.Interaction) string {
+	parts := []string{ix.Summary}
+	for _, q := range ix.Questions {
+		parts = append(parts, q.Header, q.Question)
+		for _, o := range q.Options {
+			parts = append(parts, o.Label, o.Description)
+		}
+	}
+	parts = append(parts, ix.Plan, ix.Reason, ix.EditableText, ix.ReviewReport)
+	if ix.Elicitation != nil {
+		parts = append(parts, ix.Elicitation.Message)
+	}
+	parts = append(parts, jsonStrings(proto.RedactArgs(ix.ToolInput))...)
+	parts = append(parts, ix.SessionTitle, ix.TaskTitle, ix.Screen)
+	var out []string
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // feishuInteractionAlways posts ix's card whatever the cards switches say: a task's decision the report put on top
@@ -1065,4 +1093,31 @@ func sessionPath(machine, session string, assistant bool) string {
 // todoLink is a todo's page in the web app at web (/todos/<id>), "" when web is.
 func todoLink(web, id string) string {
 	return deeplink.Web(web, deeplink.Todo(id))
+}
+
+// jsonStrings are the string values in raw (a tool's input, its secrets already redacted), not its keys or braces.
+func jsonStrings(raw string) []string {
+	var v any
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		return nil
+	}
+	var out []string
+	var walk func(any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case string:
+			out = append(out, v)
+		case []any:
+			for _, e := range v {
+				walk(e)
+			}
+		case map[string]any:
+			keys := slices.Sorted(maps.Keys(v))
+			for _, k := range keys {
+				walk(v[k])
+			}
+		}
+	}
+	walk(v)
+	return out
 }

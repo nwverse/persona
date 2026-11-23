@@ -151,7 +151,7 @@ Implementation (#4045): generated values are **not written back to `.env`**. Com
 
 On the iPhone, a pairing link never pairs by itself (#9929): whether it comes from the camera, another app or the pairing page's scanner, the app first asks **Connect to <host>?**, naming the hub's address as the link gives it (and saying when that hub is already paired), and pairs only after Connect. Cancel leaves everything as it was; typing an address and token and tapping Connect is already the user's own step. The launch arguments `-pairURL` and `-openPairLink` (DEBUG automation) still pair directly.
 
-The web login page (`Login.tsx:45-48`) prefers "Scan with a logged-in phone to sign in" (existing `#token=jp_…` web login code), followed by "Paste pairing link". Put the main-token field and `jq` / `--legacy` in "Advanced," labeled "This is hub's master key." When signing in again in the same browser, reuse or replace the old device, with a date in the device name, rather than accumulating identically named "Web (Chrome · Linux)" entries. Implementation (#3356): web sends `replaces` (the previous device ID) when exchanging credentials; hub revokes only that `kind: web` device (`docs/protocol/protocol.md`, "Authentication"). "No hub yet?" is an explanation within the page; web cannot obtain the website URL.
+The browser pairing page leads with a field for the pairing link. Scan opens the phone approval flow on demand, Help explains how to obtain a link, and Key opens the advanced master-key form with its warning and terminal commands. When signing in again in the same browser, reuse or replace the old device, with a date in the device name, rather than accumulating identically named "Web (Chrome · Linux)" entries. Implementation (#3356): web sends `replaces` (the previous device ID) when exchanging credentials; hub revokes only that `kind: web` device (`docs/protocol/protocol.md`, "Authentication"). "No hub yet?" is an explanation within the page; web cannot obtain the website URL.
 
 #### Your computers ↔ hub
 
@@ -279,21 +279,17 @@ Risks (why a decision is needed): memory, transcript, and permissions split into
 
 #### First screen (not paired yet)
 
-Same structure on all four platforms:
+On iOS and Android, center the Persona mark and a single scan button above three shortcuts:
 
 ```
-Persona
-Connect your computers and phone, and let AI do the work.
-
-[ Scan to connect to hub ]       ← Primary button
-Find nearby hubs                ← P1, mDNS
-No hub yet?                     ← In-app browser opens "Get started" (choices in 3.3)
-Try demo first (all data is fictional) ← Hidden on web, which has no demo mode
-Other ways                      ← Manual entry, SSH tunnel, paste link, command-line instructions
+                 Persona
+            [ Scan to pair ]
+       Other ways   Help   Demo
 ```
 
-- Replace the small text below the primary button, "Run `personad hub pair` on the hub machine," with "A QR code appears when hub is installed. You can also open Settings › Devices › Connect new device on an already connected device."
-- Web: if the page opens, hub already exists; show only "Scan with your phone to sign in" and "Paste pairing link," plus a "No hub yet?" link.
+- **Other ways** opens the platform's alternative connection methods. **Help** explains where to find the code and opens the getting-started guide when the build provides one. **Demo** lets the user try the app with sample data.
+- Web uses the same hierarchy. Paste a pairing link and submit it using the arrow. The shortcuts open phone scanning, help, or the master-key form. Keep the credential warning with that form.
+- Nearby hub discovery (P1, mDNS) belongs with alternative connection methods.
 - Android: remove `JCodeBlock("personad hub pair")` from the welcome page. Replace "Run personad hub pair again" in failure copy with "Generate a new code on a logged-in device."
 - Exiting demo mode lands on "No hub yet?".
 

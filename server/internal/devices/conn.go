@@ -283,6 +283,7 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 		return nil, err
 	}
 	peer := rpc.New("h", l.w)
+	peer.ReadLimit = nodeproto.RPCReadLimit
 	// Lanes are asked for below, once node.info says the node has them; until then (and with an older node for good)
 	// the connection is JSON lines.
 	peer.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)

@@ -65,6 +65,8 @@ internal fun InteractionPanel(
     labels: Map<String, StackLabel> = emptyMap(),
     first: String? = null,
     counted: Boolean = true,
+    /** When non-null, a lone unfolded card shows a top-edge grabber allowing the user to resize its cap (#12306). */
+    resize: CardResize? = null,
     /** Drawn under a card that is not folded: the rule a question a supervisor passed up suggests (#4929); null: nothing. */
     suggestion: (@Composable (Interaction) -> Unit)? = null,
 ) {
@@ -131,6 +133,7 @@ internal fun InteractionPanel(
                     headerActions = { closeCard(request) },
                     // an approval says it waits for the user, in the chat as on the web and iOS (#4883)
                     kicker = if (request.kind == "permission" && !request.isSecretRun) stringResource(DecisionKind.Tool.labelRes) else null,
+                    grabber = if (!folded && resize != null && resize.id == request.id) ({ CardGrabber(resize) }) else null,
                 ) {
                     if (full != request.id) body(request, false)
                 }
@@ -261,6 +264,10 @@ internal fun InteractionForm(
                 onDecline = { act(AnswerAction.Deny) }, onRun = { act(AnswerAction.Allow, AnswerDraft(password = password)) },
                 // Room between the dock's divider and the field's label.
                 modifier = Modifier.padding(top = Tokens.Space.s))
+            else if (interaction.isSecretHandoff) SecretHandoffActions(interaction,
+                canDeny = enabled(AnswerAction.Deny), canAllow = enabled(AnswerAction.Allow), canAlways = enabled(AnswerAction.Always),
+                onDeny = { act(AnswerAction.Deny) }, onAllow = { act(AnswerAction.Allow) }, onAlways = { act(AnswerAction.Always) },
+                modifier = Modifier.padding(top = Tokens.Space.s))
             // A card with fields (#4641): its form, Deny and Fill In & Allow, no Always.
             else if (interaction.hasFieldsForm) PermissionFieldsActions(interaction.fields.orEmpty(), fieldValues, { fieldValues = it }, editable,
                 canDeny = enabled(AnswerAction.Deny),
@@ -390,7 +397,8 @@ internal fun InteractionForm(
             style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
         Spacer(Modifier.height(Tokens.Space.s))
         when (interaction.kind) {
-            "permission" -> if (interaction.isSecretRun) SecretRunSummary(interaction) else {
+            "permission" -> if (interaction.isSecretRun) SecretRunSummary(interaction)
+            else if (interaction.isSecretHandoff) SecretHandoffSummary(interaction) else {
                 // Another agent's card says why it asks, in its own words.
                 interaction.reason?.takeIf { interaction.fromOtherAgent && it.isNotBlank() }?.let {
                     ChatLinkText(it, style = PersonaTheme.type.callout.copy(color = PersonaTheme.palette.ink2))
@@ -476,8 +484,8 @@ internal fun InteractionForm(
             }
             else -> Text(stringResource(R.string.chat_request_unsupported))
         }
-        // A password card is the assistant's own: no terminal to go to, nothing to hand back (#1137).
-        if (!interaction.isSecretRun) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        // The assistant's own secret cards have no terminal to go to and nothing to hand back (#1137, #3962).
+        if (!interaction.isSecretRun && !interaction.isSecretHandoff) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             if (onTerminal != null || showTerminalHelp) JTextButton(if (onTerminal != null) RequestExpiry.terminalLabel.text() else stringResource(R.string.chat_request_terminal_help),
                 { password = ""; if (onTerminal != null) onTerminal() else terminalHelp = true })
             if (ApprovalPolicy.actions(AnswerEntry.Conversation, interaction.kind, false).any { it.id == ApprovalAction.Dismiss }) {

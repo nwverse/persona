@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -30,6 +31,7 @@ import kotlinx.coroutines.launch
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import java.time.Instant
 
 /**
@@ -368,7 +370,7 @@ internal fun AddMailAccountPage(
                 val uri = LocalUriHandler.current
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs), modifier = Modifier.padding(top = Tokens.Space.xs)) {
                     SettingsCaption(stringResource(guide.provider.steps))
-                    JTextButton(stringResource(guide.provider.open), onClick = { runCatching { uri.openUri(guide.webMail) } }, icon = PhIcons.ArrowSquareOut)
+                    JTextButton(stringResource(guide.provider.open), onClick = { val _ = runCatching { uri.openUri(guide.webMail) } }, icon = PhIcons.ArrowSquareOut)
                 }
             } else item("form-footer") {
                 SettingsCaption(
@@ -462,6 +464,8 @@ internal fun FeishuConnectorPage(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var displayPage by remember { mutableStateOf(false) }
+    val homePreference = LocalAppStyleStore.current
+    val homeMessages = homePreference?.larkHomeMessages?.collectAsState()?.value ?: false
     if (displayPage) { LarkMessageDisplayPage(connectors, onBack = { displayPage = false }); return }
 
     fun load() {
@@ -559,12 +563,32 @@ internal fun FeishuConnectorPage(
             }
             item("accounts-caption") {
                 SettingsCaption(
-                    stringResource(R.string.settings_src_lark_accounts_caption),
+                    stringResource(
+                        if (homeMessages) R.string.settings_src_lark_accounts_caption_default
+                        else R.string.settings_src_lark_accounts_caption
+                    ),
                     Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.s),
                 )
             }
         }
 
+        // Demo has no conversation repository, so it must not offer a destination that can only say "unavailable".
+        if (homePreference != null && connectors != null) {
+            item("home-messages") {
+                JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.l)) {
+                    JSwitchRow(
+                        title = stringResource(R.string.settings_src_lark_home_messages),
+                        checked = homeMessages,
+                        onCheckedChange = homePreference::setLarkHomeMessages,
+                        modifier = Modifier.testTag("settings.lark.homeMessages"),
+                        subtitle = stringResource(R.string.settings_src_lark_home_messages_detail),
+                        leadingIcon = PersonaIcons.messagesApp,
+                        subtitleLines = Int.MAX_VALUE,
+                        titleLines = 2,
+                    )
+                }
+            }
+        }
         item("display") {
             JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.l)) {
                 JRow(stringResource(R.string.settings_src_display_title), leadingIcon = PhIcons.Eye, onClick = { displayPage = true })
@@ -641,7 +665,7 @@ internal fun ConnectorSignInStep(
                     JGroupItem(GroupPosition.Single) {
                         JRow(stringResource(R.string.settings_ext_auth_link_label), subtitle = url, subtitleLines = 2, leadingIcon = PhIcons.LinkSimple,
                             trailing = { JIcon(PhIcons.ArrowSquareOut, null, size = Tokens.Space.l, tint = PersonaTheme.palette.ink3) },
-                            onClick = { runCatching { uri.openUri(url) } })
+                            onClick = { val _ = runCatching { uri.openUri(url) } })
                     }
                 }
                 // No code: the page alone is enough (the protocol leaves it out then).
@@ -658,7 +682,7 @@ internal fun ConnectorSignInStep(
                 SignInWaiting(stringResource(R.string.settings_src_channel_waiting_authorize))
                 Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                     link?.let { url ->
-                        JButton(stringResource(R.string.settings_ext_auth_open_link), { runCatching { uri.openUri(url) } }, Modifier.weight(1f),
+                        JButton(stringResource(R.string.settings_ext_auth_open_link), { val _ = runCatching { uri.openUri(url) } }, Modifier.weight(1f),
                             icon = PhIcons.ArrowSquareOut)
                     }
                     JButton(stringResource(R.string.settings_src_cancel), model::cancel, Modifier.weight(1f), kind = JButtonKind.Secondary)
@@ -677,7 +701,7 @@ internal fun ConnectorSignInStep(
                     else stringResource(R.string.settings_src_channel_waiting_authorize))
                 Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                     prompt.url?.takeIf { StepView.isWebLink(it) }?.let { url ->
-                        JButton(stringResource(R.string.settings_src_open_web), { runCatching { uri.openUri(url) } }, Modifier.weight(1f),
+                        JButton(stringResource(R.string.settings_src_open_web), { val _ = runCatching { uri.openUri(url) } }, Modifier.weight(1f),
                             kind = JButtonKind.Secondary, icon = PhIcons.ArrowSquareOut)
                     }
                     JButton(stringResource(R.string.settings_src_cancel), model::cancel, Modifier.weight(1f), kind = JButtonKind.Secondary)

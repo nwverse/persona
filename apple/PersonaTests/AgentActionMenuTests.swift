@@ -58,6 +58,32 @@ import PersonaWire
         #expect(!facts.items.contains { $0.id == .terminal }, "no terminal capability, no terminal")
     }
 
+    /// Move To… (#11516): with the hub's `direction_sessions` and a session the owner may file, the session group
+    /// gains it after the to-do's own entries, so it reads apart from Move to Another To-do…; without its choices
+    /// (no feature, another manager's page, an Agent that follows its supervised task) the inventory is as before.
+    @Test func moveToIsOfferedOnlyWithItsChoices() throws {
+        let s = try session()
+        let without = AgentActionFacts(session: s, todoHub: true)
+        #expect(!without.items.contains { $0.id == .moveTo })
+        let choices = [DirectionFilings.Choice(id: "lead-a", name: "Product"), DirectionFilings.Choice(id: "lead-b", name: "Ops")]
+        let with = AgentActionFacts(session: s, todoHub: true, moveChoices: choices)
+        let ids = with.items.map(\.id)
+        #expect(ids.filter { $0 != .moveTo } == without.items.map(\.id), "nothing else moves")
+        let move = try #require(ids.firstIndex(of: .moveTo))
+        #expect(ids[move - 1] == .unlinkTodo && ids[move + 1] == .stopLoop)
+        #expect(with.items[move].group == .session)
+        #expect(with != without, "a change of the choices rebuilds the menu")
+        #expect(with == AgentActionFacts(session: s, todoHub: true, moveChoices: choices))
+    }
+
+    /// The gate itself: with no feature or no tree there are no choices (`DirectionFilings.offers` reads it).
+    @Test func moveToChoicesNeedTheFeatureAndTheTree() {
+        let tree = DirectionTree(directions: [DirectionTree.Direction(id: "lead-a", name: "Product")])
+        #expect(!DirectionFilings.shows(features: [], tree: tree, routesMissing: false))
+        #expect(!DirectionFilings.shows(features: [DirectionRoutes.feature], tree: nil, routesMissing: false))
+        #expect(DirectionFilings.shows(features: [DirectionRoutes.feature], tree: tree, routesMissing: false))
+    }
+
     @Test func bothEntryPointsConstructTheIdenticalView() throws {
         let s = try session()
         let facts = AgentActionFacts(session: s, pinned: true)

@@ -77,7 +77,10 @@ func (h *Hub) notifyDoneUnder(owner, kind, machineID, machine, sessionID, title,
 	}
 	policy.manager, policy.title, policy.body = owner, title, text
 	pushSelected, pushReachable, heldReason := h.push.sendFromPolicy(owner, policy, build, collapseID, wants.fn(), wants.quiet(), nil, nil)
-	ws := h.notifyWSFrom(owner, kind, build, wants.fn(), wants.quiet())
+	var ws wsReach
+	if heldReason == "" {
+		ws = h.notifyWSFrom(owner, kind, build, wants.fn(), wants.quiet())
+	}
 	return pushOutcome{devices: pushSelected + ws.selected, reachable: pushReachable + ws.reachable, kept: ws.kept, held: heldReason}
 }
 
@@ -115,8 +118,9 @@ func (h *Hub) notifyReplyKeyed(owner, machineID, machine, sessionID, title, text
 	build := func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }
 	wants := pushWants{Kind: "input"}
 	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: replyKey(sessionID, text, key), title: title, body: text}
-	h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil)
-	h.notifyWSFrom(owner, "reply", build, wants.fn(), wants.quiet())
+	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil); heldReason == "" {
+		h.notifyWSFrom(owner, "reply", build, wants.fn(), wants.quiet())
+	}
 }
 
 // replyKey is the related key of a reply reminder: the manager's when it named one, else the session and a digest of
@@ -144,8 +148,9 @@ func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text str
 	// One key a round: the same decision does not ring twice in 12 hours, but a new round of it (asked again) does.
 	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: "todo:" + todo.ID + "@" + todo.AskedAt.UTC().Format(time.RFC3339Nano),
 		title: title, body: text}
-	h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, nil)
-	h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
+	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, nil); heldReason == "" {
+		h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
+	}
 }
 
 // notifyInteraction pushes a new card. linkCovered: owner says its Persona Link summary rings for this card
@@ -180,16 +185,18 @@ func (h *Hub) notifyInteractionAt(owner string, ix proto.Interaction, machine st
 		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,
 		// the push has no buttons) and the connections that declared it.
 		policy := pushPolicy{level: level, relatedKey: key, title: summary}
-		h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation)
-		h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
+		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation); heldReason == "" {
+			h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
+		}
 	} else {
 		// A card owner's Persona Link summary rings for: "Phone Muted" holds it back while one of owner's Persona Link
 		// desktops is there too (desktops.go); which cards those are is owner's to say. The desktop app's online check
 		// follows in sendCard and notifyWSFrom.
 		fn := alertWanted(wants.fn(), linkCovered && h.linkDesktopOnline(owner))
 		policy := pushPolicy{level: level, relatedKey: key, title: summary}
-		h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil)
-		h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
+		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil); heldReason == "" {
+			h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
+		}
 	}
 }
 
