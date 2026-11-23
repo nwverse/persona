@@ -35,10 +35,15 @@ type Item struct {
 	// BackgroundWaiting: a working row that only waits on background commands (#6045). It stays in State's count
 	// (older apps call it working) and is counted apart in Counts.BackgroundWaiting too.
 	BackgroundWaiting bool
+	// JustFinished: a seen row whose done turn nobody had looked at, while it is new (proto.WorkState.JustFinished,
+	// #9751). It stays in State's count (older apps call it seen) and is counted apart in Counts.JustFinished too.
+	JustFinished bool
 	// Private: a row a reader with Options.NoPrivate is never shown, in its rows, totals or counts (a health-space
 	// conversation, which an extension's token does not see).
 	Private bool
-	// Assistant marks an Assistant conversation, excluded from the active Agent aggregate.
+	// HiddenByDirectory remains indexed for explicit inspection, but is excluded by default.
+	HiddenByDirectory bool
+	// Assistant marks a Persona conversation, excluded from the Agents list and active Agent aggregate.
 	Assistant bool
 	// Fold is the item's optional per-row metadata: its place in the session hierarchy (#5120) and its open to-do
 	// (#6662). Nil for an item with neither, which shows its own State and BackgroundWaiting. It sits behind a pointer
@@ -96,6 +101,11 @@ type Options struct {
 	AllowedMachines                                                                    []string
 	Limit                                                                              int
 	ID, Cursor, Since, State, Machine, Project, Group, Source, Provider, Q, PaneSource string
+	// Providers is the personal-Agent OR-set form of Provider. ParseProviderSets
+	// uses it for every nonempty provider value, including a singleton. Values are
+	// exact and case-sensitive; order and duplicates do not affect matching, cache
+	// keys or cursor bindings. At most 64 supplied values, none empty.
+	Providers []string
 	// Manager selects the rows of the batches replaced with that owner (ReplaceOwned); like the other filters, a
 	// cursor is bound to it. It is the adapter's to set (not a key Parse reads): the adapter knows which owners exist
 	// and who may ask for which.
@@ -110,6 +120,10 @@ type Options struct {
 	// NoPrivate leaves the Private items out of the rows, the totals and every count; like Manager it is the adapter's
 	// to set (who asks), not a key Parse reads, and it binds a cursor as the other filters do.
 	NoPrivate bool
+	// IncludeHidden opts into directory-hidden rows without changing the stored rules.
+	IncludeHidden bool
+	// AgentsOnly excludes assistant and health-space conversations from the filtered view.
+	AgentsOnly bool
 	// Places (place=["<machine>","<project>"], repeatable) selects the items at any of these machine and project
 	// pairs: one project's directories across computers. Spaces (space=["<machine>","<group>"]) does the same by
 	// machine and group. An empty key selects the items of that machine without the attribute. Each combines with
@@ -126,6 +140,10 @@ type Options struct {
 	// sidebar's hidden botmux sessions). Both bind a cursor as the other filters do (#6662).
 	Waiting           string
 	ExcludePaneSource string
+	// JustFinished (just_finished=1) selects the Just finished items (Item.JustFinished, by their folded state with
+	// Roots: idle), just_finished=0 the others: with state=idle, the web's Just finished and Seen sections (#9751). It
+	// binds a cursor as the other filters do.
+	JustFinished string
 }
 
 // TodoNone is the todo value that selects the items on no to-do: no to-do id is spelled so ("todo_<hex>").
@@ -138,10 +156,13 @@ type Page struct {
 	SearchHits map[string]SearchHit `json:"search_hits,omitempty"`
 	Sessions   []any                `json:"sessions"`
 	Remove     []string             `json:"remove"`
-	HasMore    bool                 `json:"has_more"`
-	NextCursor string               `json:"next_cursor,omitempty"`
-	Revision   string               `json:"revision"`
-	Total      int                  `json:"total"`
+	// Added identifies rows created after a delta's baseline, not existing rows that only changed or entered its filter.
+	// It is always an array so a client can distinguish no creations from an older hub that omits the field (#11801).
+	Added      []string `json:"added"`
+	HasMore    bool     `json:"has_more"`
+	NextCursor string   `json:"next_cursor,omitempty"`
+	Revision   string   `json:"revision"`
+	Total      int      `json:"total"`
 }
 
 // Counts describes the complete filtered membership, ignoring page size.
@@ -160,8 +181,13 @@ type Counts struct {
 	Todo map[string]int `json:"todo"`
 	// BackgroundWaiting: how many of State["working"] only wait in the background (#6045): a client that shows them
 	// apart takes them out of its Working count.
-	BackgroundWaiting int    `json:"background_waiting,omitempty"`
-	Revision          string `json:"revision"`
+	BackgroundWaiting int `json:"background_waiting,omitempty"`
+	// JustFinished: how many of State["idle"] are Just finished (#9751): a client that shows them apart takes them out
+	// of its Seen count.
+	JustFinished int `json:"just_finished,omitempty"`
+	// HeldNeeds: how many of State["needs_you"] only wait on held non-interrupting cards (P1/P2) for push grading.
+	HeldNeeds int    `json:"held_needs,omitempty"`
+	Revision  string `json:"revision"`
 }
 
 // PageWithCounts is a page with its view's current counts (with_counts=1): what a separate ?counts=1 read with the
@@ -198,10 +224,11 @@ type journalEntry struct {
 }
 
 type filters struct {
-	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, Todo, Waiting, ExcludePaneSource string
-	// Places and Spaces are Options' as placesKey spells them: filters stay comparable.
-	Places, Spaces   string
-	Roots, NoPrivate bool
+	ID, State, Machine, Project, Group, Source, Provider, Q, PaneSource, Manager, Under, Todo, Waiting, ExcludePaneSource, JustFinished string
+	// Places and Spaces are Options' as placesKey spells them, Providers as
+	// providersKey spells the set: filters stay comparable.
+	Places, Spaces, Providers                   string
+	Roots, NoPrivate, IncludeHidden, AgentsOnly bool
 }
 
 type binding struct {
@@ -220,6 +247,7 @@ type event struct {
 	id      string
 	updated time.Time
 	value   *record // nil means a removal
+	added   bool    // created after a delta's baseline; full pages and filter entrances leave this false
 }
 
 type result struct {
@@ -349,13 +377,17 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 	}
 	for id, c := range changes {
 		if c.before != nil {
-			addCount(&i.counts, c.before.item, false, -1)
+			if !c.before.item.HiddenByDirectory {
+				addCount(&i.counts, c.before.item, false, -1)
+			}
 			if c.before.searchDocument == nil {
 				i.undecoded--
 			}
 		}
 		if c.after != nil {
-			addCount(&i.counts, c.after.item, false, 1)
+			if !c.after.item.HiddenByDirectory {
+				addCount(&i.counts, c.after.item, false, 1)
+			}
 			i.undecoded++ // a new record: its document is decoded by the first search that reads it
 		}
 		if c.after == nil {

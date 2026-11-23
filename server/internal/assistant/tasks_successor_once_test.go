@@ -18,10 +18,11 @@ import (
 // the session holds its answer; fail answers that many of the held starts with an error once the gate opens.
 type successorGateHub struct {
 	*fakeHub
-	arrived chan struct{}
-	gate    chan struct{}
-	mu      sync.Mutex
-	fail    int
+	arrived  chan struct{}
+	gate     chan struct{}
+	mu       sync.Mutex
+	fail     int
+	startErr error
 }
 
 func (h *successorGateHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
@@ -35,6 +36,9 @@ func (h *successorGateHub) DeviceCall(ctx context.Context, p DeviceCall) (json.R
 		}
 		h.mu.Unlock()
 		if failing {
+			if h.startErr != nil {
+				return nil, h.startErr
+			}
 			return nil, errors.New("the node could not start the agent")
 		}
 	}
@@ -219,6 +223,52 @@ func TestStoppedTaskMessageAfterAFailedStartStartsTheAgent(t *testing.T) {
 	})
 }
 
+func TestStoppedTaskUncertainStartDoesNotRepeatTheMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"deadline across the bus", relayedDeadline},
+		{"node failed after writing", nodeAfterWrite},
+		{"unreadable start receipt", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s, h, todo := stoppedTaskOnGate(t)
+				if ok, err := s.autoDoneTodo(t.Context(), todo.ID, "finished", time.Now()); !ok || err != nil {
+					t.Fatalf("complete task: %v, %v", ok, err)
+				}
+				if tc.err == nil {
+					h.answerNode(DeviceSessionStart, unreadableWriteReceipt)
+				} else {
+					h.fail, h.startErr = 1, tc.err
+				}
+				first, waiting := make(chan error, 1), make(chan error, 1)
+				route := func(result chan<- error) {
+					_, err := s.routeToTask(t.Context(), "conv1", todo.ID, "Check the weekly figures")
+					result <- err
+				}
+				go route(first)
+				<-h.arrived
+				go route(waiting)
+				synctest.Wait()
+				close(h.gate)
+				for _, ch := range []chan error{first, waiting} {
+					if err := <-ch; err == nil || !strings.Contains(i18n.Localize(err, i18n.En), "before sending again") {
+						t.Errorf("route returned %v; want to check the agent before sending again", err)
+					}
+				}
+				if extra := len(h.arrived); extra != 0 {
+					t.Errorf("the waiting message started %d more agents", extra)
+				}
+				if got := todoNow(s, todo.ID); got.DoneAt != nil || got.ReopenedAt == nil {
+					t.Errorf("an uncertain start did not reopen the task")
+				}
+			})
+		})
+	}
+}
+
 // A start that outlasts its own bound: the message that waited for it is answered as not sent, rather than waiting
 // for good or starting a second agent beside it.
 func TestStoppedTaskMessageStopsWaitingForAStuckStart(t *testing.T) {
@@ -245,4 +295,71 @@ func TestStoppedTaskMessageStopsWaitingForAStuckStart(t *testing.T) {
 		close(h.gate)
 		<-results
 	})
+}
+
+// A bare /exit on the card while the new agent another message started is still starting is a second message like any
+// other (#8272): it waits for that start and goes to the agent it brought up. Only when no agent is there or on its way
+// is there nothing to exit: after the start failed, the waiting /exit is refused and starts no agent itself (#7539).
+func TestStoppedTaskExitWaitsForTheStartingAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail bool
+	}{{name: "the start comes up"}, {name: "the start fails", fail: true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s, h, todo := stoppedTaskOnGate(t)
+				if tc.fail {
+					h.fail = 1
+				}
+				results := make(chan routed, 2)
+				route := func(text string) {
+					item, err := s.routeToTask(context.Background(), "conv1", todo.ID, text)
+					results <- routed{text, item, err}
+				}
+				go route("接着把环比也算上")
+				<-h.arrived
+				go route("/exit")
+				synctest.Wait()
+				close(h.gate)
+				got := map[string]routed{}
+				for range 2 {
+					r := <-results
+					got[r.text] = r
+				}
+				select {
+				case <-h.arrived:
+					t.Fatal("/exit started an agent")
+				default:
+				}
+				f := h.fakeHub
+				f.mu.Lock()
+				starts := len(f.starts) // a start the gate failed never reaches the fake
+				var exits []map[string]any
+				for _, a := range f.agentSent {
+					if a["text"] == "/exit" {
+						exits = append(exits, a)
+					}
+				}
+				f.mu.Unlock()
+				if want := map[bool]int{false: 1, true: 0}[tc.fail]; starts != want {
+					t.Fatalf("%d starts reached the fake, want %d", starts, want)
+				}
+				exit := got["/exit"]
+				if tc.fail {
+					var m *i18n.Message
+					if !errors.As(exit.err, &m) || m.Key != "assistant-tasks.route_agents_exited" || len(exits) != 0 {
+						t.Fatalf("/exit after the failed start: %v, sent %v; want route_agents_exited, nothing sent", exit.err, exits)
+					}
+					return
+				}
+				agent := newAgentOf(got["接着把环比也算上"].item)
+				if exit.err != nil || agent == "" || newAgentOf(exit.item) != "" {
+					t.Fatalf("/exit: %v, feed %s; first feed %s", exit.err, exit.item.Body, got["接着把环比也算上"].item.Body)
+				}
+				if len(exits) != 1 || exits[0]["session_id"] != agent {
+					t.Fatalf("/exit sent %v, want once to the new agent %s", exits, agent)
+				}
+			})
+		})
+	}
 }

@@ -2,14 +2,17 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -82,6 +85,24 @@ func TestGatewayModelsFollowsClaudeCodeDiscovery(t *testing.T) {
 	}
 }
 
+func TestGatewayModelsUserAgent(t *testing.T) {
+	srv, got, _ := gatewayFixture(t)
+	n := gatewayNode(t, `{"env":{"`+gatewayDiscoveryVar+`":"1"}}`)
+	for _, tc := range []struct{ headers, want string }{
+		{"", modelhttp.UserAgent()},
+		{"user-agent: provider/1", "provider/1"},
+		{"user-agent:", ""},
+	} {
+		l := proto.ManagedLauncher{Name: "gw", BaseURL: srv.URL, APIKey: "sk-test", Headers: tc.headers}
+		if models := n.gatewayModels(context.Background(), l); len(models) == 0 {
+			t.Fatal("gateway returned no models")
+		}
+		if ua := got.Get("User-Agent"); ua != tc.want {
+			t.Errorf("headers %q: User-Agent = %q, want %q", tc.headers, ua, tc.want)
+		}
+	}
+}
+
 // Off (not set, or set off by the provider over the user's settings), without a key, or for another agent: the
 // gateway is not asked.
 func TestGatewayModelsOnlyWhenDiscoveryIsOn(t *testing.T) {
@@ -145,6 +166,72 @@ func TestWithGatewayModelsAddsWhatIsMissing(t *testing.T) {
 	}
 	if got := withGatewayModels(cli, nil); len(got) != len(cli) {
 		t.Fatalf("nothing from the gateway: %v", modelIDs(got))
+	}
+}
+
+func TestLauncherModelsCarriesOnlyExactGatewayEvidence(t *testing.T) {
+	home := fakeCLIHome(t)
+	n, _ := testNode(t)
+	n.home, n.dir, n.bin = home, filepath.Join(home, ".persona"), filepath.Join(home, "bin", "personad")
+	writeFile(t, n.bin, `#!/bin/sh
+read request
+echo '{"type":"control_response","response":{"subtype":"success","request_id":"persona-models","response":{"models":[{"value":"relay/model-x-1m","resolvedModel":"claude-opus-5-5"},{"value":"relay/window","resolvedModel":"claude-opus-4-8[1m]"}]}}}'
+`)
+	if err := os.Chmod(n.bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gateway, _, calls := gatewayFixture(t)
+	for _, tc := range []struct {
+		name, key string
+		exact     bool
+	}{
+		{name: "with-key", key: "test-key", exact: true},
+		{name: "no-key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n.setManaged([]proto.ManagedLauncher{{Name: tc.name, BaseURL: gateway.URL, APIKey: tc.key, Env: gatewayDiscoveryVar + "=1"}})
+			before := *calls
+			for range 2 { // the second read reuses this launcher's catalog
+				got, err := n.launcherModels(t.Context(), tc.name, "claude", false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := []string{"relay/model-x-1m", "relay/window"}
+				if tc.exact {
+					want = append(want, "anthropic-compat/glm-5.3", "vendor/claude-x")
+				}
+				if !slices.Equal(modelIDs(got.Models), want) {
+					t.Fatalf("model ids = %v, want %v", modelIDs(got.Models), want)
+				}
+				wire, err := json.Marshal(got)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("launchers.models %s", wire)
+				var response struct {
+					Models []struct {
+						ID              string
+						ResolvedOffered *bool `json:"resolved_offered"`
+					}
+				}
+				if err := json.Unmarshal(wire, &response); err != nil {
+					t.Fatal(err)
+				}
+				for _, row := range response.Models {
+					wantMark := tc.exact && row.ID == "relay/model-x-1m"
+					if mark := row.ResolvedOffered; (mark != nil) != wantMark || mark != nil && !*mark {
+						t.Fatalf("gateway evidence for %s: %s", row.ID, wire)
+					}
+				}
+			}
+			wantCalls := 0
+			if tc.exact {
+				wantCalls = 1
+			}
+			if *calls-before != wantCalls {
+				t.Fatalf("gateway GETs = %d, want %d", *calls-before, wantCalls)
+			}
+		})
 	}
 }
 

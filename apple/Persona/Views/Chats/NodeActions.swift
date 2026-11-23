@@ -426,16 +426,16 @@ private struct NodeActionPrompts: ViewModifier {
                 }
             }
             #endif
-            .confirmationDialog(actions.closingTab.map { $0.name.isEmpty ? String(localized: "Close This Tab?") : String(localized: "Close Tab “\($0.name)”?") } ?? "",
+            .accessibleConfirmationDialog(actions.closingTab.map { $0.name.isEmpty ? String(localized: "Close This Tab?") : String(localized: "Close Tab “\($0.name)”?") } ?? "",
                                 isPresented: Binding(get: { actions.closingTab != nil }, set: { if !$0 { actions.closingTab = nil } }),
-                                titleVisibility: .visible, presenting: actions.closingTab) { c in
+                                titleVisibility: .visible, hasCancel: true, presenting: actions.closingTab) { c in
                 Button("Close Tab", role: .destructive) { actions.closeTab(c) }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in
                 Text("Every pane in the tab closes, and the agents running in them end too.")
             }
-            .confirmationDialog("Push to the Remote?", isPresented: Binding(get: { actions.askingPush != nil }, set: { if !$0 { actions.askingPush = nil } }),
-                                titleVisibility: .visible, presenting: actions.askingPush) { a in
+            .accessibleConfirmationDialog("Push to the Remote?", isPresented: Binding(get: { actions.askingPush != nil }, set: { if !$0 { actions.askingPush = nil } }),
+                                titleVisibility: .visible, hasCancel: true, presenting: actions.askingPush) { a in
                 Button("Push") { actions.push(a) }
                 Button("Cancel", role: .cancel) {}
             } message: { a in
@@ -530,9 +530,7 @@ struct RunAgentHereSheet: View {
             .navigationTitle("Run Agent Here")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }.lineLimit(1).disabled(busy)
-                }
+                SheetClose(disabled: busy) { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     if busy {
                         ProgressView()
@@ -920,7 +918,7 @@ struct NewWorktreeSheet: View {
                 .navigationTitle(workspace == nil ? String(localized: "New Worktree") : String(localized: "workspace.newChildTitle", defaultValue: "New Worktree"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.lineLimit(1).disabled(busy) }
+                    SheetClose(disabled: busy) { dismiss() }
                     ToolbarItem(placement: .confirmationAction) {
                         if busy { ProgressView() }
                         else {

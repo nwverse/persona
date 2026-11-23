@@ -54,9 +54,9 @@ struct TaskRemoval: ViewModifier {
     @Binding var pending: TodoItem?
 
     func body(content: Content) -> some View {
-        content.confirmationDialog(pending.map { String(localized: "Remove “\($0.title)”?") } ?? "",
+        content.accessibleConfirmationDialog(pending.map { String(localized: "Remove “\($0.title)”?") } ?? "",
                                    isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
-                                   titleVisibility: .visible, presenting: pending) { todo in
+                                   titleVisibility: .visible, hasCancel: true, presenting: pending) { todo in
             Button("Remove [Task Sheets 6135d4]", role: .destructive) { Task { await TasksStore.shared.remove(todo) } }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
@@ -136,6 +136,8 @@ enum TaskPlace {
 @MainActor @Observable final class PlanChoices {
     /// Start These Directly: this kind of task starts without asking from now on.
     var remember = false
+    /// Let the scheduled task whose run planned this start this kind by itself from now on (#8045).
+    var scheduleGrant = false
     var editing = false
     /// Each task's ultracode as set on the card (#12), by index; the assistant's where it is not.
     var ultra: [Int: Bool] = [:]
@@ -193,6 +195,7 @@ struct PlanCard: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            if let title = grantTitle { PlanScheduleGrant(title: title, choices: picked) }
             if !actionsPinned { PlanActions(plan: plan, choices: picked) }
         }
         .card(padding: Theme.Space.l)
@@ -201,9 +204,17 @@ struct PlanCard: View {
                 picked.editing = false
                 let blocked = Ultracode.blockedMachines(edits)
                 let sent = Ultracode.editsToSend(plan, edits: edits, blocked: { blocked.contains($0) })
-                Task { await store.start(plan, edits: sent, remember: picked.remember) }
+                Task { await store.start(plan, edits: sent, remember: picked.remember, scheduleGrant: picked.grantsSchedule(plan)) }
             }
         }
+    }
+
+    /// The name under which the card offers "Let … Start These by Itself" (#8045), nil where it offers nothing.
+    private var grantTitle: String? {
+        #if DEBUG
+        if StartGrantSample.on, plan.tasks.contains(where: { !$0.isReadOnly }) { return plan.grantableSchedule?.title ?? StartGrantSample.title }
+        #endif
+        return plan.grantableSchedule?.title
     }
 
     private func settled(symbol: String, text: String, failed: [PlanTask]) -> some View {
@@ -222,6 +233,53 @@ struct PlanCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+#if DEBUG
+/// `-showStartGrantSample YES` (#8045, screenshots against a mock hub that has no start grants): every open plan with a
+/// task that changes files offers the schedule's option, and a scheduled task's editor lists two kinds.
+enum StartGrantSample {
+    static let on = UserDefaults.standard.bool(forKey: "showStartGrantSample")
+    static let title = Locale.current.language.languageCode?.identifier == "zh" ? "周报" : "Weekly report" // i18n-ignore
+    static let kinds = ["macbook|/Users/me/code/weather|edit", "studio|/Users/me/notes|read"]
+}
+#endif
+
+extension PlanChoices {
+    /// Whether Start lets the plan's scheduled task start this kind by itself: ticked, and offered on this plan.
+    func grantsSchedule(_ plan: TaskPlan) -> Bool { scheduleGrant && plan.grantableSchedule != nil }
+}
+
+/// "Let “…” Start These by Itself" under Start These Directly (#8045), on a plan a scheduled task's own run made: drawn
+/// as that one, with what it covers under it.
+struct PlanScheduleGrant: View {
+    var title: String
+    var choices: PlanChoices
+
+    var body: some View {
+        let name = title.isEmpty ? String(localized: "This Scheduled Task") : title
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            Button {
+                withAnimation(Theme.Motion.state) { choices.scheduleGrant.toggle() }
+            } label: {
+                Label {
+                    Text("Let “\(name)” Start These by Itself").buttonLabelLine()
+                } icon: {
+                    // the same mark as Start These Directly's, so the two read as one group
+                    ThemedIcon(choices.scheduleGrant ? Theme.Icon.successFilled : Theme.Icon.unchecked)
+                }
+                .font(Theme.Font.caption)
+                .foregroundStyle(choices.scheduleGrant ? Theme.accent : .secondary)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(choices.scheduleGrant ? .isSelected : [])
+            Text("Only in this scheduled task's own runs, never after it read mail, Inbox or web pages. You can remove this on its page.")
+                .font(Theme.Font.label)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -248,7 +306,7 @@ struct PlanActions: View {
         Button {
             let blocked = Ultracode.blockedMachines(plan.tasks)
             let edits = Ultracode.cardEdits(plan, choices: Ultracode.choices(plan, card: choices.ultra), blocked: { blocked.contains($0) })
-            Task { await store.start(plan, edits: edits, remember: choices.remember) }
+            Task { await store.start(plan, edits: edits, remember: choices.remember, scheduleGrant: choices.grantsSchedule(plan)) }
         } label: {
             Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Start"))
                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)
@@ -296,8 +354,7 @@ struct PlanTaskRow: View {
             FlowLayoutRow(spacing: Theme.Space.xs) {
                 Chip(text: TaskPlace.machineName(task.machine), symbol: Theme.Icon.laptop)
                 Chip(text: task.project, symbol: Theme.Icon.folder)
-                Chip(text: task.model.flatMap { $0.isEmpty ? nil : $0 } ?? task.launcher.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Default Model"),
-                     symbol: Theme.Icon.cpu)
+                Chip(text: modelLabel, symbol: Theme.Icon.cpu)
                 if task.isReadOnly {
                     Chip(text: String(localized: "Read-only"), symbol: Theme.Icon.view, look: .tint(Theme.accent))
                 } else if let p = task.permission, !p.isEmpty {
@@ -321,13 +378,24 @@ struct PlanTaskRow: View {
         }
     }
 
+    /// An explicit model wins; a tier names its preset with the task's launcher, then the existing launcher/default.
+    private var modelLabel: String {
+        if let model = task.model, !model.isEmpty { return model }
+        let launcher = task.launcher.flatMap { $0.isEmpty ? nil : $0 }
+        if let tier = task.tier, !tier.isEmpty {
+            let preset = String(localized: "Preset \(tier)")
+            return launcher.map { "\($0) · \(preset)" } ?? preset
+        }
+        return launcher ?? String(localized: "Default Model")
+    }
+
     /// The modes a planned task can start with (web PLAN_PERMISSIONS, Android PlanPermissions); Auto too, which the hub
     /// may settle an unset one to from Claude Code's default mode (#3026).
     static let permissions = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"]
 
     static func permissionLabel(_ mode: String) -> String {
         switch mode {
-        case "acceptEdits": String(localized: "Can edit files")
+        case "acceptEdits": String(localized: "Auto-Edit")
         case "plan": String(localized: "Plan first")
         case "auto": String(localized: "Auto [Plan Card Permission]", comment: "A planned task's permission mode: the agent judges the risk itself")
         case "bypassPermissions": String(localized: "Allow Everything")
@@ -421,7 +489,7 @@ struct FeedLine: View {
             // A routine's facts (#2320); a body this build can't read leaves the card out, never the feed around it.
             if let brief = item.brief { BriefCard(brief: brief, group: group, conversation: item.conversation) }
         case .message:
-            if let id = item.ref, !store.laterMessages.contains(id) { MessageCard(item: item, itemID: id) }
+            if let id = item.ref, !store.isLater(item) { MessageCard(item: item, itemID: id) }
         case .inboxSuggestion:
             // A hand-off conversation's write-back (#5932); a body this build can't read leaves the card out.
             if let id = item.ref, let card = item.handoffCard { HandoffCardView(item: item, card: card, itemID: id) }
@@ -747,34 +815,6 @@ struct MessageCard: View {
 }
 
 // MARK: - Above the composer
-
-/// What the conversation's tasks are asking, at the bottom where the user is: the oldest question under its task's
-/// name, answered where it is; the next comes up when it is done (「还有 N 件」 counts them).
-struct TaskQuestions: View {
-    var conversation: String
-    private var store: TasksStore { .shared }
-
-    var body: some View {
-        let asks = store.tasks(of: conversation)
-            .flatMap { todo in store.interactions(todo).map { (todo: todo, ix: $0) } }
-            .sorted { ($0.ix.createdAt ?? .distantPast) < ($1.ix.createdAt ?? .distantPast) }
-        if let first = asks.first {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                HStack(spacing: Theme.Space.s) {
-                    Label(first.todo.title, systemImage: Theme.Icon.askFirst).lineLimit(1)
-                    Spacer(minLength: Theme.Space.s)
-                    if asks.count > 1 { Text("\(asks.count - 1) more").lineLimit(1).fixedSize() }
-                }
-                .font(Theme.Font.captionStrong)
-                .foregroundStyle(AgentState.needsYou.tone.text)
-                .padding(.horizontal, Theme.Space.xs)
-                InteractionPanel(interaction: first.ix)
-            }
-            .id(first.ix.id)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-        }
-    }
-}
 
 /// The capsule the row above the assistant's composer draws an entry in: the action bar's Needs You / In Progress (#3393)
 /// and its trays' All, the look the dock's All had (#1094), so the bar is exactly as low as the dock was:

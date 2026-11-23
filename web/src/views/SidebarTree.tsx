@@ -26,12 +26,12 @@ import type { MenuAt } from "../ui/menu-model";
 import type { TermSpace } from "../lib/terminals";
 import { useFolded } from "../lib/use-folded";
 import { sameValue } from "../lib/stable-lines";
-import { stateCount } from "../lib/state-labels";
+import { stateCount, type WaitReason } from "../lib/state-labels";
 import { neverConnected } from "../lib/add-computer";
 import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
 import { NavRow, SessionRow } from "./SidebarRows";
 import { WindowedRows } from "./WindowedRows";
-import type { WorkspaceTarget } from "../lib/workspace-catalog";
+import { workspacePinTime, type WorkspaceTarget } from "../lib/workspace-catalog";
 import { selectWorkspace, useWorkspaceSelection } from "../lib/workspace-selection";
 import { DirectionCountsText, DirectionStateText } from "./DirectionMarks";
 
@@ -42,9 +42,11 @@ export type MachineLabel = (machineId: string) => string;
 const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
 /** "Needs you" / "Working" / "Done" at the end of a tree node's line; `label`: a to-do's own word for it (the To-dos
- *  page's, #6458), in the color of the state it ranks as. */
-const TreeStateText = memo(function TreeStateText({ state, label }: { state: TreeState; label?: string }) {
-  return <span className={cx("shrink-0 text-[11px] font-semibold whitespace-nowrap", TREE_TONE[state])}>{label ?? treeStateLabel(state)}</span>;
+ *  page's, #6458), in the color of the state it ranks as, but for a waiting to-do's (`wait`, #11090): Needs you's
+ *  attention when it waits on the owner, the neutral one otherwise. */
+const TreeStateText = memo(function TreeStateText({ state, label, wait }: { state: TreeState; label?: string; wait?: WaitReason }) {
+  const tone = wait ? (wait === "owner" ? TREE_TONE.needs_you : TREE_TONE.waiting) : TREE_TONE[state];
+  return <span className={cx("shrink-0 text-[11px] font-semibold whitespace-nowrap", tone)} data-tree-state={wait}>{label ?? treeStateLabel(state)}</span>;
 });
 
 // The tree's rows are memoized, and a push hands them the nodes it did not change as the same objects (shareTree), so
@@ -131,12 +133,15 @@ function BranchEnd({ n, state, label }: { n: number; state?: TreeState; label?: 
  * list's sticky group headings (a grouping's top level, DESIGN_SYSTEM 3.4, which Collapse all reads), else a row inside a
  * section. Its body is `children`, or `empty` said in their place when there are none. The row selects no text: a
  * press-and-drag over the rows that fold groups painted the theme's grey selection behind each of their lines (#6458).
+ * On a touch screen the row is 44 px tall and a tap anywhere on it folds it: the chevron's touch-hit square, its button
+ * unpositioned there, takes the row as its box, under the positioned controls that keep their own taps (the to-do's link,
+ * the ⓘ) and over the words, the count and the state.
  */
 export function TreeBranch({ branch, top, folded, onToggle, toggleLabel, icon, title, info, end, empty, children }: { branch: string; top?: boolean; folded: boolean; /** None: nothing to unfold, the title stays in the column. */ onToggle?: () => void; toggleLabel: string; icon?: IconName; title: React.ReactNode; info?: React.ReactNode; end: React.ReactNode; empty?: string; children?: React.ReactNode }) {
   const row = (
-    <div data-tree-branch-row className="relative z-10 flex w-full min-w-0 select-none items-center gap-1.5 rounded-control py-1 pl-2 pr-2 text-label text-ink-2 hover:bg-hover">
+    <div data-tree-branch-row className="relative z-10 flex w-full min-w-0 select-none items-center gap-1.5 rounded-control py-1 pl-2 pr-2 text-label text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11">
       {onToggle ? (
-        <button type="button" aria-expanded={!folded} aria-label={toggleLabel} onClick={onToggle} className="touch-hit flex shrink-0 items-center">
+        <button type="button" aria-expanded={!folded} aria-label={toggleLabel} onClick={onToggle} className="touch-hit flex shrink-0 items-center [@media(pointer:coarse)]:static">
           <BranchChevron folded={folded} />
         </button>
       ) : (
@@ -150,7 +155,7 @@ export function TreeBranch({ branch, top, folded, onToggle, toggleLabel, icon, t
   );
   const body = (
     <Collapse open={!folded} sidebarFold>
-      <div data-tree-branch-list className="flex flex-col gap-px pl-3" inert={folded || undefined}>
+      <div data-tree-branch-list className="flex flex-col gap-px sidebar-indent" inert={folded || undefined}>
         {children ?? (empty ? <EmptyHint text={empty} /> : null)}
       </div>
     </Collapse>
@@ -216,8 +221,10 @@ export const TreeTodoRows = memo(function TreeTodoRows({ td, top, ...p }: { td: 
   const [folded, toggle] = useFolded(td.key, td.folded, { follow: true, holds: holdsRow(td.sessions, p.activeKey) });
   // a direction's task no agent is on yet (#4352): nothing to unfold, and no bare 0 beside its state
   const unfolds = td.agents.length > 0 || !td.taskState;
+  // the link takes the touch row's height (touch-hit; the words truncate inside it, which would clip its square), so a
+  // finger just off the words opens the to-do rather than folding it
   const title = td.todoId ? (
-    <a href={href({ name: "todos", id: td.todoId })} onClick={(e) => { e.preventDefault(); openTodoFromTag(td.todoId!, navigate, p.onNavigate); }} className="min-w-0 flex-1 truncate font-medium text-ink hover:underline">{td.name}</a>
+    <a href={href({ name: "todos", id: td.todoId })} onClick={(e) => { e.preventDefault(); openTodoFromTag(td.todoId!, navigate, p.onNavigate); }} className="touch-hit min-w-0 flex-1 font-medium text-ink hover:underline"><span className="block truncate">{td.name}</span></a>
   ) : (
     <button type="button" onClick={toggle} className="min-w-0 flex-1 truncate text-left">{td.name}</button>
   );
@@ -226,7 +233,7 @@ export const TreeTodoRows = memo(function TreeTodoRows({ td, top, ...p }: { td: 
   ) : td.status === "usage_limit" ? (
     <span className="shrink-0 text-[11px] font-semibold whitespace-nowrap text-orange">{t("lib-usage-limit.short")}</span>
   ) : (
-    <TreeStateText state={td.state} label={td.statusLabel} />
+    <TreeStateText state={td.state} label={td.statusLabel} wait={td.wait} />
   );
   return (
     <TreeBranch
@@ -365,6 +372,7 @@ function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }:
           <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {w.main && <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" />}
+        <SpaceMarks pinned={workspacePinTime(w.workspace) !== undefined} muted={false} />
         <button type="button" title={title} aria-pressed={selected === w.key} aria-expanded={!folded} onClick={() => { if (w.target) actions.onSelectWorkspace?.(w.target); toggle(); }} className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 text-left hover:text-ink [@media(pointer:coarse)]:min-h-11">{label}</button>
         {w.workspace?.available === false && <Icon name="warning" size={11} className="shrink-0 text-ink-3" aria-label={t("workspace-tree.unavailable")} />}
         <span className="ml-auto shrink-0 text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
@@ -593,7 +601,7 @@ function TreeBlock({ foldKey, sessions, activeKey, state, title, right, children
         {right(folded)}
       </div>
       <Collapse open={!folded} sidebarFold>
-        <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>{children}</div>
+        <div className="flex flex-col gap-px sidebar-indent" inert={folded || undefined}>{children}</div>
       </Collapse>
     </div>
   );
@@ -766,7 +774,7 @@ function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
         </button>
       </div>
       <Collapse open={!folded} sidebarFold>
-        <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>
+        <div className="flex flex-col gap-px sidebar-indent" inert={folded || undefined}>
           {tab.sessions.map((s, i) => {
             const key = rowKey(s);
             const branch = Boolean(tab.launcher) && s !== tab.launcher;

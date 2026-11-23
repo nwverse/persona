@@ -46,7 +46,7 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 		params["model"] = c.p.model.Model
 	}
 	// The same on every start of the thread, apart from the memory index: the live snapshot goes with each message.
-	params["developerInstructions"] = prompts.RenderCodexInstructions(codexMemoryPrompt(c.memDir))
+	params["developerInstructions"] = prompts.RenderCodexInstructions(codexMemoryPrompt(c.memDir), c.p.model.SupervisionInstructions)
 	var res struct {
 		Model       string          `json:"model"`
 		ServiceTier json.RawMessage `json:"serviceTier"`
@@ -194,9 +194,11 @@ func (c *codexConn) deliver(ctx context.Context, live, text string, images []pro
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
+	sentAt := time.Now()
 	if err := c.call(ctx, "turn/start", params, &res); err != nil {
 		return err
 	}
+	n.ttft.arm(c.p.id, sentAt, res.Turn.ID)
 	c.mu.Lock()
 	if res.Turn.ID != "" {
 		c.turnID = res.Turn.ID
@@ -242,6 +244,7 @@ func (c *codexConn) compacted() {
 	manual := c.p.manual
 	c.p.manual, c.p.compacting = false, false
 	c.p.mu.Unlock()
+	c.compactedInTurn(manual) // whether it made room, the next request says (assistant_codex_compaction_loop.go)
 	if manual {
 		c.p.ownerOr(c.n).compactionEnded(c.p.id, "")
 	}

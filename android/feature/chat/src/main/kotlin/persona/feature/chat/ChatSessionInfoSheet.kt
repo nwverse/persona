@@ -210,7 +210,7 @@ internal fun ChatSessionInfoSheet(
         session.externalLink?.let { url ->
             JGroupItem(GroupPosition.of(0, 1), Modifier.padding(top = Tokens.Space.m)) {
                 JRow(stringResource(R.string.chat_host_open_feishu), leadingIcon = PersonaIcons.openExternal, chevron = false,
-                    onClick = { runCatching { uriHandler.openUri(url) } })
+                    onClick = { val _ = runCatching { uriHandler.openUri(url) } })
             }
         }
         // The questions the assistant answered for this agent; its own conversations have none.

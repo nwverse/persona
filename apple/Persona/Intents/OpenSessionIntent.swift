@@ -63,7 +63,10 @@ struct SessionEntityQuery: EntityQuery {
 /// Opens the app on one chat. The app is in the foreground here, so touching `AppModel` is fine.
 struct OpenSessionIntent: OpenIntent {
     nonisolated static let title: LocalizedStringResource = "Open Session"
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .foreground(.immediate) }
+    // iOS 18 has no supportedModes: it opens the app this way.
+    nonisolated static var openAppWhenRun: Bool { true }
 
     @Parameter(title: "Session")
     var target: SessionEntity
@@ -77,7 +80,7 @@ struct OpenSessionIntent: OpenIntent {
         await MainActor.run {
             // As a notification opens it: a Persona conversation on Assistant, an Agent's on Agents.
             let model = AppModel.shared
-            model.open(model.resolve(path: key.path) ?? key)
+            model.openExternal(machineID: key.machineID, sessionID: key.sessionID, group: key.hubGroup)
         }
         return .result()
     }

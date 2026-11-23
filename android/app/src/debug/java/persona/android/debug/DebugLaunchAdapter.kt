@@ -26,6 +26,7 @@ private val pages = mapOf(
     "inbox" to ResolvedRoute(AppTab.Persona, persona.core.navigation.InboxRoute),
     "settings" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsRoute),
     "phone" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.PhoneData)),
+    "about" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.About)),
     "mail" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Mail)),
     "feishu" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Feishu)),
     "catalog" to ResolvedRoute(AppTab.Persona, ComponentCatalogRoute),

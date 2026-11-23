@@ -299,27 +299,73 @@ func (ps *extensions) nodePackage(p *extension.Extension, platform string) (node
 	return pkg, nil
 }
 
+const nodePackageChunkBytes = 32 << 10
+
+type nodePackageFailure struct {
+	retryAt time.Time
+	err     error
+}
+
+func (m *Machine) nodePackageRetryDue() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	due := false
+	for prog, failure := range m.nodePackageFailures {
+		if !time.Now().Before(failure.retryAt) {
+			delete(m.nodePackageFailures, prog)
+			due = true
+		}
+	}
+	return due
+}
+
 // putNodePackage sends pkg to m unless it has it.
-func putNodePackage(ctx context.Context, m *Machine, prog proto.PluginNodeProgram, pkg nodePackage) error {
+func putNodePackage(ctx context.Context, m *Machine, prog proto.PluginNodeProgram, pkg nodePackage) (retErr error) {
 	var have proto.PluginNodeHave
 	if err := m.call(ctx, "plugin.node.have", prog, &have); err != nil {
 		return err
 	}
 	if have.Have {
+		m.mu.Lock()
+		delete(m.nodePackageFailures, prog)
+		m.mu.Unlock()
 		return nil
+	}
+	m.mu.Lock()
+	for key, failure := range m.nodePackageFailures {
+		if !time.Now().Before(failure.retryAt) {
+			delete(m.nodePackageFailures, key)
+		}
+	}
+	failure, delayed := m.nodePackageFailures[prog]
+	m.mu.Unlock()
+	if delayed {
+		return failure.err
 	}
 	f, err := os.Open(pkg.file)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	defer func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if retErr == nil {
+			delete(m.nodePackageFailures, prog)
+			return
+		}
+		if m.nodePackageFailures == nil {
+			m.nodePackageFailures = make(map[proto.PluginNodeProgram]nodePackageFailure)
+		}
+		m.nodePackageFailures[prog] = nodePackageFailure{retryAt: time.Now().Add(extensionLeaseEvery), err: retErr}
+	}()
 	var begun struct {
 		UploadID string `json:"upload_id"`
 	}
 	if err := m.call(ctx, "plugin.node.put.begin", proto.PluginNodePutBegin{PluginNodeProgram: prog, Size: pkg.size}, &begun); err != nil {
 		return err
 	}
-	buf := make([]byte, proto.UploadChunkBytes)
+	buf := make([]byte, nodePackageChunkBytes)
 	var off int64
 	for {
 		n, rerr := f.Read(buf)
@@ -339,15 +385,24 @@ func putNodePackage(ctx context.Context, m *Machine, prog proto.PluginNodeProgra
 // nodeInit is the initialize p's program on a computer gets: the configuration, and only the secrets its manifest
 // sends to computers (node.secrets); no hub token (no hub_api on computers, plan "Decisions").
 func (ps *extensions) nodeInit(ctx context.Context, p *extension.Extension) (json.RawMessage, error) {
-	all, err := ps.programSecrets(ctx, p.Record.ID)
+	live := ps.reg.SnapshotExact(p.Record.ID)
+	stored, err := ps.reg.Secrets(ctx, p.Record.ID)
 	if err != nil {
 		return nil, err
 	}
-	secrets := map[string]string{}
+	selected := map[string]string{}
 	for _, name := range p.Manifest.Node.Secrets {
-		if v, ok := all[name]; ok {
-			secrets[name] = v
+		if live != nil && live.IsLiveEntrySecret(name) {
+			continue // entry secrets are hub-only, even if a fixed declaration has the same flat name
 		}
+		if v, ok := stored[name]; ok {
+			selected[name] = v
+		}
+	}
+	// Resolve only values the node can receive. An unavailable hub-only entry reference must not block node startup.
+	secrets, err := ps.resolveStored(ctx, p.Record.ID, selected)
+	if err != nil {
+		return nil, err
 	}
 	params := extension.InitializeParams{Hub: extension.HubInfo{ExtensionPoints: extension.PointVersions(), Capabilities: extension.HubCapabilities()},
 		Extension: extension.ExtensionInfo{ID: p.Record.ID, Version: p.Record.Version}, Config: ps.reg.Config(p), Secrets: secrets,
@@ -669,6 +724,9 @@ func (h *Manager) extensionLeaseLoop(ctx context.Context) {
 				h.logf("[%s] plugins' leases: %v", m.cfg.ID, err)
 			}
 			cancel()
+			if m.nodePackageRetryDue() {
+				go h.syncExtensionNodes(ctx, m)
+			}
 		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
@@ -58,6 +59,9 @@ func init() {
 			if json.Unmarshal(params, &p) != nil || h.ownsMachine(c, p.MachineID) != nil {
 				return // only its manager lists a machine's sessions (ownership.go)
 			}
+			if m := h.localMachine(p.MachineID); m != nil {
+				m.archivedOnlyOf(c.managerID())
+			}
 			h.takeFleetSessions(p)
 			return
 		}
@@ -75,8 +79,20 @@ func init() {
 		if err != nil {
 			return
 		}
+		m.archivedOnlyOf(c.managerID())
 		p.Sessions = list
 		h.takeFleetSessionsFrom(m, p, raws)
+	})
+	// A machine's archived rows told apart from its list (assistantwire.Hello.ArchivedApart, #6836): kept for lookups
+	// by session only. They change nothing the apps get, so nothing is pushed.
+	handleBusEvent(assistantwire.EventFleetArchived, func(h *Hub, c *busConn, params json.RawMessage) {
+		var p assistantwire.FleetArchived
+		if json.Unmarshal(params, &p) != nil || h.ownsMachine(c, p.MachineID) != nil {
+			return
+		}
+		if m := h.localMachine(p.MachineID); m != nil {
+			m.setArchived(c.managerID(), p.Sessions)
+		}
 	})
 	handleBusEvent(assistantwire.EventFleetInteraction, func(h *Hub, c *busConn, params json.RawMessage) {
 		var p assistantwire.FleetInteraction
@@ -170,6 +186,24 @@ func (h *Hub) takeFleetSessionsFrom(m *Machine, p assistantwire.FleetSessions, r
 	if list == nil {
 		list = []proto.Session{}
 	}
+	var newlyDeleted []string
+	var wasDeleted map[string]bool
+	for _, row := range list {
+		if !row.IsDeleted() {
+			continue
+		}
+		if wasDeleted == nil {
+			wasDeleted = map[string]bool{}
+			for _, previous := range m.keptSessions() {
+				if previous.IsDeleted() {
+					wasDeleted[previous.SessionID] = true
+				}
+			}
+		}
+		if !wasDeleted[row.SessionID] {
+			newlyDeleted = append(newlyDeleted, row.SessionID)
+		}
+	}
 	m.setSessionListRaws(list, raws)
 	f := &h.reported
 	f.mu.Lock()
@@ -178,6 +212,9 @@ func (h *Hub) takeFleetSessionsFrom(m *Machine, p assistantwire.FleetSessions, r
 	}
 	f.muted[m.cfg.ID] = p.Muted
 	f.mu.Unlock()
+	for _, id := range newlyDeleted {
+		h.conversationDeletedPush(m, id)
+	}
 	h.broadcastSessions(m, m.keptSessions())
 }
 
@@ -262,7 +299,8 @@ func sameJSON(a, b any) bool {
 	return string(x) == string(y)
 }
 
-// decorated is a machine's sessions as the apps get them: the manager's last list.
+// decorated is a machine's sessions as the manager listed them, stamped: its last list, with the archived rows it
+// told apart (Machine.sessionList). The apps get it through Hub.shown, which leaves those out.
 func (h *Hub) decorated(m *Machine) []proto.Session {
 	list := m.sessionList()
 	h.stampSessions(m, list)
@@ -582,10 +620,70 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 			writeErr(w, http.StatusForbidden, errors.New("this device can only answer with a card's own choices"))
 			return
 		}
-		if pr := principalOf(r.Context()); pr.Role == roleExtension {
+		pr := principalOf(r.Context())
+		if pr.Role == roleScoped {
+			ix, pending := h.pendingInteraction(r.PathValue("id"))
+			if !pending || !h.scopedQuestion(ix) || res.Approve != nil || res.Allow != nil || res.Mode != "" || res.Always || len(res.Keys) > 0 || len(res.PreKeys) > 0 {
+				scopedPermissionDenied(w, "")
+				return
+			}
+		}
+		if pr.Role == roleExtension {
+			// A pending card the token is never shown (health space, private) is answered as if it did not exist, the
+			// same 404 its read routes give, before any answer is forwarded (#12216).
+			if _, hidden := h.pendingCardHiddenFromExtensions(r.PathValue("id")); hidden {
+				writeErr(w, http.StatusNotFound, errDeleteUnknown)
+				return
+			}
 			if why, mode, mid, sid := h.extensionResolveRefused(pr, r.PathValue("id"), res); why != "" { // extension_modes.go
 				h.refuseExtensionMode(w, r, pr, mid, sid, mode, why)
 				return
+			}
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		h.forwardOwned(w, h.captureOwnerAnswer(r), h.byInteraction)
+	})))
+	// A clarification is an owner's free-text message to the originating
+	// conversation, not a card answer. Restricted answer-only devices and
+	// extension principals cannot speak as the owner here. The operation receipt
+	// and the manager's client_msg_id together make an unchanged retry one message.
+	api.HandleFunc("POST /api/v1/interactions/{id}/clarify", h.withoutTerminalControls(h.withClientOp("clarify", func(w http.ResponseWriter, r *http.Request) {
+		if answerOnly(r) || principalOf(r.Context()).Role == roleExtension {
+			writeErr(w, http.StatusForbidden, errors.New("only the owner can ask an approval question"))
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<16))
+		if err != nil {
+			writeBodyErr(w, err, err)
+			return
+		}
+		var in struct {
+			Text        string `json:"text"`
+			ClientMsgID string `json:"client_msg_id"`
+		}
+		if json.Unmarshal(body, &in) == nil {
+			clientID := strings.TrimSpace(in.ClientMsgID)
+			ix, pending := h.pendingInteraction(r.PathValue("id"))
+			question := assistantwire.ClarificationProof{InteractionID: r.PathValue("id"), MachineID: ix.MachineID,
+				SessionID: ix.SessionID, Text: in.Text, ClientMsgID: clientID}
+			if pending && ix.CanClarify && utf8.RuneCountInString(strings.TrimSpace(in.Text)) <= 1000 {
+				admitted := h.captureHumanSubmission(r, in.Text)
+				if _, verified := admitted.Context().Value(trustedSubmissionKey{}).(devicewire.Submission); verified {
+					if clientID == "" {
+						clientID = "approval-question-" + ix.ID + "-" + randomHex(6)
+						question.ClientMsgID = clientID
+						var fields map[string]json.RawMessage
+						if json.Unmarshal(body, &fields) == nil {
+							fields["client_msg_id"], _ = json.Marshal(clientID)
+							body, _ = json.Marshal(fields)
+						}
+					}
+					if validHubClarification(question) {
+						manager := cmp.Or(ix.Manager, assistantwire.AssistantID)
+						token := h.clarificationProofs.issue(manager, question)
+						r = withClarificationRequestProof(admitted, token)
+					}
+				}
 			}
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
@@ -610,9 +708,9 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 		}
 		h.forwardOwned(w, r, h.byRequest)
 	})
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/seen", h.withMachine(func(w http.ResponseWriter, r *http.Request, _ *Machine) {
+	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/seen", h.extensionControllable(h.withMachine(func(w http.ResponseWriter, r *http.Request, _ *Machine) {
 		h.forwardOwned(w, r, h.bySession)
-	}))
+	})))
 }
 
 // ---- what the manager asks of the hub for the nodes ----
@@ -723,7 +821,7 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 	switch n.Kind {
 	case assistantwire.NotifyPush: // one with an id shows once, sent again however late (a day recap's push)
 		policy := pushPolicy{level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, !n.Asked)}
-		policy.level = h.lnNotifyPushLevel(n, policy.level)
+		policy.level = h.pushGradingNotifyLevel(n, policy.level)
 		o := h.notifyDoneUnder(from, "assistant", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, pushWants{}, managerPushCollapseID(from, n.ID),
 			pushRecordingID(n.RecordingID), policy)
 		out = &o
@@ -745,13 +843,13 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 	return out, nil
 }
 
-// lnNotifyPushLevel is a notify_user push's effective level while ln mode is on. A level the caller named explicitly
+// pushGradingNotifyLevel is a notify_user push's effective level while push grading is on. A level the caller named explicitly
 // (P0/P1/P2) always stands. A notice that named none and came from the main conversation still interrupts (P0): the
 // owner talking to Persona directly keeps its alerts. Every other conversation's ordinary notice is P1 — held for the
 // "Needs you" list and the briefing instead of alerting. With the switch off the level the caller named stands, so
 // delivery is exactly as before.
-func (h *Hub) lnNotifyPushLevel(n assistantwire.Notification, derived string) string {
-	if h.push == nil || !h.push.lnModeOn() {
+func (h *Hub) pushGradingNotifyLevel(n assistantwire.Notification, derived string) string {
+	if h.push == nil || !h.push.pushGradingOn() {
 		return derived
 	}
 	if n.Level != "" {

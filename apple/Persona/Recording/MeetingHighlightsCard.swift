@@ -53,7 +53,8 @@ nonisolated enum MeetingHighlights {
     /// as off, `RecordingSync.attendanceProblem`), and the room isn't unavailable. Each of those has its banner on the page
     /// (`MeetingPage.problems`), which a waiting line would contradict. A room not read yet, starting or ready attends.
     static func attending(_ entry: RecordingEntry, room: MeetingRoom?, roomMissing: Bool, refused: Bool) -> Bool {
-        MeetingAsk.canAsk(entry, roomMissing: roomMissing) && entry.attendance?.stopped == nil && !refused
+        // The room follows the meeting (notes too, #8851): Persona needn't be in it for the highlights to come.
+        entry.attended && !roomMissing && entry.attendance?.stopped == nil && !refused
             && room?.known != .unavailable
     }
 

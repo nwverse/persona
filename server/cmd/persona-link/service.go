@@ -102,7 +102,7 @@ func (e *env) lingering() bool {
 func install(e *env, args []string) error {
 	var pairLink, machine, listen, personad string
 	var addrs []string
-	var sshFlags sshPairFlags
+	var flags routeFlags
 	nodeBinAny := false // --node-bin: either program, asked which (nodeInstall)
 	pairing, passive, withNode := false, false, true
 	for i := 0; i < len(args); i++ {
@@ -122,7 +122,7 @@ func install(e *env, args []string) error {
 				passive, listen, i = true, v, next
 				continue
 			}
-			if next, ok, err := sshFlags.consume(args, i); ok || err != nil {
+			if next, ok, err := flags.consume(args, i); ok || err != nil {
 				if err != nil {
 					return err
 				}
@@ -167,8 +167,14 @@ func install(e *env, args []string) error {
 	if pairing && (passive || len(addrs) > 0) {
 		return link.NewTextError("link-cli.install_pair_listen_conflict", nil)
 	}
-	if sshFlags.any() && (passive || len(addrs) > 0) {
+	if flags.any() && (passive || len(addrs) > 0) {
 		return link.NewTextError("link-cli.install_listen_ssh", nil)
+	}
+	if flags.proxy.any() && (passive || len(addrs) > 0) {
+		return link.NewTextError("link-cli.listen_proxy", nil)
+	}
+	if err := flags.check(); err != nil {
+		return err
 	}
 	switch e.goos {
 	case "linux", "darwin", "windows":
@@ -179,23 +185,32 @@ func install(e *env, args []string) error {
 		return link.NewTextError("link-cli.windows_personad_required", nil, i18n.Args{"path": personad})
 	}
 	if pairing {
-		c, err := pairWithSSH(e, pairLink, machine, sshFlags)
+		c, err := pairWithSSH(e, pairLink, machine, flags)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintln(e.stdout, terminalText("link-cli.install_pair_success", i18n.Args{"machine": c.Machine, "path": e.configPath()}))
-	} else if sshFlags.any() {
-		if strings.TrimSpace(sshFlags.server) == "" {
-			return link.NewTextError("link-cli.ssh_flags_require_server", nil)
-		}
-		always := sshFlags.always
-		if !sshFlags.alwaysSet {
-			if c, err := link.Read(e.configPath()); err == nil {
-				always = link.AllLoopback(c.Endpoints)
+	} else {
+		var ssh *link.SSH
+		if flags.any() {
+			if strings.TrimSpace(flags.server) == "" {
+				return link.NewTextError("link-cli.ssh_flags_require_server", nil)
 			}
+			always := flags.always
+			if !flags.alwaysSet {
+				if c, err := link.Read(e.configPath()); err == nil {
+					always = link.AllLoopback(c.Endpoints)
+				}
+			}
+			ssh = &link.SSH{Server: flags.server, Target: flags.target, Always: always}
 		}
-		if _, err := link.SetSSH(e.configPath(), &link.SSH{Server: sshFlags.server, Target: sshFlags.target, Always: always}); err != nil {
+		if err := flags.saveProxy(e, ssh); err != nil {
 			return err
+		}
+		if ssh != nil {
+			if _, err := link.SetSSH(e.configPath(), ssh); err != nil {
+				return err
+			}
 		}
 	}
 	var invite *link.PairInvite
@@ -442,7 +457,7 @@ func uninstall(e *env, args []string) error {
 	cfg := e.configPath()
 	var gone []string
 	files := []string{cfg, cfg + ".lock", cfg + ".run", cfg + ".tmp", link.StatusPath(cfg), link.StatusPath(cfg) + ".tmp",
-		e.logPath(), e.logPath() + ".1", e.binPath()}
+		link.RouteHintPath(cfg), link.RouteHintPath(cfg) + ".tmp", e.logPath(), e.logPath() + ".1", e.binPath()}
 	if e.goos == "windows" { // the supervisor's (winservice.go); a running persona-link.exe cannot remove itself
 		files = append(files, e.serviceLog(), e.serviceLog()+".1", filepath.Join(e.personaDir(), "link-service.run"))
 	}

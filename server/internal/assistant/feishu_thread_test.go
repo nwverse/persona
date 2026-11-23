@@ -352,12 +352,13 @@ func TestRunAnswersGoBackIntoTheTopic(t *testing.T) {
 	if inTopic < 2 || inPrivate < 2 { // the progress card and the answer
 		t.Fatalf("posts for the topic %d, for the private chat %d: %v", inTopic, inPrivate, posts)
 	}
-	// What a topic's run does not do: an agent message (the hub would make it in the private chat). The private run, loaded the same way, may.
+	// Loading either run permits an existing agent message; creation for a new topic run is gated by topic_cot and
+	// the first process item (covered in feishu_topic_cot_test.go).
 	var tp, pp cotProgress
 	e.s.loadCot(&tp, &topicRun)
 	e.s.loadCot(&pp, &privateRun)
-	if !tp.off || pp.off {
-		t.Fatalf("agent messages: off for the topic's run %v (want true), for the private run %v (want false)", tp.off, pp.off)
+	if tp.off || pp.off {
+		t.Fatalf("agent messages: off for the topic's run %v, for the private run %v; want both usable", tp.off, pp.off)
 	}
 	e.s.fbot.mu.Lock()
 	_, remembered := e.s.fbot.st.Threads["om_post"]
@@ -735,8 +736,19 @@ func TestStopButtonOnATopicsProgressCard(t *testing.T) {
 	e.topicTodo("发版")
 	e.deliver(topicEvent("om_t1", "开始"))
 	ctx := context.Background()
-	r := e.s.channelRuns(channel.Feishu)[0]
-	feishuSink{e.s}.progress(ctx, &r, time.Second, []string{"读文件"}, "")
+	runID := e.s.channelRuns(channel.Feishu)[0].ID
+	// Production posts progress from the registered watcher under its progress lock. Use the same ownership here instead
+	// of racing the watcher's initial devices.list or a lifecycle change while calling the sink directly.
+	waitFor(t, "topic run watcher", func() bool { _, prog := e.s.channelRunByID(runID); return prog != nil })
+	_, prog := e.s.channelRunByID(runID)
+	prog.mu.Lock()
+	r, live := e.s.channelRunByID(runID)
+	if r == nil || live != prog {
+		prog.mu.Unlock()
+		t.Fatal("topic run changed before its progress post")
+	}
+	feishuSink{e.s}.progress(ctx, r, time.Second, []string{"读文件"}, "")
+	prog.mu.Unlock()
 	var card string
 	for _, p := range e.f.appParams(AppFeishu, FeishuPost) {
 		if c, _ := p["card"].(string); strings.Contains(c, `"a":"stop"`) && p["chat_id"] == testChat {
@@ -746,9 +758,14 @@ func TestStopButtonOnATopicsProgressCard(t *testing.T) {
 	if card == "" {
 		t.Fatalf("no progress card with a Stop button went into the topic: %v", e.f.appParams(AppFeishu, FeishuPost))
 	}
+	// Stop acts only from the run's current progress card (#12710): press it on that card's own message.
+	mid := e.s.channelRuns(channel.Feishu)[0].Ext["card"]
+	if mid == "" {
+		t.Fatal("the run does not record its progress card")
+	}
 	var a feishubot.CardAction
 	a.Action.Value = map[string]any{"a": "stop", "k": targetPersona, "m": r.MachineID, "s": r.SessionID}
-	a.Context.MessageID, a.Context.ChatID = "om_post", testChat
+	a.Context.MessageID, a.Context.ChatID = mid, testChat
 	if res := e.s.botCardAction(ctx, &a, ""); res.Toast == nil {
 		t.Fatalf("no answer to the press: %+v", res)
 	}

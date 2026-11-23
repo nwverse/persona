@@ -160,7 +160,7 @@ The same definition as the app, from the same code (principle 4):
 | Usage | money spent today | only what a gateway reports: the `cost_usd` of the quota report's usage entries whose `period` is `day`, over the launchers with a gateway, a key two launchers share counted once (`HomeUsage.spentToday`). Never estimated from prices, never an entry known only by its label. With no gateway saying, the widget shows no money | launcher quotas (`GET /api/v1/launchers/{name}/quota`) |
 | Computers | online, load | `Machine.online`; load from `FleetState.stats.loads` | `AppModel.machines` |
 | Health | steps, sleep, resting heart rate | Health's own numbers, with the user's permission | `HealthTool.daily` / `.summary` |
-| Inbox | Need You, Unread | open items the triage marks as yours (`InboxStore.actionCount`); the Inbox badge's number | `InboxStore` |
+| Inbox | Need You | open items the triage marks as yours, read ones included (`InboxStore.actionCount`). The snapshot also carries the unread ones among them (`InboxStore.unreadCount`, the Inbox badge's number), which no widget draws | `InboxStore` |
 
 **Private content**: Inbox and Health are `privacySensitive`. While the phone is locked the system blurs them on the
 Lock Screen, in StandBy and in the Smart Stack.
@@ -195,7 +195,10 @@ Widgets/faces/<id>_<rev>/    the chosen package's pictures, one per state, at th
   when it goes to the background; at least every 20 minutes while it runs (`HomeWidgetWriter.heartbeat`); and when the
   hub's widget push wakes it (#5721). That push is sent within seconds when Needs You changes; other changes are coalesced to at most one
   every 15 minutes per device. The app writes only when the bytes changed, then reloads only the kinds whose part
-  changed (`WidgetCenter.reloadTimelines(ofKind:)`): WidgetKit budgets reloads. The writer is `HomeWidgetWriter`; what
+  changed (`WidgetCenter.reloadTimelines(ofKind:)`) and that are placed (`HomeWidgetData.installed`; every kind until
+  that is known): WidgetKit budgets reloads. A change of only the live numbers (each working row's activity line, the
+  machines' load, today's tokens; `HomeWidgetWriter.settled`) is written at most once a minute (`livePause`), the latest
+  then: a working fleet changed them every few seconds, a rewrite and a reload each time (#9592). The writer is `HomeWidgetWriter`; what
   the watch's summary follows asks it for a write (`AppModel.summariesChanged`), and a recording that starts or stops
   writes at once (`RecordingActivity`).
 - **Waking the app** (#5721): from the foreground the app tells the hub whether any of the widgets is on a screen
@@ -239,7 +242,7 @@ The gallery draws every widget at its Home Screen sizes in light and dark with m
 from the system, so the gallery supplies stand-ins for them. For the Home Screen itself, `-showHomeWidgetSample YES`
 writes the same made-up snapshot instead of the app's, so the widgets added to a simulator's Home Screen show it
 without a hub (`-showHomeWidgetSample ticked`: two to-dos just ticked, one on its way and one the hub refused); those
-shots, on each PR, are the proof (both DEBUG launch arguments, in `release.sh`'s list). `-showHomeWidgets calendar:<page>`
+shots, on each PR, are the proof (both DEBUG launch arguments, in `scripts/release/debug_switches.txt`). `-showHomeWidgets calendar:<page>`
 draws the Calendar widget's views a page at a time (`medium`, `large`, `large2`, `more`; an iPad's screen holds one).
 
 ## Phases

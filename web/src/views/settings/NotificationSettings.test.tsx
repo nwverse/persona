@@ -4,13 +4,17 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../../i18n";
 
 type Pending = { method: string; json?: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void };
 const pending: Pending[] = [];
+// The hub-wide push grading switch at the end of the page reads the legacy route (#8157, LowDistractionSettings.test.tsx):
+// kept apart, so pending is this device's prefs as before.
+const lnMode: Pending[] = [];
 vi.mock("../../lib/api", async (original) => ({
   ...(await original<typeof import("../../lib/api")>()),
-  api: (_path: string, init?: { method?: string; json?: unknown }) =>
-    new Promise((resolve, reject) => pending.push({ method: init?.method ?? "GET", json: init?.json, resolve, reject })),
+  api: (path: string, init?: { method?: string; json?: unknown }) =>
+    new Promise((resolve, reject) => (path === "/push/ln-mode" ? lnMode : pending).push({ method: init?.method ?? "GET", json: init?.json, resolve, reject })),
   enc: encodeURIComponent,
   errorText: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
@@ -25,6 +29,7 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   pending.length = 0;
+  lnMode.length = 0;
   toast.mockClear();
   localStorage.clear();
   host = document.createElement("div");
@@ -191,5 +196,29 @@ describe("设置 › 通知", () => {
       await act(async () => named("弹出系统通知")!.click());
       expect(always().getAttribute("aria-checked")).toBe("true");
     });
+  });
+});
+
+describe("Settings › Notifications › Push grading", () => {
+  const pushGrading = () => named(t("settings-notifications.low_distraction"));
+
+  it("comes after the browser-only settings and reflects the hub's answer", async () => {
+    await render();
+    expect(pushGrading()).toBeUndefined();
+    expect(lnMode).toHaveLength(1);
+    expect(lnMode[0].method).toBe("GET");
+    await act(async () => lnMode[0].resolve({ enabled: true }));
+    expect(pushGrading()?.getAttribute("aria-checked")).toBe("true");
+    const text = host.textContent ?? "";
+    const deviceNote = text.indexOf(t("settings-notifications.device_note"));
+    expect(deviceNote).toBeGreaterThan(-1);
+    expect(text.indexOf(t("settings-notifications.low_distraction_footer"))).toBeGreaterThan(deviceNote);
+  });
+
+  it.each([404, 405])("explains unsupported push grading on an older hub (HTTP %s)", async (status) => {
+    await render();
+    await act(async () => lnMode[0].reject(Object.assign(new Error("not supported"), { status })));
+    expect(pushGrading()).toBeUndefined();
+    expect(host.textContent).toContain(t("settings-notifications.low_distraction_unsupported"));
   });
 });

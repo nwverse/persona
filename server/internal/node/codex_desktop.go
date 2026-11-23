@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -30,6 +31,14 @@ import (
 // its method; without it no client claims the request and the bus answers "no-client-found".
 
 const codexDesktopTimeout = 60 * time.Second
+
+const codexDesktopUnavailableKey = "codex-desktop.control_unavailable"
+
+// This refusal is safe to retry: no turn or settings request reached the App. Keep transport diagnostics out of
+// the user-facing message, including the stale socket's path after an App update removes the bus.
+func codexDesktopUnavailable(ctx context.Context) error {
+	return refusal("codex_read_only", i18n.T(i18n.From(ctx), codexDesktopUnavailableKey), nil)
+}
 
 // codexDesktopLoadWait: how long a thread the App has not loaded (one a thread just created, one not opened since the
 // App started) is given to load after the App is asked to open it.
@@ -139,22 +148,26 @@ func (c *codexDesktop) request(method string, params any, target string) (codexD
 
 // sendCodexDesktop runs a turn in a thread the Codex App has loaded.
 func (n *Node) sendCodexDesktop(ctx context.Context, src codexSource, text string, images []proto.Image) error {
+	// Refuse before saving attachments or holding a message behind a running turn on an unavailable App.
+	if !codexDesktopAvailable(src.home) {
+		return codexDesktopUnavailable(ctx)
+	}
 	paths, err := n.saveImages(images)
 	if err != nil {
 		return refusal("bad_image", err.Error(), nil)
 	}
-	input := []map[string]any{}
-	if text != "" {
-		input = append(input, map[string]any{"type": "text", "text": text, "text_elements": []any{}})
-	}
-	for _, p := range paths {
-		input = append(input, map[string]any{"type": "localImage", "path": p})
-	}
+	// While the App runs a turn in the thread the message waits here and goes in once, as a turn of its own, when the
+	// turn ends (codex_desktop_queue.go): a start-turn into a running turn is steered into it and then run again.
+	return n.sendOrHoldCodexDesktop(ctx, src, codexDesktopMessage{text: text, paths: paths})
+}
+
+// startCodexDesktopTurn asks the window owning src's thread to run a turn with input, as the App's own composer does.
+func (n *Node) startCodexDesktopTurn(ctx context.Context, src codexSource, input []map[string]any) error {
 	ctx, cancel := context.WithTimeout(ctx, codexDesktopTimeout)
 	defer cancel()
 	c, err := dialCodexDesktop(ctx, src.home)
 	if err != nil {
-		return refusal("codex_read_only", "连不上电脑上的 Codex App："+err.Error(), nil)
+		return codexDesktopUnavailable(ctx)
 	}
 	defer c.close()
 	owner, err := c.loadedOwner(ctx, src.thread)
@@ -184,7 +197,7 @@ func (n *Node) interruptCodexDesktop(ctx context.Context, src codexSource) error
 	defer cancel()
 	c, err := dialCodexDesktop(ctx, src.home)
 	if err != nil {
-		return refusal("codex_read_only", "连不上电脑上的 Codex App："+err.Error(), nil)
+		return codexDesktopUnavailable(ctx)
 	}
 	defer c.close()
 	owner, err := c.owner(src.thread)
@@ -416,7 +429,12 @@ func (a *codexAppState) listed(thread string) bool {
 // placeCodexDesktop puts an App thread in its sidebar project — a subagent in its parent's (`group`) — and, for recent
 // ones, gives it its state. A subagent's finished turn is not something to read on its own: it is idle.
 func (n *Node) placeCodexDesktop(s *proto.Session, src codexSource, group string, subagent bool) {
-	app := loadCodexAppState(src.home)
+	n.placeCodexDesktopIn(s, src, group, subagent, nil)
+}
+
+// placeCodexDesktopIn is placeCodexDesktop with the App's state looked up once per home in a list pass (codexListPass).
+func (n *Node) placeCodexDesktopIn(s *proto.Session, src codexSource, group string, subagent bool, pass *codexListPass) {
+	app := pass.appState(src.home)
 	s.SpaceKind = "codex_app"
 	if pid, name := app.project(group, s.Cwd); pid != "" && name != "" && (app == nil || !app.projectless[group]) {
 		s.SpaceID, s.SpaceName = "codex-app:"+pid, name
@@ -430,7 +448,7 @@ func (n *Node) placeCodexDesktop(s *proto.Session, src codexSource, group string
 	if s.Status == proto.StatusDone && (subagent || app == nil || !app.unread[src.thread]) {
 		s.Status = proto.StatusIdle // looked at in the App
 	}
-	if s.Status == proto.StatusWorking && !subagent && s.Capabilities != nil {
+	if s.Status == proto.StatusWorking && !subagent && s.Capabilities != nil && s.Capabilities.Send {
 		// Stopped from the phone as with the App's stop button (interruptCodexDesktop); a subagent stops with its chat.
 		s.Capabilities.Interrupt = true
 	}
@@ -444,7 +462,7 @@ func slotCodexDesktop(list []proto.Session) {
 		if s.SpaceKind != "codex_app" {
 			continue
 		}
-		s.SlotIndex = next[s.SpaceID]
+		s.SlotIndex = int32(next[s.SpaceID])
 		next[s.SpaceID]++
 	}
 }
@@ -452,46 +470,63 @@ func slotCodexDesktop(list []proto.Session) {
 type codexTurnMark struct {
 	size   int64
 	status string
+	offset int64
+	mtime  time.Time
 }
 
-// codexDesktopTurn: working while the rollout's last turn has started and not ended, done after; read from the tail
-// and kept until the file grows.
+// codexDesktopTurn follows turn boundaries across the entire rollout. After the first read, only appended
+// complete lines are read: a long running turn must not lose its start when it leaves a bounded tail window.
 func (n *Node) codexDesktopTurn(path string) string {
 	st, err := os.Stat(path)
 	if err != nil {
 		return proto.StatusUnknown
 	}
-	if v, ok := codexTurnMarks.Load(path); ok && v.(codexTurnMark).size == st.Size() {
-		return v.(codexTurnMark).status
-	}
 	status := proto.StatusDone
-	if f, err := os.Open(path); err == nil {
-		const tail = 256 << 10
-		off := max(st.Size()-tail, 0)
-		b := make([]byte, st.Size()-off)
-		_, err = f.ReadAt(b, off)
-		f.Close()
-		if err == nil {
-			for _, line := range bytes.Split(b, []byte("\n")) {
-				var e struct {
-					Type    string `json:"type"`
-					Payload struct {
-						Type string `json:"type"`
-					} `json:"payload"`
-				}
-				if !bytes.Contains(line, []byte(`"event_msg"`)) || json.Unmarshal(line, &e) != nil || e.Type != "event_msg" {
-					continue
-				}
-				switch e.Payload.Type {
-				case "task_started":
-					status = proto.StatusWorking
-				case "task_complete", "turn_aborted":
-					status = proto.StatusDone
-				}
-			}
+	var off int64
+	if v, ok := codexTurnMarks.Load(path); ok {
+		c := v.(codexTurnMark)
+		if c.size == st.Size() && c.mtime.Equal(st.ModTime()) {
+			return c.status
+		}
+		if st.Size() > c.size {
+			status, off = c.status, c.offset
 		}
 	}
-	codexTurnMarks.Store(path, codexTurnMark{size: st.Size(), status: status})
+	f, err := os.Open(path)
+	if err != nil {
+		return proto.StatusUnknown
+	}
+	defer f.Close()
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return proto.StatusUnknown
+	}
+	reader := bufio.NewReader(io.LimitReader(f, st.Size()-off))
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			if err != io.EOF {
+				return proto.StatusUnknown
+			}
+			break // Retry an unfinished line at the same offset when the rollout grows.
+		}
+		off += int64(len(line))
+		var e struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type string `json:"type"`
+			} `json:"payload"`
+		}
+		if !bytes.Contains(line, []byte(`"event_msg"`)) || json.Unmarshal(line, &e) != nil || e.Type != "event_msg" {
+			continue
+		}
+		switch e.Payload.Type {
+		case "task_started":
+			status = proto.StatusWorking
+		case "task_complete", "turn_aborted":
+			status = proto.StatusDone
+		}
+	}
+	codexTurnMarks.Store(path, codexTurnMark{size: st.Size(), status: status, offset: off, mtime: st.ModTime()})
 	return status
 }
 
@@ -602,20 +637,18 @@ func codexThreadOrigin(src codexSource) codexOrigin {
 	return readCodexOrigin(src.path)
 }
 
-// codexDesktopChat: a chat of the Codex App running on this machine (not a CLI thread, not a subagent of one).
+// codexDesktopChat identifies an App chat independently of whether the App still exposes its control bus.
+// An unavailable bus must not turn an App chat into a CLI session or invite a second writer.
 func codexDesktopChat(src codexSource) bool { return codexDesktopChatIn(src, nil) }
 
-// codexDesktopChatIn is codexDesktopChat with the App's presence looked up once per home in a list pass (codexListPass).
+// codexDesktopChatIn is codexDesktopChat with sidebar state read once per home in a list pass (codexListPass).
 func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
-	if !pass.desktopAvailable(src.home) {
-		return false
-	}
 	if src.path == "" { // its rollout is gone: one the App's sidebar lists and its database has (codex_appdb.go), not a subagent
 		t, ok := codexAppThreadOf(src)
 		return ok && !t.origin().sub
 	}
 	o := readCodexOrigin(src.path)
-	return o.desktop && o.parent == "" && (o.persona || loadCodexAppState(src.home).listed(src.thread))
+	return o.desktop && o.parent == "" && (o.persona || pass.appState(src.home).listed(src.thread))
 }
 
 // loadedOwner is the App window that owns the thread, the App asked to open it when none does: it loads a thread it is

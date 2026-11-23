@@ -12,6 +12,9 @@
     "TextStyle": {
       "description": "title and headline (UI version 6) are a section's big title and a small heading; an older app draws them as body.",
       "type": "string", "enum": ["body", "secondary", "caption", "code", "title", "headline"]},
+    "ProgressStyle": {
+      "description": "A progress drawing hint: bar (the default) or ring.",
+      "type": "string", "enum": ["bar", "ring"]},
     "FieldKind": {
       "description": "date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD, time HH:MM (24 hours), datetime YYYY-MM-DDTHH:MM local to context.tz, multichoice a JSON array of the chosen values, multiline the text with \\n.",
       "type": "string", "enum": ["text", "secret", "number", "toggle", "choice", "date", "time", "datetime", "multichoice", "multiline"]},
@@ -42,7 +45,7 @@
     },
     "Platform": {"type": "string", "enum": ["ios", "mac", "android", "web"]},
     "NavIcon": {
-      "description": "The fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the icons after money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).",
+      "description": "The fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the icons after money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8 a section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).",
       "type": "string",
       "enum": ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file",
         "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"]
@@ -74,7 +77,13 @@
         "footer": {"type": "string", "maxLength": 2000},
         "items": {"type": "array", "items": {"$ref": "#/$defs/Component"}},
         "more": {"$ref": "#/$defs/More", "x-since": 3},
-        "pane": {"$ref": "#/$defs/Pane", "x-since": 4}
+        "pane": {"$ref": "#/$defs/Pane", "x-since": 4},
+        "span": {"$ref": "#/$defs/SectionSpan", "x-since": 8},
+        "icon": {"$ref": "#/$defs/NavIcon", "x-since": 8, "description": "Drawn before the title."},
+        "icon_color": {"$ref": "#/$defs/Color", "x-since": 8},
+        "link": {"$ref": "#/$defs/SectionLink", "x-since": 8},
+        "columns": {"type": "integer", "minimum": 1, "maximum": 3, "x-since": 8,
+          "description": "How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a narrow screen and when absent. Other components keep the whole width."}
       },
       "required": ["items"]
     },
@@ -107,7 +116,9 @@
         {"$ref": "#/$defs/ComposerComponent"},
         {"$ref": "#/$defs/ImageComponent"},
         {"$ref": "#/$defs/GridComponent"},
-        {"$ref": "#/$defs/CarouselComponent"}
+        {"$ref": "#/$defs/CarouselComponent"},
+        {"$ref": "#/$defs/GraphComponent"},
+        {"$ref": "#/$defs/SceneComponent"}
       ]
     },
     "TextComponent": {
@@ -138,13 +149,14 @@
       "required": ["type", "label", "value"]
     },
     "ProgressComponent": {
-      "description": "A bar filled to ratio (0 to 1).",
+      "description": "Progress toward a goal, filled to ratio (0 to 1).",
       "type": "object", "x-since": 1,
       "properties": {
         "type": {"const": "progress"},
         "key": {"type": "string", "maxLength": 128, "x-since": 3},
         "label": {"type": "string", "minLength": 1, "maxLength": 2000},
         "ratio": {"type": "number", "minimum": 0, "maximum": 1, "x-go-pointer": true},
+        "style": {"$ref": "#/$defs/ProgressStyle", "description": "A drawing hint; omitted means bar. Apple Home Screen widgets (small, medium and large) draw ring as a ring; other surfaces draw a bar. Apps that do not recognize this field keep drawing a bar. Native stream does not accept this field."},
         "detail": {"type": "string", "maxLength": 2000},
         "tone": {"$ref": "#/$defs/Tone"}
       },
@@ -491,6 +503,180 @@
       },
       "required": ["type", "tiles"]
     },
+    "GraphComponent": {
+      "description": "Nodes joined by edges, drawn as a canvas the person can pan, zoom, fit and open full screen (UI version 10): work split into parts, a plan's steps, a family of things. The app lays it out (layout, direction) and draws each node with its own design system; tapping a node does its action, as a row's (or opens its in-place inspector first on the web when the node carries facts, detail or links, with the action inside); a node with children folds them. Each node counts as a component of the page. The hub refuses ids that repeat, an edge naming an unknown node or itself, a repeated edge, a cycle, a second parent in a tree, and selected or folded naming an unknown node. In a card it is a still preview that opens full screen. An older app gets a row per node in reading order, indented.",
+      "type": "object", "x-since": 10,
+      "properties": {
+        "type": {"const": "graph"},
+        "key": {"type": "string", "maxLength": 128, "description": "Keeps the person's pan, zoom and folding across redraws of the page."},
+        "nodes": {"type": "array", "minItems": 1, "maxItems": 300, "items": {"$ref": "#/$defs/GraphNode"}},
+        "edges": {"type": "array", "maxItems": 600, "items": {"$ref": "#/$defs/GraphEdge"}},
+        "layout": {"$ref": "#/$defs/GraphLayout"},
+        "direction": {"$ref": "#/$defs/GraphDirection"},
+        "selected": {"type": "string", "maxLength": 128, "description": "A node's id: drawn as selected, and the canvas opens centred on it."},
+        "folded": {"type": "array", "maxItems": 300, "items": {"type": "string", "minLength": 1, "maxLength": 128}, "description": "Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for this key."}
+      },
+      "required": ["type", "nodes"]
+    },
+    "GraphNode": {
+      "description": "One node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress bar, in tone's role color or color's named color (never both), with optional timing and inspector details.",
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+        "subtitle": {"type": "string", "maxLength": 200},
+        "badge": {"$ref": "#/$defs/Badge"},
+        "tone": {"$ref": "#/$defs/Tone"},
+        "color": {"$ref": "#/$defs/Color"},
+        "icon": {"$ref": "#/$defs/NavIcon"},
+        "progress": {"type": "number", "minimum": 0, "maximum": 1, "x-go-pointer": true, "description": "A thin bar along the node's foot, 0 to 1."},
+        "group": {"type": "string", "minLength": 1, "maxLength": 60, "description": "Nodes with the same parents and the same group sit next to each other inside one frame titled with it (the same task tried several ways)."},
+        "action": {"$ref": "#/$defs/Action"},
+        "started_at": {"type": "number", "minimum": 0, "x-go-pointer": true, "description": "Unix timestamp in seconds when this node started."},
+        "ended_at": {"type": "number", "minimum": 0, "x-go-pointer": true, "description": "Unix timestamp in seconds when this node ended; omitted while still running."},
+        "facts": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/Fact"}, "description": "Short label/value readings shown in the node inspector."},
+        "detail": {"type": "string", "maxLength": 2000, "description": "Plain-text summary, verifier feedback or error shown in the node inspector."},
+        "links": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/GraphNodeLink"}, "description": "HTTPS links shown in the node inspector (for example work and verifier sessions across attempts)."}
+      },
+      "required": ["id", "title"]
+    },
+    "GraphNodeLink": {
+      "description": "An https link shown in a graph node's inspector (UI version 10).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "url"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 80},
+        "url": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "^https://[^/?#]+"}
+      }
+    },
+    "GraphEdge": {
+      "description": "An edge from one node to another (UI version 10): from is the parent, to the child.",
+      "type": "object",
+      "properties": {
+        "from": {"type": "string", "minLength": 1, "maxLength": 128},
+        "to": {"type": "string", "minLength": 1, "maxLength": 128}
+      },
+      "required": ["from", "to"]
+    },
+    "GraphLayout": {"description": "tree (the default): every node has at most one parent, children under it, a parent centred over its children. layered: a node may have several parents; each node sits one layer past its furthest parent (a plan whose steps wait for several others).", "type": "string", "enum": ["tree", "layered"]},
+    "GraphDirection": {"description": "right (the default): roots at the start, children after them, so a wide fan-out reads down the screen like an outline. down: roots at the top, children below.", "type": "string", "enum": ["right", "down"]},
+    "SceneComponent": {
+      "description": "A small 3D model the person can turn, zoom and tap (UI version 11): a home with its rooms and furniture as simple shapes, each device pinned where it is with its state, and a light in the model for lamps that are on. The app builds it with its own engine; the extension sends shapes, never a model file or code. Metres; plan coordinates [x, y] with x east and y north, heights up from the floor; angles in degrees counter-clockwise from +x seen from above. Each pin counts as a component of the page; a view has at most one scene. In a card it is a still preview that opens full screen. An older app gets the poster as an image, or without one a row per pin.",
+      "type": "object", "x-since": 11,
+      "properties": {
+        "type": {"const": "scene"},
+        "key": {"type": "string", "maxLength": 128, "description": "Keeps the person's camera across redraws of the page."},
+        "alt": {"type": "string", "minLength": 1, "maxLength": 200, "description": "What the model shows, in a sentence: read out first, and shown when it cannot be drawn."},
+        "caption": {"type": "string", "maxLength": 2000},
+        "poster": {"$ref": "#/$defs/ImageSource", "description": "A picture of the model for an older app (an image in its place) and for share as image. Without it an older app gets a row per pin."},
+        "camera": {"$ref": "#/$defs/SceneCamera"},
+        "shapes": {"type": "array", "minItems": 1, "maxItems": 500, "items": {"$ref": "#/$defs/SceneShape"}},
+        "labels": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/SceneLabel"}},
+        "pins": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/ScenePin"}}
+      },
+      "required": ["type", "alt", "shapes"]
+    },
+    "SceneCamera": {
+      "description": "Where the model is first seen from (UI version 11), orthographic, around the centre of the shapes' bounding box. Each field has its default when absent.",
+      "type": "object",
+      "properties": {
+        "yaw": {"type": "number", "minimum": -360, "maximum": 360, "x-go-pointer": true, "description": "The camera's direction from the centre, in degrees counter-clockwise from +x (east): 225 (the default) stands south-west, looking north-east."},
+        "pitch": {"type": "number", "minimum": 10, "maximum": 90, "x-go-pointer": true, "description": "Degrees above the floor plane: 35 by default, 90 straight down."},
+        "zoom": {"type": "number", "minimum": 0.5, "maximum": 4, "x-go-pointer": true, "description": "1 (the default) fits the shapes' bounding box in the view; 2 draws it twice as large."}
+      }
+    },
+    "SceneShape": {
+      "description": "One shape of a scene (UI version 11), told apart by kind: a box, a cylinder or a prism, standing from bottom to top (metres above the floor, at least 0.005 apart). Without color, the material's own.",
+      "x-discriminator": "kind",
+      "oneOf": [
+        {"$ref": "#/$defs/SceneBox"},
+        {"$ref": "#/$defs/SceneCylinder"},
+        {"$ref": "#/$defs/ScenePrism"}
+      ]
+    },
+    "SceneBox": {
+      "description": "A box (UI version 11): at yaw 0, size[0] along +x and size[1] along +y. round rounds its corners seen from above (at most half the smaller size); the app bevels its upright edges no more than half its height. wall says the box is a wall, for an app's cutaway (#13036): the outer walls between the camera and the rooms are drawn low (a wall with a floor on the camera's side, between two rooms, keeps its height), what stands in one is cut to that height, and what stands tall in front of one is drawn see-through; an app without a cutaway draws it as any box.",
+      "type": "object",
+      "properties": {
+        "kind": {"const": "box"},
+        "center": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number", "minimum": -500, "maximum": 500}},
+        "size": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number", "minimum": 0.01, "maximum": 1000}},
+        "yaw": {"type": "number", "minimum": -360, "maximum": 360, "x-go-pointer": true},
+        "round": {"type": "number", "minimum": 0, "maximum": 500, "x-go-pointer": true},
+        "bottom": {"type": "number", "minimum": -500, "maximum": 500, "x-go-pointer": true},
+        "top": {"type": "number", "minimum": -500, "maximum": 500, "x-go-pointer": true},
+        "color": {"$ref": "#/$defs/SceneColor"},
+        "material": {"$ref": "#/$defs/SceneMaterial"},
+        "wall": {"type": "boolean"}
+      },
+      "required": ["kind", "center", "size", "bottom", "top"]
+    },
+    "SceneCylinder": {
+      "description": "An upright cylinder (UI version 11): a round table's top, a stool, a lamp's stem.",
+      "type": "object",
+      "properties": {
+        "kind": {"const": "cylinder"},
+        "center": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number", "minimum": -500, "maximum": 500}},
+        "radius": {"type": "number", "minimum": 0.01, "maximum": 500},
+        "bottom": {"type": "number", "minimum": -500, "maximum": 500, "x-go-pointer": true},
+        "top": {"type": "number", "minimum": -500, "maximum": 500, "x-go-pointer": true},
+        "color": {"$ref": "#/$defs/SceneColor"},
+        "material": {"$ref": "#/$defs/SceneMaterial"}
+      },
+      "required": ["kind", "center", "radius", "bottom", "top"]
+    },
+    "ScenePrism": {
+      "description": "A floor plan's polygon raised from bottom to top (UI version 11): a room's floor, an L-shaped counter. The hub refuses a polygon that is not simple: a point twice, an edge shorter than 0.005, an edge folding back, edges that touch, an area under 0.0001.",
+      "type": "object",
+      "properties": {
+        "kind": {"const": "prism"},
+        "points": {"type": "array", "minItems": 3, "maxItems": 64, "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number", "minimum": -500, "maximum": 500}}},
+        "bottom": {"type": "number", "minimum": -500, "maximum": 500, "x-go-pointer": true},
+        "top": {"type": "number", "minimum": -500, "maximum": 500, "x-go-pointer": true},
+        "color": {"$ref": "#/$defs/SceneColor"},
+        "material": {"$ref": "#/$defs/SceneMaterial"}
+      },
+      "required": ["kind", "points", "bottom", "top"]
+    },
+    "SceneColor": {"description": "A shape's own color, #RRGGBB in sRGB (UI version 11). A scene's shapes are content, like a picture's pixels: their colors are the extension's. Pins and every control around the model keep the app's colors.", "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+    "SceneMaterial": {"description": "How a shape's surface looks (UI version 11): matte (the default), glass (see-through), metal, screen (dark and glossy), tile and wood (the app's own pattern, in metres, in the shape's color).", "type": "string", "enum": ["matte", "glass", "metal", "screen", "tile", "wood"]},
+    "SceneLabel": {
+      "description": "A quiet name on the floor (UI version 11): a room's. Not tappable and not a component of the page; read out after alt.",
+      "type": "object",
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 40},
+        "at": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number", "minimum": -500, "maximum": 500}},
+        "height": {"type": "number", "minimum": 0, "maximum": 500, "x-go-pointer": true}
+      },
+      "required": ["text", "at"]
+    },
+    "ScenePin": {
+      "description": "A device in the model (UI version 11): a pin at its place with its label and state, in tone's role color or color's named color (never both); with light on, the model lights up around it. Tapping it does its action, as a tile's. state is required when a tone other than neutral, a color or a light that is on says something, so it never rides on color or light alone. A scene has at most 16 pins with a light on.",
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "at": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number", "minimum": -500, "maximum": 500}},
+        "height": {"type": "number", "minimum": 0, "maximum": 500, "x-go-pointer": true, "description": "Metres above the floor: a ceiling lamp's 2.4, an AC's 2.2. 0 when absent."},
+        "label": {"type": "string", "minLength": 1, "maxLength": 80},
+        "state": {"type": "string", "maxLength": 40, "description": "In plain words: On, Off, 26 °C."},
+        "icon": {"$ref": "#/$defs/NavIcon"},
+        "tone": {"$ref": "#/$defs/Tone"},
+        "color": {"$ref": "#/$defs/Color"},
+        "light": {"$ref": "#/$defs/SceneLight"},
+        "action": {"$ref": "#/$defs/Action"}
+      },
+      "required": ["id", "at", "label"]
+    },
+    "SceneLight": {
+      "description": "A lamp's light (UI version 11): when on, the model is lit around the pin, warm or cool. Off (the default) adds no light.",
+      "type": "object",
+      "properties": {
+        "on": {"type": "boolean"},
+        "warmth": {"$ref": "#/$defs/SceneWarmth"}
+      }
+    },
+    "SceneWarmth": {"description": "warm (the default): a lamp's yellow light; cool: a white one.", "type": "string", "enum": ["warm", "cool"]},
     "ImageSource": {
       "description": "Where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref the extension serves itself (ui.image) through the hub; exactly one. path is written by the hub only, for a ref: its own address, which the app loads with its device credentials. An extension that writes path is refused.",
       "type": "object",
@@ -563,15 +749,36 @@
         "spark": {"$ref": "#/$defs/Spark"},
         "control": {"$ref": "#/$defs/RowControl", "description": "A switch only; the tile then has a key."},
         "actions": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"$ref": "#/$defs/RowAction"}},
-        "action": {"$ref": "#/$defs/Action"}
+        "action": {"$ref": "#/$defs/Action"},
+        "gauge": {"$ref": "#/$defs/Gauge", "x-since": 9, "description": "Draws the tile as a ring (UI version 9): never with an image or a spark."}
       },
       "required": ["title"]
     },
+    "Gauge": {
+      "description": "A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the color as the tile's.",
+      "type": "object",
+      "properties": {
+        "ratio": {"type": "number", "minimum": 0, "maximum": 1, "x-go-pointer": true, "description": "How full the ring is, 0 to 1."},
+        "unit": {"type": "string", "maxLength": 8, "description": "A short word under the value (USD, GB, h), as a control's unit."},
+        "color": {"$ref": "#/$defs/Color"}
+      },
+      "required": ["ratio"]
+    },
     "Layout": {
-      "description": "stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a sheet.",
-      "type": "string", "enum": ["stack", "split"]
+      "description": "stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three when there is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow one a single column, as stack. An older app gets stack.",
+      "type": "string", "enum": ["stack", "split", "columns"]
     },
     "Pane": {"description": "Where a section of a split view goes.", "type": "string", "enum": ["main", "side"]},
+    "SectionSpan": {"description": "How much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one column. Other layouts ignore it.", "type": "string", "enum": ["full"]},
+    "SectionLink": {
+      "description": "A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls ui.action with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as the section's last row.",
+      "type": "object",
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 40},
+        "action": {"$ref": "#/$defs/Action"}
+      },
+      "required": ["title", "action"]
+    },
     "FileStatus": {"type": "string", "enum": ["added", "modified", "deleted", "renamed"]},
     "DiffSide": {"type": "string", "enum": ["old", "new"]},
     "Tabs": {

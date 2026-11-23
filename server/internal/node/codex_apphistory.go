@@ -36,6 +36,10 @@ import (
 // (<file>.lock: the others wait for its write). The database is read while the App has it closed too (codexDBTarget).
 // Without sqlite3 or the history database there is none, as before.
 
+// codexAppHistoryVersion changes when already-written JSONL no longer matches what the converter produces. A mark
+// without it is a legacy cache and is rebuilt once, even when the App database has not changed.
+const codexAppHistoryVersion = 2
+
 // codexAppHistoryWait bounds one read of the history database; a long chat's turns stream in well under it.
 const codexAppHistoryWait = 30 * time.Second
 
@@ -65,6 +69,7 @@ type codexHistoryFailure struct {
 // files (the App may write a turn's rows after updating the chat, and finish a turn without updating it) — and the size
 // the file had then (-1: no file, the chat has no finished turn).
 type codexHistoryMark struct {
+	Version int    `json:"version,omitempty"`
 	Turn    int64  `json:"turn"`
 	TurnID  string `json:"turn_id"`
 	Status  string `json:"status"`
@@ -156,6 +161,9 @@ func (n *Node) codexAppHistoryPath(src codexSource, pass *codexListPass) string 
 
 // codexAppHistoryChat: session id is an App chat with no rollout, whose transcript comes from the App's database.
 func (n *Node) codexAppHistoryChat(id string) (codexSource, codexAppThread, bool) {
+	if t, ok := n.traexThread(id); ok {
+		return codexSource{home: n.traexHome(), thread: id}, t, true
+	}
 	src, ok := n.codexSource(id)
 	if !ok || n.codexBlocked(id) || n.ownedAssistantSource(id) { // as findTranscriptPath: no transcript of these here
 		return codexSource{}, codexAppThread{}, false
@@ -203,8 +211,11 @@ func (n *Node) refreshCodexAppHistory(id string) error {
 	history := ""
 	if db != "" {
 		history = fileStamp(db) + fileStamp(db+"-wal")
+		if t.includeRunning {
+			history = traexHistoryStamp(db, t.ID, history)
+		}
 	}
-	if mark.Updated == t.UpdatedAtMs && mark.History == history && mark.Size == size && (!t.Paginated || mark.Lineage == t.RolloutPath) {
+	if mark.Version == codexAppHistoryVersion && mark.Updated == t.UpdatedAtMs && mark.History == history && mark.Size == size && (!t.Paginated || mark.Lineage == t.RolloutPath) {
 		return nil // up to date
 	}
 	if db == "" {
@@ -222,14 +233,14 @@ func (n *Node) refreshCodexAppHistory(id string) error {
 	if t.Paginated {
 		lineage = t.RolloutPath
 	}
-	grow := mark.Size >= 0 && mark.Size == size && mark.TurnID != "" && mark.Lineage == lineage
+	grow := !t.includeRunning && mark.Version == codexAppHistoryVersion && mark.Size >= 0 && mark.Size == size && mark.TurnID != "" && mark.Lineage == lineage
 	res, err := writeCodexAppHistory(ctx, db, t, p, mark, grow)
 	if errors.Is(err, errCodexHistoryChanged) { // a written turn is not what it was (the App rolled back): anew
 		res, err = writeCodexAppHistory(ctx, db, t, p, codexHistoryMark{Turn: -1}, false)
 	}
 	if err == nil {
 		_, size = readCodexHistoryMark(p)
-		err = writeCodexHistoryMark(p, codexHistoryMark{Turn: res.turn, TurnID: res.turnID, Status: res.status,
+		err = writeCodexHistoryMark(p, codexHistoryMark{Version: codexAppHistoryVersion, Turn: res.turn, TurnID: res.turnID, Status: res.status,
 			Updated: t.UpdatedAtMs, History: history, Size: size, Lineage: lineage})
 	}
 	codexAppHistoryFailed.Lock()
@@ -503,6 +514,14 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 	}
 	if cur != nil && !cur.done && cur.final {
 		closeTurn(cur, false) // the last turn while it still runs is left for later
+	} else if cur != nil && !cur.done && t.includeRunning {
+		// Terminal CLIs have no separate live stream. Include their stored current items
+		// without inventing a completion; the next revision rebuilds this snapshot.
+		startTurn(cur, cur.heldStart)
+		for _, it := range cur.held {
+			line(it[0].(time.Time), "event_msg", map[string]any{"type": "item_completed", "item": it[1]})
+		}
+		res.turn, res.turnID, res.status = cur.ordinal, cur.id, cur.status
 	}
 	if err := w.Flush(); err != nil {
 		return res, err
@@ -607,8 +626,10 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 		Arguments        json.RawMessage `json:"arguments"`
 		Result           *struct {
 			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				Data     string `json:"data"`
+				MimeType string `json:"mimeType"`
 			} `json:"content"`
 			IsError bool `json:"isError"`
 		} `json:"result"`

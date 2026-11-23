@@ -10,6 +10,8 @@ export interface ChatActions {
   draftKey: string;
   /** The conversation title for message context cards, separate from the reply's speaker. */
   title: string;
+  /** Source owner of the current transcript, included in a starred message deep link. */
+  sourceManager?: string;
   /** The composer can send here: "Quote" / "Use as context" / "Edit" / "Edit image" are offered only then. */
   canCompose: boolean;
   /** Who the replies are from, for "Quote"'s "Quote Persona · 16:45" (the assistant's name, or the agent). */
@@ -17,7 +19,7 @@ export interface ChatActions {
   /** Every image of the loaded conversation, oldest first. A function: read when the viewer opens, not on every push. */
   images: () => Item[];
   /** "Forward" (#3899): opens Forward to for a message of this chat, including when this chat is read-only. */
-  forward?: (pick: ForwardPick) => void;
+  forward?: (pick: ForwardPick, now?: boolean) => void;
   /** Picking messages to forward at once (#3838), set with `forward`: while it is on, each message with a Forward is a
    *  checkbox instead of its actions. */
   pick?: MessagePick;

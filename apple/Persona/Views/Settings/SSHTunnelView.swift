@@ -1,5 +1,6 @@
 import PersonaSSH
 import SwiftUI
+import PersonaWire
 
 /// Settings › hub › SSH Tunnel (docs/operations/network.md「Connecting to hub through SSH」): one paired hub's tunnel, with what it is doing now.
 struct HubSSHTunnelPage: View {
@@ -208,7 +209,7 @@ struct SSHTunnelForm<Status: View>: View {
                 Text("Pinned: \(expected)\\nNow: \(actual)\\n\\nThe server may have been reinstalled or changed its key, or someone may be in the middle. Trust it only after confirming the server changed its key.")
             }
         }
-        .confirmationDialog("Delete SSH Tunnel?", isPresented: $removing, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Delete SSH Tunnel?", isPresented: $removing, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { onSave(nil); dismiss() }
         } message: {
             Text("From then on, the app connects to the hub directly only. You'll need to remove the authorized_keys line on the server yourself.")

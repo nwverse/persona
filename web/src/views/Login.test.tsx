@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const fake = vi.hoisted(() => ({ pair: vi.fn<(tok: string) => Promise<void>>() }));
 vi.mock("../lib/auth", () => ({ pair: (tok: string) => fake.pair(tok) }));
 vi.mock("../lib/hubs", () => ({ here: () => "", rememberHub: () => {} }));
+const qr = vi.hoisted(() => ({ mounted: 0 }));
+vi.mock("./BrowserLoginQR", () => ({ BrowserLoginQR: () => { qr.mounted++; return null; } }));
 vi.mock("./Hubs", () => ({ OtherHubs: () => null }));
 
 import { t } from "../i18n";
@@ -144,5 +146,24 @@ describe("Login", () => {
     expect(alert("link")).toBe(t("login.invalid_link"));
     type(link, "https://hub.example/#token=jp_abd");
     expect(alert("link")).toBe("");
+  });
+});
+
+describe("scanning a code with Persona on a phone (#10291)", () => {
+  it("leads with the link field and creates a scan code only when requested", async () => {
+    qr.mounted = 0;
+    await act(async () => root.render(<Login onDone={() => {}} />));
+    const steps = host.querySelector<HTMLElement>("#login-help")!;
+    expect(steps.hidden).toBe(true);
+    expect(input(t("login.link_placeholder")).compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(qr.mounted).toBe(0);
+    const toggle = host.querySelector<HTMLButtonElement>('button[aria-controls="login-qr"]')!;
+    expect(toggle.textContent).toContain(t("login.qr_short"));
+    await act(async () => toggle.click());
+    expect(qr.mounted).toBeGreaterThan(0);
+    const help = host.querySelector<HTMLButtonElement>('button[aria-controls="login-help"]')!;
+    await act(async () => help.click());
+    expect(steps.hidden).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 });

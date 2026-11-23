@@ -74,7 +74,8 @@ internal fun ChatSearchScreen(
     }
     val loadFailed = stringResource(R.string.chat_search_load_failed)
     JFullScreen(onClose) {
-        JPage(title = stringResource(R.string.chat_search_title), onBack = onClose, modifier = Modifier.imePadding(),
+        JPage(title = stringResource(R.string.chat_search_title), onBack = onClose,
+            modifier = Modifier.imePadding().hardwareShortcutDismiss(onClose),
             topBar = {
                 Column {
                     JTopBar(stringResource(R.string.chat_search_title), onBack = onClose)

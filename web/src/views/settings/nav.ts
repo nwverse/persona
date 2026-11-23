@@ -5,14 +5,15 @@
 import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
+import { SUB } from "./href";
 
-export type Tab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar";
-export const TABS: Tab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar"];
+export { settingsHref } from "./href";
+
+export type Tab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar" | "labs";
+export const TABS: Tab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
 export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
-// The tab whose page opens one of its items, and the query parameter that names it.
-const SUB: Partial<Record<Tab, string>> = { models: "purpose", channels: "channel", extensions: "extension", connectors: "connector" };
 /** A host-owned secondary page, not a connector ID. */
 export const SENT_SUB = "-sent";
 
@@ -48,6 +49,9 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
   sources: { label: t("settings-nav.tab_sources"), icon: "inbox", hint: t("settings-nav.hint_sources") },
   extensions: { label: t("settings-nav.tab_extensions"), icon: "extension", hint: t("settings-nav.hint_extensions") },
   shortcuts: { label: t("settings-nav.tab_shortcuts"), icon: "keyboard", hint: t("settings-nav.hint_shortcuts") },
+  // trial features and new implementations, this browser's (lib/labs.ts, Labs.tsx); the existing sparkles
+  // glyph rather than a new one, as the first screen has no room for another (docs/web/web.md "Labs")
+  labs: { label: t("settings-nav.tab_labs"), icon: "sparkles", hint: t("settings-nav.hint_labs") },
   devices: { label: t("settings-nav.tab_devices"), icon: "key", hint: t("settings-nav.hint_devices") },
   hub: { label: t("settings-nav.tab_hub"), icon: "hub", hint: t("settings-nav.hint_hub") },
   managers: { label: t("settings-nav.tab_managers"), icon: "person", hint: t("settings-nav.hint_managers") },
@@ -55,12 +59,14 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
 
 /** The sidebar (desktop) and the phone's list: the categories in three groups, in this order (docs/assistant/managers.md
  *  "The current assistant"): the current assistant's settings, each page reading and writing that assistant only
- *  ("<name>'s settings", with Switch); this device's; and the hub's, the same whichever assistant is current. */
-export type NavGroup = "assistant" | "device" | "hub";
+ *  ("<name>'s settings", with Switch); this device's; and the hub's, the same whichever assistant is current. Then Labs
+ *  on its own, untitled: its modules each say whose setting they hold (Labs.tsx). */
+export type NavGroup = "assistant" | "device" | "hub" | "labs";
 export const NAV_GROUPS: { key: NavGroup; tabs: Tab[] }[] = [
   { key: "assistant", tabs: ["models", "persona", "prompts", "channels", "connectors", "sources", "extensions", "knowledge", "agents"] },
   { key: "device", tabs: ["general", "notifications", "shortcuts"] },
   { key: "hub", tabs: ["hub", "managers", "avatar", "devices"] },
+  { key: "labs", tabs: ["labs"] },
 ];
 
 /** The current assistant's group: its pages follow the pick, and an item opened in one goes back to its list when the
@@ -81,14 +87,6 @@ export function settingsAt(search: string, hash = ""): { tab: Tab | null; sub: s
   if (t === "extensions" && sub?.startsWith("-channels/")) return { tab: "channels", sub: sub.slice("-channels/".length), section: null };
   const section = legacy?.section ?? sectionOfHash(hash, t);
   return { tab: t, sub, section };
-}
-
-/** The URL of a category (and its open item). "General" is plain /settings on a wide screen, where that opens it; on a
- *  phone /settings is the list, so it is named. */
-export function settingsHref(tab: Tab, id: string | null, phone: boolean, manager?: string | null, section?: SettingsSection | null): string {
-  const param = SUB[tab];
-  const query = `/settings?tab=${tab}${id && param ? `&${param}=${encodeURIComponent(id)}` : ""}${manager ? `&manager=${encodeURIComponent(manager)}` : ""}`;
-  return `${tab === "general" && !phone ? "/settings" : query}${section ? `#settings-${section}` : ""}`;
 }
 
 /** Replace a legacy category URL in place, retaining provider and manager parameters. */

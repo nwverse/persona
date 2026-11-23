@@ -67,6 +67,7 @@ class PersonaWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val dependencies = SurfacesDependencies.of(context)
         val feed = dependencies.fleet()
+        feed.settled()
         val sessions = dependencies.sessions()
         val look = WidgetLook.of(AppStyleStore(context).style.value)
         // Read inside the composition: while Glance keeps this session, updateAll() only recomposes it.
@@ -151,7 +152,7 @@ class PersonaWidget : GlanceAppWidget() {
     companion object {
         /** Redraws every placed widget (cheap when none is placed). */
         suspend fun refresh(context: Context) {
-            runCatching { PersonaWidget().updateAll(context.applicationContext) }
+            val _ = runCatching { PersonaWidget().updateAll(context.applicationContext) }
         }
     }
 }

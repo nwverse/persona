@@ -40,6 +40,9 @@ import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.inbox.InboxTier
+import persona.core.navigation.AppTab
+import persona.core.navigation.ChatRoute
+import persona.core.navigation.ConversationKind
 import persona.core.navigation.Navigator
 
 /**
@@ -63,6 +66,7 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
     }
     val record = listedRecord ?: (lookup as? InboxItemLookupResult.Found)?.record
     val pages = LocalInboxItemPages.current
+    val landing = LocalInboxLanding.current
     val feedback = LocalAppFeedback.current
     val res = LocalResources.current
     val scope = rememberCoroutineScope()
@@ -72,6 +76,22 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
     var stale by rememberSaveable(route.itemId) { mutableStateOf(false) }
     var lineageRevision by remember(route.itemId) { mutableIntStateOf(0) }
     val open = LocalLarkLinkOpener.current
+    val handOff = rememberInboxHandOffBarModel(repository, route.itemId)
+    val composers = rememberReplyComposers(repository)
+    var drafting by rememberSaveable(route.itemId) { mutableStateOf(false) }
+    val draftComposer = if (record != null && !record.item.isDone && inboxSupportsDraftReply(record) && record.event.suggestion?.kind != "reply") {
+        composers.get(ReplyTarget.Inbox(record.item.id), record.agent?.draft.orEmpty())
+    } else null
+    fun openHandOff(destination: HandOffDestination) {
+        val target = destination.target
+        if (target != null) {
+            navigator.navigate(ChatRoute(target.machineId, target.sessionId, ConversationKind.Agent))
+        } else {
+            val session = destination.session
+            if (session != null) navigator.navigate(ChatRoute(session.machineId, session.sessionId, ConversationKind.Assistant))
+            else navigator.selectTab(AppTab.Persona)
+        }
+    }
     val clock = LocalInboxClock.current
     val zone = LocalInboxZone.current
     val nowText = record?.let { inboxNowForRow(it, res, currentLocale, now = clock(), zone = zone) }
@@ -100,8 +120,9 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
             is ChainTarget.Page -> navigator.navigate(target.key)
             ChainTarget.Source -> navigator.navigate(pages.open(shown))
             is ChainTarget.Url -> open?.invoke(target.url, inbox.contentSource)
+            // Another item's chain opens it from outside the list: a list beside it moves to it (#9053).
             is ChainTarget.Item -> navigator.navigate(inbox.records.firstOrNull { it.item.id == target.id }
-                ?.let { inboxRowPage(it, pages) } ?: InboxEventRoute(target.id))
+                ?.let { inboxRowPage(it, pages).also { page -> landing?.landBeside(it, page) } } ?: InboxEventRoute(target.id))
             ChainTarget.Inline, ChainTarget.None -> Unit
         }
     }
@@ -130,6 +151,16 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
                 })
             if (record != null) InboxSameMatterMenu(repository, record, onLinked = { lineageRevision++ })
         },
+        bottomBar = if (record == null || handOff == null) null else ({
+            InboxHandOffBar(
+                repository = repository,
+                model = handOff,
+                // A completed item opened from history can still be handed off; live Done rows stay read-only.
+                enabled = !record.item.isDone || listedRecord == null,
+                onDraftReply = if (draftComposer != null) ({ drafting = true }) else null,
+                onOpen = ::openHandOff,
+            )
+        }),
     ) {
         if (record == null) {
             when (val result = lookup) {
@@ -203,6 +234,9 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
             }
         }
         item("event-end") { Spacer(Modifier.padding(top = Tokens.Space.xxl)) }
+    }
+    if (drafting && record != null && draftComposer != null) {
+        InboxDraftSheet(repository, record, draftComposer, navigator, onDismiss = { drafting = false })
     }
 }
 

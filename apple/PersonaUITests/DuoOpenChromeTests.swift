@@ -1,7 +1,8 @@
 import XCTest
 
 /// iPhone Duo open, the inner screen, in the Separate layout's new look (#4206; it replaced #2623's switch on the page):
-/// - the system's tab bar (down the side on its side), no Assistant | Agents switch drawn on the page;
+/// - the system's tab bar on the tabs: iOS puts it down the side column on its side and along the foot upright; no
+///   switch drawn on the page's top and none over the tabs;
 /// - each tab its part of the one sidebar's column: its fold at the head, New Chat, Search and Settings at the foot;
 /// - Search and Settings over the window, and the iPhone's new conversation with Needs You (#3680);
 /// - an Agent asked for from outside on the Agents tab.
@@ -13,8 +14,9 @@ import XCTest
 /// TEST_RUNNER_PERSONA_HOLD=<seconds> holds each state, named in an activity `duo-shot <name>`, for
 /// `simctl io --display=3 screenshot`; XCUITest's own screenshot captures the dark outer screen.
 final class DuoOpenChromeTests: XCTestCase {
-    /// A tab item is about 44 pt wide; a heading or a row is wider.
-    private static let tabItemWidth: CGFloat = 60
+    /// A tab item is at most about 100 pt wide (wider along the foot upright, where it has its name beside it room);
+    /// a heading or a row is wider.
+    private static let tabItemWidth: CGFloat = 120
 
     private var app: XCUIApplication!
 
@@ -39,12 +41,15 @@ final class DuoOpenChromeTests: XCTestCase {
 
     @MainActor private func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
 
-    /// The system tab bar's item (down the side on its side, at the foot upright): a button of that name a tab item
-    /// wide, not the column's heading of the same name. The bar itself is not a `TabBar` to XCUITest there.
-    @MainActor private func tab(_ label: String) -> XCUIElement {
+    /// The system tab bar's item: a button of that name a tab item wide, not the column's heading of the same name. The
+    /// bar itself is not a `TabBar` to XCUITest there.
+    @MainActor private func systemTab(_ label: String) -> XCUIElement {
         let narrow = NSPredicate { item, _ in ((item as? XCUIElementAttributes)?.frame.width ?? .infinity) <= Self.tabItemWidth }
         return app.buttons.matching(NSPredicate(format: "label == %@", label)).matching(narrow).firstMatch
     }
+
+    /// The tab bar's item for a tab: the system's, by the tab's name.
+    @MainActor private func tab(_ id: String) -> XCUIElement { systemTab(id == "shell-agents" ? "Agents" : "Persona") }
 
     @MainActor private func shot(_ name: String) {
         XCTContext.runActivity(named: "duo-shot \(name)") { _ in
@@ -52,18 +57,21 @@ final class DuoOpenChromeTests: XCTestCase {
         }
     }
 
-    /// The system's tab bar, no switch drawn on the page (#4206, the new look of the Separate layout): the column's head
-    /// has its fold, its foot Search; the page has its face, and its sidebar button only while the column is away.
-    @MainActor func testTheTabBarAndTheColumnsFold() {
+    /// The system's tab bar on the tabs, no switch drawn on the page's top (#4206, the new look of the Separate layout)
+    /// and none over the tabs: the column's head has its fold, its foot Search; the page has its menu (the name pill beside the
+    /// column, whose head shows the face, #9973), and its sidebar button only while the column is away.
+    @MainActor func testTheTabSwitchAndTheColumnsFold() {
         let main = element("sidebar-main"), fold = element("sidebar-fold-column"), search = element("sidebar-search")
         XCTAssertTrue(main.waitForExistence(timeout: 20), "no column:\n\(app.debugDescription)")
-        XCTAssertTrue(tab("Persona").exists && tab("Agents").exists, "no system tab bar:\n\(app.debugDescription)")
-        XCTAssertFalse(element("page-tab-switch").exists || element("shell-assistant").exists, "a switch drawn on the page")
+        XCTAssertTrue(tab("shell-assistant").exists && tab("shell-agents").exists, "no system tab bar:\n\(app.debugDescription)")
+        XCTAssertFalse(element("tab-switch").exists, "a tab bar drawn over the system's:\n\(app.debugDescription)")
+        XCTAssertFalse(element("page-tab-switch").exists, "a switch drawn on the page")
+        XCTAssertGreaterThan(tab("shell-agents").frame.minY, app.windows.firstMatch.frame.midY, "the tab bar is not low in the window")
         XCTAssertTrue(fold.exists && search.exists, "no fold or Search:\n\(app.debugDescription)")
         XCTAssertLessThan(fold.frame.maxY, main.frame.minY, "the fold is not at the column's head")
         let window = app.windows.firstMatch.frame
         XCTAssertGreaterThan(search.frame.minY, window.maxY - 160, "Search is not at the column's foot")
-        XCTAssertTrue(element("persona-avatar").exists, "no face on the page")
+        XCTAssertTrue(element("persona-avatar").exists, "no menu on the page")
         let back = element("assistant-sidebar-button")
         XCTAssertFalse(back.exists && back.isHittable, "the page's sidebar button shows beside the column")
         shot("chrome")
@@ -121,7 +129,7 @@ final class DuoOpenChromeTests: XCTestCase {
     }
 
     /// Settings covers the window, as ChatGPT's account page does there, not a sheet over half of it (#3701): one column
-    /// across, its × at the top right, which closes it.
+    /// across, its × at the top left (#9653), which closes it.
     @MainActor func testSettingsCoversTheWindowAndCloses() {
         let settings = element("sidebar-settings")
         XCTAssertTrue(settings.waitForExistence(timeout: 20), "no Settings at the column's foot:\n\(app.debugDescription)")
@@ -132,34 +140,34 @@ final class DuoOpenChromeTests: XCTestCase {
         let window = app.windows.firstMatch.frame, list = element("settings-list")
         XCTAssertTrue(list.exists, "no settings list:\n\(app.debugDescription)")
         XCTAssertGreaterThan(list.frame.width, window.width * 0.8, "Settings does not cover the window: \(list.frame) in \(window)")
-        XCTAssertGreaterThan(close.frame.midX, window.width * 0.85, "the × is not at the window's right: \(close.frame) in \(window)")
+        XCTAssertLessThan(close.frame.midX, window.width * 0.15, "the × is not at the window's left: \(close.frame) in \(window)")
         XCTAssertLessThan(close.frame.minY, window.minY + window.height / 4, "the × is not at the top: \(close.frame) in \(window)")
         close.tap()
         XCTAssertTrue(close.waitForNonExistence(timeout: 5), "the × did not close Settings")
         XCTAssertTrue(settings.waitForExistence(timeout: 5) && settings.isHittable, "the page did not come back")
     }
 
-    /// The tab bar's Agents: the same column with the Agents' part beside the Agents' page, and back to Persona's.
+    /// The switch's Agents: the same column with the Agents' part beside the Agents' page, and back to Persona's.
     @MainActor func testTheTabsGoToAgentsAndBack() {
         XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 20), "no column:\n\(app.debugDescription)")
-        tab("Agents").tap()
+        tab("shell-agents").tap()
         XCTAssertTrue(element("sidebar-agents-new").waitForExistence(timeout: 10), "no Agents in the column:\n\(app.debugDescription)")
         XCTAssertFalse(element("sidebar-main").exists, "the Agents tab's column holds Persona's rows")
         shot("agents")
-        tab("Persona").tap()
-        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the tab bar did not go back to Persona")
+        tab("shell-assistant").tap()
+        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the switch did not go back to Persona")
     }
 
-    /// An agent asked for from outside opens on the Agents tab, beside its column, and the tab bar goes back to Persona.
+    /// An agent asked for from outside opens on the Agents tab, beside its column, and the switch goes back to Persona.
     @MainActor func testAnOpenedAgentIsOnTheAgentsTab() {
         app.terminate()
         app.launchArguments += ["-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000002"]
         app.launchPinned()
         let title = element("chat.title")
         XCTAssertTrue(title.waitForExistence(timeout: 20), "the agent did not open:\n\(app.debugDescription)")
-        XCTAssertTrue(tab("Persona").exists, "no tab bar over the opened agent")
+        XCTAssertTrue(tab("shell-assistant").exists && tab("shell-agents").isSelected, "no switch over the opened agent")
         shot("agent-open")
-        tab("Persona").tap()
-        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the tab bar did not go back to Persona")
+        tab("shell-assistant").tap()
+        XCTAssertTrue(element("sidebar-main").waitForExistence(timeout: 10), "the switch did not go back to Persona")
     }
 }

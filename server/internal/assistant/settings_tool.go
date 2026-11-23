@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -27,6 +28,8 @@ type ownSetting struct {
 	Setting
 	get func(ctx context.Context) (string, error)
 	set func(ctx context.Context, v json.RawMessage) (*ownChange, error)
+	// cardTitle localizes a dynamic setting's title (direction.<id>.prompt); static keys use settingTitles instead.
+	cardTitle func(l i18n.Lang) string
 	// change is a setting's other actions (a list's add and remove: tasks.trust), in place of set.
 	change func(ctx context.Context, action string, v json.RawMessage) (*ownChange, error)
 }
@@ -36,6 +39,10 @@ type ownChange struct {
 	summary  string                   // for the assistant: the change made nothing to do
 	cardText func(l i18n.Lang) string // what the card says, in the user's language
 	apply    func(ctx context.Context) (string, error)
+	// applyChecksProposal marks an apply that re-reads current state and
+	// atomically checks the exact card revision itself. Rebuilding such an
+	// operation would move its revision baseline forward and hide a conflict.
+	applyChecksProposal bool
 }
 
 // card is what the approval card says in l.
@@ -49,6 +56,7 @@ func (c *ownChange) card(l i18n.Lang) string {
 func (s *Service) ownSettings() []ownSetting {
 	getSet := []string{"get", "set"}
 	return []ownSetting{
+		s.hiddenDirSetting(),
 		{Setting: Setting{Key: standingAuthorizationsKey, Title: "Standing authorizations", Actions: getSet,
 			About: "user-confirmed actions for one computer and absolute directory tree; only the main conversation may set them, and every change requires the user’s own permission approval",
 			Value: "{revision, authorizations: [{id?, machine_id, directory, actions, conditions, quote, source, reversible}]}; get first; retain existing entries unchanged or remove them; omit id for new grants; granted_at is set by the server"},
@@ -71,6 +79,30 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.startRequestedTasks(ctx)), nil },
 			set: s.setStartRequestedTasks},
+		{Setting: Setting{Key: "assistant.idle_auto_compact", Title: "Compact idle conversations", Actions: getSet,
+			About: "on (the default): compact an idle conversation when the idle time and context size thresholds are both reached",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompact(ctx)), nil },
+			set: s.setIdleAutoCompact},
+		{Setting: Setting{Key: "assistant.idle_auto_compact_minutes", Title: "Idle time before compaction", Actions: getSet,
+			About: "minimum idle time before automatic compaction; 30 minutes by default",
+			Value: "a whole number from 1 to 1440"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactMinutes(ctx)), nil },
+			set: s.setIdleAutoCompactMinutes},
+		{Setting: Setting{Key: "assistant.idle_auto_compact_tokens", Title: "Context size before compaction", Actions: getSet,
+			About: "minimum context size before automatic compaction; 300000 tokens by default. Once saved, it is also the size " +
+				"at which the main chat is compacted before its idle process is let go (assistant.idle_release_minutes), " +
+				"whatever assistant.idle_auto_compact says; never saved, that compaction stays at 75% of the conversation's window",
+			Value: "a whole number from 10000 to 10000000"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactTokens(ctx)), nil },
+			set: s.setIdleAutoCompactTokens},
+		{Setting: Setting{Key: "assistant.idle_release_minutes", Title: "Main chat stays loaded when idle", Actions: getSet,
+			About: "how long the main chat's process stays loaded after its last activity before it is let go (it resumes on the " +
+				"next message); 20 minutes by default. Just before, it is compacted when its context is large (assistant.idle_auto_compact_tokens " +
+				"once saved). Kept below an hour so that compaction still reads the prompt cache. Applies from the main chat's next message",
+			Value: "a whole number of minutes from 5 to 55"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleReleaseMinutes(ctx)), nil },
+			set: s.setIdleReleaseMinutes},
 		{Setting: Setting{Key: readonlyModeKey, Title: "Read-only task protection", Actions: getSet,
 			About: "sandbox (the default) keeps current runtime protection: Codex uses a read-only sandbox, while Claude uses " +
 				"bypassPermissions and a first-message read-only instruction. prompt keeps the instruction without forcing plan " +
@@ -117,6 +149,17 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainBackgroundFolded(ctx)), nil },
 			set: s.setMainBackgroundFolded},
+		{Setting: Setting{Key: "assistant.main_compact_window", Title: "Main chat compaction window", Actions: getSet,
+			About: "400000 (the default): the main conversation is compacted at about this many tokens (and sent /compact when " +
+				"idle at 75% of it) instead of its model's whole window, when it runs on a launcher Persona manages that declares " +
+				"a larger one; fewer tokens re-read every turn and rewritten after a long pause, while early details stay in the " +
+				"task ledger and the old conversation. 0: the launcher's window, as for every other conversation and Agent. " +
+				"Applies from the main conversation's next message while it is idle",
+			Value: "0, or a whole number of tokens, 100000–10000000"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(mainCompactWindowOf(s.settings(ctx))), nil
+			},
+			set: s.setMainCompactWindow},
 		{Setting: Setting{Key: "assistant.recent_task_chats", Title: "Show scheduled task chats in Recent", Actions: getSet,
 			About: "off (the default): the sidebar's Recent in the apps leaves out the chats a scheduled task or the background " +
 				"supervisor started (they stay in All chats and under Scheduled Tasks); on: Recent lists them by last activity with " +
@@ -135,29 +178,46 @@ func (s *Service) ownSettings() []ownSetting {
 		{Setting: Setting{Key: "assistant.meeting_transcription_default", Title: i18n.T(i18n.Default, "assistant-settings_tool.title_meeting_transcription_default"), Actions: getSet,
 			About: prompts.RenderMeetingTranscriptionSetting(), Value: "device or hub"},
 			get: s.getMeetingTranscriptionDefault, set: s.setMeetingTranscriptionDefault},
+		{Setting: Setting{Key: "assistant.delivery_gate", Title: i18n.T(i18n.Default, "assistant-settings_tool.title_delivery_gate"), Actions: getSet,
+			About: "merged (the default): supervised tasks with linked PR(s) or GitHub issue(s) stay open until the PR is merged " +
+				"and linked issue(s) are closed (unless explicitly PR-only/draft-only or outcome cannot). off: close strictly on " +
+				"done_when with no delivery gate. live: also require the change to be deployed and live on the running hub " +
+				"(equivalent to assistant.done_needs_delivery=true). Applies from the next judgment / review",
+			Value: "off, merged or live"},
+			get: func(ctx context.Context) (string, error) { return s.deliveryGate(ctx), nil },
+			set: s.setDeliveryGate},
 		{Setting: Setting{Key: "assistant.done_needs_delivery", Title: "上线并实测才算做完", Actions: getSet,
-			About: "off (the default): a task_plan task closes when its work is judged done; on: only once it is live and checked " +
-				"(or has nothing to ship): stopped at a PR, merged or off by default it stays open with where it is held, its agent is told " +
-				"so with its prompt, and the ones waiting for the user's nod are listed together in the snapshot. Applies from the next judgment / task",
+			About: "legacy boolean alias for assistant.delivery_gate: true sets delivery_gate to live (close only once live and " +
+				"checked, and hand the delivery standard to the agent); false sets delivery_gate to off (no delivery gate). " +
+				"Prefer assistant.delivery_gate (off / merged / live). Either way the judge never closes a supervised task: delivery " +
+				"waits for the main conversation's task_review. Applies from the next judgment / task",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.doneNeedsDelivery(ctx)), nil },
 			set: s.setDoneNeedsDelivery},
 		{Setting: Setting{Key: "assistant.review_sample_percent", Title: "Share of finished tasks to spot-check", Actions: getSet,
-			About: "100 (the default): every finished supervised task waits for your task_review. Below 100 the done judge also checks each " +
-				"done_when criterion; a task whose criteria are all checkable and met and whose work is live is closed by the judge, and " +
-				"only this share of those still comes to you to spot-check (tasks that fail the check wait for task_review as before). " +
-				"Applies from the next judgment on",
+			About: "100 (the default): the done judge adds no per-criterion check. Below 100 it also checks each done_when criterion " +
+				"and the delivery as evidence for review. Passing, failing, sampled and unsampled work all stay open as delivered, " +
+				"awaiting the main conversation's task_review; the judge never accepts or closes a task. Applies from the next judgment on",
 			Value: "a whole number, 0–100"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.reviewSamplePercent(ctx)), nil },
 			set: s.setReviewSamplePercent},
 		{Setting: Setting{Key: "assistant.leaders", Title: "Leader conversations", Actions: getSet,
-			About: "empty (the default): only the main conversation supervises the tasks it hands out. A leader is a side conversation " +
-				"(one repository or long-running project each) that supervises the tasks it hands out with task_plan itself: their " +
-				"supervision messages go to it and it reviews them with task_review; needs_user and failed starts still come to the " +
-				"main conversation. Applies to tasks handed out from now on",
+			About: "empty (the default): no manual Agent is assigned to a leader. New task_plan, agent_start and agent_send task work " +
+				"is always supervised by the main conversation, including task_plan(supervisor=leader). The one exception is a manually " +
+				"started Agent the owner explicitly puts under a leader: its ordinary supervision messages and failed starts go there and " +
+				"that leader reviews them with task_review; needs_user still comes to the main conversation, and every other new " +
+				"assistant-dispatched failed start goes there too",
 			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
 			get: s.getLeaders,
 			set: s.setLeaders},
+		{Setting: Setting{Key: "assistant.briefing_waits", Title: "Briefing wait rows", Actions: getSet,
+			About: "thresholds for the deterministic per-direction wait rows in morning/evening facts. Defaults come from the existing " +
+				"supervision floors: stalled_minutes=20 (superviseStallMin), silent_minutes=120 (superviseSilentMin), " +
+				"orphan_minutes=10 (orphanOfflineAfter), card_minutes=3 (superviseNeedsAfter); max_rows=15 bounds only non-owner " +
+				"rows per direction, and every owner-wait row is kept. These values do not change supervision notifications",
+			Value: "the whole object {stalled_minutes, silent_minutes, orphan_minutes, card_minutes, max_rows}; minutes 1–10080, max_rows 1–100; null restores the defaults"},
+			get: s.getBriefingWaits,
+			set: s.setBriefingWaits},
 		{Setting: Setting{Key: "assistant.interject_background", Title: "Move running work to the background when I interject", Actions: getSet,
 			About: "off (the default): a message the user sends while a Claude conversation is still answering waits until the command " +
 				"or subagent running in the foreground ends; on: that work moves to the background (it goes on and reports when done) " +
@@ -168,17 +228,58 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.interjectBackground(ctx)), nil },
 			set: s.setInterjectBackground},
+		{Setting: Setting{Key: "assistant.claude_interactive", Title: "Run Claude chats in interactive Claude Code", Actions: getSet,
+			About: "off (the default): Claude assistant conversations run Claude Code in print mode (claude -p), as always. on: they run " +
+				"the real interactive Claude Code in a private terminal on their computer instead, with the same instructions, tools, " +
+				"permission mode and settings. Why: people report that on a Claude subscription print mode uses the 5-hour limit faster " +
+				"than interactive use (Anthropic does not document this). Risk: Persona then drives a program made for a person, which " +
+				"Anthropic may treat as a different kind of use than it is; an account restriction is possible. Changes: replies show " +
+				"a block at a time instead of word by word; images reach Claude as files it reads; cancelling a queued message or Send " +
+				"now is not available. Needs tmux on that computer; when the interactive start fails the conversation runs in print mode " +
+				"and says why (Settings › Assistant › Runs on), trying again 10 minutes later. Applies to each conversation's next " +
+				"start; a running idle one restarts with its next message",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.claudeInteractive(ctx)), nil },
+			set: s.setClaudeInteractive},
+		{Setting: Setting{Key: "assistant.load_all_tools", Title: "Load every Persona tool up front", Actions: getSet,
+			About: "off (the default): only the Persona tools conversations use often are sent in full with every request; the " +
+				"others are listed by name and loaded with ToolSearch when needed, which keeps every request smaller. on: every " +
+				"Persona tool is sent in full with every request, as before. Applies at once: running conversations are sent their " +
+				"new tool list and new ones start with it (a conversation on a computer whose Persona is older than tool refresh " +
+				"keeps its tools until its process restarts)",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.loadAllTools(ctx)), nil },
+			set: s.setLoadAllTools},
 		{Setting: Setting{Key: "assistant.agent_tasks", Title: "Every Agent Persona starts is a supervised task", Actions: getSet,
-			About: "off (the default): only tasks the main conversation or a leader hands out are supervised; an agent started from an " +
-				"app or by agent_start from another conversation is on no task. on: every agent Persona starts gets a quiet to-do (no " +
-				"pushes or badges for it) supervised by the conversation that started it when that is the main conversation or a leader, " +
-				"else by the main conversation: an app's agent once a turn of it did work (edits, commands), a to-do the user made when " +
-				"an agent is linked to it, and report_to_supervisor from an agent on any open to-do reaches its supervisor. Agents " +
-				"started by hand in a terminal are left alone. Costs model calls (the done judge, supervision turns). Applies from the " +
-				"next start, turn end and report",
+			About: "off (the default): assistant-dispatched task_plan, agent_start and agent_send task work is still supervised by main. " +
+				"on: manually linked user to-dos and reporting-Agent compatibility are supervised too; an Agent opened by hand on the Agents " +
+				"page is not adopted merely because it did work. Agents started by hand in a terminal are left alone. Costs model calls " +
+				"(the done judge, supervision turns). Applies from the next start, turn end and report",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agentTasks(ctx)), nil },
 			set: s.setAgentTasks},
+		{Setting: Setting{Key: "assistant.task_lessons", Title: "Learn from finished tasks", Actions: getSet,
+			About: "off (the default): nothing is learned from accepted tasks. on: when the supervisor accepts a task that needed " +
+				"corrections (a rework round, a criterion not met, the user's answer to one of its questions, a scope change, far " +
+				"more time than estimated), a background model (Information processing) writes up to three lessons for the task's " +
+				"project (a mistake that came back, background the user had to add, a step that wasted time, a better way to work), " +
+				"and every new Agent of that project gets the most repeated ones before its first prompt. A smooth task makes no " +
+				"model call. The user sees, edits and deletes the lessons on the project's page in Knowledge; a deleted one is not " +
+				"learned again. Applies from the next acceptance and the next new Agent",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.taskLessons(ctx)), nil },
+			set: s.setTaskLessons},
+		{Setting: Setting{Key: "assistant.close_ended_terminals", Title: "Close an Agent's terminal when it ends", Actions: getSet,
+			About: "off (the default): an Agent's terminal tab stays open after it stops, with the shell it ran in, until the user " +
+				"closes it. on: when an Agent Persona started ends, Persona closes the tab it opened for it, the way Archive and " +
+				"close does: when its task is done or cancelled (an idle Agent), and when it quits by itself or is told to (/exit). " +
+				"Never closed: a busy Agent (working, waiting for an answer, background work, subagents or workflows running, a " +
+				"/loop, queued messages, a server it runs), one the user stopped with Stop or that was stopped for being idle, and " +
+				"terminals Persona did not open. The conversation is kept and can be resumed in a new tab. Applies from the next " +
+				"Agent that ends",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.closeEndedTerminals(ctx)), nil },
+			set: s.setCloseEndedTerminals},
 		{Setting: Setting{Key: "assistant.inbox_signals", Title: "Tell a task's supervisor about new Inbox messages on it", Actions: getSet,
 			About: "off (the default): an Inbox message the AI twin's judge links to a task only reaches the twin's handling chat " +
 				"(and a message card once it drafts a reply). on: new messages from other people linked to a supervised task also " +
@@ -189,16 +290,53 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.inboxSignalsOn(ctx)), nil },
 			set: s.setInboxSignals},
+		{Setting: Setting{Key: "inbox.todo_forward.enabled", Title: "Auto-forward PR/Issue Inbox events to the bound to-do's Agent", Actions: getSet,
+			About: "off (the default): Inbox ingestion performs zero automatic forwards to task Agents. on: incoming Inbox items " +
+				"with an exact canonical GitHub PR or Issue URL bound to an open to-do's pr_url or todo_repositories are " +
+				"deterministically forwarded (zero LLM calls) to that to-do's latest bound Agent (direct send if idle, queued if " +
+				"working, resumed on non-user stops), wrapped in an untrusted-content envelope with self-author suppression and " +
+				"idempotent deduplication; unavailable Agents fall back to the supervising conversation. Applies from the next " +
+				"Inbox round",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.inboxTodoForwardOn(ctx)), nil },
+			set: s.setInboxTodoForward},
+		{Setting: Setting{Key: "assistant.pr_events_route_to_agent", Title: "Route PR events directly to the bound to-do Agent", Actions: getSet,
+			About: "off (the default): pr_status keeps existing supervision behavior unchanged. on: new PR merge conflicts, current-head " +
+				"CI failures, and current-head changes_requested or actionable review events on an open to-do route deterministically " +
+				"to its bound Agent (direct send when idle, queued behind the current turn when working, or non-user resume when stopped), " +
+				"deduplicated per event, with fallback to the supervisor wake path when no usable Agent is available",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.prEventsRouteToAgentOn(ctx)), nil },
+			set: s.setPREventsRouteToAgent},
 		{Setting: Setting{Key: "assistant.main_supervises_own_tasks", Title: "The main chat supervises its own tasks", Actions: getSet,
-			About: "off (the default): the background supervisor, one built-in Persona conversation made on first use, follows up " +
-				"every supervised task no leader supervises: their supervision messages go to it and it reviews them with task_review, " +
-				"so the main conversation stays free to answer the user. The main conversation still hears of failed starts and of " +
-				"what the background supervisor hands to the user, and may review any of these tasks itself. on: the main conversation " +
-				"gets these supervision messages itself, as before the background supervisor existed. Applies to signals raised from " +
-				"the change on (a supervision message already with the background supervisor is finished there); tasks keep running",
+			About: "compatibility only, whether off (the default) or on: the main conversation supervises every new task no leader " +
+				"supervises and receives its supervision messages. The main conversation still hears of failed starts with no current " +
+				"leader and of what an already configured background conversation hands to the user; that background only finishes its " +
+				"previously assigned supervision notices, and no background conversation is created or selected for new work. Changing " +
+				"the setting does not move existing notices or stop tasks",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainSupervisesOwnTasks(ctx)), nil },
 			set: s.setMainSupervisesOwnTasks},
+		{Setting: Setting{Key: "assistant.supervision_batch_minutes", Title: "Routine supervision batching per recipient", Actions: getSet,
+			About: "0 (the default) keeps the existing supervision gather and shared spacing. A nonzero interval batches routine signals independently for each final recipient conversation, anchored at that recipient's first routine signal. needs_you, ask, escalated, decide, decision_reply, park_decided, owner_cannot_answer, recheck, undecidable and failed bypass the batch after the existing 15-second gather; any one of them releases that recipient's whole digest. Due batches still use the recipient's existing busy queue",
+			Value: "a whole number from 0 to 1440 minutes"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(supervisionBatchMinutesOf(s.settings(ctx))), nil
+			},
+			set: s.setSupervisionBatchMinutes},
+		{Setting: Setting{Key: "assistant.background_supervisor_keeps_context", Title: "The background supervisor keeps every round in context", Actions: getSet,
+			About: "off (the default): each round of the background supervisor starts from its first turn, in the same conversation: " +
+				"it reads its start brief and that round's supervision message, with only the tools supervision uses; what " +
+				"earlier rounds settled is on the tasks (brief, scope changes, decisions, the last review). on: from the next " +
+				"round, one long conversation again that keeps each later round in context, with all of the assistant's tools, " +
+				"as before (rounds already run from the first " +
+				"turn stay on their own branches, out of that context). Applies from the next round (one already running " +
+				"finishes as it is)",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(backgroundKeepsContext(s.settings(ctx))), nil
+			},
+			set: s.setBackgroundSupervisorKeepsContext},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -215,11 +353,15 @@ func (s *Service) ownSettings() []ownSetting {
 			About: "the lines an execution Agent's start is checked against on every computer: enabled, load_per_core, min_memory_bytes, " +
 				"max_claude_procs (and the hub machine's own hub_* lines, per-machine overrides), and the per-direction cap. " +
 				"direction_cap_by_direction keys are a supervisor conversation id or a direction's displayed name and win over " +
-				"direction_cap_by_project, which wins over direction_cap and the code default; get first and send the whole object",
+				"direction_cap_by_project, which wins over direction_cap and the code default. launcher_groups (none by default) caps " +
+				"running tasks across launchers that share one budget, on every computer: each {name, launchers (exact launcher names), " +
+				"cap}, a launcher in one group at most; a task held by a full group stays queued until it has room. " +
+				"Get first and send the whole object",
 			Value: "the full AdmissionSettings JSON object from get; a nil pointer keeps the code default, every set line must be positive"},
 			get: s.getAdmission,
 			set: s.setAdmission},
 		s.trustSetting(),
+		s.urgentRulesSetting(), // urgent_call_rules.go
 	}
 }
 
@@ -228,14 +370,22 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 		Action string          `json:"action"`
 		Key    string          `json:"key"`
 		Value  json.RawMessage `json:"value"`
+		ID     string          `json:"id"` // remove's, as the hub's own settings take it
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return proto.TextResult(fmt.Sprintf("invalid arguments: %v", err), true)
 	}
+	if a.Action == "remove" && len(a.Value) == 0 && a.ID != "" {
+		a.Value, _ = json.Marshal(a.ID)
+	}
 	if a.Key == standingAuthorizationsKey && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main || call.MachineID != s.settings(ctx).MachineID) {
 		return proto.TextResult("only the main conversation may change standing authorizations", true)
 	}
-	own := s.ownSettings()
+	if _, ok := directionPromptSettingID(a.Key); ok && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main) {
+		return proto.TextResult("only the main conversation may change direction prompts", true)
+	}
+	own := append(s.ownSettings(), s.modelGroupOwnSettings()...)
+	own = append(own, s.directionOwnSettings(ctx)...)
 	if a.Action == "" || a.Action == "list" {
 		text, err := s.listSettings(ctx, own)
 		if err != nil {
@@ -251,6 +401,9 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 			}
 			return proto.TextResult(text, false)
 		}
+	}
+	if _, ok := directionPromptSettingID(a.Key); ok {
+		return proto.TextResult(errNoDirection.Error(), true)
 	}
 	return s.appTool(ctx, AppSettings, call, args) // the hub's
 }
@@ -307,24 +460,50 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	}
 	l := s.lang(ctx)
 	title := o.Title
-	if k, ok := settingTitles[o.Key]; ok {
+	if o.cardTitle != nil {
+		title = o.cardTitle(l)
+	} else if k, ok := settingTitles[o.Key]; ok {
 		title = i18n.T(l, "assistant-settings_tool."+k)
 	}
 	shown, _ := json.Marshal(map[string]string{"setting": title, "action": action})
 	now := time.Now().UTC()
-	r, err := s.ask(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
-		Kind: proto.IxPermission, ToolName: "persona_settings", Summary: change.card(l), ToolInput: shown, SessionTitle: "Persona",
-		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)})
-	if err != nil {
-		return "", err
-	}
-	switch { // only the user's own answer counts: an expired card, or one answered for them, is no decline (#3722)
-	case r.UserAllowed():
-		return change.apply(ctx)
-	case r.UserDenied():
-		return "The user declined the change: nothing changed.", nil
-	}
-	return prompts.RenderSettingUnanswered(), nil
+	proposal := change.card(l)
+	outcome, err := s.waitPreparedCard(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
+		Kind: proto.IxPermission, ToolName: "persona_settings", Summary: proposal, ToolInput: shown, SessionTitle: "Persona",
+		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)}, approvalops.Operation{
+		Replacement: call.MachineID + "\x00" + call.SessionID + "\x00setting\x00" + o.Key,
+		Denied:      "The user declined the change: nothing changed.",
+		Unanswered:  prompts.RenderSettingUnanswered(),
+		Apply: func(ctx context.Context, _ proto.Resolution) (string, error) {
+			if change.applyChecksProposal {
+				// This apply already re-reads and compares the approved revision
+				// under its state lock; do not rebase it onto a newer revision.
+				return change.apply(ctx)
+			}
+			// Rebuild from current state: only the exact visible proposal the owner
+			// approved may execute, and the freshly validated operation is used.
+			var fresh *ownChange
+			var err error
+			switch {
+			case action == "set" && o.set != nil:
+				fresh, err = o.set(ctx, value)
+			case action != "set" && o.change != nil && slices.Contains(o.Actions, action):
+				fresh, err = o.change(ctx, action, value)
+			default:
+				return "", approvalops.ErrStale
+			}
+			if err != nil {
+				// The setter only rebuilds and validates a fresh operation here;
+				// fresh.apply below is the first possible side effect.
+				return "", fmt.Errorf("%w: validate the approved operation against current state: %v", approvalops.ErrNotApplied, err)
+			}
+			if fresh == nil || fresh.apply == nil || fresh.card(l) != proposal {
+				return "", approvalops.ErrStale
+			}
+			return fresh.apply(ctx)
+		},
+	})
+	return outcome.Text, err
 }
 
 func orNone(s string) string {
@@ -337,16 +516,20 @@ func orNone(s string) string {
 // settingTitles are the settings' titles for the card the user approves on, in this file's namespace (Title stays
 // what the assistant reads).
 var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
+	"assistant.idle_auto_compact": "title_idle_auto_compact", "assistant.idle_auto_compact_minutes": "title_idle_auto_compact_minutes", "assistant.idle_auto_compact_tokens": "title_idle_auto_compact_tokens",
+	"assistant.idle_release_minutes":      "title_idle_release_minutes",
 	readonlyModeKey:                       "title_readonly_mode",
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
-	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
-	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
-	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "assistant.inbox_signals": "title_inbox_signals", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "model_profiles.tiers": "title_model_tiers",
+	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
+	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context",
+	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
+	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
 	"assistant.kb_topics": "title_kb_topics", "assistant.main_background_folded": "title_main_background_folded",
-	"assistant.recent_task_chats": "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust"}
+	"assistant.main_compact_window": "title_main_compact_window",
+	"assistant.recent_task_chats":   "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -354,6 +537,87 @@ func clipped(l i18n.Lang, s string) string {
 		s = i18n.T(l, "assistant-settings_tool.none")
 	}
 	return clip(oneLine(s), 120)
+}
+
+func (s *Service) setIdleAutoCompact(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value *bool
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return nil, i18n.Err("assistant-settings_tool.bad_idle_auto_compact")
+	}
+	return s.setBoolSetting(ctx, raw, s.idleAutoCompact, i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_unchanged"), func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_idle_auto_compact", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.IdleAutoCompact },
+		"Idle compaction setting saved (%v); applies from the next unattended message.")
+}
+
+func (s *Service) setIdleAutoCompactMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil || value < minIdleAutoCompactMinutes || value > maxIdleAutoCompactMinutes {
+		return nil, i18n.Err("assistant-settings_tool.bad_idle_auto_compact_minutes")
+	}
+	before := s.idleAutoCompactMinutes(ctx)
+	if value == before {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_unchanged")}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_idle_auto_compact_minutes", i18n.Args{"before": before, "after": value})
+	}, apply: func(ctx context.Context) (string, error) {
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.IdleAutoCompactMinutes = &value; return nil }); err != nil {
+			return "", err
+		}
+		s.settingsChanged(ctx)
+		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_saved"), nil
+	}}, nil
+}
+
+func (s *Service) setIdleAutoCompactTokens(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil || value < minIdleAutoCompactTokens || value > maxIdleAutoCompactTokens {
+		return nil, i18n.Err("assistant-settings_tool.bad_idle_auto_compact_tokens")
+	}
+	before := s.idleAutoCompactTokens(ctx)
+	// Saving the default is a change while unset: a saved value is also the main chat's release-time threshold.
+	if value == before && s.settings(ctx).IdleAutoCompactTokens != nil {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_unchanged")}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_idle_auto_compact_tokens", i18n.Args{"before": before, "after": value})
+	}, apply: func(ctx context.Context) (string, error) {
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.IdleAutoCompactTokens = &value; return nil }); err != nil {
+			return "", err
+		}
+		s.settingsChanged(ctx)
+		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_saved"), nil
+	}}, nil
+}
+
+func (s *Service) setIdleReleaseMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil || value < minIdleReleaseMinutes || value > maxIdleReleaseMinutes {
+		return nil, i18n.Err("assistant-settings_tool.bad_idle_release_minutes")
+	}
+	before := s.idleReleaseMinutes(ctx)
+	if value == before {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.idle_release_unchanged")}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_idle_release_minutes", i18n.Args{"before": before, "after": value})
+	}, apply: func(ctx context.Context) (string, error) {
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.IdleReleaseMinutes = &value; return nil }); err != nil {
+			return "", err
+		}
+		s.settingsChanged(ctx)
+		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_release_saved"), nil
+	}}, nil
 }
 
 func (s *Service) setNotes(ctx context.Context, v json.RawMessage) (*ownChange, error) {
@@ -568,11 +832,77 @@ func (s *Service) setMeetingAttendanceDefault(ctx context.Context, v json.RawMes
 		}}, nil
 }
 
+func (s *Service) setDeliveryGate(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var gate string
+	if err := json.Unmarshal(v, &gate); err != nil || !slices.Contains(deliveryGates, gate) {
+		return nil, errors.New("value must be off, merged or live")
+	}
+	before := s.deliveryGate(ctx)
+	if gate == before {
+		return &ownChange{summary: "assistant.delivery_gate is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	name := func(l i18n.Lang, tier string) string { return i18n.T(l, "assistant-settings_tool.delivery_gate_"+tier) }
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_delivery_gate", i18n.Args{"before": name(l, before), "after": name(l, gate)})
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error {
+				v.DeliveryGate = &gate
+				v.DoneNeedsDelivery = nil
+				return nil
+			}); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("assistant.delivery_gate is %s from the next judgment and review on.", gate), nil
+		}}, nil
+}
+
 func (s *Service) setDoneNeedsDelivery(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	return s.setBoolSetting(ctx, v, s.doneNeedsDelivery, "「上线并实测才算做完」没有变化", func(l i18n.Lang, before, after string) string {
-		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": before, "after": after})
-	}, func(v *Settings) **bool { return &v.DoneNeedsDelivery },
-		"assistant.done_needs_delivery is %v from the next judgment and task on.")
+	var onPtr *bool
+	if err := json.Unmarshal(v, &onPtr); err != nil || onPtr == nil {
+		return nil, errors.New("value must be true or false")
+	}
+	on := *onPtr
+	target := deliveryGateOff
+	if on {
+		target = deliveryGateLive
+	}
+	beforeGate := s.deliveryGate(ctx)
+	if beforeGate == target {
+		return &ownChange{summary: "「上线并实测才算做完」没有变化"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	word := map[bool]string{true: "assistant-settings_tool.on", false: "assistant-settings_tool.off"}
+	beforeBool := beforeGate == deliveryGateLive
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		if beforeGate == deliveryGateMerged && !on {
+			return i18n.T(l, "assistant-settings_tool.change_delivery_gate", i18n.Args{
+				"before": i18n.T(l, "assistant-settings_tool.delivery_gate_"+beforeGate),
+				"after":  i18n.T(l, "assistant-settings_tool.delivery_gate_"+target),
+			})
+		}
+		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{
+			"before": i18n.T(l, word[beforeBool]),
+			"after":  i18n.T(l, word[on]),
+		})
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error {
+				v.DoneNeedsDelivery = &on
+				v.DeliveryGate = nil
+				return nil
+			}); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("assistant.done_needs_delivery is %v from the next judgment and task on.", on), nil
+		}}, nil
 }
 
 func (s *Service) setReviewSamplePercent(ctx context.Context, v json.RawMessage) (*ownChange, error) {
@@ -606,11 +936,32 @@ func (s *Service) setInterjectBackground(ctx context.Context, v json.RawMessage)
 		"assistant.interject_background is %v from the next message on.")
 }
 
+func (s *Service) setClaudeInteractive(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.claudeInteractive, "assistant.claude_interactive is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_claude_interactive", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.ClaudeInteractive },
+		"assistant.claude_interactive is %v from each conversation's next start on.")
+}
+
 func (s *Service) setAgentTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	return s.setBoolSetting(ctx, v, s.agentTasks, "assistant.agent_tasks is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_agent_tasks", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.AgentTasks },
 		"assistant.agent_tasks is %v from the next start, turn end and report on (to-dos made before keep what they have).")
+}
+
+func (s *Service) setTaskLessons(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.taskLessons, "assistant.task_lessons is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_task_lessons", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.TaskLessons },
+		"assistant.task_lessons is %v from the next accepted task and the next new Agent on (lessons already learned stay on the project's page).")
+}
+
+func (s *Service) setCloseEndedTerminals(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.closeEndedTerminals, "assistant.close_ended_terminals is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_close_ended_terminals", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.CloseEndedTerminals },
+		"assistant.close_ended_terminals is %v for Agents that end from now on (terminals already left open stay).")
 }
 
 func (s *Service) setInboxSignals(ctx context.Context, v json.RawMessage) (*ownChange, error) {
@@ -620,12 +971,35 @@ func (s *Service) setInboxSignals(ctx context.Context, v json.RawMessage) (*ownC
 		"assistant.inbox_signals is %v from the next new Inbox message on (signals already waiting go out only while it is on).")
 }
 
+func (s *Service) setInboxTodoForward(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.inboxTodoForwardOn, "inbox.todo_forward.enabled is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_inbox_todo_forward", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.InboxTodoForward },
+		"inbox.todo_forward.enabled is %v from the next Inbox round on.")
+}
+
+func (s *Service) setPREventsRouteToAgent(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.prEventsRouteToAgentOn, "assistant.pr_events_route_to_agent is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_pr_events_route_to_agent", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.PREventsRouteToAgent },
+		"assistant.pr_events_route_to_agent is %v from the next PR status sweep on.")
+}
+
 func (s *Service) setMainSupervisesOwnTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	return s.setBoolSetting(ctx, v, s.mainSupervisesOwnTasks, "assistant.main_supervises_own_tasks is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_main_supervises_own_tasks", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.MainSupervisesOwnTasks },
 		"assistant.main_supervises_own_tasks is %v for the signals raised from now on (open tasks keep running; what the "+
 			"background supervisor was already sent it finishes).")
+}
+
+func (s *Service) setBackgroundSupervisorKeepsContext(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, func(ctx context.Context) bool { return backgroundKeepsContext(s.settings(ctx)) },
+		"assistant.background_supervisor_keeps_context is unchanged", func(l i18n.Lang, before, after string) string {
+			return i18n.T(l, "assistant-settings_tool.change_background_supervisor_keeps_context", i18n.Args{"before": before, "after": after})
+		}, func(v *Settings) **bool { return &v.BackgroundSupervisorKeepsContext },
+		"assistant.background_supervisor_keeps_context is %v from the background supervisor's next round (one running now "+
+			"finishes as it is).")
 }
 
 // launchers are the launchers of the assistant's machine, as the apps list them.
@@ -668,6 +1042,9 @@ func (s *Service) setLauncher(ctx context.Context, v json.RawMessage) (*ownChang
 		return nil, errors.New("value must be a launcher name")
 	}
 	name = strings.TrimSpace(name)
+	if proto.IsExternalLauncher(name) {
+		return nil, i18n.Err("external-adapter.purpose_unsupported")
+	}
 	before := s.launcherNow(ctx)
 	ls, err := s.launchers(ctx)
 	if err != nil {

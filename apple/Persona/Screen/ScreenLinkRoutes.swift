@@ -358,6 +358,8 @@ actor ScreenLinkProber {
                     ScreenRoutes.log.info("route: \(kind, privacy: .public) (\(reason.rawValue, privacy: .public)); \(routes.count) measured; in use \(current == to ? "yes" : "no", privacy: .public)")
                 }
             case let .lost(route):
+                let kind = route.split(separator: ":").first.map(String.init) ?? "?"
+                ScreenRoutes.log.info("direct \(kind, privacy: .public): lost") // #9218: where a route stops
                 plan.failed(route, now: ScreenLinkSession.monotonic())
                 armWake()
             case let .moved(change):
@@ -440,6 +442,7 @@ actor ScreenLinkProber {
             armWake()
             return
         }
+        ScreenRoutes.log.info("direct \(kind.rawValue, privacy: .public): connected")
         plan.attached(route)
         await session.addDirect(conn, route: route, kind: kind, via: via)
     }

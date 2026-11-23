@@ -1,6 +1,7 @@
 package persona.core.hub
 
 import persona.core.contracts.JsonCodec
+import persona.core.contracts.decodeStandingAuthorizations
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
@@ -20,7 +21,7 @@ class HttpAssistantManagement private constructor(
     client: OkHttpClient,
     private val isCurrent: () -> Boolean,
     private val pinnedManager: String?,
-) : AssistantManagement {
+) : AssistantManagement, UsageHistoryApi {
     constructor(
         baseUrl: String, token: String, client: OkHttpClient, isCurrent: () -> Boolean = { true },
     ) : this(baseUrl, token, client, isCurrent, null)
@@ -77,6 +78,14 @@ class HttpAssistantManagement private constructor(
     override suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String): Boolean =
         (request("DELETE", listOf("api", "v1", "assistant", "conversations", session.sessionId, "always", keyHash), client = compactHttp)
             ["restart_required"] as? JsonPrimitive)?.booleanOrNull ?: false
+
+    override suspend fun standingAuthorizations() = decodeStandingAuthorizations(assistant("GET", "standing-authorizations"))
+
+    override suspend fun revokeStandingAuthorization(id: String) {
+        require(id.isNotBlank())
+        // One path segment, so a slash or a question mark in an id cannot change the route.
+        assistant("DELETE", "standing-authorizations", id)
+    }
     // The hub waits up to 12 s for the computer's self-check, and a probe runs a real one-word turn on top of it.
     override suspend fun readiness(probe: Boolean): AssistantReadiness = JsonCodec.decodeFromJsonElement(
         request("GET", listOf("api", "v1", "assistant", "readiness"), client = if (probe) runHttp else http,
@@ -99,7 +108,8 @@ class HttpAssistantManagement private constructor(
     override suspend fun launcherModels(machineId: String, launcher: String): LauncherModels? = try {
         require(machineId.isNotBlank() && launcher.isNotBlank())
         JsonCodec.decodeFromJsonElement(request("GET",
-            listOf("api", "v1", "machines", machineId, "launchers", launcher, "models")))
+            listOf("api", "v1", "machines", machineId, "launchers", launcher, "models"),
+            query = mapOf("purpose" to "assistant")))
     } catch (failure: HubFailure) {
         if (failure.status == 404) null else throw failure
     }
@@ -114,10 +124,24 @@ class HttpAssistantManagement private constructor(
             }, compactHttp)
         }
     }
-    override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
+    override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers = assistantLauncherList(machineId, refresh = false)
+    override suspend fun assistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers {
         require(machineId.isNotBlank())
         return JsonCodec.decodeFromJsonElement(request("GET", listOf("api", "v1", "machines", machineId, "launchers"),
-            query = mapOf("purpose" to "assistant")))
+            query = buildMap {
+                put("purpose", "assistant")
+                if (refresh) put("refresh", "1")
+            }))
+    }
+    override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers {
+        val shared = assistantLauncherList(machineId, refresh)
+        val own: AssistantLaunchers = try {
+            JsonCodec.decodeFromJsonElement(request("GET", listOf("api", "v1", "machines", machineId, "launchers"),
+                query = mapOf("purpose" to "assistant.main")))
+        } catch (failure: HubFailure) {
+            if (failure.status == 404) return shared else throw failure
+        }
+        return shared.copy(default = own.default ?: shared.default)
     }
     override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick): persona.core.contracts.ModelPick {
         require(session.sessionId.isNotBlank() && pick.launcher.isNotBlank())
@@ -140,6 +164,12 @@ class HttpAssistantManagement private constructor(
     override suspend fun unarchiveConversation(session: SessionKey) {
         require(session.sessionId.isNotBlank())
         assistant("POST", "conversations", session.sessionId, "unarchive", body = buildJsonObject { })
+    }
+    override suspend fun setConversationTags(session: SessionKey, tags: List<String>) {
+        require(session.sessionId.isNotBlank())
+        assistant("PUT", "conversations", session.sessionId, "tags", body = buildJsonObject {
+            put("tags", JsonArray(tags.map(::JsonPrimitive)))
+        })
     }
     override suspend fun searchChats(query: String, limit: Int): AssistantSearchAnswer? = try {
         val q = query.trim().take(200)
@@ -221,6 +251,25 @@ class HttpAssistantManagement private constructor(
         assistant("PUT", "memory", memoryName(name), body = buildJsonObject { put("content", content) })
     }
     override suspend fun deleteMemory(name: String) { assistant("DELETE", "memory", memoryName(name)) }
+    override suspend fun places(): List<SavedPlace> = assistant("GET", "places").list("places")
+    private fun placeId(id: String): String {
+        require(id.isNotBlank() && id != "." && id != ".." && '/' !in id && '\\' !in id)
+        return id
+    }
+    private fun SavedPlace.writeBody(): JsonObject = buildJsonObject {
+        put("name", name)
+        put("address", address)
+        put("latitude", latitude)
+        put("longitude", longitude)
+        put("radius_meters", radiusMeters)
+    }
+    override suspend fun savePlace(place: SavedPlace): SavedPlace {
+        val body = place.writeBody()
+        val out = if (place.id.isBlank()) assistant("POST", "places", body = body)
+        else assistant("PUT", "places", placeId(place.id), body = body)
+        return JsonCodec.decodeFromJsonElement(out.getValue("place"))
+    }
+    override suspend fun deletePlace(id: String) { assistant("DELETE", "places", placeId(id)) }
     override suspend fun skills(): AssistantSkills = try {
         val out = request("GET", listOf("api", "v1", "skills"))
         AssistantSkills((out["machine_id"] as? JsonPrimitive)?.contentOrNull.orEmpty(), (out["machine"] as? JsonPrimitive)?.contentOrNull,
@@ -230,5 +279,17 @@ class HttpAssistantManagement private constructor(
         val code = failure.code
         if ((failure.status == 409 || (failure.status ?: 0) >= 500) && !code.isNullOrBlank()) throw AssistantRefused(code, failure.message)
         throw failure
+    }
+
+    override suspend fun usageDays(days: Int): UsageDays {
+        require(days in 1..371) { "days is 1 to 371" }
+        val answer = request("GET", listOf("api", "v1", "usage", "days"), query = mapOf("days" to days.toString()))
+        return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
+    }
+
+    override suspend fun usageHours(days: Int): UsageHours {
+        require(days in 1..7) { "days is 1 to 7" }
+        val answer = request("GET", listOf("api", "v1", "usage", "hours"), query = mapOf("days" to days.toString()))
+        return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
     }
 }

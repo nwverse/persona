@@ -8,6 +8,44 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// Work-event evidence has no todo foreign key, so truncating todos cannot
+// remove it. Every fixture must start without a previous test's decisions.
+func TestTruncateForTestClearsDetachedWorkEvents(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Now().UTC()
+	if err := d.AddWorkEvent(ctx, WorkEvent{At: at, Kind: "owner_decided", Detail: map[string]any{"decision_id": "synthetic-detached"}}); err != nil {
+		t.Fatal(err)
+	}
+	if events, err := d.WorkEvents(ctx, at.Add(-time.Second)); err != nil || len(events) != 1 {
+		t.Fatalf("fixture event missing: %+v %v", events, err)
+	}
+	if err := d.TruncateForTest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if events, err := d.WorkEvents(ctx, time.Time{}); err != nil || len(events) != 0 {
+		t.Fatalf("detached events survived fixture cleanup: %+v %v", events, err)
+	}
+}
+
+func TestSessionWorkRestoresOldModelRetry(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	_, _ = d.pool.Exec(ctx, `TRUNCATE session_work, session_work_events`)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	wake := now.Add(time.Minute)
+	w := SessionWork{MachineID: "box", SessionID: "retry", TurnAt: now.Add(-40 * 24 * time.Hour), WakeAt: &wake,
+		Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient}, UpdatedAt: now}
+	if err := d.PutSessionWork(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PruneSessionWork(ctx, now.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.SessionWorks(ctx, now.Add(-48*time.Hour))
+	if err != nil || len(got) != 1 || got[0].WakeAt == nil {
+		t.Fatalf("old pending model retry lost: %+v, %v", got, err)
+	}
+}
+
 func TestSessionWork(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	_, _ = d.pool.Exec(ctx, `TRUNCATE session_work, session_work_events`)

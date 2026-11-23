@@ -31,7 +31,7 @@ func TestLiveContextSnapshotIncludesOpenTodoRoster(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("takeSnapshot exceeded 10 seconds")
 	}
-	got := s.contextSnapshot(ctx)
+	got := s.contextSnapshot(ctx, "", false)
 	if !strings.Contains(got, "开放待办：共 3 件（完整列表用 todo_list）") {
 		t.Fatalf("live context snapshot lacks open count and retrieval hint:\n%s", got)
 	}
@@ -125,8 +125,9 @@ func TestSnapshotOpenTodoRosterCapsHugeListsWithTodoListHint(t *testing.T) {
 		}
 	}
 	rows, total := s.snapshotOpenTodos(ctx, "")
-	text := fitSnapshot(prompts.Snapshot{Now: time.Now(), Zone: "UTC", OpenTodos: rows, OpenTodosTotal: total, OpenTodosLoaded: true})
-	if total != snapshotOpenTodoLimit+7 || len(rows) != snapshotOpenTodoLimit {
+	snap := scopeSnapshot(prompts.Snapshot{Now: time.Now(), Zone: "UTC", OpenTodos: rows, OpenTodosTotal: total, OpenTodosLoaded: true}, "")
+	text := fitSnapshot(snap)
+	if rows = snap.OpenTodos; total != snapshotOpenTodoLimit+7 || len(rows) != snapshotOpenTodoLimit {
 		t.Fatalf("rows/count = %d/%d", len(rows), total)
 	}
 	if !strings.Contains(text, "开放待办：共 107 件（完整列表用 todo_list）") || !strings.Contains(text, "其余用 todo_list 查") {
@@ -161,9 +162,9 @@ func TestSnapshotTaskDetailsPrioritizeOpenTodosAndKeepTwelveDetailLimit(t *testi
 	s.todos.todos[closed.ID].UpdatedAt = now
 	s.todos.mu.Unlock()
 
-	got := s.snapshotTasks(ctx, "")
-	if len(got) != 12 {
-		t.Fatalf("task details = %d, want 12", len(got))
+	got := scopeSnapshot(prompts.Snapshot{Tasks: s.snapshotTasks(ctx, "")}, "").Tasks
+	if len(got) != snapshotTaskLimit {
+		t.Fatalf("task details = %d, want %d", len(got), snapshotTaskLimit)
 	}
 	for _, task := range got {
 		if !strings.HasPrefix(task.ID, "todo_open_") {
@@ -258,5 +259,47 @@ func TestSnapshotListsAQuestionTodoOnceItsAskRecordIsPruned(t *testing.T) {
 	asked := s.snapshotAsked(ctx)
 	if len(asked) != 1 || asked[0].TodoID != live {
 		t.Fatalf("question line = %+v", asked)
+	}
+}
+
+// A failed start is stored done with its start error, but the app's To-dos count it open while it waits on the owner
+// (triageCountsAsOpen): the snapshot's open count and roster do the same and mark it, so one failing to start no
+// longer takes one off the count and puts it back when it is taken up again (#10365). One older than the triage keeps
+// it waiting, one whose row's work finished in a related to-do (superseded), and a cancelled one stay out.
+func TestSnapshotCountsAFailedStartOpenAsTheAppDoes(t *testing.T) {
+	s := newStorelessService(t, newFakeHub().withMachine())
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, id := range []string{"todo_open", "todo_failed", "todo_failed_old", "todo_failed_superseded", "todo_superseder", "todo_failed_cancelled"} {
+		title := "fixture " + id
+		if id == "todo_failed_superseded" || id == "todo_superseder" {
+			title = "Release the tablet layout"
+		}
+		if _, err := s.newTodoAs(ctx, id, title, "", "conversation", "", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.todos.mu.Lock()
+	fail := func(id string, at time.Time) {
+		row := s.todos.todos[id]
+		row.DoneAt, row.StartError, row.UpdatedAt, row.CreatedAt = &at, "没开起来", at, at
+	}
+	fail("todo_failed", now.Add(-time.Hour))
+	fail("todo_failed_old", now.Add(-72*time.Hour))
+	fail("todo_failed_superseded", now.Add(-time.Hour))
+	fail("todo_failed_cancelled", now.Add(-time.Hour))
+	s.todos.todos["todo_failed_cancelled"].CancelledAt = &now
+	finished := now.Add(-time.Minute)
+	s.todos.todos["todo_superseder"].DoneAt = &finished
+	s.todos.mu.Unlock()
+
+	rows, total := s.snapshotOpenTodos(ctx, "")
+	if total != 2 || len(rows) != 2 {
+		t.Fatalf("open count = %d (%v), want todo_open and todo_failed", total, rows)
+	}
+	text := fitSnapshot(prompts.Snapshot{Now: now, Zone: "UTC", OpenTodos: rows, OpenTodosTotal: total, OpenTodosLoaded: true})
+	if !strings.Contains(text, "开放待办：共 2 件") || !strings.Contains(text, "todo_failed「fixture todo_failed」（没开起来）") ||
+		!strings.Contains(text, "todo_open「fixture todo_open」") || strings.Contains(text, "todo_open「fixture todo_open」（没开起来）") {
+		t.Fatalf("roster:\n%s", text)
 	}
 }

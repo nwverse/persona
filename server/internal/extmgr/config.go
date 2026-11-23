@@ -38,6 +38,8 @@ type Config struct {
 	Extensions              []ExtensionConfig `json:"extensions,omitempty"`
 	LegacyExtensions        []ExtensionConfig `json:"plugins,omitempty"`
 	TrustedExtensionMarkets []string          `json:"trusted_extension_markets,omitempty"`
+	// ExtensionMarket configures outbound marketplace reads and package downloads.
+	ExtensionMarket ExtensionMarketConfig `json:"extension_market,omitempty"`
 	// ExtensionRuntime pins the shared engine; missing/unsupported enforcement blocks source activation.
 	ExtensionRuntime *denohost.Config  `json:"extension_runtime,omitempty"`
 	UIPageSessions   PageSessionLimits `json:"ui_page_sessions,omitempty"`
@@ -48,6 +50,9 @@ type Config struct {
 	// SentRecallHours is how many hours after a send it can be taken back (sent_recall.go): 0 or absent is 24, below 0
 	// is no limit; a connector may allow less.
 	SentRecallHours int `json:"sent_recall_hours,omitempty"`
+	// RemoteImages is manager.json's remote_images, read here for the avatars route's fetches (avatars.go) as the
+	// assistant reads it for /remote-image: its doh.
+	RemoteImages RemoteImagesConfig `json:"remote_images,omitempty"`
 
 	dir      string
 	warnings []string // said once when the manager starts (loadConfig)
@@ -55,10 +60,24 @@ type Config struct {
 	fileErr error
 }
 
+// ExtensionMarketConfig is the extension marketplace's outbound network configuration.
+type ExtensionMarketConfig struct {
+	// Proxy is an http:// or socks5:// URL used for catalog reads, package downloads and HTTPS git clones.
+	Proxy string `json:"proxy,omitempty"`
+	// CAFile is the path to a PEM bundle appended to the system roots for the marketplace HTTP client only.
+	CAFile string `json:"ca_file,omitempty"`
+}
+
+// RemoteImagesConfig is manager.json's remote_images: DoH is the DNS-over-HTTPS JSON API asked for a host's real
+// addresses behind a fake-IP proxy (nil: remoteimage.DefaultDoH; "": none, and such pictures are refused).
+type RemoteImagesConfig struct {
+	DoH *string `json:"doh,omitempty"`
+}
+
 // GoogleConfig is the iOS OAuth client behind Gmail's "Sign in with Google" (docs/extensions/mail.md).
 type GoogleConfig struct {
 	ClientID string `json:"client_id"`
-	// Proxy is an http:// proxy for Gmail IMAP / SMTP and Google's OAuth / Gmail API.
+	// Proxy is an http:// (CONNECT) or socks5:// proxy for Gmail IMAP / SMTP and Google's OAuth / Gmail API.
 	Proxy string `json:"proxy,omitempty"`
 }
 

@@ -35,8 +35,14 @@ struct TaskDetailSheet: View {
                 } else if let todo = todoID.flatMap({ store.todos[$0] }) {
                     content(todo)
                 } else {
-                    EmptyStateView(symbol: Theme.Icon.todo, title: String(localized: "This task is gone"), message: String(localized: "It may have been deleted."))
-                        .toolbarVisibility(.hidden, for: .navigationBar)
+                    // Its own header with the way out (#9971): pushed, the page had hidden the bar and drew none, so
+                    // nothing led back.
+                    VStack(spacing: 0) {
+                        header(title: String(localized: "Task"), line: nil) { EmptyView() } menu: { EmptyView() }
+                        Divider()
+                        EmptyStateView(symbol: Theme.Icon.todo, title: String(localized: "This task is gone"), message: String(localized: "It may have been deleted."))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             }
             // No bar from here: the agent's page says it itself (hidden under its own header, shown while its buttons
@@ -50,9 +56,11 @@ struct TaskDetailSheet: View {
         #if os(iOS)
         // A sheet has no edge-back of its own: a rightward swipe from the leading edge closes it like ✕ (#5603). The
         // gesture runs beside the page's own, so taps, scrolling and selection inside it are not taken.
+        // Not when pushed: the stack's own swipes go back there, and a drag over the whole page took the swipe back from
+        // anywhere from it (#9971).
         .simultaneousGesture(DragGesture(minimumDistance: Theme.Size.edgeBackZone / 2).onEnded { drag in
             if !pushed && Self.edgeSwipeCloses(start: drag.startLocation, translation: drag.translation) { dismiss() }
-        })
+        }, including: pushed ? .subviews : .all)
         #endif
     }
 
@@ -96,35 +104,13 @@ struct TaskDetailSheet: View {
         }
     }
 
-    /// The page's header while it has no agent's page under it: ✕ (‹ pushed), a mark, the title (and a line), ⋯.
+    /// The page's header while it has no agent's page under it (`DetailHeader`).
     private func header<Mark: View, Items: View>(title: String, line: String?, showsMenu: Bool = false,
                                                  @ViewBuilder mark: () -> Mark,
                                                  @ViewBuilder menu: () -> Items) -> some View {
-        HStack(spacing: Theme.Space.s) {
-            if pushed { closeButton }
-            mark()
-            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(title).font(Theme.Font.heading).lineLimit(2)
-                if let line { AgentMarkLine(text: line) }
-            }
-            Spacer(minLength: Theme.Space.s)
-            if showsMenu {
-                Menu { menu() } label: {
-                    ThemedIcon(Theme.Icon.more).font(Theme.Font.secondaryStrong)
-                        .scaledFrame(width: Theme.Size.well, height: Theme.Size.well)
-                }
-                .themedButton()
-                .clipShape(.circle)
-                .accessibilityLabel("More")
-            }
-            if !pushed { closeButton }
+        DetailHeader(title: title, showsMenu: showsMenu, mark: mark(), menu: menu()) {
+            if let line { AgentMarkLine(text: line) }
         }
-        .padding(.horizontal, Theme.Space.page)
-        .padding(.top, Theme.Space.l) // below the sheet's grabber
-        .padding(.bottom, Theme.Space.m)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Its own header: no bar over it (the agent's page decides its own, #2625).
-        .toolbarVisibility(.hidden, for: .navigationBar)
     }
 }
 
@@ -173,17 +159,6 @@ extension TaskDetailSheet {
                 .environment(\.hostedChat, host)
         }
     }
-
-    /// ✕ at the sheet's trailing edge; ‹ at the pushed page's leading one.
-    private var closeButton: some View {
-        Button { dismiss() } label: {
-            ThemedIcon(pushed ? Theme.Icon.back : Theme.Icon.close).font(Theme.Font.secondaryStrong)
-                .scaledFrame(width: Theme.Size.well, height: Theme.Size.well)
-        }
-        .themedButton()
-        .clipShape(.circle)
-        .accessibilityLabel(pushed ? String(localized: "Back [Task Sheets 572cf4]") : String(localized: "Close"))
-    }
 }
 
 /// The Agents mark and a line after it, tight: what says an agent is no task's on the board and in its sheet.
@@ -227,10 +202,7 @@ struct TaskBoardSheet: View {
             .navigationTitle("Tasks")
             .navigationBarTitleDisplayMode(.inline)
             .pageToolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { dismiss() } label: { ThemedIcon(Theme.Icon.close) }
-                        .accessibilityLabel("Close")
-                }
+                SheetClose(id: "tasks-board-close") { dismiss() }
             }
         }
         .confirmTaskRemoval($removing)

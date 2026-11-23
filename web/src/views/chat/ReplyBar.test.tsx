@@ -55,10 +55,10 @@ afterEach(() => {
 });
 
 /** The reply with the bar, once its code is in (it loads after the first screen). */
-async function draw({ actions = chat, itemId = "r1#0" as string | null, usage = undefined as string | undefined, usageMs = undefined as number | undefined } = {}) {
+async function draw({ actions = chat, itemId = "r1#0" as string | null, usage = undefined as string | undefined, usageMs = undefined as number | undefined, ttftMs = undefined as number | undefined } = {}) {
   await act(async () => root.render(
     <ChatActionsContext.Provider value={actions}>
-      <MessageActions text="All done." ts="2026-11-12T09:59:01Z" itemId={itemId ?? undefined} bar usage={usage} usageMs={usageMs}>
+      <MessageActions text="All done." ts="2026-11-12T09:59:01Z" itemId={itemId ?? undefined} bar usage={usage} usageMs={usageMs} ttftMs={ttftMs}>
         <p data-message>All done.</p>
       </MessageActions>
     </ChatActionsContext.Provider>,
@@ -81,27 +81,27 @@ const leave = () => act(() => void bar().parentElement!.dispatchEvent(new MouseE
 const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 describe("the reply bar", () => {
-  it("is in cindy's order: Copy message, Start a new session, More message actions, then the time", async () => {
+  it("keeps the reply actions together: Copy, Start a new session, Translate, More, then the time", async () => {
     await draw();
-    expect(labels()).toEqual(["复制消息", "开启一个新会话", "更多消息操作"]);
+    expect(labels()).toEqual(["复制消息", "开启一个新会话", "翻译", "更多消息操作"]);
     expect(bar().lastElementChild?.tagName).toBe("TIME");
   });
 
   it("says chat, not session, in a Persona conversation", async () => {
     await draw({ actions: { ...chat, assistant: true } });
-    expect(labels()).toEqual(["复制消息", "开启一个新对话", "更多消息操作"]);
+    expect(labels()).toEqual(["复制消息", "开启一个新对话", "翻译", "更多消息操作"]);
   });
 
   it("has no Start a new session where the session cannot branch, or for words that are not a line of their own", async () => {
     await draw({ actions: { ...chat, fork: undefined } });
-    expect(labels()).toEqual(["复制消息", "更多消息操作"]);
+    expect(labels()).toEqual(["复制消息", "翻译", "更多消息操作"]);
     await draw({ itemId: "line12#0" });
-    expect(labels()).toEqual(["复制消息", "更多消息操作"]);
+    expect(labels()).toEqual(["复制消息", "翻译", "更多消息操作"]);
   });
 
   it("has no ⋯ with nothing to put in it (a chat that cannot send, words not in the transcript)", async () => {
     await draw({ actions: { ...chat, canCompose: false }, itemId: null });
-    expect(labels()).toEqual(["复制消息"]);
+    expect(labels()).toEqual(["复制消息", "翻译"]);
   });
 
   it("shows on hover, stays a moment after the pointer leaves, and a quick way back keeps it", async () => {
@@ -309,6 +309,17 @@ describe("what the exchange cost, after the time", () => {
     expect(cardLines()).toEqual(["这条回复约 $0.35，按公开价格估算"]);
     await draw({ actions: { ...chat, assistant: true }, usage: usageKey({ entries: [tokens({ model: "claude-haiku-5-5", out: 10 })] }) });
     expect(usageText()).toBeNull();
+  });
+
+  it("includes TTFT in the Agent turn usage card when observed, while keeping Persona cards plain", async () => {
+    await draw({ usage: OPUS_TURN, usageMs: 65_000, ttftMs: 420 });
+    act(() => usageText()!.click());
+    expect(cardLines()).toContain("首字延迟 420 ms");
+    act(() => void document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+
+    await draw({ actions: { ...chat, assistant: true }, usage: OPUS_TURN, usageMs: 65_000, ttftMs: 420 });
+    act(() => usageText()!.click());
+    expect(cardLines()).toEqual(["这条回复约 $0.35，按公开价格估算"]);
   });
 });
 

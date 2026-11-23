@@ -5,10 +5,11 @@
 // The current pick is kept per hub (lib/manager-choice.ts), including while its roster loads after a reload.
 import { memo, useId, useState } from "react";
 import { t } from "../i18n";
+import { useAssistantIdentity } from "../lib/assistant-identity";
 import { BREATHING, connStatus, phaseTone, type ConnPhase } from "../lib/connection";
-import { chooseManager, pickedName, useChosenManager, useShownIdentity, useShownManager } from "../lib/manager-choice";
+import { chooseManager, useShownManager } from "../lib/manager-choice";
 import { useManagerBadges } from "../lib/manager-attention";
-import { loadRoster, managerError, managerOf, managerOrder, multiManager, renewCode, statusLine, switcherLine, useRoster, type InstallCode, type Manager, type Tone } from "../lib/managers";
+import { loadRoster, managerError, managerOf, managerOrder, multiManager, renewCode, statusLine, switcherLine, switcherManagers, useRoster, type InstallCode, type Manager, type Tone } from "../lib/managers";
 import { refreshReadiness } from "../lib/readiness";
 import { navigate, type Route } from "../lib/router";
 import { routeAfterSwitch } from "../lib/persona-nav";
@@ -115,7 +116,9 @@ function useAssistantList(route: Route, badges: Record<string, number>, open: bo
 
   const installed = roster ? managerOrder(roster) : [];
   const installing = roster ? roster.managers.filter((m) => m.installing) : [];
+  // the Default tag counts a hidden built-in too (it still runs); only its row is left out (#9055)
   const several = installed.length > 1;
+  const listed = roster ? switcherManagers(roster) : [];
   const row = (m: Manager): MenuItem => ({
     key: `assistant:${m.id}`,
     label: m.name,
@@ -132,7 +135,7 @@ function useAssistantList(route: Route, badges: Record<string, number>, open: bo
   });
   const items: MenuItem[] = roster
     ? [
-        ...[...installed, ...installing].map(row),
+        ...[...listed, ...installing].map(row),
         { key: "new-assistant", label: t("sidebar.new_assistant"), icon: "plus" as const, divider: true, onSelect: () => setCreating(true) },
         { key: "manage-assistants", label: t("sidebar.manage_assistants"), icon: "gear" as const, onSelect: () => navigate("/settings?tab=managers") },
       ]
@@ -176,12 +179,7 @@ const SwitcherRow = memo(function SwitcherRow({ phase, online, total, route, bad
   const statusId = useId();
   const currentRecord = managerOf(roster, current);
   const known = currentRecord?.installing ? null : currentRecord;
-  const remembered = useShownIdentity();
-  // Before the roster is read, the display-only identity includes the default. The older kept pick remains a fallback
-  // for a browser that has its name but has not written the new identity cache yet.
-  const picked = useChosenManager();
-  const kept = picked ? { id: picked, name: remembered && remembered.id === picked ? remembered.name : pickedName() ?? picked } : remembered;
-  const me: Pick<Manager, "id" | "name"> | null = known ?? (!roster ? kept : null);
+  const me = useAssistantIdentity();
   const hasAssistant = me !== null;
   const linked = phase === "online";
   const othersWaiting = Object.entries(badges).some(([id, n]) => id !== current && n > 0);

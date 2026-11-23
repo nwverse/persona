@@ -141,7 +141,7 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 	}
 	back, rang, told := s.screenBackLocked(machine, sess.SessionID, id, d != nil, time.Now())
 	// Back from a detach: its predecessor's ring is carried (announced), and whether it was the user's (told).
-	p := &pending{ix: ix, announced: rang || !back && d != nil, told: told, local: func(r proto.Resolution) error {
+	p := &pending{ix: ix, announced: rang || !back && d != nil, told: told, local: func(_ context.Context, r proto.Resolution) error {
 		if r.Dismiss {
 			return nil
 		}
@@ -167,6 +167,9 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 	s.ixMapLocked()[id] = p
 	s.fleet.mu.Unlock()
 	s.record(ix)
+	if back && !told && terminalQuestion(ix) && s.restoreRoute(ctx, ix) {
+		return // Reconnecting a terminal must not lose a question held by its supervisor.
+	}
 	if back || d == nil {
 		s.show(ix) // back: pushed before the node's connection ended (#4252); no dialog: the real card rings later (#4450)
 		if back {

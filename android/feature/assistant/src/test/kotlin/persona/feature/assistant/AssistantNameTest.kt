@@ -29,9 +29,8 @@ import persona.core.designsystem.PersonaTheme
 import java.time.Instant
 
 /**
- * #6401: with several assistants the drawer's head and its main-conversation row read the same name as the switcher —
- * the current manager's `shownName` — not the persona pack's name, so renaming an assistant can no longer show two
- * names. A single installed assistant keeps the product title (AssistantManagersShotsTest pins that design).
+ * The drawer's head reflects the selected assistant, and the main-conversation row has its own fixed label (#10545).
+ * A single installed assistant keeps the product title (AssistantManagersShotsTest pins that design).
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -51,10 +50,10 @@ class AssistantNameTest {
 
     @After fun cleanup() = AssistantManagerChoice.reset()
 
-    private fun drawer(roster: ManagerRoster?) {
+    private fun drawer(roster: () -> ManagerRoster?) {
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true) {
-                CompositionLocalProvider(LocalManagerRoster provides roster, LocalHomeDrawer provides true) {
+                CompositionLocalProvider(LocalManagerRoster provides roster(), LocalHomeDrawer provides true) {
                     Box(Modifier.width(380.dp).height(1100.dp).background(PersonaTheme.palette.background)) {
                         AssistantDrawer("", {}, ConversationGroups(main), active = null, hasMain = true,
                             onEnd = null, onMain = {}, onOpen = {}, onInfo = {}, onNew = {}, onSettings = {},
@@ -65,12 +64,22 @@ class AssistantNameTest {
         }
     }
 
-    @Test fun headAndMainRowReadTheManagersNameWithSeveralAssistants() {
+    @Test fun renamingTheCurrentManagerUpdatesTheHeadButNotTheFixedMainRow() {
         AssistantManagerChoice.choose("hub", null, "assistant")
-        drawer(multi)
-        // The compact drawer's head and the main-conversation row, both the manager's name, nowhere the pack's fallback.
-        rule.onAllNodesWithText("团子").assertCountEquals(2)
+        val roster = androidx.compose.runtime.mutableStateOf(multi)
+        drawer { roster.value }
+        rule.onAllNodesWithText("团子").assertCountEquals(1)
+        rule.onAllNodesWithText("主对话").assertCountEquals(1)
         rule.onAllNodesWithText("Persona").assertCountEquals(0)
+        rule.runOnIdle {
+            roster.value = roster.value.copy(managers = roster.value.managers.map {
+                if (it.id == "assistant") it.copy(name = "糯米") else it
+            })
+        }
+        rule.onAllNodesWithText("糯米").assertCountEquals(1)
+        rule.onAllNodesWithText("团子").assertCountEquals(0)
+        rule.onAllNodesWithText("主对话").assertCountEquals(1)
+        rule.onAllNodesWithText("糯米的主对话").assertCountEquals(0)
     }
 
     @Test fun aSingleAssistantOrAHubWithoutARosterKeepsThePersonaPacksName() {
@@ -87,10 +96,12 @@ class AssistantNameTest {
                 }
             }
         }
-        rule.onAllNodesWithText("Persona").assertCountEquals(2)
+        rule.onAllNodesWithText("Persona").assertCountEquals(1)
+        rule.onAllNodesWithText("主对话").assertCountEquals(1)
         roster = ManagerRoster(listOf(HubManager("assistant", "Personal assistant name", isDefault = true)), "assistant")
         rule.waitForIdle()
-        rule.onAllNodesWithText("Persona").assertCountEquals(2)
+        rule.onAllNodesWithText("Persona").assertCountEquals(1)
+        rule.onAllNodesWithText("主对话").assertCountEquals(1)
         rule.onAllNodesWithText("Personal assistant name").assertCountEquals(0)
     }
 }

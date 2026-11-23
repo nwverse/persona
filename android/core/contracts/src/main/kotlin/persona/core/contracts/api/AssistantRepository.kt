@@ -46,6 +46,12 @@ data class AssistantSnapshot(
      * the app. Null until the hub has made it and from an older hub.
      */
     val backgroundSupervisor: String? = null,
+    /** Whether scheduled task and background-supervisor chats belong in Recent; null from an older hub. */
+    val recentTaskChats: Boolean? = null,
+    /** Saved ordinary-conversation order; null or empty means activity time. Unknown ids are preserved on writes. */
+    val conversationOrder: List<String>? = null,
+    /** Exact tag-filter entries/order; unsupported on a hub that omitted the field, automatic when its entries are null. */
+    val conversationTagFilters: ConversationTagFilters = ConversationTagFilters.Unsupported,
 ) {
     /**
      * What each current leader's row shows (the tree's `running` and `counts.needs_you`, #4352, #6626), by conversation
@@ -63,4 +69,15 @@ object AssistantSpace {
 interface AssistantRepository {
     val assistant: StateFlow<AssistantSnapshot>
     suspend fun refresh()
+    /** Apply the setting's optimistic value or rollback to the selected snapshot, when the implementation supports it. */
+    suspend fun updateRecentTaskChats(value: Boolean?) {}
+    /** Capture the selected assistant for one optimistic write and its later outcome. */
+    suspend fun recentTaskChatsUpdater(): suspend (Boolean?) -> Unit = { updateRecentTaskChats(it) }
+    suspend fun updateConversationOrder(value: List<String>?) {}
+    suspend fun conversationOrderUpdater(): suspend (List<String>?) -> Unit = { updateConversationOrder(it) }
+    /** Apply the exact filter preference or its rollback without retargeting a manager switch. */
+    suspend fun updateConversationTagFilters(value: ConversationTagFilters) {}
+    suspend fun conversationTagFiltersUpdater(): suspend (ConversationTagFilters) -> Unit = {
+        updateConversationTagFilters(it)
+    }
 }

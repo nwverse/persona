@@ -13,6 +13,13 @@ sys.path.insert(0, str(HERE))
 import pr_watch_repair
 
 
+def real_dir(directory):
+    """directory with its symlinks resolved, as the repair copy the watcher hands the worker is (repair_repository_copy):
+    the sandbox mounts the checkout where it really is, so a path under a temp dir reached through a link is not there
+    (#9204)."""
+    return Path(directory).resolve()
+
+
 class RepairIntegrationTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="pr-watch-repair-")
@@ -154,6 +161,129 @@ class RepairIntegrationTests(unittest.TestCase):
         branch = "refs/heads/pr-watch/repair-7-" + merged["headRefOid"][:12]
         self.assertEqual(self.git("ls-remote", "origin", branch).split()[0], merged["headRefOid"])
 
+    def test_fork_continuation_checks_github_before_publishing(self):
+        pr, merged, base = self.fork_merge()
+        existing = {"number": 8, "title": "fix: continue #7 verification repair", "body": "",
+                    "headRefOid": pr["headRefOid"]}
+        created = []
+        snapshots = {7: pr, 9: dict(merged, number=9)}
+
+        def github(argv, **kwargs):
+            if "--search" in argv:
+                return [existing]
+            if "--head" in argv:
+                return []
+            created.append(json.loads(kwargs["input_text"]))
+            return {"number": 9}
+
+        original_checked = pr_watch_repair.checked
+
+        def checked(argv, **kwargs):
+            if argv[:2] == ["gh", "api"]:
+                self.assertEqual(argv[2], "repos/example/one/commits/" + pr["headRefOid"])
+                return "2026-11-16T00:00:00Z\n"
+            return original_checked(argv, **kwargs)
+
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}), \
+                patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: snapshots[number]), \
+                patch.object(pr_watch_repair, "gh_json", side_effect=github), \
+                patch.object(pr_watch_repair, "checked", side_effect=checked):
+            for state, merged_at, expected in [("OPEN", None, (8, None)),
+                                               ("MERGED", "2026-11-17T00:00:00Z", (8, None)),
+                                               ("MERGED", "2026-11-15T00:00:00Z", (9, []))]:
+                with self.subTest(state=state, merged_at=merged_at):
+                    existing.update(state=state, mergedAt=merged_at)
+                    result = pr_watch_repair.commit_and_push_repair("example/one", merged, str(self.repo), base, "failure",
+                                                                      {"profile": "commands", "commands": [["true"]]},
+                                                                      allow_merge_only=True, original_pr=pr)
+                    self.assertEqual(result, expected)
+                    if expected[0] == 8:
+                        self.assertEqual(created, [])
+                        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/pr-watch/*"), "")
+        self.assertEqual(len(created), 1)
+
+    def test_stale_open_continuation_does_not_block_repair_after_fork_push(self):
+        fork, old_repair, base = self.fork_merge()
+        self.git("checkout", "-q", "--detach", fork["headRefOid"])
+        self.git("commit", "--allow-empty", "-qm", "new fork head")
+        fork["headRefOid"] = self.git("rev-parse", "HEAD")
+        repaired_head = pr_watch_repair.update_branch_with_main("example/one", fork, str(self.repo), base)
+        repaired = dict(fork, headRefOid=repaired_head)
+        old_head = old_repair["headRefOid"]
+        existing = {"number": 8, "title": "fix: verification repair", "body": "Continuation of #7.",
+                    "state": "OPEN", "headRefOid": old_head}
+
+        def github(argv, **kwargs):
+            if "--search" in argv:
+                return [existing]
+            if "--head" in argv:
+                return []
+            return {"number": 9}
+
+        original_checked = pr_watch_repair.checked
+
+        def checked(argv, **kwargs):
+            if argv[:2] == ["gh", "api"]:
+                self.assertEqual(argv[2], "repos/example/one/compare/%s...%s" % (fork["headRefOid"], old_head))
+                return "diverged\n"
+            return original_checked(argv, **kwargs)
+
+        snapshots = {7: fork, 9: dict(repaired, number=9)}
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}), \
+                patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: snapshots[number]), \
+                patch.object(pr_watch_repair, "gh_json", side_effect=github) as api, \
+                patch.object(pr_watch_repair, "checked", side_effect=checked):
+            number, results = pr_watch_repair.commit_and_push_repair(
+                "example/one", repaired, str(self.repo), base, "failure", {"profile": "commands", "commands": [["true"]]},
+                allow_merge_only=True, original_pr=fork)
+        self.assertEqual((number, results), (9, []))
+        branch = "pr-watch/repair-7-" + repaired_head[:12]
+        self.assertIn("headRefOid", api.call_args_list[0].args[0][-1].split(","))
+        self.assertEqual(json.loads(api.call_args.kwargs["input_text"])["head"], "example:" + branch)
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/" + branch).split()[0], repaired_head)
+
+    def test_fork_continuation_retries_an_unchanged_absent_branch_without_force(self):
+        pr, merged, base = self.fork_merge()
+        snapshots = {7: pr, 8: dict(merged, number=8)}
+        created = []
+        original_checked = pr_watch_repair.checked
+        pushes = []
+
+        def reject_first_push(argv, **kwargs):
+            if argv[:2] == ["git", "push"]:
+                pushes.append(argv)
+                if len(pushes) == 1:
+                    raise pr_watch_repair.WatchError(
+                        "git failed (1): [remote rejected] missing necessary objects")
+            return original_checked(argv, **kwargs)
+
+        def github(argv, **kwargs):
+            if argv[:2] == ["pr", "list"]:
+                return []
+            created.append(json.loads(kwargs["input_text"]))
+            return {"number": 8}
+
+        common = dict(verify_config={"profile": "commands", "commands": [["true"]]},
+                      allow_merge_only=True, original_pr=pr)
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}), \
+                patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: snapshots[number]), \
+                patch.object(pr_watch_repair, "gh_json", side_effect=github), \
+                patch.object(pr_watch_repair, "checked", side_effect=reject_first_push):
+            with self.assertRaisesRegex(pr_watch_repair.WatchError, "missing necessary objects"):
+                pr_watch_repair.commit_and_push_repair("example/one", merged, str(self.repo), base, "failure", **common)
+            self.assertEqual(created, [])
+            self.assertEqual(self.git("ls-remote", "origin", "refs/heads/pr-watch/*"), "")
+            self.assertEqual(self.git("rev-parse", "HEAD"), merged["headRefOid"])
+            number, _ = pr_watch_repair.commit_and_push_repair("example/one", merged, str(self.repo), base, "failure", **common)
+        self.assertEqual(number, 8)
+        self.assertTrue(all("--force" not in argv and "--force-with-lease" not in argv for argv in pushes))
+        branch = "refs/heads/pr-watch/repair-7-" + merged["headRefOid"][:12]
+        self.assertEqual(self.git("ls-remote", "origin", branch).split()[0], merged["headRefOid"])
+        self.assertEqual(created[0]["head"], "example:pr-watch/repair-7-" + merged["headRefOid"][:12])
+
     def test_fork_continuation_refuses_a_main_rewritten_before_the_push(self):
         pr, merged, base = self.fork_merge()
         rewritten = self.push_main("rewritten", parent=self.base)
@@ -168,11 +298,23 @@ class RepairIntegrationTests(unittest.TestCase):
         gh.assert_not_called()
         self.assertEqual(self.git("ls-remote", "origin", "refs/heads/pr-watch/*"), "")
 
-    def test_a_model_repair_still_refuses_a_moved_base(self):
+    def test_an_ordinary_repair_refuses_a_forward_moving_base(self):
+        newer = self.push_main("newer")
         (self.repo / "repair.txt").write_text("repair\n")
         self.git("add", "repair.txt")
         with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
-                patch.object(pr_watch_repair, "pr_snapshot", return_value=dict(self.pr, baseRefOid="d" * 40)):
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=dict(self.pr, baseRefOid=newer)):
+            with self.assertRaisesRegex(pr_watch_repair.WatchError, "head/base moved"):
+                pr_watch_repair.commit_and_push_repair("example/one", self.pr, str(self.repo), self.main, "failure",
+                                                       {"profile": "commands", "commands": [["true"]]})
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)
+
+    def test_a_model_repair_refuses_a_rewritten_base(self):
+        rewritten = self.push_main("rewritten", parent=self.base)
+        (self.repo / "repair.txt").write_text("repair\n")
+        self.git("add", "repair.txt")
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=dict(self.pr, baseRefOid=rewritten)):
             with self.assertRaisesRegex(pr_watch_repair.WatchError, "head/base moved"):
                 pr_watch_repair.commit_and_push_repair("example/one", self.pr, str(self.repo), self.main, "failure",
                                                        {"profile": "commands", "commands": [["true"]]})
@@ -276,7 +418,7 @@ class RepairIntegrationTests(unittest.TestCase):
 
     def test_conflict_sandbox_only_exposes_conflict_files_for_writing(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = real_dir(directory)
             (root / "conflicted.txt").write_text("conflict\n")
             (root / "other.txt").write_text("keep\n")
             (root / "home").mkdir()
@@ -291,7 +433,7 @@ class RepairIntegrationTests(unittest.TestCase):
                              [argv[i:i + 3] for i in range(len(argv) - 2)])
     def test_large_mount_vector_reaches_the_worker_without_execve_overflow(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = real_dir(directory)
             (root / "conflicted.txt").write_text("conflict\n")
             for index in range(6000):
                 path = root / ("directory-%04d" % index) / "nested" / "deeper" / ("a-much-longer-file-name-%04d.txt" % index)
@@ -382,7 +524,7 @@ class RepairIntegrationTests(unittest.TestCase):
 
     def test_nested_conflict_directory_stays_writable_in_real_bwrap(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = real_dir(directory)
             nested = root / "src" / "deep"
             nested.mkdir(parents=True)
             (nested / "file.txt").write_text("base\n")

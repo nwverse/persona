@@ -92,26 +92,52 @@ func (s *Service) modelPicksLocked(ctx context.Context) bool {
 func (s *Service) modelPicksSet() (map[string]modelPick, bool) {
 	b := &s.modelPicks
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if !s.modelPicksLocked(context.Background()) {
+		b.mu.Unlock()
 		return nil, false
 	}
-	return maps.Clone(b.m), true
+	out := maps.Clone(b.m)
+	b.mu.Unlock()
+	if s.store != nil {
+		rows, _, err := s.logicalIndex()
+		if err != nil {
+			return out, false
+		}
+		for _, c := range rows {
+			if a, ok := c.Active(); ok && a.Ordinal > 1 {
+				out[c.SessionID] = modelPick{MachineID: c.MachineID, Launcher: a.Launcher, Model: a.Model, Effort: a.Effort}
+			}
+		}
+	}
+	return out, true
 }
 
-// modelPickOf is the main conversation's pick on machine; false when it has none, when sid is another conversation
-// (#6911: only the main conversation has a per-conversation pick; ones an older build kept for a leader, the
-// supervisor or another assistant conversation stay in the book but are never applied), or when the book can't be
-// read (a message then runs as if there were none: a pick that is not known can't be honored or refused).
+// modelPickOf is conversation sid's pick on machine; false when it has none (or one kept for another computer), or when
+// the book can't be read (a message then runs as if there were none: a pick that is not known can't be honored or
+// refused). Every assistant conversation may have one (#9248; #6911 had limited it to the main conversation so that a
+// pick nobody could see never ran a leader or the supervisor): what the apps show as the conversation's model_pick is
+// exactly what its next message runs on.
 func (s *Service) modelPickOf(ctx context.Context, machine, sid string) (modelPick, bool) {
+	p, ok, _ := s.readModelPick(ctx, machine, sid)
+	return p, ok
+}
+
+// readModelPick distinguishes an absent selection from an unreadable one at delivery boundaries.
+func (s *Service) readModelPick(ctx context.Context, machine, sid string) (modelPick, bool, error) {
+	if c, err := s.logicalPickConversation(ctx, machine, sid); err != nil {
+		return modelPick{}, false, err
+	} else if c != nil {
+		a, _ := c.Active()
+		return modelPick{MachineID: c.MachineID, Launcher: a.Launcher, Model: a.Model, Effort: a.Effort}, true, nil
+	}
 	b := &s.modelPicks
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.modelPicksLocked(ctx) {
-		return modelPick{}, false
+		return modelPick{}, false, i18n.Err("assistant-model_pick.err_unreadable")
 	}
 	p, ok := b.m[sid]
-	return p, ok && p.MachineID == machine && s.isMain(ctx, sid)
+	return p, ok && p.MachineID == machine, nil
 }
 
 // setModelPick keeps p as conversation sid's pick (nil: drops it) and tells the apps. Dropping a pick that isn't there
@@ -128,6 +154,9 @@ func (s *Service) setModelPick(ctx context.Context, sid string, p *modelPick) er
 // updateModelPick changes conversation sid's pick to what change makes of it (its pick, and whether it had one): the
 // next pick (nil: none) and whether anything changed. A change is saved, then the apps are told.
 func (s *Service) updateModelPick(ctx context.Context, sid string, change func(p modelPick, had bool) (*modelPick, bool)) error {
+	if handled, err := s.logicalUpdatePick(ctx, sid, change); handled {
+		return err
+	}
 	st := s.store()
 	if st == nil {
 		return i18n.Err("assistant-models.err_no_database")
@@ -147,6 +176,14 @@ func (s *Service) updateModelPick(ctx context.Context, sid string, change func(p
 	if !changed {
 		b.write.Unlock()
 		return nil
+	}
+	if p != nil && proto.IsExternalLauncher(p.Launcher) {
+		resolved, err := s.resolveExternalPick(ctx, sid, *p)
+		if err != nil {
+			b.write.Unlock()
+			return refusePick(http.StatusBadRequest, err)
+		}
+		p = &resolved
 	}
 	next := maps.Clone(cur)
 	if p == nil {
@@ -193,6 +230,12 @@ func (s *Service) evictModelPicks(ctx context.Context, picks map[string]modelPic
 // configuration › Main chat's model when the launcher is the one configured there (applyModel, later changes there
 // too), else the launcher's own default.
 func (s *Service) applyPick(ctx context.Context, p map[string]any, pick modelPick) error {
+	if proto.IsExternalLauncher(pick.Launcher) {
+		scope, ok := ctx.Value(externalPickKey{}).(externalPickScope)
+		if !ok || scope.pick != pick {
+			return i18n.Err("external-adapter.scope_required")
+		}
+	}
 	p["launcher"] = pick.Launcher
 	if e, _ := p["effort"].(string); e == "" && pick.Effort != "" {
 		p["effort"] = pick.Effort
@@ -205,11 +248,27 @@ func (s *Service) applyPick(ctx context.Context, p map[string]any, pick modelPic
 	return s.applyPickedModel(ctx, p)
 }
 
-// pickEffortSet makes effort the pick's effort of the main conversation on machine, when it has a pick: the apps set
-// it through POST …/modes (#2416), and the next message would otherwise put the pick's back. Other conversations have
-// no pick (#6911), so their modes change nothing here.
+// relayOnPick puts conversation sid's pick into params, a message the hub relays to it (supervision, notices, another
+// conversation's): it runs on the pick like one the user types, so the model the apps show is the next one's.
+// Ordinary legacy picks keep the previous fallback behavior; an external refusal never reaches the old connection.
+func (s *Service) relayOnPick(ctx context.Context, machine, sid string, params map[string]any, pick modelPick) error {
+	p := maps.Clone(params)
+	if err := s.sendOnPick(ctx, machine, sid, p, pick, s.lang(ctx)); err != nil {
+		if proto.IsExternalLauncher(pick.Launcher) {
+			return err
+		}
+		s.logf("[%s] %s: its pick can't run a relayed message: %v; it keeps what it ran last", machine, short(sid), err)
+		return nil
+	}
+	maps.Copy(params, p)
+	return nil
+}
+
+// pickEffortSet makes effort the pick's effort of conversation sid on machine, when it has a pick: the apps set it
+// through POST …/modes (#2416), and the next message would otherwise put the pick's back. A conversation without a
+// pick keeps its modes on the node, so they change nothing here.
 func (s *Service) pickEffortSet(ctx context.Context, machine, sid, effort string) {
-	if !slices.Contains(pickEfforts, effort) || !s.isMain(ctx, sid) {
+	if !slices.Contains(pickEfforts, effort) {
 		return
 	}
 	err := s.updateModelPick(ctx, sid, func(p modelPick, had bool) (*modelPick, bool) {
@@ -293,21 +352,36 @@ func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.M
 	if _, ok := s.device(ctx, machine); !ok {
 		return modelPick{}, refusePick(http.StatusNotFound, errUnknownMachine)
 	}
-	// Only the main conversation may keep a per-conversation pick (#6911): a leader, the background supervisor or
-	// another assistant conversation follows Model configuration › Main chat or what it started with, so the picker
-	// is not offered for them and the hub neither accepts nor applies one. The main one may not have run yet.
-	if cfg := s.settings(ctx); cfg.Main == "" || cfg.Main != sid || cfg.mainRouteMachine() != machine {
-		return modelPick{}, refusePick(http.StatusBadRequest, i18n.Err("assistant-model_pick.err_main_only"))
+	// Any assistant conversation may keep a pick (#9248), an Agent or an unknown id may not. The main conversation may
+	// not have run yet, so it is told by the settings and its route machine; the others by being an assistant
+	// conversation on machine.
+	if !s.keepsPickOn(ctx, sid, machine) {
+		return modelPick{}, refusePick(http.StatusBadRequest, i18n.Err("assistant-model_pick.err_not_assistant"))
 	}
-	if err := s.modelPickRefusal(ctx, machine, in.Launcher, lang, false); err != nil {
+	launcherMachine := s.logicalExecutionMachine(ctx, machine, sid)
+	external := proto.IsExternalLauncher(in.Launcher)
+	if external {
+		pick, err := s.resolveExternalPick(ctx, sid, modelPick{MachineID: machine, Launcher: in.Launcher, Model: in.Model})
+		if err != nil {
+			return modelPick{}, refusePick(http.StatusBadRequest, err)
+		}
+		in.Model = pick.Model
+	} else if err := s.modelPickRefusal(ctx, launcherMachine, in.Launcher, lang, false); err != nil {
 		return modelPick{}, err
 	}
 	var other *launcherOtherKind
-	if err := s.otherKindPick(ctx, machine, sid, in.Launcher); errors.As(err, &other) {
-		return modelPick{}, other.rpcError(lang) // Claude Code can't resume a Codex thread, nor Codex a Claude transcript
+	if err := s.otherKindPick(ctx, machine, sid, in.Launcher); err != nil {
+		if errors.As(err, &other) {
+			return modelPick{}, other.rpcError(lang) // Claude Code can't resume a Codex thread, nor Codex a Claude transcript
+		}
+		var refusal *rpc.Error
+		if errors.As(err, &refusal) && refusal.Code == CodeBadRequest {
+			return modelPick{}, err // Keep the logical refusal's non-delivery receipt.
+		}
+		return modelPick{}, refusePick(http.StatusBadRequest, err)
 	}
-	if in.Model != "" {
-		if err := s.pickedModelRefusal(ctx, machine, in.Launcher, in.Model); err != nil {
+	if in.Model != "" && !external {
+		if err := s.pickedModelRefusal(ctx, launcherMachine, in.Launcher, in.Model); err != nil {
 			return modelPick{}, refusePick(http.StatusBadRequest, err)
 		}
 	}
@@ -318,12 +392,29 @@ func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.M
 	return p, nil
 }
 
+// keepsPickOn: sid on machine is a conversation that may keep a pick: the main one on its route machine, or any other
+// assistant conversation the computer has.
+func (s *Service) keepsPickOn(ctx context.Context, sid, machine string) bool {
+	if cfg := s.settings(ctx); cfg.Main != "" && cfg.Main == sid {
+		return cfg.mainRouteMachine() == machine
+	}
+	c, ok := s.session(ctx, machine, sid)
+	return ok && c.Assistant
+}
+
 // modelPickRefusal is why launcher name can't be a conversation's pick on machine, nil when it can: it can't run the
 // assistant there, or it is not there (a Persona-managed provider out of the computer's device scope, or skipping a
 // computer with its own sign-in; any other launcher missing from the computer's list). sending: the refusal of a
 // message that would have run on it (the words say the message was not sent). As mainChatFit, a list that can't be
 // read refuses nothing.
 func (s *Service) modelPickRefusal(ctx context.Context, machine, name string, lang i18n.Lang, sending bool) error {
+	if proto.IsExternalLauncher(name) {
+		_, err := s.externalTarget(ctx, machine, name)
+		if err != nil && !sending {
+			return refusePick(http.StatusBadRequest, err)
+		}
+		return err
+	}
 	fit, refusal := s.mainChatFit(ctx, machine, name)
 	switch fit {
 	case mainChatFits:
@@ -333,8 +424,19 @@ func (s *Service) modelPickRefusal(ctx context.Context, machine, name string, la
 			return refusal
 		}
 		d, _ := s.device(ctx, machine)
-		return refusePick(http.StatusBadRequest, i18n.Err("assistant-model_pick.err_not_main_chat",
-			i18n.Args{"launcher": name, "machine": firstNonEmpty(d.Name, machine)}))
+		args := i18n.Args{"launcher": name, "machine": firstNonEmpty(d.Name, machine)}
+		if picker, err := s.pickerLaunchers(ctx, machine); err == nil {
+			if i := slices.IndexFunc(picker, func(l ConfiguredLauncher) bool { return l.Name == name }); i >= 0 {
+				args["launcher"] = launcherLabel(picker[i])
+			}
+			if fits, err := s.assistantLaunchersOf(ctx, machine, picker); err == nil {
+				if f, ok := assistantFor(fits, name); ok { // the one set up to run the assistant for it
+					args["instead"] = launcherLabel(f)
+					return refusePick(http.StatusBadRequest, i18n.Err("assistant-model_pick.err_not_main_chat_instead", args))
+				}
+			}
+		}
+		return refusePick(http.StatusBadRequest, i18n.Err("assistant-model_pick.err_not_main_chat", args))
 	}
 	if l, managed := s.managedNamed(ctx, name); managed {
 		if key := s.scopeReason(l, machine); key != "" {
@@ -353,6 +455,15 @@ func (s *Service) modelPickRefusal(ctx context.Context, machine, name string, la
 // agent (it sets its own --model, or its agent takes no model). A model its list lacks is a typed one and is kept, as a
 // message's pick (#1644); a list that can't be read refuses nothing.
 func (s *Service) pickedModelRefusal(ctx context.Context, machine, launcher, model string) error {
+	ctx = withLauncherPurpose(ctx, "assistant")
+	if proto.IsExternalLauncher(launcher) {
+		e, err := s.externalTarget(ctx, machine, launcher)
+		if err != nil {
+			return err
+		}
+		_, err = externalModel(e, model)
+		return err
+	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	res, err := s.askLauncherModels(cctx, machine, launcher, false) // the node keeps its list a while
@@ -395,11 +506,11 @@ func (s *Service) keepStartPick(ctx context.Context, sess *proto.Session, launch
 
 // storedPickRefused: err refuses a pick, or a message on its conversation's pick, and carries a code the hub words and
 // the apps act on (launcher_out_of_scope, launcher_own_service, launcher_missing, launcher_other_kind): it goes on as it
-// is (409 with the code).
+// is (409 with the code and the logical non-delivery receipt).
 func storedPickRefused(err error) bool {
 	var re *rpc.Error
 	return errors.As(err, &re) && slices.Contains([]string{proto.CodeLauncherOutOfScope, proto.CodeLauncherOwnService,
-		proto.CodeLauncherMissing, assistantwire.CodeLauncherOtherKind}, re.Code)
+		proto.CodeLauncherMissing, assistantwire.CodeLauncherOtherKind, CodeBadRequest}, re.Code)
 }
 
 // modelPickRoutes: PUT /api/v1/assistant/conversations/{id}/model {launcher, model?, effort?, machine_id?} keeps the pick
@@ -446,11 +557,6 @@ func (s *Service) modelPickRoutes() {
 		id := r.PathValue("id")
 		if !validSessionID(id) {
 			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-model_pick.err_invalid_id"))
-			return
-		}
-		// Only the main conversation has a pick (#6911): answer ok without touching an older build's stored side pick.
-		if !s.isMain(r.Context(), id) {
-			apierr.WriteJSON(w, map[string]any{"ok": true})
 			return
 		}
 		if err := s.setModelPick(r.Context(), id, nil); err != nil {

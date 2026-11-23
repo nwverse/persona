@@ -42,12 +42,19 @@ type InboxThing struct {
 	At   time.Time `json:"at,omitempty"`
 	Last string    `json:"last,omitempty"`
 	URL  string    `json:"url,omitempty"` // the thread on the web, opened in the app
+	// ThreadState is the observed lifecycle of a GitHub pull request: open, closed or merged.
+	ThreadState string `json:"thread_state,omitempty"`
 	// OpenURL is a link the system opens instead (sms:…: "Reply in Messages"), kept apart from URL.
 	OpenURL string `json:"open_url,omitempty"`
 	// ReplyTo says where a reply goes and who sees it ("Comment on example-org/example-repo#12 (anyone who can see the repo)");
 	// CanReply: Reply works for this thread.
 	ReplyTo  string `json:"reply_to,omitempty"`
 	CanReply bool   `json:"can_reply,omitempty"`
+	// Avatar is the thread's picture (docs/protocol/protocol.md "Avatars"): one of the connector's own media refs
+	// (Threads.Media; the ref its ThreadChat.Avatar has) or an https address the hub fetches, either always naming the
+	// same bytes. The other person of a private chat, a group's own; the Inbox row draws it, the initial without one.
+	// At most 2048 bytes (extwire.AvatarValueMost); a longer one, or an http:// address, is none.
+	Avatar string `json:"avatar,omitempty"`
 	// Tier is the tier the connector's rules decide (action, fyi, noise): the item gets it without a model. "" leaves it
 	// to the model (a human's ordinary comment). Why says which rule, for people ("Rule: a human @-mentions you").
 	Tier Tier   `json:"tier,omitempty"`

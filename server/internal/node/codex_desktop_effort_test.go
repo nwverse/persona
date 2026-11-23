@@ -3,10 +3,13 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -156,10 +159,20 @@ func TestCodexAppChatEffortNotConfirmedIsNotShown(t *testing.T) {
 	}
 }
 
-// Only the effort changes from the phone: a model or a permission mode is refused without reaching the App.
-func TestCodexAppChatTakesOnlyTheEffort(t *testing.T) {
-	n, id, bus, _ := appEffortChat(t)
-	for _, p := range []map[string]any{{"model": "gpt-y"}, {"permission_mode": "plan"}, {"model": "gpt-y", "effort": "ultra"}} {
+// Model and effort change in the owning window (preserving provider-prefixed slugs and reconciling incompatible
+// efforts), while permission modes and invalid model IDs are refused without reaching the App.
+func TestCodexAppChatSwitchesModelAndEffort(t *testing.T) {
+	n, id, bus, rollout := appEffortChat(t)
+	src, _ := n.codexSource(id)
+	withCodexAppModels(t, src.home, map[string]codexModelEfforts{
+		"gpt-x":          {levels: []string{"low", "high", "ultra"}, def: "low"},
+		"acme/gpt-5-pro": {levels: []string{"low", "medium"}, def: "medium"},
+		"beta/gpt-5-pro": {levels: []string{"low", "high", "xhigh"}, def: "high"},
+	})
+	if s := appChatRow(t, n); s.Capabilities.Model == nil || !*s.Capabilities.Model {
+		t.Fatalf("row should advertise model capability: %+v", s.Capabilities)
+	}
+	for _, p := range []map[string]any{{"permission_mode": "plan"}, {"model": "-bad"}} {
 		if err := modesCall(t, n, id, p); err == nil {
 			t.Fatalf("%v taken", p)
 		}
@@ -168,6 +181,41 @@ func TestCodexAppChatTakesOnlyTheEffort(t *testing.T) {
 	case p := <-bus.settings:
 		t.Fatalf("sent %v", p)
 	default:
+	}
+
+	// Switching from gpt-x (effort=high) to acme/gpt-5-pro (levels=[low, medium], def=medium) reconciles effort.
+	if err := modesCall(t, n, id, map[string]any{"model": "acme/gpt-5-pro"}); err != nil {
+		t.Fatal(err)
+	}
+	p := <-bus.settings
+	if b, _ := json.Marshal(p); string(b) != `{"conversationId":"`+appChat+`","threadSettings":{"effort":"medium","model":"acme/gpt-5-pro"}}` {
+		t.Fatalf("reconciled update = %s", b)
+	}
+	if s := appChatRow(t, n); s.Model != "acme/gpt-5-pro" || s.Effort != "medium" || !slices.Equal(s.Efforts, []string{"low", "medium"}) {
+		t.Fatalf("after model switch: model=%q effort=%q efforts=%v", s.Model, s.Effort, s.Efforts)
+	}
+
+	// Sequential SessionModelPanel two-step pick: {model} then {effort} validates against the newly picked model.
+	if err := modesCall(t, n, id, map[string]any{"model": "beta/gpt-5-pro"}); err != nil {
+		t.Fatal(err)
+	}
+	<-bus.settings
+	if err := modesCall(t, n, id, map[string]any{"effort": "xhigh"}); err != nil {
+		t.Fatalf("second step effort against picked model failed: %v", err)
+	}
+	<-bus.settings
+	if s := appChatRow(t, n); s.Model != "beta/gpt-5-pro" || s.Effort != "xhigh" {
+		t.Fatalf("after two-step pick: model=%q effort=%q", s.Model, s.Effort)
+	}
+
+	// A subsequent turn_context in the rollout supersedes the picked model even when effort is omitted.
+	at := time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
+	appendLines(t, rollout, `{"timestamp":"`+at+`","type":"turn_context","payload":{"model":"gpt-x"}}`)
+	n.mu.Lock()
+	clear(n.metas)
+	n.mu.Unlock()
+	if s := appChatRow(t, n); s.Model != "gpt-x" {
+		t.Fatalf("after later turn_context model=%q, want gpt-x", s.Model)
 	}
 }
 
@@ -267,5 +315,72 @@ read l4
 		if !strings.Contains(string(b), want) {
 			t.Errorf("missing %s in:\n%s", want, b)
 		}
+	}
+}
+
+// A home whose App's codex cannot list its models is asked again after each TTL, but the same failure is logged once
+// (#9845): again only when it changes, or after a read that worked.
+func TestCodexAppModelListFailureIsLoggedOnce(t *testing.T) {
+	home := t.TempDir()
+	defer func(f func(context.Context, string) (map[string]codexModelEfforts, error)) { readCodexAppModels = f }(readCodexAppModels)
+	var mu sync.Mutex
+	answer := func() (map[string]codexModelEfforts, error) { return nil, errors.New("codex not found in PATH") }
+	asks := 0
+	readCodexAppModels = func(context.Context, string) (map[string]codexModelEfforts, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		asks++
+		return answer()
+	}
+	t.Cleanup(func() {
+		codexAppModelLists.Lock()
+		delete(codexAppModelLists.at, home)
+		delete(codexAppModelLists.got, home)
+		delete(codexAppModelLists.failed, home)
+		codexAppModelLists.Unlock()
+	})
+	n := remoteTestNode(t)
+	var logs syncBuffer
+	n.logger = log.New(&logs, "", 0)
+	read := func(want int, answering func() (map[string]codexModelEfforts, error)) {
+		t.Helper()
+		mu.Lock()
+		answer = answering
+		mu.Unlock()
+		codexAppModelLists.Lock()
+		if _, ok := codexAppModelLists.at[home]; ok {
+			codexAppModelLists.at[home] = time.Now().Add(-codexAppModelsTTL) // its TTL is over
+		}
+		codexAppModelLists.Unlock()
+		n.codexAppEfforts(home, "gpt-x")
+		waitFor(t, "the App's codex asked", func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			codexAppModelLists.Lock()
+			defer codexAppModelLists.Unlock()
+			at, ok := codexAppModelLists.at[home]
+			return asks == want && ok && time.Since(at) < codexAppModelsTTL
+		})
+	}
+	failing := func(msg string) func() (map[string]codexModelEfforts, error) {
+		return func() (map[string]codexModelEfforts, error) { return nil, errors.New(msg) }
+	}
+	logged := func() int { return strings.Count(logs.String(), "its chats offer every effort level") }
+	read(1, failing("codex not found in PATH"))
+	read(2, failing("codex not found in PATH"))
+	read(3, failing("codex not found in PATH"))
+	if got := logged(); got != 1 {
+		t.Fatalf("the same failure three times was logged %d times:\n%s", got, logs.String())
+	}
+	read(4, failing("timed out"))
+	if got := logged(); got != 2 {
+		t.Fatalf("a different failure was not logged (%d lines):\n%s", got, logs.String())
+	}
+	read(5, func() (map[string]codexModelEfforts, error) {
+		return map[string]codexModelEfforts{"gpt-x": {levels: []string{"low"}}}, nil
+	})
+	read(6, failing("timed out"))
+	if got := logged(); got != 3 {
+		t.Fatalf("a failure after a read that worked was not logged (%d lines):\n%s", got, logs.String())
 	}
 }

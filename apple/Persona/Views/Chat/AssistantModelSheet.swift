@@ -46,8 +46,15 @@ nonisolated enum AssistantModelChoice {
         let defaultModel = def?.model?.emptyAsNil
             ?? (launcher == provider ? model : nil)
         return Effective(launcher: provider, model: defaultModel,
-                         effort: effort ?? def?.effort?.emptyAsNil,
+                         effort: def?.effort?.emptyAsNil ?? effort,
                          source: response == nil ? .running : .defaultValue)
+    }
+
+    /// The shared catalog owns eligibility; only the main-purpose default is overlaid.
+    static func mainCatalog(shared: APIClient.LaunchersResponse, own: APIClient.LaunchersResponse) -> APIClient.LaunchersResponse {
+        var result = shared
+        result.default = own.default ?? shared.default
+        return result
     }
 
     /// The model id ticked for `launcher` in the sheet: nil when the setup runs on another launcher, "" on its Default
@@ -103,7 +110,7 @@ nonisolated enum AssistantModelChoice {
 
     /// The configured-model row for a launcher with no readable catalog or no models of its own.
     static func configuredFallback(_ launcher: Launcher, models: [AgentModel], locked: String?) -> ConfiguredFallback? {
-        guard models.isEmpty, let id = launcher.model?.emptyAsNil else { return nil }
+        guard models.isEmpty, let id = launcher.model?.emptyAsNil, id != "默认" else { return nil } // i18n-ignore: legacy wire value, never displayed
         return ConfiguredFallback(id: id, sendsDefault: locked != nil)
     }
 
@@ -166,8 +173,8 @@ final class AssistantModelPanelModel {
         var drop: (_ key: SessionKey) async -> Bool
         static var live: Deps {
             Deps(
-                launchers: { try await AppModel.shared.assistantLaunchers($0, refresh: $1) },
-                models: { try await AppModel.shared.api($0.group)?.launcherModels(machine: $0.id, launcher: $1, refresh: $2)
+                launchers: { try await AppModel.shared.assistantLaunchers($0, refresh: $1, main: true) },
+                models: { try await AppModel.shared.api($0.group)?.launcherModels(machine: $0.id, launcher: $1, refresh: $2, purpose: "assistant")
                     ?? LauncherModels(agent: "", models: [], locked: nil, machine: nil) },
                 keep: { await AppModel.shared.keepConversationModel($0, pick: $1) },
                 drop: { await AppModel.shared.dropConversationModel($0) })
@@ -338,15 +345,8 @@ struct AssistantModelSheet: View {
                 if !panel.unavailable.isEmpty {
                     Section(String(localized: "Unavailable here")) {
                         ForEach(panel.unavailable) { item in
-                            HStack(alignment: .top, spacing: Theme.Space.m) {
-                                ThemedIcon(Theme.Icon.locked).foregroundStyle(.secondary)
-                                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                                    Text(item.displayName?.isEmpty == false ? item.displayName! : item.name)
-                                        .font(Theme.Font.heading).foregroundStyle(.secondary).lineLimit(1)
-                                    Text(item.reason).font(Theme.Font.label).foregroundStyle(.tertiary)
-                                }
-                            }
-                            .accessibilityIdentifier("assistantModel.unavailable.\(item.name)")
+                            UnavailableLauncherRow(item: item)
+                                .accessibilityIdentifier("assistantModel.unavailable.\(item.name)")
                         }
                     }
                 }
@@ -357,14 +357,12 @@ struct AssistantModelSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(String(localized: "Close")) { dismiss() }.lineLimit(1)
-                }
+                SheetClose { dismiss() }
             }
             .refreshable { await panel.load(refresh: true) }
             .task { await panel.load() }
             .sheet(item: Binding(get: { typingFor.map { TypingTarget(launcher: $0) } }, set: { typingFor = $0?.launcher })) { target in
-                TypedModelSheet(machine: panel.machine, launcher: target.launcher,
+                TypedModelSheet(machine: panel.machine, launcher: target.launcher, purpose: "assistant",
                                 note: String(localized: "Used for this conversation's next messages, on every device.")) { id in
                     Task {
                         if await panel.choose(launcher: target.launcher, model: id, session: session) { dismiss() }
@@ -397,7 +395,7 @@ struct AssistantModelSheet: View {
                 // A real Default row comes from the catalog. Add one only when the current setup has no such row.
                 if selected != nil, configured == nil, !models.contains(where: { $0.isDefault }) {
                     row(launcher: launcher.name, modelID: "", title: String(localized: "Default [Prompt Composer 844b8c]"),
-                        detail: launcher.model, ticked: selected == "", locked: nil)
+                        detail: launcher.model == "默认" ? nil : launcher.model, ticked: selected == "", locked: nil) // i18n-ignore: legacy wire value, never displayed
                 }
                 if let locked {
                     Label(locked, systemImage: Theme.Icon.locked)
@@ -445,13 +443,14 @@ struct AssistantModelSheet: View {
                 }
             }
         } header: {
-            Text(launcher.displayName?.emptyAsNil ?? launcher.name)
+            Text(launcher.title)
         }
     }
 
     private func row(launcher: String, modelID: String, title: String, detail: String?, ticked: Bool,
                      locked: String?, custom: Bool = false) -> some View {
-        Button {
+        let second = launcherModelRowDetail(owner: launcher, detail: detail)
+        return Button {
             Haptics.tap()
             Task {
                 if await panel.choose(launcher: launcher, model: modelID.isEmpty ? nil : modelID, session: session) {
@@ -463,8 +462,8 @@ struct AssistantModelSheet: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(title).font(custom ? Theme.Font.heading.monospaced() : Theme.Font.heading)
                         .foregroundStyle(.primary).lineLimit(1)
-                    if let detail {
-                        Text(detail).font(Theme.Font.label.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                    if let second {
+                        Text(second).font(Theme.Font.label.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 Spacer(minLength: Theme.Space.s)

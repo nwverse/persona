@@ -5,6 +5,7 @@
 import { matches } from "./launcher-models";
 import { cleanModelId, validModelId } from "./model-id";
 import { isCurrentModel } from "./model-switch";
+import { familyBlocks, type PanelBlock } from "./model-families";
 
 /** The catalog's reference price in USD per one million tokens; absent means unknown, not free. */
 export interface PanelPrice {
@@ -25,8 +26,14 @@ export interface PanelModel {
   description?: string;
   /** The concrete model an alias stands for under this provider. */
   resolved?: string;
+  /** The other spellings the hub folded into this row (lib/launcher-models.ts AgentModel.aliases): a saved setup naming
+   *  one is this row's, and a search finds it by them. */
+  aliases?: string[];
   /** Thinking efforts it takes, weakest first (lib/session-actions.ts EFFORTS / CODEX_EFFORTS ids); empty: no effort control. */
   efforts: string[];
+  /** The running session cannot change effort here; keep its actual value visible and explain why. */
+  effortUnavailable?: string;
+  effortNote?: string;
   /** The effort the model runs with when none is set: the slider marks it "Recommended". */
   defaultEffort?: string;
   /** A Fast (priority) speed exists for this model on this engine. */
@@ -37,9 +44,23 @@ export interface PanelModel {
   price?: PanelPrice;
   /** A model ID typed before for this provider (#1644): listed after the provider's own models, can be forgotten. */
   custom?: boolean;
+  /** The thinking levels folded into this row (#12315, foldVariants): Antigravity lists one model per level
+   *  (`<base>-<level>`, named "<Name> (<Level>)"). The row stands for one of them (`id`, its level `defaultEffort`) and
+   *  its effort control picks another level's ID; `efforts` are the levels. */
+  variants?: EffortVariants;
   /** It stands for whatever its provider runs when no model is given (New Agent's "Default" row), not a model of its
    *  own: no other provider's row is the same model. */
   providerDefault?: boolean;
+}
+
+/** A model's levels listed as models of their own (PanelModel.variants). */
+export interface EffortVariants {
+  /** The ID without its level: what the row's key and its override go by, whichever level it stands for. */
+  base: string;
+  /** Each level and the model ID that runs it, weakest first. */
+  levels: { effort: string; id: string }[];
+  /** The level a pick takes when none was chosen: Medium where listed, else the one the list names first. */
+  first: string;
 }
 
 /** One provider: a launcher (rc-file alias, PATH wrapper, built-in claude, Persona-managed) or a hosted provider. */
@@ -53,6 +74,11 @@ export interface PanelProvider {
   /** What the engine is called when the app has no name of its own for it: the session's own provider's label ("Grok",
    *  the row's agent_label); its mark and its name on the rows and in the flyout. */
   engineLabel?: string;
+  /** Known launcher default for its collapsed summary; never inferred from list order. */
+  defaultModel?: string;
+  isDefault?: boolean;
+  /** Existing launcher check result; descriptive only, never changes selection policy. */
+  status?: string;
   /** null: not read yet. */
   models: PanelModel[] | null;
   loading?: boolean;
@@ -83,6 +109,8 @@ export interface PanelConfig {
 export interface PanelState {
   /** What runs now; null while unknown. */
   current: PanelConfig | null;
+  /** The Model settings effort is display only for all picks or for AGY picks. */
+  currentEffortDisplayOnly?: "all" | "agy";
   /** A switch accepted for the next message (#5035, #5033). */
   pending?: PanelConfig | null;
   /** Providers whose models switch without a restart: the Recommended group is the current model, then their other models. */
@@ -181,8 +209,8 @@ export function resetOverride(all: PanelOverrides, provider: string, model: stri
 
 /** Whether `model` of `provider` runs now: the row named exactly what runs when the list has one (so a typed ID and the
  *  default entry that stands for the same model are never both lit, as the pill names that one), else a row whose
- *  concrete model it is (lib/model-switch.ts isCurrentModel: an alias standing for it). */
-function runsNow(provider: Pick<PanelProvider, "id" | "models">, model: Pick<PanelModel, "id" | "resolved">, current: PanelConfig | null | undefined): boolean {
+ *  concrete model it is (lib/model-switch.ts isCurrentModel: an alias standing for it, or one folded into it). */
+function runsNow(provider: Pick<PanelProvider, "id" | "models">, model: Pick<PanelModel, "id" | "resolved" | "aliases">, current: PanelConfig | null | undefined): boolean {
   if (!current || current.provider !== provider.id) return false;
   const want = current.model.toLowerCase();
   if (provider.models?.some((m) => m.id.toLowerCase() === want)) return model.id.toLowerCase() === want;
@@ -192,15 +220,18 @@ function runsNow(provider: Pick<PanelProvider, "id" | "models">, model: Pick<Pan
 const takes = (model: Pick<PanelModel, "efforts">, effort: string | undefined) => (effort && model.efforts.includes(effort) ? effort : undefined);
 
 /**
- * The setup a model's row stands for, and what picking it sends. The model that runs now shows what runs (its effort,
- * then its override's, except for an Agent not started yet, whose form holds the whole setup; its Fast as it runs). Any
- * other: its override's effort, else the effort running now when this model takes it, else none (the model's own
- * default); Fast only from its override, and only where the model has it.
+ * The setup a model's row stands for, and what picking it sends. The model that runs now shows what runs, never a
+ * browser override for an unknown session value. An Agent not started yet keeps only supported form values. Any
+ * other: the effort last chosen for it here (its override), else none: the model's own default (#12315; the effort
+ * running now no longer carries over to another model, so a model always opens at what it was left at). New agy starts
+ * use their native effort unless the user picks one. Fast comes from the override when offered.
  */
-export function rowSetup(provider: Pick<PanelProvider, "id" | "models">, model: PanelModel, state: Pick<PanelState, "current" | "starting">, override?: PanelOverride): PanelConfig {
+export function rowSetup(provider: Pick<PanelProvider, "id" | "models"> & { engine?: string }, model: PanelModel, state: Pick<PanelState, "current" | "currentEffortDisplayOnly" | "starting">, override?: PanelOverride): PanelConfig {
   const current = state.current;
   const now = runsNow(provider, model, current);
-  const effort = now ? (takes(model, current?.effort) ?? (state.starting ? undefined : takes(model, override?.effort))) : (takes(model, override?.effort) ?? takes(model, current?.effort));
+  const displayOnly = state.currentEffortDisplayOnly === "all" || (state.currentEffortDisplayOnly === "agy" && provider.engine === "agy");
+  const currentEffort = displayOnly ? undefined : current?.effort;
+  const effort = now ? (state.starting ? takes(model, currentEffort) : currentEffort) : takes(model, override?.effort);
   // what runs is what runs: an unset Fast on the running model is Standard, not "unknown, take the override"
   const fast = model.fast ? (now ? current?.fast : override?.fast) : undefined;
   return cleanSetup({ provider: provider.id, model: model.id, effort, fast });
@@ -238,9 +269,100 @@ export function rowCustomizable(row: Pick<PanelRow, "kind" | "current" | "provid
   return !rowBlock(row.provider, state);
 }
 
-/** The search (every word, any case): the model's name, id, the model it stands for, its description, the provider's name. */
-export function matchesQuery(provider: Pick<PanelProvider, "name">, model: Pick<PanelModel, "id" | "name" | "resolved" | "description">, query: string): boolean {
-  return matches([model.name, model.id, model.resolved, model.description, provider.name], query);
+/** The search (every word, any case): the model's name, id, the model it stands for, the spellings folded into it, its
+ *  description, the provider's name. */
+export function matchesQuery(provider: Pick<PanelProvider, "name">, model: Pick<PanelModel, "id" | "name" | "resolved" | "aliases" | "description">, query: string): boolean {
+  return matches([model.name, model.id, model.resolved, ...(model.aliases ?? []), model.description, provider.name], query);
+}
+
+// ── thinking levels listed as models ─────────────────────────────────────────
+
+/** The ID a model would have without its level, when it is one level of a model listed per level (Antigravity's
+ *  `gemini-4-neon-high`: its default effort is the ID's last word); undefined for any other model. */
+function variantBase(m: PanelModel): string | undefined {
+  const level = m.defaultEffort;
+  if (!level || m.custom || m.providerDefault || m.variants || !m.id.endsWith(`-${level}`)) return undefined;
+  return m.id.slice(0, -(level.length + 1)) || undefined;
+}
+
+/** A list's models in groups, in list order: the levels of one model together (where its first level is listed), every
+ *  other model alone. Only levels the node told apart (`default_effort` naming the ID's suffix, server agyModelList)
+ *  group; a model with one level listed stays as it is. */
+export function variantGroups(models: PanelModel[]): PanelModel[][] {
+  const out: PanelModel[][] = [];
+  const byBase = new Map<string, PanelModel[]>();
+  for (const m of models) {
+    const base = variantBase(m);
+    const group = base === undefined ? undefined : byBase.get(base);
+    if (group) {
+      group.push(m);
+      continue;
+    }
+    const own = [m];
+    if (base !== undefined) byBase.set(base, own);
+    out.push(own);
+  }
+  return out;
+}
+
+/** How many models a list has, each model's levels counted once (a launcher's "N models"). */
+export const modelCount = (models: PanelModel[]) => variantGroups(models.filter((m) => !m.providerDefault)).length;
+
+const levelRank = (effort: string) => {
+  const i = EFFORT_TONES.indexOf(effort);
+  return i < 0 ? EFFORT_TONES.length : i;
+};
+
+/** The level a model listed per level runs at when none was chosen: Medium where it has one (agy names no default),
+ *  else the one its list names first. */
+const defaultLevel = (levels: PanelModel[]) => (levels.some((m) => m.defaultEffort === "medium") ? "medium" : (levels[0].defaultEffort ?? ""));
+
+/** One row's model for the levels of one model (two or more, from variantGroups), standing for `chosen`: the model's
+ *  name without the level ("Gemini 4 Neon (High)" → "Gemini 4 Neon"; the base ID when the names disagree), the levels
+ *  as its efforts, and `chosen`'s level as its own. */
+export function foldVariants(levels: PanelModel[], chosen: PanelModel): PanelModel {
+  const base = variantBase(levels[0]) ?? chosen.id;
+  const names = new Set(levels.map((m) => m.name.replace(/\s*\([^()]*\)\s*$/, "")));
+  const name = names.size === 1 ? [...names][0] || base : base;
+  const sorted = levels.map((m) => ({ effort: m.defaultEffort ?? "", id: m.id })).sort((a, b) => levelRank(a.effort) - levelRank(b.effort));
+  return { ...chosen, name, efforts: sorted.map((l) => l.effort), variants: { base, levels: sorted, first: defaultLevel(levels) } };
+}
+
+/** The level a model's folded row stands for: the one that runs now, else the one a switch waits for, else the one
+ *  last chosen for it (`override.effort`), else its default level (defaultLevel). */
+function chosenLevel(provider: PanelProvider, levels: PanelModel[], state: Pick<PanelState, "current" | "pending">, override: PanelOverride | undefined): PanelModel {
+  const now = levels.find((m) => runsNow(provider, m, state.current));
+  const pending = state.pending;
+  const waiting = pending && pending.provider === provider.id ? levels.find((m) => isCurrentModel(m, pending.model)) : undefined;
+  const picked = override?.effort ? levels.find((m) => m.defaultEffort === override.effort) : undefined;
+  const first = defaultLevel(levels);
+  return now ?? waiting ?? picked ?? levels.find((m) => m.defaultEffort === first) ?? levels[0];
+}
+
+/** A provider's model rows (the search applied): one row per model, a model's levels folded into one (#12315). A
+ *  folded row's pick sends its level's own ID and no effort beside it (the ID is the level, as an Agent's pick of one
+ *  already does, lib/session-panel.ts pickPlan); the model that runs now keeps what runs. */
+function modelRows(p: PanelProvider, models: PanelModel[], state: PanelState, overrides: PanelOverrides): PanelRow[] {
+  return variantGroups(models).map((levels) => {
+    if (levels.length === 1) {
+      const m = levels[0];
+      const override = overrides[overrideKey(p.id, m.id)];
+      return { key: `model:${p.id}\n${m.id}`, kind: "model" as const, provider: p, model: m, setup: rowSetup(p, m, state, override), current: runsNow(p, m, state.current), customized: Boolean(override) };
+    }
+    const base = variantBase(levels[0])!;
+    const override = overrides[overrideKey(p.id, base)];
+    const chosen = chosenLevel(p, levels, state, override);
+    const model = foldVariants(levels, chosen);
+    const setup = rowSetup(p, { ...chosen, efforts: [] }, state, override);
+    return { key: `model:${p.id}\n${base}`, kind: "model" as const, provider: p, model, setup, current: runsNow(p, chosen, state.current), customized: Boolean(override) };
+  });
+}
+
+/** What a folded row's effort control applies for `effort`: that level's model, nothing else (Fast as the row has it). */
+export function levelSetup(row: Pick<PanelRow, "provider" | "model" | "setup">, effort: string): PanelConfig | undefined {
+  const level = row.model.variants?.levels.find((l) => l.effort === effort);
+  if (!level) return undefined;
+  return cleanSetup({ provider: row.provider.id, model: level.id, fast: row.setup.fast });
 }
 
 /** What the list shows: one rail cell's view. A search shows "all" whatever cell is on. */
@@ -277,6 +399,8 @@ export interface PanelRow {
   customized: boolean;
   /** A preset row's preset (its name is the row's name). */
   preset?: PanelPreset;
+  /** The newest version of a family that has older ones listed (lib/model-families.ts): the row says "Latest". */
+  latest?: boolean;
 }
 
 export interface PanelSection {
@@ -288,11 +412,16 @@ export interface PanelSection {
   loading?: boolean;
   /** The All view shows only the group's first rows (ALL_GROUP_MAX): how many it has in all, for its "Show all N". */
   total?: number;
+  /** The rows by model family (lib/model-families.ts), when a family has two rows or more: drawn in place of `rows`,
+   *  which then holds the same rows (the ones shown) in the same order. */
+  blocks?: PanelBlock[];
 }
 
 /** A provider group's rows in the All view, not searching, when several providers are listed: the rest are a click away
  *  in the provider's own view, so one long list does not bury the providers below it. */
 export const ALL_GROUP_MAX = 8;
+
+const NONE_OPEN: ReadonlySet<string> = new Set();
 
 export interface SectionsInput {
   providers: PanelProvider[];
@@ -304,6 +433,10 @@ export interface SectionsInput {
   overrides: PanelOverrides;
   /** Ready-made setups listed after the favorites (New Agent's presets). */
   presets?: PanelPreset[];
+  /** Families the user unfolded (PanelBlock keys); the others keep their older versions folded. */
+  openFamilies?: ReadonlySet<string>;
+  /** Flat launcher search keeps the real session setup without a Recommended projection. */
+  promote?: boolean;
 }
 
 /** A saved copy's model among the providers: undefined when its provider is gone, or its list is read and lacks it
@@ -326,9 +459,19 @@ function resolveCopy(providers: PanelProvider[], copy: PanelConfig): { provider:
  * that runs now) with its `total`. A provider's view: its favorites and presets, then its models. Favorites: the
  * favorites only. Recent: the last setups applied. A search searches every provider, and a typed model ID none of whose
  * models answers is offered as "Use “…”" in the group of each provider that takes a pick here and takes typed IDs.
+ * A provider group (and Recommended, after the model that runs) keeps each model family together, newest first, with
+ * the older versions folded unless unfolded (`openFamilies`), searched for or in use (lib/model-families.ts); the
+ * ALL_GROUP_MAX cut counts the rows shown.
  */
-export function panelSections({ providers, state, view: chosen, query, favorites, recent, overrides, presets }: SectionsInput): PanelSection[] {
+export function panelSections({ providers, state, view: chosen, query, favorites, recent, overrides, presets, openFamilies, promote = true }: SectionsInput): PanelSection[] {
   const q = query.trim();
+  const open = openFamilies ?? NONE_OPEN;
+  // an older version the user is using never folds away: the one that runs or waits, a favorite's, a recent setup's,
+  // one customized
+  const used = (c: PanelConfig | null | undefined, row: PanelRow) => Boolean(c) && c?.provider === row.provider.id && isCurrentModel(row.model, c.model);
+  const listed = (id: string) => providers.find((p) => p.id === id)?.models;
+  const keep = (row: PanelRow) =>
+    row.current || row.customized || used(state.pending, row) || favorites.some((f) => used(f, row)) || recent.slice(0, RECENT_MAX).some((c) => used(c, row));
   const view: PanelView = q ? { kind: "all" } : chosen;
   const inView = (p: PanelProvider) => view.kind !== "provider" || p.id === view.provider;
   const out: PanelSection[] = [];
@@ -370,19 +513,19 @@ export function panelSections({ providers, state, view: chosen, query, favorites
   const groups = new Map<string, PanelRow[]>();
   for (const p of shown) {
     if (p.models === null) continue;
-    groups.set(p.id, p.models.filter((m) => matchesQuery(p, m, q)).map((m) => {
-      const override = overrides[overrideKey(p.id, m.id)];
-      return { key: `model:${p.id}\n${m.id}`, kind: "model" as const, provider: p, model: m, setup: rowSetup(p, m, state, override), current: runsNow(p, m, state.current), customized: Boolean(override) };
-    }));
+    groups.set(p.id, modelRows(p, p.models.filter((m) => matchesQuery(p, m, q)), state, overrides));
   }
 
-  if (view.kind === "all" && !state.starting) {
+  if (view.kind === "all" && !state.starting && promote) {
     const promoted: PanelRow[] = [];
     const now = state.current ? groups.get(state.current.provider)?.find((r) => r.current) : undefined;
     if (now) promoted.push(now);
     for (const p of shown) if (state.recommended.includes(p.id)) for (const r of groups.get(p.id) ?? []) if (r !== now) promoted.push(r);
     if (promoted.length) {
-      out.push({ key: "recommended", kind: "recommended", rows: promoted });
+      // the model that runs stays first; the rest keep their families together
+      const blocks = familyBlocks(now ? promoted.slice(1) : promoted, { fold: !q, keep, open, scope: "recommended", listed });
+      if (blocks && now) blocks.unshift({ key: "recommended\nnow", rows: [now], older: 0 });
+      out.push({ key: "recommended", kind: "recommended", rows: blocks ? blocks.flatMap((b) => b.rows) : promoted, ...(blocks ? { blocks } : {}) });
       const moved = new Set(promoted);
       for (const [id, rows] of groups) groups.set(id, rows.filter((r) => !moved.has(r)));
     }
@@ -408,9 +551,15 @@ export function panelSections({ providers, state, view: chosen, query, favorites
     }
     // a list on its way under rows already shown (the running model's while its list is read): the spinner too
     if (!rows.length) continue;
+    // families together, older versions folded (not under a search)
+    const key = `provider:${p.id}`;
+    const blocks = familyBlocks(rows, { fold: !q, keep, open, scope: key, listed });
+    const shownRows = blocks ? blocks.flatMap((b) => b.rows) : rows;
     // the model that runs now stays, wherever it is in the list
-    const cut = capped && rows.length > ALL_GROUP_MAX ? rows.filter((r, i) => i < ALL_GROUP_MAX || r.current) : rows;
-    out.push({ key: `provider:${p.id}`, kind: "provider", provider: p, rows: cut, ...(p.loading ? { loading: true } : {}), ...(cut.length < rows.length ? { total: rows.length } : {}) });
+    const cut = capped && shownRows.length > ALL_GROUP_MAX ? shownRows.filter((r, i) => i < ALL_GROUP_MAX || r.current) : shownRows;
+    const left = cut.length < shownRows.length ? new Set(cut) : undefined;
+    const cutBlocks = blocks && left ? blocks.map((b) => ({ ...b, rows: b.rows.filter((r) => left.has(r)) })).filter((b) => b.rows.length) : blocks;
+    out.push({ key, kind: "provider", provider: p, rows: cut, ...(cutBlocks ? { blocks: cutBlocks } : {}), ...(p.loading ? { loading: true } : {}), ...(left ? { total: rows.length } : {}) });
   }
   return out;
 }

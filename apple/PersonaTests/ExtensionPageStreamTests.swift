@@ -68,7 +68,7 @@ import PersonaWire
         #if os(macOS)
         #expect(ExtensionPageStream.uiVersion == 5)
         #else
-        #expect(ExtensionPageStream.uiVersion == 6)
+        #expect(ExtensionPageStream.uiVersion == 8)
         #endif
         #expect(socket.request?["context"]?["ui_version"] == .number("\(ExtensionPageStream.uiVersion)"))
         #expect(context.uiVersion == 3 && ExtensionUIContext.here().uiVersion == 3)

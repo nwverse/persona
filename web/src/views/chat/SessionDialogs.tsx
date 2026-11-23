@@ -1,16 +1,14 @@
 // The chat's ⋯ menu dialogs: session info, rename (the agent / its space), delete, close, and the header's permission mode.
-import { useEffect, useRef, useState } from "react";
-import { api, enc, errorText, HubTimeoutError, pastHub, sessionPath } from "../../lib/api";
-import { sessionCan, sessionTitle, shortPath } from "../../lib/format";
+// Session info and Rename / Rename space / Delete load as chunks of their own, with their worktree cleanup beside them;
+// what stays here is what the first screen uses.
+import { useRef } from "react";
+import { api, errorText, HubTimeoutError, pastHub, sessionPath } from "../../lib/api";
 import { BYPASS_MODE, renameBody } from "../../lib/session-actions";
 import { bypassRestarts } from "../../lib/header-mode";
 import { sessionLauncher } from "../../lib/model-switch";
-import { href, navigate } from "../../lib/router";
-import { dropSession, getSession, refresh, refreshAssistant, upsertSession } from "../../lib/store";
+import { getSession, refreshAssistant, upsertSession } from "../../lib/store";
 import type { Session } from "../../lib/types";
-import { Button, cx, Dialog, Switch, toast } from "../../ui/atoms";
-import { removeAgentWorktree, worktreeLoss, worktreeStatus, type WorktreeStatus } from "../../lib/worktree";
-import { Icon } from "../../ui/icons";
+import { toast } from "../../ui/atoms";
 import { t } from "../../i18n";
 import { lazyDialog } from "../LazyOverlay";
 
@@ -18,7 +16,18 @@ import { lazyDialog } from "../LazyOverlay";
 // its fetch and rows are not the first screen's (#8261). The same component as before for the header that draws it.
 export const SessionInfoDialog = lazyDialog(() => import("./SessionInfoDialog").then((m) => m.SessionInfoDialog));
 
-// "Rename": the herdr tab and the session's name (Claude's /rename), each only when changed (iOS RenameSessionAlert).
+// Rename, Rename space and Delete (SessionMenuDialogs.tsx): one chunk of their own, loaded on the first open or, sooner,
+// when a menu that offers one opens (preloadSessionDialogs: the chat's ⋯ menu, an Agent row's, a space's), so the click
+// draws the dialog at once. Off the first screen (#10382, docs/web/web.md "First screen").
+const loadMenuDialogs = () => import("./SessionMenuDialogs");
+export const RenameDialog = lazyDialog(() => loadMenuDialogs().then((m) => m.RenameDialog));
+export const RenameSpaceDialog = lazyDialog(() => loadMenuDialogs().then((m) => m.RenameSpaceDialog));
+export const DeleteSessionDialog = lazyDialog(() => loadMenuDialogs().then((m) => m.DeleteSessionDialog));
+/** Starts loading the three, once (a failed load is asked again by the next menu or open). */
+export function preloadSessionDialogs(): void {
+  for (const d of [RenameDialog, RenameSpaceDialog, DeleteSessionDialog]) void d.preload().catch(() => {});
+}
+
 /** Saves a new title from the header's in-place rename (#5421, cindy's double-click on the title, which updates at once and
  *  puts the old title back if the save fails): only the title, the tab keeps its name. False when nothing changed or it
  *  failed (the error toasted). */
@@ -38,139 +47,6 @@ export async function renameTitle(session: Session, title: string): Promise<bool
     toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
     return false;
   }
-}
-
-export function RenameDialog({ session, open, onClose }: { session: Session; open: boolean; onClose: () => void }) {
-  const [tab, setTab] = useState("");
-  const [title, setTitle] = useState("");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (!open) return;
-    setTab(session.slot_name ?? "");
-    setTitle(session.title ?? "");
-    // only when it opens: a push while typing must not overwrite the field
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-  const hasTab = !session.assistant && Boolean(session.slot_id);
-  const body = renameBody(session, tab, title);
-  const save = async () => {
-    // the form submits on Enter while the field stays editable: a second Enter would rename (type /rename) twice
-    if (busy) return;
-    if (!body) return onClose();
-    setBusy(true);
-    try {
-      await api(`${sessionPath(session.machine_id, session.session_id)}/rename`, { method: "POST", json: body });
-      // the list shows the new name at once; the hub's push confirms it
-      upsertSession({ ...session, ...(body.title ? { title: body.title } : {}), ...(body.tab_name ? { slot_name: body.tab_name } : {}) });
-      if (session.assistant) void refreshAssistant().catch(() => {});
-      toast(t("chat-sessiondialogs.renamed"), "ok");
-      onClose();
-    } catch (e) {
-      toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title={t("chat-sessiondialogs.rename")}
-      footer={
-        <>
-          <Button tone="quiet" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button tone="primary" busy={busy} disabled={!body} onClick={() => void save()}>
-            {t("common.save")}
-          </Button>
-        </>
-      }
-    >
-      <form
-        className="flex flex-col gap-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void save();
-        }}
-      >
-        {hasTab && <Field label={t("chat-sessiondialogs.tab_name")} value={tab} onChange={setTab} autoFocus />}
-        <Field label={t("chat-sessiondialogs.session_name")} value={title} onChange={setTitle} autoFocus={!hasTab} />
-        {/* the agent's hint is about herdr's tab and Claude's /rename: a session without a terminal (a runtime's) has neither */}
-        {(session.assistant || sessionCan(session, "terminal")) && <p className="text-[12px] leading-relaxed text-ink-3">{session.assistant ? t("chat-sessiondialogs.rename_hint_assistant") : t("chat-sessiondialogs.rename_hint_agent")}</p>}
-        <button type="submit" hidden />
-      </form>
-    </Dialog>
-  );
-}
-
-// "Rename space": herdr's workspace, or Paseo's project (and the pins / mutes that name it). The hint is herdr's.
-export function RenameSpaceDialog({ session, open, onClose }: { session: Session; open: boolean; onClose: () => void }) {
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (open) setName(session.space_name ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-  const next = name.trim();
-  const save = async () => {
-    if (busy) return; // a second Enter while the first rename is out
-    if (!session.space_id || !next || next === session.space_name) return onClose();
-    setBusy(true);
-    try {
-      await api(`/machines/${enc(session.machine_id)}/spaces/${enc(session.space_id)}/rename`, { method: "POST", json: { name: next } });
-      void refresh().catch(() => {});
-      toast(t("chat-sessiondialogs.space_renamed"), "ok");
-      onClose();
-    } catch (e) {
-      toast(t("chat-sessiondialogs.change_failed", { error: errorText(e) }), "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title={t("chat-sessiondialogs.rename_space")}
-      footer={
-        <>
-          <Button tone="quiet" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button tone="primary" busy={busy} disabled={!next || next === session.space_name} onClick={() => void save()}>
-            {t("common.save")}
-          </Button>
-        </>
-      }
-    >
-      <form
-        className="flex flex-col gap-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void save();
-        }}
-      >
-        <Field label={t("chat-sessiondialogs.space_name")} value={name} onChange={setName} autoFocus />
-        {session.space_kind !== "paseo" && <p className="text-[12px] leading-relaxed text-ink-3">{t("chat-sessiondialogs.rename_space_hint")}</p>}
-        <button type="submit" hidden />
-      </form>
-    </Dialog>
-  );
-}
-
-function Field({ label, value, onChange, autoFocus }: { label: string; value: string; onChange: (v: string) => void; autoFocus?: boolean }) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[12px] text-ink-3">{label}</span>
-      <input
-        value={value}
-        autoFocus={autoFocus}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-9 rounded-control bg-surface px-3 text-[13px] text-ink shadow-btn outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]"
-      />
-    </label>
-  );
 }
 
 /** The hub gives a mode call 90 seconds. Five more lets its own refusal arrive first; a lost response still ends Apply. */
@@ -240,150 +116,4 @@ export async function setServiceTier(s: Session, tier: string): Promise<boolean>
     modeChangeError(e);
     return false;
   }
-}
-
-// "Delete chat" (issue #801): the hub takes it out of every app's list; the transcript stays on the computer and the
-// conversation comes back once it is used again (claude --resume).
-export function DeleteSessionDialog({ session, machineName, open, onClose }: { session: Session; machineName: string; open: boolean; onClose: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const wt = useAgentWorktree(session, open);
-  const [cleanup, setCleanup] = useState<Cleanup>(KEEP);
-  useEffect(() => {
-    if (open) setCleanup(KEEP); // each time: keeping is the default
-  }, [open]);
-  const go = async () => {
-    setBusy(true);
-    try {
-      await api(sessionPath(session.machine_id, session.session_id), { method: "DELETE" });
-      dropSession(session.machine_id, session.session_id);
-      if (location.pathname === href({ name: "session", mid: session.machine_id, sid: session.session_id })) navigate({ name: "home" }, true);
-      toast(t("chat-sessiondialogs.deleted"), "ok");
-      onClose();
-      await runCleanup(session.machine_id, wt, cleanup, session.host);
-    } catch (e) {
-      toast(t("chat-sessiondialogs.delete_failed", { error: errorText(e) }), "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title={t("chat-sessiondialogs.delete_title")}
-      footer={
-        <>
-          <Button tone="quiet" onClick={onClose}>
-            {t("common.cancel")}
-          </Button>
-          <Button tone="danger" busy={busy} disabled={!cleanupReady(wt, cleanup)} onClick={go}>
-            {t("chat-sessiondialogs.delete")}
-          </Button>
-        </>
-      }
-    >
-      <p className="text-[13px] leading-relaxed text-ink-2">
-        {t("chat-sessiondialogs.delete_detail", { title: sessionTitle(session), machine: machineName })}
-      </p>
-      {wt && <WorktreeCleanup st={wt} value={cleanup} onChange={setCleanup} />}
-    </Dialog>
-  );
-}
-
-// ── the worktree a closed or deleted agent worked in (#6115) ──
-
-/** What to do with it: keep it (the default), or remove it, its branch too if asked; `confirmed` that what it loses goes. */
-export interface Cleanup {
-  remove: boolean;
-  deleteBranch: boolean;
-  confirmed: boolean;
-}
-
-export const KEEP: Cleanup = { remove: false, deleteBranch: false, confirmed: false };
-
-/** The worktree the agent's folder is, when Persona made it; null otherwise (and while the computer is asked). */
-export function useAgentWorktree(s: Session, open: boolean): WorktreeStatus | null {
-  const [st, setSt] = useState<WorktreeStatus | null>(null);
-  useEffect(() => {
-    setSt(null);
-    if (!open || !s.cwd) return;
-    const c = new AbortController();
-    // asked of the engine it ran in, which made it (a Paseo agent's is Paseo's)
-    void worktreeStatus(s.machine_id, s.cwd, c.signal, s.host).then((x) => {
-      if (!c.signal.aborted) setSt(x?.ours && x.path ? x : null);
-    });
-    return () => c.abort();
-  }, [open, s.machine_id, s.cwd, s.host]);
-  return st;
-}
-
-/** Removing it loses something the user has not confirmed yet: the button waits. */
-export function cleanupReady(st: WorktreeStatus | null, c: Cleanup): boolean {
-  if (!st || !c.remove) return true;
-  const loss = worktreeLoss(st, c.deleteBranch);
-  return c.confirmed || (loss.dirty === 0 && loss.unmerged === 0);
-}
-
-/** After the agent is closed or deleted: removes its worktree when asked, forced only for what the user confirmed, by
- *  the engine the agent ran in (kind: its host). */
-export async function runCleanup(mid: string, st: WorktreeStatus | null, c: Cleanup, kind?: string) {
-  if (!st?.path || !c.remove) return;
-  const loss = worktreeLoss(st, c.deleteBranch);
-  try {
-    const r = await removeAgentWorktree(mid, st.path, { deleteBranch: c.deleteBranch, force: loss.dirty > 0 || loss.unmerged > 0, kind });
-    toast(t(r.branch_deleted ? "chat-sessiondialogs.wt_removed_branch" : "chat-sessiondialogs.wt_removed"), "ok");
-  } catch (e) {
-    toast(t("chat-sessiondialogs.wt_remove_failed", { error: errorText(e) }), "error");
-  }
-}
-
-/** Keep or remove the worktree, and what removing it loses (said with the counts, and to be confirmed). */
-export function WorktreeCleanup({ st, value, onChange }: { st: WorktreeStatus; value: Cleanup; onChange: (c: Cleanup) => void }) {
-  const loss = worktreeLoss(st, value.deleteBranch);
-  const losing = value.remove && (loss.dirty > 0 || loss.unmerged > 0);
-  const pick = (remove: boolean) => onChange({ ...value, remove, confirmed: false });
-  return (
-    <div data-worktree-cleanup className="mt-3 rounded-control bg-inset px-3 py-2.5">
-      <div className="flex items-center gap-2 text-[12.5px] font-medium text-ink">
-        <Icon name="branch" size={13} stroke={2.2} className="shrink-0 text-ink-2" />
-        <span className="min-w-0 flex-1 truncate">{t("chat-sessiondialogs.wt_title")}</span>
-      </div>
-      <p className="mt-0.5 truncate pl-[21px] font-mono text-[11.5px] text-ink-3" title={st.path}>
-        {st.branch ? `${st.branch} · ` : ""}
-        {shortPath(st.path ?? "")}
-      </p>
-      <div role="radiogroup" aria-label={t("chat-sessiondialogs.wt_title")} className="mt-2 flex gap-1.5 pl-[21px]">
-        {([false, true] as const).map((remove) => (
-          <button
-            key={String(remove)}
-            type="button"
-            role="radio"
-            aria-checked={value.remove === remove}
-            onClick={() => pick(remove)}
-            className={cx("h-7 rounded-full px-3 text-[12px] font-medium whitespace-nowrap transition-colors", value.remove === remove ? "bg-surface text-ink shadow-btn" : "text-ink-2 hover:bg-hover")}
-          >
-            {t(remove ? "chat-sessiondialogs.wt_remove" : "chat-sessiondialogs.wt_keep")}
-          </button>
-        ))}
-      </div>
-      {value.remove && (
-        <div className="mt-2 flex flex-col gap-1.5 pl-[21px]">
-          {st.branch && (
-            <div className="flex items-center gap-2 text-[12px] text-ink-2">
-              <span className="min-w-0 flex-1">{t("chat-sessiondialogs.wt_delete_branch", { branch: st.branch })}</span>
-              <Switch on={value.deleteBranch} onChange={(on) => onChange({ ...value, deleteBranch: on, confirmed: false })} label={t("chat-sessiondialogs.wt_delete_branch", { branch: st.branch })} />
-            </div>
-          )}
-          {loss.dirty > 0 && <p className="text-[11.5px] leading-snug text-red" data-wt-dirty>{t("chat-sessiondialogs.wt_dirty", { count: loss.dirty })}</p>}
-          {loss.unmerged > 0 && <p className="text-[11.5px] leading-snug text-red" data-wt-unmerged>{t("chat-sessiondialogs.wt_unmerged", { count: loss.unmerged, main: st.main_branch || "main" })}</p>}
-          {losing && (
-            <div className="flex items-center gap-2 text-[12px] font-medium text-ink">
-              <span className="min-w-0 flex-1">{t("chat-sessiondialogs.wt_confirm_loss")}</span>
-              <Switch on={value.confirmed} onChange={(on) => onChange({ ...value, confirmed: on })} label={t("chat-sessiondialogs.wt_confirm_loss")} />
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }

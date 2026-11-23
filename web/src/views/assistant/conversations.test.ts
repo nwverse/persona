@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "../../lib/types";
-import { arrange, conversationTitle, filterConversations, groupByDay, mergeConversations, splitTitle, type Conversation } from "./conversations";
+import { arrange, conversationTitle, filterConversations, groupByDay, inUseTags, mergeConversations, normalizeTags, splitTitle, withTag, TAG_MAX_LENGTH, TAGS_MAX, type Conversation } from "./conversations";
 
 const now = new Date(2026, 10, 2, 10, 0);
 const at = (d: number, h = 9) => new Date(2026, 10, d, h).toISOString();
@@ -37,6 +37,32 @@ describe("titles", () => {
   });
 });
 
+describe("conversation tags", () => {
+  it("trims, drops empties and de-duplicates to the first occurrence", () => {
+    expect(normalizeTags(["  planning ", "", "planning", "trip"])).toEqual(["planning", "trip"]);
+    expect(normalizeTags([])).toEqual([]);
+    expect(normalizeTags(["  ", ""])).toEqual([]);
+  });
+
+  it("keeps the hub's length and count limits as constants the dialog enforces", () => {
+    expect(TAG_MAX_LENGTH).toBe(32);
+    expect(TAGS_MAX).toBe(10);
+  });
+
+  it("lists every tag in use once, sorted", () => {
+    const list = [conv("a", { tags: ["trip", "planning"] }), conv("b", { tags: ["trip"] }), conv("c")];
+    expect(inUseTags(list)).toEqual(["planning", "trip"]);
+    expect(inUseTags([conv("c")])).toEqual([]);
+  });
+
+  it("filters by one exact tag; an empty filter is the whole list", () => {
+    const list = [conv("a", { tags: ["trip"] }), conv("b", { tags: ["planning"] }), conv("c", { tags: ["trip", "planning"] })];
+    expect(withTag(list, "trip").map((s) => s.session_id)).toEqual(["a", "c"]);
+    expect(withTag(list, "missing")).toEqual([]);
+    expect(withTag(list, "")).toBe(list);
+  });
+});
+
 describe("search", () => {
   const list = [conv("a", { title: "约周五吃饭", last_text: "已经在日历里加好了。" }), conv("b", { title: "Weekly Report", last_text: "" }), conv("c", { title: "" })];
   it("matches the title or the last message, ignoring case and width", () => {
@@ -62,6 +88,16 @@ describe("arrange", () => {
     expect(arrange(list, undefined, now).main).toBeUndefined();
   });
 
+  it("uses a saved order without moving the main chat or hiding new and archived rows", () => {
+    const list = [conv("main", { updated_at: at(2) }), conv("a", { updated_at: at(2) }), conv("b", { updated_at: at(1) }), conv("new", { updated_at: at(2, 10) }), conv("old", { archived: true })];
+    const a = arrange(list, "main", now, ["b", "a", "not-loaded", "old"]);
+    expect(a.main?.session_id).toBe("main");
+    expect(a.days).toHaveLength(1);
+    expect(a.days[0].title).toBe("");
+    expect(a.days[0].items.map((s) => s.session_id)).toEqual(["b", "a", "new"]);
+    expect(a.archived.map((s) => s.session_id)).toEqual(["old"]);
+  });
+
   it("merges what was fetched with the store and the live sessions", () => {
     const fetched = [conv("a", { archived: true, title: "旧标题" }), conv("b")];
     const listed: Session[] = [conv("b", { title: "新的 b" }), conv("n", { title: "刚开的" })];
@@ -72,6 +108,23 @@ describe("arrange", () => {
       ["b", "新的 b", undefined, undefined],
       ["n", "刚开的", undefined, undefined],
     ]);
+  });
+
+  it("includes live-only chats from the selected manager once, with their archive state", () => {
+    const listed = [conv("listed", { manager: "work" })];
+    const live = [
+      conv("listed", { manager: "work", archived: true }),
+      conv("new", { manager: "work" }),
+      conv("new-archived", { manager: "work", archived: true }),
+      conv("other-manager"),
+      conv("health-chat", { manager: "work", space: "health" }),
+      conv("agent", { manager: "work", assistant: false }),
+    ];
+    const history = mergeConversations([conv("fetched-archive", { archived: true })], listed, live, "work");
+    const sidebar = mergeConversations([], listed, live, "work");
+    expect(history.filter((s) => !s.archived).map((s) => s.session_id)).toEqual(["new"]);
+    expect(sidebar.filter((s) => !s.archived).map((s) => s.session_id)).toEqual(["new"]);
+    expect(sidebar.filter((s) => s.archived).map((s) => s.session_id)).toEqual(["listed", "new-archived"]);
   });
 
   it("takes the archive mark from the live sessions both ways: one brought back elsewhere leaves 已归档", () => {

@@ -290,15 +290,15 @@ private struct HomeAgentsWidget: View {
     private var lead: (n: Int, words: String, color: Color)? {
         if counts.needsYou > 0 { return (counts.needsYou, StateName.needsYou.text, HomeWidgetTokens.needsYou.dot) }
         if counts.working > 0 { return (counts.working, StateName.working.text, HomeWidgetTokens.working.dot) }
-        if counts.done > 0 { return (counts.done, interfaceText("Just Finished [Home Widgets]"), HomeWidgetTokens.done.dot) } // perf-ok: drawn once per timeline entry, in the widget extension
+        if counts.done > 0 { return (counts.done, StateName.unread.text, HomeWidgetTokens.done.dot) } // perf-ok: drawn once per timeline entry, in the widget extension
         return nil
     }
 
-    /// The categories after the lead one, in a line ("3 working · 1 just finished").
+    /// The categories after the lead one, in a line ("3 working · 1 unread").
     private var rest: String {
         var parts: [String] = []
         if counts.needsYou > 0, counts.working > 0 { parts.append(StateName.count(.working, counts.working)) }
-        if counts.done > 0, counts.needsYou + counts.working > 0 { parts.append(interfaceText("\(counts.done) just finished [Home Widgets]")) } // perf-ok: drawn once per timeline entry, in the widget extension
+        if counts.done > 0, counts.needsYou + counts.working > 0 { parts.append(StateName.count(.unread, counts.done)) } // perf-ok: drawn once per timeline entry, in the widget extension
         return parts.joined(separator: " · ")
     }
 
@@ -362,7 +362,7 @@ private struct HomeAgentsWidget: View {
         HStack(alignment: .top, spacing: HomeWidgetTokens.flush) {
             stat(counts.needsYou, StateName.needsYou.text, HomeWidgetTokens.needsYou.dot)
             stat(counts.working, StateName.working.text, HomeWidgetTokens.working.dot)
-            stat(counts.done, interfaceText("Just Finished [Home Widgets]"), HomeWidgetTokens.done.dot) // perf-ok: drawn once per timeline entry, in the widget extension
+            stat(counts.done, StateName.unread.text, HomeWidgetTokens.done.dot) // perf-ok: drawn once per timeline entry, in the widget extension
         }
     }
 
@@ -818,7 +818,7 @@ private struct HomeUsageWidget: View {
             HStack(alignment: .bottom, spacing: HomeWidgetTokens.gap) {
                 ZStack {
                     HomeRing(fraction: (w?.percent ?? 0) / 100, color: Self.color(w?.percent ?? 0))
-                    Text(verbatim: "\(Int(w?.percent ?? 0))").font(HomeWidgetTokens.ringNumber).monospacedDigit().minimumScaleFactor(HomeWidgetTokens.heroMinScale).homeInk(.primary)
+                    Text(verbatim: "\(Int((w?.percent ?? 0).rounded()))").font(HomeWidgetTokens.ringNumber).monospacedDigit().minimumScaleFactor(HomeWidgetTokens.heroMinScale).homeInk(.primary)
                 }
                 .frame(width: HomeWidgetTokens.ringHero * 0.76, height: HomeWidgetTokens.ringHero * 0.76)
                 VStack(alignment: .leading, spacing: 0) {
@@ -861,7 +861,7 @@ enum HomeWindowName {
 
     /// "5 hours 86% · 7 days 61%", shortest window first.
     static func list(_ account: HomeSnapshot.Account, short: Bool) -> String {
-        account.windows.sorted { $0.minutes < $1.minutes }.map { "\(of($0, short: short)) \(Int($0.percent))%" }.joined(separator: " · ")
+        account.windows.sorted { $0.minutes < $1.minutes }.map { "\(of($0, short: short)) \(Int($0.percent.rounded()))%" }.joined(separator: " · ")
     }
 }
 
@@ -891,7 +891,7 @@ private struct HomeAccountRings: View {
                     HomeRing(fraction: w.percent / 100, color: HomeUsageWidget.color(w.percent), width: HomeWidgetTokens.ringStrokeSmall)
                         .padding(CGFloat(i) * (HomeWidgetTokens.ringStrokeSmall + HomeWidgetTokens.hair))
                 }
-                Text(verbatim: "\(Int(fullest?.percent ?? 0))").font(HomeWidgetTokens.ringNumberSmall).monospacedDigit().homeInk(.primary)
+                Text(verbatim: "\(Int((fullest?.percent ?? 0).rounded()))").font(HomeWidgetTokens.ringNumberSmall).monospacedDigit().homeInk(.primary)
             }
             .frame(width: HomeWidgetTokens.ringMedium, height: HomeWidgetTokens.ringMedium)
             Text(verbatim: account.name).font(HomeWidgetTokens.captionStrong).lineLimit(1).homeInk(.primary)
@@ -1466,7 +1466,7 @@ struct HomeLockView: View {
             }
         case .usage:
             let w = c.accounts.first?.windows.max { $0.percent < $1.percent }
-            Gauge(value: min(100, w?.percent ?? 0), in: 0...100) { HomeWidgetTokens.symbol(symbol) } currentValueLabel: { Text(verbatim: "\(Int(w?.percent ?? 0))") }
+            Gauge(value: min(100, w?.percent ?? 0), in: 0...100) { HomeWidgetTokens.symbol(symbol) } currentValueLabel: { Text(verbatim: "\(Int((w?.percent ?? 0).rounded()))") }
                 .gaugeStyle(.accessoryCircularCapacity).homeAccent()
         case .health:
             let steps = c.snapshot.health?.steps ?? 0

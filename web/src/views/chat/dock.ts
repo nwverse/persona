@@ -18,32 +18,34 @@ export const INPUT_MAX = visibleShare(0.35, 240);
 /** A plan card's plan (it scrolls inside). */
 export const PLAN_MAX = visibleShare(0.4);
 
+/** The answered line's list, opened (card-stack.ts): it scrolls inside past a third of what is visible. */
+export const ANSWERED_LIST_MAX = visibleShare(0.3, 220);
+
 export interface CardFold {
   /** Shown in full: the first `full` cards. */
   full: number;
-  /** The one line in their place, or nothing: "N more" under the first (`more`), or "N pending" for all of them while
-   *  typing (`typing`: tapping it puts the keyboard away) or on a phone on its side (`short`: tapping it opens them). */
-  summary: { kind: "more" | "typing" | "short"; count: number } | null;
+  /** The one line in their place, or nothing: "N pending" for all of them while typing (`typing`: tapping it puts the
+   *  keyboard away) or on a phone on its side (`short`: tapping it opens them). */
+  summary: { kind: "typing" | "short"; count: number } | null;
 }
 
-/**
- * Which of the cards waiting on you show in full. Wide screens: all of them. Narrow ones: the first, and "N more" for
- * the others until that is tapped (`open`); while the keyboard is up, or on a phone on its side (`short`) until tapped,
- * none: one line in their place.
- */
 /** Whether the answered cards (their receipts) show above the composer: not while the cards are folded to one line
  *  (typing, or a short screen not opened), which is about the room the keyboard leaves. */
 export function showsAnswered({ narrow, keyboard, open, short = false }: { narrow: boolean; keyboard: boolean; open: boolean; short?: boolean }): boolean {
   return !narrow || (!keyboard && (open || !short));
 }
 
+/**
+ * Which of the cards waiting on you show in full: the first, at every width, the others behind it until its "2 / 6"
+ * is tapped (`open`); on a narrow screen while the keyboard is up, or on a phone on its side (`short`) until tapped,
+ * none: one line in their place.
+ */
 export function cardFold(count: number, { narrow, keyboard, open, short = false }: { narrow: boolean; keyboard: boolean; open: boolean; short?: boolean }): CardFold {
-  if (!narrow || count === 0) return { full: count, summary: null };
-  if (keyboard) return { full: 0, summary: { kind: "typing", count } };
+  if (count === 0) return { full: 0, summary: null };
+  if (narrow && keyboard) return { full: 0, summary: { kind: "typing", count } };
   if (open) return { full: count, summary: null };
-  if (short) return { full: 0, summary: { kind: "short", count } };
-  if (count === 1) return { full: 1, summary: null };
-  return { full: 1, summary: { kind: "more", count: count - 1 } };
+  if (narrow && short) return { full: 0, summary: { kind: "short", count } };
+  return { full: 1, summary: null };
 }
 
 /** A card in one line (the folded cards' line): what it asks, as the inbox says it, else what it waits for. */
@@ -83,11 +85,15 @@ export function awaitingTurn(
   now: number,
   /** The session's failure, if it has one: when its state last changed (the turn the host stopped, botmux). */
   failure?: { since?: string },
+  stateSince?: string,
 ): boolean {
-  if (!last?.user || last.steps.length || last.answer) return false;
+  if (!last?.user || last.answer) return false;
+  // Opening a completed exchange must not revive it. An unanswered tool/thought can precede the hub's working state.
+  if (last.steps.length && !last.steps.some(s => s.kind === "thinking" || (s.kind === "tool" && !s.result))) return false;
   if (state !== "idle" && state !== "unread" && state !== "unknown") return false;
   const at = last.user.ts ? Date.parse(last.user.ts) : NaN;
   if (Number.isNaN(at) || now - at >= AWAIT_MS) return false;
+  if (last.steps.length && stateSince && Date.parse(stateSince) >= at) return false;
   // the turn failed before writing anything: its FailureNote says so, nothing is worked on (#3935). A failure
   // without a time, or from before the message (the hub clears it once a message goes in), is taken as this one's
   // only when it is not older.

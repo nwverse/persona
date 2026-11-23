@@ -107,18 +107,25 @@ func turnEndOf(items []proto.Item) (turnClose, bool) {
 // signals name it), the judgment written for it and the signal it raised. Receipt: a turn with no Key has its done
 // receipt in the feed (a named one's receipt is found there by its id).
 type taskTurn struct {
-	Machine string      `json:"machine"`
-	Session string      `json:"session"`
-	Key     string      `json:"key,omitempty"`
-	Open    string      `json:"open,omitempty"`
-	Rev     int64       `json:"rev,omitempty"`
-	Seen    time.Time   `json:"seen,omitzero"`
-	State   string      `json:"state"`
-	Work    time.Time   `json:"work"`
-	At      time.Time   `json:"at"`
-	Receipt bool        `json:"receipt,omitempty"`
-	Judged  *turnJudged `json:"judged,omitempty"`
-	Signal  *turnSignal `json:"signal,omitempty"`
+	Machine string    `json:"machine"`
+	Session string    `json:"session"`
+	Key     string    `json:"key,omitempty"`
+	Open    string    `json:"open,omitempty"`
+	Rev     int64     `json:"rev,omitempty"`
+	Seen    time.Time `json:"seen,omitzero"`
+	State   string    `json:"state"`
+	Work    time.Time `json:"work"`
+	At      time.Time `json:"at"`
+	Receipt bool      `json:"receipt,omitempty"`
+	// JudgeFailures counts failed judgment passes while Judged is still nil; JudgeError keeps the latest service or
+	// parse failure for diagnostics. Both survive a manager restart and reset when a new stretch of work starts.
+	JudgeFailures int         `json:"judge_failures,omitempty"`
+	JudgeError    string      `json:"judge_error,omitempty"`
+	Judged        *turnJudged `json:"judged,omitempty"`
+	Signal        *turnSignal `json:"signal,omitempty"`
+	// Silent: the turn, taken up as interrupted, had no output at all (proto.TurnErrorNoOutput, or
+	// proto.TurnErrorStopped when Persona's Stop interrupted it): what the Agent's row says of it (silent_turns.go).
+	Silent string `json:"silent,omitempty"`
 }
 
 // turnJudged is the judgment written for a turn: the judge's check, the error when it could not say (the supervisor
@@ -137,7 +144,28 @@ type turnSignal struct {
 	Key     string     `json:"key"`
 	Machine string     `json:"machine,omitempty"`
 	Detail  string     `json:"detail,omitempty"`
+	Handoff bool       `json:"handoff,omitempty"`
 	Told    *time.Time `json:"told,omitempty"`
+}
+
+// replayTurnSignal queues only the still-current, untold ledger signal. Recovery can wait on Inbox I/O while
+// another turn is taken or judged: replay must never use signal's normal path to replace that newer ledger entry.
+func (s *Service) replayTurnSignal(todo string, expected taskTurn) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	current, ok := b.doc.Turns[todo]
+	if !b.loaded || !ok || current.Machine != expected.Machine || current.Session != expected.Session ||
+		current.Key != expected.Key || current.Open != expected.Open || !current.Seen.Equal(expected.Seen) {
+		return
+	}
+	sig := current.Signal
+	if sig == nil || expected.Signal == nil || sig.Told != nil || *sig != *expected.Signal {
+		return
+	}
+	// Keep the ledger lock until queued, so an obsolete replay cannot replace a newer pending signal.
+	// The digest releases its mutex before consulting or marking the turn ledger.
+	s.queueSignal(superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Detail: sig.Detail, Handoff: sig.Handoff})
 }
 
 // settled: nothing is left to do for the turn: it is judged (or has nothing to judge) and what it raised was told.
@@ -205,8 +233,9 @@ func receiptID(todo string, e taskTurn) string {
 // taskTurnsDoc is the ledger as it is kept: the turns by todo, and since when it is kept (a turn that ended before
 // was handled, or not, by a manager that kept none: it is not taken up again).
 type taskTurnsDoc struct {
-	Since time.Time           `json:"since"`
-	Turns map[string]taskTurn `json:"turns"`
+	Since       time.Time                 `json:"since"`
+	Turns       map[string]taskTurn       `json:"turns"`
+	InboxEvents map[string]taskInboxEvent `json:"inbox_events,omitempty"`
 }
 
 // turnLook is the row of a task's last agent as the sweep last looked at it: it looks again when the row moved. A row
@@ -219,6 +248,10 @@ type turnLook struct {
 	Machine, Session, Status string
 	Rev                      int64
 	UpdatedAt                time.Time
+}
+
+type turnRecoveryKey struct {
+	Todo, Machine, Session string
 }
 
 func lookOf(c proto.Session) turnLook {
@@ -243,12 +276,12 @@ type turnsState struct {
 	doc    taskTurnsDoc
 	// again: the judgment on the ledger is being put back (turnAgain): the signal it raises is the one told already.
 	again map[string]bool
-	// looked: the row the sweep looked at last; recovering: a look is going on; tries: how often the sweep had the
-	// turn judged; retry: the looks at a row that could not finish, and when the next one is due (turnRetry).
-	looked     map[string]turnLook
+	// looked and retry are per task/recipient: one unreadable transcript must not hold up a peer.
+	// recovering serializes a task's reads; tries counts its unfinished judgments.
+	looked     map[turnRecoveryKey]turnLook
 	recovering map[string]bool
 	tries      map[string]int
-	retry      map[string]turnRetry
+	retry      map[turnRecoveryKey]turnRetry
 	// judging: the end of a turn of the task is being handled (taskJudging). Under jmu, not mu: it is set with the
 	// receipt's reservation and read with it under the task lock (settleTurn, turnStartHeard), which must not wait
 	// for the ledger. The ledger's own looks read it with mu held (settling), so what they read of the ledger and of
@@ -291,8 +324,18 @@ func turnRetryIn(n int) time.Duration {
 }
 
 // turnsLocked reads the ledger once; b.mu is held. False when the database could not be read: nothing is taken from
-// the ledger then, and completion goes on as it does without one.
+// the ledger then, and completion goes on as it does without one. A fresh ledger records its starting time immediately.
 func (s *Service) turnsLocked(ctx context.Context) bool {
+	return s.turnsLoadLocked(ctx, true)
+}
+
+// turnsReadLocked loads the ledger for a read-only decision without writing an empty fresh ledger. A later matching
+// state change still saves through saveTurnsLocked; no match means no unnecessary write.
+func (s *Service) turnsReadLocked(ctx context.Context) bool {
+	return s.turnsLoadLocked(ctx, false)
+}
+
+func (s *Service) turnsLoadLocked(ctx context.Context, persistFresh bool) bool {
 	b := &s.tasks.turns
 	if b.loaded {
 		return true
@@ -314,7 +357,8 @@ func (s *Service) turnsLocked(ctx context.Context) bool {
 		doc.Since = time.Now().UTC()
 	}
 	b.doc, b.loaded = doc, true
-	if fresh && st != nil { // since when it is kept must outlive this manager
+	s.restoreQuietTurns(doc.Turns)
+	if fresh && persistFresh && st != nil { // since when it is kept must outlive this manager
 		if err := st.PutSetting(ctx, taskTurnsKey, b.doc); err != nil {
 			s.logf("task turns: %v", err)
 		}
@@ -323,27 +367,36 @@ func (s *Service) turnsLocked(ctx context.Context) bool {
 }
 
 // saveTurnsLocked writes the ledger; b.mu is held.
-func (s *Service) saveTurnsLocked(ctx context.Context) {
+func (s *Service) saveTurnsLocked(ctx context.Context) error {
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, taskTurnsKey, s.tasks.turns.doc); err != nil {
 			s.logf("task turns: %v", err)
+			return err
 		}
 	}
+	return nil
 }
 
 // pruneTurns takes the turns of todos closed or gone off the ledger (the sweep, each tick; a write only when there is
 // one to take off): the ledger holds one turn for each open task that had one, no more. A closed task that is opened
 // again starts from what ends after that (recoverTurn), and a turn's receipt keeps its one id in the feed.
 func (s *Service) pruneTurns(ctx context.Context) {
+	// The verdicts and Stops kept past their time (silent_turns.go); the apps are told the rows that lose one.
+	for m := range s.pruneQuiet(time.Now(), "", nil) {
+		go s.publishSessions(m)
+	}
 	b := &s.tasks.turns
 	b.mu.Lock()
-	if !s.turnsLocked(ctx) || len(b.doc.Turns) == 0 {
+	if !s.turnsLocked(ctx) || len(b.doc.Turns)+len(b.doc.InboxEvents) == 0 {
 		b.mu.Unlock()
 		return
 	}
 	ids := make([]string, 0, len(b.doc.Turns))
 	for id := range b.doc.Turns {
 		ids = append(ids, id)
+	}
+	for _, e := range b.doc.InboxEvents {
+		ids = append(ids, e.Todo)
 	}
 	b.mu.Unlock()
 	var gone []string
@@ -365,9 +418,24 @@ func (s *Service) pruneTurns(ctx context.Context) {
 			delete(b.closed, SessionRef{MachineID: e.Machine, SessionID: e.Session})
 		}
 		delete(b.doc.Turns, id)
-		delete(b.looked, id)
 		delete(b.tries, id)
-		delete(b.retry, id)
+		for key := range b.looked {
+			if key.Todo == id {
+				delete(b.closed, SessionRef{MachineID: key.Machine, SessionID: key.Session})
+				delete(b.looked, key)
+			}
+		}
+		for key := range b.retry {
+			if key.Todo == id {
+				delete(b.closed, SessionRef{MachineID: key.Machine, SessionID: key.Session})
+				delete(b.retry, key)
+			}
+		}
+		for key, e := range b.doc.InboxEvents {
+			if e.Todo == id {
+				delete(b.doc.InboxEvents, key)
+			}
+		}
 	}
 	s.saveTurnsLocked(ctx)
 	b.mu.Unlock()
@@ -392,11 +460,18 @@ func (s *Service) turnOf(ctx context.Context, todo string) (taskTurn, bool) {
 // no end yet and this is that turn (sameUnnamed: it gets its name now); or when no end is known now either and
 // nothing was written to the transcript since (sameRow).
 func (s *Service) takeTurn(ctx context.Context, t Todo, last proto.Session, items []proto.Item, end turnClose, named bool, since time.Time, state string) (e taskTurn, again bool) {
+	return s.takeTurnAs(ctx, t, last, items, end, named, since, state, "")
+}
+
+// takeTurnAs is takeTurn for an interrupted turn with no output (silent: its kind, silent_turns.go), kept on the ledger
+// in the same write that takes the turn up: a manager that stops between the two never has the turn without it. A
+// turn taken before without it (an older manager) gets it now.
+func (s *Service) takeTurnAs(ctx context.Context, t Todo, last proto.Session, items []proto.Item, end turnClose, named bool, since time.Time, state, silent string) (e taskTurn, again bool) {
 	if !named {
 		end = turnClose{}
 	}
 	fresh := taskTurn{Machine: last.MachineID, Session: last.SessionID, Key: end.Key, Open: turnOpen(items), Rev: last.Rev,
-		Seen: last.UpdatedAt.UTC(), State: state, Work: since.UTC(), At: time.Now().UTC()}
+		Seen: last.UpdatedAt.UTC(), State: state, Work: since.UTC(), At: time.Now().UTC(), Silent: silent}
 	b := &s.tasks.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -406,11 +481,18 @@ func (s *Service) takeTurn(ctx context.Context, t Todo, last proto.Session, item
 	// A turn the sweep kept as seen (turnBefore) is not one taken up: that only says the sweep makes nothing of it. An
 	// end that is told for it is handled as any first one.
 	if cur, ok := b.doc.Turns[t.ID]; ok && cur.State != turnBefore && (cur.of(last, end) || cur.sameUnnamed(last, items, end) || !named && cur.sameRow(last)) {
-		changed := !cur.Work.Equal(since) || cur.Rev != last.Rev
+		workChanged := !cur.Work.Equal(since)
+		changed := workChanged || cur.Rev != last.Rev
 		if named && cur.Key == "" {
 			cur.Key, cur.Open, changed = end.Key, fresh.Open, true // its name, now that the transcript has it
 		}
+		if silent != "" && cur.State == turnInterrupted && cur.Silent == "" {
+			cur.Silent, changed = silent, true
+		}
 		if changed {
+			if workChanged && cur.Judged == nil {
+				cur.JudgeFailures, cur.JudgeError = 0, "" // judge the latest stretch with a fresh retry budget
+			}
 			cur.Work, cur.Rev, cur.Seen = since.UTC(), last.Rev, last.UpdatedAt.UTC() // the stretch it closes now, as the judgment and the signals name it
 			b.doc.Turns[t.ID] = cur
 			s.saveTurnsLocked(ctx)
@@ -490,8 +572,8 @@ func (s *Service) turnJudged(ctx context.Context, todo string, c taskDoneCheck, 
 }
 
 // turnSignalKind: a signal that says how a turn ended, kept on its turn.
-func turnSignalKind(kind string) bool {
-	return kind == sigReview || kind == sigIdle || kind == sigUnjudged || kind == sigInterrupted
+func turnSignalKind(g superviseSignal) bool {
+	return !g.externalPRReview() && (g.Kind == sigReview || g.Kind == sigIdle || g.Kind == sigUnjudged || g.Kind == sigInterrupted)
 }
 
 // turnSignalled keeps on the ledger that todo's turn raised g, before it is told. told: a supervision message
@@ -520,8 +602,8 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 		}
 		return true
 	}
-	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key {
-		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail}
+	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key || sig.Handoff != g.Handoff {
+		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail, Handoff: g.Handoff}
 		b.doc.Turns[g.Todo] = e
 		s.saveTurnsLocked(ctx)
 	}
@@ -530,8 +612,67 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 
 // turnsTold keeps on the ledger that the turn signals in list need no telling any more: a supervision message carried
 // them (sent, or queued where a restart keeps it), said the same within the deduplication window, or they no longer
-// hold. A manager started again does not tell them a second time; until then it tells them from the ledger.
+// hold. A manager started again does not tell them a second time; until then it tells them from the ledger. An ordinary
+// receipt does not load an untouched ledger; recovery loads it through its ordinary read path.
 func (s *Service) turnsTold(ctx context.Context, list []superviseSignal) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.loaded {
+		s.turnsToldLocked(ctx, list)
+	}
+}
+
+// turnsToldDurably is the strict form used before a confirmed start or a resumed stretch discards its durable signals.
+// False leaves every form available for retry: neither an unreadable ledger nor a failed told-mark write may make the
+// only remaining copy disappear.
+func (s *Service) turnsToldDurably(ctx context.Context, list []superviseSignal) bool {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.turnsReadLocked(ctx) {
+		return false
+	}
+	return s.turnsToldLocked(ctx, list)
+}
+
+// turnsToldLocked writes matching receipts and rolls their in-memory marks back when persistence fails; b.mu is held.
+func (s *Service) turnsToldLocked(ctx context.Context, list []superviseSignal) bool {
+	b := &s.tasks.turns
+	changed := false
+	previous := map[string]*turnSignal{}
+	for _, g := range list {
+		if !turnSignalKind(g) {
+			continue
+		}
+		e, ok := b.doc.Turns[g.Todo]
+		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil {
+			old := *sig
+			previous[g.Todo] = &old
+			next, now := *sig, time.Now().UTC()
+			next.Told = &now
+			e.Signal = &next
+			b.doc.Turns[g.Todo] = e
+			changed = true
+		}
+	}
+	if !changed {
+		return true
+	}
+	if s.saveTurnsLocked(ctx) == nil {
+		return true
+	}
+	for id, sig := range previous {
+		e := b.doc.Turns[id]
+		e.Signal = sig // the write did not land: a later confirmation or watch must retry the told-mark
+		b.doc.Turns[id] = e
+	}
+	return false
+}
+
+// turnsUntold releases the ledger reservation for a signal whose durable queued copy was removed before delivery.
+// Matching kind and key prevents an old queued copy from clearing a newer turn's receipt.
+func (s *Service) turnsUntold(ctx context.Context, list []superviseSignal) {
 	b := &s.tasks.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -540,13 +681,13 @@ func (s *Service) turnsTold(ctx context.Context, list []superviseSignal) {
 	}
 	changed := false
 	for _, g := range list {
-		if !turnSignalKind(g.Kind) {
+		if !turnSignalKind(g) {
 			continue
 		}
 		e, ok := b.doc.Turns[g.Todo]
-		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil {
-			next, now := *sig, time.Now().UTC()
-			next.Told = &now
+		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told != nil {
+			next := *sig
+			next.Told = nil
 			e.Signal = &next
 			b.doc.Turns[g.Todo] = e
 			changed = true
@@ -568,7 +709,11 @@ func (s *Service) turnAgain(ctx context.Context, t Todo, e taskTurn, last proto.
 	}
 	j := e.Judged
 	if j == nil {
-		s.autoFinishTask(t, since, worked)
+		if e.JudgeFailures > 0 {
+			s.autoFinishTaskRetry(t, since, worked)
+		} else {
+			s.autoFinishTask(t, since, worked)
+		}
 		return
 	}
 	if !worked || !since.After(j.At) || j.Skip != "" {
@@ -651,96 +796,157 @@ func (s *Service) taskJudging(todo string, n int) {
 // looked (once after a start of the manager); then one transcript read, at most turnRecoverMost going at a time. A
 // look that could not finish (the node did not answer, the judgment did not land) is tried again on the next tick and
 // then ever later while the row stays as it is (turnRetryIn). A usage limit that is waited out is not looked at until
-// the wait is over (its turn goes on then), nor an agent whose computer is not connected. What a manager before this
-// one left untold is told from the ledger alone.
+// the wait is over (its turn goes on then), nor an agent whose computer is not connected. An unchanged revision lets
+// the sweep replay a previous manager's untold signal from the ledger alone. Recorded recipients are recovered
+// independently of a working peer or another recipient's failed read. Reads remain serial within a task and bounded
+// by turnRecoverMost across tasks.
 func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session) {
 	agents = currentTaskAgents(agents, supersededAgents(t, agents))
 	probe := make([]proto.Session, len(agents))
 	var last proto.Session
 	now := time.Now()
+	waiting := false
 	for i, c := range agents {
 		if probe[i] = c; c.Status == proto.StatusUnknown {
 			probe[i].Status = proto.StatusIdle // the transcript says whether it stopped
 		}
 		if limitTakenUp(c, now) {
-			return // its CLI or the manager goes on after the reset (usage_limit.go): no end to take up until then
+			waiting = true // another Agent's wait must not hide a recorded event recipient
 		}
 		if last.SessionID == "" || c.UpdatedAt.After(last.UpdatedAt) {
 			last = c
 		}
 	}
-	if !taskAgentsSettled(t, probe) {
-		return // one works, waits, or is not listed: its end comes later, by itself or by this look
-	}
-	var conn time.Time
-	if s.devs != nil {
-		conn = s.devs.ConnectedAt(last.MachineID) // a node that connected again is looked at whatever could not finish before
-	}
-	look := lookOf(last)
 	b := &s.tasks.turns
 	b.mu.Lock()
 	if !s.turnsLocked(ctx) {
 		b.mu.Unlock()
 		return
 	}
-	e, known := b.doc.Turns[t.ID]
-	same := known && e.Machine == last.MachineID && e.Session == last.SessionID && e.Rev == last.Rev
-	var tell *turnSignal
-	if sig := e.Signal; same && sig != nil && sig.Told == nil {
-		tell = sig
-	}
-	skip := b.looked[t.ID] == look || b.recovering[t.ID]
-	if !skip && same && last.Rev != 0 && e.settled() {
-		b.looked[t.ID], skip = look, true // nothing was written since it was handled
-	}
-	if r, waits := b.retry[t.ID]; waits && (r.look != look || !r.conn.Equal(conn)) {
-		delete(b.retry, t.ID) // the row moved or its node connected again: looked at now, whatever could not finish before
-	} else if waits && now.Before(r.at) {
-		skip = true
-	}
-	if !skip && len(b.recovering) >= turnRecoverMost {
-		skip = true
-	}
-	b.mu.Unlock()
-	if tell != nil { // judged before a restart, never told: told now (a signal waiting or told already stays as it is)
-		s.signal(superviseSignal{Todo: t.ID, Kind: tell.Kind, Key: tell.Key, Machine: tell.Machine, Detail: tell.Detail})
-	}
-	if skip {
-		return
-	}
-	if s.devs != nil { // the fleet is this manager's: the rows are its copy of the node's last list, kept while it is away
-		if m, ok := s.devs.Summary(last.MachineID); ok && !m.Reachable {
-			return // its computer is not connected: nothing can be read. Looked at on the tick after it is back
+	var candidates []proto.Session
+	for i, c := range agents {
+		ref := SessionRef{MachineID: c.MachineID, SessionID: c.SessionID}
+		key := turnRecoveryKey{Todo: t.ID, Machine: c.MachineID, Session: c.SessionID}
+		retry, retrying := b.retry[key]
+		// A closed row can still need its settlement read retried.
+		if b.closed[ref] == lookOf(c) && (!retrying || retry.look != lookOf(c)) ||
+			!taskAgentSettled(probe[i]) || limitTakenUp(c, now) {
+			continue
+		}
+		for _, e := range b.doc.InboxEvents {
+			if e.Todo == t.ID && e.Machine == c.MachineID && e.Session == c.SessionID {
+				candidates = append(candidates, c)
+				break
+			}
 		}
 	}
-	b.mu.Lock()
-	if b.recovering[t.ID] || len(b.recovering) >= turnRecoverMost {
-		b.mu.Unlock()
-		return
+	if len(candidates) == 0 {
+		if waiting || !taskAgentsSettled(t, probe) {
+			b.mu.Unlock()
+			return // one works, waits, or is not listed: its end comes later
+		}
+		candidates = append(candidates, last)
 	}
-	b.recovering[t.ID] = true
+	e, known := b.doc.Turns[t.ID]
+	var tell *taskTurn
+	if known && e.Signal != nil && e.Signal.Told == nil {
+		for _, row := range candidates {
+			if e.Machine == row.MachineID && e.Session == row.SessionID && e.Rev == row.Rev {
+				tell = &e
+				break
+			}
+		}
+	}
+	confirmed := known && e.Signal != nil && e.Signal.Told != nil
+	for _, c := range agents {
+		confirmed = confirmed || c.Status != proto.StatusOffline && c.CreationID() == t.ID
+	}
+	startUnknown := known && e.Signal != nil && e.Signal.Kind == sigUnjudged && e.Signal.Key == "start-unknown@"+t.ID && confirmed
+	busy := b.recovering[t.ID] || len(b.recovering) >= turnRecoverMost
+	if !busy {
+		b.recovering[t.ID] = true
+	}
 	b.mu.Unlock()
-	go func() {
-		looked := s.recoverTurn(context.WithoutCancel(ctx), t, last)
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		delete(b.recovering, t.ID)
-		if looked {
-			b.looked[t.ID] = look
-			delete(b.retry, t.ID)
+	if startUnknown {
+		// Only the exact creation id or an already persisted told receipt confirms the start. Retry retraction even when
+		// that receipt landed already: a crash before queue/outbox cleanup must not restore the confirmed signal.
+		if !s.retractStartUnknown(ctx, t.ID) {
+			if !busy {
+				b.mu.Lock()
+				delete(b.recovering, t.ID) // this look never started; leave the next sweep free to retry the retraction
+				b.mu.Unlock()
+			}
 			return
 		}
-		r := b.retry[t.ID]
-		if r.look != look || !r.conn.Equal(conn) {
-			r = turnRetry{look: look, conn: conn}
+		tell = nil
+	}
+	if tell != nil {
+		if t.Supervision.state(t) == reviewParked {
+			// Parking supersedes the old stop. Acknowledge its exact turn signal so this and every later sweep leave it
+			// untold no longer, rather than reviving the idle/review wait that the parking decision replaced (#7671).
+			s.turnsTold(ctx, []superviseSignal{{Todo: t.ID, Kind: tell.Signal.Kind, Key: tell.Signal.Key, Machine: tell.Signal.Machine}})
+		} else { // the ledger's untold notice does not need a transcript-read slot
+			s.replayTurnSignal(t.ID, *tell)
 		}
-		r.n++
-		r.at = time.Now().Add(turnRetryIn(r.n))
-		b.retry[t.ID] = r
+	}
+	if busy {
+		return
+	}
+	go func() {
+		defer func() {
+			b.mu.Lock()
+			delete(b.recovering, t.ID)
+			b.mu.Unlock()
+		}()
+		recoveryCtx := context.WithoutCancel(ctx)
+		for _, row := range candidates {
+			key := turnRecoveryKey{Todo: t.ID, Machine: row.MachineID, Session: row.SessionID}
+			look := lookOf(row)
+			var conn time.Time
+			if s.devs != nil {
+				conn = s.devs.ConnectedAt(row.MachineID)
+			}
+			b.mu.Lock()
+			e, known := b.doc.Turns[t.ID]
+			same := known && e.Machine == row.MachineID && e.Session == row.SessionID && e.Rev == row.Rev
+			skip := b.looked[key] == look
+			if !skip && same && row.Rev != 0 && e.settled() {
+				b.looked[key], skip = look, true
+			}
+			if r, waits := b.retry[key]; waits && (r.look != look || !r.conn.Equal(conn)) {
+				delete(b.retry, key) // a new row or connection retries only this recipient
+			} else if waits && time.Now().Before(r.at) {
+				skip = true
+			}
+			b.mu.Unlock()
+			if skip {
+				continue
+			}
+			if s.devs != nil {
+				if m, ok := s.devs.Summary(row.MachineID); ok && !m.Reachable {
+					continue
+				}
+			}
+			looked := s.recoverTurn(recoveryCtx, t, row)
+			b.mu.Lock()
+			if looked {
+				b.looked[key] = look
+				delete(b.retry, key)
+			} else {
+				r := b.retry[key]
+				if r.look != look || !r.conn.Equal(conn) {
+					r = turnRetry{look: look, conn: conn}
+				}
+				r.n++
+				r.at = time.Now().Add(turnRetryIn(r.n))
+				b.retry[key] = r
+			}
+			b.mu.Unlock()
+		}
 	}()
 }
 
-// recoverTurn reads the transcript of supervised task t's last agent and takes up a closed turn the ledger does not
+// recoverTurn reads the transcript of supervised task t's selected agent and takes up a closed turn the ledger does not
 // have, through settleTurn: the end's own checks first, then the start nobody heard, then the receipt, the judgment
 // and the signal. A turn the ledger has but that is not judged yet is judged (resumeTurn); one it has with no name
 // gets its name (sameUnnamed). looked: the row needs no second look while it stays as it is; false has the sweep try
@@ -756,7 +962,14 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 	b.mu.Lock()
 	if !closed {
 		delete(b.closed, ref)
+		e, known := b.doc.Turns[t.ID]
 		b.mu.Unlock()
+		if known && e.State == turnDone && e.Judged == nil && e.JudgeFailures > 0 && e.Key == "" &&
+			e.Machine == last.MachineID && e.Session == last.SessionID && e.sameRow(last) {
+			// This unnamed turn's receipt already proved that its agents stopped. Its failed judgment is resumed here even
+			// when an older runtime never writes a native end; taskCompletionCurrent still rejects any newer work.
+			return s.resumeTurn(ctx, t, e)
+		}
 		return true // open, or nothing to go by: looked at again when its row moves
 	}
 	b.closed[ref] = lookOf(last)
@@ -775,10 +988,22 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 	if !ok || current.DoneAt != nil || current.Supervision == nil {
 		return true
 	}
+	if s.taskInboxRecipient(ctx, t.ID, last.MachineID, last.SessionID) {
+		if current.AgentAborted(last.MachineID, last.SessionID) || s.meetingTurnNow(last.MachineID, last.SessionID) {
+			return true
+		}
+		if s.endHeld(ctx, last.MachineID, last.SessionID) {
+			return false
+		}
+	}
 	if known && e.of(last, end) {
+		s.taskInboxTurnEnded(ctx, current, last, items, silentTurn(items))
 		if e.settled() {
 			return true
 		}
+		// A bookkeeping entry can change the revision after the turn ends. Once its native end
+		// identifies the same turn, replay its outstanding signal even if the revision keeps moving.
+		s.replayTurnSignal(t.ID, e)
 		return s.resumeTurn(ctx, current, e)
 	}
 	if settling {
@@ -802,7 +1027,8 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 		s.turnSeen(ctx, t.ID, last, end)
 		return true
 	}
-	switch s.settleTurn(ctx, last.MachineID, last.SessionID, t.ID) {
+	settled := s.settleTurn(ctx, last.MachineID, last.SessionID, t.ID)
+	switch settled {
 	case settleRefused:
 		// Its end is refused as the task stands (cancelled, its agent let go, a meeting's turn), and nothing was
 		// changed for it. Kept as seen: not read again, and not taken up when the task changes later.
@@ -813,22 +1039,26 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 	}
 	now, ok := s.turnOf(ctx, t.ID)
 	if !ok || !now.of(last, end) {
-		return false // not taken: an agent works or waits again, the node did not answer, another look is at it
+		// A recipient may settle its event while a peer still works, without closing the task's stretch.
+		return settled == settleTaken && s.taskInboxTurnEnded(ctx, current, last, items, silentTurn(items))
 	}
 	return now.State != turnDone || now.Judged != nil // a judgment that did not land is asked again (resumeTurn)
 }
 
 // resumeTurn finishes what a manager before this one, or a look that failed, left of task t's turn e: its judgment.
-// (Its untold signal is told by watchTurn.) When the last of turnJudgeTries judgments did not land either it is told
-// unjudged at once, so that the supervisor hears of the stop in any case. looked: nothing more to try now.
+// The sweep replays its untold signal after matching the revision or the native end. Failed judgment calls use their
+// own durable bounded retry budget. When the last of turnJudgeTries judgments whose result did not land is lost too,
+// the turn is told unjudged at once, so that the supervisor hears of the stop in any case.
+// looked: nothing more to try now.
 func (s *Service) resumeTurn(ctx context.Context, t Todo, e taskTurn) (looked bool) {
 	if e.State != turnDone || e.Judged != nil {
 		return true // judged: only the telling is left
 	}
 	b := &s.tasks.turns
+	serviceRetry := e.JudgeFailures > 0
 	b.mu.Lock()
 	judging := b.settling(t.ID)
-	if !judging {
+	if !judging && !serviceRetry {
 		b.tries[t.ID]++
 	}
 	tries := b.tries[t.ID]
@@ -851,12 +1081,20 @@ func (s *Service) resumeTurn(ctx context.Context, t Todo, e taskTurn) (looked bo
 			b.mu.Lock()
 			if cur, ok := b.doc.Turns[t.ID]; ok && cur.Key == e.Key && cur.Session == e.Session && !cur.Work.Equal(work) {
 				cur.Work = work.UTC()
+				cur.JudgeFailures, cur.JudgeError = 0, "" // a new stretch gets the full service-failure retry budget
 				b.doc.Turns[t.ID] = cur
 				s.saveTurnsLocked(ctx)
 			}
 			b.mu.Unlock()
 		}
 		return work
+	}
+	if serviceRetry {
+		s.autoFinishTaskRetry(t, stretch(), true)
+		if now, ok := s.turnOf(ctx, t.ID); ok && now.Judged != nil {
+			return true
+		}
+		return false // a failed judgment call is retried by the sweep, later each time
 	}
 	if tries <= turnJudgeTries {
 		s.autoFinishTask(t, stretch(), true)

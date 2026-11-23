@@ -3,17 +3,17 @@ package hub
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -65,24 +65,23 @@ func (h *Hub) withClientOp(kind string, next http.HandlerFunc) http.HandlerFunc 
 			writeErr(w, http.StatusServiceUnavailable, errors.New("no database"))
 			return
 		}
-		target, _ := json.Marshal(map[string]string{"path": r.URL.Path, "query": r.URL.Query().Encode()})
+		target := devicewire.ClientOpTarget(r.URL.Path, r.URL.Query().Encode())
 		valid := len(bytes.TrimSpace(raw)) == 0 || json.Valid(raw)
-		canonical, _ := json.Marshal([]any{kind, json.RawMessage(target), valid, opDigestParams(kind, raw, params)})
-		sum := sha256.Sum256(canonical)
+		digest := devicewire.ClientOpDigest(kind, target, valid, opDigestParams(kind, raw, params))
 		var timing *sendTiming
 		if kind == "message" {
 			timing = &sendTiming{hub: h, id: proto.SendTraceID(id), start: started}
 			timing.mark("admission_started", true)
 		}
 		op, claimed, err := h.store.BeginClientOp(r.Context(), db.ClientOp{
-			ID: id, DeviceID: principalOf(r.Context()).ID, Kind: kind, Target: target, Digest: hex.EncodeToString(sum[:]),
+			ID: id, DeviceID: principalOf(r.Context()).ID, Kind: kind, Target: target, Digest: digest,
 		})
 		timing.mark("admission_done", err == nil && op != nil)
 		if err != nil || op == nil {
 			writeErr(w, http.StatusServiceUnavailable, errors.New("operation receipt unavailable"))
 			return
 		}
-		if op.Digest != hex.EncodeToString(sum[:]) || (principalOf(r.Context()).ID != "" && op.DeviceID != principalOf(r.Context()).ID) {
+		if op.Digest != digest || (principalOf(r.Context()).ID != "" && op.DeviceID != principalOf(r.Context()).ID) {
 			writeErrorBody(w, http.StatusConflict, map[string]any{"code": "op_id_reused"})
 			return
 		}
@@ -155,28 +154,32 @@ type clientOpForgetter interface {
 // clientOpRetry: an inbox reply or hand-off the manager never got (assistant_offline) or that was cut off on the way
 // to it (assistant_in_doubt) keeps no receipt: the same request asked again goes to the manager, whose send id has it
 // sent once (extmgr inbox_reply.go sendInboxOnce, a hand-off's session.send_once), instead of the stored refusal
-// coming back for good. A notification choice and a conversation's start only release a definitely offline receipt;
+// coming back for good. A notification choice, a conversation's start and a to-do create release only a definitely offline receipt;
 // uncertain delivery stays recorded.
 func clientOpRetry(kind string, body []byte) bool {
-	if kind == meetingJustMeOp || kind == meetingFollowupOp { // never reached the manager: the same call runs again
+	if kind == meetingJustMeOp || kind == meetingFollowupOp || kind == todoAnswerOp || kind == todoRouteOp || kind == todoCreateOp { // never reached the manager: the same call runs again
 		var res struct {
 			Code string `json:"code"`
 		}
 		_ = json.Unmarshal(body, &res)
 		return res.Code == assistantwire.CodeAssistantOffline
 	}
-	if kind != "inbox_reply" && kind != "inbox_handoff" && kind != "choose" && kind != "assistant_start" {
+	if kind != "inbox_reply" && kind != "inbox_handoff" && kind != "choose" && kind != "assistant_start" && kind != "clarify" {
 		return false
 	}
 	var res struct {
 		Code string `json:"code"`
 	}
 	_ = json.Unmarshal(body, &res)
-	if kind == "choose" || kind == "assistant_start" { // No request reached the manager; the same op can safely retry.
-		return res.Code == assistantwire.CodeAssistantOffline
+	if kind == "choose" || kind == "assistant_start" || kind == "clarify" { // No request reached the manager; the same op can safely retry.
+		return res.Code == assistantwire.CodeAssistantOffline || kind == "clarify" && res.Code == assistantwire.CodeAssistantInDoubt
 	}
 	return res.Code == assistantwire.CodeAssistantOffline || res.Code == assistantwire.CodeAssistantInDoubt
 }
+
+// clientOpStoredKey carries a *bool that executeClientOp sets once it has stored the operation's receipt (or let it
+// go, for the same op id to run again): a wrapper outside withClientOp says a final state only then (todo_receipts.go).
+type clientOpStoredKey struct{}
 
 func (h *Hub) executeClientOp(w http.ResponseWriter, r *http.Request, kind, id string, next http.HandlerFunc) {
 	state := "unknown"
@@ -197,6 +200,9 @@ func (h *Hub) executeClientOp(w http.ResponseWriter, r *http.Request, kind, id s
 	next(capture, r)
 	capture.WriteHeader(http.StatusOK)
 	state = clientOpState(capture.status, capture.body.Bytes())
+	if kind == todoAnswerOp || kind == todoRouteOp { // read as its final todo_send_state is (todo_receipts.go)
+		state = todoReceiptState(capture.status, capture.body.Bytes())
+	}
 	saved := clientOpResult{Status: capture.status, Body: capture.body.Bytes(), ContentType: capture.header.Get("Content-Type")}
 	result, _ = json.Marshal(saved)
 	var err error
@@ -211,6 +217,9 @@ func (h *Hub) executeClientOp(w http.ResponseWriter, r *http.Request, kind, id s
 		err = persist()
 	}
 	finished = true
+	if stored, ok := r.Context().Value(clientOpStoredKey{}).(*bool); ok {
+		*stored = err == nil
+	}
 	if err != nil {
 		writeErrorBody(w, http.StatusServiceUnavailable, map[string]any{"state": "unknown"})
 		return
@@ -268,9 +277,10 @@ func (h *Hub) waitClientOp(w http.ResponseWriter, r *http.Request, op *db.Client
 		case "unknown":
 			// Start, checkout and reply retries must not repeat side effects or replace a recorded HTTP outcome.
 			// A recovered pending operation has no result and remains explicitly unknown. A meeting's Just me or
-			// follow-up call replays what it answered, a definite failure too (meeting_receipts.go).
+			// follow-up call, and an answer or a message to a to-do, replay what they answered, a definite failure
+			// too (meeting_receipts.go, todo_receipts.go).
 			if op.Kind == "start" || op.Kind == "assistant_start" || op.Kind == "worktree_create" || op.Kind == "lark_send" || op.Kind == "inbox_reply" || op.Kind == "inbox_handoff" || op.Kind == "lark_thread_reply" ||
-				op.Kind == meetingJustMeOp || op.Kind == meetingFollowupOp {
+				op.Kind == meetingJustMeOp || op.Kind == meetingFollowupOp || op.Kind == todoAnswerOp || op.Kind == todoRouteOp || op.Kind == todoCreateOp {
 				var result clientOpResult
 				if json.Unmarshal(op.Result, &result) == nil && result.Status >= 200 && result.Status <= 599 {
 					writeClientOpResult(w, result)
@@ -321,23 +331,73 @@ func (h *Hub) getClientOp(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, op)
 }
 
+// clientOpsCleanupEvery bounds the periodic client_ops cleanup (var for tests).
+var clientOpsCleanupEvery = 24 * time.Hour
+
+type clientOpsWake struct {
+	mu       sync.Mutex
+	wake     chan struct{}
+	deferred bool
+}
+
+func (c *clientOpsWake) channel() chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.wake == nil {
+		c.wake = make(chan struct{}, 1)
+	}
+	return c.wake
+}
+
+func (h *Hub) cleanupClientOps(ctx context.Context) {
+	if h.store == nil {
+		return
+	}
+	if !h.quiesce.beginOrDefer(func() {
+		h.clientOps.mu.Lock()
+		h.clientOps.deferred = true
+		h.clientOps.mu.Unlock()
+	}) {
+		return
+	}
+	defer h.quiesce.end()
+	cleanCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err := h.store.CleanupClientOps(cleanCtx, time.Now().UTC().AddDate(0, 0, -30))
+	cancel()
+	if err != nil && ctx.Err() == nil {
+		h.logf("clean client operations: %v", err)
+	}
+}
+
+func (h *Hub) wakeClientOps() {
+	h.clientOps.mu.Lock()
+	deferred := h.clientOps.deferred
+	h.clientOps.deferred = false
+	ch := h.clientOps.wake
+	h.clientOps.mu.Unlock()
+	if !deferred || ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
 func (h *Hub) startClientOps(ctx context.Context) error {
 	if err := h.store.RecoverClientOps(ctx); err != nil {
 		return err
 	}
+	wake := h.clientOps.channel()
 	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
+		ticker := time.NewTicker(clientOpsCleanupEvery)
 		defer ticker.Stop()
 		for {
-			cleanCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			err := h.store.CleanupClientOps(cleanCtx, time.Now().UTC().AddDate(0, 0, -30))
-			cancel()
-			if err != nil && ctx.Err() == nil {
-				h.logf("clean client operations: %v", err)
-			}
+			h.cleanupClientOps(ctx)
 			select {
 			case <-ctx.Done():
 				return
+			case <-wake:
 			case <-ticker.C:
 			}
 		}

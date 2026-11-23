@@ -21,6 +21,20 @@ What made it into the product is in `docs/assistant/todos.md` ("Delivery") (#330
 - **Count infrastructure work separately**: tasks that fix the Agents' own runtime environment get a cap. After half a day, stop and change course (another machine, another model, handle it manually) so it does not crowd out real requirements.
 - **Prepare a real environment first**: before dispatching work that must ship, confirm there is an environment to deploy to and test in (test hub, simulator, real device); if not, make "set up the environment" the first task instead of letting every task write "untested".
 
+## Keep a mirror claim separate from its facts and retry status (#10290)
+
+A claimed scheduled-briefing completion is already handled by its dedicated mirror, including while the post is
+pending or being retried. Returning only "no facts" for that state lets a repeated callback send a generic card
+under a different UUID. Check the retained turn claim before the facts TTL, and distinguish handled from ordinary
+follow-up turns. During an existing mirror retry, unreadable channel status is not proof that pushes are disabled:
+consume that bounded retry budget and recheck before posting. Keep the same card and key; do not claim restart or eviction
+deduplication from this memory-only state.
+
+Classify every Feishu frequency-limit code at the shared rate-limit boundary (#11849). `boardPut` deliberately keeps
+the existing board after a transient edit failure so the next update edits that message; treating error 230429 as
+permanent replaces it with a duplicate board. Cover both typed and text-wrapped errors, and assert the next update's
+message id rather than only counting posts.
+
 ## Stage evidence is not runtime state (#3380)
 
 The final handoff alone misses progress while an agent still works or waits on background jobs. Observe complete assistant replies from session lists and followed items too, but never use user text, tool output or partial deltas as delivery evidence. Skip list snippets ending in an ellipsis and items marked with `FullSize`; never fetch full transcripts in the session-list event queue. Final handoffs and complete followed items supply the missing evidence. Keep list-row deduplication to avoid repeated deploy checks.
@@ -35,3 +49,18 @@ Every path that closes a task has to apply the delivery rule, not only the judge
 - "Waiting on the user" is still just a group in the assistant snapshot; there is no card where you can tick items one by one and approve them all with one tap.
 - Following up on blockers (checking CI again at a set time, nudging reviewers) is handed to the supervisor (#3124): when a supervised task has not been delivered, the supervisor message includes the blocker, but there is no automatic check-back at a set time yet.
 - There are no statistics or alerts yet for the share of infrastructure tasks or their cap.
+
+## Read a task's kind from evidence, not from every word in its criteria (#11590)
+
+A verification task's third criterion said what to do if the check found a code problem ("fix it, add unit tests and
+redeploy; otherwise leave the code alone"). The stage kind matched "code" and "deploy" anywhere in `done_when`, so the
+task drew the six-step code bar, and since acceptance moves only deployed work to Verified (#3240) the bar stayed on
+Develop after the task was accepted. Words that only name what is read or used ("cite the code", "a test account",
+"redeploy") had the same effect, and a task with no criteria defaulted to code.
+
+- Prefer facts the hub observed: a linked PR, a closeout's commit or branch artifact, a held delivery, a read-only start.
+  Keep the facts on the stage record so a later recompute does not lose them (a recompute that passes `readonly=false`
+  makes a read-only task code by its words).
+- From words, take only a change asked for outright, outside conditional and negated sentences, and let a doubt read
+  general: a missing strip costs nothing until the change appears; a strip on work that changes no code never moves.
+- Finished work needs an ending the strip can show without claiming a step: Done after the steps taken, not Verified.

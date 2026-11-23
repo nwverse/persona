@@ -22,6 +22,7 @@ private struct ExtensionRowActions: ViewModifier {
     var model: (any ExtensionViewControlling)?
     @Binding var link: LinkTarget?
     @Environment(\.extensionDisplayedRevision) private var displayed
+    @Environment(\.extensionRowSwipes) private var swipes
     @Environment(AppModel.self) private var app
     /// The action asking first: kept apart from the alert's flag, which the alert clears before its button runs.
     @State private var asking: ExtensionRowAction?
@@ -41,8 +42,9 @@ private struct ExtensionRowActions: ViewModifier {
             content
                 .contextMenu { ForEach(Array(ordered.enumerated()), id: \.offset) { _, a in button(a) } }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    // The first sits at the edge: the destructive one there, as Mail puts Delete.
-                    ForEach(Array(ordered.filter { $0.swipe == true }.reversed().enumerated()), id: \.offset) { _, a in
+                    // The first sits at the edge: the destructive one there, as Mail puts Delete. None for rows side by
+                    // side in one list row (UI version 8): a swipe moves the list row, which is all of them.
+                    ForEach(Array(ordered.filter { swipes && $0.swipe == true }.reversed().enumerated()), id: \.offset) { _, a in
                         button(a, role: false).tint(Self.destructive(a) ? Theme.danger : Theme.Hue.gray)
                     }
                 }

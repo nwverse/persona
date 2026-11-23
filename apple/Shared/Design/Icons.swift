@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 extension Theme {
     /// SF Symbols by meaning: one meaning, one symbol. Views write `Image(systemName: Theme.Icon.copy)`, not the name.
@@ -30,6 +31,9 @@ extension Theme {
         /// A status dot (online, unread).
         static let dot = "circle.fill"
         static let time = "clock"
+        /// Someday on a to-do (#10465): the owner's own "not now", put aside for some other day (its swipe and its
+        /// menu). Not `time`, which is Waiting's clock.
+        static let someday = "moon.stars.fill"
         /// An agent that only waits on background commands (Waiting in the Background, #6045): the mark in place of its dot.
         static let backgroundWaiting = "clock.fill"
         /// Agents grouped or ordered by their state (the Agents list's By Status / By Status).
@@ -45,6 +49,10 @@ extension Theme {
         /// Calls moved to the background.
         static let backgroundTask = "gearshape.2"
         static let backgroundTaskFilled = "gearshape.2.fill"
+        /// Running and recently completed background tasks in Agent chat.
+        static let backgroundTasks = taskPlan
+        /// A background command that watches an ongoing signal.
+        static let backgroundMonitor = screen
         /// A multi-agent workflow running in the background (Claude Code's Workflow tool).
         static let workflow = "flowchart"
         static let pinned = "pin.fill"
@@ -110,6 +118,9 @@ extension Theme {
         static let permissions = "lock.shield"
         /// The two little arrows after a value that opens a menu of choices.
         static let choices = "chevron.up.chevron.down"
+        /// The small chevron after an action's words that opens a menu of how far it goes (a pull-down, as UIKit draws
+        /// one): a group title's Mark All Seen in the Inbox (#10422). A value's menu of choices is `choices`.
+        static let pullDown = expand
         static let effort = "gauge.with.dots.needle.50percent"
         /// The effort level left to the model (its own default, Thinking Effort › Auto).
         static let effortAuto = "gauge.with.dots.needle.bottom.50percent"
@@ -296,6 +307,8 @@ extension Theme {
         /// Archive a conversation (out of the list, kept under Archived) and bring it back.
         static let archive = "archivebox"
         static let unarchive = "tray.and.arrow.up"
+        /// Move To…: file a chat or an Agent under one of the owner's long-running matters, or on its own (#11516).
+        static let moveTo = "rectangle.stack.badge.plus"
         static let mute = "bell.slash"
         static let unmute = "bell"
         /// An Inbox rule: where a chat's, sender's or repository's items go and what the AI twin does with them.
@@ -340,9 +353,8 @@ extension Theme {
         static let collapse = "chevron.up"
         /// All of the lines hidden between a diff's hunks shown at once (UI version 5's `context`, #827): arrows out of a line.
         static let unfoldLines = "arrow.up.and.line.horizontal.and.arrow.down"
-        /// Holding the mic: slide this way to drop what was heard, or up to keep dictating hands-free (`DictationHold`).
+        /// Holding the mic: slide this way to drop what was heard (`DictationHold`).
         static let slideToCancel = back
-        static let slideToLock = collapse
         /// Clears an agent's context (/clear), in the 「+」 menu and panel.
         static let clearContext = "eraser"
 
@@ -362,6 +374,9 @@ extension Theme {
         static let ai = "sparkles"
         /// The composer's glow while a reply is generating (Settings › Appearance › Glow While Replying).
         static let composerGlow = "wand.and.rays"
+        /// A chat's screenshot with the assistant's banner at its top (Settings › Appearance › Persona Banner in
+        /// Screenshots, #9508).
+        static let screenshotBanner = "menubar.rectangle"
         /// The Agents tab and what stands for it.
         static let agents = "chevron.left.forwardslash.chevron.right"
         /// An agent run from its command line, not its desktop app: the badge on its mark (`AgentMark`, #6390).
@@ -398,7 +413,7 @@ extension Theme {
         /// A Moments (Feishu Moments) post in the inbox: the company's public feed.
         static let moments = "newspaper"
         static let folder = "folder"
-        /// Home: Back to Main Chat (the main conversation), a repository's main checkout in the Agents list's By Repository (as Orca
+        /// Home: the main conversation (Back to Main Chat, its row in the sidebar and in search results, #9973), a repository's main checkout in the Agents list's By Repository (as Orca
         /// and the web mark it), and the computer's home folder in the file page's path bar.
         static let home = "house"
         /// Home accessories and scenes (HomeKit, #2285).
@@ -435,6 +450,10 @@ extension Theme {
         static let screen = "display"
         /// Which of a Mac's displays its VNC shows, when it has more than one (#80).
         static let displays = "display.2"
+        /// Phone Screen (#9314): one of the Mac's windows on a portrait display of its own, the live screen's third mode.
+        static let phoneScreen = "rectangle.portrait"
+        /// The Mac's windows to put on Phone Screen's display (#9314).
+        static let macWindows = "macwindow.on.rectangle"
         /// The Mac's pointer drawn over its screen in the app's VNC (#1343), when the Mac sends none of its own.
         static let pointer = "cursorarrow"
         /// VNC in a small window over everything (picture in picture).
@@ -582,6 +601,8 @@ extension Theme {
         /// The user's own messages.
         static let user = "person.fill"
         static let inbox = "tray.full"
+        static let starredMessage = pluginStar
+        static let starredMessageFilled = "star.fill"
         /// The conversations Persona opened by itself (the Inbox's AI twin, scheduled tasks, Lark /agent…): the sidebar's
         /// Auto Chats (#3266).
         static let autoConversations = "sparkles.rectangle.stack"
@@ -595,8 +616,10 @@ extension Theme {
         static let chatBot = "message.badge.waveform"
         /// Settings › Channels: the ways of talking to Persona (docs/extensions/channels.md).
         static let channels = "ellipsis.bubble"
-        /// A voice channel (talking to Persona out loud), and a chat's way into a voice conversation (Voice Chat).
-        static let voiceChannel = "waveform.and.mic"
+        /// A voice channel (talking to Persona out loud), and a chat's way into a voice conversation (Voice Chat): a
+        /// handset, since it is a call with Persona and sits beside dictation's microphone (#8730). Filled, apart from
+        /// `phoneCall` (the phone's own calls).
+        static let voiceChannel = "phone.fill"
         /// The voice conversation's bar (docs/assistant/voice.md「UI」). Mute: turns the call's microphone off; muted, the button
         /// shows `voiceUnmute` (Unmute), the same mic filled like a toggle that is on, as the iOS Phone app's Mute. The muted
         /// orb wears `voiceMute`.
@@ -608,6 +631,20 @@ extension Theme {
         static let voiceCaptions = "captions.bubble"
         /// Voice: the voice Persona speaks in.
         static let voiceTimbre = "person.wave.2"
+        /// Call Persona (#9290): a phone call to Persona through the system's call UI, from the main conversation's +.
+        /// An outgoing handset, apart from Voice Chat's `voiceChannel` beside it (the chat's own voice, in the app).
+        static let callPersona = "phone.arrow.up.right"
+        /// The call screen's Speaker: the call's sound on the loudspeaker, a toggle (its round control fills when on), the
+        /// Phone app's glyph for it. Not `voiceSpeaking` (Persona speaking) nor `answersAloud` (the meeting room's answers
+        /// said out loud).
+        static let callSpeaker = "speaker.wave.3"
+        /// The call screen's Audio: picks where the call's sound goes (the system's route picker) when Bluetooth, a car
+        /// or headphones are there; the system's own glyph for it.
+        static let callAudioRoute = "airplay.audio"
+        /// The call screen's Minimize: down to the bar that returns to the call (the call goes on).
+        static let callMinimise = expand
+        /// The voice bar's way back to a system call's full screen (the call screen).
+        static let callExpand = enlarge
         /// Pairing a device or a bot with a one-time code.
         static let pairing = "link.badge.plus"
         /// Settings › Connectors: the data sources Persona reads and acts in (this device, mail, Lark).
@@ -732,8 +769,16 @@ extension Theme {
         static let sideSessions = "rectangle.portrait.on.rectangle.portrait"
         /// A conversation with an agent (an Agents chat, a session quoted as context, the chats in Storage).
         static let agentChat = "bubble.left.and.text.bubble.right"
-        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording).
+        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording, the drawer's
+        /// Meetings, #8731).
         static let meeting = "person.2.wave.2"
+        /// Invite someone into a meeting (#8731: Persona, on the Meetings home and in the meeting room).
+        static let invite = "person.badge.plus"
+        /// Leave the meeting room for the rest of the app while the meeting records (#8731: the room's collapse).
+        static let minimizeRoom = "chevron.compact.down"
+        /// Persona says its answers out loud in the meeting / only on screen (#8731: the meeting room's speaker).
+        static let answersAloud = "speaker.wave.2"
+        static let answersOnScreen = "speaker.slash"
         /// Persona stops attending the meeting being recorded (#2981: the recording Live Activity's Turn Off).
         static let attendanceOff = "waveform.slash"
         /// Talk to Persona in the meeting (#3862 phase 4): held on the meeting page, a talk window from the Live Activity.
@@ -817,6 +862,15 @@ extension Theme {
         static let openAI = "brand-openai"
         /// TRAE's mark (Simple Icons' trae.svg), a template image: it takes the foreground color.
         static let trae = "brand-trae"
+        static let opencode = "brand-opencode"
+        static let pi = "brand-pi"
+        static let gemini = "brand-gemini"
+        static let cursor = "brand-cursor"
+        static let grok = "brand-grok"
+        static let agy = "brand-agy"
+        static let dsh = "brand-dsh"
+        static let kimi = "brand-kimi"
+        static let copilot = "brand-copilot"
         static let lark = "brand-lark"
         /// GitHub's mark (primer/octicons mark-github), a template image: it takes the foreground color.
         static let github = "brand-github"
@@ -840,7 +894,11 @@ extension Theme {
         /// they fit the box: a round or wide mark fills it (1), a full square looks bigger than a circle of the same
         /// width, so it is drawn smaller, as on Material's keyline grid (18 of 24 for a square, 20 for a circle).
         static func optical(_ asset: String) -> CGFloat {
-            asset == microsoft ? 0.88 : 1
+            switch asset {
+            case microsoft, opencode, pi, kimi: 0.88
+            case cursor: 0.92
+            default: 1
+            }
         }
 
         /// Marks whose artwork is a circle: they fill a round badge (`BrandBadge`); any other shape is drawn at

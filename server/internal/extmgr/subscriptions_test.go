@@ -147,6 +147,13 @@ func TestSubscriptionGenerate(t *testing.T) {
 	if _, err := m.JSON(ctx, in); !errors.Is(err, subscriptions.ErrNoModel) {
 		t.Fatalf("nothing set up: %v", err)
 	}
+	modelFailure := &rpc.Error{Code: assistantwire.CodeModelFailed, Message: "the upstream model is missing"}
+	answer = func(json.RawMessage) (json.RawMessage, error) {
+		return nil, modelFailure
+	}
+	if _, err := m.JSON(ctx, in); err != modelFailure || errors.Is(err, subscriptions.ErrNoModel) {
+		t.Fatalf("an upstream model failure was rewritten: %v", err)
+	}
 	until := time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)
 	answer = func(json.RawMessage) (json.RawMessage, error) {
 		return nil, &rpc.Error{Code: assistantwire.CodeModelPaused, Message: "held", Data: json.RawMessage(`{"reason":"quota","until":"` + until + `"}`)}
@@ -204,7 +211,7 @@ func TestSubscriptionsAreInboxAndKnowledgeBaseSources(t *testing.T) {
 	at := now.Add(-2 * time.Minute)
 	items := []subscriptions.Item{{UID: "n1", Title: "Office hours moved", Time: &at, Body: "Made-up text", Kind: "sub_notice"},
 		{UID: "n2", Title: "Form due", Time: &at, Body: "Made-up text", Kind: "sub_notice"}}
-	if err := store.CommitRun(ctx, subscriptions.RunCommit{Sub: sub, Revision: 1, Items: items, Now: mark}); err != nil {
+	if _, err := store.CommitRun(ctx, subscriptions.RunCommit{Sub: sub, Revision: 1, Items: items, Now: mark}); err != nil {
 		t.Fatal(err)
 	}
 	h.subs = subscriptions.New(h.subscriptionOptions(store))

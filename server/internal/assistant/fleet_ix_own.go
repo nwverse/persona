@@ -77,6 +77,16 @@ func (s *Service) askOnPhone(list []proto.Interaction) {
 	now := map[string]bool{}
 	for _, ix := range list {
 		now[ix.ID] = true
+		f.mu.Lock()
+		p := f.interactions[ix.ID]
+		prepared := p != nil && p.prepared != nil && !p.prepared.terminal
+		f.mu.Unlock()
+		if prepared {
+			// The original caller and the prepared timer own this operation's whole
+			// lifecycle, before and after clarification. A snapshot waiter must not
+			// cancel the shared card when its own snapshot withdraws.
+			continue
+		}
 		if q := f.asked[ix.ID]; q != nil {
 			if q.ended.IsZero() || time.Since(q.ended) < askAgainAfter || s.answerKept(ix.ID) {
 				continue

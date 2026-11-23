@@ -2,9 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { t } from "../i18n";
+import { Icon } from "../ui/icons";
 import type { AgentSession } from "../lib/agents";
 import type { Session } from "../lib/types";
-import { setAgentDetails, setContextAsUsed } from "../lib/context-usage";
+import { setAgentDetails } from "../lib/context-usage";
 import { AgentRow, PersonaRow, SessionRow } from "./Sidebar";
 import { conversationMenuItems } from "./ConversationMenu";
 
@@ -107,23 +108,20 @@ describe("an agent's row with 「Agent 行显示详情」 (#2430)", () => {
   const render = (s: Session, extra = {}) => renderToStaticMarkup(<SessionRow {...rowProps} s={s} active={false} {...extra} />);
   afterEach(() => {
     setAgentDetails(false);
-    setContextAsUsed(false);
   });
   it("is byte for byte the same as before while the setting is off", () => {
     expect(render(detailed)).toBe(render(session)); // the model and context change nothing
     expect(render(detailed)).not.toContain("opus 5.5");
   });
-  it("adds a second line with folder, model and what is left when on", () => {
+  it("adds a second line with folder, model and labelled context used when on", () => {
     setAgentDetails(true);
     const html = render(detailed);
     expect(html).toContain("opus 5.5");
-    expect(html).toContain("61%");
+    expect(html).toContain("上下文 39%");
     expect(html).toContain("code");
   });
-  it("shows what is used with 「上下文显示为已用」 and warns at 80%", () => {
+  it("uses amber caution from 80% context used", () => {
     setAgentDetails(true);
-    setContextAsUsed(true);
-    expect(render(detailed)).toContain("39%");
     expect(render({ ...detailed, context_tokens: 170000 })).toContain("text-orange");
     const danger = render({ ...detailed, context_tokens: 185000 });
     expect(danger).toContain("text-orange");
@@ -157,6 +155,14 @@ describe("a personal agent's row", () => {
 describe("Persona's main row", () => {
   const main: Session = { machine_id: "hub", session_id: "main", title: "Persona", cwd: "/", status: "idle", state: "idle", assistant: true };
   const props = { reg: () => () => {}, hover: () => {}, go: () => () => {}, main };
+  it("uses the existing home symbol and one Main chat line, without the assistant name or face", () => {
+    const html = renderToStaticMarkup(<PersonaRow {...props} active />);
+    const home = renderToStaticMarkup(<Icon name="home" size={14} stroke={1.8} className="shrink-0 text-ink" />);
+    expect(html).toContain(home);
+    expect(html).toContain(t("sidebar.main_chat"));
+    expect(html).not.toContain("flex-col\"><span class=\"truncate text-[13.5px] font-semibold text-ink\">Persona");
+    expect(html.replace(/<[^>]+>/g, "").match(new RegExp(t("sidebar.main_chat"), "g"))).toHaveLength(1);
+  });
   it("has a ⋯ for the conversation's menu when the main conversation is there", () => {
     const html = renderToStaticMarkup(<PersonaRow {...props} active={false} onMenu={() => {}} />);
     expect(html).toMatch(/<button [^>]*aria-label="对话的操作"[^>]*aria-haspopup="menu"/);
@@ -164,7 +170,7 @@ describe("Persona's main row", () => {
   it("draws no ⋯ without it", () => {
     expect(renderToStaticMarkup(<PersonaRow {...props} main={undefined} active={false} />)).not.toContain("对话的操作");
   });
-  it("whose menu has only 拷贝会话 ID and 结束…", () => {
+  it("whose menu has only 复制会话 ID and 结束…", () => {
     expect(conversationMenuItems(main, { main: true }).map((i) => i.key)).toEqual(["copy", "end"]);
   });
 });

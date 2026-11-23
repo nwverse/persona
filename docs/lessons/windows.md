@@ -2,10 +2,17 @@
 
 Read this before changing the Windows node (#1090), or developing or testing `personad` on a Windows computer. See [windows.md](../operations/windows.md) for the design and current status.
 
+## Release packages and native verification
+
+- **Keep `.exe` through the entire node-package path**: a Windows release is `personad-windows-amd64.exe.gz` or `persona-node-windows-amd64.exe.gz`, not its POSIX spelling. Manifest parsing removes both suffixes to get `windows-amd64`; manager selection accepts only that exact Windows name; download and cache removal strips only `.gz`. A connector's Link report does not verify personad or persona-node. A native report binds its program, version, build, feed, compressed bytes and decompressed PE bytes; node programs must also match the `latest.json` carried in that same receipt.
+- **A Windows build missing from the release stays behind on the hub**: releases up to v0.9.1 list no Windows `personad` in `latest.json`, so a hub's own update never replaced `bin/nodes/personad-windows-<arch>.exe`, and Redeploy sent the old build as the hub's version until the node's self-check refused it (#12958). When a Windows Redeploy fails its self-check, look at what `bin/nodes` holds for Windows and whether the release's manifest lists it.
+- **Cross-compilation is not native execution**: Go can compile Windows programs on a Mac, and their PE architecture and build stamp can be checked there, but `windows_release.py` must run the real `version`, `version -v` and node self-check on the matching Windows architecture before a receipt is publishable. SHA-256 alone does not establish what the program reports. The CLI's native verification is distinct from the Electron installer's required Authenticode signature.
+
 ## Development environment
 
 - **Check out the repository with LF endings**: Git for Windows defaults to `core.autocrlf=true`, so every checked-out `.go` file has CRLF endings. `gofmt -l` reports many files, and scripts and golden files can also fail to match.
   After cloning, run `git config core.autocrlf false && git config core.eol lf` in this repository, then `git rm -q --cached -r . && git reset -q --hard` to check it out again (commit or stash your changes first).
+- **Retained third-party bytes must bypass text conversion**: `-whitespace` only controls whitespace checks; it does not keep `core.autocrlf=true` from changing checkout or archive bytes. Use `-text` for checksum-pinned notices and inventories. Preserve their original LF, CRLF or mixed endings instead of normalizing them or updating their pins to match a converted copy. Test staging, checkout and archive behavior with autocrlf enabled, including ordinary neighboring files that should still convert (#9342).
 - **Unix socket paths must not exceed 108 bytes**: Go supports AF_UNIX on Windows, but a long path makes `bind` return `invalid argument` (not “unsupported”).
   Paths such as `~/.persona/node-attach.sock` are fine; do not put test sockets deep inside temporary directories (Claude Code's scratchpad exceeded the limit).
 - **`/tmp` is not the temporary directory**: On Windows, `os.MkdirTemp("/tmp", …)` means `\tmp` on the current drive, which usually does not exist. Tests that need short paths should use platform-specific files (`listen_*.go` in `orcarttest`).
@@ -28,6 +35,8 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
 - **Environment-variable values can contain spaces**: Whitespace-splitting regexes such as `envVarRe` are for `ps -E`; they truncate `C:\Users\A B\.claude`. On Windows, fetch the complete value by name (`pickEnv`); names are case-insensitive.
 - **There is no “foreground process group” or “suspended” state**: On Windows, the Orca host considers claude / codex foreground when its parent-process chain contains no agent process for the same pane. See [windows.md](../operations/windows.md) (“Orca”).
 - **PIDs are reused quickly and do not increase monotonically**: Sorting by PID to put wrappers first does not work on Windows. Sort by start time; when walking the parent chain, require ancestors to have started before the current process.
+- **Git Bash breaks the process tree**: MSYS2 emulates `fork`, and for `cd x && cmd` the forked bash that runs `cmd` as a new Windows process exits, so `cmd`'s parent pid names a process that is gone. A walk down from the agent (port discovery) or up to it misses everything below that point, and whether it happens depends on the command line: a lone `python -m http.server` keeps its chain, `cd dir && npx …` loses it (#9815).
+  Claude Code's Bash tool is Git Bash on Windows, so this is the usual case, not an edge. A process's engine pane variables (`ORCA_PANE_KEY`, `HERDR_PANE_ID`…) survive it: MSYS passes the environment through its fork and exec. Use them where the tree comes up empty.
 
 ## Paths the hub reads
 
@@ -36,6 +45,22 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
 - **`path` is not a node's syntax either**: it knows only `/` on every system, Windows included. Task workspaces checked the node's answers with `path.IsAbs`, so a Windows computer's `C:\…` was never absolute, and every writable task in a Git directory there failed with "Workspace C:\… is not an available absolute directory" (#7106).
   A path that is checked or joined and then sent back to its node goes through `proto.NodeAbs`, `proto.NodeClean` and `proto.NodeJoin`. They keep the node's own syntax (backslashes, an upper-case drive letter, a root of `C:\` or `\\server\share` that `..` cannot climb out of), so the node reads the result as its own path.
   Two of a node's paths compare by `proto.NodeKey`, which also ignores case for a Windows path: `C:\Code\App` and `c:\code\app` are one directory there. Keys are for comparing only; never send one to the node.
+
+## Paths the node's file tools take
+
+- **A short (8.3) name is a second name for the same entry**: NTFS usually gives a name that is not valid 8.3 a short alias as well (`C:\Users\EXAMPL~1`, `PERSON~1` for `.persona`, `GIT-CR~1` for `.git-credentials`). Windows hands them out itself: `TEMP` and `TMP` are usually `C:\Users\EXAMPL~1\AppData\Local\Temp`, so agents mention such paths. The path guard compares names, so before #9891 an alias got past it: secrets were readable, `.persona` took writes, files in the home reached through the home's alias were refused as read-only, and a save, move or copy through an alias gave the file the alias as its name.
+  The file tools resolve every client path through `absPath`, which spells out short names with `GetLongPathName` (`longPath`, `node/longpath_windows.go`) before `realPath` and the guard see them. A new file tool resolves its paths the same way, its last name included (`statDetail` once joined that name as asked). `GetLongPathName` keeps link and junction names, and it needs the `\\?\` prefix past `MAX_PATH` unless long paths are switched on. Test with a home whose own name has an alias (`EvalSymlinks` the temp folder first: it is often written with aliases), and skip where the volume makes none.
+- **`filepath.EvalSymlinks` does not see through a junction** (2026-11-20, #11277). A directory junction (`mklink /J`) is how a Windows user points one folder at another, for example Persona's private Claude profile at `~/.claude`. Go does not treat a junction as a symbolic link, and with Go 1.27.1 `EvalSymlinks` returned an error for a path through one. Code that dedupes directories by resolved path then sees a junction and its target as two directories. The assistant memory merge took the memory, reached through the linked profile, for another profile's copy of itself, and backed it up on every run. To tell whether two paths are one directory, compare them with `os.Stat` and `os.SameFile`, which follow a junction, as `recentDirs` and `memoryCopies` do. In tests, `cmd /c mklink /J` makes a junction without administrator rights.
+
+## The Recycle Bin (file.trash)
+
+`node/trash_windows.go` (#9933), checked on a Windows 11 machine on 2026-11-17:
+
+- **With `FOF_NOCONFIRMATION` the shell deletes for good, silently, what it can't recycle**: `FOF_ALLOWUNDO` asks for the Recycle Bin only "if possible". A file on a network share (`\\localhost\C$\…`) or with a path over `MAX_PATH` would have been deleted permanently, and the warning about it is the confirmation `FOF_NOCONFIRMATION` answers. `SHFileOperation` can't tell beforehand. `IFileOperation` with a progress sink can: `PreDeleteItem` gets `TSF_DELETE_RECYCLE_IF_POSSIBLE` (0x80) only for an item that will be recycled; for any other the sink returns `E_ABORT`, and the item and a folder's contents stay.
+- **A recycled item's result is a success code that isn't `S_OK`**: `PostDeleteItem`'s `hrDelete` was `COPYENGINE_S_DONT_PROCESS_CHILDREN` (0x00270008) for a file and for a folder. Test failure by the sign (`int32(hr) < 0`), never `!= S_OK`: the first version answered an error for a file that was already in the bin. A file open in another program fails with `COPYENGINE_E_SHARING_VIOLATION_SRC` (0x80270027), which has no Windows message; word it.
+- **Where an item went**: `PostDeleteItem`'s `psiNewlyCreated` is the item in the bin, `<volume>\$Recycle.Bin\<user SID>\$R<6 characters><ext>`, and `$I<same>` beside it holds the original path (with long names, even when the delete was given an 8.3 path) and the time. Undo renames the `$R…` back and removes the `$I…`; Explorer then no longer lists it. A junction is recycled as the junction; its target keeps its files.
+- **Tests that recycle use the user's own Recycle Bin**: there is no bin per test. Recycle only what is in the test's temp folders and put back what the test leaves, found by the original paths in the `$I` files (`keepNothingRecycled`). Shared tests that look for trashed files in a trash folder skip on Windows (`skipOnRecycleBin`).
+- **A COM sink in Go**: `windows.NewCallback` takes pointer-sized parameters, pointer types included. Declare COM objects as `*shellItem`, not `uintptr`, so no `unsafe.Pointer(uintptr)` conversion is left for `go vet` to flag. COM keeps the sink's address after the call that is given it, so the sink is a package variable (never moved), and its callbacks are made once (`NewCallback` has a limit per process).
 
 ## Scheduled tasks (automatic startup)
 
@@ -134,14 +159,20 @@ See [windows.md](../operations/windows.md) ("Codex") and [codex.md](../integrati
   `orcart` selects the transport by platform: on Windows, `named-pipe` first (`tailscale/go-winio` for dialing), then `unix`; on other platforms, only `unix`. The protocol (one JSON per line) is unchanged.
 - Orca terminals have `ORCA_PANE_KEY` / `ORCA_AGENT_PANE`, just like macOS, plus `ORCA_USER_DATA_PATH` (`%APPDATA%\orca`).
 - Paths in the `topologyRevisions` keys of `terminal.list` mix separators (`C:/Users/…` and `C:\Users\…` on the same computer). Do not compare them directly to `worktreePath` as strings.
+- **Orca's terminals run Windows PowerShell 5.1 unless the user changed Orca's `terminalWindowsShell`**. A POSIX line typed there (`cd -- '…' && …`, `'\''` quoting) leaves no error in any log: PowerShell rejects `&&`, or an odd count of quotes leaves it at its `>>` continuation prompt, and the node waits for an Agent that never starts (#9810).
+  Open the terminal in the shell you type for instead of translating the quoting: `terminal.create` takes `shell` (`git-bash`, `powershell.exe`, `pwsh.exe`, `cmd.exe`, `wsl.exe`), and only a runtime that advertises `terminal.create-shell-selection.v1` in `status.get` honours it; an older one ignores the field and starts its default.
+  The fake runtime (`orcarttest`) has no shell, so unit tests cannot show this: check a change to what the node types into Orca against the real Orca on Windows.
 
 ## herdr
 
 - **herdr's API is a named pipe whose name is the socket path**: herdr uses interprocess's `GenericNamespaced`; `C:\Users\<you>\AppData\Roaming\herdr\herdr.sock` maps to
   `\\.\pipe\C:\Users\<you>\AppData\Roaming\herdr\herdr.sock`. The path itself is not a file, so `os.Stat` on it always reports missing; stat the pipe name instead. The configuration directory is `%APPDATA%\herdr`, not `~/.config/herdr`.
 - **`herdr server` started over ssh exits with the ssh session** (Windows OpenSSH ends the entire job when closing a session); `Start-Process` behaves the same way. For a persistent server, use a scheduled task triggered at login, running in the user's desktop session.
-- **Panes default to PowerShell**: node's input commands use POSIX shell syntax (`'…'` quotes, `A=1 cmd`), which PowerShell splits incorrectly. Set `[terminal] default_shell` in `config.toml` to Git Bash.
+- **Panes default to PowerShell**: the node's start commands use POSIX shell syntax (`'…'` quotes, `A=1 cmd`), which PowerShell splits incorrectly. Setting `[terminal] default_shell` in `config.toml` to Git Bash is the setup known to work.
   This key must be under `[terminal]`; at the top level, `reload-config` only reports “unknown config key default_shell; ignoring key.”
+- **Quote a typed start for the shell that reads the typed line, not the shell that reads the launcher definitions** (#8107): launcher sync's `"shell": "bash"` describes the Git Bash that reads `~/.bashrc`, while the pane that receives the line is PowerShell. `shellQuote` turns a Windows path into the POSIX shape `'C:'\\'Users'…`, which PowerShell splits into separate arguments. For a PowerShell pane the node therefore writes the whole POSIX start, with its `PERSONA_HOME` / `unset` prefix, to a start file and types only `& '<Git Bash>' -ic '<source command>'`; the leading `&` is required to run a quoted program. A PowerShell single-quoted string must double each of the five characters PowerShell takes for a single quote (ASCII `'` and U+2018 through U+201B). The nested Bash source path uses ANSI-C `$'…'` quoting: the usual POSIX `'"'"'` form would put embedded double quotes through Windows PowerShell 5.1's lossy rebuilding of native arguments. `-ic`, not a guessed `-l`, is the existing `loginShell` mode that makes `~/.bashrc` launchers visible.
+- **A fix for a platform nobody can test changes only what is known to be broken** (#8107): the handoff was written without a Windows machine, so every start that already worked types exactly the bytes it typed before, checked against literals captured from the code before the change: Git Bash however the node learns of it, a host-named shell other than PowerShell, an unknown shell, an Orca, Tern or herdr-core pane that names no shell, an adopted pane (Run Agent Here) and herdr's own `resume_argv`. Only a new classic-herdr pane in PowerShell, a host-named PowerShell and a classic-herdr pane in `cmd.exe` (refused with the reason instead of failing after the wait) behave differently. An adopted pane whose innermost program is PowerShell later joined them (#9854). Case, slash and `.exe` normalization of Windows shell names lives only in that new decision, not in the shared `takesAssign` / `shellProgram`, which other checks read. PowerShell's `ParserError` / `Unexpected token` words are looked for only after a start that typed the `&` line, so an Agent's ordinary JavaScript output cannot cost a POSIX start an extra full-screen read.
+- **An adopted pane's programs are also the shell-prompt check's input** (#9854): Run Agent Here, a stopped session resumed in its own terminal and a launcher or engine switch read the programs in front of the pane twice, once to decide that only shells are there (`shellProgram`, `allShells`) and once for the start. Teaching the shared list PowerShell's Windows names would change which panes those checks accept, so the names are recognised only inside the start: `startPaneShells` turns a stack whose innermost program is PowerShell or pwsh into the new pane's PowerShell marker (`adoptedPaneShells`, Windows only), and the list handed to the checks stays the raw programs.
 - **A fresh Claude Code install first shows the theme-selection onboarding**: node's `waitReady` cannot find the input box within a minute and reports “claude did not become ready,” while the screen shows a theme list. Set `hasCompletedOnboarding: true` in `~/.claude.json`, or run it manually once.
 - **apiKeyHelper is executed by cmd on Windows**: `cat ~/.config/…` returns “'cat' 不是内部或外部命令” (“'cat' is not recognized as an internal or external command”); use `type "C:\…\key"`.
 - **MinGit does not contain bash.exe** (only `usr\bin\sh.exe`). For Git Bash, use PortableGit or the installed distribution.
@@ -150,3 +181,41 @@ See [windows.md](../operations/windows.md) ("Codex") and [codex.md](../integrati
   one Ctrl+C in the console ended the launcher with `0xc000013a`; the child (claude) survived, the parent disappeared, and the exit code was lost. `TestExecSurvivesCtrlC` guards this.
 - A test program `xxx.test.exe` can keep running briefly after exit (child processes), making scp fail to overwrite it with `dest open … Failure`. Use another filename or end the process first.
 - **Stopping a background shell does not stop the mock hub it started, and a second mock still binds the port**: on Windows, ending the Git Bash job that ran `python3 scripts/mock/mock_hub.py` leaves the Python process running, and Python's `HTTPServer` sets `SO_REUSEADDR`, which on Windows lets a restarted mock bind the same port too. Requests then go to either process, so a fix in the mock seems to have no effect (an unknown `/mock/…` route answers 404). Before restarting, look with `netstat -ano | grep :<port>` and end your own old process by its PID (`taskkill //PID <pid> //F`), never every Python.
+
+## Multiline terminal input and failed starts (#11145)
+
+A terminal newline is input, not a safe way to delimit a message. On Windows, herdr prompts use explicit bracketed
+paste followed by a separate Enter, checking that the same Agent is still in front and has not opened a dialog.
+This applies to Claude Code and other detected runtimes too. Codex starts with a supplied first message instead use
+the protected launch file and one native argv value, bypassing the terminal input stream entirely. Resolve npm shims
+to the native executable on the final managed-provider hop too. Keep full rollout matching and precise failure
+cleanup: argv acceptance is not a delivery receipt. Windows limits the quoted command line to 32,767 UTF-16 units
+including NUL; reject overflow without truncation or a paste fallback. Codex App uses structured IPC input.
+
+Codex can display a paste as `[Pasted Content N chars]` followed by literal tail text, or several chips. An anchored
+chip-only check rejects such a composer even when the input arrived. Match chip lengths in Unicode characters and
+visible fragments against the full expected input; a prefix chip with its tail still in flight must wait. Codex
+normalizes line endings before counting. Confirm the complete first message in the rollout after submitting once. A chip is not a
+delivery receipt or evidence of ConPTY corruption. A compact footer with directory `~` and warnings is status, not
+draft content. Keep any real draft above that footer protected.
+
+An older desktop-bundled CLI can precede a newly upgraded npm CLI on PATH. Check the executable the launcher's
+actual environment resolves, not only npm's version. Startup skips Codex's recognized update offer with Escape on
+all systems; it must not select the default installer. A late offer can consume or hide a paste: after skipping,
+reuse a matching draft, or replay once only into an empty unqueued composer. Unknown dialogs and foreign drafts
+still refuse; failure closes only the launch's own new pane. Capture an incident's rollout and version before
+attributing an older truncation to an update offer.
+
+Closing a failed start's new pane does not archive a rollout it already published. Identify that rollout only through
+the pane's explicit thread ID or its unique rollout writer, and require its start time to belong to the launch.
+Close the owned pane before requesting Codex's reversible native archive. Never use a shared directory, title or
+matching first line as cleanup authority. Adopted panes remain the user's, and cleanup failures remain visible and
+must finish before another start with the same directory and launcher. A deployed incident needs its own version
+and transport evidence; a source-level transport regression alone does not prove which installed boundary failed.
+
+A native acceptance later failed even with a mixed-chip matcher: a long visible prefix appeared without its line
+separators/non-BMP character, followed by two chips. Screen text cannot distinguish renderer loss from actual input
+loss. Codex 0.170.0's external editor exports `composer_text_with_pending`, including expanded paste elements; a
+disposable pane with a process-local read-only capture editor can measure that actual draft without submitting it.
+Never relax the matcher to silently ignore missing characters. Process-boundary regressions must run the real
+private-file helper and receiver; on WSL, execute the Windows PE variant too, not only a fake composer.

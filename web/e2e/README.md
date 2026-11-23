@@ -1,5 +1,17 @@
 # Bounded Agents list verification
 
+## Paseo workspace pins
+
+```sh
+node web/e2e/paseo-workspace-pins.mjs <loopback-web-origin> <artifact-directory> [Chromium-executable]
+```
+
+Uses the real Agents page and sidebar against an owned local web server, with all hub HTTP and WebSocket requests
+answered by synthetic data. Checks a pinned empty workspace ahead of its main sibling and an unrelated repository,
+refreshes an unpin, and verifies that selection, disclosure and Persona's separate session pin survive. Covers desktop
+and phone widths, light and dark, and standard and large text. No preference or Agent writes are allowed. Screenshots
+and `results.json` are written outside the repository; a 180-second watchdog bounds the run.
+
 ## Direct completion of a decision task
 
 ```sh
@@ -27,7 +39,7 @@ Opens the real app on an Agent's session page against a loopback web server (Vit
 ## Chat content: sent lines, tables, bubble actions, model pill, runtime line, long folds
 
 ```sh
-MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 MOCK_TABLE_CHIPS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
 (cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
 node web/e2e/chat-content.mjs <loopback-web-origin> <artifact-directory> [--big] [Chromium executable]
 ```
@@ -40,11 +52,182 @@ the browser, whose place and harness Settings › Assistant shows instead (item 
 a 600 px composer and a phone keeps the 64 px tile and chevron (item 50); in a 390 px window with a pointer, Tab reaches
 your bubble's first action inside the window, the bar under the bubble stays while the pointer goes down to it and takes
 no clicks once hidden, and in a 1440 px window the bar stays beside the bubble (item 73); on a 390 px phone a "#" column is at most 40 px and the table copy button
-covers no header words of a table that fits (item 77). `--big` runs against the mock started with `MOCK_BIG=1` instead
+covers no header words of a table that fits (item 77); in a 1440 px window a table with a sentence in its second column
+takes the room it needs up to the column, wider than the old 18em cell cap, each long cell on at most two lines, and at
+both widths no short code chip in a cell is broken across lines (#9146). `--big` runs against the mock started with `MOCK_BIG=1` instead
 (item 90): opening the "worked 1 h 10 min" fold, no animation frame draws more than 60 rows at once, all 650 rows are
 drawn after it with the header where it was tapped, and a search for `make step-600` lands on that row inside the closed
 fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
 (`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
+
+## Overview's extension cards (#9745)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_OVERVIEW_CARDS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/overview-cards.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+# a hub without the route: the mock with MOCK_NAVIGATION=off; a default manager from before the field: MOCK_NAVIGATION=no-overview
+node web/e2e/overview-cards.mjs <loopback-web-origin> <artifact-directory> --old-hub|--old-manager [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese. Four made-up cards (the gateway's usage,
+Quota left, Needs me, Agenda): with nothing arranged they come in the hub's order, two a row; **整理总览** then drags
+Agenda onto the first card, makes it a full row, moves Needs me earlier with the keyboard and switches Quota left off
+(drawn as its outline while arranging). After **完成**, Agenda spans the row over two half cards, the hub keeps the
+arrangement, a reload and a second browser draw the same and never send the hidden card's render request, and Reset
+with Undo puts the cards back and the arrangement again. `--old-hub` / `--old-manager` check that the arrangement stays
+in the browser, survives a reload and that the edit state says it is kept in this browser only. Light and dark
+screenshots of Overview as it was, the edit state, the arranged result and the edit state with the hidden card at
+1440 × 900, the arranged result and the edit state at 390 × 844, and `results.json`, go to the artifact directory; a
+300-second watchdog ends the run.
+
+## Overview's own sections (#10905)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_OVERVIEW_CARDS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/overview-sections.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese. With nothing arranged the sections come
+first in their order and the cards last (#11147); **整理总览** draws each section as a bar (需要你 and 卡住了，要你去看
+without a switch, 始终显示), drags 进行中的任务 onto 需要你 and switches 工作中 off. After **完成**, 进行中的任务 is right
+under the greeting, above 需要你, the cards still last, and 工作中 is not drawn; the hub keeps the arrangement (every section named), a
+reload and a second browser draw the same, and Reset puts Overview back. Light and dark screenshots of Overview as it
+was, the edit state and 进行中的任务 moved first, at 1440 × 1300 and 390 × 1600, and `results-sections.json`, go to the
+artifact directory; a 300-second watchdog ends the run.
+
+## Sidebar groups (#9071)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 MOCK_SIDEBAR_GROUPS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/sidebar-groups.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+# a hub without the route: the mock with MOCK_NAVIGATION=off as well
+node web/e2e/sidebar-groups.mjs <loopback-web-origin> <artifact-directory> --old-hub [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese. Made-up extension pages name 工作台, 资产 and
+家里; the run checks that Today comes in under 工作台, then in Settings › General › Sidebar pages makes "Life" and renames
+it 生活, moves built-in and extension pages between groups (Calendar from its manifest's 工作台 to 生活), moves 生活 up and
+Pages to the end, and removes a group with Undo. It checks the sidebar's groups and their pages, that no page is lost, that
+the hub keeps the arrangement and that a second browser draws the same groups; `--old-hub` that the arrangement stays in
+the browser and the setting says so. Light and dark screenshots of the sidebar (the phone's drawer open) and of the editor
+at 1440 × 900 and 390 × 844, and `results.json`, go to the artifact directory; a 300-second watchdog ends the run.
+
+## Sidebar heading spacing (#10637)
+
+```sh
+MOCK_SESSIONS_LIST=1 MOCK_MANAGERS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/sidebar-heading-spacing.mjs <loopback-web-origin> [--shots <artifact-directory>] [--chromium <executable>]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese, light and dark. It measures the sidebar's
+top-level headings (Pages, Persona chats, Personal Agents when listed, Agents) with both Agents lists: the complete one
+(the mock's pinned space keeps the sidebar on it) and the paged one (the run clears the pins and puts them back; the
+paged list needs one assistant, hence `MOCK_MANAGERS=1`). At 1440 × 1000 (standard and Large text), 390 × 844 with a
+mouse and 390 × 844 on a touch screen (the drawer, where Pages is a grid), folded and then unfolded, it checks that every heading's row is as
+tall and its title centred as far down it, that folded the title-to-title gaps are equal, and that unfolded each title
+stands as far below the group before it, all within 0.5 px (iOS: `SidebarHeadingGapsUITests`, #10561). Only the
+mock's own requests leave the browser. Screenshots and `results.json` go to the artifact directory; a four-minute
+watchdog ends the run, and the last line is the verdict.
+
+## Start page (#9071)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/start-page.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+# a hub without the route: the mock with MOCK_NAVIGATION=off as well
+node web/e2e/start-page.mjs <loopback-web-origin> <artifact-directory> --old-hub [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English. It checks that a fresh hub opens on the main chat, that
+Settings › General › Start page lists the main chat first and selected, then Overview and the made-up extension's Today;
+that choosing Today saves it to the hub (`PUT /api/v1/navigation`) and a new tab opens on Today while the Persona row and a
+reload stay on the main chat; that a second browser (another device) opens on the main chat the first time, reads the
+choice at its hello and opens on Today from its next opening; and that a Today the hub's extension list leaves out opens
+from the browser's copy and then gives way to the main chat, the choice kept and the setting saying why. `--old-hub`
+checks that a hub answering 404 leaves the choice in the browser and the setting says so. Light and dark screenshots of
+the setting and of the app opened on Today (Today moved first with Sidebar pages' ↑, as that setting already allows) at
+1440 × 900 and 390 × 844, and `results.json`, go to the artifact directory. The run sets the mock's start page and puts it
+back to the default; a 240-second watchdog ends it, and the last line is the verdict.
+
+## An extension's dashboard page: UI version 8's columns layout (#9158)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-columns.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in English, light and dark. It opens a made-up
+extension's "Today" page and checks what jsdom cannot lay out: at 1440 × 900 the five cards are in reading order in two columns,
+the "Needs me" card spans the row with its four rows two a line, Calendar | Lark today and WeChat | Running Agents sit side by side,
+each pair as tall as its taller card (the shorter list's card is stretched, not as tall by chance), a card's head has its icon and
+its link, the "Calendar ›" link pushes the card's page and Back comes back to the grid; at 390 × 844 there is one column, every card
+the grid's width one under another, and the "Needs me" rows one a line; with Settings › Appearance's Large text, the same columns
+at both widths and no card's content wider than the card. Only the mock's own requests leave the browser. Screenshots
+(the window, and the whole page at the same width) and `results.json` go to the artifact directory; a 180-second watchdog ends the
+run, and the last line is the verdict.
+
+## Extension pages on reload: the last places and view at first paint (#9283)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-first-paint.mjs <loopback-web-origin> <artifact directory> [--shots-only] [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English, light and dark, 1440 × 900. Every request the hub would
+relay to the manager (`/api/v1/extensions…`) is held for a second in the browser, as a far hub takes. The made-up "Today"
+page is loaded three times in one profile. The first load has kept nothing: its sidebar entry and header title come only
+after the first relayed answer. The second draws the sidebar's entry, the header's title and icon and the page's last view
+(marked as updating, inert) before the first relayed answer, and the extension's drawing then replaces it. The third's first
+paint is photographed while every relayed request is still held (`first-paint-after-<theme>.png`). `--shots-only` takes only
+that photograph (`first-paint-before-<theme>.png`), for a build without the cache. Only the mock's own requests leave the
+browser. Screenshots and `results.json` go to the artifact directory; a 180-second watchdog ends the run, and the last line
+is the verdict.
+
+## An extension's quota card: UI version 9's gauge (#9337)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_GAUGE=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-gauge.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in English, light and dark. It opens a made-up
+gateway's "Quota" page and checks what jsdom cannot lay out: the three rings in order, each read out as "title: value unit, N%"
+(a meter, or a button for the one with an action), its arc filled to the ratio in the named color the browser resolves, its value
+centred in the ring and not cut, its title below, the ring inside its tile, and the reset times under the rings; at 1440 × 900 the
+four status tiles in one row above three rings side by side of one width, and pressing the low ring answers its toast; at 390 × 844
+two rings a line; with Settings › Appearance's Large text the values still whole and centred at both widths; with Reduce Motion the
+arc does not ease. It waits for the page's finite animations to end, never for a fixed time. Only the mock's own requests leave the
+browser. Screenshots and `results.json` go to the artifact directory; a 180-second watchdog ends the run, and the last line is the
+verdict.
+
+## An extension's work graph: UI version 10's graph (#9727)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_GRAPH=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-graph.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in English, light and dark. It opens a made-up
+"Work" page (a 200-node tree, one part folded by the view, a step selected) and checks what jsdom cannot lay out: the canvas
+holds to 50%–100% on opening, centred on the selected node; the visible nodes in reading order with the group frames, edges
+in one SVG and the selected node's ring; the fold beside a node both folds (hiding its subtree behind a +N) and presses a
+node through to its own page and back; a drag pans and the zoom buttons zoom, with Fit centring everything (down to 25%,
+and kept as the person's view across a redraw — Fit survives a live graph's polls); the person's fold, pan and zoom survive
+the page's own redraw with the same key; Full screen covers the window and Esc closes it, the focus returning to the button
+that opened it (the page's Full screen button, a card's preview button); at 390 × 844 the canvas is 70% of the visible height
+clamped to 320–900; and the Overview card draws the same
+graph as a 200-px still preview whose only press is opening Full screen. It waits for the page's finite animations to end,
+never for a fixed time. Only the mock's own requests leave the browser. Screenshots and `results.json` go to the artifact
+directory; a 180-second watchdog ends the run, and the last line is the verdict.
 
 ## User-input navigation acceptance
 
@@ -90,7 +273,7 @@ node web/e2e/agents-paged-groupings.mjs <loopback-web-origin> <artifact-director
 
 Run against an exclusively owned mock-backed web server. It checks the one grouping bar (待办 / 机器 / 仓库 / 项目 / 状态) over the paged and the complete list, By to-do paged as a section per open to-do (open) and 没挂待办的 (folded) against the mock's `todo` counts, By machine and By state paged, and By repository and a pin taking the complete list; it saves light and dark screenshots. `MOCK_MANAGERS=1` keeps one assistant, since with several the sidebar reads the complete list. The runner clears the mock's default pins for the run (they also keep the complete list), sets one for the pinned case, and puts them back. `--before` takes the same screenshots of a build from before #6662 with no checks. (It replaces `agents-browse-by.mjs`, whose sidebar view by catalog project the sidebar no longer offers; `PagedSessionList.groups.test.tsx` still covers that view.)
 
-It reads the mock's own catalog and holds the page to it, in English at 1280 x 900 (light and dark), a 240 px sidebar and a 390 px touch phone: Browse by Computer draws one section per computer, the busiest first, the first three open on their newest six sessions and the counts adding up to the list's total; Project lists the catalog's projects in its order, the repository on two computers as one section with its remote and both directories and the sessions of both; the value pill's menu is as wide as its pill and names each computer under the project; a picked project is the one flat list of its sessions; Space names each computer's spaces, tells two of one name apart and ends with the sessions in no space; the chosen Browse by survives a reload; Recently updated is the flat list. With `--hub` it also drives 20 s of the mock's churn while the list is drawn by project and prints the mock's read counters by kind, failing when the groups were read more than once per 1.5 s or a complete list was read. Screenshots of each step go to the artifact directory. A three-minute watchdog ends the run with a timeout verdict. Browser and mock checks only: no real hub, node or Git repository is involved.
+It reads the mock's own catalog and holds the page to it, in English at 1280 x 900 (light and dark), a 240 px sidebar and a 390 px touch phone: Browse by Computer draws one section per computer in the hub's order, the first three open on their first six sessions in stable computer → workspace → tab → pane order and the counts adding up to the list's total; Project lists the catalog's projects in fixed name order, the repository on two computers as one section with its remote and both directories and the sessions of both; the value pill's menu is as wide as its pill and names each computer under the project; a picked project is the one flat list of its sessions; Space names each computer's spaces, tells two of one name apart and ends with the sessions in no space; the chosen Browse by survives a reload; Recently updated is the flat list. With `--hub` it also drives 20 s of the mock's churn while the list is drawn by project and prints the mock's read counters by kind, failing when the groups were read more than once per 1.5 s or a complete list was read. Screenshots of each step go to the artifact directory. A three-minute watchdog ends the run with a timeout verdict. Browser and mock checks only: no real hub, node or Git repository is involved.
 
 ## Machines and Overview at desktop widths (web audit items 3, 25, 30 and 76)
 
@@ -329,3 +512,48 @@ open, **Done** in an opened item's header leaves the list where it was (it used 
 opens the long Inbox and records how many rows were there at the first draw (at most 100), that all of them come in the
 end, the elements under `main` and the long tasks. Screenshots and `results.json` go to the artifact directory; a
 four-minute watchdog ends the run, and it prints a final pass / fail / timeout line.
+
+## Long tasks in a long conversation (#9795)
+
+```sh
+node web/e2e/chat-long-tasks.mjs <web origin> <artifact-directory> [--items <n>] [--secs <s>] [--chromium <executable>]
+```
+
+Opens the real app in a fresh headless browser with every hub request and the socket answered in the browser by invented
+data, and every other origin refused, so it can be pointed at any server of the web bundle (Vite, `vite preview`, or a
+hub serving its build) without reaching a hub. The text is shaped like real chats: branch and repository names without
+an extension, quotes and tables. Two scenarios: an Agent chat of `--items` items (2,000 by default) opening, watched for
+10 seconds after its newest message is on the page; then the main conversation (240 items and a question) while a reply
+naming 80 branches streams for `--secs` seconds (30 by default), a delta about every 80 ms and a tool call every
+second. A trivial script is run in the page again and again; one not answered within 5 seconds counts as stuck.
+`results.json` has, per scenario, when the newest message was drawn, the longest task and those over 1 second, the
+slowest answer and the stuck ones; a screenshot of each is taken when the page can still draw. It fails on any task over
+1 second, a stuck answer, a page error, a request leaving the origin, or a conversation not drawn within 30 seconds;
+the last line is the verdict, and a watchdog ends a run that overruns with a timeout verdict.
+
+## Local interface and code fonts (#10243)
+
+```sh
+PORT=<mock-port> python3 scripts/mock/mock_hub.py
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<mock-port> npx vite --port <web-port> --strictPort)
+node web/e2e/font-preferences.mjs http://127.0.0.1:<web-port> <artifact-directory>
+```
+
+Use exclusively owned mock/Vite processes and a fresh Chrome profile. This drives the real Settings page at wide/phone widths, light/dark and standard/large text, captures Default and Custom, checks immediate and cross-tab application/reset, before-paint reload, zero additional font requests and actual CJK/symbol fallback faces. It mounts the production single-pane and Full UI renderers against the synthetic hub and checks their first font family, retained-view attachment and unchanged size; it does not verify a live shell. All network access is restricted to the supplied loopback origin. Results and sixteen screenshots go outside the repository; a four-minute watchdog bounds the run.
+
+## Sidebar icon colors (#10822)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_NAV_ICON_COLOR=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/sidebar-icon-colors.mjs <loopback-web-origin> <artifact-directory> [--monochrome-only] [--chromium <executable>]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese, light and dark, at 1440 × 900 and 390 × 844
+(touch). With nothing stored (Monochrome), every page icon of the wide sidebar, the icon rail and the phone's drawer is
+`--ink-3` and the open page's `--ink`. It then picks 彩色 in Settings › General › Appearance › 侧栏图标 and checks that
+each built-in page's icon is its named color, that the made-up extension page naming `icon_color` (花园) is green and
+the gateway's 用量 (none named) neutral, that the open page keeps `--ink`, that Inbox keeps its orange under the pointer,
+and that every colored icon reads at 3:1 on the sidebar and on the hover fill, as the browser resolves them.
+`--monochrome-only` takes only the Monochrome part, to set its screenshots beside another build's. Screenshots and
+`results.json` go to the artifact directory; a five-minute watchdog ends the run, and the last line is the verdict.

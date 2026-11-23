@@ -75,6 +75,8 @@ struct ShellView: View {
                 if shell.agentsBuilt {
                     ChatsView()
                         .modifier(ShellPageSlide(shell: shell, index: 1))
+                        // A chat under the Agents page's rail keeps its buttons clear of the tab bar (iPhone Duo, #9837).
+                        .modifier(SideColumnScope(own: true))
                 }
                 if LarkHomePreference.shared.shows, shell.feishuBuilt {
                     LarkConversationsView()
@@ -112,7 +114,18 @@ struct ShellView: View {
                          onMachines: { go(.machines) },
                          onOpenExtension: { go(.extensionPage($0)) },
                          openHealth: { go(.health) },
-                         openRecordingsPage: openRecordingsPage)
+                         openRecordingsPage: openRecordingsPage,
+                         openStarred: openStarredPage)
+            // Keep the drawer's route closures out of the page strip's opaque type (#6735, #12249).
+            .stackSegment()
+    }
+
+    private var openStarredPage: (() -> Void)? {
+        #if os(iOS)
+        { go(.starred) }
+        #else
+        nil
+        #endif
     }
 
     /// The drawer's Recordings: the page, which shows the recording running, else Record to start one.
@@ -203,7 +216,7 @@ private struct ShellMovingBar: View {
     let pager: ShellPager
 
     var body: some View {
-        if let railEdge, pager.moving || pager.lingering {
+        if let railEdge, pager.standsIn(rail: true) {
             movingRail(railEdge)
         } else if pager.moving || pager.lingering {
             let p = Double(min(CGFloat(pager.pageCount - 1), max(0, pager.position)))
@@ -249,8 +262,7 @@ private struct ShellMovingBar: View {
                         .opacity(max(0, 1 - p) * (model.assistantCurrent == nil ? 0.4 : 1))
                     ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Session [Chats View 58e21b]"), id: "shell-moving-agents-new") {}
                         .opacity(max(0, 1 - abs(p - 1)))
-                    ShellCircleButton(symbol: Theme.Icon.settings, label: String(localized: "Lark Settings"), id: "shell-moving-feishu-settings") {}
-                        .opacity(max(0, p - 1))
+                    // Messages' slot is the system's search; Lark Settings is at the column's top there (#9837).
                 }
             }
             .allowsHitTesting(false)

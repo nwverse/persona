@@ -83,12 +83,41 @@ describe("findPathRefs", () => {
     expect(codePathRef("/tmp/x/a.md")).toMatchObject({ path: "/tmp/x/a.md", line: undefined });
   });
 
+  it("finishes quickly on a long part without an extension, in backticks and in text (#8894)", () => {
+    // a 32-character hash as the last part: the relative branch fails for want of an extension, and overlapping
+    // branches in a name would try every way to split the hash before giving up
+    const key = "bucket/2024/1/1/0123456789abcdef0123456789abcdef";
+    const started = performance.now();
+    expect(paths(`the image key is \`${key}\``)).toEqual([]);
+    expect(paths(`the image key is ${key} in the store`)).toEqual([]);
+    expect(paths(`saved to /srv/${key} and ~/${key}/`)).toEqual([`/srv/${key}`, `~/${key}/`]);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
   it("asks about each path once", () => {
     expect(uniquePaths(findPathRefs("src/a.ts:1 src/a.ts:2 `src/a.ts`"))).toEqual(["src/a.ts"]);
   });
 });
 
 describe("codePathRef", () => {
+  it.each(["/tmp/report.", "/tmp/report...", "~/notes/result..", "/tmp/My Notes/report."])("keeps the exact code path %j including its final dots", (path) => {
+    expect(codePathRef(path)).toMatchObject({ path, start: 0, end: path.length });
+    const text = `See \`${path}\``;
+    const refs = findPathRefs(text);
+    expect(refs[0].path).toBe(path);
+    expect(text.slice(refs[0].start, refs[0].end)).toBe(path);
+    const shortened = path.replace(/\.+$/, "");
+    expect(uniquePaths(refs)).not.toContain(shortened);
+    expect(splitAtRefs(text, refs, (p) => p === shortened)).toEqual([text]);
+    expect(splitAtRefs(text, refs, (p) => p === path)[1]).toMatchObject({ path });
+  });
+
+  it("keeps a code path's dots with its line while plain prose still trims punctuation", () => {
+    expect(codePathRef(" /tmp/report.:12:5 ")).toMatchObject({ path: "/tmp/report.", line: 12, col: 5, start: 1 });
+    expect(codePathRef("~/notes/result..#L8")).toMatchObject({ path: "~/notes/result..", line: 8 });
+    expect(paths("See /tmp/report... and ~/notes/result..")).toEqual(["/tmp/report", "~/notes/result"]);
+  });
+
   it("is a code span that is a whole path", () => {
     expect(codePathRef("src/a.ts:12")).toMatchObject({ path: "src/a.ts", line: 12 });
     expect(codePathRef(" /tmp/x/y.md ")).toMatchObject({ path: "/tmp/x/y.md", start: 1, end: 12 });

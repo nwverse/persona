@@ -1,6 +1,7 @@
-import { type CSSProperties, Fragment, memo, type ReactNode, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, Fragment, lazy, memo, type ReactNode, Suspense, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clock } from "../../lib/format";
-import { stripCloseout } from "../../lib/closeout";
+import type { stripCloseout as stripCloseoutText } from "../../lib/closeout-text";
+import { useCloseoutReader } from "./closeout-chunks";
 import { getSession, getState, useStore } from "../../lib/store";
 import { withChildSessions } from "../../lib/child-cards";
 import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, nestingKey, subagentFor, withNestedSubagents } from "../../lib/tasks";
@@ -16,7 +17,7 @@ import { channelOf, useChannels } from "../../lib/channels";
 import { splitQuotes } from "../../lib/drafts";
 import { EASE } from "../../ui/atoms";
 import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
-import { externalFrom, type ExternalOrigin } from "../../lib/conversation-origins";
+import { openerFrom, type ExternalOrigin } from "../../lib/conversation-origins";
 import { Markdown } from "../../ui/Markdown";
 import { CardConversation, CardItem } from "../../ui/AssistantCard";
 import { cardReply } from "../../lib/assistant-blocks";
@@ -43,9 +44,13 @@ import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
 import { TurnChanges, turnChangesHeight } from "./TurnChanges";
 import { turnChanges } from "../../lib/turn-changes";
+import type { Step } from "../../lib/turns";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
 import { useMessageFeedback } from "../../lib/message-send";
+
+// a finished reply's Sources row (#9132): its chunk loads only for a turn that looked something up on the web
+const TurnSources = lazy(() => import("./TurnSources").then((m) => ({ default: m.TurnSources })));
 
 /** A message longer than this many lines folds to ten of them (FOLDED), with "Expand" under it (the reference client's UserMessage). */
 export const BUBBLE_MAX_LINES = 14;
@@ -99,13 +104,13 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
   const pinned = useIsLatestMessage(msg.ts) && !pending && !starting;
   // the message an extension opened the conversation with (#3758)
   const { opening } = useChatContext();
-  const openedBy = opening && opening.id === msg.id ? opening.origin : undefined;
+  const openedBy = opening && opening.id === msg.id ? opening : undefined;
   // forwards (#3899) are cards at the top of the bubble (several at once, #3838: ForwardCards); the other contexts fold in
   // the row above it
   const forwards = msg.contexts.filter((c) => c.kind === "forward");
   const contexts = forwards.length ? msg.contexts.filter((c) => c.kind !== "forward") : msg.contexts;
   return (
-    <div className="ml-auto flex max-w-[min(100%,488px)] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-send-state={sendState} data-items={pending || starting ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
+    <div className="ml-auto flex max-w-[min(100%,488px)] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-source-fingerprint={msg.rawInput?.[0]?.source_fingerprint} data-send-state={sendState} data-items={pending || starting ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
       {msg.images.length > 0 && (
         <div className="flex flex-wrap justify-end gap-1.5">
           {msg.images.map((im) => (
@@ -123,6 +128,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
           <BubbleText text={msg.text} blocks={msg.contexts} mid={mid} sid={sid} own={own} pending />
         ) : (
           <MessageActions text={msg.text} editText={skillEditText(msg.contexts, msg.text)} isUser ts={msg.ts} side messageId={onDelete ? undefined : msg.id} onDelete={onDelete}
+            starSource={!onDelete && !sendState ? { mid, sid, item: msg.id, fingerprint: msg.rawInput?.[0]?.source_fingerprint, userInputs: msg.rawInput } : undefined}
             images={msg.images} photos={msg.photos} className="max-w-full">
             <BubbleText text={msg.text} blocks={msg.contexts} ts={msg.ts} mid={mid} sid={sid} own={own} />
           </MessageActions>
@@ -204,14 +210,18 @@ function BubbleText({ text: full, blocks, ts, mid, sid, own, pending }: { text: 
 }
 
 /** "From WeChat" under a message that came from a channel (its client_msg_id is `<channel>-…`, docs/extensions/channels.md);
- *  else, under the message an extension opened the conversation with, "From Lark /agent" / "From an extension" (#3758). */
-function ChannelSource({ clientMsgId, openedBy }: { clientMsgId?: string; openedBy?: ExternalOrigin }) {
+ *  else, under the message an extension opened the conversation with, "From Lark /agent" / "From an extension" (#3758),
+ *  its mark the opening extension's icon as on the conversation's rows and its words that extension's name while the icon
+ *  is drawn (#10358). */
+function ChannelSource({ clientMsgId, openedBy }: { clientMsgId?: string; openedBy?: { origin: ExternalOrigin; opened_by?: string; manager?: string } }) {
   const via = channelOf(clientMsgId, useChannels());
+  // the extension whose own icon the mark draws, which the words then name (#10358)
+  const [name, setName] = useState<string>();
   if (!via && openedBy) {
     return (
-      <span data-opened-by={openedBy} className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-ink-3">
-        <OriginMark origin={openedBy} size={14} decorative />
-        {externalFrom(openedBy)}
+      <span data-opened-by={openedBy.origin} className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-ink-3">
+        <OriginMark origin={openedBy.origin} size={14} decorative session={openedBy} onName={setName} />
+        {openerFrom(openedBy.origin, name)}
       </span>
     );
   }
@@ -233,48 +243,49 @@ const ANSWER = "[&_.prose-j]:text-[length:var(--chat-body)]! [&_.prose-j]:leadin
  *  it); only a finished turn's last reply has the bar under it (`bar`, #5314).
  *  Memo'd: the chat context changes with every streamed item, so each SegmentView re-renders; a finished answer's
  *  props stay the same and it is skipped (#3024). */
-export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, noCloseout, bar, cut, usage, usageMs }: {
+export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, stripCloseout, bar, cut, usage, usageMs, ttftMs }: {
   item?: Item;
   streaming?: string;
   mid?: string;
   sid?: string;
   fade?: boolean;
   /** The card above the transcript shows its closeout (#3612): drawn without the raw block. */
-  noCloseout?: boolean;
+  stripCloseout?: typeof stripCloseoutText;
   /** The bar under it (ReplyBar): a finished turn's last reply, never narration in a work summary. */
   bar?: boolean;
   /** Its turn ended in a model error or an interruption right after these words (Segment.cut): cindy's line above them. */
   cut?: boolean;
-  /** With `bar`: what its exchange used (lib/turn-usage.ts usageKey, a string so the memo holds) and its work time. */
+  /** With `bar`: what its exchange used (lib/turn-usage.ts usageKey, a string so the memo holds), its work time, and streaming TTFT. */
   usage?: string;
   usageMs?: number;
+  ttftMs?: number;
 }) {
   // a long answer the hub cut for the page: its start, and "View full text" under it
-  const full = useFullText(streaming === undefined ? item : undefined, mid, sid);
-  const text = streaming ?? (noCloseout ? stripCloseout(full.text) : full.text);
+  const live = streaming !== undefined;
+  const full = useFullText(live ? undefined : item, mid, sid);
+  const text = streaming ?? (stripCloseout ? stripCloseout(full.text, !item?.full_size || (Boolean(mid && sid) && !full.more)) : full.text);
   if (!text) return null;
   const cwd = mid && sid ? getSession(mid, sid)?.cwd : undefined;
-  if (streaming !== undefined) {
-    return (
-      <MessageActions text={text}>
-        <div className={ANSWER} data-answer="streaming">
-          <Markdown text={text} mid={mid} cwd={cwd} streaming lineBreaks />
-        </div>
-      </MessageActions>
-    );
-  }
   return (
-    <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined}>
+    <MessageActions text={text} ts={item?.ts} itemId={item?.id} bar={bar} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined} ttftMs={bar ? ttftMs : undefined}
+      starSource={!live && mid && sid && item?.id ? { mid, sid, item: item.id, fingerprint: item.source_fingerprint } : undefined}
+      translationSource={item?.full_size ? {
+        key: JSON.stringify([mid, sid, item.id, item.text, item.full_size, item.source_fingerprint, Boolean(stripCloseout)]),
+        load: async () => {
+          const complete = await full.getText();
+          return stripCloseout ? stripCloseout(complete) : complete;
+        },
+      } : undefined}>
       {cut && <p className="mb-1 text-[13px] leading-[1.384615] text-ink-2" data-cut-short>{t("chat-messageactions.cut_short")}</p>}
-      <div className={ANSWER} data-answer data-items={item?.id}>
+      <div className={ANSWER} data-answer={live ? "streaming" : true} data-source-fingerprint={item?.source_fingerprint} data-items={item?.id}>
         {/* the cards in it are this item's blocks (ui/AssistantCard.tsx): `<item id>/<n>` */}
         <CardItem.Provider value={item?.id ? { id: item.id, text } : null}>
-          <Markdown text={text} mid={mid} cwd={cwd} fade={fade || undefined} lineBreaks />
+          <Markdown text={text} mid={mid} cwd={cwd} streaming={live || undefined} fade={fade || undefined} lineBreaks />
         </CardItem.Provider>
       </div>
       {full.more}
-      {mid && sid && <ReplyFiles text={text} mid={mid} cwd={cwd} />}
-      {mid && sid && <ReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
+      {!live && mid && sid && <ReplyFiles text={text} mid={mid} cwd={cwd} />}
+      {!live && mid && sid && <ReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
     </MessageActions>
   );
 });
@@ -282,11 +293,13 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, no
 /** Freshness reaches only the single visible persisted text, not every paragraph hidden in its execution summary: it
  *  reads its own id (fresh-words.ts), so a new reply renders these words, not every exchange. `done`: its turn is over,
  *  so the words have the bar under them (cindy: never while the turn runs). */
-const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout, done, cut, usage, usageMs }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean; done?: boolean; cut?: boolean; usage?: string; usageMs?: number }) {
+const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid, noCloseout, done, cut, usage, usageMs, ttftMs }: { item?: Item; streaming?: string; mid: string; sid: string; noCloseout?: boolean; done?: boolean; cut?: boolean; usage?: string; usageMs?: number; ttftMs?: number }) {
   const persisted = streaming === undefined ? item?.id : undefined;
   const fresh = useFreshWords(mid, sid, persisted);
   const bar = Boolean(done && persisted);
-  return <Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} noCloseout={noCloseout} bar={bar || undefined} cut={cut} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined} />;
+  const stripCloseout = useCloseoutReader(Boolean(noCloseout));
+  if (stripCloseout && item?.text?.trim() && !item.full_size && !stripCloseout(item.text)) return null;
+  return <div data-latest-text><Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} stripCloseout={stripCloseout} bar={bar || undefined} cut={cut} usage={bar ? usage : undefined} usageMs={bar ? usageMs : undefined} ttftMs={bar ? ttftMs : undefined} /></div>;
 });
 
 export const SegmentView = memo(function SegmentView({
@@ -301,6 +314,7 @@ export const SegmentView = memo(function SegmentView({
   trace,
   offscreen,
   busy,
+  dockTurnClock,
 }: {
   seg: Segment;
   live: boolean;
@@ -308,7 +322,7 @@ export const SegmentView = memo(function SegmentView({
   sid: string;
   streaming?: string;
   /** The live words are an agent's as Claude shows them (docs/integrations/claude-integration.md "Live replies"): a batch
-   *  of lines at a time, and still while a tool runs. The live work row stays under them; the headless assistant's
+   *  of lines at a time, and still while a tool runs. The live work row stays above this text slot; the headless assistant's
    *  words stream as they are written and stand for it. */
   batchedWords?: boolean;
   expandFold: (f: Item) => Promise<boolean | void>;
@@ -323,6 +337,8 @@ export const SegmentView = memo(function SegmentView({
    *  answered): drawn finished for a moment when a send drops the live line, its words get no reply bar yet, so the
    *  bar does not come and go (#5314). */
   busy?: boolean;
+  /** The dock owns the live turn's elapsed clock; finished exchanges never receive this state. */
+  dockTurnClock?: boolean;
 }) {
   const { subagents, tasks, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle, closeoutSegment, children } = useChatContext();
   const own = useMemo(() => exchangeSteps(seg), [seg]);
@@ -342,12 +358,14 @@ export const SegmentView = memo(function SegmentView({
   const p = useMemo<WorkProps>(() => {
     const agent = (s: ToolStep) =>
       isNestedSubagentStep(s) ? nestedSubagentStatus(subagentFor(subagents, s.use)) : agentStatus(s.result, subagentFor(subagents, s.use), live, s.use.tool_use_id ? tasks.notes.get(s.use.tool_use_id) : undefined);
-    return { mid, sid, scope, expandFold, agentStatus: agent, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live, plan };
-  }, [mid, sid, scope, expandFold, subagents, tasks, live, seg.id, workflowCalls, trace, lineStyle, plan]);
+    return { mid, sid, scope, expandFold, agentStatus: agent, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live, plan, hideClock: dockTurnClock };
+  }, [mid, sid, scope, expandFold, subagents, tasks, live, seg.id, workflowCalls, trace, lineStyle, plan, dockTurnClock]);
   const identity = segmentIdentity(seg);
+  const last = steps.at(-1);
+  const newWords = streaming !== undefined && (last?.kind !== "text" || last.item.text?.trimEnd() !== streaming.trimEnd());
   const nodes = useMemo(
-    () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity }),
-    [steps, live, turnStart, streaming !== undefined, identity],
+    () => workBlocks(steps, { live, turnStart, streaming: newWords, identity }),
+    [steps, live, turnStart, newWords, identity],
   );
   useCallSeeker(scope, nodes);
   // the pictures the agent looked at this turn, between its work and its last words
@@ -361,9 +379,10 @@ export const SegmentView = memo(function SegmentView({
   // The card above the transcript shows this exchange's closeout (#3612): its last words are drawn without the raw
   // block, and not at all when the block was all they said.
   const noCloseout = closeoutSegment === seg.id && streaming === undefined;
-  const onlyCloseout = noCloseout && Boolean(latestItem?.text?.trim()) && !latestItem?.full_size && stripCloseout(latestItem?.text ?? "") === "";
   const working = live && (streaming === undefined || batchedWords) && !nodes.some((n) => n.kind === "group" && n.live);
-  const liveRow = working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
+  // When the dock bar already shows the foreground turn's Working… status and elapsed timer, skip the empty non-expandable
+  // stream placeholder unless batched live text is streaming above it (#12380).
+  const liveRow = working && (!dockTurnClock || streaming !== undefined) && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
   const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
   const box = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
@@ -378,12 +397,14 @@ export const SegmentView = memo(function SegmentView({
   // the session's folder from the store, so the card follows it when it comes in after the transcript
   const cwd = useStore(() => (counted ? getSession(mid, sid)?.cwd : undefined));
   const changes = useMemo(() => (counted ? turnChanges(own, cwd) : null), [counted, own, cwd]);
+  // the web pages the finished exchange used, in a Persona conversation and an Agent's alike (#9132)
+  const sourced = !live && !trace && Boolean(seg.user) && own.some(webStep);
   // what the finished exchange used, for its reply bar (#5426): the work summary's time when it has one summary
   const usage = !live && !trace ? usageKey(seg.usage) : undefined;
   const groups = usage ? nodes.filter((n) => n.kind === "group") : [];
   const usageMs = groups.length === 1 ? groups[0].durationMs : undefined;
   const switched = Boolean(seg.engineSwitch);
-  const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes, divided, switched) + (changes ? 12 + turnChangesHeight(changes) : 0)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes, divided, switched, changes]);
+  const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes, divided, switched) + (changes ? 12 + turnChangesHeight(changes) : 0) + (sourced ? 14 + SOURCES_HEIGHT : 0)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes, divided, switched, changes, sourced]);
   return (
     <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3.5" : "flex flex-col gap-3.5"} style={guess} data-segment>
       {/* the first message the conversation's new engine got (#5054): the switch divider above it, the user's words below */}
@@ -394,17 +415,23 @@ export const SegmentView = memo(function SegmentView({
       {/* Work stays collapsed above the single latest-text slot. */}
       {live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(0, cut)} p={p} live={live} fade />
-      {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows, under an
-          agent's live words while they are there (batchedWords) */}
-      {streaming === undefined && liveRow}
+      {liveRow}
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
-      {streaming !== undefined && liveRow}
-      {(latestItem || streaming !== undefined) && !onlyCloseout && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} /></div>}
+      {(latestItem || streaming !== undefined) && <Suspense key="latest-text" fallback={null}><LatestAnswer item={streaming === undefined ? latestItem : undefined} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} ttftMs={!live && !trace ? seg.ttftMs : undefined} /></Suspense>}
+      {sourced && <Suspense key="turn-sources" fallback={null}><TurnSources steps={own} /></Suspense>}
       {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
     </section>
   );
 });
+
+/** The Sources row's height as drawn (TurnSources.tsx: one line of chips), for an exchange's estimate. */
+const SOURCES_HEIGHT = 28;
+
+/** A step that may name web pages: a web call, or folded work that carries some (lib/turn-sources.ts reads them). */
+function webStep(s: Step): boolean {
+  return s.kind === "tool" ? s.use.tool_name === "WebSearch" || s.use.tool_name === "WebFetch" : s.kind === "fold" && Boolean(s.item.fold?.sources?.length);
+}
 
 /** The message's transcript item that carried the switch's block (its rest is fetched from it when the hub cut it). */
 function switchItem(seg: Segment): Item | undefined {

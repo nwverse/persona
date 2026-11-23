@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// Task presentation for the hub-level group's assistant conversations (docs/assistant/unified-entry.md): todos come from
 /// TodoStore's shared index; plans and each conversation's feed stay here. Feeds refresh when shown and on
@@ -30,8 +31,9 @@ final class TasksStore {
     var openAfterBoard: String?
     var openAgentAfterBoard: SessionKey?
     /// Feed card IDs put off with Later, sent here, or refused as handled elsewhere (409 inbox_item_done).
-    /// A new draft with the same Inbox reference has its own decision state.
-    private(set) var laterMessages: Set<String> = []
+    /// A new draft with the same Inbox reference has its own decision state. Private so a view can only ask by the card
+    /// itself (`isLater`), never by its Inbox reference (#6002).
+    private var laterMessages: Set<String> = []
     private(set) var sentMessages: Set<String> = []
     private(set) var filedMessages: Set<String> = []
     /// Decision rounds put off with Later, for this session only (`decisionKey`), and the ones Don't handle took out of
@@ -417,15 +419,32 @@ final class TasksStore {
     }
 
     func later(_ cardID: String) { laterMessages.insert(cardID) }
+    /// Put off with Later, by the card's own id: Needs You and the chat's feed both ask this, so a card whose Inbox item
+    /// (`ref`) differs from its id leaves both (#6002).
+    func isLater(_ card: FeedItem) -> Bool { laterMessages.contains(card.id) }
     /// A card put off with Later, opened again (a hand-off card's one line, #5932).
     func unlater(_ cardID: String) { laterMessages.remove(cardID) }
 
     // MARK: Decisions (Later / Don't handle on a decision row)
 
     /// One round of one task's decision, as the web keys it (`decisionLaterKey`): a new round is a new question, so
-    /// Later and Don't handle do not follow the task to it. Nil without a round to name.
+    /// Later and Don't handle do not follow the task to it. Nil without a round to name. All timestamp sources use the
+    /// same round-trip token, so a snapshot gaining latestReview does not rename the same round. Invalid old strings
+    /// remain usable as-is; API requests still send the hub's original `review_at` string.
     nonisolated static func decisionKey(_ todo: TodoItem) -> String? {
-        guard let round = todo.decisionReview?.reviewAt ?? todo.ask?.askedAt, !round.isEmpty else { return nil }
+        func canonical(_ raw: String) -> String {
+            JSON.parseDate(raw).map { String($0.timeIntervalSince1970) } ?? raw
+        }
+        let round: String
+        if let at = todo.supervision?.latestReview?.at {
+            round = String(at.timeIntervalSince1970)
+        } else if let raw = todo.decisionReview?.reviewAt, !raw.isEmpty {
+            round = canonical(raw)
+        } else if let raw = todo.ask?.askedAt, !raw.isEmpty {
+            round = canonical(raw)
+        } else {
+            return nil
+        }
         return "decision:\(todo.manager ?? ""):\(todo.id):\(round)"
     }
 
@@ -439,7 +458,7 @@ final class TasksStore {
     /// Whether Needs You leaves this decision out: put off, or dismissed (here, or elsewhere: the hub's `dismissal_id`).
     func decisionHidden(_ todo: TodoItem) -> Bool {
         guard let key = Self.decisionKey(todo) else { return false }
-        return laterDecisions.contains(key) || dismissedDecisions[key] != nil || todo.decisionReview?.dismissed == true
+        return laterDecisions.contains(key) || dismissedDecisions[key] != nil || todo.decisionDismissed
     }
 
     /// Don't handle: the hub keeps the round dismissed and the task open (`POST /todos/{id}/decision-dismiss`); a toast
@@ -563,12 +582,12 @@ final class TasksStore {
         return model.api?.manager(model.feedManager(of: plan.conversation, group: model.hub?.group ?? ""))
     }
 
-    func start(_ plan: TaskPlan, edits: [PlanTask]? = nil, remember: Bool = false) async {
+    func start(_ plan: TaskPlan, edits: [PlanTask]? = nil, remember: Bool = false, scheduleGrant: Bool = false) async {
         guard let api = client(for: plan), !busyPlans.contains(plan.id) else { return }
         busyPlans.insert(plan.id)
         defer { busyPlans.remove(plan.id) }
         do {
-            received(try await api.startPlan(plan.id, edits: edits, remember: remember))
+            received(try await api.startPlan(plan.id, edits: edits, remember: remember, scheduleGrant: scheduleGrant))
             reloadTodos()
             Haptics.success()
         } catch {

@@ -12,6 +12,8 @@ import PersonaWire
 nonisolated extension ExtensionUIPlace: Identifiable {
     /// The extension that draws it: `extension` under /api/v1/extensions, `plugin` under the old path (#1844).
     var owner: String { self.extension?.isEmpty == false ? self.extension! : (plugin ?? "") }
+    /// Stable identity for lists containing slots from more than one extension.
+    var scopedID: String { owner + "/" + id }
     /// The extension's name (its entries say whose they are).
     var ownerName: String? { extensionName?.isEmpty == false ? extensionName : pluginName }
 
@@ -30,16 +32,20 @@ nonisolated extension ExtensionUIContext {
     /// hub goes on turning newer components into ones it has always drawn.
     static let pageVersion = 4
     static let cardVersion = version
-    #else
-    /// The UI version a whole page of the app draws (`ExtensionPageView`): 4's code hosting (#2961), 5's code review
-    /// (#3136) and 6's pictures, controls, row actions, charts, tiles, fields and styles (#827).
-    static let pageVersion = 6
+    #elseif os(iOS)
+    /// The UI version a whole page of the app draws (`ExtensionPageView`): 8's columns (#9158), 9's gauge rings
+    /// (`ExtensionTiles.swift`), 10's native graph canvas (`ExtensionGraph.swift`, #9727) and 11's 3D scene
+    /// (`ExtensionScene.swift`, #12544).
+    static let pageVersion = 11
 
-    /// The UI version the app's cards and sections draw (the Settings home's cards, a launcher's or a computer's
-    /// sections, an Inbox item's, the assistant's `persona-view`): 6 too, version 4–5's code components read-only
-    /// (`ExtensionCodeSummary`). Widgets, the watch and the system extensions keep `version` (Shared, 3): they draw
-    /// none of it.
-    static let cardVersion = 6
+    /// The UI version the app's cards and sections draw: the same components, with code components read-only and a
+    /// graph or 3D scene as a still preview which opens full screen. Widgets, the watch and the system extensions keep
+    /// `version` (Shared, 3): they draw none of it.
+    static let cardVersion = 11
+    #else
+    /// Other older surfaces keep the version they can actually draw.
+    static let pageVersion = 8
+    static let cardVersion = 8
     #endif
 
     /// This context for a whole page: the page's UI version.
@@ -101,6 +107,8 @@ nonisolated extension ExtensionComponent {
         case .image(let c): c.key
         case .grid(let c): c.key
         case .carousel(let c): c.key
+        case .graph(let c): c.key
+        case .scene(let c): c.key
         case .unknown: nil
         }
     }
@@ -297,6 +305,11 @@ extension APIClient {
     /// A refresh held back while busy is retried once the current operation ends; starting a request does not change the task key.
     private(set) var completedOperations = 0
     var group: String { deps.api()?.group ?? "" }
+    /// The page identity beneath a graph's component key. The graph hashes this before using it as a persistence key.
+    var graphPersistenceNamespace: String {
+        [deps.api()?.config.url.absoluteString ?? "", group, selectedManager ?? "", plugin, ui,
+         context.launcher ?? "", context.machine ?? "", context.item ?? "", initialState ?? ""].joined(separator: "\n")
+    }
 
     func invalidate() {
         invalidationVersion += 1
@@ -327,7 +340,7 @@ extension APIClient {
         self.initialManager = manager
         self.ui = ui
         // A whole page (`forPage()`) is told from a card or a section by the version it was given, before every model
-        // says what the app's renderer draws (both 6): only a page opens the native stream.
+        // says what the app's renderer draws (both 8): only a page opens the native stream.
         let isPage = context.uiVersion == ExtensionUIContext.pageVersion && (context.size == nil || context.size == "full")
         self.context = context.drawnByApp()
         self.initialState = state

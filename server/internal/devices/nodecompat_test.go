@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -186,6 +189,93 @@ func TestMachineCallGatesUltracodeStarts(t *testing.T) {
 	}
 }
 
+// A start that carries a goal goes only to a node that announces start_goal: an older one would start the session and
+// drop the goal without a word. The refusal has its own code, so the caller can tell it from ultracode's and start
+// again without the goal.
+func TestMachineCallGatesStartGoal(t *testing.T) {
+	d := newTestDevices(t)
+	m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh", SSHHost: "box.invalid"})
+	set := func(info proto.NodeInfo) {
+		m.mu.Lock()
+		m.info, m.online = info, true
+		m.mu.Unlock()
+	}
+	code := func(method string, params any) string {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var re *rpc.Error
+		if err := m.call(ctx, method, params, nil); errors.As(err, &re) {
+			return re.Code
+		}
+		return ""
+	}
+	goal := map[string]any{"cwd": "/x", "goal": "the tests pass"}
+
+	set(current("b1"))
+	if c := code("session.start", goal); c == proto.CodeStartGoalUnsupported {
+		t.Fatal("a node announcing start_goal was refused")
+	}
+	without := current("b1")
+	without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool { return c == nodeproto.StartGoal })
+	set(without)
+	if c := code("session.start", goal); c != proto.CodeStartGoalUnsupported {
+		t.Fatalf("a goal on a node without start_goal: code %q", c)
+	}
+	for _, p := range []map[string]any{{"cwd": "/x", "goal": "  "}, {"cwd": "/x"}} {
+		if c := code("session.start", p); c == proto.CodeStartGoalUnsupported {
+			t.Fatalf("%v refused on a node without start_goal", p)
+		}
+	}
+	if c := code("session.send", goal); c == proto.CodeStartGoalUnsupported {
+		t.Fatal("only session.start carries a start's goal")
+	}
+	set(proto.NodeInfo{Version: "b1", ModelConfiguration: true}) // from before the handshake
+	if c := code("session.start", goal); c != proto.CodeStartGoalUnsupported {
+		t.Fatalf("a goal on a node from before the handshake: code %q", c)
+	}
+}
+
+// An extension's resume of a conversation the hub does not list (resume_outside_health, #10941) goes only to a node
+// that announces the check: an older one would resume it unchecked, or start a new conversation under an id it has
+// nothing of. The hub asks only a node it saw announce it; this holds when the node changed since. A test's node
+// (no version) does not count as having it.
+func TestMachineCallGatesResumeOutsideHealth(t *testing.T) {
+	d := newTestDevices(t)
+	m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh", SSHHost: "box.invalid"})
+	set := func(info proto.NodeInfo) {
+		m.mu.Lock()
+		m.info, m.online = info, true
+		m.mu.Unlock()
+	}
+	code := func(method string, params any) string {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var re *rpc.Error
+		if err := m.call(ctx, method, params, nil); errors.As(err, &re) {
+			return re.Code
+		}
+		return ""
+	}
+	checked := map[string]any{"cwd": "/x", "resume_session_id": "s1", "resume_outside_health": true}
+
+	set(current("b1"))
+	if c := code("session.start", checked); c == proto.CodeNodeOutdated {
+		t.Fatal("a node announcing resume_outside_health was refused")
+	}
+	without := current("b1")
+	without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool { return c == nodeproto.ResumeOutsideHealth })
+	for _, info := range []proto.NodeInfo{without, {Version: "b1", ModelConfiguration: true}, {}} {
+		set(info)
+		if c := code("session.start", checked); c != proto.CodeNodeOutdated {
+			t.Fatalf("a checked resume on a node without the check (%+v): code %q", info, c)
+		}
+	}
+	set(without)
+	if c := code("session.start", map[string]any{"cwd": "/x", "resume_session_id": "s1"}); c == proto.CodeNodeOutdated {
+		t.Fatal("an unchecked resume refused on a node without the check")
+	}
+}
+
 func TestMachineCallGatesAssistantConfigDir(t *testing.T) {
 	d := newTestDevices(t)
 	m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh", SSHHost: "box.invalid"})
@@ -241,6 +331,33 @@ func TestMachineCallGatesAssistantServiceTier(t *testing.T) {
 	var re *rpc.Error
 	if err := m.call(ctx, "session.send", map[string]any{"service_tier": "priority"}, nil); errors.As(err, &re) && re.Code == proto.CodeNodeOutdated {
 		t.Fatal("an unrelated session.send gained the assistant-start gate")
+	}
+}
+
+func TestMachineCallGatesSupervisionInstructions(t *testing.T) {
+	d := newTestDevices(t)
+	m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh", SSHHost: "box.invalid"})
+	without := current("old")
+	without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool {
+		return c == nodeproto.AssistantSupervisionInstructions
+	})
+	for _, info := range []proto.NodeInfo{current("new"), without, {Version: "pre-handshake", ModelConfiguration: true}} {
+		m.mu.Lock()
+		m.info, m.online = info, true
+		m.mu.Unlock()
+		for _, method := range []string{"assistant.send", "assistant.warm", "session.send"} {
+			for _, policy := range []string{"", "Static supervisor policy"} {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel() // an admitted call cannot reach a process in this fixture
+				var re *rpc.Error
+				err := m.call(ctx, method, map[string]any{"supervision_instructions": policy}, nil)
+				refused := errors.As(err, &re) && re.Code == proto.CodeNodeOutdated
+				want := policy != "" && !nodeHas(info, nodeproto.AssistantSupervisionInstructions)
+				if refused != want {
+					t.Fatalf("%s %s policy bytes=%d: refused=%v want=%v: %v", info.Version, method, len(policy), refused, want, err)
+				}
+			}
+		}
 	}
 }
 
@@ -348,6 +465,116 @@ func TestMachineCallGatesSessionSwitch(t *testing.T) {
 		err := m.call(ctx, "session.switch", map[string]any{"session_id": "s1"}, nil)
 		if refused := errors.As(err, &re) && re.Code == proto.CodeNodeOutdated; refused != tc.want {
 			t.Fatalf("%s: refused=%v want=%v: %v", tc.info.Version, refused, tc.want, err)
+		}
+	}
+}
+
+func TestMachineCallGatesTaskExecution(t *testing.T) {
+	d := newTestDevices(t)
+	m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh", SSHHost: "box.invalid"})
+	without := current("old")
+	without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool { return c == nodeproto.TaskExecution })
+	for _, info := range []proto.NodeInfo{current("new"), without, {Version: "pre-handshake"}} {
+		m.mu.Lock()
+		m.info, m.online = info, true
+		m.mu.Unlock()
+		for _, method := range []string{"assistant.directory", "assistant.send"} {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var re *rpc.Error
+			err := m.call(ctx, method, map[string]any{"task_execution": true}, nil)
+			refused := errors.As(err, &re) && re.Code == proto.CodeNodeOutdated
+			if refused != !nodeHas(info, nodeproto.TaskExecution) {
+				t.Fatalf("%s %s: %v", info.Version, method, err)
+			}
+		}
+	}
+}
+
+func TestMachineSelectsTaskExecutionBeforeSending(t *testing.T) {
+	without := current("older")
+	without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool { return c == nodeproto.TaskExecution })
+	for _, info := range []proto.NodeInfo{current("current"), without, {Version: "pre-handshake", ModelConfiguration: true}} {
+		t.Run(info.Version, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			d := newTestDevices(t)
+			m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh"})
+			managerSide, nodeSide := net.Pipe()
+			defer managerSide.Close()
+			defer nodeSide.Close()
+			manager, node := rpc.New("manager", managerSide), rpc.New("node", nodeSide)
+			sends := make(chan map[string]json.RawMessage, 4)
+			node.OnRequest = func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+				if method != "assistant.send" {
+					t.Errorf("unexpected node method %s", method)
+				}
+				var fields map[string]json.RawMessage
+				err := json.Unmarshal(raw, &fields)
+				sends <- fields
+				return nil, err
+			}
+			go func() { _ = node.Serve(ctx, nodeSide) }()
+			go func() { _ = manager.Serve(ctx, managerSide) }()
+			m.mu.Lock()
+			m.peer, m.info, m.online = manager, info, true
+			m.mu.Unlock()
+			strict := nodeHas(info, nodeproto.TaskExecution)
+			p := map[string]any{"origin": "task", "origin_known": true, "task_execution": true, devicewire.LegacyTaskExecution: true, "cwd": "/home/me/assistant"}
+			for _, resume := range []bool{false, true} {
+				if resume {
+					p["session_id"], p["resume_only"] = "same-session", true
+				}
+				if err := m.call(ctx, "assistant.send", p, nil); err != nil {
+					t.Fatal(err)
+				}
+				wire := <-sends
+				if wire[devicewire.LegacyTaskExecution] != nil || (string(wire["task_execution"]) == "true") != strict ||
+					(wire["cwd"] != nil) != (strict || !resume) || resume && string(wire["resume_only"]) != "true" {
+					t.Fatalf("node parameters: %s", wire)
+				}
+			}
+			if strict {
+				return
+			}
+			// Even a hint on a protected destination cannot loosen the capability gate.
+			p["origin"] = "inbox"
+			var re *rpc.Error
+			if err := m.call(ctx, "assistant.send", p, nil); !errors.As(err, &re) || re.Code != proto.CodeNodeOutdated {
+				t.Fatalf("protected send was not refused: %v", err)
+			}
+			delete(p, "origin")
+			delete(p, "origin_known")
+			if err := m.call(ctx, "assistant.send", p, nil); !errors.As(err, &re) || re.Code != proto.CodeNodeOutdated {
+				t.Fatalf("unknown-origin send was not refused: %v", err)
+			}
+			if len(sends) != 0 {
+				t.Fatal("a protected send reached the older node")
+			}
+		})
+	}
+}
+
+func TestMachineCallGatesTaskInput(t *testing.T) {
+	d := newTestDevices(t)
+	m := newMachine(d, MachineConfig{ID: "box", Name: "Box", Kind: "ssh", SSHHost: "box.invalid"})
+	without := current("old")
+	without.Capabilities = slices.DeleteFunc(slices.Clone(without.Capabilities), func(c string) bool { return c == nodeproto.TaskInput })
+	partial := current("no-strict-execution")
+	partial.Capabilities = slices.DeleteFunc(slices.Clone(partial.Capabilities), func(c string) bool { return c == nodeproto.TaskExecution })
+	for _, info := range []proto.NodeInfo{current("new"), without, partial, {Version: "pre-handshake"}} {
+		m.mu.Lock()
+		m.info, m.online = info, true
+		m.mu.Unlock()
+		for _, method := range []string{"assistant.content", "assistant.send", "fs.task.list"} {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var re *rpc.Error
+			err := m.call(ctx, method, map[string]any{"task_input": true}, nil)
+			refused := errors.As(err, &re) && re.Code == proto.CodeNodeOutdated
+			if refused != (!nodeHas(info, nodeproto.TaskInput) || !nodeHas(info, nodeproto.TaskExecution)) {
+				t.Fatalf("%s %s: %v", info.Version, method, err)
+			}
 		}
 	}
 }

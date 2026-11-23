@@ -71,8 +71,22 @@ data class QuietHours(
     }
 }
 
+/** A browser sign-in request as this device sees it. [number] is present only for the device that allowed it. */
+data class BrowserLoginDetails(
+    val name: String,
+    val source: String,
+    val ageSeconds: Int,
+    /** Null from a hub before number matching; such a hub keeps the legacy successful-Allow dismissal. */
+    val state: String? = null,
+    val network: String? = null,
+    val number: String? = null,
+)
+
 /** Bound to one pairing; preferenceDeviceId is the ID used by notification registration. */
 interface DeviceSettings {
+    suspend fun browserLogin(id: String, hub: String, allow: Boolean? = null): BrowserLoginDetails =
+        throw UnsupportedOperationException("browser-login")
+
     suspend fun devices(): PairedDevices
     suspend fun revoke(credentialId: String)
     suspend fun preferences(): DeviceNotificationPreferences
@@ -95,6 +109,15 @@ interface DeviceSettings {
      * is now.
      */
     suspend fun saveQuietHours(quiet: QuietHours): QuietHours = throw UnsupportedOperationException("quiet")
+
+    /**
+     * 设置 › 通知 › 低打扰模式 (#8157): the hub's push grading switch, `GET /api/v1/push/ln-mode`, for every device of the
+     * owner, not this one alone; null from a hub without it (404 / 405), which shows no row.
+     */
+    suspend fun lowDistraction(): Boolean? = null
+
+    /** `PUT /api/v1/push/ln-mode {"enabled": on}`; the hub's switch as it is now. */
+    suspend fun saveLowDistraction(on: Boolean): Boolean = throw UnsupportedOperationException("ln-mode")
 }
 
 /** A QR code the hub drew: [rows] of `0` / `1`, no quiet zone. */

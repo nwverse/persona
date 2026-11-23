@@ -27,6 +27,9 @@ describe("session capability contract", () => {
     for (const op of operations.filter((op) => op !== "read")) expect(sessionCan(history, op)).toBe(false);
     expect(sourceSubtitle(history)).toContain("仅查看：外部进程正在使用此会话");
     expect(sourceSubtitle({ ...history, source_kind: "claude_bg", read_only_reason: "回复请在电脑上打开" })).toBe("Claude 后台 · 仅查看：回复请在电脑上打开");
+    // The node's own "仅查看：" prefix is said once (#7803); a reason that is only the prefix falls back to the default.
+    expect(sourceSubtitle({ ...history, source_kind: "codex_app_server", read_only_reason: "仅查看：这个子 Agent 由父 Agent 驱动" })).toBe("Codex 实时 · 仅查看：这个子 Agent 由父 Agent 驱动");
+    expect(sourceSubtitle({ ...history, source_kind: "codex_app_server", read_only_reason: "仅查看：" })).toBe("Codex 实时 · 仅查看：这个来源还不能发消息");
   });
 
   it("names Claude sessions outside Persona's terminals and lets them send only when the node says so", () => {
@@ -95,6 +98,7 @@ describe("session capability contract", () => {
   it("says a runtime's session comes from its agent, by name, never a raw id (#8142)", () => {
     const paseo: Session = { ...legacy, source_kind: "runtime", source_instance_id: "paseo", capabilities: { read: true, send: true } };
     expect(sourceSubtitle({ ...paseo, agent: "paseo", agent_label: "Grok", launcher: "grok" })).toBe("Grok");
+    expect(sourceSubtitle({ ...paseo, agent: "paseo", agent_label: "TRAE CLI", launcher: "traecli" })).toBe("TRAE CLI");
     expect(sourceSubtitle({ ...paseo, agent: "claude", launcher: "my-claude" })).toBe("Claude Code");
     // a row Paseo names no label for yet: its provider, never "paseo"
     expect(sourceSubtitle({ ...paseo, agent: "paseo", launcher: "kimi" })).toBe("kimi");

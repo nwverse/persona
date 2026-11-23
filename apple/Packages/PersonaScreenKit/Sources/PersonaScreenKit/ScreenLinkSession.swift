@@ -8,7 +8,9 @@ import Foundation
 // The channels move to the route the policy picks: `use` on the new transport with what the phone has, and the node
 // answers `resumed` with what it has, so each side sends on from there. A direct route that fails puts the channels
 // back on their relays at once; a relay that fails while a direct route carries the session is opened again by the app
-// (`reopen`), so the hub keeps the last word over the session.
+// (`reopen`), so the hub keeps the last word over the session. A relay that left on an interface the phone no longer
+// uses, or went quiet, is opened again beside it and replaced once the new one attaches; a channel whose relay ended
+// with nothing else to carry it waits a few seconds for that (#8709).
 
 /// A transport of a screen session as the session needs it: the hub's relays and direct connections alike.
 public protocol ScreenLinkTransport: AnyObject, Sendable {
@@ -69,8 +71,8 @@ public actor ScreenLinkSession {
         case lost(String)
         /// The channels moved to another route.
         case moved(PathChange)
-        /// A relay dropped while a direct route carries its channel (RFB, or the video channel): open it again with
-        /// attach and hand it over with `reattach`.
+        /// A channel's relay (RFB, or the video channel) dropped, is on an interface the phone left, or went quiet:
+        /// open it again with attach and hand it over with `reattach`.
         case reopen(video: Bool)
         /// A direct route's node opened a UDP flow (#7873): open a socket to the route's address on `port`, on the
         /// route's interface, and hand it over with `addFlow`.
@@ -99,10 +101,34 @@ public actor ScreenLinkSession {
         var lastPing = -Double.infinity
         /// When the oldest ping since anything was last heard on it went out; nil while it answers.
         var unanswered: Double?
+        /// Pings sent since anything was last heard on it.
+        var unansweredPings = 0
+        /// A relay to replace (#8709): it left on an interface the phone no longer uses, or it went silent.
+        var stale: Stale?
+        /// When it was added (direct ones: an attach unanswered by `attachWithin` is lost, #9218).
+        var added = -Double.infinity
     }
+
+    /// Why a relay is being replaced: a silent one that speaks again is kept; one on the old interface is not.
+    private enum Stale { case network, silent }
 
     /// A direct route with a ping out this long and nothing heard is lost (the design's "1.5 s silent").
     public static let silentAfter = 1.5
+    /// A direct connection whose attach isn't answered this long after it was added is lost (#9218). It is never pinged
+    /// before it attaches, so without this it stayed forever: a redial whose answer went missing (a network that drops
+    /// packets for a moment) left the route counted as open, it was never dialed again, and the stream stayed on the
+    /// hub's relay.
+    public static let attachWithin = 3.0
+    /// A relay is taken as stuck when its oldest unanswered ping is this old, or four of its round trips if longer, and
+    /// at least two pings went unanswered (#8709). It is longer than a direct route's limit because a relay's round
+    /// trip goes through the hub and a cellular one jitters. A stuck relay is replaced, not dropped: the channel
+    /// stays on it until the new one attaches.
+    public static let relaySilentAfter = 3.0
+    /// While a channel needs a relay opened again, the app is asked again this often.
+    public static let reopenEvery = 3.0
+    /// A channel left with nothing to carry it waits this long for a relay opened again before it ends. The node
+    /// waits 10 s (`Grace`), so a relay that attaches in time finds the session still there.
+    public static let relayGrace = 8.0
 
     private struct Chan {
         let id: UInt8
@@ -122,6 +148,10 @@ public actor ScreenLinkSession {
         /// The route whose UDP flow carries what the node sends on this channel (#7873); what comes for it on other
         /// transports meanwhile is ignored. What the phone sends still goes on `active`.
         var flow: String?
+        /// When the app was last asked to open its relay again (#8709).
+        var reopenAskedAt: Double?
+        /// Since when nothing carries it: it waits up to `relayGrace` for a relay opened again.
+        var orphanedSince: Double?
     }
 
     private var links: [Int: Link] = [:]
@@ -129,6 +159,8 @@ public actor ScreenLinkSession {
     private var chans: [UInt8: Chan] = [:]
     private var paths: ScreenLinkPaths?
     private var relayVia: LinkStats.Via = .wifi
+    /// Whether the app has said which interface the relays leave on (until then `relayVia` is a guess).
+    private var viaKnown = false
     private var policy = PathPolicy(relay: ScreenLinkSession.relayRoute)
     private var lost: Set<String> = []
     private var networkChanged = false
@@ -284,6 +316,18 @@ public actor ScreenLinkSession {
             flowRetry = [:]
         }
         relayVia = via
+        let first = !viaKnown
+        viaKnown = true
+        for (id, l) in links where l.relayFor != nil {
+            if first {
+                links[id]?.via = via // registered before the app said: the guess becomes what it said
+            } else if l.via != via, l.stale == nil {
+                // Left on an interface the phone no longer uses (#8709): Wi-Fi went away under it, and a socket on a
+                // vanished interface often says nothing. Each channel it serves gets a relay on this one.
+                links[id]?.stale = .network
+            }
+        }
+        askReopenForStaleRelays()
     }
 
     /// A direct connection to one of the node's candidates, for route `route` over the phone's `via` interface: it
@@ -291,6 +335,7 @@ public actor ScreenLinkSession {
     public func addDirect(_ t: ScreenLinkTransport, route: String, kind: LinkStats.Kind, via: LinkStats.Via) {
         guard !ended, let token = paths?.token else { t.close(); return }
         let id = register(t, relayFor: nil, route: route, kind: kind, via: via)
+        links[id]?.added = now()
         out(id, .attach(token: token))
     }
 
@@ -373,6 +418,8 @@ public actor ScreenLinkSession {
         guard !ended else { return }
         if let l = links[id], l.route != nil, muted.contains(l.kind) { return } // a test's black-holed route
         links[id]?.unanswered = nil
+        links[id]?.unansweredPings = 0
+        if links[id]?.stale == .silent { links[id]?.stale = nil } // it speaks again: no need to replace it
         switch m {
         case let .data(ch, off, bytes):
             guard var c = chans[ch], c.flow == nil else { return } // the UDP flow carries it: these are stale copies
@@ -391,7 +438,7 @@ public actor ScreenLinkSession {
                 deliver(ch)
                 finishIfClosed(ch)
             } catch {
-                lose(id) // a gap: this transport skipped bytes
+                lose(id, wait: false) // a gap: this transport skipped bytes
             }
         case let .ack(ch, off):
             guard var c = chans[ch] else { return }
@@ -407,12 +454,7 @@ public actor ScreenLinkSession {
             links[id]?.attached = true
             for _ in 0..<5 { ping(id) } // the first probe: five round trips at once
             askFlow(id)
-            // A relay opened again: its channel's relay from now on, and its carrier when nothing else carries it.
-            if let ch = links[id]?.relayFor, ch != 0, var c = chans[ch], !c.ended {
-                c.home = id
-                chans[ch] = c
-                if links[c.active] == nil { use([ch], on: id) }
-            }
+            if let ch = links[id]?.relayFor, ch != 0 { relayReattached(id, for: ch) }
         case let .pong(sent, retrans, packets):
             guard var l = links[id] else { return }
             let rtt = (now() * 1e6 - Double(sent)) / 1000
@@ -437,15 +479,16 @@ public actor ScreenLinkSession {
                 pump(e.channel)
             }
         case let .close(ch, off):
+            guard chans[ch] != nil else { return }
             chans[ch]?.closeAt = off
+            out(id, .closeAck(channel: ch, offset: off))
             finishIfClosed(ch)
         case let .reset(ch, off):
-            chans[ch]?.receiver.reset(to: off)
-            chans[ch]?.assembler?.reset()
+            resetChannel(ch, to: off)
             if let c = chans[ch] { out(id, .ack(channel: ch, offset: c.receiver.offset)) }
         case let .udpReady(r):
             udpReady(r, from: id)
-        case .use, .attach, .ping, .unknown, .udpOpen:
+        case .use, .attach, .ping, .unknown, .udpOpen, .closeAck:
             break // the node's to receive, or a type this side doesn't know
         }
     }
@@ -479,8 +522,9 @@ public actor ScreenLinkSession {
     }
 
     /// A transport ended. The channels it carried go on over their relay, or over another route when it was their
-    /// relay that ended (which the app then opens again); a channel with neither ends, as a stream ending does today.
-    private func lose(_ id: Int) {
+    /// relay that ended (which the app then opens again). A channel with neither waits up to `relayGrace` for a relay
+    /// opened again (#8709) and ends then, or at once when `wait` is false (a gap) or the session can't attach again.
+    private func lose(_ id: Int, wait: Bool = true) {
         guard let l = links.removeValue(forKey: id) else { return }
         l.writer.finish()
         l.transport.close()
@@ -491,6 +535,7 @@ public actor ScreenLinkSession {
             lost.insert(route)
             if !ended { emit.yield(.lost(route)) }
         }
+        let t = now()
         var reopen: [UInt8] = []
         for (ch, c) in chans where !c.ended {
             if c.home == id {
@@ -501,19 +546,79 @@ public actor ScreenLinkSession {
             if let alt = fallback(for: ch, excluding: id) {
                 if chans[ch]?.home == nil { reopen.append(ch) }
                 use([ch], on: alt)
+            } else if wait, !ended, paths?.token != nil {
+                // Nothing carries it now. The network may have just changed under its relay: it waits for one opened
+                // again, and what the app sends meanwhile is kept for it.
+                chans[ch]?.orphanedSince = t
+                reopen.append(ch)
             } else {
-                chans[ch]?.ended = true
-                wake(ch, error: ScreenLinkError.closed)
-                if ch == ScreenLinkWire.rfb { end() }
+                endChannel(ch)
             }
         }
-        if !ended { for ch in Set(reopen) { emit.yield(.reopen(video: ch != ScreenLinkWire.rfb)) } }
+        if !ended { for ch in Set(reopen) { askReopen(ch, at: t) } }
     }
 
-    /// Where a channel goes when its transport ends: its relay, else any attached direct route.
+    private func endChannel(_ ch: UInt8) {
+        chans[ch]?.ended = true
+        wake(ch, error: ScreenLinkError.closed)
+        if ch == ScreenLinkWire.rfb { end() }
+    }
+
+    /// Where a channel goes when its transport ends: its relay unless that is being replaced, else any attached direct
+    /// route.
     private func fallback(for ch: UInt8, excluding id: Int) -> Int? {
-        if let h = chans[ch]?.home, h != id, links[h]?.attached == true { return h }
+        if let h = chans[ch]?.home, h != id, let r = links[h], r.attached, r.stale == nil { return h }
         return links.filter { $0.key != id && $0.value.route != nil && $0.value.attached }.keys.min()
+    }
+
+    // MARK: Relays opened again (#8709)
+
+    /// Asks the app to open channel `ch`'s relay again, at most once per `reopenEvery`.
+    private func askReopen(_ ch: UInt8, at t: Double) {
+        guard !ended, paths?.token != nil, var c = chans[ch], !c.ended else { return }
+        if let at = c.reopenAskedAt, t - at < Self.reopenEvery { return }
+        c.reopenAskedAt = t
+        chans[ch] = c
+        emit.yield(.reopen(video: ch != ScreenLinkWire.rfb))
+    }
+
+    /// Every channel that needs a relay: nothing carries it, its relay is being replaced, or one asked for earlier
+    /// hasn't attached (the app is asked again every `reopenEvery`).
+    private func askReopenForStaleRelays() {
+        let t = now()
+        for (ch, c) in chans where !c.ended {
+            let homeStale = c.home.flatMap { links[$0]?.stale } != nil
+            let waiting = c.home == nil && c.reopenAskedAt != nil
+            if c.orphanedSince != nil || homeStale || waiting { askReopen(ch, at: t) }
+        }
+    }
+
+    /// A relay opened again for channel `ch` attached: it is the channel's relay from now on, the channel moves onto
+    /// it once if a relay or nothing carried it, and the relay it replaces closes. If that relay spoke again while
+    /// this one opened, it stays and this one closes instead, so the channel doesn't move at all.
+    private func relayReattached(_ id: Int, for ch: UInt8) {
+        guard var c = chans[ch], !c.ended else { return }
+        let old = c.home.flatMap { $0 == id ? nil : $0 }
+        c.reopenAskedAt = nil
+        if let old, let o = links[old], o.attached, o.stale == nil {
+            chans[ch] = c
+            retire(id)
+            return
+        }
+        c.home = id
+        c.orphanedSince = nil
+        chans[ch] = c
+        if c.active != id, links[c.active]?.route == nil { use([ch], on: id) } // a direct route keeps it
+        if let old { retire(old) }
+    }
+
+    /// A relay no channel uses any more: closed without touching the channels.
+    private func retire(_ id: Int) {
+        guard let l = links.removeValue(forKey: id) else { return }
+        l.writer.finish()
+        l.transport.close()
+        flowAsked[id] = nil
+        for (ch, c) in chans where c.home == id { chans[ch]?.home = nil }
     }
 
     /// The transport a route names: a direct route's connection; nil for the relay (each channel has its own).
@@ -530,6 +635,7 @@ public actor ScreenLinkSession {
             guard var c = chans[ch], !c.ended else { continue }
             c.active = id
             c.waitingResume = true
+            c.orphanedSince = nil
             chans[ch] = c
             entries.append(ScreenLinkOffset(ch, c.receiver.offset))
         }
@@ -575,6 +681,7 @@ public actor ScreenLinkSession {
     private func ping(_ id: Int) {
         links[id]?.lastPing = now()
         if links[id]?.unanswered == nil { links[id]?.unanswered = now() }
+        links[id]?.unansweredPings += 1
         out(id, .ping(UInt64(now() * 1e6)))
     }
 
@@ -588,7 +695,20 @@ public actor ScreenLinkSession {
         let t = now()
         for (id, l) in links where l.route != nil {
             if let since = l.unanswered, t - since >= Self.silentAfter { lose(id) }
+            else if !l.attached, t - l.added >= Self.attachWithin { lose(id) } // its attach went unanswered (#9218)
         }
+        // A relay gone quiet (#8709): Wi-Fi without a way out, or a network that left without a word. It stays
+        // until a new one attaches; a cellular hiccup that ends in time costs nothing.
+        for (id, l) in links where l.route == nil && l.attached && l.relayFor != 0 && l.stale == nil {
+            guard let since = l.unanswered, l.unansweredPings >= 2 else { continue }
+            let rtt = (l.meter.stats(kind: .relay, via: l.via, at: t).srttMs ?? 0) / 1000
+            if t - since >= max(Self.relaySilentAfter, 4 * rtt) { links[id]?.stale = .silent }
+        }
+        for (ch, c) in chans where !c.ended {
+            if links[c.active] == nil, let since = c.orphanedSince, t - since >= Self.relayGrace { endChannel(ch) }
+        }
+        guard !ended else { return false }
+        askReopenForStaleRelays()
         // The route in use every second, the others every two, so they stay warm for a move.
         let inUse = chans[ScreenLinkWire.rfb]?.active
         for (id, l) in links where l.attached && l.relayFor != 0 {
@@ -637,6 +757,11 @@ extension ScreenLinkSession {
     /// After a flow failed or was left, the route asks again after this, doubling to `flowRetryMax`.
     public static let flowRetryFirst = 30.0
     public static let flowRetryMax = 300.0
+    /// How often the flows tick (#9492): every 5 ms while one carries the video, whose loss recovery is timed against
+    /// the round trip; otherwise every 50 ms, enough for the hellos (0.2 s), pings (1 s) and timeouts and for the video
+    /// to move onto a proved flow. A 5 ms clock with nothing to carry (a page on its sign-in form, a route still being
+    /// proved) woke the phone about 200 times a second.
+    public static func flowTickNanoseconds(carrying: Bool) -> UInt64 { carrying ? 5_000_000 : 50_000_000 }
     /// Pacing asked for before the packets say (kbit/s, `ScreenUDPPace`): a LAN route takes bursts; a Tailscale route
     /// may sit behind a slow uplink, and on cellular it likely does.
     public static let paceLAN: UInt32 = 150_000
@@ -701,9 +826,11 @@ extension ScreenLinkSession {
         emit.yield(.openFlow(route: route, port: port))
         if flowTicker == nil {
             flowTicker = Task { [weak self] in
+                var carrying = false
                 while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 5_000_000)
-                    guard let self, await self.flowTick() else { return }
+                    try? await Task.sleep(nanoseconds: Self.flowTickNanoseconds(carrying: carrying))
+                    guard let self, let next = await self.flowTick() else { return }
+                    carrying = next
                 }
             }
         }
@@ -806,10 +933,17 @@ extension ScreenLinkSession {
         return true
     }
 
+    /// The node's reset of a channel, over a route or a flow: the channel goes on at `off`, and a partial message from
+    /// before it is dropped. A reset at or behind the receiver changes nothing (#10005): it is a late copy, from a route
+    /// the channel has left, of a reset already applied, and the message the phone has received in part since is the
+    /// one the stream goes on with.
+    private func resetChannel(_ ch: UInt8, to off: UInt64) {
+        if chans[ch]?.receiver.reset(to: off) == true { chans[ch]?.assembler?.reset() }
+    }
+
     private func flowReset(_ route: String, _ ch: UInt8, _ off: UInt64, at t: Double) {
         guard var f = flows[route], f.carrying == ch, var rx = f.receiver else { return }
-        chans[ch]?.receiver.reset(to: off)
-        chans[ch]?.assembler?.reset()
+        resetChannel(ch, to: off)
         let d = rx.reset(to: off, at: t)
         f.receiver = rx
         flows[route] = f
@@ -842,11 +976,13 @@ extension ScreenLinkSession {
         sendFlow(route, .ping(micros: UInt64(t * 1e6), parity: UInt16(f.parity), paceKbps: f.pace.request(at: t, start: start)))
     }
 
-    /// Every 5 ms while a flow is open: proving, pings, moving the video onto it, asking for what is missing.
-    private func flowTick() -> Bool {
+    /// One tick of the open flows: proving, pings, moving the video onto one, asking for what is missing. Nil: none
+    /// left, the ticker ends; else whether any flow carries the video now (the next tick's interval,
+    /// `flowTickNanoseconds`).
+    private func flowTick() -> Bool? {
         guard !ended, !flows.isEmpty else {
             flowTicker = nil
-            return false
+            return nil
         }
         let t = now()
         for route in Array(flows.keys) {
@@ -903,7 +1039,7 @@ extension ScreenLinkSession {
                 nack = nack.dropFirst(80)
             }
         }
-        return true
+        return flows.values.contains { $0.carrying != nil }
     }
 
     /// The route's stats with the flow's round trip, as the video sees it on `transport`.

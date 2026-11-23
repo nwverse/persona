@@ -50,8 +50,21 @@ export interface MessagePage {
   nextCursor?: string;
 }
 
+export interface AgentOutboxEntry {
+  clientId: string;
+  sessionId?: string;
+  preview?: string;
+  length?: number;
+  origin?: string;
+  status: string;
+  error?: string;
+  attempts?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface SendResult {
-  outbox: { clientId: string; status: string; error?: string };
+  outbox: AgentOutboxEntry;
   duplicate: boolean;
   upstream?: AgentMessage;
 }
@@ -88,6 +101,11 @@ export function fetchMessages(id: string, cursor?: string, limit = 50) {
   const q = new URLSearchParams({ limit: String(limit) });
   if (cursor) q.set("cursor", cursor);
   return api<MessagePage>(`${agentPath(id)}/messages?${q}`).then((p) => ({ ...p, messages: p.messages ?? [] }));
+}
+
+export function fetchAgentOutbox(id: string, limit = 100) {
+  const q = new URLSearchParams({ session_id: id, limit: String(limit) });
+  return api<{ outbox: AgentOutboxEntry[] | null }>(`/agents/outbox?${q}`).then((r) => ({ ...r, outbox: r.outbox ?? [] }));
 }
 
 export function sendMessage(id: string, clientId: string, text: string) {
@@ -211,9 +229,13 @@ export const messageText = (m: AgentMessage) => m.blocks.filter((b) => b.type ==
 export interface Outgoing {
   clientId: string;
   text: string;
+  /** When the message was first typed; a same-id retry keeps it. */
   at: number;
+  /** The local or hub status change, whichever this entry last reconciled. */
+  updatedAt: number;
   status: "sending" | "sent" | "failed";
   error?: string;
+  attempts?: number;
 }
 
 // Persisted messages lose the clientId (externalId changes from local:<clientId>), so a local bubble is dropped once
@@ -397,14 +419,15 @@ export interface SessionGroup {
   unread: number;
 }
 
-const DAY = 86_400_000;
+/** A session's date group by local calendar days: a day is 23 or 25 hours on the days the clocks change, so the
+ *  groups start at midnights, never at 24-hour steps back from today's (#9912). */
 export function dateBucket(ms: number, now = Date.now()): { key: string; label: string; order: number } {
   const d = new Date(now);
-  const today = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  if (ms >= today) return { key: "today", label: t("lib-agents.date_today"), order: 0 };
-  if (ms >= today - DAY) return { key: "yesterday", label: t("lib-agents.date_yesterday"), order: 1 };
-  if (ms >= today - 7 * DAY) return { key: "week", label: t("lib-agents.date_week"), order: 2 };
-  if (ms >= today - 30 * DAY) return { key: "month", label: t("lib-agents.date_month"), order: 3 };
+  const daysBack = (n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - n).getTime();
+  if (ms >= daysBack(0)) return { key: "today", label: t("lib-agents.date_today"), order: 0 };
+  if (ms >= daysBack(1)) return { key: "yesterday", label: t("lib-agents.date_yesterday"), order: 1 };
+  if (ms >= daysBack(7)) return { key: "week", label: t("lib-agents.date_week"), order: 2 };
+  if (ms >= daysBack(30)) return { key: "month", label: t("lib-agents.date_month"), order: 3 };
   return { key: "older", label: t("lib-agents.date_older"), order: 4 };
 }
 

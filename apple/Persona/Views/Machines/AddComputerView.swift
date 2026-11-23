@@ -146,6 +146,7 @@ enum AddComputerText {
     /// The card's lines for a computer that is not online: a known error code in words, a pending one's request, the hub's
     /// error read in plain words (why, then what to do) with the raw error under it, else the raw error itself.
     static func machineLines(_ m: Machine) -> (line: String, detail: String?)? {
+        if m.linkSwitchRunning { return nil } // the switch's own card explains this expected disconnect (#10671)
         if let p = machineProblem(m.errorCode) { return (p, nil) }
         if m.isPending { return m.online ? (String(localized: "A computer wants to join. Confirm whether it's yours."), nil) : nil }
         if let reason = NodeHealth.offlineReason(m) { return (reason, m.error) }
@@ -570,22 +571,16 @@ struct AddComputerSheet: View {
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        // ✕ at the leading corner at every stage (#9653); Next while the form is up.
+        SheetClose(id: "addComputer.close") { dismiss() }
         if page.stage == .form || page.stage == .working {
-            ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Text("Cancel").lineLimit(1) } }
             ToolbarItem(placement: .confirmationAction) {
                 Button { Task { await page.submit() } } label: { Text("Next [Inbox Line acfc4e]").lineLimit(1) }
                     .disabled(page.validName == nil || page.stage == .working || page.assistantOffline != nil)
                     .accessibilityIdentifier("addComputer.next")
             }
-        } else {
-            ToolbarItem(placement: .confirmationAction) {
-                Button { dismiss() } label: { (isEnd ? Text("Done [Extension System Presentation c0b3fb]") : Text("Close")).lineLimit(1) }
-                    .accessibilityIdentifier("addComputer.done")
-            }
         }
     }
-
-    private var isEnd: Bool { [.confirmed, .rejected, .gone].contains(page.stage) }
 
     @ViewBuilder private var content: some View {
         if let f = page.failure { failure(f) }

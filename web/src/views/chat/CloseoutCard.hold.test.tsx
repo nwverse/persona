@@ -3,8 +3,9 @@
 // or the transcript's exchange, keeps its did, Verified and evidence rows back until both are in (HOLD_MS at most), so
 // the card grows once; after a failed load they draw without the row. Each test imports the card afresh: the chunk's
 // state belongs to the module.
-import { act } from "react";
+import { act, Suspense } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import type { Segment } from "../../lib/turns";
@@ -13,9 +14,10 @@ import type { Session } from "../../lib/types";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // The chunk comes in (or fails) when a test says so; `calls` counts its loads. A fresh one for every test (beforeEach).
-const chunk = { calls: 0, open: () => {}, fail: () => {} };
+const chunk = { calls: 0, loaded: false, open: () => {}, fail: () => {} };
 function mockChunk() {
   chunk.calls = 0;
+  chunk.loaded = false;
   vi.doMock("./CloseoutEvidence", async () => {
     chunk.calls++;
     await new Promise<void>((resolve, reject) => {
@@ -23,15 +25,24 @@ function mockChunk() {
       chunk.fail = () => reject(new TypeError("Failed to fetch dynamically imported module"));
     });
     const { createElement, Fragment } = await import("react");
+    chunk.loaded = true;
     return { CloseoutEvidence: () => createElement(Fragment, null, createElement("dt", null, "Evidence"), createElement("dd", { "data-closeout-evidence": "" })) };
   });
 }
 // the module system asks for the chunk a few turns after the import starts
 const asked = (n: number) => vi.waitFor(() => expect(chunk.calls).toBe(n));
-// a few turns of the event loop, inside act, for the chunk's module to come in and the card to draw (setImmediate: the
-// fake timers below take only setTimeout)
+// one turn of the event loop, inside act (setImmediate: the fake timers below take only setTimeout)
+const turn = () => act(async () => void (await new Promise((r) => setImmediate(r))));
+// turns until the chunk's module came in and the card drew: up to 5 s, as under a full parallel run a cold module took
+// more than the 50 turns this once allowed
 async function turns(until: () => boolean) {
-  for (let i = 0; i < 50 && !until(); i++) await act(async () => void (await new Promise((r) => setImmediate(r))));
+  const end = Date.now() + 5_000;
+  while (!until() && Date.now() < end) await turn();
+}
+// the chunk's module in, then the 50 turns its importers once had to take it up
+async function chunkIn() {
+  await turns(() => chunk.loaded);
+  for (let i = 0; i < 50; i++) await turn();
 }
 
 const read = {
@@ -71,6 +82,43 @@ afterEach(() => {
 });
 
 describe("CloseoutCard and its evidence chunk", () => {
+  it("does not statically import the loader that imports the card", () => {
+    // Vite may recover a cycle by evaluating the card before its imports finish. The shared evidence loader is a
+    // separate module so its store preload cannot expose this partially initialized component (#10408).
+    const source = readFileSync("src/views/chat/CloseoutCard.tsx", "utf8");
+    expect(source).not.toMatch(/^import[^;]*from\s+["']\.\/closeout-chunks["']/m);
+  });
+
+  it("loads the report reader with the card and keeps surrounding replies visible", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const latch = new Promise<void>((resolve) => { release = resolve; });
+    vi.doMock("./CloseoutCard", async (original) => {
+      calls++;
+      await latch;
+      return original();
+    });
+    try {
+      const { useCloseoutReader, LazyCloseoutCard } = await import("./closeout-chunks");
+      const report = "The sample passed.\n\n### Persona work report\n- Status: done\n- Merged: n/a\n- Deployed: n/a\n---";
+      function Reply({ covered }: { covered: boolean }) {
+        const strip = useCloseoutReader(covered);
+        return <p>{strip ? strip(report) : "Earlier reply."}</p>;
+      }
+      await act(async () => root.render(<Reply covered={false} />));
+      expect(calls).toBe(0);
+      await act(async () => root.render(<><Reply covered={false} /><Suspense fallback={null}><Reply covered /></Suspense></>));
+      await vi.waitFor(() => expect(calls).toBe(1));
+      expect(host.textContent).toBe("Earlier reply.");
+      const card = LazyCloseoutCard.preload();
+      await act(async () => { release(); await card; });
+      await turns(() => host.textContent === "Earlier reply.The sample passed.");
+      expect(host.textContent).toBe("Earlier reply.The sample passed.");
+      expect(calls).toBe(1);
+    } finally {
+      vi.doUnmock("./CloseoutCard");
+    }
+  });
   it("keeps did, Verified and the evidence row back until the chunk is in, then draws them together", async () => {
     await card(read);
     await asked(1); // the card's own load: nothing started it before
@@ -89,7 +137,7 @@ describe("CloseoutCard and its evidence chunk", () => {
     await card(read, null);
     await asked(1);
     chunk.open();
-    await turns(() => false);
+    await chunkIn();
     expect(shows("chat-chatview.closeout_verified")).toBe(false); // the chunk is in, the exchange is not
     await card(read);
     expect(shows("chat-chatview.closeout_did")).toBe(true);
@@ -132,15 +180,15 @@ describe("CloseoutCard and its evidence chunk", () => {
 
   it("starts the chunk once the store holds a closeout a card would show, before any card, and not with Data Saver", async () => {
     const { applyCompleteSessions } = await import("../../lib/store");
-    const { preloadCloseoutEvidence } = await import("./CloseoutCard");
-    const saver = preloadCloseoutEvidence({ navigator: { connection: { saveData: true } } });
-    const stop = preloadCloseoutEvidence({});
+    const { preloadCloseout } = await import("./closeout-chunks");
+    const saver = preloadCloseout({ navigator: { connection: { saveData: true } } });
+    const stop = preloadCloseout({});
     applyCompleteSessions([{ ...row, session_id: "w", state: "working", work: { ...row.work!, phase: "working" } } as Session]);
     expect(chunk.calls).toBe(0); // a working session shows no card
     applyCompleteSessions([row]);
     await asked(1);
     chunk.open();
-    await turns(() => false); // the chunk comes in, before any card
+    await chunkIn(); // the chunk comes in, before any card
     await card(read); // the card draws at once, with every row
     expect(chunk.calls).toBe(1);
     expect(shows("chat-chatview.closeout_verified")).toBe(true);

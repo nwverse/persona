@@ -1,5 +1,6 @@
 import Foundation
 import PersonaKit
+import PersonaWire
 
 /// The chat as a flat list of lines (`ChatLine`), from the store's blocks: every message of a turn opens its own
 /// exchange — the message, one work line for what the agent did after it, the agent's last words. Open work lines get
@@ -10,8 +11,9 @@ struct ChatLines {
 
     /// Feed cards and messages still arriving are content too, even before transcript history has loaded.
     static func placeholder(lines: [ChatLine], hasTranscript: Bool, hasPending: Bool,
-                            hasLiveText: Bool, loadedOnce: Bool) -> Placeholder {
+                            hasLiveText: Bool, loadedOnce: Bool, historyNotFound: Bool = false) -> Placeholder {
         guard lines.isEmpty, !hasTranscript, !hasPending, !hasLiveText else { return .none }
+        if historyNotFound { return .none } // the error row replaces the first-page loading state
         return loadedOnce ? .empty : .loading
     }
 
@@ -29,7 +31,7 @@ struct ChatLines {
         }
     }
 
-    /// The lines without the raw `<closeout …>…</closeout>` block of the last reply (#3612): the card in the chat's
+    /// The lines without the raw closeout of the last reply (#3612): the card in the chat's
     /// header says it, so the reply does not say it again as text. Exactly that block goes (`Closeout.strip`), from
     /// the last exchange's last words only; a reply that was nothing but the block is not drawn at all. An earlier
     /// turn's block stays as it was written: the card is about the turn that just ended.
@@ -40,8 +42,9 @@ struct ChatLines {
         for index in lines.indices.reversed() {
             switch lines[index].content {
             case .row(.assistant(let item)):
-                guard let text = item.text, Closeout.holdsBlock(text) else { return lines }
-                let stripped = Closeout.strip(text)
+                guard let text = item.text else { return lines }
+                let stripped = Closeout.strip(text, complete: item.fullSize == nil)
+                guard stripped != text else { return lines }
                 var out = lines
                 if stripped.isEmpty, item.fullSize == nil {
                     out.remove(at: index)
@@ -100,6 +103,8 @@ struct ChatLines {
     /// Background rounds fold too (docs/apple/ios.md "Background rounds"): the main conversation and the leader
     /// conversations (`AssistantInfo.leaders`, #6595), with the hub's `main_background_folded` on. Needs `foldSupervision`.
     var foldBackground = false
+    /// The main Assistant conversation: a routine relay reply stays folded; leader conversations keep the old fallback.
+    var main = false
     var openSupervision: Set<String> = []
     var openAllSupervision = false
     var active = false
@@ -171,7 +176,7 @@ struct ChatLines {
                 entry = nil
             }
             guard let trace = round, let first = trace.first else { return }
-            if Supervision.visible(evidence, results: results, live: running) {
+            if Supervision.visible(evidence, results: results, live: running, routineMainRelay: main && source?.kind == "conversation") {
                 out += trace
             } else {
                 out.append(.supervision(id: "sv-" + first.id, lines: trace, live: running, source: source))
@@ -260,7 +265,7 @@ struct ChatLines {
     static func transcriptItems(_ block: ChatBlock) -> [Item] {
         switch block {
         case .row(let row): return transcriptItems(row)
-        case .turn(let turn): return (turn.ordered + turn.tail + turn.trailing).flatMap(transcriptItems)
+        case .turn(let turn): return (turn.ordered + turn.trailing).flatMap(transcriptItems)
         }
     }
 
@@ -283,22 +288,32 @@ struct ChatLines {
             case .row(let r):
                 if !SubagentDelivery.isWake(r) { out.append(.row(r)) }
             case .turn(var t):
-                // Work a background task woke the agent for opens with that notice, where a message would be.
-                var wokeAt: Date?
+                // Work a background task woke the agent for opens with that notice, where a message would be (a
+                // subagent's report that woke it is drawn under its call, so that one opens with the work).
+                var woke: Item?
                 if let first = t.ordered.first, case .notice(let n) = first, n.wake == true {
                     if !SubagentDelivery.isWake(first) { out.append(.row(first)) }
                     t.ordered.removeFirst()
-                    wokeAt = n.ts
+                    woke = n
                 }
-                let segments = Self.segments(t.ordered)
+                let wokeAt = woke?.ts
+                var segments = Self.segments(t.ordered)
+                // Woken and at work with nothing of it here yet: its work line.
+                if segments.isEmpty, woke != nil, t.id == liveID { segments = [(nil, [])] }
                 for (k, seg) in segments.enumerated() {
-                    // Once the answer is in, its wake continues in the same summary while new words stream.
-                    let afterWake = k > 0 && t.id == liveID && t.hasPendingWake
-                    let live = t.id == liveID && k == segments.count - 1 && (t.tail.isEmpty || afterWake)
+                    let firstLine = out.count
+                    let live = t.id == liveID && k == segments.count - 1
+                    // The work a wake opened is known by the wake: its line keeps its id from before its first step.
+                    let opening = k == 0 && seg.user == nil ? woke?.id : nil
                     // Photos sent with the message (Claude inlines a pasted image path as an image block) sit above
                     // its text, as they did while it was being sent — not in the agent's work.
                     let photos = Self.photos(seg.rows)
-                    if !photos.isEmpty { out.append(.userImages(id: "img-" + photos[0].id, items: photos)) }
+                    if !photos.isEmpty {
+                        var line = ChatLine.userImages(id: "img-" + photos[0].id, items: photos)
+                        // A photo with no text is an input of its own; photos beside text stay before its divider.
+                        line.startsExchange = seg.user == nil
+                        out.append(line)
+                    }
                     if let u = seg.user { out.append(.row(u)) }
                     let last = live && streaming ? nil : seg.rows.lastIndex { if case .assistant = $0 { true } else { false } }
                     // Only an idle compaction with no later work belongs after the answer. A running turn's
@@ -319,7 +334,7 @@ struct ChatLines {
                         // Only compactions (/compact): dividers across the chat, no work line to open.
                         out += work.filter { if case .notice(let i) = $0 { i.compact != nil } else { false } }.map { .row($0) }
                     } else if !items.isEmpty || live {
-                        let id = "w-" + (seg.user?.id ?? seg.rows.first?.id ?? t.id)
+                        let id = "w-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id)
                         // The answer and an interrupt end the exchange too; an idle compaction after it does not.
                         let ending = seg.rows.indices.filter { !after.contains($0) }.map { seg.rows[$0] }
                             + (k == segments.count - 1 ? t.trailing : [])
@@ -329,9 +344,13 @@ struct ChatLines {
                     }
                     // Between the work and the answer: what the work looked at. Its id stays as pictures come in and
                     // the answer changes, so the strip grows sideways in place.
-                    out += Self.viewed("vi-" + (seg.user?.id ?? seg.rows.first?.id ?? t.id), items)
+                    out += Self.viewed("vi-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id), items)
                     if let last { out.append(.row(seg.rows[last])) }
                     out += after.sorted().map { .row(seg.rows[$0]) }
+                    if opening != nil, out.count > firstLine {
+                        // A wake opens where a message would be, whether its notice is drawn or only its work/reply is.
+                        out[firstLine].startsExchange = true
+                    }
                 }
                 out += t.trailing.map { .row($0) }
             }
@@ -383,7 +402,7 @@ struct ChatLines {
     }
 
     static func openRecap(_ lines: [ChatLine], pending: Item?) -> OpenRecap? {
-        guard let pending, let last = lines.last else { return nil }
+        guard let pending, let last = lastOfChat(lines) else { return nil }
         switch last.content {
         case .row(.recap(let i)) where i.id == pending.id:
             return OpenRecap(line: last.id, earlier: [], newest: i)
@@ -437,7 +456,11 @@ struct ChatLines {
                         }
                         return child
                     }
-                    out += unfold(raw)
+                    out += unfold(raw).map { child in
+                        var child = child
+                        child.inFoldedRound = true
+                        return child
+                    }
                 }
                 continue
             }
@@ -695,6 +718,45 @@ extension ChatLines {
         return out
     }
 
+    /// The permission mode changes the hub recorded (#10297), each at the end of the exchange it happened in, as the
+    /// assistant's feed items go (`mergeFeed`): before the first message sent after it, the newest after the last line,
+    /// never between a work line and its answer. A change from before `earliest` (the first loaded item, while older
+    /// history is still to load) waits for its page instead of piling up at the top; a chat with no lines yet gets none. Ids come from each change's time,
+    /// kind and mode, numbered within the same moment, so a list that grows or loses its oldest entry keeps the others'.
+    static func mergeModeChanges(_ lines: [ChatLine], _ changes: [APIClient.ModeChange], earliest: Date? = nil) -> [ChatLine] {
+        let known: Set<String> = ["set", "restart_done", "restart_failed", "restart_dropped"]
+        let shown = changes.filter { c in known.contains(c.kind) && (earliest.map { c.at >= $0 } ?? true) }
+            .enumerated().sorted { a, b in a.element.at != b.element.at ? a.element.at < b.element.at : a.offset < b.offset }.map(\.element)
+        // nothing to place them by yet: an empty chat keeps its placeholder
+        guard !shown.isEmpty, !lines.isEmpty else { return lines }
+        var seen: [String: Int] = [:]
+        let keyed: [ChatLine] = shown.map { c in
+            let base = "mode-\(Int(c.at.timeIntervalSince1970 * 1000))-\(c.kind)-\(c.to ?? "")"
+            let n = seen[base, default: 0]
+            seen[base] = n + 1
+            return .modeChange(id: n == 0 ? base : "\(base)-\(n)", c)
+        }
+        var out: [ChatLine] = []
+        out.reserveCapacity(lines.count + keyed.count)
+        var next = 0
+        for line in lines {
+            if let at = inputTime(line) {
+                while next < keyed.count, shown[next].at < at {
+                    out.append(keyed[next])
+                    next += 1
+                }
+            }
+            out.append(line)
+        }
+        out.append(contentsOf: keyed[next...])
+        return out
+    }
+
+    /// The chat's last line that is not a mode change (`mergeModeChanges`): what Retry and the error cards ask about.
+    static func lastOfChat(_ lines: [ChatLine]) -> ChatLine? {
+        lines.last { if case .modeChange = $0.content { false } else { true } }
+    }
+
     /// Where messages that failed to send go (#6023): one written before a message sent after it goes right before the
     /// first such message (or the day, or the feed card, that came after it), at the end of the exchange it was written
     /// in, as a feed item does (`mergeFeed`). The chat then reads in the order things were written instead of keeping it
@@ -775,6 +837,7 @@ extension ChatLines {
         case .userImages(_, let items): return items.first.flatMap(sent)
         case .day(let d): return d
         case .feed(let f): return f.at
+        case .modeChange(_, let c): return c.at
         default: return nil
         }
     }

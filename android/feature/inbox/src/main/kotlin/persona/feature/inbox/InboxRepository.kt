@@ -12,6 +12,8 @@ import java.util.UUID
 import persona.core.contracts.SessionKey
 import persona.core.contracts.LarkReaction
 import persona.core.contracts.api.ConnectionState
+import persona.core.contracts.api.LarkMember
+import persona.core.contracts.api.LarkMention
 import persona.core.contracts.api.MailTransport
 import persona.core.contracts.api.OutboxMessage
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,11 +24,15 @@ private val emptyReplyComposers: StateFlow<ReplyComposers?> = MutableStateFlow(n
 private val disconnectedMail: StateFlow<MailTransport?> = MutableStateFlow(null)
 private val emptyPersonaOutbox: StateFlow<List<OutboxMessage>> = MutableStateFlow(emptyList())
 private val emptyConversationInbox: StateFlow<InboxConversations?> = MutableStateFlow(null)
+private val emptyLarkMessages: StateFlow<LarkMessagesRepository?> = MutableStateFlow(null)
 private val emptyMessageReads: StateFlow<Set<InboxMessageRead>> = MutableStateFlow(emptySet())
 
 /** Feature capabilities until the shared repository contract exposes inbox details. */
 interface InboxRepository : persona.core.contracts.api.InboxRepository {
     val conversationInbox: StateFlow<InboxConversations?> get() = emptyConversationInbox
+    /** Optional all-chats browser; null in demo mode, lightweight fakes and while a real pairing assembles DI.
+     * No request is made merely by creating it. */
+    val larkMessages: StateFlow<LarkMessagesRepository?> get() = emptyLarkMessages
     val messageReads: StateFlow<Set<InboxMessageRead>> get() = emptyMessageReads
     val supportsThreadOutbox: Boolean get() = false
     val replyComposers: StateFlow<ReplyComposers?> get() = emptyReplyComposers
@@ -126,6 +132,7 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     suspend fun react(messageId: String, key: String, remove: Boolean) = Unit
     suspend fun cardAction(messageId: String, actionId: String) = Unit
     suspend fun userProfile(userId: String, feedId: String? = null): kotlinx.serialization.json.JsonObject? = null
+    suspend fun larkMembers(feedId: String, query: String, limit: Int = 30): List<LarkMember> = emptyList()
     suspend fun quickReactions(): List<String> = emptyList()
     suspend fun emojis(): kotlinx.serialization.json.JsonObject? = null
 
@@ -175,6 +182,8 @@ data class InboxSnapshot(
     val loading: Boolean = false,
     val error: String? = null,
     val contentSource: LarkContentSource? = null,
+    /** Whether the session catalog has completed its first load; an empty catalog before then is not "agent gone". */
+    val targetsReady: Boolean = false,
     /** Machine names by id, for saying where an Agent runs. */
     val machines: Map<String, String> = emptyMap(),
     /** How triage stands: new items waiting outside the list (#1773); null from an older hub. */
@@ -224,9 +233,29 @@ data class InboxRecord(
     /** A hub connector's item (not Feishu's, not mail): it opens as its connector's thread. */
     val isConnector: Boolean get() = connector != null && !isLark && !isMail && moment == null
 
+    /** A conversation the assistant itself put into the Inbox. */
+    val isAssistantRow: Boolean get() = source == "assistant"
+
+    /** Its preview already starts with the summary, so the row draws that text once. */
+    val repeatsSummary: Boolean get() {
+        if (!isAssistantRow) return false
+        val summary = item.summary?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+        val preview = item.preview.trim()
+        return preview.isNotEmpty() && preview.startsWith(summary)
+    }
+
     val isLark: Boolean get() = feedId != null || source == "lark"
     /** A mail item: only these open the mail page; the kind says it too in records cached without their source. */
     val isMail: Boolean get() = mail != null || source == "mail" || (source.isEmpty() && item.kind == "mail")
+
+    /** The assistant's text adds nothing beyond the title and summary already on its page. */
+    fun onlyTitleAndSummary(context: String?): Boolean {
+        if (!isAssistantRow) return false
+        val summary = item.summary?.takeIf { it.isNotBlank() } ?: return false
+        fun flat(text: String) = text.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        val text = flat(context ?: item.preview)
+        return text.isEmpty() || text == flat("${item.title} $summary") || text == flat(summary)
+    }
 
     /** The item's id on the hub (its requests name it there; [InboxItemKey]). */
     val hubItemId: String get() = InboxItemKey.hubId(item.id)
@@ -263,7 +292,8 @@ fun List<InboxRecord>.inboxRecord(id: String?): InboxRecord? =
 
 /**
  * An item's `connector` block (docs/protocol/protocol.md "Inbox"): the [thread] its connector reads it as, the [label] the
- * connector gave it (the row's tag, its words: "Direct message", "@me", "Transfer"…), and whether and where a reply goes.
+ * connector gave it (the row's tag, its words: "Direct message", "@me", "Transfer"…), whether and where a reply goes, and
+ * the hub's [avatarUrl] for the thread's picture.
  */
 @Serializable
 data class InboxConnectorRef(
@@ -271,6 +301,9 @@ data class InboxConnectorRef(
     val label: String? = null,
     val canReply: Boolean = false,
     val replyTo: String? = null,
+    /** The source page; for the assistant's own row, its conversation in the web app. */
+    val url: String? = null,
+    @SerialName("avatar_url") val avatarUrl: String? = null,
 )
 
 /** A Moments post reference on an inbox item. */
@@ -308,12 +341,21 @@ sealed interface ReplyTarget {
 }
 
 @Serializable
-data class ReplyRequest(val text: String, @SerialName("client_id") val clientId: String,
-    val mailTarget: persona.core.contracts.api.MailReplyTarget? = null)
+data class ReplyRequest(
+    val text: String,
+    @SerialName("client_id") val clientId: String,
+    val mailTarget: persona.core.contracts.api.MailReplyTarget? = null,
+    val mentions: List<LarkMention> = emptyList(),
+)
 
 /** [ai]: the text came from AI (the AI twin, or "AI draft"); sending it asks first, sending the user's own words does not. */
 @Serializable
-data class ReplyDraft(val text: String, val clientId: String = UUID.randomUUID().toString(), val ai: Boolean = false)
+data class ReplyDraft(
+    val text: String,
+    val clientId: String = UUID.randomUUID().toString(),
+    val ai: Boolean = false,
+    val mentions: List<LarkMention> = emptyList(),
+)
 
 data class LarkConversation(
     val title: String = "",
@@ -416,6 +458,10 @@ data class InboxPreferences(
     val source: String = "",
     val kind: String = "",
     val query: String = "",
+    /**
+     * The old bays' choice ("action", "", "done"). No longer read: the section bar opens on Needs you each time and keeps
+     * its choice only while the Inbox is open (#9053). Kept so the stored JSON reads the same in older versions.
+     */
     val section: String = "",
     val expanded: List<String> = listOf("action", "fyi"),
     /** Needs you, FYI and Collapsed grouped by source or by time (#2576, persona.core.domain.inbox.InboxGroups). */

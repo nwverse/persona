@@ -174,7 +174,11 @@ nonisolated enum VideoPrep {
                 }
             }
             do {
-                try await session.export(to: out, as: .mp4)
+                if #available(iOS 26.0, *) {
+                    try await session.export(to: out, as: .mp4)
+                } else {
+                    try await exportBeforeIOS26(to: out)
+                }
             } catch {
                 watch.cancel()
                 await watch.value
@@ -183,6 +187,30 @@ nonisolated enum VideoPrep {
             watch.cancel()
             await watch.value
             progress(1)
+        }
+
+        /// Before iOS 26 `export(to:as:)` is a back-deployed copy built into the app, and on iOS 18.6 it crashed the app
+        /// as the export ended, done or failed (`VideoAttachTests`, #6730). There the session's own callback ends the
+        /// wait, once, with the same outcomes and cancellation.
+        private func exportBeforeIOS26(to out: URL) async throws {
+            session.outputURL = out
+            session.outputFileType = .mp4
+            nonisolated(unsafe) let session = self.session
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, any Error>) in
+                    session.exportAsynchronously {
+                        switch session.status {
+                        case .completed: done.resume()
+                        case .cancelled: done.resume(throwing: CancellationError())
+                        default:
+                            done.resume(throwing: session.error
+                                        ?? APIError(status: 0, message: String(localized: "This video can't be compressed")))
+                        }
+                    }
+                }
+            } onCancel: {
+                session.cancelExport()
+            }
         }
     }
 }
@@ -457,10 +485,11 @@ nonisolated enum AttachedVideos {
 }
 
 extension View {
-    /// A composer's Photos picker: pictures and videos, four at most, in the library's own encoding (a video is
-    /// compressed here, and only when it has to be: `VideoPrep`).
-    func mediaPicker(isPresented: Binding<Bool>, selection: Binding<[PhotosPickerItem]>) -> some View {
-        photosPicker(isPresented: isPresented, selection: selection, maxSelectionCount: 4, matching: .any(of: [.images, .videos]),
+    /// A composer's Photos picker: pictures and videos, `limit` at most (the hub's pictures and the videos' own, #12973;
+    /// pictures past the hub's go as files), in the library's own encoding (a video is compressed here, and only when it
+    /// has to be: `VideoPrep`).
+    func mediaPicker(isPresented: Binding<Bool>, selection: Binding<[PhotosPickerItem]>, limit: Int) -> some View {
+        photosPicker(isPresented: isPresented, selection: selection, maxSelectionCount: max(1, limit), matching: .any(of: [.images, .videos]),
                      preferredItemEncoding: .current)
     }
 }

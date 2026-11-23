@@ -17,8 +17,14 @@
   "view_event": "処理",
   "linked_task": "関連するタスク",
   "linked_agent": "関連するエージェント",
+  "forward_forwarded": "Agent に転送済み",
+  "forward_queued": "Agent にキュー投入済み",
+  "forward_resumed": "Agent を再開して転送",
+  "forward_fallback": "監督会話へフォールバック",
+  "forward_failed": "自動転送に失敗",
   "assistant_says": "アシスタントによると",
   "say_something": "ひとこと伝える",
   "retry": "もう一度試す",
-  "retry_text": "もう一度試してください。"
+  "retry_requested": "AIに再試行を依頼しました",
+  "retry_failed": "再試行できませんでした：{error}"
 }

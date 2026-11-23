@@ -9,7 +9,9 @@
 import { useEffect, useState } from "react";
 import { ItemManager, useKnownDefault } from "../../lib/manager-choice";
 import { hasEvent, itemAtUid } from "../../lib/inbox-events";
-import { agentDraft, agentWorking, canDraft, isDone, itemKey, kindLabel, labelIsUrgent, muteItem, muteShortName, muteTitle, openTitle, policyMenuTitle, openURL, setDone, shortTime, sourceLine, useInbox, type InboxItem } from "../../lib/inbox";
+import { agentDraft, agentWorking, isDone, itemKey, kindLabel, labelIsUrgent, muteItem, openTitle, openURL, setDone, shortTime, useInbox, type InboxItem } from "../../lib/inbox";
+import { lineSummary } from "../../lib/inbox-markdown";
+import { canDraft, muteShortName, muteTitle, policyMenuTitle, sourceLine } from "../../lib/inbox-page";
 import { rowMeta } from "../../lib/inbox-now";
 import { openTodoDialog } from "./InboxTodoDialog";
 import { openFolderDialog, useFoldersShown } from "./InboxFolders";
@@ -145,9 +147,10 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
             <div className="flex items-start gap-3">
               <ItemAvatar it={item} size={36} />
               <div className="min-w-0 flex-1">
-                {/* where a narrow page puts the keyboard when the item opens (Inbox.tsx), so its ring shows there */}
-                <h2 tabIndex={-1} data-item-title className={cx("flex min-w-0 items-center gap-2 rounded-chip text-[15px] font-semibold text-ink outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent", item.source === "larkcli" && "flex-wrap gap-y-1 sm:flex-nowrap")}>
-                  <span className={item.source === "larkcli" ? "min-w-0 max-w-full break-words sm:truncate" : "truncate"} title={translated?.subject ? item.title : undefined}>{translated?.subject || item.title}</span>
+                {/* where a narrow page puts the keyboard when the item opens (Inbox.tsx), so its ring shows there. A phone
+                    wraps the title in full whatever its source, not cut to a few letters beside Done */}
+                <h2 tabIndex={-1} data-item-title className={cx("flex min-w-0 items-center gap-2 rounded-chip text-[15px] font-semibold text-ink outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent", phone && "flex-wrap gap-y-1")}>
+                  <span className={phone ? "min-w-0 break-words" : "truncate"} title={translated?.subject ? item.title : undefined}>{translated?.subject || item.title}</span>
                   {label && <Tag urgent={labelIsUrgent(item)}>{label}</Tag>}
                 </h2>
                 {/* with a place, the small line gives way to Original / Handling (at its end); an older item keeps its
@@ -201,7 +204,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
             {item.summary && !showEvent && (
               <p className="mt-3 text-[13px] leading-relaxed text-ink">
                 <Spark />
-                {item.summary}
+                {lineSummary(item)}
               </p>
             )}
             {!showEvent && <InboxLine item={item} />}

@@ -2,12 +2,15 @@
 // manager's current state, or an older hub's handling / suggestion line) and the detail's body — ✦ summary, the suggestion card
 // with its buttons right under it, any recap, then the handling chain folded to its three newest entries, each entry going where its link says.
 // Drawn only for an item that carries this phase's fields (lib/inbox-events.ts `hasEvent`).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   actOnSuggestion, canExpand, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
   type ChainEntry, type ChainTap, type InboxSuggestion,
 } from "../../lib/inbox-events";
-import { conversationRoute, docChangeLine, isDone, itemKey, itemPath, itemRoute, reloadInbox, replaceItem, suggestionAct, useInbox, type InboxItem } from "../../lib/inbox";
+import { conversationRoute, getInbox, isDone, itemKey, itemPath, itemRequest, itemRoute, reloadInbox, replaceItem, sameItem, suggestionAct, uncertainReplyKey, useInbox, type InboxItem } from "../../lib/inbox";
+import { api, ApiError, errorText } from "../../lib/api";
+import { markdownBody, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
+import { docChangeLine } from "../../lib/inbox-page";
 import { otherManager } from "../../lib/manager-choice";
 import { nowText } from "../../lib/inbox-now";
 import { connectorBrand } from "../../lib/connectors";
@@ -21,6 +24,7 @@ import { t } from "../../i18n";
 import { Button, cx, Shimmer, Spinner, Switch, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
+import { Markdown } from "../../ui/Markdown";
 import { StatusMark } from "../../ui/StatusMark";
 import { useFoldScroll } from "../chat/fold-scroll";
 import { useInboxView } from "../../lib/inbox-view-memory";
@@ -143,7 +147,7 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
         )}
         {(done || !item.suggestion) && (item.summary || item.recap) && (
           <section className="flex flex-col gap-2">
-            {item.summary && <EventSummary text={item.summary} />}
+            {item.summary && (markdownBody(item) ? <AssistantBody key={itemKey(item)} text={markdownBody(item)!} /> : <EventSummary text={item.summary} />)}
             {item.recap && (
               <div>
                 <p className="text-submeta font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
@@ -160,6 +164,41 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
   );
   // the line under it outside the fade, which would wash it out
   return embedded ? <div className="flex max-h-[40%] shrink-0 flex-col border-b border-line">{body}</div> : body;
+}
+
+/** Lines an assistant row's text shows folded: a briefing's conclusion and first section. */
+const BODY_LINES = 10;
+/** Folded: ten lines high, scrolling inside, its bottom fading while there is more (fold-scroll), as a long message in the chat. */
+const BODY_FOLDED = "max-h-[10lh] overflow-y-auto";
+
+/** The assistant's own row's text (#9041): the chat's Markdown, folded to BODY_LINES with Expand under it when it runs
+ *  longer, never cut with "…". */
+function AssistantBody({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [long, setLong] = useState(() => text.split("\n").length > BODY_LINES);
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    // its whole height in lines (a fold's scrollHeight is all of it)
+    const line = parseFloat(getComputedStyle(el).lineHeight) || 22;
+    setLong(el.scrollHeight / line > BODY_LINES + 0.5);
+  }, [text, open]);
+  const folded = long && !open;
+  const fold = useFoldScroll(ref, folded, [text]);
+  return (
+    <div className="flex flex-col items-start gap-1" data-event-text>
+      <div ref={ref} {...fold} className={cx("w-full text-meta leading-relaxed text-ink", folded && BODY_FOLDED)} data-folded={folded || undefined}>
+        {/* a reply, read line by line as it was written, as the chat draws one */}
+        <Markdown text={text} small lineBreaks />
+      </div>
+      {long && (
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="rounded-[6px] px-1.5 py-0.5 text-label font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink-2">
+          {open ? t("inbox-inboxevent.entry_collapse") : t("inbox-inboxevent.entry_expand")}
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** The active state, its processing conversation, and a way to instruct an open item without a suggestion. */
@@ -181,7 +220,7 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   const h = item.handling;
   const done = isDone(item);
   const canSay = !done && !item.suggestion;
-  const failed = canSay && (handlingFailed(item) || item.now === "failed");
+  const failed = canSay && (h ? handlingFailed(item) : item.now === "failed" || item.agent?.state === "failed");
   const showPreparing = !done && preparing(item);
   if (!h && !canSay && now === undefined) return null;
   const word = now ?? (done ? (item.done_by === "manager" ? t("inbox-inboxevent.manager_done") : undefined) : handlingWord(item));
@@ -206,6 +245,33 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
       toast(t("lib-inbox.suggestion_failed", { error: r.error }), "error");
     }
   };
+  const retry = async () => {
+    if (acting) return;
+    setActing(true);
+    const current = () => getInbox().items.find((row) => sameItem(row, item));
+    const before = current();
+    const reconcile = (fresh?: InboxItem) => {
+      if (fresh?.id !== item.id || (fresh.manager && !sameItem(fresh, item))) return false;
+      // A push can report newer handling progress before this request's response arrives.
+      if (current() === before) replaceItem(fresh, item.manager);
+      return true;
+    };
+    try {
+      const fresh = await api<InboxItem>(`${itemPath(item.id)}/retry`, { method: "POST", headers: itemRequest(item) });
+      reconcile(fresh);
+      toast(t("inbox-inboxdetail.retry_requested"), "ok");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && err.body?.code === "inbox_retry_stale") {
+        if (!reconcile(err.body.item as InboxItem | undefined)) void reloadInbox();
+        toast(errorText(err), "info");
+      } else {
+        void reloadInbox();
+        toast(t("inbox-inboxdetail.retry_failed", { error: errorText(err) }), "error");
+      }
+    } finally {
+      setActing(false);
+    }
+  };
   const open = to && (
     <button type="button" onClick={() => openFromInbox(to)} className="-mx-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1 text-label font-medium whitespace-nowrap text-accent-ink transition-colors hover:bg-hover">
       {t("inbox-inboxevent.open_conversation")}
@@ -213,7 +279,7 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
     </button>
   );
   const action = canSay && (failed ? (
-    <Button tone="quiet" size="sm" icon="retry" busy={acting} onClick={() => void instruct(t("inbox-inboxdetail.retry_text"))} testId="inbox-retry">{t("inbox-inboxdetail.retry")}</Button>
+    <Button tone="quiet" size="sm" icon="retry" busy={acting} onClick={() => void retry()} testId="inbox-retry">{t("inbox-inboxdetail.retry")}</Button>
   ) : !sayOpen ? (
     <Button tone="quiet" size="sm" icon="chat" onClick={() => setSayOpen(true)} testId="inbox-say">{t("inbox-inboxdetail.say_something")}</Button>
   ) : null);
@@ -311,7 +377,7 @@ function TodoSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
         <input type="date" value={day} onChange={(e) => setDay(e.target.value)} aria-label={t("inbox-inboxevent.todo_day")} className={field} data-todo-day />
         {day && !allDay && <input type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label={t("inbox-inboxevent.todo_time")} className={field} data-todo-time />}
         {day && (
-          <label className="flex items-center gap-2 text-[12.5px] whitespace-nowrap text-ink-2">
+          <label className="flex items-center gap-2 text-meta whitespace-nowrap text-ink-2">
             <Switch on={allDay} onChange={setAllDay} label={t("inbox-inboxevent.todo_all_day")} />
             {t("inbox-inboxevent.todo_all_day")}
           </label>
@@ -346,6 +412,8 @@ export function dueOf(day: string, time: string): string | undefined {
 
 function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: InboxSuggestion }) {
   const busy = useInbox((st) => st.sending.includes(itemKey(item)));
+  const uncertain = useInbox((st) => st.uncertainReplies[uncertainReplyKey(item, s.version)]);
+  const attempt = s.kind === "reply" ? uncertain ?? item.suggestion_attempts?.find((a) => a.version === s.version) : undefined;
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(s.text);
   const [say, setSay] = useState("");
@@ -359,6 +427,24 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
     if (ok) setEditing(false);
   };
   const edited = text.trim() && text !== s.text ? text : undefined;
+  if (attempt) {
+    const retryable = attempt.status === "failed" && attempt.retryable && !isDone(item) && item.suggestion?.version === s.version;
+    const label = attempt.status === "failed" ? "failed" : attempt.status === "sending" ? "sending" : attempt.status === "sent" ? "sent" : "uncertain";
+    return (
+      <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion={s.kind} data-delivery={attempt.status}>
+        <p className={cx("text-submeta font-medium", label === "failed" ? "text-red" : "text-ink-2")}>{t(`assistant-handoffcard.${label}`)}</p>
+        <p className="mt-1.5 text-meta leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{attempt.text}</p>
+        {Number.isFinite(Date.parse(attempt.at)) && <time dateTime={attempt.at} className="mt-1 block text-submeta text-ink-3">{chainTime(attempt.at)}</time>}
+        {label !== "sent" && <p role="status" className="mt-2 text-meta text-ink-2">
+          {t(`assistant-handoffcard.${label === "failed" ? retryable ? "retry_hint" : "failed_hint" : label + "_hint"}`)}
+          {retryable && attempt.retry_after ? " " + t("assistant-handoffcard.retry_after", { seconds: Math.ceil(attempt.retry_after) }) : ""}
+        </p>}
+        {retryable && <div className="mt-3 flex justify-end">
+          <Button tone="accent" className="min-h-11" disabled={busy} busy={acting === "confirm"} onClick={() => void act("confirm")} testId="suggestion-retry">{t("assistant-handoffcard.retry")}</Button>
+        </div>}
+      </section>
+    );
+  }
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion={s.kind} data-handback={s.handback ? "" : undefined}>
       <p className="flex items-center gap-1.5 text-submeta font-medium whitespace-nowrap text-accent-ink">
@@ -567,8 +653,9 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
           {goes && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />}
           {!goes && expandable && <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />}
         </button>
-        {/* an entry that goes somewhere and also has words to read: those open beside it */}
-        {goes && expandable && (
+        {/* an entry that goes somewhere and also has words to read: those open beside it; an assistant row's received
+            message is its text, drawn in full above (#9041): that entry only goes to the conversation, one arrow (#9930) */}
+        {goes && expandable && !(item.source === "assistant" && e.kind === "received") && (
           <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label={open ? t("inbox-inboxevent.entry_collapse") : t("inbox-inboxevent.entry_expand")} title={open ? t("inbox-inboxevent.entry_collapse") : t("inbox-inboxevent.entry_expand")} className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-[8px] text-ink-3 transition-colors hover:bg-hover hover:text-ink">
             <Icon name="chevron" size={12} stroke={2.4} className="transition-transform duration-200" style={{ transform: open ? "rotate(180deg)" : undefined }} />
           </button>
@@ -578,9 +665,11 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
         <div className="mx-1.5 mb-1 flex flex-col gap-1 rounded-[10px] bg-inset px-3 py-2 text-[12.5px] leading-relaxed text-ink-2" data-chain-detail>
           {e.detail && <p className="whitespace-pre-wrap">{e.detail}</p>}
           {(e.messages ?? []).map((m, i) => (
-            <p key={i} className="min-w-0">
+            // an assistant row's message: its whole text is above (#9041), so three lines say which
+            <p key={i} className={cx("min-w-0", item.source === "assistant" && "line-clamp-3")}>
               {m.sender && <span className="font-medium text-ink">{t("inbox-inboxevent.message_sender", { sender: m.sender })}</span>}
-              <span className="whitespace-pre-wrap">{m.text}</span>
+              {/* an older assistant row's message is its Markdown run into one line: said without the marks (#9041) */}
+              <span className="whitespace-pre-wrap">{markdownInSummary(item) ? withoutMarks(m.text) : m.text}</span>
               {m.at && <span className="ml-1.5 text-[11px] text-ink-3 tabular-nums">{chainTime(m.at)}</span>}
             </p>
           ))}

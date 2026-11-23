@@ -4,7 +4,23 @@
 
 use serde::Deserialize;
 
-use crate::state::WorkState;
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct WorkState {
+    pub phase: String,
+    /// Current work summary searched by iOS's conversation, assistant and errors scopes.
+    #[serde(default)]
+    pub line: Option<String>,
+    #[serde(default)]
+    pub on: Option<String>,
+    #[serde(default)]
+    pub wait: Option<String>,
+    #[serde(default)]
+    pub wake_at: Option<String>,
+    #[serde(default)]
+    pub agent: Option<serde_json::Value>,
+    #[serde(default)]
+    pub just_finished: bool,
+}
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Session {
@@ -35,6 +51,9 @@ pub struct Session {
     pub workflow_progress: Option<crate::state::WorkflowRun>,
     #[serde(default)]
     pub app_hub_group: Option<String>,
+    /// The machine's manager within the Hub, when a client distinguishes owners sharing an ID.
+    #[serde(default)]
+    pub manager: Option<String>,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
@@ -47,6 +66,10 @@ pub struct Session {
     pub last_text: Option<String>,
     #[serde(default)]
     pub asks: Option<String>,
+    #[serde(default)]
+    pub goal: Option<GoalInfo>,
+    #[serde(default)]
+    pub todo: Option<TodoInfo>,
     #[serde(default)]
     pub space_id: Option<String>,
     #[serde(default)]
@@ -77,13 +100,71 @@ pub struct Session {
     pub attention_reason: Option<String>,
     #[serde(default)]
     pub assistant: bool,
+    /// A persisted archive snapshot, whose offline state is historical rather than live membership.
+    #[serde(default)]
+    pub archived: bool,
     #[serde(default)]
     pub awaits_reply: bool,
     #[serde(default)]
     pub background_waiting: bool,
+    /// Already folded by the client's SideFold/ChildSessions input preparation, not a child to fold again.
+    #[serde(default)]
+    pub nested_subtask: bool,
+    /// Prepared CodexTasks descendants. They participate in query admission but never become separate rows or counts.
+    #[serde(default)]
+    pub search_subtasks: Vec<Session>,
+    /// The client's prepared input found a nested row that admits the current query.
+    #[serde(default)]
+    pub nested_match: bool,
+    #[serde(default)]
+    pub children: Option<Children>,
+    #[serde(default)]
+    pub pane_id: Option<String>,
+    #[serde(default)]
+    pub pane_index: Option<i64>,
+    #[serde(default)]
+    pub space_kind: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct GoalInfo {
+    #[serde(default)]
+    pub objective: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TodoInfo {
+    #[serde(default)]
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Children {
+    #[serde(default)]
+    pub working: usize,
+    #[serde(default)]
+    pub needs_you: usize,
+    #[serde(default)]
+    pub sides: usize,
+    #[serde(default)]
+    pub sides_working: usize,
+    #[serde(default)]
+    pub sides_needs_you: usize,
 }
 
 impl Session {
+    /// A hub-local `machine/session`, or iOS's `group|machine/session`. An unqualified id belongs only to its own hub.
+    pub fn matches_preference(&self, id: &str) -> bool {
+        if let Some((owner, rest)) = id.split_once('|') {
+            let qualified = self.manager.as_deref().map_or_else(
+                || self.app_hub_group.clone().unwrap_or_default(),
+                |manager| manager.to_owned(),
+            );
+            return owner == qualified && rest == format!("{}/{}", self.machine_id, self.session_id);
+        }
+        id == format!("{}/{}", self.machine_id, self.session_id)
+    }
+
     pub fn is_waiting(&self) -> bool {
         let detailed = self.loop_info.is_some()
             || self.background.as_ref().is_some_and(|tasks| !tasks.is_empty())
@@ -115,8 +196,8 @@ impl Session {
     pub fn agent_label(&self) -> String {
         if self.is_codex() {
             "Codex".to_owned()
-        } else if self.agent.as_deref() == Some("traex") {
-            "TRAEX".to_owned()
+        } else if matches!(self.agent.as_deref(), Some("traex" | "traecli" | "trae-cli")) {
+            "TRAE CLI".to_owned()
         } else if self.is_claude() {
             "Claude".to_owned()
         } else {

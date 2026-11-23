@@ -2,13 +2,17 @@ package persona.android.navigation
 
 import androidx.navigation3.runtime.NavKey
 import persona.core.navigation.*
+import persona.feature.inbox.ConnectorThreadRoute
 import persona.feature.inbox.InboxEventRoute
+import persona.feature.inbox.InboxItemDetailRoute
 import persona.feature.inbox.LarkMomentRoute
 import persona.feature.inbox.LarkRoute
 import persona.feature.inbox.MailRoute
 import persona.platform.phonetools.PhoneToolsRoute
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** The list beside a detail pane marks the row of the page the detail shows, whichever way the page was opened. */
@@ -131,5 +135,17 @@ class ShellPanesTest {
         navigator.back()
         navigator.back()
         assertEquals(space, marked(AppTab.Agents))
+    }
+
+    @Test fun inboxListAndEveryDetailBelongToTheSingleRightStack() {
+        val routes = listOf(
+            InboxRoute, LarkRoute("chat", "item"), LarkMomentRoute("post", "item"), MailRoute("item"),
+            InboxItemRoute("item"), LarkChatRoute("chat"), InboxItemUiRoute("item", "extension", "page"),
+            InboxItemDetailRoute("item"), InboxEventRoute("item"), ConnectorThreadRoute("item"),
+        )
+        routes.forEach { route -> assertTrue(route.toString(), isInboxDestination(route)) }
+        listOf<NavKey>(AssistantRoute, AgentsRoute, SettingsRoute, MachinesRoute, TodoDetailRoute("todo")).forEach { route ->
+            assertFalse(route.toString(), isInboxDestination(route))
+        }
     }
 }

@@ -46,10 +46,43 @@ struct LiveActivityStepTests {
         #expect(LiveActivityController.step(s, running: c.running, active: c.active) == c.expected, "\(c.label)")
     }
 
+    /// The last request answered elsewhere while the app is in front: off its activity at once, with the buttons, not
+    /// at the end a minute later (#8636). Anything else that empties the fleet waits for the end, as on the hub.
+    @Test func theLastRequestGoingClearsAtOnce() {
+        let ask = FleetState.Item(id: "m/s", title: "api", place: "", kind: .permission, detail: "Bash: go test", interaction: "ix1", since: 0)
+        var asking = state(phase: .needsYou)
+        (asking.needsYou, asking.items) = (1, [ask])
+        let work = FleetState.Item(id: "m/w", title: "api", place: "", kind: .working, since: 0)
+        var working = state(phase: .working)
+        (working.working, working.items) = (1, [work])
+        #expect(LiveActivityController.step(state(), running: true, active: true) == .endSoon)
+        #expect(LiveActivityController.clearsNow(asking, to: state()))
+        // The assistant answering on a tokens island: nothing to show there either.
+        #expect(LiveActivityController.clearsNow(asking, to: state(assistant: true, island: .tokens)))
+        // Shown on its island, the assistant is something to show: an ordinary update, not this.
+        #expect(!LiveActivityController.clearsNow(asking, to: state(assistant: true)))
+        #expect(!LiveActivityController.clearsNow(working, to: state()))
+        #expect(!LiveActivityController.clearsNow(state(phase: .done), to: state()))
+    }
+
     @Test func showsNothingFollowsTheIslandsSides() {
         #expect(state().showsNothing)
         #expect(!state(assistant: true).showsNothing)
         #expect(state(assistant: true, island: .none).showsNothing)
         #expect(!state(phase: .done).showsNothing)
+    }
+
+    /// #12982: one Fleet card. The running activity updated last stays (its stale date is the latest); an ended one
+    /// (iOS's eight hours, still on the Lock Screen) never does; none running keeps none.
+    @Test func keepsOneActivity() {
+        typealias C = LiveActivityController.Candidate
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ended = C(id: "ended", running: false, staleDate: now.addingTimeInterval(3600))
+        let older = C(id: "older", running: true, staleDate: now)
+        let newer = C(id: "newer", running: true, staleDate: now.addingTimeInterval(600))
+        #expect(LiveActivityController.kept([ended, older, newer]) == "newer")
+        #expect(LiveActivityController.kept([newer, older]) == "newer")
+        #expect(LiveActivityController.kept([ended]) == nil)
+        #expect(LiveActivityController.kept([]) == nil)
     }
 }

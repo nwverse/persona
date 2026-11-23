@@ -299,46 +299,18 @@ describe("folding a block of the sidebar", () => {
   });
 });
 
-describe("ordering the Agents list (G099)", () => {
-  const item = (label: string) => [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find((el) => el.textContent?.includes(label));
-
-  it("offers 状态优先 / 最近更新 under the grouping and keeps the choice", async () => {
-    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
-    await flush();
-    act(() => button("Agent 列表选项")!.click());
-    expect(item("状态优先")).toBeDefined();
-    expect(item("按机器")).toBeUndefined(); // the groupings are the segments now (#2812)
-    act(() => item("最近更新")!.click());
-    await flush();
-    expect(localStorage.getItem("persona.agentSort")).toBe("updated");
-    expect(button("Agent 列表选项：最近更新")).toBeDefined();
-  });
-
-  it("is not offered under 按状态, whose sections are the states, and a menu with nothing left is not there (#6447)", async () => {
-    localStorage.setItem("persona.agentGrouping", "state");
+describe("ordering the Agents list (#11801)", () => {
+  it("offers no activity sort, including to a browser that used one before", async () => {
     localStorage.setItem("persona.agentSort", "updated");
     await withAgent();
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
-    expect(host.querySelector('[role="radio"][aria-label="按状态"]')!.getAttribute("aria-checked")).toBe("true");
     expect(host.querySelector('[aria-label^="Agent 列表选项"]')).toBeNull();
     expect(host.querySelector("[data-sidebar-agents-controls] [data-testid=agents-fold-all]")).not.toBeNull();
   });
 });
 
 describe("the Agents fold-all button (#3027, #6447)", () => {
-  it("is the only 全部折叠 / 全部展开: the list menu does not repeat them", async () => {
-    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
-    await flush();
-    const menu = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.getAttribute("aria-label") === "Agent 列表选项")!;
-    act(() => menu.click());
-    await flush();
-    const item = (label: string) => [...document.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio], [role=menuitemcheckbox]")].find((el) => el.textContent?.includes(label));
-    expect(item("状态优先")).toBeDefined();
-    expect(item("全部折叠")).toBeUndefined();
-    expect(item("全部展开")).toBeUndefined();
-  });
-
   it("opens with 全部展开 the spaces folded by hand, and leaves the other blocks", async () => {
     localStorage.setItem("fold:space:mac/a", "1");
     localStorage.setItem("persona.agentGrouping", "machine");
@@ -359,7 +331,7 @@ describe("the Agents fold-all button (#3027, #6447)", () => {
   });
 });
 
-describe("the main conversation: the column's first row, Persona with the app's mark (#2004, #5109), marked 主对话 (#6293)", () => {
+describe("the main conversation: the column's first row, Main chat with its home symbol (#10544)", () => {
   const conv = (id: string, title: string): Session => ({ machine_id: "hub", session_id: id, title, cwd: "/", status: "idle", state: "idle", assistant: true, pending_interactions: id === "main" ? 2 : 0 });
   const assistant: AssistantInfo = { machine_id: "hub", main: "main", leaders: ["c1"], conversations: [conv("main", "Persona"), conv("c1", "整理周报")] };
   const block = (title: string) => button(title)!.closest(".mt-1, .mt-3") as HTMLElement;
@@ -412,11 +384,12 @@ describe("the main conversation: the column's first row, Persona with the app's 
     await load();
     const rows = [...host.querySelectorAll<HTMLAnchorElement>("[data-sidebar-rows] a")];
     expect(rows[0]).toBe(mainRow());
-    expect(mainRow().textContent).toContain("Persona");
-    // the brand row reads as a conversation, not a heading: a small "主对话" under the name (#6293)
+    expect(mainRow().textContent).toContain("主对话");
+    // One Main chat title instead of another assistant face and name.
     const mark = mainRow().querySelector("[data-row-line]:not([data-draft])");
-    expect(mark?.textContent).toBe("主对话");
-    expect(mainRow().querySelector("svg.rounded-full")).not.toBeNull();
+    expect(mark).toBeNull();
+    expect(mainRow().querySelector('path[d^="M3 10.5 12 3"]')).not.toBeNull();
+    expect(mainRow().querySelector("canvas,img")).toBeNull();
     expect(mainRow().textContent).toContain("2"); // its pending count
     // the line parts it from the pages, which come after it
     const line = host.querySelector("[data-persona-divider]")!;

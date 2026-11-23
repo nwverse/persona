@@ -36,6 +36,11 @@ interface AssistantManagement {
      * there, with why (`GET /api/v1/machines/{id}/launchers?purpose=assistant`): the model panel's providers (#5033, #5055).
      */
     suspend fun assistantLauncherList(machineId: String): AssistantLaunchers = AssistantLaunchers(assistantLaunchers(machineId))
+    /** [refresh] asks the hub to refresh launcher discovery. Older transports retain their normal read. */
+    suspend fun assistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers = assistantLauncherList(machineId)
+    /** Main-only default over the ordinary Assistant catalog; old transports retain shared defaults. */
+    suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean = false): AssistantLaunchers =
+        assistantLauncherList(machineId, refresh)
     /**
      * Keeps [pick] as what the conversation's next messages run on (`PUT /api/v1/assistant/conversations/{id}/model`,
      * feature `assistant_model_pick`); answers the pick the hub kept. A refusal throws the hub's failure with its words
@@ -60,6 +65,9 @@ interface AssistantManagement {
     suspend fun archiveConversation(session: SessionKey): Unit = throw UnsupportedOperationException("Archive unavailable")
     /** Brings an archived conversation back into the list (POST /api/v1/assistant/conversations/{id}/unarchive). */
     suspend fun unarchiveConversation(session: SessionKey): Unit = throw UnsupportedOperationException("Unarchive unavailable")
+    /** Replaces a conversation's user-defined labels in one write; an empty list clears them. */
+    suspend fun setConversationTags(session: SessionKey, tags: List<String>): Unit =
+        throw UnsupportedOperationException("Conversation tags unavailable")
     /**
      * The archived conversations, newest first ("Archived (N)", iOS `archivedConversations`): those `GET /api/v1/assistant?archived=1`
      * marks `archived`, never a health chat. Only the ones their computer still lists (docs/assistant/assistant.md
@@ -120,6 +128,14 @@ interface AssistantManagement {
     suspend fun saveMemory(name: String, content: String)
     suspend fun deleteMemory(name: String)
     /**
+     * Saved places (GET /api/v1/assistant/places, #1598 / #9293): home, the office, and other spots reminders use.
+     * Defaults keep transports and fakes written before the page compiling.
+     */
+    suspend fun places(): List<SavedPlace> = throw UnsupportedOperationException("Saved places unavailable")
+    /** Adds [place] (no id yet, POST) or saves edits (PUT); returns it as the hub has it. */
+    suspend fun savePlace(place: SavedPlace): SavedPlace = throw UnsupportedOperationException("Saved places unavailable")
+    suspend fun deletePlace(id: String): Unit = throw UnsupportedOperationException("Saved places unavailable")
+    /**
      * The skills on the machine that runs the assistant (GET /api/v1/skills), read only. A hub that cannot read them
      * (no assistant machine, the node did not answer) throws [AssistantRefused] with its own words.
      */
@@ -136,6 +152,20 @@ interface AssistantManagement {
      */
     suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String): Boolean =
         throw UnsupportedOperationException("Always-allowed permissions unavailable")
+
+    /**
+     * The current assistant's standing authorizations (GET /api/v1/assistant/standing-authorizations).
+     * A device without the full-access role is answered 403. Missing fields default; a row without an id is left out.
+     */
+    suspend fun standingAuthorizations(): persona.core.contracts.StandingAuthorizationList =
+        throw UnsupportedOperationException("Standing authorizations unavailable")
+
+    /**
+     * Revokes one (DELETE …/standing-authorizations/{id}). The hub answers ok when it is already gone.
+     * There is no route that puts a grant back.
+     */
+    suspend fun revokeStandingAuthorization(id: String): Unit =
+        throw UnsupportedOperationException("Standing authorizations unavailable")
 }
 
 /** One message a chat was found by (`docs/protocol/protocol.md` "Assistant chat search"). `ranges` are UTF-16 `[start, end)` in [snippet]. */
@@ -223,12 +253,17 @@ data class ScheduledTask(
      * offers it with the [PUSH_FEATURE] hello feature; an older one leaves it out.
      */
     val push: String? = null,
+    /**
+     * "When done, put it in the Inbox": "" (or absent) = no row, [INBOX_WORTHY] = only a result worth a look,
+     * [INBOX_EVERY] = after every answered run. Independent of [push]; the hub offers it with [INBOX_FEATURE].
+     */
+    val inbox: String? = null,
 ) {
     val pushesOnlyAsked: Boolean get() = push == PUSH_ASKED
 
     /**
-     * The fields `PUT /api/v1/assistant/tasks/{id}` saves; "" = the default. `push` goes only when the task has one, so a
-     * hub without it is never sent it and an unchanged one keeps what it has.
+     * The fields `PUT /api/v1/assistant/tasks/{id}` saves; "" = the default. `push` and `inbox` go only when the task has one,
+     * so a hub without them is never sent them and unchanged values stay as they are.
      */
     fun editable(): JsonObject = buildJsonObject {
         if (id.isNotBlank()) put("id", id)
@@ -243,6 +278,7 @@ data class ScheduledTask(
         put("session_id", sessionId.orEmpty())
         put("permission_mode", permissionMode.orEmpty())
         push?.let { put("push", it) }
+        inbox?.let { put("inbox", it) }
     }
 
     companion object {
@@ -253,6 +289,10 @@ data class ScheduledTask(
         const val PUSH_ASKED = "asked"
         /** The hello feature of a hub that reads and writes [push]. */
         const val PUSH_FEATURE = "task_push"
+        const val INBOX_WORTHY = "worthy"
+        const val INBOX_EVERY = "every"
+        /** The hello feature of a hub that reads and writes [inbox]. */
+        const val INBOX_FEATURE = "task_inbox"
     }
 }
 

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import { Command, Record, ReplayedChat, at, frame, handleField, helperPath, hex, startCore, wire, wireSource } from './host.mjs';
+import { Command, Record, ReplayedChat, at, frame, handleField, helperPath, hex, requestObject, startCore, wire, wireSource } from './host.mjs';
 
 // The same values as `samples()` in the helper, written by hand here and built in Rust there. Neither side is
 // generated from the other, and neither comes from the codec under test.
@@ -126,7 +126,12 @@ test('ArkTS and Rust write the same bytes for every wire shape, and read them as
   await core.end();
 });
 
-// The fixture event -> Action mapping of NativeCore.test.ets, which this replay mirrors on the host.
+// The request projection preserves a keyed fold's identity while retaining the legacy unkeyed request shape.
+test('request projection retains keyed fold identity without changing the legacy null shape', () => {
+  assert.deepEqual(requestObject(sampleRange), sampleRange);
+  assert.deepEqual(requestObject({kind: 'fetch_range', fold_id: null, from_seq: 2, through_seq: 8}),
+    {kind: 'fetch_range', from_seq: 2, through_seq: 8});
+});
 function batch(event) {
   return {items_json: JSON.stringify(event.items ?? []), history: event.history ?? null, from_seq: event.from_seq ?? null,
     to_seq: event.to_seq ?? null, backlog: event.backlog === true, has_more: event.has_more ?? null, more_after: event.more_after === true};
@@ -167,6 +172,10 @@ test('every continuity case replays through the ArkTS codec and the real runtime
         history: initial.history ?? null, covered: initial.covered ?? 0, has_more: initial.has_more ?? null,
         loaded_once: initial.loaded_once === true}});
       await replay.settle();
+      // A keyed fold is opened at most once per fixture and supplies the identity of all its range pages.
+      const foldIds = new Set(fixture.input.events.filter((event) => event.kind === 'open_fold').map((event) => event.fold_id));
+      assert.ok(foldIds.size <= 1, fixture.name + ': the existing replay has one fold identity');
+      const foldId = foldIds.values().next().value ?? null;
       assert.equal(fixture.input.events.length, fixture.expected.length, fixture.name + ': one expectation per event');
       for (let index = 0; index < fixture.input.events.length; index++) {
         const label = fixture.name + ' step ' + index;
@@ -174,6 +183,9 @@ test('every continuity case replays through the ArkTS codec and the real runtime
         replay.label = label;
         await replay.dispatch(eventAction(fixture.input.events[index], chat));
         const {patch, requests} = await replay.settle();
+        const expectedActions = expected.actions.map((action) => action.kind === 'fetch_range' && foldId
+          ? {...action, fold_id: foldId} : action);
+        if (fixture.input.events[index].kind === 'open_fold') assert.equal(foldId, fixture.input.events[index].fold_id);
         // Compared as values, as the Rust host replay does. The core writes an item it changes (a promoted
         // fold) with its keys in another order, so comparing the text would fail on steps that are right.
         at(label + ' items', () => assert.deepStrictEqual(replay.list.map((json) => JSON.parse(json)), expected.items));
@@ -181,7 +193,7 @@ test('every continuity case replays through the ArkTS codec and the real runtime
         assert.equal(patch.history, expected.history, label + ' history');
         assert.equal(patch.has_more, expected.has_more, label + ' has_more');
         assert.equal(patch.loaded_once, expected.loaded_once, label + ' loaded_once');
-        at(label + ' requests', () => assert.deepStrictEqual(requests, expected.actions));
+        at(label + ' requests', () => assert.deepStrictEqual(requests, expectedActions));
         steps++;
       }
       await core.coreClose(handle);
@@ -189,8 +201,8 @@ test('every continuity case replays through the ArkTS codec and the real runtime
     }
   }
   await core.end();
-  assert.equal(cases, 38, 'every continuity case replays');
-  assert.equal(steps, 94, 'every continuity step replays');
+  assert.equal(cases, 39, 'every continuity case replays');
+  assert.equal(steps, 95, 'every continuity step replays');
 });
 
 test('a repeated item is one Update, and a closed handle stays closed', {timeout: 60_000}, async () => {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/connector"
 	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 func TestInboxPollFollowupAfterOwnReply(t *testing.T) {
@@ -30,6 +31,9 @@ func TestInboxPollFollowupAfterOwnReply(t *testing.T) {
 			followup := request
 			followup.MessageID, followup.MessagePosition = "om_a_followup", "12"
 			followup.Content = json.RawMessage(`"Still need help"`)
+			earlier := request // the chat's background, an hour before
+			earlier.MessageID, earlier.MessagePosition, earlier.CreateTime = "om_b_earlier", "5", "2029-12-31T23:00:00Z"
+			earlier.Content = json.RawMessage(`"Earlier question"`)
 			for _, onlyRequest := range []bool{false, true} {
 				name := "all_search_results"
 				search := []adapter.Message{followup, reply, request}
@@ -37,7 +41,7 @@ func TestInboxPollFollowupAfterOwnReply(t *testing.T) {
 					name, search = "only_request_is_indexed", []adapter.Message{request}
 				}
 				t.Run(name, func(t *testing.T) {
-					history := []adapter.Message{followup, reply, request}
+					history := []adapter.Message{followup, reply, request, earlier}
 					for i := range history {
 						history[i].ChatType = "" // Chat reads omit the type supplied by search.
 					}
@@ -55,6 +59,14 @@ func TestInboxPollFollowupAfterOwnReply(t *testing.T) {
 					}
 					if topic == "" && got.Kind != "dm" {
 						t.Fatalf("history lost direct chat metadata: %+v", got)
+					}
+					// The unindexed follow-up is current. The owner's reply and the earlier question are background.
+					want := prompts.RenderLarkCLIInboxContext(prompts.LarkCLIInboxContext{
+						Current: contextLines([]adapter.Message{request, followup}, "ou_example_user", 0),
+						History: contextLines([]adapter.Message{earlier, reply}, "ou_example_user", 0),
+					})
+					if got.Context != want {
+						t.Fatalf("context:\n%s\nwant\n%s", got.Context, want)
 					}
 					if moved, err := c.Poll(context.Background()); err != nil || moved {
 						t.Fatalf("unchanged poll duplicated the item: moved=%v err=%v", moved, err)
@@ -133,6 +145,38 @@ func TestInboxSweepReachesEleventhDirectChat(t *testing.T) {
 	}
 	if got := inboxThings(t, c)["larkcli:chat:oc_target"]; got.Last != message.MessageID || got.Done != "" {
 		t.Fatalf("eleventh chat was skipped again: %+v", got)
+	}
+}
+
+// lark-cli lists only people in a message's mentions: an @all is in the content alone, as "@_all" in a text message
+// and as <at user_id="all"> in a post.
+func TestInboxKeepsAtAllWrittenOnlyInContent(t *testing.T) {
+	for name, content := range map[string]string{
+		"text": `"@_all Please update your weekly notes"`,
+		"post": `"<at user_id=\"all\"></at> Service is degraded"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			message := adapter.Message{MessageID: "om_all", MessagePosition: "10", ChatID: "oc_example",
+				ChatType: "group", CreateTime: "2030-01-01T00:00:00Z",
+				Sender: adapter.Sender{ID: "ou_example_peer"}, Content: json.RawMessage(content)}
+			c := followupConnector(t, []adapter.Message{message}, []adapter.Message{message})
+			if _, err := c.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := inboxThings(t, c)["larkcli:chat:oc_example"]; got.Kind != "mention" || got.Last != message.MessageID {
+				t.Fatalf("an @all in the content was not kept as a mention: %+v", got)
+			}
+		})
+	}
+	for name, content := range map[string]string{
+		"address": `"mail me@_allhands.example"`,
+		"other":   `"<at user_id=\"ou_example_other\"></at> hi"`,
+	} {
+		t.Run("not/"+name, func(t *testing.T) {
+			if messageMentions(adapter.Message{Content: json.RawMessage(content)}, "ou_example_user") {
+				t.Fatalf("%s read as an @all", content)
+			}
+		})
 	}
 }
 

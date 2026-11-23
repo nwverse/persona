@@ -67,6 +67,11 @@ func conclusionServiceOn(t *testing.T, st Store, onlyConclusions bool) (s *Servi
 func reviewTask(t *testing.T, s *Service, todo string, args map[string]any) string {
 	t.Helper()
 	args["todo_id"] = todo
+	if args["verdict"] == reviewAccepted {
+		if _, supplied := args["checks"]; !supplied {
+			args["checks"] = completeReviewChecks(todoNow(s, todo))
+		}
+	}
 	asDecision(args)
 	raw, _ := json.Marshal(args)
 	res, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw)
@@ -370,7 +375,7 @@ func TestRecommendationThatCannotReachTheAgentIsNotTaken(t *testing.T) {
 	f.mu.Lock()
 	f.failSend = errors.New("node down")
 	f.mu.Unlock()
-	if ok, err := s.acceptTryFromBrief(ctx, todo.ID, a.AskedAt.UTC().Format(timeKeyLayout)); ok || err == nil {
+	if ok, err := s.acceptTryFromBrief(ctx, todo.ID, a.AskedAt.UTC().Format(timeKeyLayout)); ok.taken || err == nil {
 		t.Fatalf("taken while the agent cannot be reached: %v %v", ok, err)
 	}
 	// The web button: 502 with the reason, not 409 "already handled" (the web app toasts it and the button works again).
@@ -398,7 +403,7 @@ func TestRecommendationThatCannotReachTheAgentIsNotTaken(t *testing.T) {
 	f.mu.Lock()
 	f.failSend = nil
 	f.mu.Unlock()
-	if ok, err := s.acceptTry(ctx, todo.ID, ""); !ok || err != nil {
+	if ok, err := s.acceptTry(ctx, todo.ID, ""); !ok.taken || err != nil {
 		t.Fatalf("not taken once the agent is reachable: %v %v", ok, err)
 	}
 	if got := sentToAgent(f); len(got) == 0 || !strings.Contains(got[len(got)-1], "先灰度 10%") {
@@ -546,7 +551,7 @@ func TestRecommendationIsRecordedOnlyOnceItReachedTheAgent(t *testing.T) {
 	f.mu.Lock()
 	f.failSend = errors.New("node down")
 	f.mu.Unlock()
-	if err := s.takeRecommendation(ctx, todo.ID, a); err == nil {
+	if _, err := s.takeRecommendation(ctx, todo.ID, a); err == nil {
 		t.Fatal("no error while the agent cannot be reached")
 	}
 	if list := decisions(); len(list) != 0 {
@@ -555,7 +560,7 @@ func TestRecommendationIsRecordedOnlyOnceItReachedTheAgent(t *testing.T) {
 	f.mu.Lock()
 	f.failSend = nil
 	f.mu.Unlock()
-	if err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
+	if _, err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
 		t.Fatal(err)
 	}
 	if list := decisions(); len(list) != 1 || list[0].Choice != "先灰度 10%" {
@@ -624,5 +629,84 @@ func TestAcceptRouteNotTakenReadsInTheRequestLanguage(t *testing.T) {
 		if status != http.StatusBadGateway || body["error"] != want {
 			t.Fatalf("bot %s, request %s: %d %v, want %q", tc.bot, tc.request, status, body, want)
 		}
+	}
+}
+
+// A decision answered in words on Lark is made even when its agent cannot take it now: recorded, out of needs_user,
+// its ask answered, and its supervisor told what to pass on. The hub does not resend it, so a later reply to the same
+// card finds it answered and nothing reaches the agent twice.
+func TestDecisionAnsweredInWordsStaysDecidedWhenTheSendFails(t *testing.T) {
+	s, f, todo, _, notes := conclusionService(t, false)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
+	a := askOf(s, todo.ID)
+	f.mu.Lock()
+	f.failSend = errors.New("a dialog is open")
+	f.mu.Unlock()
+	sent := len(sentToAgent(f))
+	if !s.acceptReply(ctx, "om_words", "直接全量吧", false, a.MessageID) {
+		t.Fatal("reply not taken")
+	}
+	if got := todoNow(s, todo.ID).Supervision.State; got == reviewNeedsUser {
+		t.Fatalf("still waits on the owner: %q", got)
+	}
+	if got := askOf(s, todo.ID); got.AcceptedAt.IsZero() {
+		t.Fatalf("ask not answered: %+v", got)
+	}
+	want := i18n.T(s.botLang(ctx), "assistant-reports.accept_decided_not_sent", i18n.Args{"error": "a dialog is open"})
+	if n := notes(); len(n) == 0 || n[len(n)-1] != want {
+		t.Fatalf("reply note %q", n)
+	}
+	key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
+	s.supervise.mu.Lock()
+	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	s.supervise.mu.Unlock()
+	if !(pending && g.Key == key && strings.Contains(g.Detail, "直接全量") && strings.Contains(g.Detail, "a dialog is open")) && !told {
+		t.Fatalf("supervisor not told: %+v (told %v)", g, told)
+	}
+	f.mu.Lock()
+	f.failSend = nil
+	f.mu.Unlock()
+	s.acceptReply(ctx, "om_again", "直接全量吧", false, a.MessageID)
+	if n := len(sentToAgent(f)); n != sent {
+		t.Fatalf("%d sends after the failed one: the hub resent it", n-sent)
+	}
+}
+
+func TestFeishuConclusionQuestionGoesToSupervisorWithoutAnswering(t *testing.T) {
+	s, f, todo, _, _ := conclusionService(t, false)
+	ctx := t.Context()
+	waitsForReview(t, s, f, todo.ID, "Two options: start with ten percent or defer the rollout.")
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Which rollout do you want?", "recommend": "Start with ten percent"})
+	a := askOf(s, todo.ID)
+	status, err := s.feishuStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(sentToAgent(f))
+	var ev feishubot.MessageEvent
+	ev.Message.ChatType, ev.Message.ParentID, ev.Message.MessageType = "p2p", a.MessageID, "text"
+	ev.Message.MessageID, ev.Message.Content = "om_background", `{"text":"能补充一下这个决定的背景吗"}`
+	s.feishuMessage(ev, status, "")
+	task := todoNow(s, todo.ID)
+	if got := askOf(s, todo.ID); got == nil || !got.AcceptedAt.IsZero() || task.Supervision.State != reviewNeedsUser ||
+		task.DoneAt != nil || len(sentToAgent(f)) != before {
+		t.Fatalf("the question changed the decision or sent to the Agent: ask=%+v task=%+v sends=%v", got, task.Supervision, sentToAgent(f))
+	}
+	text := sendOnceText(f)
+	if !strings.Contains(text, "能补充一下这个决定的背景吗") || !strings.Contains(text, todo.ID) {
+		t.Fatalf("question and task context did not reach supervisor: %q", text)
+	}
+	// The existing option still answers this exact card after the clarification.
+	ev.Message.MessageID, ev.Message.Content = "om_choice", `{"text":"B"}`
+	s.feishuMessage(ev, status, "")
+	if got := askOf(s, todo.ID); got == nil || got.AcceptedAt.IsZero() {
+		t.Fatalf("explicit option did not answer: %+v", got)
+	}
+	sends := sentToAgent(f)[before:]
+	if len(sends) != 1 || !strings.Contains(sends[0], "先不动") {
+		t.Fatalf("agent got %v, want just the selected option", sends)
 	}
 }

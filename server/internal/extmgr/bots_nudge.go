@@ -15,12 +15,16 @@ const botNudgeAfterMax = 6 * 24 * 60
 // nudgeAfterValue reads nudge_after from a request: nil when it is absent (or null), else a whole number of minutes
 // from 0 to botNudgeAfterMax; anything else (a fraction, a string, out of range) is the same error.
 func nudgeAfterValue(raw json.RawMessage) (*int, error) {
+	return botMinutesValue(raw, botNudgeAfterMax, "hub-bots.nudge_after_range")
+}
+
+func botMinutesValue(raw json.RawMessage, max int, rangeKey string) (*int, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
 	var f float64
-	if err := json.Unmarshal(raw, &f); err != nil || f != math.Trunc(f) || f < 0 || f > botNudgeAfterMax {
-		return nil, i18n.Err("hub-bots.nudge_after_range", i18n.Args{"max": botNudgeAfterMax})
+	if err := json.Unmarshal(raw, &f); err != nil || f != math.Trunc(f) || f < 0 || f > float64(max) {
+		return nil, i18n.Err(rangeKey, i18n.Args{"max": max})
 	}
 	n := int(f)
 	return &n, nil
@@ -28,15 +32,24 @@ func nudgeAfterValue(raw json.RawMessage) (*int, error) {
 
 // setNudgeAfter keeps nudge_after (PUT /api/v1/bots/feishu): the minutes a card waits before the assistant nudges
 // under it once, 0 off (docs/extensions/bots.md "Nudging a card nobody answered"). The range is checked by the caller.
-func (h *Manager) setNudgeAfter(ctx context.Context, minutes int) {
+func (h *Manager) setNudgeAfter(ctx context.Context, minutes int) error {
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return err
+	}
+	previous := b.set.NudgeAfter
 	changed := b.set.nudgeAfter() != minutes
 	b.set.NudgeAfter = &minutes
-	h.saveBotSettingsLocked()
+	if err := h.saveBotSettingsLocked(); err != nil {
+		b.set.NudgeAfter = previous
+		b.mu.Unlock()
+		return err
+	}
 	b.mu.Unlock()
 	if changed {
 		h.auditBot(ctx, botRecord{auditBotNudgeAfter, map[string]any{"minutes": minutes}})
 	}
+	return nil
 }

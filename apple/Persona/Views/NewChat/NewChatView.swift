@@ -41,6 +41,9 @@ struct NewChatView: View {
     var forwardedImages: [UIImage] = []
     var nameHint: String? = nil
     var onlyGroup: String? = nil
+    /// An inbox hand-off follows the ordinary first message's outbox delivery. The message is nil when the local send
+    /// rejected it; Codex keeps its existing start-accepted path and does not use this callback.
+    var onFirstMessage: ((Session, PendingMessage?) -> Void)? = nil
     var onStarted: (Session) -> Void
 
     @AppStorage("newChat.machine") private var machineID = ""
@@ -57,10 +60,13 @@ struct NewChatView: View {
     /// Model Settings › New Agent's model: what runs with no pick when its launcher does.
     @State private var configuredModel = ""
     @State private var mode = ""   // "" = whatever the launcher uses
-    /// The mode picked for a Paseo provider that is neither Claude Code nor Codex (`StartModes.limited`): Allow
-    /// Everything or its own, picked on this sheet and never remembered. The remembered `mode` is Claude Code's and
-    /// never goes to such a start (#8144).
+    /// The mode picked for a launcher that takes its own modes, not Claude Code's (`StartModes.limited`: Paseo's Grok,
+    /// OpenCode or Codex): Allow Everything or its own, picked on this sheet and never remembered. The remembered `mode`
+    /// is Claude Code's and never goes to such a start (#8144, #8261).
     @State private var providerMode = ""
+    /// The thinking effort picked for such a launcher, one its model lists: picked here and never remembered either, so
+    /// the remembered `effort` stays Claude Code's (#8261).
+    @State private var providerEffort = ""
     @State private var effort = ""
     /// Claude Code's ultracode for this start (#1307): off each time the sheet opens and never saved, unlike the effort
     /// (no choice carries over, the server's rule); only an explicit on is sent.
@@ -68,6 +74,12 @@ struct NewChatView: View {
     @State private var prompt = ""
     @State private var tabName = ""
     @State private var launchers: [Launcher] = []
+    /// The active model profile's Agent presets on this computer, and the preset whose fields are still intact.
+    @State private var tiers: [AgentPreset] = []
+    @State private var profile: AgentPresetProfile?
+    @State private var pickedTier: AgentPreset?
+    /// A picked preset is waiting for its launcher's model list before Start can validate its model and effort.
+    @State private var presetLoading = false
     /// The models of the launcher that will run (`runLauncher`) and the IDs typed for it before (#1644). `pickedModel`
     /// "": the default; an ID the list doesn't have (typed) stays picked when the list comes.
     @State private var modelList = LauncherModelsModel()
@@ -139,6 +151,12 @@ struct NewChatView: View {
 
     /// The launcher runs Codex: it starts with its first message (Codex makes the thread then) and the start waits for it.
     private var codex: Bool { launchers.first(where: { $0.name == runLauncher })?.isCodex == true }
+    /// The launcher runs omp (docs/integrations/omp.md): no modes, effort, ultracode or model (`StartModes`), and its
+    /// first message goes with the start, which the node types into omp's command; sent afterwards, a message to an omp
+    /// whose extension has not connected yet is refused, and the first message would be lost.
+    private var omp: Bool { runEntry?.isOmp == true }
+    /// The first message goes with the start, as text only: a Codex's or an omp's.
+    private var inlineFirst: Bool { codex || omp }
 
     /// A Codex this computer opens only with its first message (an older computer); a newer one opens it waiting for
     /// one, sent later here or typed in its terminal (docs/integrations/codex.md「Starting without a first message」).
@@ -149,19 +167,62 @@ struct NewChatView: View {
     private var desktopScratch: Bool { desktopStart && !cwdPicked && targetPreset == nil }
 
     /// The list for `runLauncher`; nil: none to pick (not loaded, an older hub).
-    private var models: LauncherModels? { modelList.list }
-    private var modelsLoading: Bool { modelList.loading }
-    private var modelsError: String? { modelList.error }
+    private var modelHost: String? {
+        if let host = targetPreset?.host, !host.isEmpty { return host }
+        return runEntry?.startsOmp == true ? machine?.defaultStartHost : nil
+    }
+    private var modelKey: String { modelList.catalogKey(ref, launcher: runLauncher, host: modelHost) }
+    private var models: LauncherModels? { modelList.key == modelKey ? modelList.list : nil }
+    private var modelsLoading: Bool { modelList.key == modelKey && modelList.loading }
+    private var modelsError: String? { modelList.key == modelKey ? modelList.error : nil }
 
-    private var modelChoice: LauncherModelChoice? {
-        models.map { LauncherModelChoice(list: $0, picked: pickedModel, configured: unifiedModels && runLauncher == defaultLauncher ? configuredModel : "") }
+    private var startModelChoice: LauncherModelChoice {
+        let followsModelSettings = unifiedModels && runLauncher == defaultLauncher && (launcher.isEmpty || runEntry?.startsOmp != true)
+        return LauncherModelChoice(list: models ?? LauncherModels(agent: startAgent, models: []),
+                                   picked: pickedModel, configured: followsModelSettings ? configuredModel : "",
+                                   presetDefault: pickedTier != nil, startLauncher: runEntry,
+                                   startsInHerdr: machine?.startsInHerdr(host: targetPreset?.host) == true)
+    }
+    private var modelChoice: LauncherModelChoice? { models == nil ? nil : startModelChoice }
+
+    /// Whether this preset needs its model list to check what a start can pass on.
+    private func presetNeedsList(_ tier: AgentPreset?) -> Bool {
+        guard let tier else { return false }
+        return tier.model?.isEmpty == false || tier.effort?.isEmpty == false
     }
 
-    /// The list couldn't be read, but the launcher runs Claude Code or Codex: a model ID can still be typed (#1644).
-    private var typesWithoutList: Bool { modelsError != nil && LauncherModels.takesTypedModel(agent: startAgent) }
+    /// Start waits rather than losing or validating a preset against the launcher's previous model list.
+    private var presetNeedsModels: Bool {
+        presetNeedsList(pickedTier) && (presetLoading || modelsLoading)
+    }
+
+    /// The effort the corresponding start path sends, used to explain a preset field that cannot run.
+    private var presetSentEffort: String? {
+        if codex { return listsModes ? providerEffortSent : nil }
+        return limitedModes ? providerEffortSent : (effort.isEmpty ? nil : effort)
+    }
+
+    /// What of the picked preset this start would leave out, once its own model-list request has settled. A missing or
+    /// failed list does not hide the explanation: it is based on the same fields the start actually sends.
+    private var presetProblem: String? {
+        guard let tier = pickedTier, !presetNeedsModels else { return nil }
+        var omitted: [String] = []
+        if let id = tier.model, !id.isEmpty, sentModel != id {
+            omitted.append(String(localized: "Model \(id) [Agent Preset Compatibility]"))
+        }
+        if let id = tier.effort, !id.isEmpty, presetSentEffort != id {
+            omitted.append(String(localized: "Effort \(id) [Agent Preset Compatibility]"))
+        }
+        guard !omitted.isEmpty else { return nil }
+        return String(localized: "Not used here: \(omitted.joined(separator: " · ")). The launcher or model's own settings apply. [Agent Preset Compatibility]")
+    }
+
+    /// A launcher that accepts a typed ID can still be used after a catalog error.
+    private var typesWithoutList: Bool { modelsError != nil && startModelChoice.takesTyped }
 
     /// The `model` the start sends: the pick (from the list or typed), or an ID typed while the list couldn't be read.
     private var sentModel: String? {
+        if omp { return nil } // omp's own config picks its model; the node refuses a start that names one
         if let c = modelChoice { return c.sent }
         return typesWithoutList && ModelID.isValid(pickedModel) ? pickedModel : nil
     }
@@ -172,17 +233,33 @@ struct NewChatView: View {
 
     /// The launcher that will run, as this computer lists it; nil before its launchers are in.
     private var runEntry: Launcher? { launchers.first(where: { $0.name == runLauncher }) }
-    /// It is a Paseo provider other than Claude Code and Codex: Use Launcher's and Allow Everything only, picked in
-    /// `providerMode` (#8144).
+    /// What the picked launcher is called (Paseo's "Grok" for `grok`, #8261): its title, else its name.
+    private var launcherTitle: String { launchers.first(where: { $0.name == launcher })?.title ?? launcher }
+    /// It takes its own modes, not Claude Code's: it lists them (#8261), or it is a Paseo provider other than Claude Code
+    /// and Codex on an older computer (#8144). Use Launcher's and, where it has one, Allow Everything, picked in
+    /// `providerMode`; only the efforts its model lists, picked in `providerEffort`.
     private var limitedModes: Bool { StartModes.limited(runEntry) }
+    /// The launcher lists the modes a start on it takes (#8261): a Codex of Paseo's takes them too, and its chat can
+    /// switch between them, which the footer says.
+    private var listsModes: Bool { StartModes.listed(runEntry) != nil }
     /// The mode the picker shows and the start sends: Claude Code's remembered one, or the limited launcher's own pick.
     private var startMode: String { limitedModes ? providerMode : mode }
+    /// There is a mode to pick besides the launcher's own (none for a launcher whose own approval is all it lists).
+    private var offersModes: Bool { !StartModes.modes(for: runEntry).isEmpty }
+    /// Permissions & Thinking is shown: Claude Code's modes and efforts, or a limited launcher's that has a choice to
+    /// make; never a Codex that lists no modes, which keeps its own.
+    private var modesShown: Bool { (!codex || listsModes) && (offersModes || !effortOptions.isEmpty || ultracodeShown) }
+    /// The effort a limited launcher's start sends: its pick, when its model lists it.
+    private var providerEffortSent: String? {
+        providerEffort.isEmpty || !effortOptions.contains(where: { $0.id == providerEffort }) ? nil : providerEffort
+    }
 
     /// What the launcher that will run starts: its model list's agent, else the launcher's; Claude Code by default.
     private var startAgent: String {
         if let a = models?.agent, !a.isEmpty { return a }
         guard let l = launchers.first(where: { $0.name == runLauncher }) else { return "claude" }
         if l.baseURL == "(traex)" { return "traex" }
+        if l.startsOmp || l.runtimeAgent == "omp" { return "omp" }
         return l.agent.flatMap { $0.isEmpty ? nil : $0 } ?? "claude"
     }
 
@@ -197,15 +274,17 @@ struct NewChatView: View {
     private var promptHint: String {
         if codexNeedsFirst { return String(localized: "What should Codex do? (Required: Codex starts a session only after the first message)") }
         if codex { return String(localized: "What should Codex do? (Optional: you can also send it later, here or in its terminal)") }
-        // Claude only for Claude Code: a Paseo provider such as Grok, TRAEX or a runtime's agent is just the agent (#8144).
+        // Claude only for Claude Code: a Paseo provider such as Grok, TRAE CLI or a runtime's agent is just the agent (#8144).
         if startAgent != "claude" { return String(localized: "What should the agent do? (Optional)") }
         return String(localized: "What should Claude do? (Optional)")
     }
 
-    /// Permissions & Thinking's footer while no mode is picked. A Paseo provider other than Claude Code and Codex is told
-    /// as it is: its own approval unless Allow Everything, nothing promised about changing it later in the chat, where
-    /// its mode can't be changed (#8144).
+    /// Permissions & Thinking's footer while no mode is picked. A limited launcher is told as it is: its own approval
+    /// unless Allow Everything. One that lists its modes (#8261) can be switched in the chat later, which it says; one
+    /// from an older computer promises nothing about that, its mode can't be changed in the chat there (#8144). No words
+    /// where there is no mode to pick.
     private var modesFooter: String {
+        if listsModes { return offersModes ? String(localized: "This agent uses its own approval settings unless you choose Allow Everything. You can switch in the chat later.") : "" }
         if limitedModes { return String(localized: "This agent uses its own approval settings unless you choose Allow Everything.") }
         return effortOptions.isEmpty ? String(localized: "This model's thinking effort can't be changed. You can change the permission mode anytime in the chat.")
             : String(localized: "You can change the permission mode and thinking effort anytime in the chat.")
@@ -223,7 +302,7 @@ struct NewChatView: View {
 
     /// What the attachments hold the start back for (a Codex launcher, uploads still going); nil: nothing.
     private var attachmentsHold: String? {
-        FirstMessage.hold(codex: codex, attached: !attachments.isEmpty, uploading: attachments.uploading)
+        FirstMessage.hold(codex: codex, omp: omp, attached: !attachments.isEmpty, uploading: attachments.uploading)
     }
 
     /// Why Start Chat is greyed out, the first thing missing in `ready`'s order; nil when it is ready (or still loading).
@@ -391,6 +470,24 @@ struct NewChatView: View {
                 }
 
                 Section {
+                    if !tiers.isEmpty {
+                        NavigationLink {
+                            AgentPresetPicker(tiers: tiers, profile: profile, launchers: launchers, picked: pickedTier, onPick: pickTier)
+                        } label: {
+                            Label {
+                                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                    Text(pickedTier.map { String(localized: "Preset \($0.name)") } ?? String(localized: "Preset"))
+                                        .font(Theme.Font.heading).foregroundStyle(Color.primary)
+                                    if let profile {
+                                        Text(profile.name).font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(1)
+                                    }
+                                }
+                            } icon: {
+                                ThemedIcon(Theme.Icon.model).foregroundStyle(Theme.accent)
+                            }
+                        }
+                        .accessibilityIdentifier("newChat.preset")
+                    }
                     NavigationLink {
                         launcherPicker
                     } label: {
@@ -398,7 +495,7 @@ struct NewChatView: View {
                             ThemedIcon(Theme.Icon.model).foregroundStyle(Theme.accent)
                             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 HStack(spacing: Theme.Space.sm) {
-                                    Text(launcher.isEmpty ? (unifiedModels ? defaultLabel : String(localized: "Choose Launcher")) : launcher).font(Theme.Font.heading.monospaced()).lineLimit(1)
+                                    Text(launcher.isEmpty ? (unifiedModels ? defaultLabel : String(localized: "Choose Launcher")) : launcherTitle).font(Theme.Font.heading.monospaced()).lineLimit(1)
                                     // A pick over the default is for this start only.
                                     if unifiedModels, !launcher.isEmpty { Chip(text: String(localized: "Just Once")) }
                                 }
@@ -413,22 +510,39 @@ struct NewChatView: View {
                         }
                     }
                     .accessibilityIdentifier("newChat.launcher")
-                    modelRow
-                } header: { Text(models?.models.isEmpty == false || modelChoice?.canPick == true ? String(localized: "Launcher & Model (This Time Only)") : String(localized: "Launcher (This Time Only)")) } footer: {
+                    if startModelChoice.startAllowsModel || startModelChoice.showsLocked { modelRow }
+                    if let pickedTier {
+                        if let problem = presetProblem {
+                            Label(problem, systemImage: Theme.Icon.error)
+                                .font(Theme.Font.label).foregroundStyle(Theme.cautionText)
+                                .accessibilityIdentifier("newChat.preset.problem")
+                        } else {
+                            let detail = pickedTier.description?.isEmpty == false ? " · \(pickedTier.description!)" : ""
+                            Label(String(localized: "Preset \(pickedTier.name)") + detail, systemImage: Theme.Icon.model)
+                                .font(Theme.Font.label).foregroundStyle(Color.secondary)
+                                .accessibilityIdentifier("newChat.preset.picked")
+                        }
+                    }
+                } header: {
+                    let offersModels = startModelChoice.startAllowsModel && (models?.models.isEmpty == false || modelChoice?.canPick == true)
+                    Text(offersModels ? String(localized: "Launcher & Model (This Time Only)") : String(localized: "Launcher (This Time Only)"))
+                } footer: {
                     let about = unifiedModels ? String(localized: "Uses Model Configuration › New Agent by default. A choice here applies to this session only and doesn't change the global default.")
                         : String(localized: "Claude Code / Codex launchers from this machine. It runs in a new tab in the terminal engine.")
                     // A Paseo provider of another kind has no terminal and no /model (#8144).
                     Text(modelChoice?.canPick == true && !limitedModes ? String(localized: "\(about) Models are the same as what /model shows in the terminal.") : about)
                 }
 
-                if !codex { // Claude Code's modes (`StartModes`); a Codex keeps its own
+                if modesShown { // Claude Code's modes, or a limited launcher's (`StartModes`); a Codex that lists none keeps its own
                     Section {
-                        Picker(selection: limitedModes ? $providerMode : $mode) {
-                            Text("Use Launcher's").tag("")
-                            ForEach(StartModes.modes(for: runEntry)) { o in Label(o.title, systemImage: o.symbol).tag(o.id) }
-                        } label: { Label { Text("Permission Mode") } icon: { ThemedIcon(Theme.Icon.permissions).foregroundStyle(Theme.accent) } }
+                        if offersModes {
+                            Picker(selection: limitedModes ? $providerMode : $mode) {
+                                Text("Use Launcher's").tag("")
+                                ForEach(StartModes.modes(for: runEntry)) { o in Label(o.title, systemImage: o.symbol).tag(o.id) }
+                            } label: { Label { Text("Permission Mode") } icon: { ThemedIcon(Theme.Icon.permissions).foregroundStyle(Theme.accent) } }
+                        }
                         if !effortOptions.isEmpty {
-                            Picker(selection: $effort) {
+                            Picker(selection: effortByHand) {
                                 Text("Use Launcher's").tag("")
                                 ForEach(effortOptions) { o in Label(o.title, systemImage: o.symbol).tag(o.id) }
                             } label: { Label { Text("Thinking Effort") } icon: { ThemedIcon(Theme.Icon.effort).foregroundStyle(Theme.accent) } }
@@ -436,8 +550,13 @@ struct NewChatView: View {
                         if ultracodeShown {
                             UltracodeStartRow(on: $ultracode, blocked: ultracodeBlocked, group: ref.group)
                         }
-                    } header: { Text("Permissions & Thinking") } footer: {
-                        Text(SessionModes.mode(startMode)?.detail ?? modesFooter)
+                    } header: {
+                        if offersModes { Text("Permissions & Thinking") } else { Text("Thinking Effort") }
+                    } footer: {
+                        // What the picked mode does as this launcher runs it (Allow Everything that can be switched back where
+                        // the launcher lists its modes), else what holds with none picked.
+                        let words = StartModes.detail(startMode, for: runEntry) ?? modesFooter
+                        if !words.isEmpty { Text(words) }
                     }
                     .pickerStyle(.menu)
                     .tint(Theme.accent)
@@ -458,13 +577,13 @@ struct NewChatView: View {
                         .focused($promptFocused)
                         .accessibilityIdentifier("newChat.prompt")
                         .id(Self.promptRow)
-                    // A Codex launcher takes no attachments: no menu, only those picked before to take out (#2321).
-                    NewAgentAttachmentRows(attachments: attachments, adds: !codex, photos: { showPhotos = true },
+                    // A Codex or omp launcher takes no attachments: no menu, only those picked before to take out (#2321).
+                    NewAgentAttachmentRows(attachments: attachments, adds: !inlineFirst, photos: { showPhotos = true },
                                            camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                                            files: { showFiles = true })
                 } header: { Text("First Message") } footer: {
                     VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                        if codex && !attachments.isEmpty {
+                        if inlineFirst && !attachments.isEmpty {
                             Text(FirstMessage.codexRefusal).accessibilityIdentifier("newChat.codexNote")
                         }
                         if let note = attachments.note {
@@ -488,18 +607,16 @@ struct NewChatView: View {
             .navigationTitle("New Chat [Quick Actions ea4b29]")
             .navigationBarTitleDisplayMode(.inline)
             .pageToolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        attachments.cancelUploads()
-                        dismiss()
-                    }
+                SheetClose {
+                    attachments.cancelUploads()
+                    dismiss()
                 }
                 #if os(macOS)
                 // A Mac sheet's primary button sits beside Cancel and answers ⏎ (docs/apple/mac.md「Mapping from iOS」).
                 ToolbarItem(placement: .confirmationAction) {
                     Button(starting ? startingLabel : String(localized: "Start Chat")) { Task { await start() } }
                         .lineLimit(1)
-                        .disabled(starting || loading || !ready)
+                        .disabled(starting || loading || presetNeedsModels || !ready)
                 }
                 #endif
             }
@@ -507,7 +624,14 @@ struct NewChatView: View {
                 VStack(spacing: Theme.Space.s) {
                 // Next to the button, not as the form's last section: below First Message and under this button it went
                 // unseen, the button just turned back to Start Chat (and a retry started a second agent).
-                if let error {
+                if presetNeedsModels {
+                    Label(String(localized: "Loading the preset's model options…"), systemImage: Theme.Icon.ai)
+                        .font(Theme.Font.caption).foregroundStyle(Color.secondary).lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Theme.Space.m)
+                        .background(.regularMaterial, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                        .accessibilityIdentifier("newChat.preset.loading")
+                } else if let error {
                     Label(error, systemImage: Theme.Icon.errorFilled)
                         .font(Theme.Font.caption).foregroundStyle(Theme.danger).lineLimit(4)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -537,7 +661,7 @@ struct NewChatView: View {
                 }
                 .themedButton(prominent: true)
                 .controlSize(.large)
-                .disabled(starting || loading || !ready)
+                .disabled(starting || loading || presetNeedsModels || !ready)
                 #endif
                 }
                 .padding(.horizontal, Theme.Space.xl)
@@ -562,24 +686,26 @@ struct NewChatView: View {
             #endif
             // The Claude quota under ultracode's row (#1307).
             .task(id: ultracodeShown) { if ultracodeShown { await UsageWindowsStore.shared.loadIfOld(model) } }
-            .task(id: "\(machineID)|\(runLauncher)|\(machine?.online == true)|\(defaultsFor)") { await loadModels() }
+            .task(id: "\(modelKey)|\(machine?.online == true)|\(defaultsFor)|\(pickedTier?.name ?? "")") { await loadModels() }
             .task(id: SpacePreset.repositoryLookupKey(machineID: machineID, cwd: cwd, online: machine?.online == true,
                                                       destination: targetPreset)) { await loadRepo() }
             .sheet(isPresented: $typingModel) {
-                TypedModelSheet(initial: pickedModel, note: String(localized: "Used for this start only. Once it runs, it's listed under Typed Before.")) { id in
+                TypedModelSheet(initial: pickedModel, note: startModelChoice.typedStartNote) { id in
+                    clearPickedTier()
                     pickedModel = id
                 }
             }
             .onChange(of: effortOptions.map(\.id)) { _, ids in
-                if !effort.isEmpty, !ids.contains(effort) { effort = "" } // the picked model does not take it
+                // Keep a preset's own effort until its launcher's list arrives; the old list must not clear it.
+                guard !presetNeedsModels else { return }
+                settleEffort(ids)
             }
             .onAppear {
                 if prompt.isEmpty { prompt = initialPrompt }
                 if !forwardedAttached {
                     forwardedAttached = true
-                    for img in forwardedImages.prefix(MessagePhotos.limit) {
-                        if let p = MessagePhotos.payload(img) { attachments.images.append(p) }
-                    }
+                    // no computer picked yet: past the hub's pictures one is turned away with a word, never dropped silently
+                    for img in forwardedImages { attachments.add(img, model: model, to: nil) }
                 }
                 if let preset { machineID = preset.machineID; cwd = preset.cwd } else { pickDefaultMachine() }
             }
@@ -588,18 +714,18 @@ struct NewChatView: View {
             .onChange(of: machineID) { _, now in
                 attachments.computerChanged(to: now) { model.machine(MachineRef(path: $0))?.name }
             }
-            .photosPicker(isPresented: $showPhotos, selection: $photoPicks, maxSelectionCount: MessagePhotos.limit,
+            .photosPicker(isPresented: $showPhotos, selection: $photoPicks, maxSelectionCount: model.imageLimits(ref.group).perMessage,
                           matching: .images, preferredItemEncoding: .current)
             .onChange(of: photoPicks) { _, items in
                 guard !items.isEmpty else { return }
                 Task {
-                    await attachments.load(items, model: model)
+                    await attachments.load(items, model: model, to: ref)
                     photoPicks = []
                 }
             }
             .fileUploadPicker(isPresented: $showFiles) { urls in attachments.upload(urls, to: ref, model: model) }
             .fullScreenCover(isPresented: $showCamera) {
-                CameraPicker { img in attachments.add(img, model: model) }.ignoresSafeArea()
+                CameraPicker { img in attachments.add(img, model: model, to: ref) }.ignoresSafeArea()
             }
             #if DEBUG && (os(iOS) || os(visionOS))
             // `-openNewAgentAttachments photo,build.log`: once this computer's launchers are in, the made-up photo
@@ -609,7 +735,7 @@ struct NewChatView: View {
                 debugAttached = true
                 for name in list.split(separator: ",").map(String.init) {
                     if name == "photo" {
-                        attachments.add(ChatView.debugPhoto, model: model)
+                        attachments.add(ChatView.debugPhoto, model: model, to: ref)
                         continue
                     }
                     let url = FileManager.default.temporaryDirectory.appending(path: name)
@@ -652,11 +778,45 @@ struct NewChatView: View {
         #endif
     }
 
+    private var launcherByHand: Binding<String> {
+        Binding(get: { launcher }, set: { clearPickedTier(); launcher = $0 })
+    }
+
+    private var modelByHand: Binding<String> {
+        Binding(get: { pickedModel }, set: { clearPickedTier(); pickedModel = $0 })
+    }
+
+    private var effortByHand: Binding<String> {
+        Binding(get: { limitedModes ? providerEffort : effort }, set: { value in
+            clearPickedTier()
+            if limitedModes { providerEffort = value } else { effort = value }
+        })
+    }
+
+    /// Only a manual edit unmarks a preset; filling its fields and settling its model list do not.
+    private func clearPickedTier() {
+        pickedTier = nil
+        presetLoading = false
+    }
+
+    /// Fills exactly the three ordinary start fields. `restoredModel` carries the model onto a new launcher's list.
+    private func pickTier(_ tier: AgentPreset) {
+        pickedTier = tier
+        launcher = tier.launcher
+        let limited = StartModes.limited(launchers.first { $0.name == tier.launcher })
+        effort = limited ? "" : tier.effort ?? ""
+        providerEffort = limited ? tier.effort ?? "" : ""
+        restore(model: tier.model ?? "")
+        let expected = modelList.catalogKey(ref, launcher: tier.launcher, host: modelHost)
+        presetLoading = presetNeedsList(tier) && (modelList.key != expected || modelsLoading)
+    }
+
     private var launcherPicker: some View {
-        LauncherPicker(launchers: launchers, selection: $launcher, allowDefault: unifiedModels, defaultLabel: defaultLabel,
+        LauncherPicker(launchers: launchers, selection: launcherByHand, allowDefault: unifiedModels, defaultLabel: defaultLabel,
                        defaultBlock: unifiedModels ? launchers.first(where: { $0.name == defaultLauncher })?.block : nil,
                        // The provider wizard saves to the hub-level group: on another group's computer it would land elsewhere.
-                       addsProvider: ref.group == (model.hub?.group ?? ""))
+                       addsProvider: ref.group == (model.hub?.group ?? ""),
+                       unavailable: model.launcherUnavailable[ref] ?? [])
     }
 
     /// The machines offered: the current assistant's (`AppModel.scopedMachines`), and of them this hub's when a todo is
@@ -704,6 +864,7 @@ struct NewChatView: View {
     /// would be, and the model goes only with the launcher it was picked for.
     private func apply(_ fill: RecentSetupCard.Fill) {
         pendingFill = nil
+        clearPickedTier()
         pickedWorkspace = nil
         cwd = fill.cwd
         cwdPicked = !fill.cwd.isEmpty
@@ -719,7 +880,7 @@ struct NewChatView: View {
     /// Picks a model for the launcher that will run: now when its list is the one on screen, else once `loadModels`
     /// moves to it (moving to another launcher's list starts over from the default).
     private func restore(model id: String) {
-        let key = LauncherModelsModel.key(ref, runLauncher)
+        let key = modelKey
         if modelList.key == key {
             pickedModel = id
             restoredModel = nil
@@ -836,6 +997,8 @@ struct NewChatView: View {
             let (ls, dirs) = try await (l, d)
             guard current() else { return }
             launchers = ls
+            tiers = model.launcherTiers[ref] ?? []
+            profile = model.launcherTierProfile[ref]
             recent = dirs.recent ?? []
             let firstLoad = defaultsFor != machineID
             if firstLoad {
@@ -856,7 +1019,7 @@ struct NewChatView: View {
             // latest recent setup with this launcher started (none: the default).
             if let fill = pendingFill, fill.machine == machineID {
                 apply(fill)
-            } else if firstLoad {
+            } else if firstLoad, runEntry?.startsOmp != true {
                 restore(model: recents.model(machine: machineID, launcher: launcher))
             }
         } catch {
@@ -873,9 +1036,14 @@ struct NewChatView: View {
         pickedWorkspace = nil
         recent = []
         launchers = []
+        tiers = []
+        profile = nil
+        pickedTier = nil
+        presetLoading = false
         launcher = ""
         mode = ""
         providerMode = ""
+        providerEffort = ""
         effort = ""
         restoredModel = nil
         defaultsFor = ""
@@ -918,7 +1086,7 @@ struct NewChatView: View {
                     .accessibilityIdentifier("newChat.model.enter")
                     // A typed pick can be dropped again: the start goes with the launcher's default.
                     if !pickedModel.isEmpty {
-                        Button { pickedModel = "" } label: { ThemedIcon(Theme.Icon.clear).foregroundStyle(.secondary) }
+                        Button { clearPickedTier(); pickedModel = "" } label: { ThemedIcon(Theme.Icon.clear).foregroundStyle(.secondary) }
                             .buttonStyle(.borderless)
                             .accessibilityLabel("Use Default Model")
                             .accessibilityIdentifier("newChat.model.clearTyped")
@@ -927,8 +1095,8 @@ struct NewChatView: View {
             }
         } else if let c = modelChoice, c.canPick {
             NavigationLink {
-                LauncherModelPicker(choice: c, picked: $pickedModel, refresh: { await loadModels(refresh: true) }, offersTyping: true,
-                                    forget: { id in await modelList.forget(id, machine: ref, launcher: runLauncher) },
+                LauncherModelPicker(choice: c, picked: modelByHand, refresh: { await loadModels(refresh: true) }, owner: runLauncher, offersTyping: true,
+                                    forget: { id in await modelList.forget(id, machine: ref, launcher: runLauncher, host: modelHost) },
                                     forgetError: modelList.forgetError,
                                     defaultFooter: c.configured.isEmpty ? String(localized: "No model chosen: runs with the launcher's own settings.")
                                         : String(localized: "No model chosen: runs with the launcher's own settings and Model Configuration."))
@@ -942,7 +1110,7 @@ struct NewChatView: View {
                 .accessibilityElement(children: .combine) // one row, read with why, like the pickable one
                 .accessibilityIdentifier("newChat.model.locked")
         } else if modelsLoading {
-            modelLabel(title: String(localized: "Model [Assistant View c98e11]"), detail: String(localized: "Loading models for \(runLauncher)…"), trailing: nil)
+            modelLabel(title: String(localized: "Model [Assistant View c98e11]"), detail: String(localized: "Loading models for \(runEntry?.title ?? runLauncher)…"), trailing: nil)
                 .accessibilityIdentifier("newChat.model.loading")
         }
     }
@@ -962,23 +1130,47 @@ struct NewChatView: View {
         }
     }
 
+    /// Drops an effort only after the list for the launcher and model that will run has settled.
+    private func settleEffort(_ ids: [String]) {
+        // Only the picker on screen: the remembered Claude Code effort is not dropped for a limited launcher's model,
+        // whose own pick is `providerEffort`.
+        if limitedModes {
+            if !providerEffort.isEmpty, !ids.contains(providerEffort) { providerEffort = "" }
+        } else if !effort.isEmpty, !ids.contains(effort) { effort = "" }
+    }
+
     /// The model list of the launcher that will run. Again only when that launcher (or machine) changed, or refresh:
     /// `.task` runs again when a pushed list pops. A typed pick stays when the list comes (it isn't in it, #1644); another
-    /// launcher or machine starts over from the default.
+    /// launcher or machine starts over from the default. A preset picked during a request schedules its own completion,
+    /// so an older request cannot clear its loading state or validate against the previous launcher's list.
     private func loadModels(refresh: Bool = false) async {
-        let key = LauncherModelsModel.key(ref, runLauncher)
-        if !refresh, modelList.key == key, modelList.list != nil || modelList.loading { return }
+        let key = modelKey
+        let needsPresetList = presetNeedsList(pickedTier)
+        if needsPresetList { presetLoading = modelList.key != key || modelList.loading }
+        if !refresh, modelList.key == key, modelList.list != nil || modelList.loading {
+            if !needsPresetList { return }
+            if !modelList.loading {
+                presetLoading = false
+                settleEffort(effortOptions.map(\.id))
+                return
+            }
+        }
         if modelList.key != key { pickedModel = "" }
-        // A recent setup's model, or the machine's (#2134): picked before the list comes, so the efforts offered are its.
+        // A recent setup's or preset's model, or the machine's (#2134): picked before the list comes, so its efforts show.
         if let r = restoredModel, r.key == key {
             pickedModel = r.id
             restoredModel = nil
         }
-        modelList.select(ref, launcher: runLauncher)
+        modelList.select(ref, launcher: runLauncher, host: modelHost)
         // Only once this machine's launchers are in: before that `launcher` is still the last machine's.
         guard defaultsFor == machineID, launchers.contains(where: { $0.name == runLauncher }), machine?.online == true else { return }
         restoredModel = nil // one left was for a launcher no longer picked
-        await modelList.load(ref, launcher: runLauncher, refresh: refresh)
+        let requestedTier = pickedTier
+        await modelList.load(ref, launcher: runLauncher, refresh: refresh, host: modelHost)
+        if modelKey == key, pickedTier == requestedTier {
+            presetLoading = false
+            settleEffort(effortOptions.map(\.id))
+        }
     }
 
     /// What names the worktree's branch: the todo's name, else the first message, else the folder.
@@ -999,6 +1191,7 @@ struct NewChatView: View {
     }
 
     private func start() async {
+        guard !presetNeedsModels else { return }
         guard let api = model.api(ref.group) else {
             error = String(localized: "Can't reach this computer's hub. Try again later.")
             return
@@ -1023,12 +1216,37 @@ struct NewChatView: View {
             let name = tabName.trimmingCharacters(in: .whitespacesAndNewlines)
             // The first message: a todo's context block (when a todo is handed over), then what was typed.
             let outgoing = contextBlock.map { p.isEmpty ? $0 : "\($0)\n\n\(p)" } ?? p
-            if codex {
+            if StartModes.terminalTraex(runEntry) {
+                let first = FirstMessage.text(prompt: prompt, contextBlock: contextBlock, paths: attachments.paths,
+                                              photos: attachments.images.count)
+                if !first.isEmpty && attachments.isEmpty {
+                    // A terminal Traex makes its own session from the inline prompt, as Android and the web start it.
+                    // Do not reuse Claude's pre-assigned id or send the text again as an ordinary message (#1842).
+                    let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: runLauncher, agentType: "traex", prompt: first,
+                                                      workspaceID: targetPreset?.workspaceID, host: targetPreset?.host,
+                                                      model: sentModel, tabName: name.isEmpty ? nil : name,
+                                                      nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
+                    UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
+                    UserDefaults.standard.set(cwd, forKey: "cwd.\(machineID)")
+                    record(setup)
+                    Haptics.success()
+                    model.adopt(s)
+                    onStarted(s)
+                    return
+                }
+            }
+            if inlineFirst {
                 // Codex picks its thread's id once it has the first message: it goes with the start, which answers
                 // with that thread (one session, already working on it). With none, the start answers with Codex
-                // waiting for it (Session.awaitingFirstMessage).
+                // waiting for it (Session.awaitingFirstMessage). omp gets it in its command, and the start answers with
+                // its session once the node has it (docs/integrations/omp.md).
+                // A Codex of Paseo's that lists its modes (#8261) takes the mode and effort picked for it; any other keeps
+                // its own, and omp takes none (`StartModes`).
                 let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, prompt: contextBlock == nil ? prompt : outgoing,
-                                                  workspaceID: targetPreset?.workspaceID, host: targetPreset?.host, model: sentModel, tabName: name.isEmpty ? nil : name,
+                                                  workspaceID: targetPreset?.workspaceID, host: targetPreset?.host,
+                                                  permissionMode: listsModes ? StartModes.sent(providerMode, for: runEntry) : nil,
+                                                  effort: listsModes ? providerEffortSent : nil,
+                                                  model: sentModel, tabName: name.isEmpty ? nil : name,
                                                   nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
                 UserDefaults.standard.set(cwd, forKey: "cwd.\(machineID)")
@@ -1045,12 +1263,14 @@ struct NewChatView: View {
             let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, prompt: nil,
                                               workspaceID: targetPreset?.workspaceID, host: targetPreset?.host,
                                               permissionMode: StartModes.sent(startMode, for: runEntry),
-                                              effort: effort.isEmpty ? nil : effort, model: sentModel, tabName: name.isEmpty ? nil : name,
+                                              effort: limitedModes ? providerEffortSent : (effort.isEmpty ? nil : effort),
+                                              model: sentModel, tabName: name.isEmpty ? nil : name,
                                               async: true, nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID,
                                               ultracode: sendsUltracode ? true : nil))
             if !unifiedModels {
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
-                UserDefaults.standard.set(effort, forKey: "effort.\(machineID)")
+                // The remembered effort is Claude Code's: a limited launcher's start leaves it as it was (#8261).
+                if !limitedModes { UserDefaults.standard.set(effort, forKey: "effort.\(machineID)") }
             }
             // The remembered mode is Claude Code's: a limited launcher's start leaves it as it was.
             if !limitedModes { UserDefaults.standard.set(mode, forKey: "mode.\(machineID)") }
@@ -1061,7 +1281,18 @@ struct NewChatView: View {
             // The photos and the uploaded files' paths go with it (#2321).
             let photos = attachments.images.map(\.1)
             let first = FirstMessage.text(prompt: prompt, contextBlock: contextBlock, paths: attachments.paths, photos: photos.count)
-            if !first.isEmpty { model.sendNow(s.key, text: first, images: photos) }
+            if let onFirstMessage {
+                // Preserve sendNow's immediate local bubble and background send. Only its new pending message is handed
+                // to the inbox's delivery observer; onStarted below still runs without waiting for the hub's answer.
+                let existing = Set(model.chat(s.key).pending.map(\.id))
+                var message: PendingMessage?
+                if !first.isEmpty, model.sendNow(s.key, text: first, images: photos) {
+                    message = model.chat(s.key).pending.last { !existing.contains($0.id) }
+                }
+                onFirstMessage(s, message)
+            } else if !first.isEmpty {
+                model.sendNow(s.key, text: first, images: photos)
+            }
             onStarted(s)
         } catch {
             if sendsUltracode, Ultracode.refused(error) {
@@ -1086,8 +1317,70 @@ struct NewChatView: View {
     }
 }
 
+/// The active model profile's Agent presets. A blocked launcher's health reason stays on its disabled row; picking any
+/// other row only fills New Agent's ordinary launcher, model and effort fields.
+struct AgentPresetPicker: View {
+    var tiers: [AgentPreset]
+    var profile: AgentPresetProfile?
+    var launchers: [Launcher]
+    var picked: AgentPreset?
+    var onPick: (AgentPreset) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(tiers) { tier in row(tier) }
+            } header: {
+                if let profile { Text(profile.name) }
+            } footer: {
+                Text("Picking a preset fills the launcher, model and thinking effort for this start.")
+            }
+        }
+        .themedPage()
+        .navigationTitle("Preset")
+        #if os(iOS) || os(visionOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+    }
+
+    private func row(_ tier: AgentPreset) -> some View {
+        let block = launchers.first { $0.name == tier.launcher }?.block
+        let selected = picked?.name == tier.name
+        return Button {
+            onPick(tier)
+            Haptics.tap()
+            dismiss()
+        } label: {
+            HStack(alignment: .top, spacing: Theme.Space.m) {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    Text(String(localized: "Preset \(tier.name)"))
+                        .font(Theme.Font.heading).foregroundStyle(Color.primary)
+                    if let description = tier.description, !description.isEmpty {
+                        Text(description).font(Theme.Font.secondary).foregroundStyle(Color.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text(runs(tier)).font(Theme.Font.label).foregroundStyle(Color.secondary).fixedSize(horizontal: false, vertical: true)
+                    if let block { LauncherBlockLine(block: block) }
+                }
+                Spacer(minLength: Theme.Space.s)
+                if selected { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
+            }
+            .contentShape(.rect)
+        }
+        .disabled(block != nil)
+        .accessibilityIdentifier("newChat.preset.\(tier.name)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func runs(_ tier: AgentPreset) -> String {
+        let effort = tier.effort.flatMap { $0.isEmpty ? nil : SessionModes.effortLabel($0) ?? $0 }
+        return [tier.launcher, tier.model, effort].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " · ")
+    }
+}
+
 /// New Agent's launchers. One grayed out on this computer (`Launcher.block`, #1643) stays listed with why; choosing it
-/// shows how to fix it instead of picking it, and the help's Try Anyway picks it after all.
+/// shows how to fix it instead of picking it, and the help's Try Anyway picks it after all. A provider the hub leaves out
+/// here (`unavailable`, #8109) comes after them, off with why.
 struct LauncherPicker: View {
     var launchers: [Launcher]
     @Binding var selection: String
@@ -1097,8 +1390,11 @@ struct LauncherPicker: View {
     /// Why the launcher Default runs is grayed out on this computer; nil when it is not. Default stays pickable: it is
     /// Model Settings' choice, said under it.
     var defaultBlock: LauncherBlock? = nil
-    /// The help offers Add Provider: the computer is in the hub group the provider wizard saves to.
+    /// The help offers Add Provider: the computer is in the hub group the provider wizard saves to. So does How to Fix of
+    /// a provider left out here: Settings' provider pages read that group's hub.
     var addsProvider = true
+    /// The Persona-managed providers the hub leaves out on this computer, with why (#8109: their own-service rule).
+    var unavailable: [UnavailableLauncher] = []
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     /// The grayed-out launcher whose help is open.
@@ -1144,11 +1440,29 @@ struct LauncherPicker: View {
                     } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                                Text(l.name).font(Theme.Font.heading.monospaced()).foregroundStyle(.primary)
+                                Text(l.title).font(Theme.Font.heading.monospaced()).foregroundStyle(Color.primary)
                                 chips(l, look: .neutral)
                             }
                             Spacer()
                             if l.name == selection { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
+                        }
+                    }
+                }
+            }
+            // Not just missing (#8109): a provider left out here is said after the launchers, in the main chat sheet's row,
+            // and never picked. How to Fix opens its page in Settings › Model providers, whose Computers has the switch.
+            let skipped = UnavailableLauncher.shown(unavailable, after: launchers, query: query)
+            if !skipped.isEmpty {
+                Section(String(localized: "Unavailable here")) {
+                    ForEach(skipped) { u in
+                        if addsProvider {
+                            NavigationLink { ModelLauncherDetailView(name: u.name) } label: { UnavailableLauncherRow(item: u, fixable: true) }
+                                .accessibilityHint(Text("Shows how to fix it"))
+                                .accessibilityIdentifier("launcherPicker.unavailable.\(u.name)")
+                        } else {
+                            UnavailableLauncherRow(item: u)
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("launcherPicker.unavailable.\(u.name)")
                         }
                     }
                 }
@@ -1188,7 +1502,7 @@ struct LauncherPicker: View {
             HStack {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     // Gray, not the row tint's lighter shade: it reads as unavailable, like a disabled row.
-                    Text(l.name).font(Theme.Font.heading.monospaced()).foregroundStyle(Color.secondary)
+                    Text(l.title).font(Theme.Font.heading.monospaced()).foregroundStyle(Color.secondary)
                     chips(l, look: .outline)
                     LauncherBlockLine(block: block)
                 }

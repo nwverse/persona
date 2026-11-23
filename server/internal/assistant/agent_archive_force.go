@@ -30,19 +30,32 @@ func (s *Service) forceArchiveConfirmation(ctx context.Context, mid, sid string)
 		return err
 	}
 	raw, listed := s.nodeSession(row.MachineID, sid)
-	if !confirmationArchiveSafe(row) || !listed || !confirmationArchiveSafe(raw) {
-		return archiveRefusal(http.StatusConflict, "agent_busy", i18n.Err("hub-agent_archives.close_busy"))
+	if !confirmationArchiveSafe(row) {
+		return forceArchiveRefusal(row)
+	}
+	if !listed {
+		return archiveRefusal(http.StatusConflict, "agent_busy", i18n.ErrEnglish("hub-agent_archives.force_unverified"))
+	}
+	if !confirmationArchiveSafe(raw) {
+		// The decorated target is blocked even if the raw row no longer is.
+		// Do not suggest plain archive from that less restrictive snapshot.
+		if agentArchiveBusy(raw) {
+			return archiveBusyRefusal(raw, false)
+		}
+		return archiveRefusal(http.StatusConflict, "agent_busy", i18n.ErrEnglish("hub-agent_archives.force_unverified"))
 	}
 	for _, ix := range s.pendingInteractions() {
 		if ix.MachineID == row.MachineID && ix.SessionID == sid &&
 			ix.Kind != proto.IxPermission && ix.Kind != proto.IxPlan && ix.Kind != proto.IxScreen {
-			return archiveRefusal(http.StatusConflict, "agent_busy", i18n.Err("hub-agent_archives.close_busy"))
+			return archiveRefusal(http.StatusConflict, "agent_busy", i18n.ErrEnglish("hub-agent_archives.force_question"))
 		}
 	}
 	// Persist the archive and close fence together before the node can cancel its runtime.
-	if err := s.confirmationArchiveFence(ctx, row, true); err != nil {
+	provisional, err := s.confirmationArchiveFenceAt(ctx, row, true)
+	if err != nil {
 		return err
 	}
+	row.ArchiveChangedAt = archiveChangedAt(provisional)
 	closeCtx, cancel := context.WithTimeout(ctx, agentArchiveCloseTimeout)
 	defer cancel()
 	// Closing kills the terminal or closes the provider runtime. Never press Enter or approve the pending request.
@@ -68,39 +81,64 @@ func (s *Service) forceArchiveConfirmation(ctx context.Context, mid, sid string)
 			s.logf("force archive %s: cancel confirmation %s after close: %v", short(sid), ix.ID, err)
 		}
 	}
-	if err := s.noteAgentArchiveClosed(ctx, row, closedAt); err != nil {
+	publishMark, err := s.noteAgentArchiveClosed(ctx, row, closedAt, true)
+	if err != nil {
 		return err
 	}
-	s.nativeArchiveWanted(row, true)
-	s.publishList(row.MachineID)
+	if publishMark != 0 {
+		s.publishListAtArchiveMark(row.MachineID, publishMark)
+	}
 	return nil
 }
 
 // confirmationArchiveFence never publishes an archived confirmation with an empty ClosedAt.
-// Failed closes remove only this provisional record and leave the cards untouched.
+// A failed close turns only its own provisional record into a new restored generation; a stale rollback leaves a
+// newer restore, archive or close generation untouched.
 func (s *Service) confirmationArchiveFence(ctx context.Context, row proto.Session, closing bool) error {
+	_, err := s.confirmationArchiveFenceAt(ctx, row, closing)
+	return err
+}
+
+func (s *Service) confirmationArchiveFenceAt(ctx context.Context, row proto.Session, closing bool) (time.Time, error) {
 	ctx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
 	defer cancel()
 	b := &s.agentArchives
 	if err := b.lock(ctx); err != nil {
-		return err
+		return time.Time{}, err
 	}
 	defer b.unlock()
 	if err := s.loadAgentArchivesLocked(ctx); err != nil {
-		return err
+		return time.Time{}, err
 	}
 	key := runtimeListID(row.MachineID, row.SessionID)
 	next := maps.Clone(b.records)
 	if closing {
-		now := time.Now().UTC()
-		next[key] = agentArchive{Session: archiveSnapshot(row), Archived: true, ChangedAt: now,
-			ClosedAt: now.Add(agentArchiveCloseTimeout + agentArchiveTimeout)}
+		changedAt := nextAgentArchiveChangedAt(b.records[key].ChangedAt)
+		next[key] = agentArchive{Session: archiveSnapshot(row), Archived: true, ChangedAt: changedAt,
+			ClosedAt: time.Now().UTC().Add(agentArchiveCloseTimeout + agentArchiveTimeout)}
 	} else {
-		delete(next, key)
+		rec, ok := b.records[key]
+		if !ok || row.ArchiveChangedAt == nil || !rec.ChangedAt.Equal(*row.ArchiveChangedAt) {
+			return rec.ChangedAt, nil
+		}
+		rec.Archived = false
+		rec.ClosedAt = time.Time{}
+		rec.ChangedAt = nextAgentArchiveChangedAt(rec.ChangedAt)
+		next[key] = rec
 	}
+	changedAt := next[key].ChangedAt
 	if err := s.saveAgentArchivesLocked(ctx, next); err != nil {
-		return err
+		return time.Time{}, err
 	}
 	delete(b.pending, key)
-	return nil
+	return changedAt, nil
+}
+
+// An idle session does not qualify for force cancellation, even if plain archive
+// is available. Keep that distinction from the busy-state refusal.
+func forceArchiveRefusal(row proto.Session) error {
+	if !agentCloseBusy(row) {
+		return archiveRefusal(http.StatusConflict, "agent_busy", i18n.ErrEnglish("hub-agent_archives.force_not_blocked"))
+	}
+	return archiveBusyRefusal(row, true)
 }

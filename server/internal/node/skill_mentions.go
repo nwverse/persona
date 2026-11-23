@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 type skillCatalogRequest struct {
@@ -17,7 +18,6 @@ type skillCatalogRequest struct {
 	SessionID string `json:"session_id"`
 	Cwd       string `json:"cwd"`
 	Launcher  string `json:"launcher"`
-	Runtime   string `json:"runtime"`
 	ConfigDir string `json:"config_dir"`
 	Scope     string `json:"-"` // additional node-derived ordinary session identity
 }
@@ -35,60 +35,84 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 	if in.Owner == "" || in.Cwd == "" || !filepath.IsAbs(in.Cwd) {
 		return out, errors.New("skill catalog requires an assistant execution environment")
 	}
-	if n.runtimeAssistant(in.SessionID) || n.assistantRuntime(in.Launcher) != nil || n.guestOf(in.SessionID) != nil {
+	if n.guestOf(in.SessionID) != nil {
 		return out, errors.New("skill selection is unavailable for this runtime")
 	}
-	if in.Launcher == "" {
-		in.Launcher = "claude"
-	}
-	agent, err := n.assistantAgent(ctx, in.Launcher)
-	if err != nil {
-		return out, err
-	}
-	var entries []assistantskills.Entry
-	switch agent {
-	case "codex":
-		entries, out.Complete, err = n.codexSkillCatalog(ctx, in)
-	case "claude":
-		in.ConfigDir, err = n.assistantProfileSelection(ctx, in.SessionID, in.Launcher, in.Runtime, in.ConfigDir, in.SessionID != "")
-		if err != nil {
-			return out, err
+	var (
+		entries []assistantskills.Entry
+		err     error
+	)
+	if agyLauncher, isRuntime, rerr := n.agySkillRuntime(in); isRuntime {
+		if rerr != nil {
+			return out, rerr
 		}
-		profile := n.assistantConfigDir(in.Launcher, in.ConfigDir)
-		if profile == "" {
-			profile = filepath.Join(n.home, ".claude")
+		if in.ConfigDir != "" {
+			return out, errors.New(assistantwire.ConfigDirClaudeOnly)
 		}
-		roots := []assistantskills.Root{{Path: filepath.Join(profile, "skills"), Source: "user"}}
-		for dir, depth := filepath.Clean(in.Cwd), 0; depth < 64; depth++ {
-			rel, _ := filepath.Rel(in.Cwd, dir)
-			roots = append(roots, assistantskills.Root{Path: filepath.Join(dir, ".claude", "skills"), Source: "project · " + rel})
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
-		// Bounded local roots, not a claim to enumerate bundled, remote or plugin-only commands.
-		entries, err = assistantskills.LocalCatalog(roots)
-		if err == nil {
-			var own map[string]any
-			if settings := n.launcherOwnSettings(ctx, in.Launcher); settings != "" {
-				own, err = readLauncherSettings(settings, in.Cwd, n.home)
-				if err != nil {
-					return out, errors.New("cannot establish the launcher's skill settings")
+		in.Launcher = agyLauncher
+		entries, err = n.agySkillCatalog(in)
+	} else {
+		if in.Launcher == "" && in.SessionID != "" && n.state != nil {
+			if st, ok := n.state.get(in.SessionID); ok && st.Launcher != "" &&
+				n.assistantRuntime(st.Launcher) == nil && n.runtimeOf(st.Launcher) == nil {
+				if m, ok := n.managedLauncher(st.Launcher); !ok || m.AgentType() != agyAgent {
+					in.Launcher = st.Launcher
 				}
 			}
-			// The user's skill switches a private profile carries (assistant_user_setup.go) come before the launcher's.
-			entries, err = visibleClaudeSkills(entries, profile, in.Cwd, map[string]any{"skillOverrides": n.userSkillsOff(profile, in.Cwd)}, own)
 		}
-	default:
-		err = errors.New("skill selection is unavailable for this runtime")
+		if in.Launcher == "" {
+			in.Launcher = "claude"
+		}
+		agent, agentErr := n.assistantAgent(ctx, in.Launcher)
+		if agentErr != nil {
+			return out, agentErr
+		}
+		switch agent {
+		case "codex":
+			entries, out.Complete, err = n.codexSkillCatalog(ctx, in)
+		case "claude":
+			in.ConfigDir, err = n.assistantProfileSelection(ctx, in.SessionID, in.Launcher, in.ConfigDir, in.SessionID != "")
+			if err != nil {
+				return out, err
+			}
+			profile := n.assistantConfigDir(in.Launcher, in.ConfigDir)
+			if profile == "" {
+				profile = filepath.Join(n.home, ".claude")
+			}
+			roots := []assistantskills.Root{{Path: filepath.Join(profile, "skills"), Source: "user"}}
+			for dir, depth := filepath.Clean(in.Cwd), 0; depth < 64; depth++ {
+				rel, _ := filepath.Rel(in.Cwd, dir)
+				roots = append(roots, assistantskills.Root{Path: filepath.Join(dir, ".claude", "skills"), Source: "project · " + rel})
+				parent := filepath.Dir(dir)
+				if parent == dir {
+					break
+				}
+				dir = parent
+			}
+			// Bounded local roots, not a claim to enumerate bundled, remote or plugin-only commands.
+			entries, err = assistantskills.LocalCatalog(roots)
+			if err == nil {
+				var own map[string]any
+				if settings := n.launcherOwnSettings(ctx, in.Launcher); settings != "" {
+					own, err = readLauncherSettings(settings, in.Cwd, n.home)
+					if err != nil {
+						return out, errors.New("cannot establish the launcher's skill settings")
+					}
+				}
+				// The user's skill switches a private profile carries (assistant_user_setup.go) come before the launcher's.
+				entries, err = visibleClaudeSkills(entries, profile, in.Cwd, map[string]any{"skillOverrides": n.userSkillsOff(profile, in.Cwd)}, own)
+			}
+		default:
+			err = errors.New("skill selection is unavailable for this runtime")
+		}
 	}
 	if err != nil {
 		return out, err
 	}
-	identity := []string{in.Owner, in.Machine, in.Cwd, in.Launcher, in.Runtime, in.ConfigDir,
-		n.executionFingerprint(in.Launcher, modelExecution{Runtime: in.Runtime})}
+	// The empty fifth word keeps a CLI conversation's scope, and so each skill's id, what an older node gave: a skill
+	// picked from its catalog still resolves here.
+	identity := []string{in.Owner, in.Machine, in.Cwd, in.Launcher, "", in.ConfigDir,
+		n.executionFingerprint(in.Launcher, modelExecution{})}
 	if in.Scope != "" {
 		identity = append(identity, in.Scope)
 	}
@@ -97,18 +121,69 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 	return out, nil
 }
 
-func visibleClaudeSkills(entries []assistantskills.Entry, profile, cwd string, launcherSettings ...map[string]any) ([]assistantskills.Entry, error) {
-	// A bounded local adapter cannot establish the effective managed policy. Check presence only:
-	// never execute a policy helper or read a server-policy cache that may contain credentials.
-	policies := append([]string{filepath.Join(profile, "remote-settings.json"),
-		"/etc/claude-code/managed-settings.json", "/etc/claude-code/managed-settings.d"}, claudeManagedSettings...)
-	policies = append(policies, claudeManagedSettingsDirs...)
+// claudeLinuxManagedSettings and claudeLinuxManagedSettingsDirs are claudeManagedSettings and claudeManagedSettingsDirs
+// on Linux and WSL.
+var (
+	claudeLinuxManagedSettings     = []string{"/etc/claude-code/managed-settings.json"}
+	claudeLinuxManagedSettingsDirs = []string{"/etc/claude-code/managed-settings.d"}
+)
+
+// readClaudeManagedSettings reads the administrator's settings files for Claude Code on every system, each system's in
+// the order Claude Code merges them: managed-settings.json, then the *.json files in managed-settings.d alphabetically,
+// hidden ones left out. A missing file or directory holds no policy; one that cannot be read, or holds no JSON object, is
+// an error.
+func readClaudeManagedSettings() ([]map[string]any, error) {
+	systems := [][2][]string{{claudeManagedSettings, claudeManagedSettingsDirs}, {claudeLinuxManagedSettings, claudeLinuxManagedSettingsDirs}}
 	if programFiles := os.Getenv("ProgramFiles"); programFiles != "" {
-		policies = append(policies, filepath.Join(programFiles, "ClaudeCode", "managed-settings.json"),
-			filepath.Join(programFiles, "ClaudeCode", "managed-settings.d"))
+		root := filepath.Join(programFiles, "ClaudeCode")
+		systems = append(systems, [2][]string{{filepath.Join(root, "managed-settings.json")}, {filepath.Join(root, "managed-settings.d")}})
 	}
-	for _, file := range policies {
-		if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+	var out []map[string]any
+	for _, system := range systems {
+		files := append([]string{}, system[0]...)
+		for _, dir := range system[1] {
+			entries, err := os.ReadDir(dir) // sorted by name
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			for _, e := range entries {
+				if name := e.Name(); strings.HasSuffix(name, ".json") && !strings.HasPrefix(name, ".") {
+					files = append(files, filepath.Join(dir, name))
+				}
+			}
+		}
+		for _, file := range files {
+			// readSettingsFile gives a missing file as an empty map (no policy) and nil only for a file that holds null.
+			settings, err := readSettingsFile(file)
+			if err == nil && settings == nil {
+				err = errors.New(file + " is not a JSON object")
+			}
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, settings)
+		}
+	}
+	return out, nil
+}
+
+func visibleClaudeSkills(entries []assistantskills.Entry, profile, cwd string, launcherSettings ...map[string]any) ([]assistantskills.Entry, error) {
+	// Never read the server-policy cache, which may contain credentials: its presence alone refuses.
+	if _, err := os.Stat(filepath.Join(profile, "remote-settings.json")); !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.New("skill catalog is unavailable while a managed policy may apply")
+	}
+	// The administrator's files go through the same checks as every other layer below (#9862), so one that only sets
+	// hooks restricts nothing. Failing to read one refuses, as does a policy helper: its output would replace them, and
+	// this adapter never runs it.
+	managed, err := readClaudeManagedSettings()
+	if err != nil {
+		return nil, errors.New("skill catalog is unavailable while a managed policy cannot be read")
+	}
+	for _, settings := range managed {
+		if settings["policyHelper"] != nil {
 			return nil, errors.New("skill catalog is unavailable while a managed policy may apply")
 		}
 	}
@@ -121,10 +196,11 @@ func visibleClaudeSkills(entries []assistantskills.Entry, profile, cwd string, l
 		layers = append(layers, settings)
 	}
 	overrides := map[string]string{}
-	for _, settings := range append(layers, launcherSettings...) {
-		strict, _ := settings["strictPluginOnlyCustomization"].([]any)
-		enabled, _ := settings["strictPluginOnlyCustomization"].(bool)
-		if enabled || len(strict) > 0 {
+	// Lowest first, so a later layer's skillOverrides entry replaces an earlier one's and the managed ones, last, win.
+	for _, settings := range append(append(layers, launcherSettings...), managed...) {
+		// true or a non-empty list; a value Claude Code cannot read may lock too.
+		strict := settings["strictPluginOnlyCustomization"]
+		if list, ok := strict.([]any); strict != nil && strict != false && (!ok || len(list) > 0) {
 			// Do not bypass policies whose effective roots this bounded adapter cannot establish.
 			return nil, errors.New("skill catalog is unavailable under this customization policy")
 		}
@@ -143,7 +219,9 @@ func visibleClaudeSkills(entries []assistantskills.Entry, profile, cwd string, l
 		}
 		if values, _ := settings["skillOverrides"].(map[string]any); values != nil {
 			for key, value := range values {
-				overrides[key], _ = value.(string)
+				if state, ok := value.(string); ok { // Claude Code drops an entry it cannot read
+					overrides[key] = state
+				}
 			}
 		}
 	}
@@ -169,7 +247,7 @@ func (n *Node) selectedSkills(ctx context.Context, id, cwd, launcher, text strin
 	machine := n.machineID
 	n.mu.Unlock()
 	catalog, err := n.skillCatalog(ctx, skillCatalogRequest{Owner: owner, Machine: machine, SessionID: id, Cwd: cwd,
-		Launcher: launcher, Runtime: execution.Runtime, ConfigDir: execution.ConfigDir})
+		Launcher: launcher, ConfigDir: execution.ConfigDir})
 	if err != nil {
 		return nil, skillSelectionError(err)
 	}

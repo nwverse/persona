@@ -1,7 +1,6 @@
 package persona.feature.settings
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -26,7 +25,7 @@ internal fun SettingsHomePage(
     knowledgeSelectionAvailable: Boolean,
     connection: ConnectionState, translationValue: String?, hubUpdateStatus: HubUpdateStatus?, updateValue: String?,
     selected: NavKey?, onOpen: (SettingsPage) -> Unit, onNavigate: ((NavKey) -> Unit)?, onClose: (() -> Unit)?,
-    onDemo: (() -> Unit)?, onExitDemo: (() -> Unit)?, slots: LazyListScope.() -> Unit,
+    onDemo: (() -> Unit)?, onExitDemo: (() -> Unit)?,
     footer: @Composable () -> Unit,
 ) {
     val resources = LocalContext.current.resources
@@ -37,6 +36,7 @@ internal fun SettingsHomePage(
     val assistantEntries = listOfNotNull(
         entry(SettingsPage.ModelConfig, R.string.settings_home_models, PersonaIcons.memory, R.string.settings_home_models_detail, R.string.settings_search_models_aliases),
         onNavigate?.let { HomeEntry(AssistantSettingsRoute, R.string.settings_row_assistant, PersonaIcons.ai, R.string.settings_row_assistant_subtitle) },
+        entry(SettingsPage.StandingAuthorizations, R.string.settings_standing_title, PersonaIcons.privacy, aliases = R.string.settings_standing_search_aliases),
         entry(SettingsPage.Connectors, R.string.settings_section_connectors, PersonaIcons.link, R.string.settings_home_connectors_detail, R.string.settings_search_connectors_aliases),
         // Inbox Sources (#5308): the same pages as the Inbox menu, every source, once the hub reports inbox_sources.
         if (!inboxSources) null else HomeEntry(
@@ -107,7 +107,6 @@ internal fun SettingsHomePage(
                     head = { current, isDefault, _, toggle -> JAssistantSettingsHeader(stringResource(R.string.settings_group_assistant, current.shownName), current, isDefault,
                         switchLabel, onSwitch = toggle) })
             }
-            if (query.isBlank()) slots()
             group(a)
             val named = assistant.manager?.takeIf { services.managers != null && !services.demo && assistant.roster?.installed?.isNotEmpty() == true }
             if (named != null && query.isBlank()) item("assistant-footer") {

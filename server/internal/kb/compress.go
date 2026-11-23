@@ -102,10 +102,10 @@ func settleCompression(current, snapshot *Chat) bool {
 
 // compressFailed records that compressing c (the copy the call started from) failed with err, and returns the error to
 // log. A refused snapshot is settled without a summary only when no new live work arrived; otherwise that work stays
-// eligible for another judgment. Any other failure puts the chat off (compressRetry). A paused connection or an ended
-// run changes nothing: the chat stays due.
+// eligible for another judgment. Any other failure puts the chat off (compressRetry). A paused connection, no model set
+// up and an ended run change nothing: the chat stays due.
 func (e *Engine) compressFailed(ctx context.Context, c *Chat, err error) error {
-	if ai.IsPaused(err) || ctx.Err() != nil {
+	if deferred(ctx, err) {
 		return err
 	}
 	e.Store.chatMu.Lock() // read and written whole: what archiving or a history import wrote meanwhile stays
@@ -183,13 +183,14 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 		_, err := e.putCompressed(c, func(cur *Chat) { cur.Pending = 0 })
 		return err
 	}
-	in := prompts.RenderKBCompressInput(prompts.KBCompressInput{Name: c.Name, Kind: c.Kind, Automated: c.Kind == "mail" && !HasPeople(c),
+	owner := e.knowledgeOwner()
+	in := prompts.RenderKBCompressInput(prompts.KBCompressInput{Language: owner.Language, Name: c.Name, Kind: c.Kind, Automated: c.Kind == "mail" && !HasPeople(c),
 		Pinned: c.Pinned, People: e.pinnedPeople(c.People), Projects: e.knownProjects(), Tags: e.TopTags(40), Summary: e.Store.Summary(KindChat, c.ID), News: news})
 
 	var d chatDigest
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(prompts.KBOwner{Owner: e.ownerName()}), in, 4000, &d); err != nil {
+	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(owner), in, 4000, &d); err != nil {
 		return e.compressFailed(ctx, c, err)
 	}
 	if _, ok := e.Store.Chat(c.ID); !ok { // forgotten while the model wrote (ForgetSource): not written back

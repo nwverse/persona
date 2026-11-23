@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/update"
 
 	"github.com/mdp/qrterminal/v3"
 
@@ -60,6 +61,8 @@ type MachineConfig struct {
 	CodexServers     []proto.CodexServer `json:"codex_servers,omitempty"`
 	// Launchers adds configured wrappers or overrides the type reported by the node.
 	Launchers []assistantwire.ConfiguredLauncher `json:"launchers,omitempty"`
+	// LauncherRecovery bounds rediscovery of a missing Assistant launcher and names its only permitted substitutes.
+	LauncherRecovery *assistantwire.LauncherRecovery `json:"launcher_recovery,omitempty"`
 	// Botmux false: the machine's node does not list botmux's sessions and never runs botmux (docs/integrations/engines.md "botmux");
 	// unset lists them, as before.
 	Botmux *bool `json:"botmux,omitempty"`
@@ -86,6 +89,9 @@ type MachineConfig struct {
 	// computer, docs/protocol/file-transfer.md): "~/" is the remote home, or an absolute folder in it. Unset,
 	// proto.DefaultInboxDir. The node refuses a folder the phone may not write to.
 	InboxDir string `json:"inbox_dir,omitempty"`
+	// ExtraPath are directories the machine's node puts in front of its PATH, for the tools a service's PATH lacks
+	// (#10127): "~/" is the remote home, or absolute. The node adds mise's and asdf's shims by itself.
+	ExtraPath []string `json:"extra_path,omitempty"`
 }
 
 // NodePackagesConfig is where the manager fetches the node builds for the computers that the hub has none of its own
@@ -103,8 +109,9 @@ type NodePackagesConfig struct {
 // http://[user:pass@]host:port proxy for the update's checks and downloads only (internal/netproxy); "" the
 // environment's, as before.
 type UpdateConfig struct {
-	URL   string `json:"url,omitempty"`
-	Proxy string `json:"proxy,omitempty"`
+	URL         string                    `json:"url,omitempty"`
+	Proxy       string                    `json:"proxy,omitempty"`
+	Development *update.DevelopmentConfig `json:"development,omitempty"`
 }
 
 // TailcatConfig: DERPMapURL is a DERP map of your own relays (a derper) instead of Tailscale's public ones; the nodes
@@ -493,8 +500,8 @@ func (c *Config) requestPairCodeLang(ctx context.Context, l i18n.Lang) (*pairCod
 	return p.pairCode, nil
 }
 
-// requestPairCodeWith asks the running hub for a pairing code over loopback with the master token: body nil for an
-// app's, {"machine"} or {"add"} for a computer's.
+// requestPairCodeWith asks the running hub for a pairing code from loopback (managerconf.CLIHubURL, CLIDial) with the
+// master token: body nil for an app's, {"machine"} or {"add"} for a computer's.
 func (c *Config) requestPairCodeWith(ctx context.Context, reqBody map[string]any) (*pairCodeReply, error) {
 	return c.requestPairCodeWithLang(ctx, reqBody, i18n.Terminal())
 }
@@ -504,7 +511,7 @@ func (c *Config) requestPairCodeWithLang(ctx context.Context, reqBody map[string
 	if n, parseErr := strconv.Atoi(port); err != nil || parseErr != nil || n <= 0 || n > 65535 {
 		return nil, errors.New(i18n.T(l, "hub-cli.pair_listen_invalid"))
 	}
-	endpoint := "http://" + net.JoinHostPort("127.0.0.1", port) + "/api/v1/auth/pair-codes"
+	endpoint := managerconf.CLIHubURL(c.Listen) + "/api/v1/auth/pair-codes"
 	var body io.Reader
 	if reqBody != nil {
 		b, _ := json.Marshal(reqBody)
@@ -516,7 +523,7 @@ func (c *Config) requestPairCodeWithLang(ctx context.Context, reqBody map[string
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Accept-Language", string(l))
-	transport := &http.Transport{Proxy: nil}
+	transport := &http.Transport{Proxy: nil, DialContext: managerconf.CLIDial}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Timeout: 5 * time.Second, Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

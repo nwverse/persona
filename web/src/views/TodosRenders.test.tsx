@@ -85,7 +85,7 @@ describe("todo rows on a sessions push", () => {
   it("renders a fresh waiting PR in its own section with link and blocker details", async () => {
     const url = "https://example.com/repo/pull/91";
     await act(async () => putTodo({ ...getState().todos[0], id: "ta", title: "Waiting PR", agents: [], pr_url: url, delivery: { state: "pr" }, pr_status: { url, state: "open", draft: false, review: "required", checks: "failure", conflicts: false, checked_at: new Date(Date.now() - 30_000).toISOString() } }));
-    const section = host.querySelector<HTMLElement>('[data-testid="todo-section"][data-section="pr"]');
+    const section = host.querySelector<HTMLElement>('[data-testid="todo-section"][data-section="parked"]');
     expect(section?.textContent).toContain("Waiting PR");
     const link = section?.querySelector<HTMLAnchorElement>('[data-testid="todo-pr-line"] a');
     expect(link?.href).toBe(url);
@@ -162,5 +162,23 @@ describe("todo rows on a sessions push", () => {
     expect(tag("tc")?.textContent).toBe(t("todos.concern"));
     expect(tag("td")?.textContent).toBe(t("todos.concern"));
     expect(tag("tb")).toBeNull();
+  });
+
+  it("keeps a fresh reported concern in Just finished and reserves awaiting review for live delivery", async () => {
+    const reported = { ...todo("tc", "Reported concern", "s3"), kind: "concern", done_at: now, done_by: "reported", agents: [] };
+    const live = { ...todo("td", "Live delivery", "s4"), agents: [], delivery: { state: "live", at: now },
+      supervision: { supervisor: "main", state: "pending_review" as const } };
+    const load = async (list: Todo[]) => {
+      api.mockImplementation(async (path) => path === "/todos" ? { todos: list } : {});
+      await act(async () => { await refreshTodos(); });
+    };
+    const title = () => host.querySelector('[data-testid="todo-section"][data-section="just_done"] button')?.textContent;
+
+    await load([reported]);
+    expect(title()).toContain("刚做完");
+    await load([live]);
+    expect(title()).toContain("已交付·待看");
+    await load([reported, live]);
+    expect(title()).toContain("刚做完");
   });
 });

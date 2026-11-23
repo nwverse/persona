@@ -6,7 +6,7 @@ import Darwin
 /// The node's per-session Unix socket (0600, made for this helper, gone once it connected): connect, say the token,
 /// then read and write bytes until the node closes it. As Persona Screen's, kept apart so the two helpers share no code
 /// whose change would change the other's binary.
-final class UnixSocket {
+final class UnixSocket: @unchecked Sendable { // fd is fixed; the phone screen reads on one thread, writes on another
     private let fd: Int32
 
     private init(fd: Int32) { self.fd = fd }

@@ -112,6 +112,53 @@ class AgentsTreeTest {
         assertEquals(listOf("group:todo/t2", "group:todo/t1", "session:mac/a", "session:mac/b", "group:todo/none"), keys(setOf("todo/t2")))
     }
 
+    @Test fun byRepositoryOfflineHistoryStaysUnderItsComputerAndFoldsWithIt() {
+        fun at(machine: String, id: String, state: String, cwd: String, updatedAt: String) = AgentSession(Session(
+            machineId = machine, sessionId = id, state = state, status = state, cwd = cwd, updatedAt = updatedAt))
+        val rows = listOf(
+            at("mac", "running", "working", "/tmp/example-project", "2026-01-04T00:00:00Z"),
+            at("box", "other", "working", "/srv/api", "2026-01-03T00:00:00Z"),
+            at("mac", "old", "offline", "/tmp/example-project", "2026-01-02T00:00:00Z"),
+            at("box", "old", "offline", "/tmp/example-project", "2026-01-01T00:00:00Z"),
+        )
+        val computers = listOf(Machine("mac", "Mac", online = true), Machine("box", "Box", online = true))
+        val prefs = AgentsPreferencesSnapshot(range = AgentRange.All)
+        val settings = AgentListSettings(grouping = AgentGrouping.Repo)
+        val projected = scopedAgentList(rows, computers, prefs, settings)
+        val treeIds = projected.machines.flatMap { it.groups }.toSet()
+        assertTrue(projected.groups.filter { it.id.startsWith("history/") }.all { it.id in treeIds })
+        assertEquals(listOf(1, 1), projected.machines.map { it.repoCount })
+        val runningTitle = projected.groups.single { it.id == "tree/mac//tmp/example-project" }.title
+        val historyTitle = projected.groups.single { it.id == "history/mac//tmp/example-project" }.title
+        assertNotEquals(runningTitle.shown, historyTitle.shown)
+        assertTrue(historyTitle.shown.contains(CoreText.of(CoreText.Key.StateNotRunning).shown))
+        fun keys(range: AgentRange = AgentRange.All, folded: Set<String> = emptySet()) = agentTreeEntries(
+            scopedAgentList(rows, computers, prefs.copy(range = range), settings.copy(folded = folded)), "").map { it.key }
+        assertEquals(listOf(
+            "machine-header:machine/mac", "group:tree/mac//tmp/example-project", "session:mac/running",
+            "group:history/mac//tmp/example-project", "session:mac/old",
+            "machine-header:machine/box", "group:tree/box//srv/api", "session:box/other",
+            "group:history/box//tmp/example-project", "session:box/old"), keys())
+        assertEquals(listOf("machine-header:machine/mac", "machine-header:machine/box"),
+            keys(folded = setOf("machine/mac", "machine/box")))
+        assertEquals(listOf(
+            "machine-header:machine/mac", "group:history/mac//tmp/example-project", "session:mac/old",
+            "machine-header:machine/box", "group:history/box//tmp/example-project", "session:box/old"), keys(AgentRange.History))
+        assertEquals(listOf("machine-header:machine/mac", "machine-header:machine/box"),
+            keys(AgentRange.History, setOf("machine/mac", "machine/box")))
+        val running = scopedAgentList(rows, computers, prefs.copy(range = AgentRange.Running), settings)
+        assertTrue(running.groups.none { it.id.startsWith("history/") })
+        assertTrue(running.groups.flatMap { it.rows }.none { it.session.sessionId == "old" })
+    }
+
+    @Test fun historyTitlesOutsideRepositoryGroupingStayUnchanged() {
+        val rows = listOf(AgentSession(Session(machineId = "mac", sessionId = "old", cwd = "/tmp/example-project",
+            state = "offline", status = "offline", updatedAt = "2026-01-01T00:00:00Z")))
+        val projected = scopedAgentList(rows, listOf(Machine("mac", "Mac")), AgentsPreferencesSnapshot(range = AgentRange.History),
+            AgentListSettings(grouping = AgentGrouping.MachineSpace))
+        assertEquals("/tmp/example-project", projected.groups.single().title.shown)
+    }
+
     @Test fun byRepositoryTreesSitAStepInsideTheirRepositoryAndFoldWithIt() {
         fun at(id: String, cwd: String, state: String) = AgentSession(Session(machineId = "mac", sessionId = id, state = state, cwd = cwd,
             updatedAt = "2026-01-01T00:00:00Z"))
@@ -230,6 +277,34 @@ class AgentsTreeTest {
         // A paged list takes the hub's count for the space (`SessionListCounts.backgroundWaiting`): Working there includes them.
         val counted = space.copy(totalCount = 4, stateCounts = AgentState.entries.associateWith { if (it == AgentState.Working) 3 else 0 }, waitingInBackground = 2)
         assertEquals(listOf(0, 1, 0, 0), counted.headingCounts.map { it.second })
+    }
+
+    @Test fun byMachineHeadingCountsFromRowsWhenStateCountsAreNull() {
+        // #9319: shared fixtures leave state_counts null for Machine groups; the feature helper counts from rows.
+        fun at(id: String, machine: String, state: String, waiting: Boolean = false) = AgentSession(Session(
+            machineId = machine, sessionId = id, state = state, backgroundWaiting = waiting,
+            updatedAt = "2026-01-01T00:00:00Z"))
+        val list = buildAgentList(
+            listOf(
+                at("a", "mac", "needs_you"), at("b", "mac", "working"), at("c", "mac", "working", waiting = true),
+                at("d", "mac", "unread"), at("e", "mac", "idle"), at("f", "mac", "unknown"),
+                at("g", "box", "idle"),
+            ),
+            machines,
+            settings = AgentListSettings(grouping = AgentGrouping.Machine),
+        )
+        val mac = list.groups.single { it.id == "machine/mac" }
+        assertNull(mac.stateCounts)
+        assertEquals(1, mac.waitingInBackground)
+        assertEquals(
+            listOf(persona.core.designsystem.Status.NeedsYou, persona.core.designsystem.Status.Working,
+                persona.core.designsystem.Status.Unread, persona.core.designsystem.Status.Idle),
+            machineHeadingCounts(mac).map { it.first },
+        )
+        assertEquals(listOf(1, 1, 1, 2), machineHeadingCounts(mac).map { it.second })
+        val box = list.groups.single { it.id == "machine/box" }
+        assertNull(box.stateCounts)
+        assertEquals(listOf(0, 0, 0, 1), machineHeadingCounts(box).map { it.second })
     }
 
     @Test fun aSpaceHeadingCountsItsIdleAgentsAfterTheClockAsTheComputerDoes() {

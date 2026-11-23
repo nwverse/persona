@@ -1,5 +1,6 @@
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 /// The Sign In section of an extension's page (#4507), under its status: how it is signed in (Not signed in / Waiting for
 /// confirmation / Signed in: <account> / Expired / Error: <reason>), Sign In or Sign In Again, and Sign Out when signed in. Signing in is a card a step at a time: a QR code
@@ -33,7 +34,7 @@ struct ExtensionAuthSection: View {
         .task(id: model.prompt.flatMap(ExtensionSignIn.pollKey)) {
             _ = await model.waitForAuthorization()
         }
-        .confirmationDialog("Sign out of \(auth.title)? [Extension Auth Views fd7af9]", isPresented: $confirmLogout, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Sign out of \(auth.title)? [Extension Auth Views fd7af9]", isPresented: $confirmLogout, titleVisibility: .visible, hasCancel: true) {
             Button(role: .destructive) { Task { await model.logout() } } label: { Text("Sign Out [Connector Sign In Views 3ab8cc]").lineLimit(1) }
                 .accessibilityIdentifier("extension-auth-logout-confirm")
             Button("Cancel", role: .cancel) {}

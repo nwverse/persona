@@ -42,12 +42,12 @@ describe("a node's items as palette commands", () => {
     expect(titles).toContain("重命名");
     expect(titles).toContain("新建窗格 · 向右拆分");
     expect(titles).toContain("Git · 拉取");
-    expect(titles).toContain("Git · 拷贝分支名");
-    expect(titles).toContain("拷贝目录路径");
+    expect(titles).toContain("Git · 复制分支名");
+    expect(titles).toContain("复制目录路径");
     expect(cmds.every((c) => c.section === "Workspace · build")).toBe(true);
     expect(new Set(cmds.map((c) => c.id)).size).toBe(cmds.length);
     expect(cmds.find((c) => c.title === "关闭标签页")?.danger).toBe(true);
-    expect(cmds.find((c) => c.title === "拷贝目录路径")?.danger).toBeFalsy();
+    expect(cmds.find((c) => c.title === "复制目录路径")?.danger).toBeFalsy();
   });
 
   it("a rename asks for the name, and commits a changed one", async () => {
@@ -105,7 +105,7 @@ describe("a node's items as palette commands", () => {
 
   it("a plain item just runs", async () => {
     const d = deps();
-    itemsToCommands("s", tab, nodeActions(tab, d)).find((c) => c.title === "拷贝目录路径")!.run();
+    itemsToCommands("s", tab, nodeActions(tab, d)).find((c) => c.title === "复制目录路径")!.run();
     await flush();
     expect(d.copy).toHaveBeenCalledWith("/home/me/proj");
   });
@@ -154,9 +154,16 @@ describe("the node the user is on", () => {
     const session = { machine_id: "m1", session_id: "s1", cwd: "/home/me/proj", title: "t", status: "idle", space_kind: "herdr", space_id: "w1", space_name: "proj", pane_id: "w1:p1" };
     const state = getState();
     state.sessions = { m1: [session as never] };
-    const where = nodesFor({ route: { name: "session", mid: "m1", sid: "s1" }, pane: { mid: "m1", sid: "s1" } });
+    const ctx = { route: { name: "session" as const, mid: "m1", sid: "s1" }, pane: { mid: "m1", sid: "s1" } };
+    const where = nodesFor(ctx);
     expect(where.find((w) => w.node.kind === "workspace")?.node.canWorktree).toBe(true);
     // the agent's pane under its title, its space under its name
     expect(where.map((w) => w.section)).toEqual(["窗格 · t", "空间 · proj"]);
+    const ids = nodeCommands(ctx).filter((c) => c.section === "窗格 · t").map((c) => c.id);
+    expect(ids).toEqual(expect.arrayContaining([
+      "node:pane:w1:p1:node-split:node-split-right",
+      "node:pane:w1:p1:node-close-pane",
+      "node:pane:w1:p1:node-copy-id",
+    ]));
   });
 });

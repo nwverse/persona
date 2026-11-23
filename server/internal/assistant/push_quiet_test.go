@@ -85,7 +85,7 @@ func TestQuietPermissionCardStaysWithItsSupervisor(t *testing.T) {
 
 	e.s.askTick(time.Now().Add(2 * askHoldFor)) // leader → main conversation, as before
 	m := e.noticeWith("conv1", "interaction_id=ix1")
-	if !strings.Contains(m, "不会发给用户") || strings.Contains(m, "自动上交给用户") {
+	if !strings.Contains(m, "signal=ask") || !strings.Contains(m, "low_distraction=true") {
 		t.Fatalf("the main conversation is not told the card stays with the supervisors:\n%s", m)
 	}
 	e.s.askTick(time.Now().Add(4 * askHoldFor)) // past the last rung: back to the leader once, not the owner
@@ -263,7 +263,7 @@ func TestQuietOffPermissionCardReachesTheOwnerAsBefore(t *testing.T) {
 	e.noticeWith("lead1", "interaction_id=ix1")
 	e.s.askTick(time.Now().Add(2 * askHoldFor))
 	m := e.noticeWith("conv1", "interaction_id=ix1")
-	if !strings.Contains(m, "自动上交给用户") {
+	if !strings.Contains(m, "signal=ask") {
 		t.Fatalf("the main conversation's message changed with the switch off:\n%s", m)
 	}
 	e.s.askTick(time.Now().Add(4 * askHoldFor))
@@ -360,16 +360,16 @@ func TestEscalateLevel(t *testing.T) {
 
 // The supervision message says what the switch changes: never to the user on a timeout, why_owner on escalations.
 func TestSuperviseMessageUnderTheSwitch(t *testing.T) {
-	on := prompts.RenderSupervise(prompts.Supervise{Leader: true, Background: true, Asked: true, AskMinutes: 5, LowDistraction: true,
+	on := prompts.RenderSupervise(prompts.Supervise{Leader: true, Background: true, Asked: true, AskMinutes: 5, PushGrading: true,
 		Entries: []prompts.SuperviseEntry{{Kind: sigAsk, ID: "todo_1", Title: "修登录崩溃",
 			Asks: []prompts.SuperviseAsk{{ID: "ix1", Kind: "permission", Session: "w1", Text: "Bash", Reminded: true}}}}})
-	for _, want := range []string{"低打扰模式", "why_owner", "不会发给用户", "再交给你处理一次"} {
+	for _, want := range []string{"signal=ask", "Question routing: timeout_minutes=5", "low_distraction=true", "session_id=w1"} {
 		if !strings.Contains(on, want) {
 			t.Errorf("lacks %q:\n%s", want, on)
 		}
 	}
 	off := prompts.RenderSupervise(prompts.Supervise{Leader: true, Background: true, Asked: true, AskMinutes: 5})
-	if strings.Contains(off, "低打扰模式") || !strings.Contains(off, "自动上交给用户") {
+	if strings.Contains(off, "low_distraction=true") || !strings.Contains(off, "low_distraction=false") {
 		t.Fatalf("the message changed with the switch off:\n%s", off)
 	}
 }
@@ -452,6 +452,29 @@ func TestHeldEscalationIsNotReEscalatable(t *testing.T) {
 	waitFor(t, "the held escalation's P1 push", func() bool { return len(e.cardPushes("ix1")) == 1 })
 	if got := e.cardPushes("ix1"); len(got) != 1 || got[0] != assistantwire.LevelP1 {
 		t.Fatalf("the rejected re-escalation pushed: %v", got)
+	}
+	if shown := e.lastShown("ix1"); shown.PushLevel != assistantwire.LevelP1 {
+		t.Fatalf("held escalation interaction push_level = %q, want %q", shown.PushLevel, assistantwire.LevelP1)
+	}
+	e.s.fleet.mu.Lock()
+	storedLevel := e.s.fleet.interactions["ix1"].ix.PushLevel
+	e.s.fleet.mu.Unlock()
+	if storedLevel != assistantwire.LevelP1 {
+		t.Fatalf("stored pending interaction push_level = %q, want %q", storedLevel, assistantwire.LevelP1)
+	}
+
+	// An urgent P0 escalation stamps P0 on the Interaction as well.
+	e.raise(askPermission("ix2", "worker-1"))
+	e.noticeWith("lead1", "interaction_id=ix2")
+	if _, err := runJSON(t, e.s, "lead1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "urgent", "p0": true}); err != nil {
+		t.Fatalf("P0 escalation: %v", err)
+	}
+	waitFor(t, "P0 interaction shown", func() bool {
+		ix, ok := e.shown("ix2")
+		return ok && !ix.Delegating
+	})
+	if shown := e.lastShown("ix2"); shown.PushLevel != assistantwire.LevelP0 {
+		t.Fatalf("P0 escalation interaction push_level = %q, want %q", shown.PushLevel, assistantwire.LevelP0)
 	}
 }
 

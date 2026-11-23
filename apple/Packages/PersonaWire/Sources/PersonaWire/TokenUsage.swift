@@ -26,6 +26,13 @@ public nonisolated enum TokenFormat {
 
     public static func count(_ n: Int) -> String { count(Int64(n)) }
 
+    /// The language's own short numbers, at most three digits: 3.2B and 72.9M in English, counted in ten-thousands and
+    /// hundred-millions in Chinese and Japanese (the token calendar, docs/server/machines.md "Token usage history").
+    /// `count` stays K / M / B everywhere else.
+    public static func short(_ n: Int64, locale: Locale = .autoupdatingCurrent) -> String {
+        n.formatted(.number.notation(.compactName).precision(.significantDigits(1...3)).locale(locale))
+    }
+
     /// "31K/min": a rate of tokens per minute.
     public static func perMinute(_ n: Int64) -> String { String(localized: "\(count(n))/min", comment: "Tokens per minute, as in 31K/min") }
 
@@ -153,7 +160,8 @@ public nonisolated struct UsageShare: Decodable, Hashable, Sendable, Identifiabl
 
 /// GET /api/v1/machines/{id}/usage.
 public nonisolated struct MachineUsageSeries: Decodable, Hashable, Sendable {
-    public init(machineID: String, online: Bool, range: String, step: Int, points: [UsagePoint], total: UsageTokens, models: [UsageShare], launchers: [UsageShare], launchersKnown: Bool) {
+    public init(machineID: String, online: Bool, range: String, step: Int, points: [UsagePoint], total: UsageTokens, models: [UsageShare], launchers: [UsageShare], launchersKnown: Bool, receivedAt: Date? = nil) {
+        self.receivedAt = receivedAt
         self.machineID = machineID
         self.online = online
         self.range = range
@@ -181,8 +189,20 @@ public nonisolated struct MachineUsageSeries: Decodable, Hashable, Sendable {
         case launchersKnown = "launchers_known"
     }
 
-    /// Minutes in a step: a point's sums over this are per minute.
+    /// Minutes in a step: a whole step's sums over this are per minute.
     public var minutesPerStep: Double { max(Double(step) / 60, 1) }
+
+    /// Not on the wire: when the report arrived (APIClient.machineUsage), the end of the step under way (#9205).
+    public var receivedAt: Date?
+
+    /// The minutes the sums of the step starting at t cover: the whole step, except the step under way when the report
+    /// came (receivedAt), whose sums cover only the part that had passed (at least a minute). Divided by the whole step,
+    /// a 10-minute or hourly step read as a fraction of its rate until it ended (#9205). The web has the same rule
+    /// (web/src/lib/usage-rate.ts stepMinutes).
+    public func minutes(at t: Int64) -> Double {
+        let ran = receivedAt.map { $0.timeIntervalSince1970 - Double(t) } ?? Double(step)
+        return max(60, min(Double(step), ran)) / 60
+    }
 }
 
 /// A machine's tokens on its card (GET /api/v1/metrics): today, all tokens per minute now, the last hour by minute.

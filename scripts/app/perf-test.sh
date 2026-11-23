@@ -14,6 +14,7 @@
 #   PERF_DD          DerivedData of the optimized build (default /tmp/persona-perf-dd)
 #   PERF_SKIP_BUILD  1: reuse the last build in PERF_DD
 #   PERF_SIM_LOCK    the lock every simulator use runs under (default /tmp/playbox-sim.lock, shared with other agents)
+#   PERSONA_CONTINUITY_SHADOW=1  opt in to the DEBUG production shadow A/B (`-showContinuityShadow YES`)
 #   PERF_SAMPLE      a test name (e.g. testAgentChatScrollBig): also `sample` the app's main thread during that test
 #
 # Builds always go through ~/.local/bin/xcode-slot (at most two builds on the machine). Building does not hold
@@ -50,7 +51,7 @@ mock_env() {
     launch) echo "MOCK_AGENTS=1 MOCK_LONG_ASSISTANT=1 MOCK_LONG_HISTORY=1" ;;
     agents) echo "MOCK_AGENTS=1 MOCK_BIG=1 MOCK_CHAT_LINES=1 MOCK_SUBAGENT_CARDS=1 MOCK_FILES=1 MOCK_MACHINES=1 MOCK_TURN_IMAGES=many" ;;
     assistant|composer) echo "MOCK_LONG_ASSISTANT=1 MOCK_AGENTS=1 MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASKS_DOCK=many MOCK_ASSISTANT_SIDEBAR=1 MOCK_KB_MANY_LINKS=1" ;;
-    inbox) echo "MOCK_LARK=1 MOCK_LARK_RICH=1 MOCK_LARK_TOPIC=1 MOCK_INBOX_EXTRA=150 MOCK_MAIL=1 MOCK_AGENTS=1" ;;
+    inbox) echo "MOCK_LARK=1 MOCK_LARK_RICH=1 MOCK_LARK_TOPIC=1 MOCK_INBOX_EXTRA=150 MOCK_MAIL=1 MOCK_AGENTS=1 MOCK_MANAGERS=0" ;;
     settings) echo "MOCK_EXTENSIONS=1 MOCK_SCHEDULE=1 MOCK_AGENTS=1" ;;
     machines) echo "MOCK_PERF_MACHINES=24 MOCK_PERF_METRIC_STEP=50 MOCK_AGENTS=1" ;;
     sidebar) echo "MOCK_AGENTS=1 MOCK_ASSISTANT_SIDEBAR=1 MOCK_LONG_ASSISTANT=1" ;;
@@ -80,6 +81,8 @@ log "simulator $UDID, default navigation, $ITER iterations, results in $OUT"
 
 # 1. The optimized build (no simulator lock: it only compiles).
 if [ "${PERF_SKIP_BUILD:-0}" != 1 ]; then
+  # The app as it ships, with the watch app and the share extension, whatever the shell exported (apple/lean-dev-build.yml).
+  unset PERSONA_LEAN_DEV_BUILD
   (cd apple && xcodegen generate -q) || { verdict "failed xcodegen"; exit 1; }
   log "building (optimized, $DD)…"
   "${SLOT[@]}" timeout 3600 xcodebuild build-for-testing -project apple/Persona.xcodeproj -scheme Persona \
@@ -165,6 +168,7 @@ for s in "${SUITES[@]}"; do
     env TEST_RUNNER_PERSONA_PERF_HUB="http://127.0.0.1:$port" \
       TEST_RUNNER_PERSONA_PERF_ITERATIONS="$ITER" \
       TEST_RUNNER_PERSONA_PERF_SIM="$UDID" \
+      TEST_RUNNER_PERSONA_CONTINUITY_SHADOW="${PERSONA_CONTINUITY_SHADOW:-0}" \
       TEST_RUNNER_PERSONA_PERF_BUNDLE="$PERSONA_BUNDLE_ID" \
       TEST_RUNNER_PERSONA_PERF_SIM_HOME="$HOME" \
     "${SLOT[@]}" timeout 5400 xcodebuild test-without-building -project apple/Persona.xcodeproj -scheme Persona \

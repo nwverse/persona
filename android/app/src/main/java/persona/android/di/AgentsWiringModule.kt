@@ -11,6 +11,7 @@ import persona.core.contracts.api.*
 import persona.core.hub.HttpAgentArchives
 import persona.core.hub.HttpAgentOperations
 import persona.core.hub.HttpAgentCreationService
+import persona.core.hub.HttpHubPreferencesTransport
 import persona.core.hub.HubError
 import persona.core.hub.HubChatTransport
 import persona.core.data.PersistentAgentOperations
@@ -24,6 +25,16 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object AgentsWiringModule {
+    @Provides @Singleton
+    fun displayHubs(stacks: GroupStacks): AgentsDisplayHubs = AgentsDisplayHubs {
+        combine(stacks.stacks, stacks.selected) { list, selected ->
+            list.map { stack ->
+                AgentsDisplayHub(stack.data.scope.path, stack.namespace, stack === selected,
+                    stack.connection.currentHello, HttpHubPreferencesTransport(stack.connection) { stack.current })
+            }
+        }
+    }
+
     @Provides
     @Singleton
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -86,7 +97,9 @@ private fun groupAgentsState(stack: GroupStack, assistant: AssistantConversation
         }
         override suspend fun closeSession(key: SessionKey) = api().closeSession(key)
         override suspend fun attachSession(key: SessionKey) = api().attachSession(key)
+        override suspend fun interruptSession(key: SessionKey) = api().interruptSession(key)
         override suspend fun deleteSession(key: SessionKey) = api().deleteSession(key)
+        override suspend fun forkSession(key: SessionKey) = api().forkSession(key)
     }
     // Notifications are posted with merged ids; the plain key a closed session reports is put back into them.
     val bindings = AgentsOperationsBindings(PersistentAgentOperations(operations, data.operations, HubChatTransport(connection)), assistant) { key ->

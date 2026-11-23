@@ -135,6 +135,8 @@ func installedHelper(t *testing.T, permission string) string {
 	swap(t, &screenHelpers, &helperResolver{})
 	swap(t, &screenPermissions, &permissionCache{ttl: time.Minute})
 	swap(t, &screenPreflight, func(context.Context, string) string { return permission })
+	swap(t, &screenFFmpegPaths, []string{}) // never this Mac's own ffmpeg (#8859)
+	swap(t, &screenX264, &x264Probe{})
 	return app
 }
 
@@ -157,7 +159,7 @@ func TestStartScreenHelperJoinsTheStreamAndEndsWithScreenSharing(t *testing.T) {
 	n.screens.mu.Unlock()
 
 	var released atomic.Int32
-	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, func() { released.Add(1) }); err != nil {
+	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, false, func() { released.Add(1) }); err != nil {
 		t.Fatal(err)
 	}
 	n.screens.mu.Lock()
@@ -167,12 +169,16 @@ func TestStartScreenHelperJoinsTheStreamAndEndsWithScreenSharing(t *testing.T) {
 		t.Fatalf("video streams bound to the pair = %d, want 1", bound)
 	}
 
+	n.screens.mu.Lock()
+	video := n.screens.byID["K"].video[0]
+	n.screens.mu.Unlock()
 	_ = tee.Close() // screen sharing ends: the video ends with it, and its slot is released once
 	select {
 	case <-streamClosed: // The stream pump has closed the helper connection again.
 	case <-time.After(2 * time.Second):
 		t.Fatal("the screen-sharing stream ended without closing the video stream")
 	}
+	_ = video.Close() // closing the same helper again must not release twice
 	if got := released.Load(); got != 1 {
 		t.Fatalf("slot released %d times, want 1", got)
 	}
@@ -183,13 +189,13 @@ func TestStartScreenHelperRefusesWithoutAHelperOrPermission(t *testing.T) {
 	n.screens.byID["K"] = &screenPair{result: rfbLoginSignedIn, open: true}
 
 	installedHelper(t, "missing")
-	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, func() {}); dialErrCode(t, err) != "video_unavailable" {
+	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, false, func() {}); dialErrCode(t, err) != "video_unavailable" {
 		t.Fatalf("no Screen Recording permission: %v", err)
 	}
 
 	swap(t, &screenHelperSource, func() string { return "" })
 	swap(t, &screenHelpers, &helperResolver{})
-	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, func() {}); dialErrCode(t, err) != "video_unavailable" {
+	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, false, func() {}); dialErrCode(t, err) != "video_unavailable" {
 		t.Fatalf("no helper installed: %v", err)
 	}
 }

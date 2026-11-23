@@ -2,6 +2,7 @@ package persona.core.hub
 
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.Machine
+import persona.core.contracts.MachineLinkSwitch
 import persona.core.contracts.api.AgentLauncher
 import persona.core.contracts.api.ClaudeSetting
 import persona.core.contracts.api.ClaudeDirsState
@@ -9,6 +10,7 @@ import persona.core.contracts.api.LauncherQuotaAnswer
 import persona.core.contracts.api.HerdrState
 import persona.core.contracts.api.MachineManagement
 import persona.core.contracts.api.MachineMove
+import persona.core.contracts.api.NO_TERMINAL_ENGINE
 import persona.core.contracts.MachineBrowser
 import persona.core.contracts.api.DoctorReport
 import persona.core.contracts.api.UsageAccount
@@ -46,6 +48,17 @@ class HttpMachineManagement internal constructor(
 
     override suspend fun reconnect(machineId: String) { call(api("machines", machineId, "reconnect"), "POST", buildJsonObject { }) }
 
+    override suspend fun startLinkSwitch(machineId: String): MachineLinkSwitch {
+        val answer = call(api("machines", machineId, "link-switch"), "POST", buildJsonObject { })
+        val state = answer["link_switch"] as? JsonObject
+            ?: throw HubFailure(HubError.Protocol, "hub answered the Link switch without link_switch", retryable = false)
+        if ((state["available"] as? JsonPrimitive)?.booleanOrNull == null) {
+            throw HubFailure(HubError.Protocol, "hub answered the Link switch without available", retryable = false)
+        }
+        return try { JsonCodec.decodeFromJsonElement(state) }
+        catch (error: kotlinx.serialization.SerializationException) { throw HubFailure(HubError.Protocol, cause = error) }
+    }
+
     override suspend fun deploy(machineId: String) { call(api("machines", machineId, "deploy"), "POST", buildJsonObject { }) }
 
     override suspend fun rename(machineId: String, name: String): String =
@@ -60,25 +73,35 @@ class HttpMachineManagement internal constructor(
 
     override suspend fun setEngine(machineId: String, engine: String): Machine {
         require(engine.isNotBlank())
-        val machine = JsonCodec.decodeFromJsonElement<Machine>(
-            call(api("machines", machineId, "engine"), "PUT", buildJsonObject { put("engine", engine) }))
+        // The empty host set says no terminal engine, which a single engine cannot (docs/protocol/protocol.md "Host sets").
+        val body = if (engine == NO_TERMINAL_ENGINE) buildJsonObject { put("hosts", JsonArray(emptyList())) } else buildJsonObject { put("engine", engine) }
+        val machine = JsonCodec.decodeFromJsonElement<Machine>(call(api("machines", machineId, "engine"), "PUT", body))
         // An answer for another machine is not this machine's state.
         if (machine.id != machineId) throw HubFailure(HubError.Protocol, "hub answered for another machine", retryable = false)
         return machine
     }
 
-    override suspend fun botmux(machineId: String): Boolean? = try {
-        botmuxOn(call(api("machines", machineId, "botmux"), "GET"))
+    override suspend fun botmux(machineId: String): Boolean? = boolSwitch(machineId, "botmux")
+
+    override suspend fun setBotmux(machineId: String, on: Boolean): Boolean = setBoolSwitch(machineId, "botmux", on)
+
+    override suspend fun claudeLiveReplies(machineId: String): Boolean? = boolSwitch(machineId, "claude-live-replies")
+
+    override suspend fun setClaudeLiveReplies(machineId: String, on: Boolean): Boolean =
+        setBoolSwitch(machineId, "claude-live-replies", on)
+
+    private suspend fun boolSwitch(machineId: String, route: String): Boolean? = try {
+        boolOn(call(api("machines", machineId, route), "GET"), route)
     } catch (failure: HubFailure) {
-        // An older hub has no such route: the page shows no switch rather than an error.
+        // An older hub has no such route: the page hides the switch rather than showing an error.
         if (failure.status == 404) null else throw failure
     }
 
-    override suspend fun setBotmux(machineId: String, on: Boolean): Boolean =
-        botmuxOn(call(api("machines", machineId, "botmux"), "PUT", buildJsonObject { put("on", on) }))
+    private suspend fun setBoolSwitch(machineId: String, route: String, on: Boolean): Boolean =
+        boolOn(call(api("machines", machineId, route), "PUT", buildJsonObject { put("on", on) }), route)
 
-    private fun botmuxOn(body: JsonObject): Boolean = (body["on"] as? JsonPrimitive)?.booleanOrNull
-        ?: throw HubFailure(HubError.Protocol, "hub answered botmux without on", retryable = false)
+    private fun boolOn(body: JsonObject, what: String): Boolean = (body["on"] as? JsonPrimitive)?.booleanOrNull
+        ?: throw HubFailure(HubError.Protocol, "hub answered $what without on", retryable = false)
 
     override suspend fun claudeSettings(machineId: String): List<ClaudeSetting> =
         settings(call(api("machines", machineId, "claude-settings"), "GET"))
@@ -91,6 +114,12 @@ class HttpMachineManagement internal constructor(
 
     override suspend fun setCodexSetting(machineId: String, key: String, value: JsonElement): List<ClaudeSetting> =
         setSetting(machineId, "codex-settings", key, value)
+
+    override suspend fun agySettings(machineId: String): List<ClaudeSetting> =
+        settings(call(api("machines", machineId, "agy-settings"), "GET"))
+
+    override suspend fun setAgySetting(machineId: String, key: String, value: JsonElement): List<ClaudeSetting> =
+        setSetting(machineId, "agy-settings", key, value)
 
     private suspend fun setSetting(machineId: String, page: String, key: String, value: JsonElement): List<ClaudeSetting> {
         require(key.isNotBlank())

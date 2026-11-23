@@ -6,39 +6,18 @@ import (
 )
 
 // TestDistBudget bounds what personad, persona-node and persona-manager embed of the runtime packages: every file
-// Generate writes from integrations/. Measured 424,588 B on 2026-11-10 (the same files raw were 1,627,267 B); the
-// budget was that +3%. Raised by 4,500 B on 2026-11-13 for the Paseo bridge's workspaces (#6295, #6297: 5,693 B over
-// main's 434,235 B), and by 4,000 B more for the bridge reading the lines of forked Claude sessions (#6709). Raise it
-// only for code a runtime needs, never to embed the packages raw again. The required whole-input clip pass (#2907) measured
-// 445,466 B on untouched main and 447,388 B after its ordering, marker and linear-accounting fixes; the budget is the latter
-// plus the same 334 B of headroom main had. Raised by 2,405 B for pi's ask_user that never hangs on an unseen dialog,
-// an interrupt that waits for the turn to end, and the SDK's queued / settled / runtime.driven (#8097: 449,837 B over
-// main's 447,432 B, with main's 290 B of headroom). Raised by 3,011 B for the Paseo bridge keeping cards and their
-// answers across link drops, and the SDK's wait for the next node counted from the drop (#8128: 452,848 B over main's
-// 449,837 B, with main's 290 B of headroom). Raised by 2,725 B for pi registering Persona's model providers in scope so a
-// computer without a models.json runs pi (#8194: 455,573 B over main's 452,848 B, with main's 290 B of headroom). Raised
-// by 1,337 B for the Paseo bridge's rows of closed and archived agents: Unread kept across an unload, archived rows'
-// capabilities, the features last seen, efforts, its own words named for the hub (#8133: 456,910 B over main's 455,573 B,
-// with main's 290 B of headroom). Raised by 2,149 B for the Paseo bridge's same-kind starts and the SDK's
-// caps.same_kind (#8140: a launcher Paseo lacks runs on its provider of the same kind or is refused, an effort the
-// model lacks goes down to one it offers, and the answer says both; 459,059 B over main's 456,910 B, with main's 290 B
-// of headroom). Raised by 1,048 B for the Paseo bridge's agents on one Claude session (one id, the newer agent takes the
-// messages) and its takeover of an archived agent with that agent's own provider (#8131: 460,362 B over main's 459,314 B,
-// with main's 35 B of headroom). Raised by 484 B for the Paseo bridge answering Persona's own tools on every provider
-// and marking Auto Accept launchers (#8141: 460,876 B over main's 460,392 B, with main's 5 B of headroom). Raised by
-// 784 B for the Paseo bridge reading an agent Paseo let go only while its chat is open (#8132: 461,660 B over main's
-// 460,876 B, with main's 5 B of headroom). Raised by 1,795 B for the Paseo bridge's state across a reconnect: no page
-// older than what Paseo said meanwhile, the archive read again, live text ended, archived agents' deletions, a
-// keepalive that sleep does not trip (#8129: 463,455 B over main's 461,660 B, with main's 5 B of headroom). Raised by
-// 2,257 B for the Paseo bridge drawing what another agent hands one (a message, a child's notice, a schedule's run) as a
-// message, a task note or a notice (#8220: 465,712 B over main's 463,455 B, with main's 5 B of headroom). Raised by
-// 4,444 B for the Paseo bridge's starts that answer before Paseo is done or lose a connection (#8130: rows kept as
-// starting, late refusals shown and logged, idempotent creation asked again after a reconnect, imports without a hard
-// limit; 470,156 B over main's 465,712 B, with main's 5 B of headroom). Raised by 489 B for the Paseo bridge's
-// permission modes on launchers and rows, its providers' names, and a Codex agent's way back to its own mode (#8261:
-// 470,645 B over main's 470,156 B, with main's 5 B of headroom).
+// Generate writes from integrations/. The complete Antigravity package, including the image guard (#11790),
+// measured 192,060 B; preserving delivered replies through a background wake (#11756) added 1,822 B. Claude Code
+// plugin 0.2.0 session settings overrides brought the total to 196,211 B; busy owner input queueing + turn interrupts
+// add 2,129 B on their branch. Main measured 196,937 B on 2026-11-21, and keeping an Antigravity send from rewriting
+// the conversation's history (#12014) adds 738 B (199,188 B ceiling). Embedding persona-opencode-runtime
+// (opencode/package.json, index.js, companion.mjs, lib/*.js including #12504/#12545; shared runtime-sdk blob reused)
+// measured 248,704 B on 2026-11-21. Session-bound A2A tool bridges bring the generated total to about 251.3 kB.
+// Minifying the remaining non-compat Antigravity lib sources (acp.js, file-links.js, models.js; #12781, #13123)
+// brings the generated total from 254,085 B back to 251,311 B under the unchanged 252,000 B ceiling.
+// Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 470_650
+	const budget = 252_000
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

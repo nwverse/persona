@@ -94,6 +94,7 @@ private fun SettingsContent(
     var tunnelPage by tunnelPageState
     val pairingDiagnosticsState = rememberSaveable(initialPage) { mutableStateOf(false) }
     var pairingDiagnostics by pairingDiagnosticsState
+    var diagnosticsExport by rememberSaveable(initialPage) { mutableStateOf(false) }
     // Model providers's own steps when they open in place: one provider, adding one, importing from ~/.zshrc.
     val providerState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var provider by providerState
@@ -115,6 +116,7 @@ private fun SettingsContent(
     LaunchedEffect(assistant.id) {
         if (shownFor == assistant.id) return@LaunchedEffect
         shownFor = assistant.id
+        ProviderImportRequests.cancel()
         if (initialPage == "settings" && isAssistantSettingsPage(page)) {
             page = "settings"; parents = emptyList(); purpose = null; purposeManager = null; extension = null; extensionManager = null
             connectorManager = null; channel = null; provider = null; providerStep = null
@@ -199,12 +201,13 @@ private fun SettingsContent(
         extensionSummary = try { ExtensionText.listSummary(context.resources, extensionService.extensions().filter { assistant.owns(it.manager) }) }
         catch (error: CancellationException) { throw error } catch (_: Exception) { extensionSummary }
     }
-    // Extensions' UI slots (docs/extensions/extensions.md "UI slots"): read again whenever the settings list shows.
+    // Extensions' UI slots (docs/extensions/extensions.md "UI slots"): refresh when Settings or Settings › Extensions shows,
+    // so the tab badge and the Extensions page stay current. Cards load only on the Extensions page when a tap can open them.
     val slots = services.extensionSlots.takeUnless { services.demo }
     val slotsState = slots?.state?.collectAsState()?.value ?: ExtensionSlotsState()
-    val slotCards = if (page == "settings" && onNavigate != null) rememberExtensionCards(slots) { onNavigate(it) } else emptyList()
+    val slotCards = if (page == "plugins" && onNavigate != null) rememberExtensionCards(slots) { onNavigate(it) } else emptyList()
     LaunchedEffect(slots, page, connection) {
-        if (slots != null && page == "settings" && connection == ConnectionState.Online) slots.load()
+        if (slots != null && (page == "settings" || page == "plugins") && connection == ConnectionState.Online) slots.load()
     }
     val channelService = mine.channels.takeUnless { services.demo }
     val channelsAvailable by remember(channelService) { channelService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
@@ -351,7 +354,12 @@ private fun SettingsContent(
         knowledgeSelection = knowledgeSelection, knowledgeSelectionAvailable = knowledgeSelectionAvailable,
         translationValue = translationValue, hubUpdateStatusState = hubUpdateStatusState,
         slotsState = slotsState, slotCards = slotCards, detailKey = detailKey,
-        back = back, openPage = ::open, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
+        back = back, openPage = ::open, openDiagnosticsExport = {
+            if (onBack == null) {
+                parents = parents + page
+                page = "about-export"
+            } else diagnosticsExport = true
+        }, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
         onNavigate = onNavigate, onClose = onClose, onDemo = onDemo, onExitDemo = onExitDemo,
     )
     // Routed Back leaves a page in one step. Pairing handles its own steps before returning to Settings or Hubs.
@@ -363,6 +371,13 @@ private fun SettingsContent(
     BackHandler(page == "managers" && manager != null) { manager = null }
     BackHandler(page == "providers" && (provider != null || providerStep != null)) { if (providerStep != null) providerStep = null else provider = null }
     BackHandler(page == "hubs" && tunnelPage != null) { tunnelPage = null }
+    if (diagnosticsExport && onBack != null) {
+        val close = { diagnosticsExport = false }
+        BackHandler(onBack = close)
+        JFullScreen(onDismiss = close) {
+            services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = close) }
+        }
+    }
     if (pairingDiagnostics && (page == "pair" || page == "hubs-add")) {
         val close = { pairingDiagnostics = false }
         JFullScreen(onDismiss = close) { DiagnosticsScreen(services, onBack = close, footer = deviceFeedback) }
@@ -426,6 +441,7 @@ private fun SettingsPageContent(
     detailKey: androidx.navigation3.runtime.NavKey?,
     back: () -> Unit,
     openPage: (SettingsPage) -> Unit,
+    openDiagnosticsExport: () -> Unit,
     deviceFeedback: @Composable () -> Unit,
     connectorItems: LazyListScope.() -> Unit,
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)?,
@@ -470,9 +486,11 @@ private fun SettingsPageContent(
             mainReadiness = services.readiness.takeUnless { services.demo }, skipWelcome = true)
         "capsule" -> CapsuleSettingsPage(services.capsule, back)
         "knowledge-selection" -> KnowledgeSelectionPage(knowledgeSelection, connectorsService, back)
-        // The current assistant's computers alone: their Claude Code / Codex settings.
+        // The current assistant's computers alone: their Claude Code / Codex / Antigravity settings.
         "claude" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, owns = { assistant.ownsOn(it.id, it.manager) })
         "codex" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Codex,
+            owns = { assistant.ownsOn(it.id, it.manager) })
+        "agy" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Agy,
             owns = { assistant.ownsOn(it.id, it.manager) })
         "models" -> purpose?.let { id -> ModelPurposePage(services.models.takeUnless { services.demo }, id, onBack = { purpose = null },
                 providers = services.providers.takeUnless { services.demo }, manager = purposeManager, machines = machines) }
@@ -486,7 +504,12 @@ private fun SettingsPageContent(
                 onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext, manager = extensionManager)) } }) }
             ?: ExtensionsPage(mine.extensions.takeUnless { services.demo }, back,
                 onExtension = { id, manager -> onNavigate?.invoke(persona.core.navigation.ExtensionRoute(id, manager = manager)) ?: run { extension = id; extensionManager = manager } },
-                onMarket = onNavigate?.let { navigate -> { navigate(persona.core.navigation.ExtensionMarketRoute) } })
+                onMarket = onNavigate?.let { navigate -> { navigate(persona.core.navigation.ExtensionMarketRoute) } },
+                slots = {
+                    if (onNavigate != null && (assistant.roster == null || assistant.id == assistant.roster?.defaultManagerId)) extensionSlotItems(slotsState, slotCards,
+                        selected = { place -> detailKey == persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id }) },
+                        onOpen = { place -> onNavigate(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
+                })
         "channels" -> channel?.let { id -> ChannelPage(channelService, id, onBack = { channel = null }, onOpen = onNavigate) }
             ?: ChannelsPage(channelService, back,
                 onChannel = { id -> onNavigate?.invoke(persona.core.navigation.ChannelRoute(id)) ?: run { channel = id } },
@@ -507,7 +530,7 @@ private fun SettingsPageContent(
         }
         "agent-settings" -> JListPage(title = stringResource(R.string.settings_home_agents), onBack = back) {
             val entries = listOf(SettingsPage.ClaudeCode to R.string.settings_row_claude, SettingsPage.Codex to R.string.settings_row_codex,
-                SettingsPage.Triage to R.string.settings_triage_title)
+                SettingsPage.Agy to R.string.settings_row_agy, SettingsPage.Triage to R.string.settings_triage_title)
             itemsIndexed(entries) { index, (destination, title) -> JGroupItem(GroupPosition.of(index, entries.size)) {
                 JRow(stringResource(title), onClick = { open(destination) })
             } }
@@ -516,7 +539,26 @@ private fun SettingsPageContent(
         "storage" -> StoragePage(back, services.clearCacheFiles, footer = deviceFeedback)
         "providers" -> {
             val providerService = mine.providers.takeUnless { services.demo }
-            when {
+            // Take the link only after this destination's provider service can open it. Leaving the providers page or
+            // switching assistants cancels it, so a later service cannot replay a key-bearing link (#5428).
+            var importLink by remember(page, assistant.id) { mutableStateOf<String?>(null) }
+            var importGeneration by remember(page, assistant.id) { mutableLongStateOf(0L) }
+            DisposableEffect(page, assistant.id) { onDispose { ProviderImportRequests.cancel() } }
+            val requestedImport = ProviderImportRequests.pending.value
+            LaunchedEffect(requestedImport, providerService != null) {
+                if (requestedImport != null) {
+                    val link = ProviderImportRequests.takeIfReady(providerService != null)
+                    if (link != null) {
+                        importLink = link
+                        importGeneration = ProviderImportRequests.generation.longValue
+                    }
+                }
+            }
+            if (importLink != null && providerService != null) {
+                NewProviderPage(providerService, onBack = { ProviderImportRequests.cancel(); importLink = null; providerStep = null },
+                    onSaved = { importLink = null; providerStep = null }, readiness = services.readiness,
+                    machines = machines, importLink = importLink, importGeneration = importGeneration)
+            } else when {
                 providerStep == "add" && providerService != null -> NewProviderPage(providerService, onBack = { providerStep = null }, onSaved = { providerStep = null },
                     readiness = services.readiness, machines = machines)
                 providerStep == "import" && providerService != null -> ProviderImportPage(providerService, machines, onBack = { providerStep = null }, onDone = { providerStep = null })
@@ -558,8 +600,9 @@ private fun SettingsPageContent(
             item { PersonaSettings(demo = services.demo) }
             item { deviceFeedback() }
         }
+        "about-export" -> services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = back) }
         "about" -> JListPage(title = stringResource(R.string.settings_home_about), onBack = back) {
-            item { AboutSettingsPage() }
+            item { AboutSettingsPage(developing = services.developing, onExport = openDiagnosticsExport) }
             item { JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
                 JRow(stringResource(R.string.settings_update_check), subtitle = updateSubtitle, subtitleLines = 6, value = when {
                     busy -> stringResource(R.string.settings_update_checking)
@@ -599,6 +642,7 @@ private fun SettingsPageContent(
         "translate" -> TranslationSettingsPage(services.translation.takeUnless { services.demo }, services.models.takeUnless { services.demo },
             services.connectors.takeUnless { services.demo }, onBack = back, pickingAtStart = TranslationPreview.take(),
             onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("translate")) ?: run { purposeManager = null; purpose = "translate"; page = "models" } })
+        "standing-authorizations" -> StandingAuthorizationsPage(mine.standing.takeUnless { services.demo }, machines, back)
         "triage" -> TriageSettingsPage(mine.triage.takeUnless { services.demo }, mine.models.takeUnless { services.demo }, onBack = back,
             onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("agent.triage", owner)) ?: run {
                 purposeManager = owner; purpose = "agent.triage"; page = "models" } })
@@ -622,12 +666,7 @@ private fun SettingsPageContent(
                 installing -> stringResource(R.string.settings_update_installing)
                 update != null -> stringResource(R.string.settings_update_found)
                 else -> null
-            }, detailKey, ::open, onNavigate, onClose, onDemo, onExitDemo,
-            slots = {
-                if (onNavigate != null && (assistant.roster == null || assistant.id == assistant.roster?.defaultManagerId)) extensionSlotItems(slotsState, slotCards,
-                    selected = { place -> detailKey == persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id }) },
-                    onOpen = { place -> onNavigate(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
-            }, footer = {
+            }, detailKey, ::open, onNavigate, onClose, onDemo, onExitDemo, footer = {
                 if (paired) JButton(stringResource(R.string.settings_disconnect_forget), { confirmDisconnect = true },
                     Modifier.fillMaxWidth().padding(top = Tokens.Space.section), kind = JButtonKind.Destructive, enabled = !deviceState.busy)
                 deviceFeedback()
@@ -636,6 +675,9 @@ private fun SettingsPageContent(
     }
     return page
 }
+
+internal fun shouldRequestNotificationPermission(item: ReadyItem, sdkInt: Int, requested: Boolean): Boolean =
+    item.id == "notifications" && item.satisfied == false && sdkInt >= 33 && !requested
 
 @Composable
 fun ReadinessScreen(
@@ -660,6 +702,7 @@ fun ReadinessScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val preferences = remember { context.getSharedPreferences("settings-readiness", android.content.Context.MODE_PRIVATE) }
+    var notificationRequested by remember { mutableStateOf(preferences.getBoolean("notification-requested", false)) }
     // The GitHub star prompts (#5761): finish() tells them setup is done.
     val starPrompt = persona.core.designsystem.LocalStarPrompt.current
     val readinessOn by remember(readiness) { readiness?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
@@ -766,12 +809,14 @@ fun ReadinessScreen(
                     if (skipped && item.satisfied != true && !confirmed) SettingsCaption(stringResource(R.string.settings_ready_skipped_note))
                     SettingsCaption(item.detail)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        Action(stringResource(R.string.settings_ready_open)) {
+                        val requestNotifications = shouldRequestNotificationPermission(item, Build.VERSION.SDK_INT, notificationRequested)
+                        Action(stringResource(if (requestNotifications) R.string.settings_ready_allow_notifications else R.string.settings_ready_open)) {
                             when {
-                                item.id == "notifications" && Build.VERSION.SDK_INT >= 33 &&
-                                    !preferences.getBoolean("notification-requested", false) -> {
+                                requestNotifications -> {
+                                    val firstRequest = !preferences.getBoolean("notification-requested", false)
                                     preferences.edit().putBoolean("notification-requested", true).apply()
-                                    notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    notificationRequested = true
+                                    if (firstRequest) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                                 }
                                 item.id == "local-network" && PairingLocalNetwork.missing(context) &&
                                     !preferences.getBoolean("local-network-requested", false) -> {
@@ -901,11 +946,13 @@ private fun AssistantOfflinePage(page: String, assistant: persona.core.contracts
         SettingsPage.Channels -> R.string.settings_src_channels_title
         SettingsPage.ClaudeCode -> R.string.settings_row_claude
         SettingsPage.Codex -> R.string.settings_row_codex
+        SettingsPage.Agy -> R.string.settings_row_agy
         SettingsPage.Mail -> R.string.settings_src_mail_title
         SettingsPage.Feishu -> R.string.settings_src_lark_title
         SettingsPage.FeishuBot -> R.string.settings_feishu_bot_title
         SettingsPage.Sent -> R.string.settings_sent_title
         SettingsPage.KnowledgeSelection -> R.string.settings_knowledge_selection_title
+        SettingsPage.StandingAuthorizations -> R.string.settings_standing_title
         else -> R.string.settings_section_connectors
     }
     JListPage(title = stringResource(title), onBack = onBack) { item("offline") { JAssistantOffline(assistant) } }

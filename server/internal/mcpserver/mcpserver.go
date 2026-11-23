@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
@@ -71,6 +74,9 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 			werr = err
 		}
 	}
+	ctx = context.WithValue(ctx, workCatalogKey{}, &workCatalog{notify: func() {
+		writeNotification(notification{JSONRPC: "2.0", Method: "notifications/tools/list_changed", Params: map[string]any{}})
+	}})
 	for sc.Scan() {
 		var req request
 		if err := json.Unmarshal(sc.Bytes(), &req); err != nil || req.Method == "" {
@@ -310,7 +316,11 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 		if listed, ok := ctx.Value(toolsListedKey{}).(func(toolSnapshot)); ok {
 			listed(snapshot)
 		}
-		return map[string]any{"tools": snapshot.Tools}, nil
+		tools := snapshot.Tools
+		if catalog, ok := ctx.Value(workCatalogKey{}).(*workCatalog); ok {
+			tools = catalog.list(snapshot)
+		}
+		return map[string]any{"tools": tools}, nil
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -321,6 +331,11 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 		}
 		if rerr := checkCallParams(&p.Name, &p.Arguments); rerr != nil {
 			return nil, rerr
+		}
+		if p.Name == workSearchName {
+			if catalog, ok := ctx.Value(workCatalogKey{}).(*workCatalog); ok && catalog.active() {
+				return catalog.search(ctx, p.Arguments), nil
+			}
 		}
 		var copied *clipboardCopy // phone_clipboard_set with file: read here, on the agent's machine (clipboard_file.go)
 		if p.Name == clipboardSetTool {
@@ -337,6 +352,12 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 		// (report_to_supervisor and the todo tools need to know whose call it is: node callerTools).
 		call := map[string]any{"kind": "mcp.call", "away_ok": true, "name": p.Name, "args": p.Arguments,
 			"session_id": sessionID(), "assistant": isAssistant(), "guest": isGuest(), "pane": nodeclient.HookPane(os.Getenv)}
+		if token := os.Getenv("PERSONA_A2A_TOKEN"); token != "" {
+			call["a2a_token"] = token
+		}
+		if set := toolSet(); set != "" {
+			call["tool_set"] = set // the node runs no tool outside the narrower set here (node/hooks.go)
+		}
 		if mcpWaitFrom(ctx) != nil {
 			call["wait_updates"] = true // an older node ignores this and returns only its final line
 		}
@@ -431,8 +452,15 @@ func listTools(ctx context.Context) (toolSnapshot, error) {
 }
 
 func listToolsOnce(ctx context.Context, previous toolSnapshot) (toolSnapshot, error) {
-	line, err := dialNode(ctx, map[string]any{"kind": "mcp.tools", "away_ok": true, "assistant": isAssistant(), "session_id": sessionID(), "guest": isGuest(),
-		"pane": nodeclient.HookPane(os.Getenv), "input": map[string]string{"revision": previous.Revision, "session": previous.Session}})
+	req := map[string]any{"kind": "mcp.tools", "away_ok": true, "assistant": isAssistant(), "session_id": sessionID(), "guest": isGuest(),
+		"pane": nodeclient.HookPane(os.Getenv), "input": map[string]string{"revision": previous.Revision, "session": previous.Session}}
+	if token := os.Getenv("PERSONA_A2A_TOKEN"); token != "" {
+		req["a2a_token"] = token
+	}
+	if set := toolSet(); set != "" {
+		req["tool_set"] = set // a supervision round's narrower set (node/assistant_round.go)
+	}
+	line, err := dialNode(ctx, req)
 	if err != nil {
 		return toolSnapshot{}, fmt.Errorf("Persona node is not reachable: %w", err)
 	}
@@ -454,7 +482,17 @@ func listToolsOnce(ctx context.Context, previous toolSnapshot) (toolSnapshot, er
 		return previous, nil
 	}
 	tools := []map[string]any{}
+	var work map[string]bool
 	for _, t := range res.Tools {
+		if os.Getenv("PERSONA_MCP_EXCLUDE_A2A") == "1" && assistantwire.IsA2ATool(t.Name) {
+			continue
+		}
+		if t.WorkGuideTool && isAssistant() && !isGuest() && toolSet() == "" {
+			if work == nil {
+				work = make(map[string]bool)
+			}
+			work[t.Name] = true
+		}
 		schema, description := t.InputSchema, t.Description
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
@@ -463,13 +501,21 @@ func listToolsOnce(ctx context.Context, previous toolSnapshot) (toolSnapshot, er
 			schema, description = withClipboardFile(schema, description)
 		}
 		tool := map[string]any{"name": t.Name, "description": description, "inputSchema": schema}
-		if isAssistant() {
-			// Claude Code keeps these loaded up front while other MCP servers stay behind ToolSearch (#5838).
+		if isAssistant() && !t.DeferLoading {
+			// Claude Code keeps these loaded up front (#5838); the tools the manager deferred and other MCP servers'
+			// stay behind ToolSearch (#7317).
 			tool["_meta"] = map[string]any{"anthropic/alwaysLoad": true}
 		}
 		tools = append(tools, tool)
 	}
-	return toolSnapshot{Tools: tools, Revision: res.Revision, Session: res.Session}, nil
+	if len(work) > 0 {
+		cwd, err := os.Getwd()
+		if err != nil || !assistantskills.WorkGuideReady(cwd) || slices.ContainsFunc(res.Tools, func(t proto.Tool) bool { return t.Name == workSearchName }) {
+			// Keep the full catalog if prepare fell back to full instructions, or an extension owns the search name.
+			work = nil
+		}
+	}
+	return toolSnapshot{Tools: tools, WorkGuide: work, Revision: res.Revision, Session: res.Session}, nil
 }
 
 // The assistant's processes start this server with PERSONA_ASSISTANT / PERSONA_SESSION_ID (node/assistant.go): it
@@ -480,6 +526,10 @@ func isAssistant() bool { return identity.Getenv("PERSONA_ASSISTANT") == "1" }
 // isGuest: a guest conversation's process (node/assistant_guest.go). The hub knows its guests itself; this is its word
 // for one the hub cannot tell about, which then gets nothing.
 func isGuest() bool { return identity.Getenv("PERSONA_GUEST") == "1" }
+
+// toolSet is the narrower tool set the process was started with (PERSONA_TOOL_SET: "supervise", a background
+// supervisor's round, node/assistant_round.go); "" for the whole list.
+func toolSet() string { return identity.Getenv("PERSONA_TOOL_SET") }
 
 func sessionID() string {
 	if id := identity.Getenv("PERSONA_SESSION_ID"); id != "" {

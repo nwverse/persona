@@ -43,14 +43,13 @@ func (d *Devices) pathInfos(m *Machine) []pathInfo {
 // until its own wait runs out, a task's start for minutes.
 func (d *Devices) measureNodes(ctx context.Context) {
 	for _, m := range d.machinesNow() {
-		p := m.activePath()
-		if p == nil || !m.isOnline() {
+		m.mu.Lock()
+		p, peer, rev, online := m.active, m.peer, m.routeRev, m.online
+		m.mu.Unlock()
+		if p == nil || !online {
 			continue
 		}
-		m.mu.Lock()
-		peer := m.peer
-		m.mu.Unlock()
-		if peer == nil {
+		if peer == nil || peer.Lost() { // waiting to be resumed: no transport to ping (resume.go)
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, pingWait)
@@ -60,7 +59,10 @@ func (d *Devices) measureNodes(ctx context.Context) {
 		err := peer.Call(cctx, "ping", map[string]any{}, nil)
 		cancel()
 		m.logCall("ping", err, time.Since(start), 1)
-		if err == nil {
+		m.mu.Lock()
+		sameRoute := m.peer == peer && m.active == p && m.routeRev == rev
+		m.mu.Unlock()
+		if err == nil && sameRoute { // a preserved pong may arrive after a resume moved the route
 			d.pathRTT(p, max(1, int(time.Since(start).Milliseconds())))
 		}
 		if ctx.Err() == nil {
@@ -69,23 +71,28 @@ func (d *Devices) measureNodes(ctx context.Context) {
 	}
 }
 
-// pingWait bounds one ping of measureNodes; pingMissLimit is how many in a row may go unanswered before the
-// connection is closed. Vars so tests shorten them.
+// pingInterval is how often measureLoop pings every computer; pingWait bounds one ping of measureNodes;
+// pingMissLimit is how many in a row may go unanswered before the connection is closed. Vars so tests shorten them.
 var (
+	pingInterval       = 30 * time.Second
 	pingWait           = 5 * time.Second
 	pingMissLimit      = 2
-	pingActivityWindow = 30 * time.Second // one measurement cycle; recent traffic is not a dead link
+	pingActivityWindow = 30 * time.Second // looked back over by a connection's first ping, and by any if it reaches further
 )
 
 // pingAnswered counts a ping sent on peer: one written that ran out of time without an answer is a miss, anything
 // else (an answer, an error the node answered with) clears the count; a connection already gone (closed, offline), a
 // ping that could not be written in time, and one during a resident node's handover count neither way. A ping whose
-// writer consumed most of its response budget also counts neither way. Recent incoming activity clears a miss: a
-// large response can hold its pong behind it. pingMissLimit misses in a row on the same connection close it.
+// writer consumed most of its response budget also counts neither way. Recent incoming activity that can explain a
+// late pong clears a miss (rpc.Peer.PingActivity): a reply, late ones included, shows the node gets the hub's calls,
+// and a large frame still arriving can hold the pong behind it. Requests and events the node starts itself do not
+// (#8771): they kept coming for 15 minutes over a link whose hub-to-node direction had stalled, and every call on it
+// waited out its whole timeout. pingMissLimit misses in a row on the same connection close it.
 func (m *Machine) pingAnswered(peer *rpc.Peer, err error) {
 	if peer == nil {
 		return
 	}
+	now := time.Now()
 	var re *rpc.Error
 	gone := errors.Is(err, rpc.ErrClosed) || errors.Is(err, rpc.ErrSuspended) || errors.Is(err, errOffline) || errors.Is(err, context.Canceled)
 	relayedMiss := errors.As(err, &re) && re.Code == "" && re.Message == context.DeadlineExceeded.Error()
@@ -105,9 +112,18 @@ func (m *Machine) pingAnswered(peer *rpc.Peer, err error) {
 	}
 	if missed {
 		// rpc.Peer excludes a deadline error response itself, including one that arrives late, so this cannot be kept
-		// alive by a relay answering its own timeout.
+		// alive by a relay answering its own timeout, nor by the node's own requests and events. Activity counts since
+		// the previous ping on this connection was judged, or pingActivityWindow back if that reaches further, so the
+		// previous ping's late pong always counts however far apart the two pings fall: pings go out one computer after
+		// another, and slow ones ahead of this one can stretch the time between its pings past pingInterval (#10442).
 		activity := peer.PingActivity()
-		if !activity.IsZero() && time.Since(activity) <= pingActivityWindow {
+		m.mu.Lock()
+		since := now.Add(-pingActivityWindow)
+		if m.pingPeer == peer && !m.pingJudged.IsZero() && m.pingJudged.Before(since) {
+			since = m.pingJudged
+		}
+		m.mu.Unlock()
+		if !activity.IsZero() && activity.After(since) {
 			missed = false
 		} else if mostlyDelayed {
 			return
@@ -117,6 +133,7 @@ func (m *Machine) pingAnswered(peer *rpc.Peer, err error) {
 	if m.pingPeer != peer {
 		m.pingPeer, m.pingMisses = peer, 0
 	}
+	m.pingJudged = now
 	if missed {
 		m.pingMisses++
 	} else {
@@ -130,8 +147,18 @@ func (m *Machine) pingAnswered(peer *rpc.Peer, err error) {
 	if misses < pingMissLimit || !current {
 		return
 	}
-	m.d.logf("[%s] no answer to %d pings in a row over %s: closing the connection to reconnect", m.cfg.ID, misses, m.transportNow())
-	peer.Close(fmt.Errorf("no answer to %d pings in a row (a half-open link?)", misses))
+	last := "nothing received yet"
+	if at := peer.PingActivity(); !at.IsZero() {
+		last = "last reply or large frame " + now.Sub(at).Round(time.Second).String() + " ago"
+	}
+	why := fmt.Errorf("no answer to %d pings in a row (a half-open link?)", misses)
+	if peer.Lose(why) {
+		// The node keeps the connection: only the transport is dead, and a new one takes it back (resume.go).
+		m.d.logf("[%s] no answer to %d pings in a row over %s (%s, %s): resuming on a new transport", m.cfg.ID, misses, m.transportNow(), last, peer.LaneStats())
+		return
+	}
+	m.d.logf("[%s] no answer to %d pings in a row over %s (%s, %s): closing the connection to reconnect", m.cfg.ID, misses, m.transportNow(), last, peer.LaneStats())
+	peer.Close(why)
 	m.wake()
 }
 
@@ -182,13 +209,15 @@ func (d *Devices) decorate(m *Machine, s proto.Machine) proto.Machine {
 	return s
 }
 
-// measureLoop measures the round trip to every computer now and then (the choice between paths uses it).
+// measureLoop measures the round trip to every computer every pingInterval (the choice between paths uses it).
 func (d *Devices) measureLoop(ctx context.Context) {
+	tick := time.NewTicker(pingInterval)
+	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(30 * time.Second):
+		case <-tick.C:
 		}
 		d.measureNodes(ctx)
 	}

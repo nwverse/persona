@@ -56,6 +56,9 @@ type Hello struct {
 	// SecretHandoffGate: the hub lets only a device that may approve a hand-off card say yes to one, and names it in
 	// HTTPRequest.HandoffApprover. An older hub never sends it; a manager then shows no hand-off card at all.
 	SecretHandoffGate bool `json:"secret_handoff_gate,omitempty"`
+	// ArchivedApart: the hub takes a machine's archived rows apart from its list (EventFleetArchived, #6836). An older
+	// hub never sends it, and a manager then tells them inside EventFleetSessions as before.
+	ArchivedApart bool `json:"archived_apart,omitempty"`
 	// QuietPush: the hub's push tiering switch (the low-distraction switch, docs/server/server.md) is on. The manager
 	// then holds back what is its own to send, by the same levels the hub filters pushes by: a supervised card is not
 	// handed to the owner on a timeout, a P1 escalation and conclusion / progress cards post nothing. An older hub never
@@ -84,10 +87,22 @@ type Placement struct {
 	// WorkMachines are configured work computers, including aliases; none may host the assistant.
 	WorkMachines []string `json:"work_machines,omitempty"`
 	// Standby: this hub is a member of a mesh group, whose center runs the scheduled tasks (docs/server/mesh.md).
-	Standby bool `json:"standby,omitempty"`
+	Standby        bool `json:"standby,omitempty"`
+	MemoryDreaming bool `json:"memory_dreaming,omitempty"`
+	// CompleteAgentlessTodos lets a supervising conversation complete its own agentless memo without another card.
+	CompleteAgentlessTodos bool `json:"complete_agentless_todos,omitempty"`
+	// SupervisionBatchMinutes is manager.json's administrator-pinned routine supervision interval. Nil leaves the
+	// assistant's saved setting in effect; an explicit zero pins immediate delivery through the legacy cadence.
+	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
+	// TaskExecutionWaitSeconds bounds pre-delivery waits for a node with scheduled execution support (default 600).
+	TaskExecutionWaitSeconds *int `json:"task_execution_wait_seconds,omitempty"`
+	// TaskExecutionLegacyFallback permits only attested inherited ordinary tasks to omit task_execution on old nodes.
+	TaskExecutionLegacyFallback *bool `json:"task_execution_legacy_fallback,omitempty"`
+	// NodeUpdateHandoffGraceSeconds bounds natural-idle update waits before new headless turns are refused (default 60).
+	NodeUpdateHandoffGraceSeconds *int `json:"node_update_handoff_grace_seconds,omitempty"`
 }
 
-// DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList.
+// DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList and fleet-wide DeviceInteractionsList.
 type DeviceCall struct {
 	Device string          `json:"device"`
 	Method string          `json:"method"`
@@ -98,11 +113,12 @@ type DeviceCall struct {
 // answers the others from what it holds about the machine.
 const (
 	// The node's (docs/protocol/protocol.md "hub ↔ node").
-	DeviceSessionItems  = "session.items"  // {session_id, turns} → {items}
-	DeviceSessionRename = "session.rename" // {session_id, title} → {ok}
-	DeviceAssistantSend = "assistant.send" // {session_id, text, resume_only?, permission_mode?, …model} → {session_id}
-	DeviceSessionSend   = "session.send"   // {session_id, text} → {}
-	DeviceSessionStart  = "session.start"  // {cwd, prompt, launcher?, model?, permission_mode?, tab_name?, workspace_id?, session_id?} → {session}; session_id names the new session (Claude), for an exact reconciliation when the answer is lost
+	DeviceSessionItems              = "session.items"                 // {session_id, turns} → {items}
+	DeviceSessionRename             = "session.rename"                // {session_id, title?, tab_name?} → {ok}
+	DeviceSessionRenameTabIfCurrent = "session.rename_tab_if_current" // {session_id, tab_id, expected_tab_name, tab_name} → {ok}
+	DeviceAssistantSend             = "assistant.send"                // {session_id, text, resume_only?, permission_mode?, …model} → {session_id}
+	DeviceSessionSend               = "session.send"                  // {session_id, text} → {}
+	DeviceSessionStart              = "session.start"                 // {cwd, prompt, launcher?, model?, permission_mode?, tab_name?, workspace_id?, session_id?} → {session}; session_id names the new session (Claude), for an exact reconciliation when the answer is lost
 	// DeviceSessionModes: {session_id, launcher?, from?, model?, effort?, permission_mode?} → {}; a launcher other than
 	// the session's own is a switch to it, carried out by a session.send with apply_switch (docs/protocol/protocol.md).
 	DeviceSessionModes = "session.modes"
@@ -118,7 +134,7 @@ const (
 	// DeviceDevicesList (on DeviceAll): {} → {devices: [Device], phone_online, apps: [ClientApp]}, the user's machines
 	// and the Persona apps that last said their version (apps: absent from a hub from before).
 	DeviceDevicesList = "devices.list"
-	// DeviceInteractionsList (on DeviceAll): {} → {interactions}, what the machines' agents wait on the user for.
+	// DeviceInteractionsList (on DeviceAll or a machine id): {} → {interactions}, what the machines' agents wait on the user for.
 	DeviceInteractionsList = "interactions.list"
 	// DeviceSessionsList: {} → {sessions}, the machine's sessions as the apps get them (state, titles).
 	DeviceSessionsList = "sessions.list"
@@ -144,6 +160,10 @@ type Device struct {
 	// (--model) and effort, which "Models" needs of the machine a launcher purpose runs on.
 	Version            string `json:"version,omitempty"`
 	ModelConfiguration bool   `json:"model_configuration,omitempty"`
+	// ExternalInventory is announced only by a node with an enabled, trusted local model adapter.
+	ExternalInventory bool `json:"external_inventory,omitempty"`
+	// TaskInstructions: this node preserves delegated instructions separately, including fallback/resume.
+	TaskInstructions bool `json:"task_instructions,omitempty"`
 	// ClaudeVersion is Claude Code's version there ("" when it has none or never said): 设置 › 模型供应商's built-in
 	// claude lists the machines that have it.
 	ClaudeVersion string `json:"claude_version,omitempty"`
@@ -186,6 +206,9 @@ const (
 	// ConnectorsSnapshots: {tz} → {snapshots: [connectorwire.SnapshotData]}, the live states of the signed-in connectors
 	// that keep one (the chats waiting on the user, today's meetings), those that answered within a few seconds.
 	ConnectorsSnapshots = "connectors.snapshots"
+	// ConnectorsLarkReply: connectorwire.LarkReplyWatch -> connectorwire.LarkReplyObservation. A narrow read of an
+	// explicitly bound Lark topic, through the configured built-in reader; it never sends or changes read state.
+	ConnectorsLarkReply = "connectors.lark_reply"
 
 	// AppInteractions is the hub's interaction queue (InteractionsGet, InteractionsAnswer).
 	AppInteractions = "interactions"
@@ -194,6 +217,8 @@ const (
 	// (internal/extmgr), not the hub; AppSettings is Persona's own settings (persona_settings).
 	AppInbox    = "inbox"
 	AppSettings = "settings"
+	// AgentsDisplayGet reads the default manager's shared Agents display settings for another manager.
+	AgentsDisplayGet = "agents.display.get"
 
 	// AppNotify is the hub's push settings: NotifyQuietGet tells whether the user is in their quiet hours now.
 	AppNotify = "notify"
@@ -219,12 +244,18 @@ const (
 	InteractionsAnswer = "interactions.answer"
 )
 
-// ModelBinding is what a purpose runs on: a provider (launcher.<name> for a launcher) with a model and effort.
+// ModelBinding is what a purpose runs on: a provider (launcher.<name> for a launcher) with a model and effort. A
+// binding an older hub stored with the main chat's "runtime" ("cli" or "agentsdk") reads without it, as the CLI every
+// assistant conversation runs on; the key is gone from the next write.
 type ModelBinding struct {
-	Provider string `json:"provider,omitempty"`
-	Model    string `json:"model,omitempty"`
-	Effort   string `json:"effort,omitempty"`
-	Runtime  string `json:"runtime,omitempty"` // main chat only: cli (default) or agentsdk; kept across a provider change
+	Provider       string `json:"provider,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+	// ConfigDir is the main chat's only: the Claude profile its new conversations start in (#4633). None is Persona's
+	// own profile (the default); "legacy" is this computer's existing Claude Code setup. Kept across a provider change;
+	// an existing conversation keeps the profile it was started in.
+	ConfigDir string `json:"config_dir,omitempty"`
 }
 
 // NotifyRequest is notify.request's params.
@@ -305,6 +336,12 @@ type NotifyTodo struct {
 	// `response`. Left out by a hub from before them.
 	Options   []string `json:"options,omitempty"`
 	Responses []string `json:"responses,omitempty"`
+	// Ask is the decision's ask in the to-do's view (OwnerAsk.ID), which an answer from the notification names, and
+	// Lockscreen what its push may offer on the lock screen (OwnerAskLockscreen: answer, its options as actions;
+	// open_only, none, a tap opens it), from how risky answering it is (#10465). The hub forwards the options only
+	// with answer, and sends an older manager's push, which has neither, as before.
+	Ask        string `json:"ask,omitempty"`
+	Lockscreen string `json:"lockscreen,omitempty"`
 }
 
 // NotifyPush is the kind of the assistant's pushes.
@@ -347,15 +384,16 @@ type Snapshot struct {
 
 // TaskView is one scheduled task in the snapshot.
 type TaskView struct {
-	ID           string    `json:"id"`
-	Label        string    `json:"label"`  // its title, or what stands for one
-	Repeat       string    `json:"repeat"` // once / daily / interval / cron
-	Enabled      bool      `json:"enabled"`
-	At           time.Time `json:"at,omitempty"` // once: when; interval, cron: the next run
-	EveryMinutes int       `json:"every_minutes,omitempty"`
-	MachineID    string    `json:"machine_id,omitempty"` // of the conversation it came from
-	RunMachineID string    `json:"run_machine_id,omitempty"`
-	RunSessionID string    `json:"run_session_id,omitempty"` // its own conversation
+	ExecutionMachineID string    `json:"execution_machine_id,omitempty"`
+	ID                 string    `json:"id"`
+	Label              string    `json:"label"`  // its title, or what stands for one
+	Repeat             string    `json:"repeat"` // once / daily / interval / cron
+	Enabled            bool      `json:"enabled"`
+	At                 time.Time `json:"at,omitempty"` // once: when; interval, cron: the next run
+	EveryMinutes       int       `json:"every_minutes,omitempty"`
+	MachineID          string    `json:"machine_id,omitempty"` // of the conversation it came from
+	RunMachineID       string    `json:"run_machine_id,omitempty"`
+	RunSessionID       string    `json:"run_session_id,omitempty"` // its own conversation
 	// Push is what of a run reaches the phone: "" every run's answer, PushAsked only what the run sends with
 	// notify_user (#2396). Such a task always runs in its own conversation, whose finished turns are not pushed.
 	Push string `json:"push,omitempty"`
@@ -407,9 +445,13 @@ type SessionView struct {
 	MachineID string `json:"machine_id"`
 	SessionID string `json:"session_id"`
 	// Title is "MMDD | kind | topic" or the user's own (titles.go); the main conversation's is always "Persona".
-	Title    string   `json:"title,omitempty"`
-	Archived bool     `json:"archived,omitempty"`
-	Queued   []string `json:"queued,omitempty"` // messages from other conversations waiting for its turn to end
+	Title    string `json:"title,omitempty"`
+	Archived bool   `json:"archived,omitempty"`
+	// Tags are the conversation's user-defined labels (assistant/conversation_tags.go); absent or empty for one without.
+	Tags   []string `json:"tags,omitempty"`
+	Queued []string `json:"queued,omitempty"` // messages from other conversations waiting for its turn to end
+	// Undelivered: the owner's messages it keeps after they could not go in (proto.Session.Undelivered, #10194).
+	Undelivered []proto.UndeliveredMessage `json:"undelivered,omitempty"`
 	// Origin is who opened the conversation (docs/protocol/protocol.md "Origin of assistant chats": user, channel, inbox, task, spawned,
 	// lark_agent, extension) and OriginRef what of (the inbox item, the task, the conversation, the channel, the
 	// extension); both "" while it is not known.

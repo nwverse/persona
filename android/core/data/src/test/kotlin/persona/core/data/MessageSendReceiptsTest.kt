@@ -11,6 +11,7 @@ import java.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MessageSendReceiptsTest {
+    @get:org.junit.Rule val shadowParity = ShadowParityRule()
     private val key = SessionKey("computer", "chat")
     private val at = Instant.parse("2026-11-12T10:00:00Z")
     private val row = Session(key.machineId, key.sessionId, status = "idle")
@@ -34,6 +35,17 @@ class MessageSendReceiptsTest {
         assertTrue("late receipts cannot resurrect a completed projection", state.receipts.value.isEmpty())
         state.event(event(id = "new-operation", nanos = 3))
         assertTrue(state.receipts.value.single().processing)
+    }
+
+    @Test fun keptReceiptIsTerminalWithoutProcessingOrDelivery() {
+        val state = reducer()
+        state.sessions(listOf(row))
+        state.event(event("kept"))
+        val kept = state.receipts.value.single()
+        assertEquals("kept", kept.state)
+        assertFalse(kept.processing)
+        state.sessions(listOf(row.copy(status = "working", state = "working")))
+        assertTrue(state.receipts.value.isEmpty())
     }
 
     @Test fun anEchoBeforeHttpKeepsReceiptWithoutRestoringTheOutboxBubble() = runTest {

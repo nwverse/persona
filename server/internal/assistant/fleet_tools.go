@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -27,12 +29,17 @@ const runtimeCLITool = "phone_runtime_cli"
 // are ok and give their tools to agents too (mail); for the assistant also its own, then Cua's, ego's and those of
 // the connectors only it gets (Feishu, GitHub…).
 func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
+	ctx = i18n.With(ctx, s.lang(ctx))
 	var agents, assistantOnly []proto.Tool
 	if s.ext != nil {
 		agents, assistantOnly = s.ext.AgentTools(ctx, assistant)
 	}
 	tools := append(s.phoneTools(ctx), agents...)
 	if !assistant {
+		tools = append(tools, toolsNamed(resourceToolNames)...)
+	}
+	if !assistant {
+		tools = append(tools, s.knowledgeFolderTools(ctx)...)
 		tools = append(tools, s.AgentTools()...)       // report_to_supervisor, todo_decisions, todo_decision_add, todo_bind_thread (agentToolNames)
 		tools = append(tools, s.dispatchTools(ctx)...) // dispatch_start, dispatch_read, when agents.dispatch is on (dispatch.go)
 	}
@@ -40,7 +47,7 @@ func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
 		tools = append(tools, s.Tools(ctx)...)
 		tools = append(tools, assistantOnly...)
 	}
-	return tools
+	return localizedMCPTools(tools, s.toolLanguage(ctx))
 }
 
 // phoneToolTries is how many times a tool list asks the hub for the phone's tools, phoneToolRetry apart, before it
@@ -101,7 +108,10 @@ func (s *Service) phoneTools(ctx context.Context) []proto.Tool {
 }
 
 // sessionMCPTools are machine's conversation session's tools: a guest conversation's only its own (guest.go; the
-// node saying it is one, the hub not knowing it or not able to tell: none), any other's mcpTools.
+// node saying it is one, the hub not knowing it or not able to tell: none), any other's mcpTools. The set the process
+// asked for (mcp.tools tool_set, on ctx: toolSetOf): "supervise", a background supervisor's round, narrows an
+// assistant conversation's list to the round's (roundTools, supervise_round.go); none, or one this manager does not
+// know, is the whole list.
 func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, assistant, guestHint bool) []proto.Tool {
 	tools, err := s.sessionMCPToolsChecked(ctx, machine, session, assistant, guestHint)
 	if err != nil {
@@ -113,8 +123,13 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 
 // Discovery with a cursor must distinguish a denied/empty list from a failed
 // state read. Otherwise the failed list is cached until an unrelated link changes.
-func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session string, assistant, guestHint bool) ([]proto.Tool, error) {
-	assistant = assistant && s.assistantDiscovery(ctx, machine, session)
+func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session string, assistant, guestHint bool) (result []proto.Tool, resultErr error) {
+	defer func() { result = localizedMCPTools(result, s.toolLanguage(ctx)) }()
+	if assistant && !s.assistantDiscovery(ctx, machine, session) {
+		s.logf("mcp tools: assistant discovery denied for machine %s session %s (tool_set=%q); falling back to agent tools", machine, short(session), toolSetOf(ctx))
+		s.noteAssistantDenied(ctx, machine, session, "mcp.tools")
+		assistant = false
+	}
 	allowed, guest, err := s.guestOf(ctx, machine, session)
 	if err != nil {
 		return nil, err
@@ -138,16 +153,29 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 			}
 		}
 		tools := s.mcpTools(ctx, assistant)
+		if assistant {
+			tools = s.guardTools(ctx, machine, session, tools)
+		}
 		if !assistant {
 			tools = append(tools, s.leaderTools(ctx, machine, session)...)
 			tools = append(tools, s.spawnTools(ctx, machine, session)...)
+		}
+		cfg := s.a2aConfig(ctx)
+		_, hasA2A := s.a2aStore()
+		if hasA2A == nil && (session == "" && s.a2aMachineAllowed(ctx, cfg, s.canonical(machine)) ||
+			s.a2aAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
+			tools = append(tools, toolsNamed(assistantwire.A2AToolNames)...)
+		}
+		if assistant && toolSetOf(ctx) == toolSetSupervise {
+			tools = roundTools(tools)
 		}
 		return tools, nil
 	}
 	if s.isWorkMachine(machine) {
 		return []proto.Tool{}, nil
 	}
-	return guestTools(s.mcpTools(ctx, assistant), allowed), nil
+	tools := guestTools(s.mcpTools(ctx, assistant), allowed)
+	return slices.DeleteFunc(tools, func(t proto.Tool) bool { return isKnowledgeFolderTool(t.Name) }), nil
 }
 
 // guestRefuses refuses a guest conversation's call of a tool it was not given (and any call of one the hub cannot
@@ -160,7 +188,7 @@ func (s *Service) guestRefuses(ctx context.Context, machine, session, name strin
 		return proto.TextResult("tool unavailable for the moment: "+name, true), true
 	case !guest && guestHint:
 		return proto.TextResult("unknown tool "+name, true), true
-	case guest && !slices.Contains(allowed, name):
+	case guest && (isKnowledgeFolderTool(name) || !slices.Contains(allowed, name)):
 		return proto.TextResult("unknown tool "+name, true), true
 	}
 	return proto.ToolResult{}, false
@@ -169,6 +197,12 @@ func (s *Service) guestRefuses(ctx context.Context, machine, session, name strin
 // mcpCall runs one: a connector's, Cua's or ego's at the hub (it says whether it is one of them), else the
 // assistant's own (for its conversations), else the phone's.
 func (s *Service) mcpCall(ctx context.Context, machine, session, name string, args json.RawMessage, assistant bool) proto.ToolResult {
+	return s.mcpCallWithOrigin(ctx, machine, session, name, args, assistant, "")
+}
+
+// mcpCallWithOrigin also takes the node's attested conversation origin. It is needed before assistant.send returns:
+// the manager's origin book is written from the returned session afterwards.
+func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name string, args json.RawMessage, assistant bool, origin string) proto.ToolResult {
 	if res, refused := s.meetingRefuses(ctx, machine, session, name, assistant); refused {
 		return res // a meeting's batch started this turn: only reading tools (meeting_turns.go)
 	}
@@ -179,9 +213,28 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 		return proto.TextResult(i18n.T(s.lang(ctx), "assistant-privacy.tool_denied"), true)
 	}
 	if assistant && !s.assistantCaller(ctx, machine, session) {
+		s.noteAssistantDenied(ctx, machine, session, name)
 		return proto.TextResult(i18n.T(s.lang(ctx), "assistant-privacy.assistant_denied"), true)
 	}
+	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
+		return res
+	}
+	if slices.Contains(resourceToolNames, name) {
+		return s.resourceTool(ctx, machine, session, name, args)
+	}
+	if name == "secret_store" {
+		return s.toolSecretStore(ctx, machine, session, args)
+	}
+	if assistantwire.IsA2ATool(name) {
+		return s.a2aTool(ctx, a2aRef{s.canonical(machine), session}, name, args)
+	}
+	if isKnowledgeFolderTool(name) && !assistant {
+		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
+	}
 	if s.ext != nil { // the connectors', Cua's, ego's: ctx is the node's call (its caller going away withdraws a card)
+		if s.ext.ConnectorTool(name) { // a connector is told where the call comes from (connector_context.go)
+			ctx = connector.WithCallContext(ctx, s.connectorCallContext(ctx, session))
+		}
 		if res, ok := s.ext.CallTool(ctx, machine, session, name, args, assistant); ok {
 			return res
 		}
@@ -217,15 +270,20 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 			// notify_user's: nothing goes out, the text stays in the conversation, which the meeting page shows.
 			return proto.TextResult(justMeNotice(s.lang(ctx)), false)
 		}
-		if name == "phone_notify" && s.inHealth(ctx, session) {
+		if name == "phone_notify" {
+			// Local phone notifications follow the same privacy rule as notify_user: what they say decides.
 			var a map[string]any
-			if err := json.Unmarshal(args, &a); err != nil {
-				return proto.TextResult(err.Error(), true)
-			}
-			if a != nil {
-				// Local phone notifications follow the same privacy rule as notify_user.
-				a["title"], a["body"] = healthNotice(s.lang(ctx))
-				args, _ = json.Marshal(a)
+			decodeErr := json.Unmarshal(args, &a)
+			title, _ := a["title"].(string)
+			body, _ := a["body"].(string)
+			if space, _ := s.selfSpace(ctx, session); s.exitPolicy(ctx, title+"\n"+body, session, space).Redact {
+				if decodeErr != nil {
+					return proto.TextResult(decodeErr.Error(), true)
+				}
+				if a != nil {
+					a["title"], a["body"] = s.redactedNotice(ctx, s.lang(ctx), space)
+					args, _ = json.Marshal(a)
+				}
 			}
 		}
 		var res proto.ToolResult
@@ -234,9 +292,53 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 		if err := s.appCall(ctx, assistantwire.AppPhone, assistantwire.PhoneCall, params, &res); err != nil {
 			return proto.TextResult(err.Error(), true)
 		}
-		return res
+		return phoneCreateResultWithSource(name, res)
 	}
 	return proto.TextResult("unknown tool "+name, true)
+}
+
+// phoneCreateResultWithSource carries the hub's executing-device attribution into the JSON that quick-result cards
+// parse. Payload source claims are removed before attested values are added. Failures, malformed responses and
+// unrelated tools keep their original content; legacy and queued payloads without source claims stay byte-identical.
+func phoneCreateResultWithSource(tool string, res proto.ToolResult) proto.ToolResult {
+	if tool != "phone_calendar_create_event" && tool != "phone_reminders_create" || res.IsError {
+		return res
+	}
+	sourceName := strings.TrimSpace(res.SourceDeviceName)
+	sourcePlatform := strings.TrimSpace(res.SourceDevicePlatform)
+	res.SourceDeviceName, res.SourceDevicePlatform = sourceName, sourcePlatform
+	res.Content = slices.Clone(res.Content)
+	for i, content := range res.Content {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(content.Text), &payload); err != nil || payload == nil {
+			continue
+		}
+		var state string
+		queued := payload["state"] != nil && json.Unmarshal(payload["state"], &state) == nil && state == "queued"
+		_, hasName := payload["source_device_name"]
+		_, hasPlatform := payload["source_device_platform"]
+		if (queued || sourceName == "" && sourcePlatform == "") && !hasName && !hasPlatform {
+			continue
+		}
+		delete(payload, "source_device_name")
+		delete(payload, "source_device_platform")
+		if !queued {
+			if sourceName != "" {
+				raw, _ := json.Marshal(sourceName)
+				payload["source_device_name"] = raw
+			}
+			if sourcePlatform != "" {
+				raw, _ := json.Marshal(sourcePlatform)
+				payload["source_device_platform"] = raw
+			}
+		}
+		text, err := json.Marshal(payload)
+		if err != nil {
+			continue
+		}
+		res.Content[i].Text = string(text)
+	}
+	return res
 }
 
 // mailAttachment answers a node's mail.attachment: the bytes of the attachment mail_save_attachment saves on that
@@ -319,4 +421,23 @@ func (s *Service) assistantSummary(ctx context.Context, tool, summary string) (s
 		return summary, false
 	}
 	return s.ext.AssistantSummary(ctx, tool, summary)
+}
+
+// Localize only fixed built-in definitions, after discovery/permission filtering.
+// The source slices and third-party tool contracts are never rewritten.
+func localizedMCPTools(tools []proto.Tool, lang string) []proto.Tool {
+	out := slices.Clone(tools)
+	for i, t := range out {
+		localized := prompts.LocalizeTool(prompts.MCPTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}, lang)
+		out[i].Description, out[i].InputSchema = localized.Description, localized.InputSchema
+	}
+	return out
+}
+
+// A zero Service can enumerate its static tools without a configured hub.
+func (s *Service) toolLanguage(ctx context.Context) string {
+	if s.hub == nil {
+		return ""
+	}
+	return string(s.lang(ctx))
 }

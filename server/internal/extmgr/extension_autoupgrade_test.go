@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,11 +76,25 @@ type upgradeMarket struct {
 	downloads int
 	down      bool
 	srv       *httptest.Server
+
+	hold        atomic.Bool
+	started     chan struct{}
+	release     chan struct{}
+	startOnce   sync.Once
+	releaseOnce sync.Once
 }
 
 func newUpgradeMarket(t *testing.T) *upgradeMarket {
 	mk := &upgradeMarket{t: t, pkgs: map[string][]byte{}}
 	mk.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/plugins/"+extension.IndexFile && mk.hold.Load() {
+			mk.startOnce.Do(func() { close(mk.started) })
+			select {
+			case <-mk.release:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		mk.mu.Lock()
 		defer mk.mu.Unlock()
 		switch {
@@ -97,6 +112,24 @@ func newUpgradeMarket(t *testing.T) *upgradeMarket {
 	}))
 	t.Cleanup(mk.srv.Close)
 	return mk
+}
+
+// holdNextRead blocks the next index read outside mk.mu, so publish and readCount remain usable. It is for one read;
+// releaseRead is idempotent and also runs at cleanup so a failed test cannot leave the server handler blocked.
+func (mk *upgradeMarket) holdNextRead() <-chan struct{} {
+	mk.started = make(chan struct{})
+	mk.release = make(chan struct{})
+	mk.hold.Store(true)
+	mk.t.Cleanup(mk.releaseRead)
+	return mk.started
+}
+
+func (mk *upgradeMarket) releaseRead() {
+	if mk.release == nil {
+		return
+	}
+	mk.hold.Store(false)
+	mk.releaseOnce.Do(func() { close(mk.release) })
 }
 
 // publish makes dir the market's newest version of its plugin.
@@ -141,11 +174,19 @@ func editManifest(t *testing.T, dir string, f func(m map[string]any)) {
 
 // upgradeHub is a hub with the market mk registered and example-ui 1.0.0 installed from it.
 func upgradeHub(t *testing.T) (h *Manager, mux http.Handler, phone string, mk *upgradeMarket, dir, mid string) {
+	return upgradeHubWith(t, nil)
+}
+
+// upgradeHubWith is upgradeHub with change made to example-ui's manifest before it is published and installed.
+func upgradeHubWith(t *testing.T, change func(m map[string]any)) (h *Manager, mux http.Handler, phone string, mk *upgradeMarket, dir, mid string) {
 	h, phone, _ = marketDevices(t)
 	mux = h.routes()
 	mk = newUpgradeMarket(t)
 	h.extensions.markets.client = mk.srv.Client()
 	dir = uiPackage(t)
+	if change != nil {
+		editManifest(t, dir, change)
+	}
 	mk.publish(dir)
 	code, out := call(t, mux, "POST", "/api/v1/plugins/-/markets", phone, fmt.Sprintf(`{"spec": %q}`, mk.srv.URL+"/plugins/"))
 	if code != 200 {
@@ -896,5 +937,60 @@ func TestExtensionUpgradesConcurrentChanges(t *testing.T) {
 	u.mu.Unlock()
 	if got, _ := json.Marshal(saved); string(got) != string(want) {
 		t.Fatalf("saved %s\nwant %s", got, want)
+	}
+}
+
+// An installed extension's saved config: address is what the market's catalog, the upgrades list (and its note) and
+// the market upgrade's preview name for a newer version that adds the entry, as its settings page does (#8570).
+func TestInstalledConfigAddressInCatalogAndUpgrade(t *testing.T) {
+	h, mux, phone, mk, dir, mid := upgradeHubWith(t, func(m map[string]any) {
+		m["configuration"] = map[string]any{"type": "object", "properties": map[string]any{
+			"base_url": map[string]any{"type": "string", "title": "Gateway", "format": "uri"}}}
+	})
+	ctx := context.Background()
+	if err := h.extensions.reg.SetConfig(ctx, "example-ui", json.RawMessage(`{"base_url":"https://gateway.example.com:8443"}`), "app"); err != nil {
+		t.Fatal(err)
+	}
+	setUIVersion(t, dir, "1.1.0")
+	editManifest(t, dir, func(m map[string]any) {
+		m["permissions"].(map[string]any)["network"] = []any{"config:base_url"}
+	})
+	mk.publish(dir)
+	if _, err := h.marketRead(ctx, mid); err != nil {
+		t.Fatal(err)
+	}
+	const want = "now: gateway.example.com:8443"
+	detail := func(lines []extension.PermissionLine) string {
+		for _, l := range lines {
+			if l.Key == "network_config" {
+				return l.Detail
+			}
+		}
+		return ""
+	}
+	var item *CatalogItem
+	for _, it := range h.catalogIn(i18n.En, "", mid) {
+		if it.ID == "example-ui" {
+			item = &it
+		}
+	}
+	if item == nil || !item.Upgradable || !strings.Contains(detail(item.Permissions), want) {
+		t.Fatalf("catalog: %+v", item)
+	}
+	up, _, _, ok := h.extensionUpgrades().candidateIn(h.extensions.reg.Snapshot("example-ui"), i18n.En)
+	if !ok || up.State != upgradeNeedsConsent || !strings.Contains(detail(up.AddedPermissions), want) {
+		t.Fatalf("upgrades: %+v, found %v", up, ok)
+	}
+	if note := upgradeConsentText(i18n.En, up); !strings.Contains(note, "gateway.example.com:8443") {
+		t.Fatalf("note: %q", note)
+	}
+	code, pv := call(t, mux, "POST", "/api/v1/plugins/-/catalog/preview", phone, fmt.Sprintf(`{"market": %q, "plugin": "example-ui"}`, mid))
+	if code != 200 || pv["upgrade"] != true {
+		t.Fatalf("preview: %d %v", code, pv)
+	}
+	for _, key := range []string{"permissions", "added_permissions"} {
+		if !strings.Contains(fmt.Sprint(pv[key]), "gateway.example.com:8443") {
+			t.Errorf("preview %s: %v", key, pv[key])
+		}
 	}
 }

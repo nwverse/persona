@@ -148,6 +148,10 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
     /// Watch: when the day recording ended (its midnight, or when it was closed late); it stays until the phone has
     /// everything.
     var closedAt: Date? = nil
+    /// The hub's name for it when that is a calendar item's or a title written from what was said (#8873,
+    /// `RecordingTitle.hubName`); nil otherwise, and from a hub that names none. Shown only while `title` is empty, never
+    /// uploaded, and kept without moving `updatedAt` (`RecordingLibrary.noteHubName`).
+    var hubName: String? = nil
     /// Watch: why the microphone is closed, the reason of the last `paused` event since the last `started` (kept by
     /// `RecordingLibrary.appendDayEvent`); nil while it records.
     var gapReason: String? = nil
@@ -192,16 +196,14 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
     var attended: Bool {
         active && isMeeting && source == .phone && attendance?.sentRole.attends == true && attendance?.stopped != .unsupported
     }
-    var displayTitle: String {
-        guard title.isEmpty else { return title }
-        if isDay, let date = dayTitleDate { return String(localized: "Day · \(date)") }
-        let when = createdAt.formatted(date: .abbreviated, time: .shortened)
-        if isRolling { return String(localized: "Rolling · \(when)") }
-        return isMeeting ? String(localized: "Meeting · \(when)") : String(localized: "Recording · \(when)")
-    }
+    /// …and Persona is in it, answering when asked (not while the room only takes notes, #8851).
+    var answered: Bool { attended && attendance?.sentRole.answers == true }
+    /// What every screen calls it (`RecordingTitle`, #8873): its own title, else the hub's name, else its kind and when it
+    /// started.
+    var displayTitle: String { RecordingTitle.text(self) }
     /// A day recording's date as the title shows it: written in the recording's own time zone, so a day recorded in
     /// Shanghai reads as that date on a phone set to New York too. nil without a valid `day`.
-    private var dayTitleDate: String? {
+    var dayTitleDate: String? {
         let zone = dayTimeZone ?? .autoupdatingCurrent
         guard let day, let start = RecordingDayCalendar.start(of: day, in: zone) else { return nil }
         return start.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: zone))

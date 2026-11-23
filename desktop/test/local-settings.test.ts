@@ -11,7 +11,14 @@ test("an explicit hub change closes the old window before making its own session
   assert.match(change, /parseHubAddress\(previous\.webContents\.getURL\(\)\)\.url\.href === next\.url\.href/);
   assert.match(change, /const closed = new Promise<void>\(done => previous\.once\("closed", done\)\);/);
   assert.ok(change.indexOf("await closed;") < change.indexOf("mainWindow = undefined;"));
-  assert.match(main, /await replaceMainWindow\(next, window => window\.destroy\(\)\);\s+hub = next;\s+setup\.close\(\);\s+await showMain\(\);/);
+  const connect = main.slice(main.indexOf("connect: async"), main.indexOf("await setup.loadURL(SETUP_URL)"));
+  assert.ok(connect.indexOf("const generation = hubWindow.generation") < connect.indexOf("await showMain()"));
+  assert.ok(connect.indexOf("await showMain()") < connect.indexOf("await store().update({ hub: next.url.href })"));
+  assert.ok(connect.indexOf("await store().update({ hub: next.url.href })") < connect.indexOf("setup.close()"));
+  assert.match(connect, /generation !== hubWindow\.generation \|\| hub\?\.url\.href !== next\.url\.href/);
+  assert.match(connect, /Could not save the hub connection/);
+  assert.match(connect, /failedWindow\.destroy\(\)/);
+  assert.match(main, /hubWindow\.replace\(\);/);
   assert.match(main, /hub: \(\) => \{\s+const url = current\.webContents\.getURL\(\);/);
   const ipc = await source("ipc.ts");
   assert.match(ipc, /inHub\(hub, event\.senderFrame\.url\)/);
@@ -27,4 +34,13 @@ test("local login-item IPC is separate from the surviving hub window's public br
   }
   const hub = await source("ipc.ts");
   for (const name of ["desktop:login-get", "desktop:login-set"]) assert.match(hub, new RegExp(`"${name}"`));
+});
+
+test("quitting while setup is the only window does not open setup again (#9458)", async () => {
+  const main = await source("main.ts");
+  const closed = main.slice(main.indexOf('setup.once("closed"'), main.indexOf("const removeIPC = installSetupIPC"));
+  assert.ok(closed.includes("if (quitting) return;"), "setup's closed handler must stop once the app is quitting");
+  assert.ok(closed.indexOf("if (quitting) return;") < closed.indexOf("showMain()"), "the quitting check must come before reopening");
+  // Every quit (menu, Dock, signal, tray) passes before-quit, which runs before windows close.
+  assert.match(main, /app\.on\("before-quit", \(\) => \{ quitting = true;/);
 });

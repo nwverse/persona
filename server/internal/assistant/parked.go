@@ -12,17 +12,17 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// Parked tasks (#3804, docs/assistant/todos.md "Parked tasks"). A supervised task that only waits — for the owner to say
-// what comes first, for someone else, for something outside to happen, for a date — is no decision, so needs_user is
-// refused for it. Its supervisor parks it instead (task_review parked): one sentence of what it waits for, what kind
-// of thing that is, and until when. A parked task stays open and is nobody's to answer: no ask, no push, no conclusion
-// card, and none of the signals that say work stopped (stalled, idle, orphaned, overdue, undecidable). At its time its
+// Parked tasks (docs/assistant/todos.md "Parked tasks"). New parks require a typed external wait and source-backed
+// evidence (park_evidence.go). An owner decision belongs in needs_user, never a new owner_priority park. Existing
+// records remain readable without inventing contacts. A parked task stays open: no new ask, push or conclusion card.
+// A verified interaction_id instead keeps the worker's existing pending request in Needs you, without another card.
+// No stalled, idle, orphaned, overdue or undecidable signal is raised for the park. At its time its
 // supervisor gets one parked_due signal: decide, park again with a new reason, or close it. Its agent starting a turn
 // (someone sent it something) ends the parking, and it is supervised as before. So does a decision of the owner's
 // recorded on a task parked for them or for someone else (parkDecided, #8044): its supervisor gets the decision.
 // Parking again and again is the old habit under a new name, so the parks in a row with no agent turn between them
-// are counted, and one past maxReparks re-parks is refused. Only waiting_on owner_priority concerns the owner: the
-// daily digest lists it, never Needs you.
+// are counted, and one past maxReparks re-parks is refused. The watch reconciles legacy owner_priority parks into
+// needs_user and hands missing questions back to their supervisor; it never reconstructs a question or consent.
 
 const (
 	reviewParked = "parked"
@@ -35,13 +35,13 @@ const (
 
 // What a parked task waits on (task_review waiting_on).
 const (
-	parkOwnerPriority = "owner_priority" // the owner says whether it is done at all, or what comes first
+	parkOwnerPriority = "owner_priority" // legacy reads only; new owner decisions use needs_user
 	parkSomeoneElse   = "someone_else"   // another person has to do or answer something
 	parkExternalEvent = "external_event" // something outside has to happen (a release, a result, a fix upstream)
 	parkDate          = "date"           // nothing but the time
 )
 
-var parkWaitingOn = []string{parkOwnerPriority, parkSomeoneElse, parkExternalEvent, parkDate}
+var parkWaitingOn = []string{parkSomeoneElse, parkExternalEvent, parkDate}
 
 var (
 	// parkDefault: how long a task is parked when the review gives no time; parkMin and parkMax bound the time it gives.
@@ -57,10 +57,12 @@ const maxReparks = 3
 // sentence, until when, what kind of thing it waits on, and how many times in a row it was parked with no agent turn
 // in between (1: parked once).
 type Parked struct {
-	Reason    string    `json:"reason"`
-	Until     time.Time `json:"until"`
-	WaitingOn string    `json:"waiting_on"`
-	Count     int       `json:"count"`
+	Reason    string             `json:"reason"`
+	Until     time.Time          `json:"until"`
+	WaitingOn string             `json:"waiting_on"`
+	Count     int                `json:"count"`
+	Evidence  *ParkEvidence      `json:"evidence,omitempty"`
+	Handoff   *taskHandoffTarget `json:"handoff,omitempty"`
 }
 
 // parking is what holds v parked now: its latest review, when the ledger's state is parked and that review parked it.
@@ -75,13 +77,49 @@ func (v *Supervision) parking() *TaskReview {
 	return nil
 }
 
+// activeTimeSince discounts the intersection of each park with the current period of inactivity.
+// For older ledgers, the next review (or the last ledger update) is the available end of a completed park.
+func (v *Supervision) activeTimeSince(since, now time.Time) time.Duration {
+	active := now.Sub(since)
+	cursor := since
+	for i, r := range v.Reviews {
+		if r.Verdict != reviewParked || r.At.IsZero() {
+			continue
+		}
+		end := r.ParkEndedAt
+		if end.IsZero() {
+			end = v.UpdatedAt
+			if i+1 < len(v.Reviews) {
+				end = v.Reviews[i+1].At
+			}
+		}
+		if end.After(now) {
+			end = now
+		}
+		start := r.At
+		if cursor.After(start) {
+			start = cursor
+		}
+		if end.After(start) {
+			active -= end.Sub(start)
+			cursor = end
+		}
+	}
+	return active
+}
+
 // parked is v's parking as the apps get it; nil when it is not parked.
 func (v *Supervision) parked() *Parked {
 	r := v.parking()
 	if r == nil {
 		return nil
 	}
-	return &Parked{Reason: r.Reason, Until: r.Until, WaitingOn: r.WaitingOn, Count: max(1, r.Parks)}
+	p := &Parked{Reason: r.Reason, Until: r.Until, WaitingOn: r.WaitingOn, Count: max(1, r.Parks), Evidence: r.Evidence.clone()}
+	if r.Handoff != nil {
+		target := r.Handoff.Target
+		p.Handoff = &target
+	}
+	return p
 }
 
 // parseParkUntil reads a park's time: a duration ("3d", "36h", "2d12h", "90m") or an RFC 3339 time; "" is parkDefault
@@ -131,9 +169,9 @@ func parkDuration(raw string) (time.Duration, bool) {
 const parkElse = "A task that waits for nothing is not parked: decide it yourself and send the agent on (agent_send), send " +
 	"the work back (rework), or close it (accepted or cancelled); a decision only the user can make is needs_user."
 
-// readPark checks a parked review: what it waits for in one sentence, what kind of thing that is, and until when. The
-// error names everything missing at once.
-func readPark(reason, until, waitingOn string, now time.Time) (Parked, error) {
+// readPark checks the external wait and its source-backed evidence before any review is written. The error names
+// everything missing at once.
+func readPark(reason, until, waitingOn string, evidence *ParkEvidence, now time.Time) (Parked, error) {
 	p := Parked{Reason: clip(oneLine(reason), 200), WaitingOn: strings.TrimSpace(waitingOn)}
 	var missing []string
 	if p.Reason == "" {
@@ -142,6 +180,11 @@ func readPark(reason, until, waitingOn string, now time.Time) (Parked, error) {
 	if !slices.Contains(parkWaitingOn, p.WaitingOn) {
 		missing = append(missing, "waiting_on (what kind of thing it waits on: "+strings.Join(parkWaitingOn, ", ")+")")
 	}
+	if p.WaitingOn == parkOwnerPriority {
+		missing = append(missing, "owner_priority is an owner decision: use needs_user with why_owner, reason, recommend, options and cost_of_waiting")
+	}
+	e, fields := readParkEvidence(evidence, p.WaitingOn, until, now)
+	missing = append(missing, fields...)
 	at, err := parseParkUntil(until, now)
 	if err != nil {
 		missing = append(missing, err.Error())
@@ -150,7 +193,7 @@ func readPark(reason, until, waitingOn string, now time.Time) (Parked, error) {
 		return Parked{}, fmt.Errorf("parked is refused: it does not say what the task waits for. Missing: %s. %s",
 			strings.Join(missing, "; "), parkElse)
 	}
-	p.Until = at
+	p.Until, p.Evidence = at, e
 	return p, nil
 }
 
@@ -174,15 +217,19 @@ func parkedAnswer(id string, p Parked, loc *time.Location) string {
 			"it too, and a supervision message brings you the decision."
 	}
 	left := 1 + maxReparks - p.Count
+	asked := "the user is not asked"
+	if p.Evidence != nil && p.Evidence.InteractionID != "" {
+		asked = "no new request is created: the existing linked owner request remains actionable"
+	}
 	again := fmt.Sprintf("It can be parked again %d more time(s) with no agent turn in between.", left)
 	if left <= 0 {
 		again = "It cannot be parked again unless its agent works in between: next time, decide or close it."
 	}
-	return fmt.Sprintf("Task %s is parked until %s (waiting_on %s; parked %d time(s) in a row). It stays open; the user is not asked, and "+
+	return fmt.Sprintf("Task %s is parked until %s (waiting_on %s; parked %d time(s) in a row). It stays open; %s, and "+
 		"no stalled, idle, orphaned or overdue signal is raised for it meanwhile.%s At that time a supervision message (parked_due) brings it "+
 		"back to you: decide, park it again with a new reason, or close it. Its agent starting a turn ends the parking (anything sent "+
 		"to it does that, so tell it what it needs before you park, not after).%s %s", id, p.Until.In(loc).Format(toolTimeLayout), p.WaitingOn,
-		p.Count, owner, decided, again)
+		p.Count, asked, owner, decided, again)
 }
 
 // parkedDueSignal: supervised open task t is parked and its time came, and no supervision message carried that yet
@@ -194,7 +241,7 @@ func parkedDueSignal(t Todo, now time.Time) (superviseSignal, bool) {
 		return superviseSignal{}, false
 	}
 	r := v.parking()
-	if r == nil || !r.DueAt.IsZero() || now.Before(r.Until) {
+	if r == nil || r.Handoff != nil || !r.DueAt.IsZero() || now.Before(r.Until) {
 		return superviseSignal{}, false
 	}
 	return superviseSignal{Todo: t.ID, Kind: sigParkedDue, Key: parkKey(r), Detail: r.Reason,
@@ -236,7 +283,9 @@ func decisionEndsPark(source string) bool {
 
 // parkWaitsForDecision: a task parked waiting on on waits for an answer (the owner's call, or someone else's), which
 // a decision of the owner's recorded on it may be.
-func parkWaitsForDecision(on string) bool { return on == parkOwnerPriority || on == parkSomeoneElse }
+func parkWaitsForDecision(on string) bool {
+	return on == parkOwnerPriority || on == parkSomeoneElse || on == parkTodoHandoff
+}
 
 // decidedPark is the latest park of v that a recorded decision ended (parkDecided), whatever was reviewed since: a
 // review that followed it, parking it again included, does not mean its supervisor heard of the decision, so the
@@ -277,11 +326,11 @@ func (s *Service) endParkOnDecision(ctx context.Context, row db.TodoDecisionRow)
 		return nil
 	}
 	t, ok := s.todoNow(row.TodoID)
-	if !ok || t.DoneAt != nil || t.Supervision.parking() == nil {
+	if !ok || t.DoneAt != nil || t.Supervision.decisionPark() == nil {
 		return nil
 	}
 	v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-		r := v.parking()
+		r := v.decisionPark()
 		if r == nil || !parkWaitsForDecision(r.WaitingOn) ||
 			!row.CreatedAt.IsZero() && row.CreatedAt.Before(r.At.Truncate(time.Microsecond)) {
 			return false // not parked for an answer, or parked again after this decision (parkDecidedRetry)
@@ -299,6 +348,9 @@ func (s *Service) endParkOnDecision(ctx context.Context, row db.TodoDecisionRow)
 	b := &s.supervise
 	b.mu.Lock()
 	delete(b.pending, t.ID+"|"+sigParkedDue)
+	delete(b.pending, t.ID+"|"+sigUndecidable)
+	delete(b.pending, t.ID+"|"+sigEstimateDue)
+	s.forgetSupervisePending(t.ID+"|"+sigParkedDue, t.ID+"|"+sigUndecidable, t.ID+"|"+sigEstimateDue)
 	b.mu.Unlock()
 	s.logf("task %s: decision %s was recorded while it was parked: the parking ends, its supervisor is told", t.ID, row.ID)
 	t.Supervision = &v
@@ -311,29 +363,31 @@ func (s *Service) endParkOnDecision(ctx context.Context, row db.TodoDecisionRow)
 // parkDecidedRetry: open task t is parked for an answer, and a decision of the owner's was stored after it was parked
 // (the latest such one in effect): the parking ends on it, as parkDecided would have when it was stored. The watch
 // asks this on every look, so a ledger write that failed then (or a manager that stopped between the decision and the
-// ledger) is made good from what is stored, never lost.
-func (s *Service) parkDecidedRetry(ctx context.Context, t Todo) {
-	r := t.Supervision.parking()
+// ledger) is made good from what is stored, never lost. True means owner evidence was found or its lookup failed:
+// legacy reconciliation must not run ahead of an answer that is stored, pending or unknown.
+func (s *Service) parkDecidedRetry(ctx context.Context, t Todo) bool {
+	r := t.Supervision.decisionPark()
 	if t.DoneAt != nil || r == nil || !parkWaitsForDecision(r.WaitingOn) {
-		return
+		return false
 	}
 	st := s.todoDB()
 	if st == nil {
-		return
+		return false
 	}
 	list, err := st.ListTodoDecisions(ctx, t.ID, false)
 	if err != nil {
 		s.logf("task %s: the decisions of a parked task: %v", t.ID, err)
-		return
+		return true
 	}
 	for i := len(list) - 1; i >= 0; i-- {
 		if d := list[i]; decisionEndsPark(d.Source) && !d.CreatedAt.Before(r.At.Truncate(time.Microsecond)) {
 			if err := s.endParkOnDecision(ctx, d); err != nil {
 				s.logf("task %s: decision %s on a parked task: %v (tried again on the next look)", t.ID, d.ID, err)
 			}
-			return
+			return true
 		}
 	}
+	return false
 }
 
 // parkDecidedSignal: a recorded decision ended a parking of open task t (parkDecided) and no supervision message
@@ -396,6 +450,6 @@ func (s *Service) parkedEntry(ctx context.Context, r *TaskReview) *prompts.Super
 // parkedHealth is a parked task's supervision in the snapshot's words: until when and why.
 func parkedHealth(p *Parked, loc *time.Location) string {
 	on := map[string]string{parkOwnerPriority: "等用户定优先级", parkSomeoneElse: "等别人", parkExternalEvent: "等外部的事", // i18n-ignore: the snapshot is the assistant's prompt
-		parkDate: "等到时间"}[p.WaitingOn] // i18n-ignore: the snapshot is the assistant's prompt
+		parkDate: "等到时间", parkTodoHandoff: "等另一条待办回传结果"}[p.WaitingOn] // i18n-ignore: the snapshot is the assistant's prompt
 	return fmt.Sprintf("已搁置到 %s（%s）：%s", p.Until.In(loc).Format("01-02 15:04"), on, p.Reason) // i18n-ignore: the snapshot is the assistant's prompt
 }

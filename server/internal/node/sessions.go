@@ -56,8 +56,18 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	n.mu.Lock()
 	agents := make(map[string]host.Agent, len(n.agents))
-	for k, v := range n.agents {
-		agents[k] = v
+	agyConversations := map[string]string{}
+	agyRuntimeIDs := map[string]string{}
+	for id, agent := range n.agents {
+		agents[id] = agent
+		if agent.Agent == agyAgent {
+			if conversation := n.agyConversationLocked(id, agent.PaneID); conversation != "" {
+				agyConversations[id] = conversation
+				if agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+					agyRuntimeIDs[id] = agyAgent + "-" + conversation
+				}
+			}
+		}
 	}
 	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
 	n.mu.Unlock()
@@ -86,6 +96,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			codexWaitRow(&s, a)
 			if w := n.codexWaitByID(id); w != nil {
 				s.UpdatedAt = w.began.UTC()
+				if w.manual && s.HerdrTabName() != "" {
+					s.Title = s.HerdrTabName()
+				}
 			}
 			n.decorateIn(&s, pass)
 			out = append(out, s)
@@ -106,7 +119,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			s.CodexRoute, s.CodexRouteNote = n.codexRoute(id) // codex_daemon.go
 		case a.Agent == traexAgent:
 			s.Title = n.traexTitle(id) // the thread's name; the terminal title adds " | <directory>"
-			s.CodexRoute, s.CodexRouteNote = codexRouteTerminal, "TRAEX 没有共享的 app-server"
+			s.CodexRoute, s.CodexRouteNote = codexRouteTerminal, "TRAE CLI 没有共享的 app-server"
 		}
 		n.placeIn(&s, a)
 		s.Ports = n.portsOf(a.PaneID)
@@ -147,9 +160,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		// textAt: when the transcript last had the agent's words; rollout: a Codex pane's rollout meta, for its effort.
 		var textAt, promptAt time.Time
 		var rollout quickMeta
+		var rolloutPath string
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil {
 				m := n.meta(p, st)
+				if sp := identity.SpaceAt(m.cwd); sp != "" {
+					s.Space = sp
+				}
+				rolloutPath = p
 				textAt = m.lastTextAt
 				rollout = m
 				if m.title != "" && a.Agent != "codex" && a.Agent != traexAgent {
@@ -168,11 +186,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 				m.turnErr.set(&s)
 				s.Activity, s.ActivityAt = m.activityOf()
-				setContext(&s, m)
+				n.setSessionContext(&s, m)
 				s.ModelFallback = m.modelFallback
-				if a.Agent != "codex" && a.Agent != traexAgent {
-					s.PermissionMode, s.Effort = n.currentModes(id, m)
-				}
 				s.WokeByTask = m.wake
 				if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked {
 					s.Queued = m.queue // an idle agent has taken everything; stale entries are from outside the tail
@@ -183,6 +198,15 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 				s.Subagents = n.subagents(id)
 			}
+		}
+		if a.Agent != "codex" && a.Agent != traexAgent {
+			n.terminalModesRow(&s, rollout)
+		}
+		blockedSince := n.noteBlockedAt(id, s.Status == proto.StatusBlocked, now)
+		if a.Agent == "codex" && host.ParsePane(a.PaneID).Kind != host.Botmux && s.Status == proto.StatusBlocked &&
+			n.codexRolloutWorkingOverBlocked(ctx, id, a.PaneID, rolloutPath, rollout, blockedSince, now) {
+			s.Status = proto.StatusWorking
+			s.AttentionReason = ""
 		}
 		// The host's record of the answer (botmux's reply in the topic), unless the transcript has words well after it:
 		// the session went on outside the host (a `claude --resume` in a terminal). Text written in the same turn
@@ -202,9 +226,13 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if _, thread, err := n.codexOwner(id); err == nil && thread.model != "" {
 				s.Model = thread.model
 			}
+			n.codexRewindRow(id, &s)
+			if c, thread, driven := n.codexEffortThread(id); driven {
+				s.Model = n.codexModelNow(id, c, thread, s.Model)
+				s.Capabilities.Model = proto.Bool(true)
+			}
 			n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
 			n.codexSpeedRow(&s)
-			n.codexRewindRow(id, &s)
 		}
 		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
@@ -214,7 +242,38 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			s.Title = opencodeTitle(a.Title)
 			n.mergeOpencodeRow(&s) // its conversation is the plugin's (opencode.go)
 		case a.Agent == cursorAgent || a.Agent == agyAgent:
-			// herdr drives the pane (agent.prompt, the keys); Persona does not read the conversation (workagent.go).
+			// Herdr drives the pane (agent.prompt, the keys). Agy can also read its verified conversation (workagent.go).
+			// Its mode, effort and model are its start's, so no chips (session.modes refuses, workAgentCalls); every other
+			// operation stays as for a terminal row that says none. Not on a stopped one, which says none (stoppedAgent).
+			if s.Capabilities == nil && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
+				s.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Interrupt: true, Approve: true, Terminal: true, Modes: proto.CanModes(false)}
+			}
+			hasRuntimeRow := false
+			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
+				seen[runtimeID] = true
+				if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+					hasRuntimeRow = true
+					if s.Model == "" {
+						s.Model = runtimeRow.Model
+					}
+					if s.ContextTokens == 0 && runtimeRow.ContextTokens > 0 {
+						s.ContextTokens = runtimeRow.ContextTokens
+					}
+					if s.ContextWindow == 0 && runtimeRow.ContextWindow > 0 {
+						s.ContextWindow = runtimeRow.ContextWindow
+					}
+					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
+						s.OutputTokens = runtimeRow.OutputTokens
+					}
+				}
+			}
+			if a.Agent == agyAgent {
+				if hasRuntimeRow {
+					n.resolveAgyContextWindow(&s)
+				} else {
+					n.mergeAgyTranscript(&s, agyConversations[id])
+				}
+			}
 		case otherAgent(a):
 			s.ReadOnlyReason = otherNoReader(a.Agent)
 		}
@@ -250,7 +309,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if seen[s.SessionID] {
 			continue
 		}
-		n.decorateState(s)
+		n.decorateState(s, false)
 		if n.runtimeAssistant(s.SessionID) { // the assistant keeps its mode (assistant_runtime.go)
 			if m := n.assistantModeOf(s.SessionID); m != "" {
 				s.PermissionMode = m
@@ -273,6 +332,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 				s.SetAliases(aliases)
 			}
+		} else if s.Agent == agyAgent {
+			n.resolveAgyContextWindow(s)
 		}
 		seen[s.SessionID] = true
 		if j != i {
@@ -292,6 +353,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
+	for _, s := range n.traexSessions(seen) {
+		out = append(out, s)
+		seen[s.SessionID] = true
+	}
 	n.forgetDialogs(livePanes) // after every row that reads a pane's dialog, the tmux claudes' too
 	for _, s := range n.codexSessionsIn(seen, pass) {
 		out = append(out, s)
@@ -303,6 +368,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	from = len(out)
 	out = n.appendOffline(out, seen)
 	n.markInterrupted(out[from:], seen) // the restart cut these off (#1917)
+	// omp's stopped sessions (ompdisk.go)
+	out = append(out, n.ompOfflineRows(seen)...)
 	for i := from; i < len(out); i++ {
 		n.decorateIn(&out[i], pass)
 		n.markStopped(&out[i]) // read-only (stopped.go, #4754)
@@ -322,11 +389,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		s := &out[i]
 		if !s.Assistant && s.PaneID != "" && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
 			n.observedRunning(s.SessionID)
+			n.noteGatewayRunning(s)
 		}
-		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
+		if earlier[s.SessionID] || n.isRoundFork(s.SessionID) || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
-		if s.Cwd != "" && n.cwdBlocked(s.Cwd) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
+		if n.listBlocked(s.SessionID, s.Cwd) {
 			continue
 		}
 		if s.Status == proto.StatusWorking && (s.Agent == "" || s.Agent == "claude" || s.Agent == "codex") {
@@ -349,6 +417,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	out = out[:j]
 	parents, origins := n.offlineDesktop()
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
+	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them
 	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
 	sortNewestFirst(out)
 	return out
@@ -391,7 +460,7 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	if s.PaneID != "" && s.Host == "" {
 		s.Host = host.ParsePane(s.PaneID).Kind // the host it runs in (#2576)
 	}
-	if st, ok := n.decorateState(s); ok {
+	if st, ok := n.decorateState(s, true); ok {
 		s.Compaction = st.Compaction
 		s.PendingSwitch = st.PendingSwitch   // launcher_switch.go
 		s.SetEngineHistory(st.EngineHistory) // engine_switch.go
@@ -406,22 +475,40 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	if s.Launcher == "" {
 		s.Launcher = n.inferLauncher(s.SessionID)
 	}
-	if s.Title == "" {
+	n.normalizeSessionRowModel(s) // keep the echoed model for display, clearing stand-in markers ("<synthetic>")
+	n.applyLauncherContextWindow(s)
+	if s.Title == "" && s.HerdrTabName() == "" {
 		s.Title = filepath.Base(s.Cwd)
 	}
 	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
 	n.modeRestartRow(s)                                // mode_restart.go
 	n.ultracodeRow(s, pass)
+	n.wakeEffortChange(s)
 }
 
 // decorateState restores metadata recorded when Persona started the session.
-func (n *Node) decorateState(s *proto.Session) (sessionState, bool) {
+func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState, bool) {
 	st, ok := n.state.get(s.SessionID)
+	if ok && isCodexWaitID(s.SessionID) && st.Launcher == "" {
+		return sessionState{}, false // a manually discovered waiting row's pane binding is not an app start
+	}
 	if ok {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
-		// A row without a pane is listed where its record says it started, when that is an assistant or health
+		s.SetCreationID(st.CreationID)
+		s.OffLauncher = n.offLauncher(s.SessionID) // its claude not started by Persona's command (offlauncher.go)
+		if st.TaskExecution {
+			classifyTaskTurnFailure(s)
+		}
+		if managesModel {
+			model := st.Model
+			s.RequestedModel = &model
+		}
+		// A row without a pane is listed where its record says it started, when that is an assistant or space
 		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
+		if sp := identity.SpaceAt(st.Cwd); sp != "" {
+			s.Space = sp
+		}
 		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
 			s.Cwd = st.Cwd
 		}
@@ -469,6 +556,43 @@ func truncatedSnippet(s string) string {
 	return s + "…"
 }
 
+const (
+	pollFailBackoffFirst = 2 * time.Second
+	pollFailBackoffMax   = 30 * time.Second
+)
+
+// hostFailBackoff throttles repeated snapshot attempts for a host that is failing to answer (for example herdr on a
+// computer where it is not installed or not running). A watcher kick or a successful snapshot resets the host at once.
+type hostFailBackoff struct {
+	gap     map[string]time.Duration
+	retryAt map[string]time.Time
+}
+
+func newHostFailBackoff() *hostFailBackoff {
+	return &hostFailBackoff{gap: map[string]time.Duration{}, retryAt: map[string]time.Time{}}
+}
+
+func (b *hostFailBackoff) skip(kind string, now time.Time, kicked bool) bool {
+	if kicked {
+		delete(b.gap, kind)
+		delete(b.retryAt, kind)
+		return false
+	}
+	until, ok := b.retryAt[kind]
+	return ok && now.Before(until)
+}
+
+func (b *hostFailBackoff) record(kind string, failed bool, now time.Time) {
+	if !failed {
+		delete(b.gap, kind)
+		delete(b.retryAt, kind)
+		return
+	}
+	next := min(max(2*b.gap[kind], pollFailBackoffFirst), pollFailBackoffMax)
+	b.gap[kind] = next
+	b.retryAt[kind] = now.Add(next)
+}
+
 // pollAgents refreshes the hosts' state every second (only the ones due) and pushes sessions.changed when anything
 // visible changes. Each watcher host is snapshotted on its own stream's changes and at most every slowSnapshot while
 // its stream is live, independently of the other hosts (the combined engine): a herdr-core event never snapshots
@@ -477,6 +601,7 @@ func (n *Node) pollAgents(ctx context.Context) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	last := map[string]time.Time{} // host kind → its last snapshot
+	backoff := newHostFailBackoff()
 	var listed time.Time
 	for {
 		sigs := n.signalSnapshot()
@@ -484,8 +609,12 @@ func (n *Node) pollAgents(ctx context.Context) {
 		if !ok {
 			return
 		}
+		now := time.Now()
 		var due []host.Host
 		for _, h := range n.hosts.All() {
+			if backoff.skip(h.Kind(), now, kicked[h.Kind()]) {
+				continue
+			}
 			if n.hostDue(h.Kind(), last[h.Kind()], kicked[h.Kind()]) {
 				due = append(due, h)
 			}
@@ -494,10 +623,11 @@ func (n *Node) pollAgents(ctx context.Context) {
 		// running) does not stop the list: runtimes, the assistant and the transcripts do not need it. Its agents stay
 		// as last seen (refreshHosts).
 		if len(due) > 0 {
-			_ = n.refreshHosts(ctx, due...)
-			now := time.Now()
+			failed, _ := n.refreshHostsWithFailures(ctx, due...)
+			now = time.Now()
 			for _, h := range due {
 				last[h.Kind()] = now
+				backoff.record(h.Kind(), failed[h.Kind()], now)
 			}
 		}
 		list := n.sessionList(ctx, false)
@@ -552,4 +682,10 @@ func (n *Node) revsChanged(list []proto.Session) map[string]int64 {
 	}
 	n.lastRevs = next
 	return out
+}
+
+// listBlocked: the live list leaves session sid out for its working folder cwd: a blocked Agent folder or Claude config
+// folder, except the assistant's own conversations and the sessions the hub keeps.
+func (n *Node) listBlocked(sid, cwd string) bool {
+	return cwd != "" && n.cwdBlocked(cwd) && !n.isAssistantSession(sid) && !n.keptSessions()[sid]
 }

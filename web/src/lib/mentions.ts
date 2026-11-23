@@ -5,7 +5,10 @@
 // <persona-context> before the message). No DOM here.
 
 import { t } from "../i18n";
-import { shortPath } from "./format";
+import { normalizeTraeCliName } from "./agent-kind";
+import { listedKeys, rowKey } from "./child-sessions";
+import { foldRows } from "./folded-rows";
+import { baseName, shortPath } from "./format";
 import type { Item, Session } from "./types";
 import { byTime } from "./times";
 import type { Workspace } from "./workspace-board";
@@ -88,23 +91,33 @@ export function byPrefix<T>(rows: T[], name: (t: T) => string, filter: string): 
   return [...head, ...rows.filter((r) => !name(r).toLowerCase().startsWith(f))];
 }
 
-/** Who answers in a session ("Claude" / "Codex" / "a compatible CLI" / a runtime's own name; Session.agentLabel). */
+/** Who answers in a session ("Claude" / "Codex" / "TRAE CLI" / a runtime's own name; Session.agentLabel). */
 export function agentLabel(s: Pick<Session, "agent" | "agent_label" | "source_kind">): string {
   if (s.agent === "codex" || s.source_kind === "codex_app_server" || s.source_kind === "codex_history") return "Codex";
-  if (s.agent === "traex") return "TRAEX";
   if (!s.agent || s.agent === "claude") return "Claude";
-  return s.agent_label || s.agent;
+  return normalizeTraeCliName(s.agent_label || s.agent);
 }
 
-function folderName(cwd?: string): string {
-  const parts = (cwd ?? "").replace(/\/+$/, "").split("/");
-  return parts[parts.length - 1] || "";
+/** A session's folder by its name: "app" for /home/me/code/app, and for C:\Users\me\code\app, a Windows computer's path
+ *  read by its own separator (`baseName`, #9901); "" for none or the root. */
+export function folderName(cwd?: string): string {
+  return /[^\\/]/.test(cwd ?? "") ? baseName(cwd) : "";
 }
 
 /** A session's title as the @ menu shows it (Session.displayTitle). */
 export function displayTitle(s: Pick<Session, "title" | "cwd">): string {
   const title = s.title?.trim();
   return !title || title === "Claude Code" ? folderName(s.cwd) || t("lib-format.untitled_session") : title;
+}
+
+/** The sessions this page holds, each once (#12983): the chats opened here as their complete rows (the store's
+ *  `sessions`), then the Agents list's rows of the others (`sessionSummaries`). A paging hub pushes no `sessions`
+ *  (docs/lessons/web.md), so an Agent nobody opened here is only in the list. Child sessions fold into their parent,
+ *  as in every list (#5120). */
+export function pageSessions(sessions: Record<string, Session[]>, listed: readonly Session[]): Session[] {
+  const complete = Object.values(sessions).flat();
+  const opened = listedKeys(complete);
+  return foldRows([...complete, ...listed.filter((s) => !opened.has(rowKey(s.machine_id, s.session_id)))]);
 }
 
 /** Other agents' sessions, most recently active first, at most `limit` (PromptItems.sessions). */

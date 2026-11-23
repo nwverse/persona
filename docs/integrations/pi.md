@@ -42,7 +42,7 @@ both built on `integrations/runtime-sdk/`. pi follows the route of whichever hos
 At session start, the extension records where it runs using `pi.appendEntry("persona-host", {host})` (`herdr`, `terminal`, `pi-web`; only when it changes, excluded from model context;
 not recorded for sessions launched by other programs, such as `pi --mode rpc` or `pi -p`). After a session stops, the companion lists it from disk and uses the last record to decide:
 
-- Previously run in herdr or a terminal: the row carries `resume_argv: ["pi", "--session", <file>]`. When the phone sends a message, node opens a new tab in the herdr space for that directory,
+- Previously run in herdr or a terminal: the row carries `resume_argv: ["pi", "--approve", "--session", <file>]` (`--approve`: "Project trust" below). When the phone sends a message, node opens a new tab in the herdr space for that directory,
   runs it through `personad tab-start <0600 file>` (commands and paths do not pass through a shell or appear on screen), waits for the new pi extension to list the session, then sends the message.
   If herdr is unavailable, it rejects the request (`engine_missing`); it does **not** open it in pi-web instead. If node is too old to recognize `resume_argv`, the companion also rejects the request rather than waking pi-web.
 - Previously run in pi-web, or no record (sessions from before the extension was installed): pi-web wakes it, as before.
@@ -85,7 +85,9 @@ as Claude Code does (`docs/integrations/launchers.md`, "Device scope and on-dema
   Claude Code or Oh My Pi becomes an `anthropic-messages` provider (bearer providers also send `Authorization: Bearer`), a Codex provider an
   `openai-responses` one. Not offered: Antigravity providers, Responses / Chat Completions API connections (the node never gets them), providers with a
   proxy of their own (pi sends straight to the gateway), and providers without a key. They are registered as `persona-<provider id>` with the
-  provider's models (its default model first, context windows from what the provider knows, no prices).
+  provider's models (its default model first, context windows from what the provider knows, no prices). Output limits, image input and thinking
+  support use the provider's reported model metadata when available; otherwise pi receives the existing estimates based on the context window
+  and model name. A reported output limit is capped at the context window.
 - **How**: when pi loads the extension (`lib/providers.js`; every pi process, `pi -p` included, and every pi-web session), it reads the node's launch
   key beside `node.sock` and asks `launcher.pi`. The node (`server/internal/node/pi_providers.go`) pulls what it does not have yet with `launchers.pull`,
   under the provider's scope and own-service rule, and answers. The extension passes the keys to `pi.registerProvider()`: they live in pi's memory
@@ -120,6 +122,12 @@ These are all terminal commands on that computer (or ask an Agent to do it); the
 
 The companion's `--port` / `--host` must match pi-web (default `127.0.0.1:30141`). If pi-web sets `PI_WEB_PASSWORD`, the companion needs the same environment variable.
 
+### Project trust
+
+pi asks before it loads project-local files (`.pi/`, `.agents/`, `AGENTS.md` and the like) from a directory it has no saved decision for. A pi Persona starts or resumes in a herdr pane has nobody at that prompt: a `task_plan` / `agent_start` start, herdr's resume of one, and a stopped session woken by a phone message would wait there, the extension would never list the session, and the first message would not be sent (#9462).
+So those runs pass `--approve` ("trust project-local files for this run"): the directory the task or the person chose is trusted for that process only. Nothing is written to `~/.pi/agent/trust.json`, so a pi the user starts in a terminal still asks, and a saved decision there stays the user's. pi versions without project trust also lack the flag and refuse it; update pi (`pi update self`).
+Persona's own health check runs `pi -p … --no-session` in an empty temporary directory, which has nothing to trust.
+
 ## Mapping
 
 `integrations/pi/lib/map.js`, entries in a pi session file → Persona items:
@@ -141,6 +149,11 @@ The companion's `--port` / `--host` must match pi-web (default `127.0.0.1:30141`
 - Sending: while the session waits in `ask_user`, the message is the answer to the question. Otherwise, while the session is running, `pi.sendUserMessage(…, {deliverAs: "steer"})` inserts it into the current turn, read after the step under way, and the send answers `queued` (the manager says "queued", not "sent"); when idle, it starts a new turn.
 - Interrupt: inside pi-web through pi-web's own Stop (`POST /api/agent/<id> {type: "abort"}`: it also cancels the dialogs extensions have open and takes back what was queued for the turn), elsewhere `ctx.abort()`; `ask_user` gives up on the turn's abort signal. The interrupt then waits up to 10 seconds for `agent_settled` and answers `settled`, or fails with `interrupt_timeout` (#8097). Rename uses `pi.setSessionName`.
   A given `client_msg_id` is sent only once.
+
+## Token usage
+
+The node meters pi's token usage from its session files (`$PI_CODING_AGENT_DIR` or `~/.pi/agent`), whether or not Persona started the session: each assistant message's
+usage, cache warming's `usage` entries and the compaction and branch summaries' calls, under the agent `pi` on the token calendar (`docs/server/machines.md`, "Token usage").
 
 ## Limitations
 
@@ -166,3 +179,32 @@ The companion's `--port` / `--host` must match pi-web (default `127.0.0.1:30141`
     Unit tests: the last five cases in `integrations/pi/test/pi.test.js` (wait until idle before switching; no switch or message without a command; companion exits after installation; restore and stop retrying when returning to the same version; do not install a mismatched hash).
   - `node integrations/pi/e2e/pi-web.mjs`: real pi-web (isolated configuration directory, this package installed through `packages`, idle reclamation set to 6 seconds) + companion:
     launcher visible before any session exists, creation from the phone, sending, disk listing and pagination after reclamation, waking on another message, extension taking ownership again, and listing sessions created in the web client. 2026-11-01: 11/11.
+
+### Assistant conversations
+
+The pi-web path can start an empty Assistant session and apply session-local tool,
+live-context and supervision hooks before the first prompt. The ordinary terminal
+pi path does not advertise Assistant starts. Assistant custom state stays outside
+user message text; closing the execution session revokes its hooks. Tools verify
+the actual session context on every call.
+
+The pi-web launcher advertises one default model row. Choosing it sends no model
+or effort override: this adapter keeps the model selected inside pi. It refuses
+unsupported explicit model/effort choices and permission modes before releasing
+input; it supports default approvals and bypassPermissions. No permission upgrade
+is inferred during a logical conversation switch. Unit contracts use fake pi
+extension APIs and a fake web backend, without a provider call.
+
+Native shell actions still obey Persona command gates in bypassPermissions. The
+adapter reads current tool rules for the actual session, rejects matching shell
+commands (including nested shell wrappers), and asks the model to use the scoped
+Persona action tool. Failed rule reads block shell execution; ordinary coding
+Agent sessions retain their existing behavior. Gate parsing is shared with the
+OpenCode companion and covered by its existing contracts plus pi-specific fakes.
+
+A Persona message arriving during an active pi Assistant turn returns retryable
+`busy` with `delivered: none`, leaving role, permissions and hidden context intact.
+The normal durable delivery path waits for idle, so the next `before_agent_start`
+can apply the fresh snapshot and policy together. An answer to the current turn's
+own question may resolve that question without changing its role or permissions.
+Ordinary coding Agent steering is unchanged.

@@ -31,7 +31,8 @@ func (m *Meta) ClaudeTurnStarted(wake bool) {
 
 // TurnErrorResumesSaid: a line read said whether Claude Code goes on by itself after its limit (its notices, a
 // message typed, a reply, another error). False when none did: the lines read start after its notice (a tail of the
-// transcript), and what an earlier read found stands.
+// transcript, read into a Meta of its own: the first prompt in its head says nothing of a wait at the end), and what
+// an earlier read found stands.
 func (m *Meta) TurnErrorResumesSaid() bool { return m.resumesSaid }
 
 // TurnSucceeded reports that the latest Claude turn closed after at least one visible reply from the model, not a
@@ -40,10 +41,6 @@ func (m *Meta) TurnErrorResumesSaid() bool { return m.resumesSaid }
 func (m *Meta) TurnSucceeded() bool {
 	return !m.Codex && m.TurnClosed && m.turnSucceeded && m.TurnError == ""
 }
-
-// ReadingTail: the lines parsed from here on are the transcript's tail, after its head was read for the title (a
-// prompt there says nothing of a wait at the end): TurnErrorResumesSaid counts the tail's lines only.
-func (m *Meta) ReadingTail() { m.resumesSaid = false }
 
 func (m *Meta) clearTurnError() {
 	m.TurnError, m.TurnErrorKind, m.TurnErrorResetsAt = "", "", time.Time{}
@@ -78,6 +75,9 @@ func (m *Meta) claudeReply(e *entry, blocks []block, shown bool) {
 		return
 	}
 	kind, reset := claudeErrorKind(code, e)
+	if kind == "" {
+		kind, reset = GatewayErrorKind(text, e.Timestamp)
+	}
 	m.TurnErrorCode = ""
 	if m.ModelFallback != nil && (code == "model_not_found" || e.APIErrorStatus == 404 && fallbackModelError(text, m.ModelFallback.FallbackModel)) {
 		m.TurnErrorCode, kind = proto.TurnErrorModelFallbackUnavailable, proto.TurnErrorUser

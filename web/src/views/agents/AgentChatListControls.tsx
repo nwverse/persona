@@ -16,7 +16,7 @@ import {
   type SearchPlan,
   type SearchScope,
 } from "../../lib/agent-chatlist-filter";
-import { awaitsReply, sessionSource, sourceName, type AgentMutes } from "../../lib/agent-groups";
+import { awaitsReply, justFinished, sessionSource, sourceName, type AgentMutes } from "../../lib/agent-groups";
 import { ago, backgroundWaiting, sessionPreview, sessionTitle, stateOf, tabLabel } from "../../lib/format";
 import { sessionCard } from "../../lib/folded-rows";
 import { machineWithHub } from "../../lib/mesh";
@@ -145,7 +145,8 @@ export function AgentFilterButton({
   };
 
   const filterLabel = count > 0 ? `${t("lib-agent-filter.filter")} (${count})` : t("lib-agent-filter.filter");
-  // the title row's other icon buttons' size and colors (⋯, fold all); lit like ⋯ under a sort while something is on
+  // the title row's other icon buttons' size and colors (⋯, fold all), and their 44 px box on a touch screen (they sit
+  // 4 px apart: centred touch-hit squares would overlap); lit like ⋯ under a sort while something is on
   const lit = count > 0 || filters.searchAsCode || chatList;
   return (
     <>
@@ -161,7 +162,7 @@ export function AgentFilterButton({
         title={filterLabel}
         data-testid="agent-filter-button"
         className={cx(
-          "touch-hit relative z-10 flex h-5 min-w-5 shrink-0 items-center justify-center gap-0.5 rounded-[5px] px-0.5 text-[11px] hover:bg-hover hover:text-ink-2",
+          "touch-hit relative z-10 flex h-5 min-w-5 shrink-0 items-center justify-center gap-0.5 rounded-[5px] px-0.5 text-[11px] hover:bg-hover hover:text-ink-2 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:min-w-11",
           lit ? "font-semibold text-accent" : "text-ink-3",
           filterMenu.anchor && "bg-hover",
         )}
@@ -346,9 +347,10 @@ export const AgentChatListRow = memo(function AgentChatListRow({
 }) {
   const st = stateOf(s);
   const awaiting = awaitsReply(s, mutes);
+  const finished = justFinished(s, mutes);
   const ix = useStore((state) => sessionCard(state.interactions, s.machine_id, s.session_id));
   const draft = draftLine(useLeftDraft(`${s.machine_id}/${s.session_id}`));
-  const line: { lead?: string; text: string; tone?: "needs" | "reply" } | undefined = draft ?? rowLine(s, ix, awaiting);
+  const line: { lead?: string; text: string; tone?: "needs" | "reply" } | undefined = draft ?? rowLine(s, ix, awaiting, finished);
   const previewText = line?.text || plainMarkdown(sessionPreview(s)) || s.activity || "";
   const now = useNow(60_000, Boolean(s.updated_at));
   const timeLabel = s.updated_at ? ago(s.updated_at, now) : "";
@@ -401,7 +403,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
         <span className="relative mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-inset shadow-hairline">
           <SessionMark s={s} size={17} />
           <span className="absolute -right-0.5 -bottom-0.5 flex size-3.5 items-center justify-center rounded-full bg-canvas ring-1 ring-canvas">
-            <StatusMark state={st} size="sm" awaiting={awaiting} waiting={backgroundWaiting(s)} />
+            <StatusMark state={st} size="sm" awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} />
           </span>
         </span>
 

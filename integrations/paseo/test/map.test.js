@@ -156,8 +156,9 @@ test("an archived agent keeps its row when its id is not its transcript's: a ses
   const able = { ...started, capabilities: { supportsRewindConversation: true, supportsRewindBoth: true } }
   assert.deepEqual(agentRow(able, { roots, archived: true, thinking: ['low', 'high'] }).capabilities,
     { rewind: false, rewind_code: false, modes: false, model: false })
-  assert.deepEqual(agentRow({ ...able, archivedAt: null }, { roots }).capabilities, { rewind: true, rewind_code: true },
-    "listed: the provider's own rewind, modes and model left to the node")
+  assert.deepEqual(agentRow({ ...able, archivedAt: null }, { roots }).capabilities,
+    { rewind: true, rewind_code: true, a2a_wake_on_send: true },
+    'an idle-retired agent can wake on send until it is archived')
   const grok = agentSnapshot({ id: 'g1', provider: 'grok', archivedAt: at, labels: { 'persona.session': 'paseo-g1' } })
   assert.equal(agentRow(grok, { roots, archived: true, thinking: ['low', 'high'] }).efforts, undefined, 'no effort to pick either')
 })
@@ -620,4 +621,23 @@ test("Paseo's workspaces as the node's rows: kind, branch, the space its agents 
   assert.notEqual(paseoCheckouts('/b', '/w/app'), paseoCheckouts('/b', '/w/app2'))
   const row = agentRow(agentSnapshot({ id: 'a1', provider: 'grok', workspaceId: 'wks_00000000000000c2', title: 'x' }), { roots: {} })
   assert.equal(row.workspace_id, 'wks_00000000000000c2', "an agent's row names its workspace")
+})
+
+test("native workspace pins carry a timestamp, independently of project and directory; old or unpinned workspaces omit it", () => {
+  const descriptor = workspaceDescriptor({ id: 'wks_pin', workspaceDirectory: '/w/app', pinnedAt: '2026-11-16T15:00:00+02:00' })
+  assert.equal(workspaceRow(descriptor).pinned_at, '2026-11-16T13:00:00.000Z')
+  const sibling = { ...descriptor, id: 'wks_sibling', pinnedAt: null }
+  assert.equal(workspaceRow(sibling).pinned_at, undefined, 'same folder and project are not the same workspace')
+  for (const pinnedAt of [undefined, null, '', 'invalid', '2026-11-16', 1, true]) {
+    assert.equal(workspaceRow({ ...descriptor, pinnedAt }).pinned_at, undefined)
+  }
+})
+
+test('a retained archived conversation no longer belongs to a natively pinned workspace until resumed', () => {
+  const agent = agentSnapshot({ provider: 'my-codex', workspaceId: 'wks_pinned', labels: { 'persona.session': 'saved-chat' }, archivedAt: '2026-11-16T12:00:00Z' })
+  const history = agentRow(agent, { archived: true })
+  assert.equal(history.session_id, 'saved-chat')
+  assert.equal(history.status, 'offline')
+  assert.equal(history.workspace_id, undefined)
+  assert.equal(agentRow({ ...agent, archivedAt: null }).workspace_id, 'wks_pinned')
 })

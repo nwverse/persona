@@ -5,7 +5,7 @@
 // pick changes goes back to its list.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const viewport = vi.hoisted(() => ({ phone: false, lark: false }));
 vi.hoisted(() => {
@@ -22,6 +22,7 @@ vi.mock("./settings/KnowledgeSelection", () => ({ KnowledgeSelection: () => <div
 vi.mock("./settings/TranslationSettings", () => ({ TranslationSettings: () => <div data-page="translation" /> }));
 vi.mock("./settings/AssistantSettings", () => ({ AssistantSettings: () => <div data-page="persona" /> }));
 vi.mock("./settings/SidebarPages", () => ({ SidebarPagesGroup: () => <div data-page="sidebar-pages" /> }));
+vi.mock("./settings/StartPage", () => ({ StartPageGroup: () => <div data-page="start-page" /> }));
 vi.mock("../lib/pwa", async (original) => ({ ...(await original<typeof import("../lib/pwa")>()), useInstall: () => "installed" }));
 vi.mock("./settings/AgentSettings", () => ({ AgentSettings: ({ agent }: { agent: string }) => <div data-page="agent" data-agent={agent} /> }));
 vi.mock("./settings/Extensions", () => ({
@@ -37,6 +38,7 @@ import { t } from "../i18n";
 import { chooseManager, resetManagerChoice } from "../lib/manager-choice";
 import { resetRoster, setRoster, type ManagerList } from "../lib/managers";
 import { Settings } from "./Settings";
+import { loadPages } from "../lib/lazy-page";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -57,6 +59,9 @@ let roster: ManagerList | null;
 // the current assistant has no route for the chat connector: its manager answers 404
 const larkAbsent = { on: false };
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
+// Extensions and Connectors are chunks of their own (Settings.tsx, lazyPage): in before the pages render
+beforeAll(() => loadPages());
+
 beforeEach(() => {
   viewport.phone = false;
   viewport.lark = false;
@@ -103,11 +108,11 @@ const navGroups = () => [...host.querySelectorAll<HTMLElement>("[data-settings-n
 const asked = (path: string) => calls.filter((c) => c.path === path).map((c) => c.manager);
 
 describe("Settings' groups", () => {
-  it("are the current assistant's, this device's and the hub's, in that order, with their titles and lines", async () => {
+  it("are the current assistant's, this device's and the hub's, in that order, with their titles and lines, then Labs untitled", async () => {
     setRoster(ROSTER);
     await mount("/settings?tab=shortcuts");
     const groups = navGroups();
-    expect(groups.map((g) => g.dataset.settingsNavGroup)).toEqual(["assistant", "device", "hub"]);
+    expect(groups.map((g) => g.dataset.settingsNavGroup)).toEqual(["assistant", "device", "hub", "labs"]);
     expect(groups[0].textContent).toContain(t("settings-nav.group_assistant", { name: "助手" }));
     expect(groups[0].querySelector("[data-assistant-avatar]")?.getAttribute("data-assistant-avatar")).toBe("assistant");
     expect(groups[0].querySelector("[data-settings-switch]")?.textContent).toBe(t("settings-nav.switch"));
@@ -118,6 +123,8 @@ describe("Settings' groups", () => {
     // the rows: the assistant's profile in the first, the assistant list in the hub's, never called like a group
     expect(groups[0].textContent).toContain(t("settings-nav.tab_profile"));
     expect(groups[2].textContent).toContain(t("settings-nav.tab_managers"));
+    // Labs on its own: only its row, no title or line of a group
+    expect(groups[3].textContent).toBe(t("settings-nav.tab_labs"));
   });
 
   it("are the phone's first page too", async () => {
@@ -125,7 +132,7 @@ describe("Settings' groups", () => {
     setRoster(ROSTER);
     await mount("/settings");
     const sections = [...host.querySelectorAll<HTMLElement>("[data-settings-group^='nav-']")];
-    expect(sections.map((s) => s.dataset.settingsGroup)).toEqual(["nav-assistant", "nav-device", "nav-hub"]);
+    expect(sections.map((s) => s.dataset.settingsGroup)).toEqual(["nav-assistant", "nav-device", "nav-hub", "nav-labs"]);
     expect(sections[0].textContent).toContain(t("settings-nav.group_assistant", { name: "助手" }));
     expect(sections[0].querySelector("[data-settings-switch]")).not.toBeNull();
   });

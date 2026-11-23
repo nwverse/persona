@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // drainFleetBackground stops new background scheduling, then lets active calls finish before a test closes its store.
@@ -15,6 +16,18 @@ import (
 func drainFleetBackground(t *testing.T, s *Service, cancel context.CancelFunc) {
 	t.Helper()
 	cancel()
+
+	// A retry callback may still be restoring todos before it takes dedupMu. Cancel its context, wait for the whole
+	// callback, then disarm anything left; a callback that was already due observes the cancellation before any I/O.
+	digest := &s.supervise
+	digest.digestMu.Lock()
+	digest.mu.Lock()
+	if digest.timer != nil {
+		digest.timer.Stop()
+		digest.timer, digest.timerAt = nil, time.Time{}
+	}
+	digest.mu.Unlock()
+	digest.digestMu.Unlock()
 
 	names := &s.agentNames
 	names.mu.Lock()
@@ -32,17 +45,39 @@ func drainFleetBackground(t *testing.T, s *Service, cancel context.CancelFunc) {
 		tree.armed = false
 		tree.runs.Done()
 	}
+	if tree.wakeTimer != nil {
+		tree.wakeTimer.Stop()
+		tree.wakeTimer, tree.wake = nil, time.Time{}
+	}
 	tree.mu.Unlock()
 
+	s.todoViewsStop()
+
 	// A screen-upgrade start checks runCtx under fleet.mu; taking it here closes the Add/Wait teardown window.
+	// Delayed turn completions use the same gate: stop pending timers and let an already running callback finish.
 	s.fleet.mu.Lock()
+	s.fleet.completionStopped = true
+	for timer := range s.fleet.completionTimers {
+		if timer.Stop() {
+			s.fleet.completionRuns.Done()
+		}
+		delete(s.fleet.completionTimers, timer)
+	}
+	for _, p := range s.fleet.interactions {
+		if p.orphaned != nil {
+			p.orphaned.Stop()
+			p.orphaned = nil // a queued callback checks this under fleet.mu before recording its outcome
+		}
+	}
 	s.fleet.mu.Unlock()
 	// workEvent and recordSendAsync use work.mu for the same runCtx + Add scheduling gate.
 	s.work.mu.Lock()
 	s.work.mu.Unlock()
 
+	waitFleetBackground(t, "turn completions", &s.fleet.completionRuns)
 	waitFleetBackground(t, "agent naming", &names.runs)
 	waitFleetBackground(t, "direction tree", &tree.runs)
+	waitFleetBackground(t, "to-do views", &s.tview.runs)
 	waitFleetBackground(t, "screen upgrades", &s.fleet.upgrades)
 	waitFleetBackground(t, "hub transcription", &s.hubTr.wg)
 	waitFleetBackground(t, "work events", &s.work.eventWrites)
@@ -73,6 +108,57 @@ func waitFleetBackground(t *testing.T, name string, wg *sync.WaitGroup) {
 	case <-done:
 	case <-timer.C:
 		t.Fatalf("%s did not finish before the database fixture closed", name)
+	}
+}
+
+// orphanEndMem observes the real grace callback's outcome write without closing a database under a finished test.
+type orphanEndMem struct {
+	*fleetMem
+	ended chan string
+}
+
+func (m *orphanEndMem) FinishInteraction(ctx context.Context, id, status string, r *proto.Resolution) error {
+	m.ended <- id
+	return m.fleetMem.FinishInteraction(ctx, id, status, r)
+}
+
+func orphanTimerFixture(t *testing.T) (*Service, *orphanEndMem, context.CancelFunc) {
+	t.Helper()
+	st := &orphanEndMem{fleetMem: newFleetMem(), ended: make(chan string, 1)}
+	s := New(Options{Hub: newFakeHub(), Store: func() Store { return st }, Logf: testLogf(t), Devices: newFleetDevs()})
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.running.Store(&runCtx)
+	p := &pending{ix: resumable("ix_drain"), done: make(chan proto.Resolution)}
+	p.ix.ExpiresAt = time.Now().Add(30 * time.Millisecond)
+	s.fleet.mu.Lock()
+	s.fleet.interactions = map[string]*pending{p.ix.ID: p}
+	if !s.orphanLocked(p) {
+		t.Fatal("the short grace did not arm")
+	}
+	s.fleet.mu.Unlock()
+	return s, st, cancel
+}
+
+func TestOrphanTimerRecordsCancellationBeforeDrain(t *testing.T) {
+	s, st, cancel := orphanTimerFixture(t)
+	select {
+	case id := <-st.ended:
+		if id != "ix_drain" {
+			t.Fatalf("ended %q", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the ordinary grace callback did not record its cancellation")
+	}
+	drainFleetBackground(t, s, cancel)
+}
+
+func TestDrainFleetBackgroundStopsOrphanedInteractions(t *testing.T) {
+	s, st, cancel := orphanTimerFixture(t)
+	drainFleetBackground(t, s, cancel)
+	select {
+	case id := <-st.ended:
+		t.Fatalf("orphan timer %q recorded an outcome after the service was drained", id)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -125,6 +211,85 @@ func (s *acceptedSendStore) Setting(ctx context.Context, key string, out any) (b
 		}
 	}
 	return s.DB.Setting(ctx, key, out)
+}
+
+// digestLoadStore holds a digest in its todo restoration, before it takes the delivery lock. Draining still has to
+// wait for that callback; otherwise the database fixture can close while the callback is only getting started.
+type digestLoadStore struct {
+	*db.DB
+	started chan struct{}
+	release chan struct{}
+	loaded  chan struct{}
+	once    sync.Once
+}
+
+func (s *digestLoadStore) ListTodos(context.Context) ([]db.TodoRow, error) {
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+	close(s.loaded)
+	return nil, nil
+}
+
+func (s *digestLoadStore) ListAllTodoSpaces(context.Context) ([]db.TodoSpaceRow, error) {
+	return nil, nil
+}
+
+func (s *digestLoadStore) ListAllTodoAgents(context.Context) ([]db.TodoAgentRow, error) {
+	return nil, nil
+}
+
+func TestDrainFleetBackgroundDigestLifecycle(t *testing.T) {
+	t.Run("stops_retry", func(t *testing.T) {
+		s := New(Options{Hub: newFakeHub(), Store: func() Store { return &memStore{} }, Logf: t.Logf, Devices: newFleetDevs()})
+		runCtx, cancel := context.WithCancel(context.Background())
+		s.running.Store(&runCtx)
+		b := &s.supervise
+		b.mu.Lock()
+		b.init()
+		s.retryDigestLocked(time.Hour)
+		b.mu.Unlock()
+
+		drainFleetBackground(t, s, cancel)
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.timer != nil {
+			t.Fatal("the digest retry remained armed after the service was drained")
+		}
+	})
+
+	t.Run("waits_for_callback_before_delivery_lock", func(t *testing.T) {
+		st := &digestLoadStore{DB: taskRecoveryDatabase(t), started: make(chan struct{}), release: make(chan struct{}), loaded: make(chan struct{})}
+		s := New(Options{Hub: newFakeHub(), Store: func() Store { return st }, Logf: t.Logf, Devices: newFleetDevs()})
+		runCtx, cancel := context.WithCancel(context.Background())
+		s.running.Store(&runCtx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			s.sendDigest(context.Background())
+		}()
+		select {
+		case <-st.started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the digest did not reach its todo restoration")
+		}
+		time.AfterFunc(50*time.Millisecond, func() { close(st.release) })
+
+		drainFleetBackground(t, s, cancel)
+		early := false
+		select {
+		case <-st.loaded:
+		default:
+			early = true
+		}
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the digest did not finish after its restoration was released")
+		}
+		if early {
+			t.Fatal("drain returned while the digest was still restoring its todos")
+		}
+	})
 }
 
 // A database-backed fleet fixture must drain the service work it started before the test's database closes. Each case

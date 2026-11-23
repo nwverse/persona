@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // Visible, reversible model recovery for the main and leader/supervisor conversations (#7824).
@@ -47,52 +47,20 @@ func ModelRecoveryReason(result string) string {
 	}
 }
 
-var (
-	// "an account becomes available again at 15:48 UTC (in 32m)" and the dated form
-	// "... available again at 2026-11-17 04:03 UTC (in 2d3h)". The words are a gateway's, so the match stays narrow.
-	gatewayAvailableRe      = lazyre.New(`(?i)available again at (?:(\d{4})-(\d{2})-(\d{2})\s+)?(\d{2}):(\d{2})\s*UTC`)
-	modelRecoveryProbeEvery = time.Minute
-)
+const modelRecoveryProbeEvery = time.Minute
 
-// GatewayAvailableAgain reads the UTC moment a gateway says an account becomes available again. A bare clock time is
-// placed at its first future occurrence relative to at; a dated form is read literally in UTC. False when the words do
-// not name such a time: callers then show a manual Retry without a countdown.
+// GatewayAvailableAgain shares the transcript parser used by worker usage-limit waits.
 func GatewayAvailableAgain(text string, at time.Time) (time.Time, bool) {
-	m := gatewayAvailableRe.FindStringSubmatch(text)
-	if m == nil {
-		return time.Time{}, false
-	}
-	hour, min := atoiOr(m[4]), atoiOr(m[5])
-	if hour > 23 || min > 59 {
-		return time.Time{}, false
-	}
-	if m[1] != "" {
-		t, err := time.Parse("2006-01-02 15:04", m[1]+"-"+m[2]+"-"+m[3]+" "+fmt.Sprintf("%02d:%02d", hour, min))
-		if err != nil {
-			return time.Time{}, false
-		}
-		return t.UTC(), true
-	}
-	now := at.UTC()
-	t := time.Date(now.Year(), now.Month(), now.Day(), hour, min, 0, 0, time.UTC)
-	if !t.After(now) {
-		t = t.Add(24 * time.Hour)
-	}
-	return t, true
-}
-
-func atoiOr(s string) int {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0
-	}
-	return n
+	return transcript.GatewayAvailableAgain(text, at)
 }
 
 // recoveryProtected says the conversation is the main one or a leader/supervisor one, the only conversations the
 // owner's auto-switch-and-return rule applies to. The manager marks both through follows_setting (assistant/start.go);
 // worker Agents have neither flag and keep their own fallback behavior.
 func (n *Node) recoveryProtected(id string) bool {
+	if n.state == nil {
+		return false
+	}
 	st, ok := n.state.get(id)
 	return ok && (st.IsMain || st.FollowsSetting)
 }
@@ -167,13 +135,32 @@ func (n *Node) persistModelRecovery(id string) {
 
 // recordRecoverySwitch marks that recovery moved id from its configured model to the model that answers now. The
 // marker accumulates every model the chain tried and keeps the first failure's reason, reset time and probe identity.
-func (n *Node) recordRecoverySwitch(id, launcher, from, probeFrom, to, reason string, resets *time.Time, tried []string) {
+func (n *Node) recordRecoverySwitch(id, launcher, from, probeFrom, to, reason string, resets *time.Time, tried []string, original ...modelExecution) {
 	if !n.recoveryProtected(id) {
 		return
 	}
 	prev := n.modelRecovery(id)
-	r := &proto.ModelRecovery{From: from, ProbeFrom: probeFrom, To: to, Reason: reason, At: time.Now().UTC(), Tried: append([]string{}, tried...)}
+	var choice *proto.ModelRecoveryChoice
+	if len(original) > 0 {
+		e := original[0]
+		choice = &proto.ModelRecoveryChoice{Effort: e.Effort, UseEffort: e.UseEffort, Fingerprint: e.Fingerprint, Launcher: launcher}
+	} else {
+		n.mu.Lock()
+		if current := n.recoveries[id]; current != nil {
+			e := current.from
+			choice = &proto.ModelRecoveryChoice{Effort: e.Effort, UseEffort: e.UseEffort, Fingerprint: e.Fingerprint, Launcher: launcher}
+		}
+		n.mu.Unlock()
+	}
+	r := &proto.ModelRecovery{From: from, ProbeFrom: probeFrom, To: to, Reason: reason, At: time.Now().UTC(), Tried: append([]string{}, tried...), Choice: choice}
 	if prev != nil && prev.From == from {
+		if prev.Choice != nil && choice != nil && !prev.ChainExhausted {
+			e := modelExecution{Model: prev.From, Effort: prev.Choice.Effort, UseEffort: prev.Choice.UseEffort, Fingerprint: prev.Choice.Fingerprint}
+			current := modelExecution{Model: from, Effort: choice.Effort, UseEffort: choice.UseEffort, Fingerprint: choice.Fingerprint}
+			if prev.Choice.Launcher == launcher && sameModelChoice(e, current) {
+				r.Choice = prev.Choice // the first configured execution identity wins throughout one recovery chain
+			}
+		}
 		if prev.ProbeFrom != "" {
 			r.ProbeFrom = prev.ProbeFrom // the first configured identity wins throughout one recovery chain
 		}
@@ -198,6 +185,7 @@ func (n *Node) recordRecoveryExhausted(id, reason string, resets *time.Time, tri
 	r := &proto.ModelRecovery{Reason: reason, At: time.Now().UTC(), Tried: append([]string{}, tried...), ChainExhausted: true}
 	if prev != nil {
 		r.From, r.ProbeFrom, r.To = prev.From, prev.ProbeFrom, prev.To
+		r.Choice = prev.Choice
 	}
 	if resets != nil {
 		r.ResetsAt = resets
@@ -294,21 +282,27 @@ func (n *Node) returnToConfiguredAt(ctx context.Context, id string, at time.Time
 // askedModel is the request before heldFallback, so an empty or literal default remains distinguishable from a concrete
 // model. ProbeFrom is deliberately never copied into the execution.
 func (n *Node) applyModelRecoveryReturn(ctx context.Context, id, askedModel string, execution modelExecution, holdExpired bool) modelExecution {
+	if execution.NewModelChoice {
+		// An explicit choice wins even when it names marker.To. Its old marker and hold are committed only after delivery.
+		return execution
+	}
 	marker := n.modelRecovery(id)
 	if !modelRecoverySwitched(marker) || !n.recoveryProtected(id) {
 		return execution
 	}
 	if askedModel != marker.From && askedModel != marker.To {
-		// A newer explicit model choice wins over an automatic return. End the old marker without rewriting the request.
+		// Compatibility for callers that do not carry full-choice provenance. End the old marker without rewriting the request.
 		n.clearModelRecovery(id)
 		return execution
 	}
-	// Only an existing hold that expired for this exact request counts as natural expiry. Its two-hour sticky record
-	// must still skip a wasted same-model retry. A confirmed recovery/reset releases all recovery bookkeeping.
-	backViaHold := holdExpired && askedModel == marker.From && execution.Model == marker.From
 	now := time.Now()
+	// An existing hold that expired for this exact request counts as natural expiry. So does an aged persisted record
+	// whose original full identity still matches: age must not turn it into a cold fallback.
+	naturalExpiry := holdExpired && askedModel == marker.From && execution.Model == marker.From ||
+		!marker.At.IsZero() && now.Sub(marker.At) >= assistantRefusalSticky && askedModel == marker.From && execution.Model == marker.From
+	// Its two-hour sticky record must still skip a wasted same-model retry. A confirmed recovery/reset releases all recovery bookkeeping.
 	confirmed := marker.Returning || marker.ResetsAt != nil && now.After(*marker.ResetsAt)
-	if !confirmed && !backViaHold {
+	if !confirmed && !naturalExpiry {
 		confirmed = n.returnToConfiguredAt(ctx, id, now)
 	}
 	switch {
@@ -316,7 +310,7 @@ func (n *Node) applyModelRecoveryReturn(ctx context.Context, id, askedModel stri
 		// Confirmed recovery is stronger than simultaneous natural expiry: release the hold and unavailable record too.
 		execution.Model = marker.From
 		n.releaseModelRecovery(id, marker.From)
-	case backViaHold:
+	case naturalExpiry:
 		execution.Model = marker.From
 		n.clearModelRecovery(id)
 	default:
@@ -352,10 +346,24 @@ func (n *Node) releaseModelRecoveryLocked(id, configured string) (dropped bool) 
 		}
 	}
 	delete(n.fallbacks, id)
+	launcher := ""
+	if marker != nil && marker.Choice != nil {
+		launcher = marker.Choice.Launcher
+	}
+	if launcher == "" {
+		if st, ok := n.state.get(id); ok {
+			launcher = st.Launcher
+		}
+	}
 	probeFrom := modelRecoveryProbeFrom(marker)
 	for k := range n.unavailable {
-		if _, model, ok := strings.Cut(k, "\x00"); ok &&
-			(model == configured || marker != nil && (model == marker.From || model == probeFrom)) {
+		l, model, ok := strings.Cut(k, "\x00")
+		// Only this conversation's original launcher supplied the availability evidence. A same-named model on another
+		// launcher, or on an unidentified one, keeps its own unavailable record.
+		if !ok || l != launcher {
+			continue
+		}
+		if model == configured || marker != nil && (model == marker.From || model == probeFrom) {
 			delete(n.unavailable, k)
 		}
 	}
@@ -395,16 +403,16 @@ func (n *Node) launcherModelAnswers(ctx context.Context, launcher, model string)
 // the conversation on its fallback. A 200 that the upstream ends with a refusal still proves the model is served and
 // has quota, so the conversation returns to it.
 var assistantModelProbe = func(ctx context.Context, n *Node, launcher, model string) bool {
-	base, key := n.launcherGateway(ctx, launcher)
+	base, key, headers := n.launcherGateway(ctx, launcher)
 	if base == "" || key == "" || model == "" {
 		return false
 	}
-	return probeGateway(ctx, base, key, n.resolvedLauncherModel(ctx, launcher, model))
+	return probeGateway(ctx, base, key, n.resolvedLauncherModel(ctx, launcher, model), headers)
 }
 
 // probeGateway is the probe's HTTP seam: one one-token request to the gateway. A 2xx (including a stream ended with a
 // refusal) proves the model is served and has quota; a 429/5xx/auth error or a connection failure keeps the fallback.
-func probeGateway(ctx context.Context, base, key, model string) bool {
+func probeGateway(ctx context.Context, base, key, model, headers string) bool {
 	root, err := rootURL(base)
 	if err != nil || model == "" || key == "" {
 		return false
@@ -417,10 +425,15 @@ func probeGateway(ctx context.Context, base, key, model string) bool {
 	if err != nil {
 		return false
 	}
+	for name, value := range piHeaders(headers) {
+		req.Header.Set(name, value)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("x-api-key", key)
 	req.Header.Set("Authorization", "Bearer "+key)
+	modelhttp.SetDefaultUserAgent(req.Header)
+	modelhttp.SetOpenCodeSession(req.Header, req.URL.String(), modelhttp.OpenCodeSessionHeaderValue(headers))
 	resp, err := modelProbeHTTPClient.Do(req)
 	if err != nil {
 		return false
@@ -436,13 +449,13 @@ func probeStatusOK(status int) bool { return status >= 200 && status < 300 }
 var modelProbeHTTPClient = &http.Client{Timeout: 15 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
-// launcherGateway is the gateway address and key launcher's agent sends with, layered as Claude Code layers them:
+// launcherGateway is the gateway address, key, and custom headers the launcher's agent sends with, layered as Claude Code layers them:
 // the launcher's --settings env wins, then the user settings of its config directory, then the process environment.
 // The key never leaves this machine and is never logged.
-func (n *Node) launcherGateway(ctx context.Context, launcher string) (base, key string) {
+func (n *Node) launcherGateway(ctx context.Context, launcher string) (base, key, headers string) {
 	p, err := n.launcherProbe(ctx, launcher)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	flag := map[string]string{}
 	if arg := settingsArg(p.Args); arg != "" {
@@ -459,16 +472,17 @@ func (n *Node) launcherGateway(ctx context.Context, launcher string) (base, key 
 		user = settingsEnv(s)
 	}
 	get := func(k string) string {
-		if v := flag[k]; v != "" {
+		if v, ok := flag[k]; v != "" || (k == "ANTHROPIC_CUSTOM_HEADERS" && ok) {
 			return v
 		}
-		if v := user[k]; v != "" {
+		if v, ok := user[k]; v != "" || (k == "ANTHROPIC_CUSTOM_HEADERS" && ok) {
 			return v
 		}
 		return p.Env[k]
 	}
 	return firstNonEmpty(get("ANTHROPIC_BASE_URL"), get("OPENAI_BASE_URL")),
-		firstNonEmpty(get("ANTHROPIC_AUTH_TOKEN"), get("ANTHROPIC_API_KEY"), get("OPENAI_API_KEY"))
+		firstNonEmpty(get("ANTHROPIC_AUTH_TOKEN"), get("ANTHROPIC_API_KEY"), get("OPENAI_API_KEY")),
+		get("ANTHROPIC_CUSTOM_HEADERS")
 }
 
 // settingsEnv is a Claude Code settings document's string env values.

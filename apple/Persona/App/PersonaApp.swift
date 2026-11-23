@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 #endif
 import UserNotifications
+import PersonaWire
 
 @main
 struct PersonaApp: App {
@@ -13,12 +14,37 @@ struct PersonaApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                #if os(iOS)
+                .personaCallCover() // the call to Persona's page and the bar back to it (#9290, CallScreen.swift)
+                .urgentCallCover() // an answered urgent call's page, over everything (UrgentCallView.swift)
+                .overlay { MeetingFloatingWindow() } // a meeting recording with its room put away (#8731 V5)
+                .locationAlwaysOffer() // once, after a location read failed in the background (#13200)
+                #endif
+                #if DEBUG && os(iOS)
+                .task { ProductionContinuityShadow.shared.install() } // Lazy: no core is created until a real input arrives.
+                #endif
                 #if DEBUG && os(iOS)
                 .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
                 .overlay { HomeGalleryOverlay() } // `-showHomeWidgets YES`: every widget, every size (docs/apple/home-widgets.md)
                 .overlay { ButtonContrastOverlay() } // `-showButtonContrast YES`: secondary buttons on every surface (#6157)
                 #endif
                 .environment(model)
+                // A link to one of Persona's pages opens in the app on every screen that has no link handling of its own
+                // (#9926, docs/protocol/deep-links.md); any other link opens as it did.
+                .environment(\.openURL, OpenURLAction { url in
+                    guard let opened = model.openOwnLink(url) else { return .systemAction }
+                    if case .sheet(let page) = opened { model.linkSheet = page }
+                    return .handled
+                })
+                .rootHubLinkSheet($model.linkSheet)
+                // A pairing link from outside the app asks before it pairs (#9929).
+                .pairConfirmation($model.pairToConfirm) { model.pairFromLink($0.config) }
+                #if os(iOS)
+                // A redial from the Phone app's Recents (#9290), where SwiftUI hands it over rather than the scene's delegate;
+                // the two are one tap (`PersonaCalls.continueActivity` takes it once).
+                .onContinueUserActivity(PersonaCalls.activityTypes[0]) { PersonaCalls.shared.continueActivity($0) }
+                .onContinueUserActivity(PersonaCalls.activityTypes[1]) { PersonaCalls.shared.continueActivity($0) }
+                #endif
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
                 .onOpenURL { url in
                     #if os(iOS)
@@ -28,15 +54,27 @@ struct PersonaApp: App {
                     #if os(iOS)
                     if let link = FleetLink.session(url) { // tapped the Live Activity
                         // "group|machine" for another group's row (FleetMerge); a row the hub pushed names no group.
-                        if let key = model.resolve(path: link.machine + "/" + link.session) { model.open(key) }
+                        model.openExternal(path: link.machine + "/" + link.session)
                         return
                     }
-                    if RecordingLink.matches(url) { MeetingRecorder.openRecordings(); return } // the recording's activity
+                    if RecordingLink.matches(url) { MeetingRecorder.openRecordings(askingEnd: RecordingLink.endID(url)); return } // the recording's activity
                     if let kind = HomeWidgetLink.kind(url) { model.openWidget(kind); return } // a Home Screen widget
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
+                    if let link = ProviderImportLink.text(url) { model.openProviderImport(link); return } // a gateway's or a shared provider import link (#5428)
                     if IPhoneSetupLink.matches(url) { model.openIPhoneSetup(); return }
+                    // The web sign-in page's code, read by the Camera app: only the scanner in Settings › Devices
+                    // approves a browser (#10293), so a link says where to scan it and does nothing else.
+                    if BrowserLoginLink.matches(url) {
+                        model.toast = Toast(String(localized: "To sign in a browser, scan its code in Settings › Devices › Scan Browser Sign-in Code."))
+                        return
+                    }
+                    // A page of Persona's (persona://open<path>, an older persona:// form, #9926): only opens it.
+                    if let opened = model.openOwnLink(url) {
+                        if case .sheet(let page) = opened { model.linkSheet = page }
+                        return
+                    }
                     // A computer's pairing link (「添加电脑」, Add computer) is for Persona Link on that computer, not for this device (#4198).
                     if ServerConfig.isComputerLink(url) {
                         model.toast = Toast(String(localized: "Open this link on the computer you're adding"))
@@ -50,24 +88,8 @@ struct PersonaApp: App {
                         }
                         return
                     }
-                    Task {
-                        do {
-                            try await model.pair(cfg)
-                            let host = cfg.url.host() ?? String(localized: "Server")
-                            model.toast = Toast(String(localized: "Connected to \(host)"), style: .success)
-                        }
-                        catch {
-                            // An expired code says so (showPairing); anything else is said too, not through `show`, which
-                            // keeps quiet about a timeout or no network: a hub out of reach then said nothing after 30 s on
-                            // the welcome page (#4273).
-                            if PairError.isExpiredCode(error) {
-                                model.showPairing(error)
-                            } else if !error.isCancellation {
-                                model.toast = Toast(String(localized: "Couldn't connect: \(error.localizedDescription)"), style: .error)
-                                Haptics.error()
-                            }
-                        }
-                    }
+                    // A link only opens pages: pairing waits for the user's Connect (#9929).
+                    model.askToPair(cfg)
                 }
         }
         #if os(visionOS)
@@ -107,15 +129,24 @@ struct PersonaApp: App {
                 // Refresh the health summary snapshot while unlocked, so a locked-phone phone_health_summary
                 // call later can serve it instead of HealthKit's inaccessible-database error.
                 Task { await HealthTool.refreshSnapshot() }
+                SiriCalls.askOnce(paired: model.hub != nil) // a build with app.siri_calls only (#9290)
+                BackgroundLocation.shared.cameToFront() // offers Always once after a read refused in the background
                 #endif
             } else if new == .background {
                 #if os(iOS)
                 ClipboardOfferWatcher.shared.left()
+                // The Live Activity follows the first group's hub (LiveActivityController.report): without a push route
+                // there it would only go stale (#12982).
+                let group = model.links.first?.api.group
+                LiveActivityController.shared.left(pushReaches: group.flatMap { PushHealthStore.shared.health.routes[$0]?.reaches })
                 #endif
                 // A suspended app's socket looks alive to the hub until it times out, and phone_* calls sent to it hang.
                 // Closed, the hub knows the phone is away and wakes it with a silent push instead; and nothing opens it
                 // again until the app is back (the network returning, a refresh ending: LiveConnection.suspended).
                 model.suspendLinks()
+                // A refresh still running from the last return to the app stops before its next write to the App Group:
+                // iOS ends an app that is suspended holding that store's lock (0xdead10cc, #11360).
+                ExtensionSurfaceForegroundRefresh.shared.cancel()
                 // All-day recording: a run or request in progress finishes only inside a grant of background time, and a
                 // model download a run started in front stops.
                 RecordingDayTranscriber.shared.background()
@@ -144,6 +175,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         ErrorReports.installExceptionHandler(queue: .shared) // first: a crash while launching is reported too (#5621)
+        ExtensionSurfaceAppLease.install() // background time around the App Group store's lock, before anything writes it (#11360)
+        // Developing Persona carries on recording when it was left on (#9460); reads two defaults otherwise.
+        DevMode.shared.launch(tab: UserDefaults.standard.string(forKey: "app.tab").flatMap(AppTab.init(rawValue:)) ?? .assistant)
         _ = KeyboardState.shared // watches the keyboard from the start: a card may come while it is already up
         UNUserNotificationCenter.current().delegate = self
         Task { await ExtensionNotificationActions.preserveAndRegister { NotificationActions.categories } }
@@ -153,6 +187,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the
         // reports' small state file this early.
         if WorkoutReports.deliversInBackground { WorkoutReports.shared.observe() }
+        // Here too, for a launch iOS made for a significant location change: the Always session and the service are kept
+        // only a few seconds after a relaunch (#13200). Asks nothing; one manager whose level arrives in a callback.
+        BackgroundLocation.shared.launch()
+        // Urgent calls' PushKit registry, when they are on: a VoIP push that launches the app reaches only one made now.
+        UrgentCallPush.shared.start()
+        #endif
+        #if DEBUG && os(iOS)
+        TerminationActivities.install() // a test's Live Activities end with the app, not at the next run's install (#10109)
         #endif
         #if DEBUG
         // Simulator automation: `simctl launch … -pairURL persona://pair?...`; `-pairURL2`, `-pairURL3` pair more hubs
@@ -162,6 +204,57 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             AppModel.shared.adopt([cfg] + more)
         }
         let d = UserDefaults.standard
+        #if os(iOS)
+        // `-showUrgentCallSample YES|held`: the urgent call page, from the mock hub (UrgentCallCenter.showSample); `held`
+        // on hold with Resume. `-showUrgentCallSampleTitle <text>`: its title instead of the mock's (a long one).
+        let urgentSampleHeld = d.string(forKey: "showUrgentCallSample") == "held"
+        if d.bool(forKey: "showUrgentCallSample") || urgentSampleHeld {
+            let title = d.string(forKey: "showUrgentCallSampleTitle")
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                UrgentCallCenter.shared.showSample(held: urgentSampleHeld, title: title)
+            }
+        }
+        // `-openOwnerCall YES`: calls Persona (#9290) once the hub is there, as the main conversation's Call does (on the
+        // Simulator through `SimulatedCallSystem`); `-openOwnerCallSeconds <n>` hangs up n seconds after it connected.
+        if d.bool(forKey: "openOwnerCall") {
+            let seconds = d.integer(forKey: "openOwnerCallSeconds")
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                await PersonaCalls.shared.callPersona(origin: .recents)
+                guard seconds > 0 else { return }
+                for _ in 0..<60 where PersonaCalls.shared.ownerCall?.connectedSince == nil && PersonaCalls.shared.ownerInProgress {
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                try? await Task.sleep(for: .seconds(seconds))
+                PersonaCalls.shared.hangUp()
+            }
+        }
+        // `-showCallSample dialing|connecting|connected|muted|held|interrupted|resume|speaker|ended|speaking|hearing|
+        // thinking|working|asking|mutedSpeaking|paused|…`: the call page's state, with no system and no audio
+        // (PersonaCalls.showSample; a speaking or hearing sample has a made-up voice level). `-showCallSampleName <text>`,
+        // `-showCallSampleCaption <text>`, `-showCallSampleReason <text>`: the name (the page's and the bar's), the latest
+        // words and why it ended, instead of the sample's own (long texts for the screenshots). `-showCallSampleLook
+        // package|uploaded|<id>`: that look's avatar (waits up to 30 s for it to be on the phone; the mock's
+        // MOCK_PERSONAS=builtin MOCK_LOOK=nwverse has a package). `-showCallSampleAgent YES`: a call to an Agent session.
+        if let sample = d.string(forKey: "showCallSample").flatMap(PersonaCalls.Sample.init(rawValue:)) {
+            let name = d.string(forKey: "showCallSampleName"), caption = d.string(forKey: "showCallSampleCaption")
+            let reason = d.string(forKey: "showCallSampleReason"), wanted = d.string(forKey: "showCallSampleLook")
+            let agent = d.bool(forKey: "showCallSampleAgent")
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                var look: Persona?
+                if let wanted {
+                    for _ in 0..<60 {
+                        look = PersonaCalls.sampleLook(wanted, model: AppModel.shared)
+                        if look != nil { break }
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                }
+                PersonaCalls.shared.showSample(sample, name: name, caption: caption, reason: reason, look: look, agent: agent)
+            }
+        }
+        #endif
         // `-openPairLink <persona://pair?…>`: pairs as a scanned link does (`pair`, then the device token trade), unlike
         // `-pairURL`; `-openPairLinkTimes 2` handles the same link again a few seconds later (#2766).
         if let s = d.string(forKey: "openPairLink"), let cfg = ServerConfig(pairURL: s) {
@@ -245,14 +338,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         default: break
         }
         // "machine/session", or "group|machine/session" for another group.
-        if let open = d.string(forKey: "openSession"), let key = AppModel.shared.resolve(path: open) {
+        if let open = d.string(forKey: "openSession") {
             // `-openFromDoneNotice YES`: as a tap on its "Done" notification (lands on the latest answer).
-            if d.bool(forKey: "openFromDoneNotice") {
-                AppDelegate.openFromNotification(key, finished: true)
-            } else {
-                AppModel.shared.selectedTab = .chats
-                AppModel.shared.openChat = key
-            }
+            AppModel.shared.openExternal(path: open, latestAnswer: d.bool(forKey: "openFromDoneNotice"))
         }
         if d.string(forKey: "showLark") != nil { AppModel.shared.selectedTab = .mail }
         if let open = d.string(forKey: "openAssistant"), let key = AppModel.shared.resolve(path: open) {
@@ -268,11 +356,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             AppModel.shared.selectedTab = .assistant
             AppModel.shared.assistantCurrent = nil
         }
+        #if os(iOS)
+        // `-openDictationControl YES`: the Dictate to Persona control's intent, including its cold-start request.
+        if d.bool(forKey: "openDictationControl") { OpenPersonaDictationIntent.open(AppModel.shared) }
+        #endif
         if let id = d.string(forKey: "openAssistantManager") { AppModel.shared.openAssistantManagerWhenListed(id) }
         AppModel.shared.debugShowNewChat = d.bool(forKey: "showNewChat")
         // `-simulateTap <machine>/<session>`: what tapping a push does, 4 s after launch (on another screen by then).
-        if let tap = d.string(forKey: "simulateTap"), let key = AppModel.shared.resolve(path: tap) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { AppDelegate.openFromNotification(key) }
+        if let tap = d.string(forKey: "simulateTap") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { AppModel.shared.openExternal(path: tap) }
         }
         // `-showTestNotification permission|plan|elicitation`: posts what an interaction push looks like (category, ids),
         // 3 s after the app goes to the background, so the UI test can exercise the notification without APNs.
@@ -305,6 +397,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             LiveActivityController.shared.showSample(phase, details: d.bool(forKey: "fleetDetails"), island: d.string(forKey: "fleetIsland"),
                                                      count: d.integer(forKey: "showFleetCount"))
         }
+        #if os(iOS) && canImport(AlarmKit)
+        // `-showAlarmSample timer|paused`: a 25-minute "Focus" timer set as phone_timer_start sets one (paused: then paused),
+        // so its Live Activity can be photographed (docs/apple/live-activity.md "Alarms and timers (AlarmKit)").
+        if #available(iOS 26.0, *), let sample = d.string(forKey: "showAlarmSample") {
+            AlarmsTool.showSample(paused: sample == "paused")
+        }
+        #endif
         RuntimeCLI.startIfAsked() // `-runtimeCLI <port>`: scripts/app/personactl.py drives the running app
         let automation = d.string(forKey: "pairURL") != nil
         #else
@@ -318,20 +417,31 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #if os(iOS)
         RecordingDayCatchUp.register()
         #endif
+        #if os(iOS)
+        MeetingReplay.shared.clearEnded() // a replayed meeting tape (#10589) left from the last run leaves the recordings
+        #endif
         #if DEBUG
         RecordingSamples.showMeetingIfAsked() // `-showMeetingSample recording|paused|interrupted|minutes|pending|overview`
+        #if os(iOS)
+        MeetingReminders.showIfAsked() // `-showMeetingReminder start|open`, after the made-up meetings are cleared
+        #endif
         #if os(iOS)
         Task { await RecordingSamples.installDaySampleIfAsked() } // `-showDaySample today|paused|recap|pending|failed`
         #endif
         #if os(iOS)
         // `-openDayCatchUp YES`: runs the all-day catch-up now (the simulator never runs background tasks).
         if UserDefaults.standard.bool(forKey: "openDayCatchUp") { Task { _ = await RecordingDayCatchUp.catchUp() } }
+        MeetingReplay.startIfAsked() // `-showMeetingReplay <tape>|sample` (#9417)
+        MeetingTapeLibrary.installSampleIfAsked() // `-openMeetingTapes sample|empty` (#10589)
+        MeetingTapeRecorder.startIfAsked() // `-openMeetingAudio <file>`: the meeting it records writes a tape
         #endif
         #endif
         WatchSync.shared.activate()
         AppModel.shared.start()
         AppIconBadgeWatcher.shared.start(AppModel.shared)
         LiveActivityController.shared.start()
+        // A hub that retired this device's push registration answers its writes 409 (#9612): register again, then retry.
+        APIClient.onPushRegistrationRequired = { group in await PushRegistrar.shared.registrationRequired(group: group).value }
         if !automation { PushRegistrar.shared.registerIfPossible() }
         return true
     }
@@ -431,6 +541,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
         #if os(iOS)
+        // An urgent call's companion notification (UrgentCallCenter): answers the call while it rings, else opens its
+        // conversation.
+        let callInfo = response.notification.request.content.userInfo
+        if let call = callInfo[UrgentCallCenter.callKey] as? String {
+            let group = callInfo[PushCrypto.groupKey] as? String ?? ""
+            nonisolated(unsafe) let done = completionHandler
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    UrgentCallCenter.shared.opened(callID: call, group: group)
+                    done()
+                }
+            }
+            return
+        }
         // "Recording paused" (MeetingRecorder.notifyPaused): open Recordings; coming to the front resumes it.
         if response.notification.request.content.userInfo[RecordingLink.notificationKey] != nil {
             nonisolated(unsafe) let done = completionHandler
@@ -438,6 +562,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     if opened { MeetingRecorder.openRecordings() }
+                    done()
+                }
+            }
+            return
+        }
+        // A calendar meeting's reminder (MeetingReminders, #8731 G2): Start starts the meeting, a tap opens Meetings.
+        if let meeting = MeetingReminders.meeting(response.notification.request.content.userInfo) {
+            nonisolated(unsafe) let done = completionHandler
+            let action = response.actionIdentifier
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    MeetingReminders.respond(action: action, meeting: meeting)
                     done()
                 }
             }
@@ -511,7 +647,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 }
                 #endif
                 // No interaction: a turn finished ("Done"), opened at its answer like from the list.
-                if action != UNNotificationDismissActionIdentifier { AppDelegate.openFromNotification(key, finished: ixID == nil) }
+                if action != UNNotificationDismissActionIdentifier, let ref {
+                    let model = AppModel.shared
+                    model.openExternal(machineID: ref.machine, sessionID: ref.session, group: ref.sourceGroup(model), latestAnswer: ixID == nil)
+                }
                 done()
             }
         }
@@ -627,12 +766,4 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     nonisolated static func sessionRef(_ info: [AnyHashable: Any]) -> PushRef? { PushRef(info) }
     static func sessionKey(_ ref: PushRef) -> SessionKey { ref.key(AppModel.shared) }
-
-
-    /// Opens the session a notification is about. On a cold launch the tap arrives before the UI exists: `open`
-    /// only sets state (tab + chat to open) that the views pick up when they appear.
-    static func openFromNotification(_ key: SessionKey?, finished: Bool = false) {
-        guard let key else { return }
-        AppModel.shared.open(key, latestAnswer: finished)
-    }
 }

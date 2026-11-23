@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -173,7 +174,13 @@ func piProviderOf(l proto.ManagedLauncher) (piProvider, bool) {
 		p.BaseURL = cmp.Or(l.LaunchBaseURL(), "https://api.anthropic.com")
 		p.AuthHeader = l.BearerAuth() // the same key as Authorization: Bearer as well
 	} else {
-		p.BaseURL = cmp.Or(strings.TrimRight(l.BaseURL, "/"), "https://api.openai.com/v1")
+		p.BaseURL = cmp.Or(strings.TrimRight(l.LaunchBaseURL(), "/"), "https://api.openai.com/v1")
+	}
+	if modelhttp.OpenCodeGo(p.BaseURL) && !modelhttp.HasOpenCodeSessionHeader(l.Headers) {
+		if p.Headers == nil {
+			p.Headers = map[string]string{}
+		}
+		p.Headers[modelhttp.OpenCodeSessionHeader] = modelhttp.OpenCodeSessionID("launcher:" + cmp.Or(l.Name, p.BaseURL))
 	}
 	var ids []string
 	add := func(id string) {
@@ -231,12 +238,25 @@ func piModelOf(api, id string, known []proto.ProviderModel) piModel {
 		if k.ContextWindow > 0 {
 			m.ContextWindow = k.ContextWindow
 		}
-		if len(k.Efforts) > 0 {
+		if k.NoEffort {
+			m.Reasoning = false
+		} else if len(k.Efforts) > 0 || len(k.AllEfforts) > 0 {
 			m.Reasoning = true
+		}
+		if k.ImageInput != nil {
+			m.Input = []string{"text"}
+			if *k.ImageInput {
+				m.Input = append(m.Input, "image")
+			}
+		}
+		if k.MaxOutputTokens > 0 {
+			m.MaxTokens = min(k.MaxOutputTokens, m.ContextWindow)
 		}
 		break
 	}
-	m.MaxTokens = min(32000, m.ContextWindow/4)
+	if m.MaxTokens == 0 {
+		m.MaxTokens = min(32000, m.ContextWindow/4)
+	}
 	return m
 }
 

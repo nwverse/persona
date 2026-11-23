@@ -3,6 +3,7 @@
 package persona.core.contracts
 
 import persona.core.contracts.stream.NativeStreamSchema
+import persona.core.contracts.generated.ExtensionNotification
 import persona.core.contracts.generated.ExtensionUIStreamServerEnvelope
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
@@ -61,6 +62,8 @@ data class Hello(
     @SerialName("min_app_build") val minAppBuild: Int? = null,
     /** Dedicated hub-owned receipt protocol version; an extension's feature string cannot establish trust. */
     @SerialName("message_send_state") val messageSendState: Int? = null,
+    /** The pictures a message may carry; older hubs use the same documented defaults, not a four-picture cap. */
+    @SerialName("image_limits") val imageLimits: ImageLimitsTable? = null,
 ) : ServerEvent
 
 @KeepGeneratedSerializer
@@ -100,6 +103,10 @@ data class SessionsEvent(
     @SerialName("machine_id") val machineId: String, val sessions: List<Session> = emptyList(),
 ) : ServerEvent
 
+/** A whole, authoritative row, including an empty Agent queue when undelivered is absent. */
+@Serializable
+data class SessionRowEvent(val session: Session) : ServerEvent
+
 /** Session-scoped hub receipt, not proof of durable delivery to the Agent. */
 @KeepGeneratedSerializer
 @Serializable(with = MessageSendStateEventSerializer::class)
@@ -107,7 +114,7 @@ data class MessageSendStateEvent(
     @SerialName("machine_id") val machineId: String,
     @SerialName("session_id") val sessionId: String,
     @SerialName("client_msg_id") val clientMessageId: String,
-    @WireEnum("processing", "delivered", "failed", "unknown") val state: String,
+    @WireEnum("processing", "delivered", "failed", "unknown", "kept") val state: String,
     @WireTime val at: String,
     /** Stamped by the authenticated socket, never read from or written to JSON. */
     @kotlinx.serialization.Transient val socketGeneration: Long? = null,
@@ -207,6 +214,8 @@ data class NotifyEvent(
     val id: String? = null,
     /** This device is inside its quiet hours (the prefs' `quiet`): shown, but without a sound. */
     val quiet: Boolean = false,
+    /** An extension's page and declared notification buttons; absent on older hubs and ordinary alerts. */
+    @SerialName("extension_notification") val extensionNotification: ExtensionNotification? = null,
 ) : ServerEvent
 
 /**
@@ -249,6 +258,14 @@ data class HubUpdateEvent(val update: persona.core.contracts.api.HubUpdateStatus
 @Serializable(with = KnowledgeSelectionEventSerializer::class)
 data class KnowledgeSelectionEvent(val manager: String? = null) : ServerEvent
 
+/** One assistant's saved prompts changed. An absent manager names the hub's default assistant. */
+@Serializable
+data class SavedPromptsEvent(val manager: String? = null) : ServerEvent
+
+/** One assistant's starred messages changed. An absent manager names the hub's default assistant. */
+@Serializable
+data class StarredMessagesEvent(val manager: String? = null) : ServerEvent
+
 /**
  * An extension's install, upgrade or uninstall moved on (docs/protocol/protocol.md "Extension install, upgrade and uninstall progress"): only to a client
  * that says `extension_operations`, and not replayed after a reconnect (the page lists them again).
@@ -287,6 +304,20 @@ data object ManagersEvent : ServerEvent
 
 data object UnknownEvent : ServerEvent
 
+/** A malformed optional extension payload degrades to the ordinary alert instead of dropping the whole event. */
+private fun decodeNotifyEvent(json: Json, obj: JsonObject): NotifyEvent {
+    val extension = try {
+        when (val element = obj["extension_notification"]) {
+            null, JsonNull -> null
+            else -> Json(from = json) { coerceInputValues = false }.decodeFromJsonElement<ExtensionNotification>(element)
+        }
+    } catch (_: Exception) {
+        null
+    }
+    return json.decodeFromJsonElement<NotifyEvent>(JsonObject(obj.filterKeys { it != "extension_notification" }))
+        .copy(extensionNotification = extension)
+}
+
 object ServerEventSerializer : KSerializer<ServerEvent> {
     override val descriptor = buildClassSerialDescriptor("persona.core.contracts.ServerEvent")
     override fun deserialize(decoder: Decoder): ServerEvent {
@@ -299,8 +330,11 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "sessions" -> input.json.decodeFromJsonElement<SessionsEvent>(obj).let { event ->
                 event.copy(sessions = event.sessions.map { it.copy(machineId = event.machineId) })
             }
+            "session" -> input.json.decodeFromJsonElement<SessionRowEvent>(obj).also {
+                require(it.session.machineId.isNotBlank() && it.session.sessionId.isNotBlank())
+            }
             "message_send_state" -> {
-                require((obj["state"] as? JsonPrimitive)?.content in setOf("processing", "delivered", "failed", "unknown"))
+                require((obj["state"] as? JsonPrimitive)?.content in setOf("processing", "delivered", "failed", "unknown", "kept"))
                 input.json.decodeFromJsonElement<MessageSendStateEvent>(obj).also {
                     require(it.machineId.isNotBlank() && it.sessionId.isNotBlank() && it.clientMessageId.isNotBlank())
                     require(parseTime(it.at) != null)
@@ -318,7 +352,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "endpoints" -> input.json.decodeFromJsonElement<EndpointsEvent>(obj)
             "client_hello_ack" -> input.json.decodeFromJsonElement<ClientHelloAck>(obj)
             "pong" -> input.json.decodeFromJsonElement<Pong>(obj)
-            "notify" -> input.json.decodeFromJsonElement<NotifyEvent>(obj)
+            "notify" -> decodeNotifyEvent(input.json, obj)
             "extension_ui", "plugin_ui" -> input.json.decodeFromJsonElement<ExtensionUiEvent>(obj).also {
                 require(it.invalidate || !it.id.isNullOrEmpty()) { "A badge names its UI" }
             }
@@ -344,6 +378,8 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "inbox" -> input.json.decodeFromJsonElement<InboxEvent>(obj)
             "todos" -> input.json.decodeFromJsonElement<TodosEvent>(obj)
             "assistant_feed" -> input.json.decodeFromJsonElement<AssistantFeedEvent>(obj)
+            "assistant_saved_prompts" -> input.json.decodeFromJsonElement<SavedPromptsEvent>(obj)
+            "assistant_starred" -> input.json.decodeFromJsonElement<StarredMessagesEvent>(obj)
             "directions" -> DirectionsEvent
             "task_plan" -> input.json.decodeFromJsonElement<TaskPlanEvent>(obj)
             "assistant_view" -> input.json.decodeFromJsonElement<AssistantViewEvent>(obj)
@@ -372,6 +408,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
         val (type, payload) = when (value) {
             is Hello -> "hello" to output.json.encodeToJsonElement(value)
             is ItemsEvent -> "items" to output.json.encodeToJsonElement(value)
+            is SessionRowEvent -> "session" to output.json.encodeToJsonElement(value)
             is SessionsEvent -> "sessions" to output.json.encodeToJsonElement(value)
             is MessageSendStateEvent -> "message_send_state" to output.json.encodeToJsonElement(value)
             is SessionsListEvent -> "sessions_list" to output.json.encodeToJsonElement(value)
@@ -402,6 +439,8 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             is InboxEvent -> "inbox" to output.json.encodeToJsonElement(value)
             is TodosEvent -> "todos" to output.json.encodeToJsonElement(value)
             is AssistantFeedEvent -> "assistant_feed" to output.json.encodeToJsonElement(value)
+            is SavedPromptsEvent -> "assistant_saved_prompts" to output.json.encodeToJsonElement(value)
+            is StarredMessagesEvent -> "assistant_starred" to output.json.encodeToJsonElement(value)
             DirectionsEvent -> "directions" to JsonObject(emptyMap())
             is TaskPlanEvent -> "task_plan" to output.json.encodeToJsonElement(value)
             is AssistantViewEvent -> "assistant_view" to output.json.encodeToJsonElement(value)

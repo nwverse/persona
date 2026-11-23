@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -72,20 +74,34 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.mergeList(w, r, key, h.forwardHTTP) })
 			continue
 		}
+		if pattern == todoPlacesRoute { // the To-dos places: every manager's, joined (todo_view.go)
+			api.HandleFunc(pattern, h.mergeTodoPlaces)
+			continue
+		}
 		if pattern == "POST /api/v1/assistant/conversations" {
 			api.HandleFunc(pattern, h.startConversationOnce())
 			continue
 		}
 		by := h.byRequest
 		switch {
+		case pattern == directionSessionFilingRoute:
+			// The selected/default manager owns the direction book. Its 404 for a session on another
+			// manager's computer is the route's contract, not a reason to relay to that computer's manager.
+			by = h.byRequest
 		case strings.Contains(pattern, "/machines/{mid}/"):
 			by = h.byMachine
-		case strings.Contains(pattern, "/assistant/conversations/{id}/"):
+		case strings.Contains(pattern, "/sessions/{mid}/{sid}/"):
+			by = h.bySession
+		case strings.Contains(pattern, "/assistant/conversations/{id}"):
 			by = h.byConversation
 		case strings.Contains(pattern, "/todos/{id}"):
 			by = h.byTodo
 		}
 		var relay http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, by) }
+		todoKind, todoReceipt := todoReceiptRoutes[pattern]
+		if todoReceipt { // relayed as a send: one cut off on the way may have been taken (todo_receipts.go)
+			relay = h.todoRelay(todoKind, by)
+		}
 		if pattern == "GET /api/v1/machines/{mid}/launchers/{name}/start-options" {
 			next := relay
 			relay = h.withMachine(func(w http.ResponseWriter, r *http.Request, m *Machine) {
@@ -101,6 +117,9 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 		}
 		if kind, ok := meetingReceiptRoutes[pattern]; ok {
 			relay = h.withBodyIDReceipt(kind, relay) // meeting_receipts.go
+		}
+		if todoReceipt {
+			relay = h.withTodoReceipt(todoKind, relay) // todo_receipts.go
 		}
 		api.HandleFunc(pattern, relay)
 	}
@@ -133,6 +152,9 @@ func (h *Hub) startConversationOnce() http.HandlerFunc {
 			return
 		}
 		r = withManager(withHumanStart(r), id) // a person's own app: its first message is theirs (secret_handoff.go)
+		if legacyAppOwner(r.Context()) {
+			r = r.WithContext(assistantwire.WithReplyInput(r.Context()))
+		}
 		if h.busConnOf(id) == nil {
 			writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
 			return
@@ -154,10 +176,11 @@ type assistantLink struct{ h *Hub }
 // "manager.json").
 func (l assistantLink) Hello(context.Context) (assistantwire.Hello, error) {
 	h := l.h
-	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go).
+	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go). ArchivedApart: it takes a
+	// machine's archived rows apart from its list (fleet.archived, fleet_link.go).
 	// QuietPush: this hub's push tiering switch, which the managers follow for what is not a hub push (cards they
 	// post, cards they hand up); a change sends manager.updated.
-	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, QuietPush: h.push.lnModeOn()}
+	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true, QuietPush: h.push.pushGradingOn()}
 	if m, ok := h.mutesEvent(); ok { // the hub's mutes, before the manager pushes anything (fleet_link.go)
 		out.Mutes = m.Mutes
 	}
@@ -197,9 +220,11 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 				m.mu.Lock()
 				online, info := m.online, m.info
 				m.mu.Unlock()
-				list = append(list, assistantwire.Device{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: info.Home,
+				list = append(list, assistantwire.Device{ID: m.cfg.ID, Name: m.name(), Kind: m.kind(), SSHHost: m.cfg.SSHHost, Home: info.Home,
 					HomeReal: info.HomeReal, DataDir: info.DataDir, Online: online, Reachable: m.reachable(), Version: info.Version,
-					ModelConfiguration: info.ModelConfiguration, ClaudeVersion: info.ClaudeVersion, Engine: startEngine(info)})
+					ModelConfiguration: info.ModelConfiguration, ClaudeVersion: info.ClaudeVersion, Engine: startEngine(info),
+					TaskInstructions:  info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.TaskInstructions),
+					ExternalInventory: info.Protocol > 0 && slices.Contains(info.Capabilities, nodeproto.ExternalLauncherInventory)})
 			}
 			d := &h.devices
 			d.mu.Lock()
@@ -207,10 +232,18 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 				others = append(others, from)
 			}
 			d.mu.Unlock()
-			// complete: the list is every machine there is (the manager reported them and the pending computers were
+			// complete: the list is every machine there is (from reported its own and the pending computers were
 			// read), so an id in neither it nor others was removed.
 			return json.Marshal(map[string]any{"devices": list, "phone_online": h.phoneClient() != nil,
-				"complete": h.devicesUp() && !h.trustUnknown(), "others": others, "apps": h.clientAppList(ctx)})
+				"complete": h.devicesUpFor(from) && !h.trustUnknown(), "others": others, "apps": h.clientAppList(ctx)})
+		case assistantwire.DeviceInteractionsList:
+			list := []proto.Interaction{}
+			for _, ix := range h.pendingInteractions() {
+				if cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
+					list = append(list, ix)
+				}
+			}
+			return json.Marshal(map[string]any{"interactions": list})
 		}
 	}
 	m := h.localMachine(p.Device)
@@ -224,6 +257,17 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 		return out, err
 	}
 	switch p.Method {
+	case assistantwire.DeviceInteractionsList:
+		if h.machineOwner(m.cfg.ID) != from {
+			return nil, noDevice(p.Device)
+		}
+		list := []proto.Interaction{}
+		for _, ix := range h.pendingInteractions() {
+			if (ix.MachineID == "" || ix.MachineID == m.cfg.ID) && cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
+				list = append(list, ix)
+			}
+		}
+		return json.Marshal(map[string]any{"interactions": list})
 	case assistantwire.DeviceSessionsList:
 		list := h.decorated(m)
 		if h.machineOwner(m.cfg.ID) != from { // moved while it was read
@@ -248,6 +292,29 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 			}
 		}
 		return json.Marshal(map[string]any{"session": s, "ok": ok})
+	}
+	if strings.HasPrefix(p.Method, "task.workspace.") && p.Method != "task.workspace.capabilities" || p.Method == devicewire.MethodStartBackendSession {
+		identity := p.Params
+		if p.Method == devicewire.MethodStartBackendSession {
+			var in struct {
+				Workspace json.RawMessage `json:"backend_workspace"`
+			}
+			if err := json.Unmarshal(identity, &in); err != nil {
+				return nil, err
+			}
+			identity = in.Workspace
+		}
+		var named struct {
+			Plan struct {
+				Source struct {
+					Manager   string `json:"manager"`
+					MachineID string `json:"machine_id"`
+				} `json:"source"`
+			} `json:"plan"`
+		}
+		if json.Unmarshal(identity, &named) != nil || named.Plan.Source.Manager != from || named.Plan.Source.MachineID != p.Device {
+			return nil, &rpc.Error{Code: "invalid_params", Message: "workspace routing identity mismatch"}
+		}
 	}
 	var out json.RawMessage
 	if err := m.call(ctx, p.Method, p.Params, &out); err != nil {
@@ -383,14 +450,25 @@ func init() {
 			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodNotify + ": " + err.Error()}
 		}
 		from, id := c.managerID(), p.Notification.ID
-		if id != "" && !h.firstHandOver(ctx, from, id) {
-			return map[string]any{"ok": true}, nil // delivered already: it came again (outbox_relay.go)
+		var release func()
+		if id != "" {
+			first, rel, paused := h.beginHandOver(ctx, from, id)
+			if paused {
+				return nil, &rpc.Error{Code: bus.CodeStoreUnavailable, Message: "hub writes are paused"}
+			}
+			if !first {
+				return map[string]any{"ok": true}, nil // delivered already: it came again (outbox_relay.go)
+			}
+			release = rel
+		}
+		if release != nil {
+			defer release()
 		}
 		// Only about its own machines, sessions and cards (fleet_link.go deliverPushFrom).
 		out, err := h.deliverPushFrom(from, p.Notification)
 		if err != nil {
 			if id != "" {
-				h.forgetHandOver(from, id)
+				h.forgetHandOver(from, id, release != nil)
 			}
 			return nil, busCodedError(err)
 		}
@@ -687,8 +765,12 @@ func (a assistantRemote) Action(ctx context.Context, act assistantwire.Action) (
 	return res, err
 }
 
-func (a assistantRemote) UserSpoke(_ context.Context, r assistantwire.SessionRef) {
-	a.notify(assistantwire.EventUserSpoke, r)
+func (a assistantRemote) UserSpoke(ctx context.Context, r assistantwire.SessionRef) {
+	a.userSpoke(ctx, assistantwire.UserSpokeParams{SessionRef: r})
+}
+
+func (a assistantRemote) userSpoke(_ context.Context, p assistantwire.UserSpokeParams) {
+	a.notify(assistantwire.EventUserSpoke, p)
 }
 
 func (a assistantRemote) UserStopped(_ context.Context, r assistantwire.SessionRef) {

@@ -75,6 +75,8 @@ struct HealthView: View {
     /// A conversation is being started (the Persona page shows it coming).
     var disabled: Bool
     @Binding var launcher: String?
+    /// The model picked under `launcher` (#11472), in the same menu.
+    @Binding var launcherModel: String?
     /// The permission mode and effort a new conversation starts with: Persona's new conversation's, which `start` sends
     /// for Health's too; picked here in the shell composer's model menu (#3825).
     @Binding var mode: String
@@ -112,7 +114,7 @@ struct HealthView: View {
                 if ChatComposerKind.padCard {
                     // iPhone and iPad, every style: Persona's new conversation's composer (#3825), with the attach panel and
                     // + menu (#3225, #3805) and the launcher, effort and permission mode in its model button.
-                    StarterComposer(disabled: disabled, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort, health: true),
+                    StarterComposer(disabled: disabled, shell: StarterComposer.ShellModes(launcher: $launcher, launcherModel: $launcherModel, mode: $mode, effort: $effort, health: true),
                                     placeholder: String(localized: "Ask about your health…"), uploadDest: Session.healthSpace, send: send)
                 } else if AppStyle.current.usesBeautifulUI {
                     BeautifulStarterComposer(disabled: disabled, launcher: $launcher, placeholder: String(localized: "Ask about your health…"), uploadDest: Session.healthSpace, send: send)
@@ -128,6 +130,7 @@ struct HealthView: View {
             .background(Theme.groupedPage.ignoresSafeArea(edges: .bottom))
         }
         .background(Theme.groupedPage)
+        .keepsHeightUnderUndockedKeyboard() // the composer stays at the bottom under a floating keyboard (#2565)
         .pageTitle(String(localized: "Health"))
         .fileUploadPicker(isPresented: $showReports) { uploadReports($0) }
         #if DEBUG
@@ -157,6 +160,18 @@ struct HealthView: View {
                 Section { hero }
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
+                // Where the data comes from, named first (App Review 2.5.1, #13118): HealthKit is Apple Health, with its
+                // icon; on an iPhone or iPad it opens This iPhone, where the access is turned on.
+                Section {
+                    #if os(iOS)
+                    NavigationLink { PhoneDataView() } label: { appleHealth }
+                        .accessibilityIdentifier("health-apple-health")
+                    #else
+                    appleHealth
+                    #endif
+                } footer: {
+                    Text("Persona reads Apple Health only after you allow it, and saves an entry only after you confirm it. You can change this anytime.")
+                }
                 Section {
                     Button { showReports = true } label: {
                         Label { Text("Upload a Checkup Report").foregroundStyle(Theme.Hue.pink).lineLimit(1) } icon: {
@@ -223,7 +238,7 @@ struct HealthView: View {
                     Text("Goals, allergies, medications and other things noted in health chats are kept separately and never flow into other chats. You can view and delete them anytime.")
                 }
                 Section {
-                    source(Theme.Icon.health, "Apple Health", String(localized: "Reads summaries of steps, sleep, heart rate, weight and more through your iPhone. Persona needs to be open on the phone with access granted."))
+                    source(Theme.Brand.iosHealth, String(localized: "Apple Health"), String(localized: "Reads summaries of steps, sleep, heart rate, weight and more through your iPhone. Persona needs to be open on the phone with access granted."))
                     source(Theme.Icon.edit, String(localized: "Log Data"), String(localized: "Say “log my weight” or “I drank 300 ml of water”; after you confirm on the phone it's saved to Health."))
                     source(Theme.Icon.document, String(localized: "Checkup Reports and Lab Results"), String(localized: "Choose Upload a checkup report and pick a PDF or a photo: each item is read out and the ones outside the reference range are marked. The original and its record stay in Health, so years can be compared."))
                 } header: {
@@ -266,13 +281,28 @@ struct HealthView: View {
                 .background(Theme.Hue.pink.opacity(0.14), in: .circle)
                 .accessibilityHidden(true)
             Text("Ask About Your Health").font(Theme.Font.title).lineLimit(1)
-            Text("Sleep, steps, heart rate, weight and diet, answered from the health data on your phone. Chats and memory here are kept apart from Persona's other chats.")
+            Text("Sleep, steps, heart rate, weight and diet, answered from your Apple Health data. Chats and memory here are kept apart from Persona's other chats.")
                 .font(Theme.Font.secondary)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, Theme.Space.l)
+    }
+
+    /// Apple Health, by its name and the Health app's icon (`PhoneDataSource.health`'s): what Health reads and saves.
+    private var appleHealth: some View {
+        HStack(spacing: Theme.Space.m) {
+            BrandMark(Theme.Brand.iosHealth, side: Theme.Size.wellS)
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text("Works with Apple Health").font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
+                Text("Reads steps, sleep, heart rate, weight and more from Apple Health, and saves the entries you confirm to it.")
+                    .font(Theme.Font.secondary)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, Theme.Space.xxs)
+        .accessibilityElement(children: .combine)
     }
 
     private func row(_ s: Session) -> some View {
@@ -319,7 +349,11 @@ struct HealthView: View {
                 Text(body).font(Theme.Font.secondary).foregroundStyle(.secondary)
             }
         } icon: {
-            ThemedIcon(symbol).foregroundStyle(symbol == Theme.Icon.health ? Theme.Hue.pink : .secondary)
+            if Theme.Brand.isAppIcon(symbol) {
+                BrandMark(symbol, side: Theme.Size.iconL)
+            } else {
+                ThemedIcon(symbol).foregroundStyle(.secondary)
+            }
         }
     }
 }

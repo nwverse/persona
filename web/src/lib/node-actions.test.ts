@@ -198,7 +198,7 @@ describe("git", () => {
     expect(git.hint).toBe("main");
     const ops = git.children as MenuItem[];
     // the branch is copied from the Git menu, as Moshi's is
-    expect(ops.map((i) => [i.label, i.accel])).toEqual([["拉取", "p"], ["推送", "u"], ["获取", "f"], ["拷贝分支名", "b"]]);
+    expect(ops.map((i) => [i.label, i.accel])).toEqual([["拉取", "p"], ["推送", "u"], ["获取", "f"], ["复制分支名", "b"]]);
     await ops[1].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/git", { op: "push", pane: "w1:p2" });
     expect(d.notify).toHaveBeenCalledWith("推送：已是最新", "ok");
@@ -253,16 +253,16 @@ describe("read-only items", () => {
     const d = deps();
     const space: MenuNode = { kind: "workspace", mid: "m1", host: "herdr", label: "proj", workspaceId: "w1", cwd: "/home/me/proj" };
     const labels = (node: MenuNode) => nodeActions(node, d).filter((i) => i.icon === "copy").map((i) => i.label);
-    expect(labels(pane)).toEqual(["拷贝目录路径", "拷贝会话 ID", "拷贝窗格 ID"]);
-    expect(labels(tab)).toEqual(["拷贝目录路径", "拷贝标签页 ID"]);
-    expect(labels(space)).toEqual(["拷贝目录路径", "拷贝空间 ID"]);
-    expect(labels({ kind: "machine", mid: "m1" })).toEqual(["拷贝机器 ID"]);
+    expect(labels(pane)).toEqual(["复制目录路径", "复制会话 ID", "复制窗格 ID"]);
+    expect(labels(tab)).toEqual(["复制目录路径", "复制标签页 ID"]);
+    expect(labels(space)).toEqual(["复制目录路径", "复制空间 ID"]);
+    expect(labels({ kind: "machine", mid: "m1" })).toEqual(["复制机器 ID"]);
     // the same values as before: only the words changed
     by(nodeActions(tab, d), "node-copy-id").onSelect();
     expect(d.copy).toHaveBeenLastCalledWith("w1:t2");
     by(nodeActions(space, d), "node-copy-id").onSelect();
     expect(d.copy).toHaveBeenLastCalledWith("w1");
-    for (const node of [pane, tab, space]) for (const label of labels(node)) expect(label).not.toMatch(/herdr|复制|\bid\b/);
+    for (const node of [pane, tab, space]) for (const label of labels(node)) expect(label).not.toMatch(/herdr|拷贝|\bid\b/);
   });
   it("copies a folder's path in the same words in every menu of the Agents list and a chat, in every language", () => {
     const languages = [
@@ -274,7 +274,7 @@ describe("read-only items", () => {
       expect(new Set([node.copy_path, worktree.copy_path, agent.copy_folder, chat.copy_folder]).size).toBe(1);
     }
     // the By repository grouping's worktree menu, beside the node menus, says their verb
-    expect([zhWorktree.copy_name, zhWorktree.copy_path, zhNode.copy_path]).toEqual(["拷贝工作树名称", "拷贝目录路径", "拷贝目录路径"]);
+    expect([zhWorktree.copy_name, zhWorktree.copy_path, zhNode.copy_path]).toEqual(["复制工作树名称", "复制目录路径", "复制目录路径"]);
   });
   it("leaves out what is not known", () => {
     const k = keys(nodeActions({ kind: "pane", mid: "m1", paneId: "w1:p3", agent: "" }, deps()));
@@ -364,8 +364,10 @@ describe("a Tern node (#2154)", () => {
     expect(keys(nodeActions({ ...ternTab, online: false }, deps()))).not.toContain("node-rename");
     for (const host of ["orca", "herdr-core", "botmux"]) expect(keys(nodeActions({ ...ternTab, host }, deps()))).not.toContain("node-rename");
     expect(canRenameIn("tern")).toBe(true);
+    expect(canRenameIn("rex")).toBe(true);
     expect(canRenameIn(undefined)).toBe(true);
     expect(canChangeHost("tern")).toBe(false);
+    expect(canChangeHost("rex")).toBe(false);
   });
 });
 
@@ -469,5 +471,17 @@ describe("the nodes of the two trees", () => {
     expect(shells[0].tabs.map((t) => t.label)).toEqual(["shell", "split"]);
     expect(shells[0].tabs.flatMap((t) => t.panes.map((p) => p.pane))).toEqual(["w1:p2", "w1:p3", "w1:p4"]);
     expect(shellsOnly([{ ...sp, tabs: [sp.tabs[0]] }])).toEqual([]);
+  });
+});
+
+
+describe("session menus keep pane operations in the terminal toolbar (#10239)", () => {
+  it.each(["herdr", "orca", "tern", "botmux"])("removes pane controls for a %s session", (host) => {
+    const node = sessionNode({ machine_id: "m1", session_id: "s1", pane_id: "w1:p1", space_kind: host, cwd: "/project" } as Session, true);
+    const items = keys(nodeActions(node, deps()));
+    for (const key of ["node-split", "node-close-pane", "node-copy-id"]) expect(items).not.toContain(key);
+    expect(items).toContain("node-copy-session");
+    if (host === "herdr") expect(items).toContain("node-git");
+    expect(keys(nodeActions({ ...node, paneId: undefined }, deps()))).not.toContain("node-split");
   });
 });

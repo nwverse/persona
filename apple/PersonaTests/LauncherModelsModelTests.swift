@@ -31,6 +31,43 @@ import Testing
         #expect(m.remembered.map(\.id) == ["vendor/model-x", "~vendor/model-latest"])
     }
 
+    @Test func anExplicitHerdrWorkspaceReadsItsOwnCatalogAndDropsTheLateDefaultHostReply() async throws {
+        let hub = FakeHub()
+        let route = "/api/v1/machines/box/launchers/omp/models"
+        let releaseDefault = AsyncStream<Void>.makeStream()
+        defer { releaseDefault.continuation.finish() }
+        hub.onAsync("GET", route) { request in
+            if hub.sent("GET", route).count == 1 {
+                for await _ in releaseDefault.stream { break }
+            }
+            if request.query["host"] == "herdr" {
+                return Data(#"{"agent":"omp","models":[],"supports_start_model":true}"#.utf8)
+            }
+            return Data(#"{"agent":"omp","models":[],"locked":"The default herdr-core host does not take a model."}"#.utf8)
+        }
+        let m = LauncherModelsModel(deps: .init(api: { _ in hub.client }))
+        let first = Task { await m.load(box, launcher: "omp") }
+        try await waitForRefreshTest { !hub.sent("GET", route).isEmpty }
+        await m.load(box, launcher: "omp", host: "herdr")
+        releaseDefault.continuation.yield(())
+        await first.value
+        #expect(hub.sent("GET", route).map { $0.query["host"] } == [nil, "herdr"])
+        #expect(m.key == "box|omp|host=herdr")
+        #expect(m.list?.supportsStartModel == true && m.list?.locked == nil)
+    }
+
+    @Test func losingTheModelsRouteOnRefreshClearsTheOmpStartCapability() async {
+        let hub = FakeHub()
+        let route = "/api/v1/machines/box/launchers/omp/models"
+        hub.on("GET", route, json: #"{"agent":"omp","models":[],"supports_start_model":true}"#)
+        let m = LauncherModelsModel(deps: .init(api: { _ in hub.client }))
+        await m.load(box, launcher: "omp")
+        #expect(m.list?.supportsStartModel == true)
+        hub.on("GET", route) { _ in throw APIError(status: 404, message: "Not found") }
+        await m.load(box, launcher: "omp", refresh: true)
+        #expect(m.list == nil && m.error == nil)
+    }
+
     @Test func forgetSendsTheIDAndDropsTheRow() async throws {
         let hub = FakeHub()
         hub.on("GET", path, json: list)
@@ -88,6 +125,21 @@ import Testing
         #expect(m.list == nil && m.error == nil && !m.loading)
     }
 
+    @Test func typedAssistantModelsKeepTheirPurposeWhenLoadedAndForgotten() async {
+        let hub = FakeHub()
+        hub.on("GET", path, json: list)
+        hub.on("DELETE", path + "/custom", json: #"{"ok":true}"#)
+        let model = LauncherModelsModel(deps: .init(api: { _ in hub.client }))
+        await model.load(box, launcher: "claude", purpose: "assistant")
+        #expect(model.key == "box|claude|assistant")
+        #expect(hub.sent("GET", path).first?.query == ["purpose": "assistant"])
+        await model.forget("vendor/model-x", machine: box, launcher: "claude", purpose: "assistant")
+        #expect(model.remembered.map(\.id) == ["~vendor/model-latest"])
+        #expect(hub.sent("DELETE", path + "/custom").count == 1)
+        model.select(box, launcher: "claude")
+        #expect(model.key == "box|claude" && model.list == nil)
+    }
+
     @Test func aFailedReadSaysWhyAndAnotherLauncherStartsOver() async {
         let hub = FakeHub()
         hub.on("GET", path) { _ in throw APIError(status: 502, message: "claude 没登录") }
@@ -95,6 +147,24 @@ import Testing
         #expect(m.list == nil && m.error == "claude 没登录")
         m.select(box, launcher: "codex")
         #expect(m.key == "box|codex" && m.error == nil && m.list == nil)
+    }
+
+    @Test func assistantManagersKeepTheirOwnListAndForgetRoute() async throws {
+        let hub = FakeHub()
+        hub.on("GET", path, json: list)
+        hub.on("DELETE", path + "/custom", json: #"{"ok":true}"#)
+        var api = hub.client.showing("first")
+        let m = LauncherModelsModel(deps: .init(api: { _ in api }))
+        await m.load(box, launcher: "claude", purpose: "assistant")
+        #expect(m.key == "box|claude|assistant|first")
+        api = hub.client.showing("second")
+        await m.forget("vendor/model-x", machine: box, launcher: "claude", purpose: "assistant")
+        #expect(hub.sent("DELETE", path + "/custom").isEmpty)
+        await m.load(box, launcher: "claude", purpose: "assistant")
+        await m.forget("vendor/model-x", machine: box, launcher: "claude", purpose: "assistant")
+        #expect(m.key == "box|claude|assistant|second")
+        #expect(hub.sent("GET", path).map { $0.headers[APIClient.managerHeader] } == ["first", "second"])
+        #expect(hub.sent("DELETE", path + "/custom").first?.headers[APIClient.managerHeader] == "second")
     }
 }
 

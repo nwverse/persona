@@ -187,6 +187,8 @@ nonisolated struct ExtensionField: Codable, Hashable, Sendable, Identifiable {
     var maxLength: Int?
     var minimum: Double?
     var maximum: Double?
+    /// How far an integer stepper moves; typing and validation are independent of this hint.
+    var step: Int?
     /// An array's items (strings, maybe from a list of choices).
     var items: ExtensionItems?
     var minItems: Int?
@@ -207,9 +209,27 @@ nonisolated struct ExtensionField: Codable, Hashable, Sendable, Identifiable {
     var picksLauncher: Bool { type == "string" && format == "launcher" && (self.enum ?? []).isEmpty }
 
     enum CodingKeys: String, CodingKey {
-        case name, type, title, description, `default`, required, `enum`, format, pattern, minimum, maximum, items, fields, confirm, os
+        case name, type, title, description, `default`, required, `enum`, format, pattern, minimum, maximum, step, items, fields, confirm, os
         case minLength = "min_length", maxLength = "max_length", minItems = "min_items", maxItems = "max_items"
         case uniqueItems = "unique_items"
+    }
+}
+
+/// Integer configuration steppers share the Android app's fallback and bounds rules.
+nonisolated enum ExtensionIntegerStepper {
+    static func next(_ field: ExtensionField, current: Double?, up: Bool) -> Double {
+        let from = current?.rounded(.towardZero) ?? field.default?.double?.rounded(.towardZero)
+            ?? field.minimum?.rounded(.up) ?? 0
+        let step = Double(field.step ?? 1)
+        var next = from + (up ? step : -step)
+        if let minimum = field.minimum { next = max(next, minimum.rounded(.up)) }
+        if let maximum = field.maximum { next = min(next, maximum.rounded(.down)) }
+        return next
+    }
+
+    static func canStep(_ field: ExtensionField, current: Double?, up: Bool) -> Bool {
+        guard let current else { return true }
+        return up ? field.maximum.map { current < $0 } ?? true : field.minimum.map { current > $0 } ?? true
     }
 }
 
@@ -545,6 +565,16 @@ enum ExtensionText {
         return from + " · " + title
     }
 
+    /// The secret the header's "Still needs" line opens (#8853): the first one not set that is required or that the line
+    /// names (the hub writes a missing secret's own title into `needs_setup`). Nil when nothing it names is a secret to set
+    /// here (a dependency, a configuration an upgrade no longer takes): the line stays plain text. Web: `setupSecret`.
+    static func setupSecret(needs: [String]?, secrets: [ExtensionSecret]) -> ExtensionSecret? {
+        guard let needs, !needs.isEmpty else { return nil }
+        return secrets.first { s in
+            !s.set && (s.required == true || (!s.title.isEmpty && needs.contains { $0.contains(s.title) }))
+        }
+    }
+
     /// A secret's row: set (with its last four characters when the hub gives them, #5906), or not set (required).
     static func secretState(_ s: ExtensionSecret) -> String {
         if let r = s.reference { return String(localized: "From \(r.providerName.isEmpty ? r.provider : r.providerName)", comment: "A secret that holds a secret provider's reference") }
@@ -603,10 +633,10 @@ enum ExtensionText {
     static func saveFooter(_ fields: [ExtensionField]) -> String? {
         let all = fields.flatMap { $0.type == "object" ? ($0.fields ?? []) : [$0] }
         let now = all.filter { $0.items?.format == "machine" }.map { String(localized: "「\($0.label)」", comment: "A field's name in quotes") }
-        if now.isEmpty { return String(localized: "When you're done, tap Save at the end of Extension configuration; the extension restarts after saving. Empty fields use the extension's defaults.") }
+        if now.isEmpty { return String(localized: "When you're done, tap Save; the extension restarts after saving. Empty fields use the extension's defaults.") }
         if now.count == all.count { return nil }
         let names = list(now)
-        return String(localized: "Switches in \(names) take effect right away. For the rest, tap Save at the end of Extension configuration when you're done; the extension restarts after saving. Empty fields use the extension's defaults.")
+        return String(localized: "Switches in \(names) take effect right away. For the rest, tap Save when you're done; the extension restarts after saving. Empty fields use the extension's defaults.")
     }
 
     /// The Update section's line for a newer version: what happens to it (docs/extensions/extensions.md「自动升级」).
@@ -733,6 +763,9 @@ enum ExtensionText {
             markets = list.markets
             error = nil
             missing = false
+            // An extension installed, upgraded or removed since: the marks of the conversations one opened read theirs
+            // again the next time one appears (#10358).
+            OpenerIcons.shared.stale()
         } catch {
             guard revision == read, !Task.isCancelled, api.sameSettingsScope(as: deps.api()) else { return }
             self.error = error.localizedDescription

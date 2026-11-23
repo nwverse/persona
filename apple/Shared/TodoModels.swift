@@ -19,6 +19,9 @@ nonisolated enum TodoStage: String, CaseIterable, Sendable {
         }
     }
 
+    /// The name of the step that ends the bar of work closed with nothing left to deploy (`stage_done`, #11590).
+    static var doneLabel: String { String(localized: "Done [Todo Stage Bar]") }
+
     /// How far along the six it is: 1 … 6.
     var stepNumber: Int { (Self.allCases.firstIndex(of: self) ?? 0) + 1 }
 
@@ -35,8 +38,9 @@ nonisolated enum TodoStage: String, CaseIterable, Sendable {
 nonisolated extension TodoItem {
     var isDone: Bool { doneAt != nil }
 
-    /// The stage the hub sent (`stage`), none when it sent none or one this build does not know (#2776).
-    var todoStage: TodoStage? { TodoStage(hub: stage) }
+    /// The stage the hub sent (`stage`), none when it sent none or one this build does not know (#2776), and none for
+    /// general work (`stage_kind`, #3380), whose status already says how it goes, as on the web and Android.
+    var todoStage: TodoStage? { stageKind == "general" ? nil : TodoStage(hub: stage) }
 
     /// The pull request its work is in (`pr_url`, #2768), when the hub sent a web address the in-app link sheet opens.
     var prLink: URL? {
@@ -55,21 +59,59 @@ nonisolated extension TodoItem {
     /// The state's label for this todo: "Auto-completed" for one the hub closed (docs/assistant/todos.md), "Accepted" /
     /// "Canceled" for one its supervisor closed after a review (#3124), "Accepted" too for one accepted and at rest again.
     func statusLabel(_ state: TaskState) -> String {
+        if isCancelled { return String(localized: "Canceled") }
         if acceptedAtRest(state) { return String(localized: "Accepted") }
-        guard state == .done else { return state.todoLabel }
-        if reviewDone { return supervision?.state == "cancelled" ? String(localized: "Canceled") : String(localized: "Accepted") }
-        return autoDone ? String(localized: "Auto-completed") : state.todoLabel
+        if state == .done {
+            if reviewDone { return supervision?.state == "cancelled" ? String(localized: "Canceled") : String(localized: "Accepted") }
+            return autoDone ? String(localized: "Auto-completed") : state.todoLabel
+        }
+        if waitsForOwner { return StateName.needsYou.text }
+        if deliveredAwaitingReview(state) { return String(localized: "Delivered · Awaiting Review [To-do Sections]") }
+        return state.todoLabel
+    }
+
+    /// An open task whose next move belongs to the owner, with the same wording on the row and detail as in triage (#5732).
+    var waitsForOwner: Bool {
+        doneAt == nil && !decisionDismissed && (reviewState == .needsUser || openAsk?.outcome == "decide" || openAsk?.outcome == "cannot")
+    }
+
+    /// Delivered work at rest still awaits acceptance; `live` alone never means done (#5732).
+    func deliveredAwaitingReview(_ state: TaskState) -> Bool {
+        guard doneAt == nil, !waitsForOwner else { return false }
+        let atRest = state == .followup || state == .unread || state == .notStarted
+        let reviewRequired = reviewState == .pendingReview || openAsk != nil || (!isConcern && delivery?.state == "live")
+        return atRest && reviewRequired
+    }
+
+    /// The review this decision belongs to: the latest review's time, else the hub's, else the ask's (web / Android).
+    private var decisionRound: Date? {
+        if let at = supervision?.latestReview?.at { return at }
+        if let at = decisionReview?.reviewAt, !at.isEmpty { return JSON.parseDate(at) }
+        return openAsk.flatMap { JSON.parseDate($0.askedAt) }
+    }
+
+    /// Don't handle was pressed for this very round and not undone; a newer review is a new decision round (#4874).
+    /// An unparseable legacy round keeps the previous hub-receipt behavior only when no newer review supersedes it.
+    var decisionDismissed: Bool {
+        guard let review = decisionReview, !(review.dismissalID ?? "").isEmpty, !review.reviewAt.isEmpty else { return false }
+        if let at = JSON.parseDate(review.reviewAt), let round = decisionRound { return at == round }
+        return supervision?.latestReview?.at == nil && JSON.parseDate(review.reviewAt) == nil
     }
 
     /// An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it
     /// running or asking now: it reads Accepted, not Follow Up (#3156, docs/assistant/todo-status-sop.md "Accepted tasks").
     /// An open concern still waits for its report, so acceptance gives it neither that word nor Done styling (#3582).
     func acceptedAtRest(_ state: TaskState) -> Bool {
-        !isConcern && doneAt == nil && acceptanceStands && (state == .followup || state == .unread || state == .notStarted)
+        !isConcern && doneAt == nil && (!waitsForOwner || decisionDismissed) && acceptanceStands && (state == .followup || state == .unread || state == .notStarted)
     }
 
-    /// The state a row draws its tone and mark from: Done for an accepted task at rest, else its own.
-    func shownState(_ state: TaskState) -> TaskState { acceptedAtRest(state) ? .done : state }
+    /// The state a row draws its tone and mark from: accepted, owner wait and delivered work match their labels (#5732).
+    func shownState(_ state: TaskState) -> TaskState {
+        if acceptedAtRest(state) { return .done }
+        if waitsForOwner { return .needsYou }
+        if deliveredAwaitingReview(state) { return .unread }
+        return state
+    }
 
     /// Why the hub closed it, when it did.
     var autoDoneReason: String? {
@@ -249,6 +291,20 @@ nonisolated enum TodosLogic {
         }
         let immutableMap = map
         return { mid, sid in immutableMap["\(mid)/\(sid)"] }
+    }
+
+    /// The Agent a task card names (#10904): the working one, else the one that moved last; nil while no row is known.
+    /// A deleted row is absent from the lookup, like one the app has not read. Released Agents are not the task's any more.
+    public static func taskLeadAgent(_ todo: TodoItem, lookup: SessionLookup) -> Session? {
+        func movedAt(_ session: Session) -> Date { max(session.updatedAt ?? .distantPast, session.stateSince ?? .distantPast) }
+        var lead: Session?
+        for agent in todo.agents where agent.releasedAt == nil {
+            guard let candidate = lookup(agent.machineID, agent.sessionID) else { continue }
+            guard let current = lead else { lead = candidate; continue }
+            let working = candidate.state == .working, leadWorking = current.state == .working
+            if working != leadWorking ? working : movedAt(candidate) > movedAt(current) { lead = candidate }
+        }
+        return lead
     }
 
     /**

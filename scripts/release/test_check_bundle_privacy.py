@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import io
 import ipaddress
+import os
 from pathlib import Path
 import plistlib
 import shutil
@@ -14,6 +15,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -186,7 +188,16 @@ class PublicConstantTests(unittest.TestCase):
         self.assertIn("email", self.kinds(field + ".cn"))
         self.assertIn(f"private value ({len(field)} chars)", self.kinds(field, words=(field,)))
 
-    def test_full_rfc1918_networks_are_not_host_addresses(self):
+    def test_gitlab_ssh_identity_is_not_an_email_or_a_domain_exemption(self):
+        identity = "git@" + "gitlab.com"
+        self.assertEqual(self.kinds(identity + "/-/issues/not_member"), set())
+        self.assertEqual(self.kinds("prefix" + identity + "suffix"), set())
+        for text in ("person@" + "gitlab.com", identity + ".cn", "git+owner@" + "gitlab.com",
+                     "prefix-" + identity, identity + "-user"):
+            with self.subTest(text=text):
+                self.assertIn("email", self.kinds(text))
+        self.assertIn(f"private value ({len(identity)} chars)", self.kinds(identity, words=(identity,)))
+
         for network in NETWORKS:
             with self.subTest(network=str(network)):
                 self.assertEqual(self.kinds("constant" + str(network) + "nextConstant"), set())
@@ -461,7 +472,28 @@ class GoDependenciesTests(unittest.TestCase):
         self.assertEqual(cbp.go_dependencies("binary", str(self.sums), str(self.tags)), set())
 
 
-class BundleScanIntegrationTests(unittest.TestCase):
+    def test_archive_members_preserve_public_go_context_and_reject_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exe = root / "personad"
+            exe.write_bytes(b"public binary")
+            with patch.object(cbp, "go_dependencies", return_value={"tailscale.com"}):
+                with tarfile.open(root / "release.tar.gz", "w:gz") as archive:
+                    archive.add(exe, arcname="Persona-0.6.0-linux-amd64/personad")
+                members = list(cbp.archive_members(str(root / "release.tar.gz")))
+                self.assertEqual(members, [("Persona-0.6.0-linux-amd64/personad", b"public binary")])
+                with zipfile.ZipFile(root / "release.zip", "w") as archive:
+                    archive.write(exe, "Persona-0.6.0-windows-amd64/personad.exe")
+                    archive.writestr("Persona-0.6.0-windows-amd64/persona-link-windows-amd64.exe", b"link")
+                self.assertEqual(len(list(cbp.archive_members(str(root / "release.zip")))), 2)
+                with tarfile.open(root / "unsafe.tar.gz", "w:gz") as archive:
+                    archive.add(exe, arcname="../outside")
+                with self.assertRaisesRegex(ValueError, "unsafe path"):
+                    list(cbp.archive_members(str(root / "unsafe.tar.gz")))
+                self.assertEqual(cbp.public_archive_dependencies("personad", True), {"tailscale.com"})
+                self.assertEqual(cbp.public_archive_dependencies("other.exe", True), set())
+                self.assertEqual(cbp.public_archive_dependencies("other", True), set())
+
     def scan(self, text, words=(), public=True, config=None, dependencies=DEPENDENCIES):
         with tempfile.TemporaryDirectory(prefix="bundle-privacy-test-") as directory:
             (Path(directory) / "binary").write_bytes(text if isinstance(text, bytes) else text.encode())
@@ -605,19 +637,38 @@ class BundleScanIntegrationTests(unittest.TestCase):
                 code, _ = self.scan(bad + "/dl", words=(bad + "/dl",), config={"publish": {"site_url": bad}})
                 self.assertNotEqual(code, 0)
 
-    def test_published_binary_accepts_only_the_exact_configured_update_url(self):
-        # publish.update_url (#4522): the binaries carry it instead of <site>/dl, exactly as configured.
+    def test_published_binary_accepts_the_configured_update_url_and_site_feed(self):
+        # publish.update_url (#4522): the binaries carry it, while the site itself still legitimately serves /dl.
         url = "https://releases.example.test/owner/repo/releases/latest/download"
-        words = ("releases.example.test",)
+        words = ("releases.example.test", "site.example.test")
         config = {"publish": {"site_url": "https://site.example.test", "update_url": url + "/"}}
-        code, output = self.scan(url, words=words, config=config)
+        code, output = self.scan(url + "\nhttps://site.example.test/dl", words=words, config=config)
         self.assertEqual(code, 0, output)
         for text in (url + "/private", url + "?token=placeholder", "https://releases.example.test/owner",
-                     "https://site.example.test/dl", "person@releases.example.test"):
+                     "person@releases.example.test"):
             with self.subTest(text=text):
                 code, output = self.scan(text, words=words + ("site.example.test",), config=config)
                 self.assertNotEqual(code, 0)
                 self.assertIn("private value", output)
+
+    def test_published_binary_scan_uses_the_inherited_update_url_override(self):
+        configured = "https://configured.example.test/releases/latest/download"
+        override = "https://override.example.test/releases/latest/download"
+        config = {"publish": {"update_url": configured}}
+        with patch.dict(os.environ, {"PERSONA_UPDATE_URL": override}):
+            code, output = self.scan(override, words=("override.example.test",), config=config)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(cbp.public_download_url(config), (override, "/releases/latest/download"))
+
+    def test_published_binary_scan_allows_override_and_site_dl_feeds(self):
+        configured = "https://configured.example.test/releases/latest/download"
+        override = "https://override.example.test/releases/latest/download"
+        site = "https://site.example.test"
+        config = {"publish": {"site_url": site, "update_url": configured}}
+        with patch.dict(os.environ, {"PERSONA_UPDATE_URL": override}):
+            code, output = self.scan(override + "\n" + site + "/dl", words=("override.example.test", "site.example.test"), config=config)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(cbp.public_download_urls(config), [(override, "/releases/latest/download"), (site + "/dl", "/dl")])
 
     def test_the_app_ssh_algorithm_names_are_not_emails(self):
         names = "\n".join(a + "@" + d for a, d in (("aes256-gcm", "openssh.com"), ("curve25519-sha256", "libssh.org"),

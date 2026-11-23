@@ -47,6 +47,8 @@ import re
 import struct
 import subprocess
 import sys
+import tarfile
+import zipfile
 import zlib
 from urllib.parse import urlsplit
 
@@ -107,6 +109,9 @@ WIREGUARD_MODULES = frozenset({"github.com/tailscale/wireguard-go", "golang.zx2c
 # Go rodata also joins the unrelated title_mail field identifier with the
 # domain constant @gmail.com. Only that exact join is not an email address.
 GO_ADJACENT_MAIL_FIELD = re.compile(r'(?<![A-Za-z0-9._%+-])title_mail@gmail[.]com(?![A-Za-z0-9._%+-])')
+# The repository identity adapter's generic SSH remote, not a person's email. Match only this exact public constant,
+# not the GitLab domain, another account or surrounding text.
+GITLAB_SSH_IDENTITY = re.compile(r'(?<![A-Za-z0-9._%+-])git@gitlab[.]com(?![A-Za-z0-9._%+-])')
 RFC1918_NETWORKS = tuple(ipaddress.ip_network((address, prefix)) for address, prefix in (
     (0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16),
 ))
@@ -181,6 +186,7 @@ def generic_text(text, dependencies, original_text=None):
     text = RUST_TLS_CONSTANTS.sub("", text)
     text = pc.EMAIL.sub(lambda m: "" if binary_noise_email(m.group(1)) else m.group(0), text)
     text = GO_ADJACENT_MAIL_FIELD.sub("", text)
+    text = GITLAB_SSH_IDENTITY.sub("", text)
     if "golang.org/x/crypto" in dependencies:
         text = GO_SSH_IDENTIFIERS.sub("", text)
     if "github.com/tailscale/web-client-prebuilt" in dependencies:
@@ -589,12 +595,73 @@ def verified_public_file(path):
 
 
 def public_download_url(cfg):
-    """The update URL every published personad carries and the one path it may have: publish.update_url as configured
-    (a GitHub repository's releases/latest/download, say), else publish.site_url's /dl (persona_config.update_url)."""
-    url = persona_config.update_url(cfg)
-    if url and persona_config.get(cfg, "publish.update_url", "") not in ("", None):
+    """The update URL every published personad carries and the one path it may have: an inherited environment override,
+    then publish.update_url (a GitHub repository's releases/latest/download, say), else publish.site_url's /dl."""
+    override = os.environ.get("PERSONA_UPDATE_URL")
+    url = persona_config.update_url(cfg, override)
+    if url and (override or persona_config.get(cfg, "publish.update_url", "") not in ("", None)):
         return url, urlsplit(url).path
     return url, "/dl"
+
+
+def public_download_urls(cfg):
+    """Both legitimate public feeds: the update base and the site's own /dl publication feed."""
+    urls = [public_download_url(cfg)]
+    site = persona_config.get(cfg, "publish.site_url", "")
+    if isinstance(site, str) and site.strip():
+        urls.append((site.rstrip("/") + "/dl", "/dl"))
+    return urls
+
+
+def public_archive_dependencies(path, whole_short):
+    """Only a named public CLI member gets its own verified Go dependency context, never a whole archive."""
+    if not whole_short:
+        return set()
+    name = os.path.basename(path)
+    if name in {"personad", "persona-hub", "persona-manager", "persona-node", "persona-link"}:
+        return go_dependencies(path)
+    match = re.fullmatch(r"(personad|persona-hub|persona-manager|persona-node|persona-link)(?:-windows-(?:amd64|arm64))?[.]exe", name)
+    return go_dependencies(path) if match else set()
+
+
+def archive_members(path):
+    """Yield safe, bounded executable members only, keeping archive traversal out of the release scanner."""
+    if path.endswith(".zip"):
+        with zipfile.ZipFile(path) as archive:
+            seen = set()
+            for entry in archive.infolist():
+                name = entry.filename
+                parts = name.split("/")
+                if (not name or name.startswith("/") or "\\" in name or any(part in ("", ".", "..") for part in parts)
+                        or len(parts) != 2 or name.casefold() in seen):
+                    raise ValueError("unsafe path in release ZIP")
+                seen.add(name.casefold())
+                if entry.is_dir() or entry.file_size > 512 * 1024 * 1024:
+                    continue
+                program = parts[1]
+                if program in {"personad", "persona-hub", "persona-manager", "persona-node", "persona-link"}:
+                    yield name, archive.read(entry)
+                elif re.fullmatch(r"(?:personad|persona-hub|persona-manager|persona-node|persona-link)(?:-windows-(?:amd64|arm64))?[.]exe", program):
+                    yield name, archive.read(entry)
+    elif path.endswith(".tar.gz"):
+        with tarfile.open(path, "r:gz") as archive:
+            seen = set()
+            for entry in archive:
+                name = entry.name
+                parts = name.split("/")
+                if (not name or name.startswith("/") or "\\" in name or any(part in ("", ".", "..") for part in parts)
+                        or len(parts) != 2 or name.casefold() in seen):
+                    raise ValueError("unsafe path in release archive")
+                seen.add(name.casefold())
+                if not entry.isfile() or entry.size > 512 * 1024 * 1024:
+                    continue
+                program = parts[1]
+                if program in {"personad", "persona-hub", "persona-manager", "persona-node", "persona-link", "persona-iphone-bridge"}:
+                    stream = archive.extractfile(entry)
+                    if stream is None:
+                        continue
+                    with stream:
+                        yield name, stream.read()
 
 
 def main():
@@ -621,31 +688,50 @@ def main():
             if f in SKIP:
                 continue
             path = os.path.join(dirpath, f)
-            kinds = set()
-            dependencies = go_dependencies(path) if whole_short else set()
-            with open(path, "rb") as source:
-                data = source.read()
-            public_js = (not whole_short and verified_public_js(path, data)) or (
-                hermes_public_js and f == "Persona")
-            # Reference bytes can spell a configured value too; only generic IP/email detection skips them.
-            modes = (False, True) if data[:6] == b"bplist" or data[:3] == b"bvx" else (False,)
-            for private_only in modes:
-                found = texts(path, data, private_only=private_only)
-                if whole_short and not private_only:
-                    found = itertools.chain(found, member_texts(data))
-                for t in found:
-                    original_text = t
-                    if not whole_short:
-                        t = remove_public_relay_url(t, persona_config.get(cfg, "app.push_relay", ""))
-                    else:  # the update URL every published personad carries (-X main.updateURL, scripts/release/publish.sh)
-                        t = remove_public_relay_url(t, *public_download_url(cfg))
-                    for v in inherent:
-                        t = t.replace(v, "")
-                    if modules:
-                        t = modules.sub("", t)
-                    kinds.update(text_kinds(t, words, whole_short, dependencies, original_text, public_js=public_js,
-                                            generic=not private_only))
-            bad += [(os.path.relpath(path, root), k) for k in sorted(kinds)]
+            members = [(path, None)]
+            archive = whole_short and path.endswith(".zip") or whole_short and path.endswith(".tar.gz") and not path.endswith("-web.tar.gz")
+            if archive:
+                try:
+                    members = [(os.path.join(dirpath, name), data) for name, data in archive_members(path)]
+                except (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError) as error:
+                    bad.append((os.path.relpath(path, root), "invalid release archive"))
+                    continue
+            for member_path, member_data in members:
+                kinds = set()
+                dependencies = go_dependencies(member_path) if whole_short and not archive else set()
+                if member_data is not None and archive:
+                    # A nested member needs a real executable file for Go's metadata reader, not an archive-name exemption.
+                    import tempfile
+                    with tempfile.TemporaryDirectory(prefix="persona-release-scan-") as temporary:
+                        executable = os.path.join(temporary, os.path.basename(member_path))
+                        with open(executable, "wb") as output:
+                            output.write(member_data)
+                        dependencies = go_dependencies(executable)
+                data = member_data
+                if data is None:
+                    with open(path, "rb") as source:
+                        data = source.read()
+                public_js = (not whole_short and verified_public_js(member_path, data)) or (
+                    hermes_public_js and f == "Persona")
+                modes = (False, True) if data[:6] == b"bplist" or data[:3] == b"bvx" else (False,)
+                for private_only in modes:
+                    found = texts(member_path, data, private_only=private_only)
+                    if whole_short and not private_only:
+                        found = itertools.chain(found, member_texts(data))
+                    for t in found:
+                        original_text = t
+                        if not whole_short:
+                            t = remove_public_relay_url(t, persona_config.get(cfg, "app.push_relay", ""))
+                        else:
+                            for public_url, public_path in public_download_urls(cfg):
+                                t = remove_public_relay_url(t, public_url, public_path)
+                        for v in inherent:
+                            t = t.replace(v, "")
+                        if modules:
+                            t = modules.sub("", t)
+                        kinds.update(text_kinds(t, words, whole_short, dependencies, original_text, public_js=public_js,
+                                                generic=not private_only))
+                bad += [(os.path.relpath(member_path, root), k) for k in sorted(kinds)]
     for f, k in bad:
         print("%s: %s" % (f, k))
     if bad:

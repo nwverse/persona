@@ -73,6 +73,23 @@ func computerMac(t *testing.T, h *Manager, id string) (*Machine, func() (statuse
 				return map[string]any{"ok": true}, nil
 			}
 			return map[string]any{"text": board}, nil
+		case "screen.phone": // Phone Screen (#9314): a node that has one session, for pair "P" only
+			var p struct {
+				Pair string `json:"pair"`
+				Op   string `json:"op"`
+				PID  int32  `json:"pid"`
+			}
+			_ = json.Unmarshal(params, &p)
+			calls = append(calls, computerCallSeen{Tool: method + " " + p.Op})
+			switch {
+			case p.Pair != "P":
+				return nil, &rpc.Error{Code: "not_signed_in", Message: "the paired screen-sharing stream has not signed in"}
+			case p.Op == "place" && p.PID == 99:
+				return nil, &rpc.Error{Code: "window_gone", Message: "the window is gone"}
+			case p.Op == "start":
+				return map[string]any{"display": map[string]any{"id": 7, "x": 1920, "y": 0, "width": 540, "height": 1021, "scale": 2}}, nil
+			}
+			return map[string]any{}, nil
 		case "computer.nolock": // kept apart (fakeNoLock): the plugin's changes send it to every Mac
 			var p struct {
 				On bool `json:"on"`

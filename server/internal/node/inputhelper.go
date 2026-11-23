@@ -144,8 +144,10 @@ func signedInputCopy(ctx context.Context, signer helperSigner, source, stamp str
 	return dst, os.WriteFile(stampFile, []byte(stamp+"\n"), 0o644)
 }
 
-// inputPreflight asks the helper whether it may post events, without asking macOS (--preflight): "granted", "missing"
-// or "unknown". Through LaunchServices, so the answer is about the helper's own permission. A variable for tests.
+// inputPreflight is the helper's --preflight output, asking macOS nothing: whether it may post events
+// (`post_event: granted|missing`, parseInputPreflight) and, from a helper with Phone Screen (#9314), whether it may move
+// windows (`phone_screen: …`, parsePhoneScreenPreflight); "" when it gave none. Through LaunchServices, so the answer is
+// about the helper's own permission. A variable for tests.
 var inputPreflight = func(ctx context.Context, helper string) string {
 	dir, err := os.MkdirTemp("", "persona-input-")
 	if err != nil {
@@ -154,23 +156,28 @@ var inputPreflight = func(ctx context.Context, helper string) string {
 	defer os.RemoveAll(dir)
 	out := filepath.Join(dir, "preflight")
 	if err := os.WriteFile(out, nil, 0o600); err != nil {
-		return "unknown"
+		return ""
 	}
 	if err := exec.CommandContext(ctx, "/usr/bin/open", "-g", "-n", "--stdout", out, helper, "--args", "--preflight").Run(); err != nil {
-		return "unknown"
+		return ""
 	}
 	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
 		b, _ := os.ReadFile(out)
-		if v := parseInputPreflight(string(b)); v != "" {
-			return v
+		if parseInputPreflight(string(b)) != "" {
+			// The phone screen line follows at once (the helper prints both before it exits).
+			if _, p := parsePhoneScreenPreflight(string(b)); p == "" {
+				time.Sleep(100 * time.Millisecond)
+				b, _ = os.ReadFile(out)
+			}
+			return string(b)
 		}
 		select {
 		case <-ctx.Done():
-			return "unknown"
+			return ""
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	return "unknown"
+	return ""
 }
 
 // parseInputPreflight is the helper's --preflight answer ("post_event: granted|missing"), "" before it wrote one.
@@ -199,10 +206,19 @@ type inputPermissionCache struct {
 	value  string
 }
 
+// get is whether the helper may post events: granted, missing or unknown.
 func (c *inputPermissionCache) get(ctx context.Context, helper string) string {
+	if v := parseInputPreflight(c.raw(ctx, helper)); v != "" {
+		return v
+	}
+	return "unknown"
+}
+
+// raw is the helper's whole --preflight output ("" when it gave none), kept for the cache's ttl.
+func (c *inputPermissionCache) raw(ctx context.Context, helper string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.helper == helper && time.Since(c.at) < c.ttl && c.value != "" {
+	if c.helper == helper && !c.at.IsZero() && time.Since(c.at) < c.ttl {
 		return c.value
 	}
 	c.helper, c.at, c.value = helper, time.Now(), inputPreflight(ctx, helper)
@@ -211,7 +227,7 @@ func (c *inputPermissionCache) get(ctx context.Context, helper string) string {
 
 func (c *inputPermissionCache) forget() {
 	c.mu.Lock()
-	c.value = ""
+	c.value, c.at = "", time.Time{}
 	c.mu.Unlock()
 }
 

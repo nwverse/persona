@@ -68,6 +68,7 @@ import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.currentLocale
+import persona.core.designsystem.hardwareShortcutDismiss
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.rememberToastState
 import persona.feature.chat.media.MediaShare
@@ -336,7 +337,9 @@ internal fun shareCardPng(picture: Bitmap): ByteArray =
  */
 @Composable
 internal fun MessageSharePage(message: MessagePicture, onDismiss: () -> Unit) {
-    JFullScreen(onDismiss) { MessageShareContent(message, onDismiss) }
+    JFullScreen(onDismiss) {
+        Box(Modifier.fillMaxSize().hardwareShortcutDismiss(onDismiss)) { MessageShareContent(message, onDismiss) }
+    }
 }
 
 /** [MessageSharePage] inside its window; [layer] records the card (a test reads the picture from it). */

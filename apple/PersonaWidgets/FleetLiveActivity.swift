@@ -43,6 +43,10 @@ struct FleetLiveActivity: Widget {
                             if state.needsYou > 0 { IslandCellView(cell: .needsYou(state.needsYou)) }
                             if state.working > 0 { IslandCellView(cell: .working(state.working)) }
                             if state.unread > 0 { IslandCellView(cell: .unread(state.unread)) }
+                            // The minute before it ends, nothing left to count (FleetCounts).
+                            if state.showsNothing {
+                                Text(FleetText.headline(state)).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                            }
                         }
                         FleetStatsLine(state: state, onDark: true)
                     }
@@ -262,7 +266,8 @@ struct FleetBar: View {
     }
 }
 
-/// Counts: 「💬 2 需要你  ⚙ 3 在工作  ● 1 未看」, the first line of the lock screen (the island's symbols).
+/// Counts: 「💬 2 需要你  ⚙ 3 在工作  ● 1 未看」, the first line of the lock screen (the island's symbols); with none,
+/// "All Caught Up".
 struct FleetCounts: View {
     var state: FleetState
     /// Numbers only (the symbols say which): when the island's numbers share the line.
@@ -288,6 +293,11 @@ struct FleetCounts: View {
             if state.needsYou > 0 { chip(Image(systemName: FleetSymbol.needsYou), "\(state.needsYou)", StateName.count(.needsYou, state.needsYou), FleetPalette.needsYou, short) }
             if state.working > 0 { chip(Image(systemName: FleetSymbol.working), "\(state.working)", StateName.count(.working, state.working), FleetPalette.working, short) }
             if state.unread > 0 { chip(Image(systemName: FleetSymbol.unread).font(.system(size: 7)), "\(state.unread)", StateName.count(.unread, state.unread), FleetPalette.unread, short) }
+            // Nothing left to count: the minute between the last request going (answered, here or on a computer) and
+            // the activity ending, beside the idle persona, rather than a bare face (#8636).
+            if state.showsNothing {
+                Text(FleetText.headline(state)).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+            }
         }
     }
 
@@ -392,11 +402,21 @@ struct FleetLockScreen: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 10) {
                 FleetFace(size: FleetLiveActivity.lockFace, state: FleetPersona.state(state, stale: stale), look: state.drawnLook)
-                FleetCounts(state: state, short: FleetStatsLine.count(state) > 1)
-                Spacer(minLength: 0)
-                FleetStatsLine(state: state)
+                if stale {
+                    // What the hub said last is no longer known to be true (#12982): no counts, no requests, only that
+                    // it is waiting; the app ends or refreshes the card when it is back.
+                    Label("Waiting for hub…", systemImage: "wifi.exclamationmark").font(.subheadline).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                } else {
+                    FleetCounts(state: state, short: FleetStatsLine.count(state) > 1)
+                    Spacer(minLength: 0)
+                    FleetStatsLine(state: state)
+                }
             }
-            if !stale, let act = state.firstActionable {
+            if stale {
+                EmptyView()
+            } else if let act = state.firstActionable {
                 // Allow / Approve need Face ID first (authenticationRequired); Deny works locked.
                 FleetRow(item: act, showTitle: state.details)
                 FleetActionRow(item: act)
@@ -405,9 +425,7 @@ struct FleetLockScreen: View {
             } else if let first = state.items.first, first.needsYou {
                 FleetRow(item: first, showTitle: false)
             }
-            if stale {
-                Label("Waiting for hub…", systemImage: "wifi.exclamationmark").font(.caption2).foregroundStyle(.secondary)
-            } else if state.details, state.firstActionable == nil, state.hidden(showing: FleetLiveActivity.rows) > 0 {
+            if !stale, state.details, state.firstActionable == nil, state.hidden(showing: FleetLiveActivity.rows) > 0 {
                 Text(FleetText.more(state.hidden(showing: FleetLiveActivity.rows))).font(.caption).foregroundStyle(.secondary)
                     .padding(.leading, 15)
             }

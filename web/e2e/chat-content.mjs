@@ -26,6 +26,7 @@ const root = base.replace(/\/$/, "");
 const WIDGET = "/s/macbook/a1f3c2d4-0000-4000-8000-000000000001"; // a working session with a long first message
 const TABLES = "/s/macbook/a1f3c2d4-0000-4000-8000-00000000000a"; // a reply with a narrow table and a wide one
 const BIG = "/s/server/a1f3c2d4-0000-4000-8000-000000000008"; // MOCK_BIG: 650 commands folded into one work line
+const CHIPS = "/s/macbook/a1f3c2d4-0000-4000-8000-000000009146"; // MOCK_TABLE_CHIPS: a table with code chips in a sentence
 const results = [];
 const check = (name, ok, detail) => {
   results.push({ name, ok: Boolean(ok), detail });
@@ -119,27 +120,48 @@ try {
         await ((await group.count()) ? group : where).screenshot({ path: join(shots, `item80-settings-390-${theme}.png`) });
         await context.close();
       }
-      // 50: the model pill takes the width its name needs under a 600 px composer; on a phone the tile and chevron (64 px)
+      // 50: the model pill takes the width its name needs under a 600 px composer.
       for (const width of [600, 480]) {
         const p = await page({ path: WIDGET, width, height: 800, theme });
         const pill = p.locator("[data-model-pill]").first();
-        await pill.waitFor({ timeout: 20_000 });
-        await p.waitForTimeout(800);
+        await pill.locator('span[title="Opus 5.5"]:visible').waitFor({ timeout: 20_000 });
         const m = await pill.evaluate((el) => {
-          const name = [...el.querySelectorAll("span[title]")].find((s) => getComputedStyle(s).display !== "none");
-          return { composer: el.closest('[class*="@container/composer"]').clientWidth, cut: name ? name.scrollWidth > name.clientWidth : null, name: name?.textContent, overflow: el.parentElement.scrollWidth > el.parentElement.clientWidth };
+          const labels = [...el.querySelectorAll("span[title]")].filter((s) => s.getClientRects().length);
+          const name = labels.find((label) => label.title === "Opus 5.5");
+          const clippedBelow = labels.filter((label) => {
+            const text = document.createRange();
+            text.selectNodeContents(label);
+            return text.getBoundingClientRect().bottom > label.getBoundingClientRect().bottom + 0.5;
+          }).map((label) => label.textContent);
+          return { composer: el.closest('[class*="@container/composer"]').clientWidth, cut: name ? name.scrollWidth > name.clientWidth : null, name: name?.textContent, overflow: el.parentElement.scrollWidth > el.parentElement.clientWidth, clippedBelow };
         });
-        check(`50 ${theme} ${width}: the model's name is not cut beside free room`, m.composer < 600 && m.cut === false && !m.overflow, m);
+        check(`50 ${theme} ${width}: the model's name is not cut beside free room`, m.composer < 600 && m.name === "Opus 5.5" && m.cut === false && !m.overflow, m);
+        check(`11160 ${theme} ${width}: the pill labels leave room for descenders`, m.name && !m.clippedBelow.length, m.clippedBelow);
         await p.locator('[class*="@container/composer"]').first().screenshot({ path: join(shots, `item50-pill-${width}-${theme}.png`) });
         await p.context().close();
       }
-      {
-        const p = await page({ path: WIDGET, width: 390, height: 844, theme, touch: true });
-        const pill = p.locator("[data-model-pill]").first();
+      // A new chat has no Agent launcher. WIDGET explicitly runs claude and keeps its launcher and model on the phone.
+      for (const path of ["/persona/new", WIDGET]) {
+        const p = await page({ path, width: 390, height: 844, theme, touch: true });
+        const pill = p.locator('button[data-model-pill="ready"]').first();
         await pill.waitFor({ timeout: 20_000 });
-        await p.waitForTimeout(500);
-        const w = Math.round((await pill.boundingBox()).width);
-        check(`50 ${theme} 390: the phone keeps the tile and chevron`, w === 64, w);
+        if (path === WIDGET) {
+          await pill.locator('span[title="Opus 5.5"]:visible').waitFor({ timeout: 20_000 });
+          const label = await pill.locator("[data-pill-target]:visible").innerText();
+          const model = await pill.locator('span[title="Opus 5.5"]:visible').innerText();
+          const fits = await pill.evaluate((el) => {
+            const button = el.getBoundingClientRect();
+            const composer = el.closest('[class*="@container/composer"]').getBoundingClientRect();
+            return button.left >= composer.left && button.right <= composer.right;
+          });
+          check(`50 ${theme} 390: the phone shows the explicit launcher and model inside the composer`, label === "claude" && model === "Opus 5.5" && fits, { label, model, fits });
+        } else {
+          const width = (await pill.boundingBox()).width;
+          const engine = await pill.locator("[data-pill-engine]:visible").count();
+          const chevron = await pill.locator(":scope > span > svg:last-child:visible").count();
+          const words = await pill.locator("span[title]:visible").count();
+          check(`50 ${theme} 390: the phone keeps the tile and chevron without an explicit launcher`, width === 64 && engine === 1 && chevron === 1 && words === 0, { width, engine, chevron, words });
+        }
         await p.context().close();
       }
       // 73: a narrow window with a pointer: Tab reaches your bubble's buttons where they can be seen
@@ -224,6 +246,47 @@ try {
         await into(p, first);
         const b = await first.boundingBox();
         await p.screenshot({ path: join(shots, `item77-tables-390-${theme}.png`), clip: { x: 0, y: Math.max(0, b.y - 20), width: 390, height: 640 } });
+        await p.context().close();
+      }
+      // 9146: on a wide column a table takes the room its text needs, up to the column, and wraps at a reading length,
+      // not at a phone's 18em; a short code chip in a cell is never broken across lines. On a phone it still fits.
+      for (const [width, height] of [[1440, 900], [390, 844]]) {
+        const p = await page({ path: CHIPS, width, height, theme, touch: width < 600 });
+        const wrap = p.locator(".md-table").first();
+        await wrap.waitFor({ timeout: 20_000 });
+        await p.waitForTimeout(800);
+        const m = await p.evaluate(() => {
+          const table = document.querySelector(".md-table table");
+          const cells = [...table.querySelectorAll("td:not([data-fit])")].map((td) => {
+            const cs = getComputedStyle(td);
+            const r = td.getBoundingClientRect();
+            const text = r.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - parseFloat(cs.borderBottomWidth);
+            return { lines: Math.round(text / parseFloat(cs.lineHeight)), width: Math.round(r.width), em: parseFloat(cs.fontSize) };
+          });
+          const chips = [...table.querySelectorAll("code[data-chip]")].map((c) => ({ text: c.textContent, rects: c.getClientRects().length }));
+          return {
+            table: Math.round(table.getBoundingClientRect().width),
+            column: Math.round(table.closest(".prose-j").getBoundingClientRect().width),
+            scrolls: table.scrollWidth > table.clientWidth,
+            page: document.scrollingElement.scrollWidth,
+            cells,
+            chips,
+          };
+        });
+        const em = m.cells[0]?.em ?? 13;
+        if (width > 600) {
+          check(`9146 ${theme} 1440: the table is no wider than the column and does not scroll`, m.table <= m.column && !m.scrolls, { table: m.table, column: m.column });
+          check(`9146 ${theme} 1440: a long cell is wider than the old 18em cap`, m.cells[0].width > 18 * em + 20, m.cells[0]);
+          check(`9146 ${theme} 1440: each long cell takes at most two lines`, m.cells.every((c) => c.lines <= 2), m.cells);
+        } else {
+          check(`9146 ${theme} 390: the table stays in the page (it fits or scrolls inside itself)`, m.page <= 390 && (m.table <= m.column || m.scrolls), { table: m.table, column: m.column, page: m.page });
+          check(`9146 ${theme} 390: long cells keep their 7em`, m.cells.every((c) => c.width >= 7 * em), m.cells);
+        }
+        check(`9146 ${theme} ${width}: the short chips are marked and none is broken across lines`, m.chips.length >= 6 && m.chips.every((c) => c.rects === 1), m.chips);
+        await into(p, wrap);
+        const b = await wrap.boundingBox();
+        const x = Math.max(0, b.x - 24);
+        await p.screenshot({ path: join(shots, `item9146-${width}-${theme}.png`), clip: { x, y: Math.max(0, b.y - 60), width: Math.min(width - x, b.width + 48), height: Math.min(height, b.height + 100) } });
         await p.context().close();
       }
     }

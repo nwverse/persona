@@ -6,8 +6,10 @@ import OSLog
 import PersonaKit
 
 /// Says Persona's answers out loud in a meeting it takes part in (#2981, docs/apple/recording.md「Persona in meetings」).
-/// In the realtime voice of voice chats when the hub offers it (#5004): the voice extension's `speak`, with the model the
-/// use `plugin.<id>` picks and the voice picked on this device, streamed and played as it comes. Otherwise, or when that
+/// In a voice of the hub's when it offers one: first an extension's `speech` contribution that reads now (#8712, the
+/// built-in Volcengine speech's), in the voice set there; else the realtime voice of voice chats (#5004): the voice
+/// extension's `speak`, with the model the use `plugin.<id>` picks and the voice picked on this device; either streamed
+/// and played as it comes. Otherwise, or when that
 /// voice fails or has not started within `Deps.realtimeWithin`, with the phone's on-device voice for the answer's
 /// language. Either way in the meeting recording's own audio session (so the recording goes on), with the voice call's
 /// route rule for where it plays (`VoiceRoute.output`): a connected headset, else the loudspeaker, never the earpiece;
@@ -231,7 +233,7 @@ final class MeetingSpeaker {
     }
 }
 
-/// The hub's realtime voice for a spoken answer: the voice extension and what to ask it for.
+/// The hub's voice for a spoken answer: the extension and what to ask it for.
 struct MeetingVoiceRoute {
     var api: APIClient?
     var extensionID: String
@@ -239,15 +241,18 @@ struct MeetingVoiceRoute {
     var model: String?
     /// The voice picked on this device for that extension (`VoiceTimbre`); nil: the model's default.
     var voice: String?
+    /// The extension's speech contribution that reads it (#8712), in the voice its settings pick; nil: the voice
+    /// extension's `speak`.
+    var speech: String? = nil
 }
 
 extension MeetingSpeaker {
     /// What it needs from the rest of the app; the tests hand in fakes.
     struct Deps {
-        /// The hub's realtime voice when it can say an answer now (its voice extension runs, is set up and lists
-        /// `speak`); nil: the on-device voice says it.
+        /// The hub's voice when it can say an answer now (a speech contribution that reads, else a voice extension that
+        /// runs, is set up and lists `speak`); nil: the on-device voice says it.
         var realtime: () async -> MeetingVoiceRoute?
-        /// The realtime voice saying `text` (`POST …/speak`), streamed.
+        /// The hub's voice saying `text` (`POST …/speech/<cid>/speak` or `POST …/speak`), streamed.
         var synthesize: (_ route: MeetingVoiceRoute, _ text: String, _ lang: String?) async throws -> VoiceSpeech
         /// How long the realtime voice gets to begin (the hub asked, its session opened, the first audio in) before
         /// the on-device voice says the answer instead.
@@ -275,6 +280,9 @@ extension MeetingSpeaker.Deps {
         Self(realtime: { await MeetingVoiceRoutes.shared.route() },
              synthesize: { route, text, lang in
                  guard let api = route.api else { throw URLError(.notConnectedToInternet) }
+                 if let speech = route.speech {
+                     return try await api.speechSpeak(route.extensionID, contribution: speech, text: text, lang: lang)
+                 }
                  return try await api.voiceSpeak(route.extensionID, text: text, model: route.model, voice: route.voice, lang: lang)
              },
              player: { MeetingVoicePlayer() },
@@ -284,6 +292,8 @@ extension MeetingSpeaker.Deps {
              spoken: { id, span in RecordingLibrary.shared.change(id) { entry in entry.attendance?.spoken.append(span) } },
              speaking: { id, on, at, text in MeetingTranscription.shared.speaking(id, voice: .answer, on: on, at: at, text: text) },
              routeToSpeaker: {
+                 // A meeting recording a system call paused: the route is the call's (docs/apple/calls.md).
+                 guard !LiveCallGate.callIsLive else { return false }
                  let session = AVAudioSession.sharedInstance()
                  guard VoiceRoute.output(PhoneVoiceAudio.snapshot(session)).speaker else { return false }
                  do {
@@ -295,25 +305,31 @@ extension MeetingSpeaker.Deps {
                      return false
                  }
              },
-             restoreOutput: { try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none) })
+             restoreOutput: {
+                 guard !LiveCallGate.callIsLive else { return }
+                 try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
+             })
     }
 }
 
-/// Finds the hub's realtime voice for spoken answers: the voice extension the voice chats use (`VoiceSupport`, asked again
-/// after a minute), the model its use picks and the voice picked on this device. The model is kept a minute too, so an
-/// answer does not wait for two more requests each time.
+/// Finds the hub's voice for spoken answers (`VoiceSupport`'s extensions, asked again after a minute): first a speech
+/// contribution that reads now (#8712, docs/extensions/extensions.md「Speech」), in the voice its settings pick; else the
+/// voice extension the voice chats use, the model its use picks and the voice picked on this device. A contribution's
+/// `/info` and the model are kept a minute, so an answer does not wait for more requests each time.
 @MainActor final class MeetingVoiceRoutes {
     static let shared = MeetingVoiceRoutes()
 
     private var models: [String: (model: String?, at: Date)] = [:]
+    private var speechInfos: [String: (info: SpeechInfo?, at: Date)] = [:]
     static let ttl: TimeInterval = 60
 
     func route(now: Date = .now) async -> MeetingVoiceRoute? {
         guard let hub = AppModel.shared.hub else { return nil }
         let api = hub.api, group = hub.group
         await VoiceSupport.shared.refresh(group: group, api: api)
-        guard let probe = VoiceSupport.shared.probes[group], let voice = VoiceAvailability.pick(probe.extensions),
-              case .info(let info)? = probe.info, Self.speaks(info) else { return nil }
+        guard let probe = VoiceSupport.shared.probes[group] else { return nil }
+        if let speech = await speechRoute(api: api, group: group, extensions: probe.extensions, now: now) { return speech }
+        guard let voice = VoiceAvailability.pick(probe.extensions), case .info(let info)? = probe.info, Self.speaks(info) else { return nil }
         let key = group + "\u{0}" + voice.id
         let model: String?
         if let kept = models[key], now.timeIntervalSince(kept.at) < Self.ttl {
@@ -333,6 +349,73 @@ extension MeetingSpeaker.Deps {
     /// The extension can say an answer: protocol 2, set up, and it lists `speak` (older hubs don't).
     nonisolated static func speaks(_ info: VoiceInfo) -> Bool {
         info.protocolVersion >= 2 && info.setup.isEmpty && info.features.contains(VoiceInfo.speakFeature)
+    }
+
+    /// The speech contribution that reads an answer now: `speechPick`'s, while its `/info` allows (`reads`).
+    func speechRoute(api: APIClient, group: String, extensions: [HubExtension], now: Date = .now) async -> MeetingVoiceRoute? {
+        guard let (ext, cid) = Self.speechPick(extensions) else { return nil }
+        let key = group + "\u{0}" + ext + "/" + cid
+        let info: SpeechInfo?
+        if let kept = speechInfos[key], now.timeIntervalSince(kept.at) < Self.ttl {
+            info = kept.info
+        } else {
+            info = await api.speechInfo(ext, contribution: cid)
+            speechInfos[key] = (info, now)
+        }
+        guard let info, Self.reads(info) else { return nil }
+        return MeetingVoiceRoute(api: api, extensionID: ext, model: nil, voice: nil, speech: cid)
+    }
+
+    /// The first running extension with a speech contribution, and that contribution (ids that may become a path only).
+    nonisolated static func speechPick(_ extensions: [HubExtension]) -> (extensionID: String, contribution: String)? {
+        for ext in extensions where ext.status == "running" && VoiceAvailability.validID(ext.id) {
+            if let cid = ext.contributes?[SpeechInfo.point]?.first(where: VoiceAvailability.validID) { return (ext.id, cid) }
+        }
+        return nil
+    }
+
+    /// The contribution reads now: protocol 1, nothing missing (`setup`: no key yet, or reading answers turned off).
+    nonisolated static func reads(_ info: SpeechInfo) -> Bool {
+        info.protocolVersion >= 1 && (info.setup ?? "").isEmpty
+    }
+}
+
+/// A speech contribution's `GET /speech/<cid>/info` (docs/extensions/extensions.md「Speech」, #8712).
+nonisolated struct SpeechInfo: Decodable, Equatable, Sendable {
+    /// The extension point the contribution is of, in the extensions list's `contributes`.
+    static let point = "speech"
+
+    var protocolVersion: Int
+    /// The audio's sample rate.
+    var rate: Int?
+    /// Why it reads nothing now (`key`: not set up; `off`: turned off in its settings); nil when it reads.
+    var setup: String?
+
+    init(protocolVersion: Int, rate: Int? = nil, setup: String? = nil) {
+        self.protocolVersion = protocolVersion
+        self.rate = rate
+        self.setup = setup
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case rate, setup
+        case protocolVersion = "protocol"
+    }
+}
+
+extension APIClient {
+    /// `GET …/speech/<cid>/info`; nil when it cannot be asked (an older hub, not running, a refused device).
+    func speechInfo(_ extensionID: String, contribution: String) async -> SpeechInfo? {
+        try? await get(extensionPath("/\(extensionID)/speech/\(contribution)/info"))
+    }
+
+    /// `POST …/speech/<cid>/speak`: the voice extension's read-aloud contract (`voiceSpeak`) in the contribution's own
+    /// voice, so the request carries only the text and its language.
+    func speechSpeak(_ extensionID: String, contribution: String, text: String, lang: String?) async throws -> VoiceSpeech {
+        let body = VoiceSpeech.Body(text: text, model: nil, voice: nil, lang: lang)
+        let (response, bytes) = try await streamed("POST", extensionPath("/\(extensionID)/speech/\(contribution)/speak"), body: body)
+        let rate = response.value(forHTTPHeaderField: VoiceSpeech.rateHeader).flatMap(Int.init) ?? VoiceSpeech.defaultRate
+        return VoiceSpeech(rate: rate, audio: VoiceSpeech.chunks(bytes))
     }
 }
 

@@ -37,6 +37,20 @@ test('compat environment and existing root do not create an empty store', (t) =>
   assert.equal(stateDir(home, { PERSONA_HOME: legacy }), legacy)
 })
 
+test('assistant and health workspaces recognize manager IDs only under a state root', () => {
+  const home = '/example'
+  const env = { PERSONA_HOME: '~/profile' }
+  for (const name of ['assistant', 'health', 'assistant-m-01aef', 'health-m-f0']) {
+    for (const root of ['.persona', '.jarvis', 'profile']) {
+      assert.equal(isAssistantDir(join(home, root, name), home, env), true)
+    }
+    assert.equal(isAssistantDir(join(home, 'project', name), home, env), false)
+  }
+  for (const name of ['assistant-bin', 'assistant-hooks', 'assistant-m-', 'health-m-AF', 'assistant-m-0g', 'health-m-a\n']) {
+    assert.equal(isAssistantDir(join(home, '.persona', name), home, env), false)
+  }
+})
+
 test('compat websocket selects only a protocol actually offered and still checks token', () => {
   for (const protocol of ['persona-runtime.v1', 'jarvis-runtime.v1']) {
     const req = { method: 'GET', headers: { authorization: 'Bearer secret', upgrade: 'websocket', 'sec-websocket-key': 'test', 'sec-websocket-version': '13', 'sec-websocket-protocol': protocol } }
@@ -57,13 +71,15 @@ test('compat websocket selects only a protocol actually offered and still checks
 
 test('compat package names use identical files and hashes and keep exact name verification', () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '../..')
-  for (const canonical of ['persona-dsh-runtime', 'persona-pi-runtime', 'persona-paseo-runtime', 'persona-agent-sdk-runtime']) {
+  for (const canonical of ['persona-dsh-runtime', 'persona-pi-runtime', 'persona-paseo-runtime']) {
     const legacy = wirePackageName(canonical)
     assert.equal(legacy, canonical.replace('persona-', 'jarvis-'))
     assert.deepEqual(PACKAGES[legacy], PACKAGES[canonical])
     assert.equal(packageHash(readShipped(root, PACKAGES[legacy])), packageHash(readShipped(root, PACKAGES[canonical])))
   }
   assert.equal(selfPackage(new URL('../../pi/index.js', import.meta.url).href, 'persona-pi-runtime').name, 'jarvis-pi-runtime')
+  assert.equal(wirePackageName('persona-antigravity-runtime'), 'persona-antigravity-runtime')
+  assert.equal(selfPackage(new URL('../../antigravity/companion.mjs', import.meta.url).href, 'persona-antigravity-runtime').name, 'persona-antigravity-runtime')
   const files = [{path:'pi/index.js', data:Buffer.from('safe')}]
   const pkg = {name:'jarvis-pi-runtime', hash:packageHash(files), files:files.map((f)=>({path:f.path,data:f.data.toString('base64')}))}
   assert.ok(verifyPackage(pkg, 'jarvis-pi-runtime'))
@@ -119,4 +135,6 @@ test('compat context only strips bare live snapshots and MCP aliases keep sessio
   const bin = join(home,'.jarvis','bin','jarvisd')
   mkdirSync(dirname(bin),{recursive:true}); writeFileSync(bin,'binary')
   assert.equal(daemonBinary(home,{}),bin)
+  const stateHome = join(home, 'fixture-state')
+  assert.equal(daemonBinary(home, { personadBin: join(home, 'no-personad'), jarvisdBin: join(home, 'no-personad'), stateHome }), join(stateHome, 'bin', 'personad'))
 })

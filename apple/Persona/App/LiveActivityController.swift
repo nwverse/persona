@@ -32,16 +32,18 @@ final class LiveActivityController {
     }
 
     private var watching: Set<String> = []
+    /// Activities `keepOne` is ending: their end runs on, and until then nothing updates them in place of the kept one.
+    private var ending: Set<String> = []
     private var endTask: Task<Void, Never>?
     private var started = false
 
     private var activity: Activity<LegacyFleetActivityAttributes>? {
-        Activity<LegacyFleetActivityAttributes>.activities.first { $0.activityState == .active || $0.activityState == .stale }
+        Activity<LegacyFleetActivityAttributes>.activities.first { Self.running($0.activityState) && !ending.contains($0.id) }
     }
 
     /// Keep activities created by the interim canonical-identity builds alive too.
     private var canonicalActivity: Activity<PersonaActivityAttributes>? {
-        Activity<PersonaActivityAttributes>.activities.first { $0.activityState == .active || $0.activityState == .stale }
+        Activity<PersonaActivityAttributes>.activities.first { Self.running($0.activityState) && !ending.contains($0.id) }
     }
     private var runningContent: ActivityContent<FleetState>? { canonicalActivity?.content ?? activity?.content }
     private var hasActivity: Bool { activity != nil || canonicalActivity != nil }
@@ -97,6 +99,7 @@ final class LiveActivityController {
         }
         for activity in Activity<LegacyFleetActivityAttributes>.activities { watch(activity) }
         for activity in Activity<PersonaActivityAttributes>.activities { watch(activity) }
+        keepOne()
     }
 
     /// The hub's current fleet (the `fleet` event, or GET /api/v1/fleet on becoming active).
@@ -106,8 +109,14 @@ final class LiveActivityController {
             endAll()
             return
         }
+        keepOne()
         let step = Self.step(state, running: hasActivity, active: UIApplication.shared.applicationState == .active)
         if step == .endSoon {
+            // The last request went (answered here or on a computer, or gone): off the activity now, with its buttons,
+            // as the hub's push does while the app is away. The minute below still runs.
+            if let content = runningContent, Self.clearsNow(content.state, to: state) {
+                updateRunning(ActivityContent(state: state, staleDate: content.staleDate, relevanceScore: Self.relevance(state)))
+            }
             // Agents flicker between turns: end only when nothing came back for a minute (the hub does the same).
             guard endTask == nil else { return }
             endTask = Task { [weak self] in
@@ -143,6 +152,14 @@ final class LiveActivityController {
         if state.showsNothing { return running ? .endSoon : .nothing }
         if running { return .update }
         return active && state.phase != .none && state.phase != .done ? .start : .nothing
+    }
+
+    /// Whether an activity showing `shown` is cleared at once when the fleet leaves it nothing to show (`state`, an
+    /// `.endSoon`): only when it still shows something needing the user. Anything else (the last agent done and seen,
+    /// the assistant done) stays the minute until the end, as the hub pushes nothing for it either (liveactivity.go
+    /// `flush`, #8636).
+    nonisolated static func clearsNow(_ shown: FleetState, to state: FleetState) -> Bool {
+        state.showsNothing && (shown.needsYou > 0 || shown.items.contains(where: \.needsYou))
     }
 
     /// Takes a settled request off the activity at once (the hub's update follows).
@@ -208,6 +225,49 @@ final class LiveActivityController {
         let status = SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "persona.look"] as CFDictionary)
         if status == errSecSuccess { FleetLookStore.log.notice("deleted the keychain look of an older build") }
     }()
+
+    /// One Fleet card on the Lock Screen (#12982): of every activity this app has, of either attribute type, the running
+    /// one updated last stays; every other ends at once, ended ones too — iOS ends an activity after about eight hours
+    /// but leaves it on the Lock Screen, stale, for hours, where `activity` no longer sees it and a new one would start
+    /// beside it.
+    func keepOne() {
+        let legacy = Activity<LegacyFleetActivityAttributes>.activities.map {
+            Self.Candidate(id: $0.id, running: Self.running($0.activityState), staleDate: $0.content.staleDate)
+        }
+        let canonical = Activity<PersonaActivityAttributes>.activities.map {
+            Self.Candidate(id: $0.id, running: Self.running($0.activityState), staleDate: $0.content.staleDate)
+        }
+        let keep = Self.kept(legacy + canonical)
+        for activity in Activity<LegacyFleetActivityAttributes>.activities where activity.id != keep && ending.insert(activity.id).inserted {
+            Self.end(activity)
+        }
+        for activity in Activity<PersonaActivityAttributes>.activities where activity.id != keep && ending.insert(activity.id).inserted {
+            Self.end(activity)
+        }
+    }
+
+    /// An activity as `kept` weighs it.
+    nonisolated struct Candidate: Equatable, Sendable {
+        var id: String
+        var running: Bool
+        var staleDate: Date?
+    }
+
+    nonisolated static func running(_ state: ActivityState) -> Bool { state == .active || state == .stale }
+
+    /// Which activity stays: a running one, the one whose content was updated last (each update moves its stale date
+    /// on); nil when none runs, so every one ends.
+    nonisolated static func kept(_ all: [Candidate]) -> String? {
+        all.filter(\.running).max { ($0.staleDate ?? .distantPast) < ($1.staleDate ?? .distantPast) }?.id
+    }
+
+    /// The app went to the background. With no push route to this phone (the hub's `none`), nothing can update or
+    /// end the activity from now on: it would go stale and keep showing old counts and an old request for hours. It
+    /// ends now instead, and the app starts it again when it is back in front (#12982).
+    func left(pushReaches: Bool?) {
+        guard pushReaches == false else { return }
+        endAll()
+    }
 
     func endAll() {
         endTask?.cancel()
@@ -288,13 +348,14 @@ final class LiveActivityController {
 
 #if DEBUG
 extension LiveActivityController {
-    /// `-showFleetSample needsYou|working|background|done|thinking|assistant|offline` (`-fleetDetails YES` for names on the lock screen,
+    /// `-showFleetSample needsYou|working|background|done|thinking|assistant|offline|cleared` (`-fleetDetails YES` for names on the lock screen,
     /// `-fleetIsland b`, `c` or `custom:assistant,load` for the island's sides, `-showFleetCount 12` for that many in
     /// each kind there is; `-openPersona nwverse` for the persona): starts the activity with made-up agents, no
     /// hub needed, for screenshots. `thinking` is only the assistant answering (beside one finished agent);
     /// `assistant` is the assistant alone, nothing to count (the minimal island then shows the persona); `background`
     /// leads with two agents whose workflows run on in the background (#3437: their lines, bars and workflows' clocks);
-    /// `offline` is the working sample made stale once it shows.
+    /// `offline` is the working sample made stale once it shows; `cleared` is a lone request answered elsewhere two
+    /// seconds after it shows (the fleet then empty, the minute before the end, #8636).
     func showSample(_ phase: String, details: Bool, island spec: String?, count: Int = 0) {
         UserDefaults.standard.set(details, forKey: Self.detailsKey)
         var island = IslandPrefs()
@@ -334,6 +395,7 @@ extension LiveActivityController {
             state.unread = state.unread > 0 ? count : 0
         }
         state.assistant = phase != "done"
+        if phase == "cleared" { state = FleetState(phase: .needsYou, needsYou: 1, items: [ask]) }
         if phase == "offline" { state = FleetState(phase: .working, working: 3, unread: 1, items: [work, done], workingSince: now - 754) }
         state.stats = .init(tpm: 12000, tokens: 42_000_000, requests: 1200,
                             loads: [.init(id: "studio", name: "Studio", percent: 35), .init(id: "macbook", name: "MacBook", percent: 70)])
@@ -356,6 +418,12 @@ extension LiveActivityController {
                 return
             }
             apply(state)
+            if phase == "cleared" {
+                try? await Task.sleep(for: .seconds(2))
+                var empty = FleetState()
+                empty.stats = state.stats
+                apply(empty)
+            }
         }
     }
 }

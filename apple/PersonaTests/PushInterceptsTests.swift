@@ -126,6 +126,16 @@ struct PushInterceptsTests {
         #expect(failedModel.enabled && failedModel.failed)
     }
 
+    // Settings › Notifications › Low-Distraction Mode (#8157): the switch sends the choice and shows what the hub answered.
+    @Test func settingsSwitchPutsTheChoiceAndReadsTheHubsAnswer() async throws {
+        let hub = FakeHub()
+        hub.on("PUT", "/api/v1/push/ln-mode", json: #"{"enabled":true}"#)
+        let saved = try await hub.client.setPushLnMode(true)
+        #expect(saved.enabled)
+        let body = try JSONSerialization.jsonObject(with: try #require(hub.sent("PUT", "/api/v1/push/ln-mode").last?.body)) as? [String: Any]
+        #expect(body?["enabled"] as? Bool == true)
+    }
+
     @Test func olderHubHidesTheEntry() async {
         let hub = FakeHub()
         let model = PushInterceptsModel(api: hub.client)
@@ -133,6 +143,9 @@ struct PushInterceptsTests {
         #expect(!model.enabled && model.failed)
     }
 
+    // The held answer belongs to the refresh that started first, whose ticket is 1, so the model must drop it once the
+    // second refresh (ticket 2) has read the rows. Two concurrent refreshes do not order their `intercepts` calls, so the
+    // second refresh starts only after the first one is holding its answer (#10289).
     @Test func lateResponseCannotOverwriteNewerRead() async {
         // The model keeps only records from the local day of `.now` (#7953): both sit on today, whenever this runs.
         let today = { (hour: Int) in
@@ -140,16 +153,19 @@ struct PushInterceptsTests {
         }
         let old = response([record(today(11), title: "Old")])
         let new = response([record(today(12), title: "New")])
-        let counter = LockedCounter()
+        let reads = LockedCounter()
+        let (started, readStarted) = AsyncStream<Void>.makeStream()
+        let (finish, readFinished) = AsyncStream<Void>.makeStream()
         let model = PushInterceptsModel(mode: { LnModeResponse(enabled: true) }, intercepts: {
-            if counter.next() == 1 {
-                try? await Task.sleep(for: .milliseconds(150))
-                return old
-            }
-            return new
+            guard reads.next() == 1 else { return new }
+            readStarted.yield()
+            for await _ in finish { break }
+            return old
         })
         async let first: Void = model.refresh()
+        for await _ in started { break }
         await model.refresh()
+        readFinished.yield()
         await first
         #expect(model.groups.p1.first?.summaries.first == "New")
     }

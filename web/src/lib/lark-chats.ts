@@ -7,7 +7,7 @@
 import { t } from "../i18n";
 import { useSyncExternalStore } from "react";
 import { api, ApiError, enc, errorText } from "./api";
-import { larkPath } from "./lark-accounts";
+import { larkPath } from "./lark-path";
 import { itemHeaders } from "./manager-choice";
 import { sameValue } from "./stable-lines";
 
@@ -55,6 +55,7 @@ export interface LarkConversation {
   id: string;
   name: string;
   avatar?: string;
+  avatar_url?: string;
   is_group: boolean;
   is_topic?: boolean;
   unread: number;

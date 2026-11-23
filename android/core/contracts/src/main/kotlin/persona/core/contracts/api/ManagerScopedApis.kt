@@ -1,5 +1,6 @@
 package persona.core.contracts.api
 
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -26,6 +27,10 @@ fun FeishuBotSettings.forManager(manager: String): FeishuBotSettings = ManagerFe
 
 /** This sent-as-you ledger with every request for [manager]. */
 fun HubSent.forManager(manager: String): HubSent = ManagerSent(this, RequestManager(manager))
+
+/** This standing-authorizations list with every request for [manager]. */
+fun StandingAuthorizationsSource.forManager(manager: String): StandingAuthorizationsSource =
+    ManagerStandingAuthorizations(this, RequestManager(manager))
 
 private class ManagerAgentTriage(private val source: AgentTriage, private val owner: RequestManager) : AgentTriage {
     override suspend fun switches() = withContext(owner) { source.switches() }
@@ -59,6 +64,16 @@ private class ManagerChannels(private val source: ChannelManagement, private val
 private class ManagerFeishuBot(private val source: FeishuBotSettings, private val owner: RequestManager) : FeishuBotSettings {
     override suspend fun status() = withContext(owner) { source.status() }
     override suspend fun update(update: FeishuBotUpdate) = withContext(owner) { source.update(update) }
+}
+
+private class ManagerStandingAuthorizations(
+    private val source: StandingAuthorizationsSource,
+    private val owner: RequestManager,
+) : StandingAuthorizationsSource {
+    override val hubIdentity: StateFlow<String> get() = source.hubIdentity
+    override fun pinned(): StandingAuthorizationsSource = ManagerStandingAuthorizations(source.pinned(), owner)
+    override suspend fun list() = withContext(owner) { source.list() }
+    override suspend fun revoke(id: String) = withContext(owner) { source.revoke(id) }
 }
 
 private class ManagerSent(private val source: HubSent, private val owner: RequestManager) : HubSent {
@@ -101,4 +116,7 @@ private class ManagerConnectors(private val source: ConnectorsManagement, privat
     override suspend fun deleteMessagesData() = withContext(owner) { source.deleteMessagesData() }
     override suspend fun messagesChats(before: String?) = withContext(owner) { source.messagesChats(before) }
     override suspend fun messagesThread(chatId: String, before: String?) = withContext(owner) { source.messagesThread(chatId, before) }
+    override suspend fun gitHubAuth() = withContext(owner) { source.gitHubAuth() }
+    override suspend fun setGitHubAuth(machine: String?) = withContext(owner) { source.setGitHubAuth(machine) }
+    override suspend fun setGitHubInboxOptions(options: GitHubInboxOptions) = withContext(owner) { source.setGitHubInboxOptions(options) }
 }

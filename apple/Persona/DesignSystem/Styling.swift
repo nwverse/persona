@@ -9,6 +9,10 @@ extension View {
         modifier(Surface(shape: shape, tint: tint, interactive: interactive))
     }
 
+    /// A lens gliding over a bar's items (iPhone Duo's tab bar, #9837): clear Liquid Glass in the glass styles, over the
+    /// items, bending them as it passes; in the others the style's soft pill, under them (`StyleSpec.usesGlass` says which).
+    func lensSurface<S: Shape>(in shape: S) -> some View { modifier(LensSurface(shape: shape)) }
+
     /// A list row on the style's canvas (plain lists paint rows white otherwise).
     @ViewBuilder func themedRow() -> some View {
         if StyleSpec.current.usesGlass { self } else { listRowBackground(Color.clear) }
@@ -24,6 +28,27 @@ extension View {
             self
         } else {
             scrollContentBackground(.hidden).background(Theme.pageBackground)
+        }
+    }
+}
+
+private struct LensSurface<S: Shape>: ViewModifier {
+    var shape: S
+
+    func body(content: Content) -> some View {
+        if StyleSpec.current.usesGlass {
+            #if os(visionOS)
+            content.background(.ultraThinMaterial, in: shape)
+            #else
+            if #available(iOS 26.0, *) {
+                content.glassEffect(.clear, in: shape)
+            } else {
+                // iOS 18 has no Liquid Glass (#6730): visionOS's material.
+                content.background(.ultraThinMaterial, in: shape)
+            }
+            #endif
+        } else {
+            content.background(Theme.Shell.segment, in: shape)
         }
     }
 }
@@ -44,7 +69,14 @@ private struct Surface<S: Shape>: ViewModifier {
                 .background(.regularMaterial, in: shape)
                 .hoverEffect(isEnabled: interactive)
             #else
-            content.glassEffect(glass, in: shape)
+            if #available(iOS 26.0, *) {
+                content.glassEffect(glass, in: shape)
+            } else {
+                // iOS 18 has no Liquid Glass (#6730): visionOS's material, the tint washed over it.
+                content
+                    .background { if let tint { shape.fill(tint) } }
+                    .background(.regularMaterial, in: shape)
+            }
             #endif
         case .puffy:
             // Clay: a puffy pastel slab — light from the top left, a soft shadow below in the color's wash.
@@ -77,6 +109,7 @@ private struct Surface<S: Shape>: ViewModifier {
     }
 
     #if !os(visionOS)
+    @available(iOS 26.0, *)
     private var glass: Glass {
         var g = Glass.regular
         if let tint { g = g.tint(tint) }
@@ -156,19 +189,20 @@ extension View {
             // visionOS has no .glassProminent: its windows are glass already, and the system's prominent style is the filled one.
             if prominent { buttonStyle(.borderedProminent).modifier(DimWhenDisabled()) } else { buttonStyle(.bordered) }
             #else
-            if prominent {
-                buttonStyle(.glassProminent).modifier(DimWhenDisabled())
+            if #available(iOS 26.0, *) {
+                if prominent {
+                    buttonStyle(.glassProminent).modifier(DimWhenDisabled())
+                } else {
+                    buttonStyle(RedWhenDestructive()).buttonStyle(.glass).menuStyle(SystemStyleMenu()).modifier(LabelOffItsFill())
+                }
             } else {
-                buttonStyle(RedWhenDestructive()).buttonStyle(.glass).menuStyle(SystemStyleMenu()).modifier(LabelOffItsFill())
+                // iOS 18 has no glass buttons (#6730): the bordered style's.
+                borderedButton(prominent: prominent)
             }
             #endif
         case .bordered:
             #if os(iOS)
-            if prominent {
-                buttonStyle(.borderedProminent)
-            } else {
-                buttonStyle(RedWhenDestructive()).buttonStyle(.bordered).menuStyle(SystemStyleMenu(bordered: true)).modifier(LabelOffItsFill())
-            }
+            borderedButton(prominent: prominent)
             #else
             if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered).modifier(LabelOffItsFill()) }
             #endif
@@ -176,6 +210,16 @@ extension View {
             buttonStyle(SoftButtonStyle(prominent: prominent))
         }
     }
+
+    #if os(iOS)
+    @ViewBuilder private func borderedButton(prominent: Bool) -> some View {
+        if prominent {
+            buttonStyle(.borderedProminent)
+        } else {
+            buttonStyle(RedWhenDestructive()).buttonStyle(.bordered).menuStyle(SystemStyleMenu(bordered: true)).modifier(LabelOffItsFill())
+        }
+    }
+    #endif
 }
 
 /// A secondary glass or bordered button's label, pushed away from the fill under it (#6157): blended with it, lighter in
@@ -227,8 +271,10 @@ private struct SystemStyleMenu: MenuStyle {
     @ViewBuilder func makeBody(configuration: Configuration) -> some View {
         if bordered {
             Menu(configuration).buttonStyle(.bordered)
-        } else {
+        } else if #available(iOS 26.0, *) {
             Menu(configuration).buttonStyle(.glass)
+        } else {
+            Menu(configuration).buttonStyle(.bordered)
         }
     }
 }

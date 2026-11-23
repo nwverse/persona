@@ -40,7 +40,7 @@ nonisolated struct FileContent: Decodable, Sendable {
     }
 }
 
-extension APIClient {
+nonisolated extension APIClient {
     /// A file or a directory on a machine; a text file bigger than a page from `offset` (the page before's `next`).
     /// `stream`: a binary file without its bytes (hub feature `file_stream`, docs/protocol/protocol.md「File preview」).
     func file(machine: String, path: String, cwd: String?, offset: Int64 = 0, stream: Bool = false) async throws -> FileContent {
@@ -55,7 +55,7 @@ extension APIClient {
 }
 
 /// A file mentioned in a conversation, opened on the machine the session runs on.
-struct FileRef: Identifiable, Hashable {
+nonisolated struct FileRef: Identifiable, Hashable, Sendable {
     /// The group of hubs the machine is in (docs/protocol/multi-hub.md).
     var group: String = ""
     var machineID: String
@@ -175,17 +175,16 @@ struct FileViewer: View {
         NavigationStack {
             content
                 .navigationTitle(page?.file?.name ?? (ref.path as NSString).lastPathComponent)
-                .navigationSubtitle(model.machine(ref.machineRef)?.name ?? ref.machineID)
+                .navigationSubtitleWhenSupported(model.machine(ref.machineRef)?.name ?? ref.machineID)
                 .navigationBarTitleDisplayMode(.inline)
                 .pageToolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        if let back = history.last {
+                    // ‹ after following a file link, else the sheet's ✕ (#9653).
+                    if let back = history.last {
+                        ToolbarItem(placement: .topBarLeading) {
                             Button { history.removeLast(); ref = back } label: { Label("Back [Task Sheets 572cf4]", systemImage: Theme.Icon.back) }
-                        } else {
-                            Button("Done [Extension System Presentation c0b3fb]") { dismiss() }
-                                .lineLimit(1)
-                                .accessibilityIdentifier("file-close")
                         }
+                    } else {
+                        SheetClose(id: "file-close") { dismiss() }
                     }
                     #if os(iOS)
                     if page?.kind != .directory {

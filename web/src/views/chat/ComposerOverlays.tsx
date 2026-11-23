@@ -1,11 +1,14 @@
 import { useLayoutEffect, useRef } from "react";
 import { t } from "../../i18n";
-import { enterSends, hasFinePointer } from "../../lib/viewport";
+import { useCloseOnBack } from "../../lib/back-close";
+import { enterSends, hasFinePointer, NARROW, useMedia } from "../../lib/viewport";
+import { useComposition } from "../../lib/ime";
 import { EASE } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { useModalFocus } from "../../ui/overlay";
 
 type ExpandedProps = {
+  editLabel?: string;
   value: string;
   placeholder: string;
   selection: [number, number];
@@ -25,10 +28,11 @@ export function ComposerOverlay(props: ExpandedProps | SuggestionProps) {
 
 /** The draft full screen on a phone (#5688): collapse at the top right, the text filling the visible height, send at the
  *  bottom right. It edits the box's own draft; closing hands back the caret so the box picks up where this left off. */
-function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse, canSend, blocked, onSend }: ExpandedProps) {
+function ExpandedComposer({ editLabel, value, placeholder, selection, onChange, onCollapse, canSend, blocked, onSend }: ExpandedProps) {
   const panel = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const start = useRef(selection);
+  const ime = useComposition();
   useModalFocus(panel);
   useLayoutEffect(() => {
     const el = field.current;
@@ -37,12 +41,14 @@ function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse,
     el.setSelectionRange(start.current[0], start.current[1]);
   }, []);
   const sel = (): [number, number] => [field.current?.selectionStart ?? value.length, field.current?.selectionEnd ?? value.length];
+  // Back collapses it, as the collapse button does, and stays in the chat
+  useCloseOnBack(true, () => onCollapse(sel()), useMedia(NARROW));
   return (
     <div
       ref={panel}
       role="dialog"
       aria-modal="true"
-      aria-label={t("chat-composer.message")}
+      aria-label={editLabel ?? t("chat-composer.message")}
       tabIndex={-1}
       data-testid="composer-expanded"
       className="fixed inset-x-0 z-50 flex flex-col bg-surface outline-none"
@@ -71,18 +77,20 @@ function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse,
         ref={field}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        {...ime.handlers}
+        onBlur={ime.onBlur}
         onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+          if (ime.busy(e.nativeEvent)) return;
           // The full editor always keeps plain Enter as a newline; an explicit Mod+Enter sends on any pointer.
-          if (!enterSends(e, false)) return;
+          if (editLabel || !enterSends(e, false)) return;
           e.preventDefault();
           if (canSend || blocked) onSend(sel(), e.repeat);
         }}
         placeholder={placeholder}
-        aria-label={t("chat-composer.message")}
+        aria-label={editLabel ?? t("chat-composer.message")}
         className="min-h-0 w-full flex-1 resize-none bg-transparent px-5 py-1 text-[16px] leading-[24px] text-ink outline-none [overflow-wrap:anywhere] placeholder:text-ink-3"
       />
-      <div className="flex justify-end px-3 pt-2 pb-[max(env(safe-area-inset-bottom),12px)]">
+      {!editLabel && <div className="flex justify-end px-3 pt-2 pb-[max(env(safe-area-inset-bottom),12px)]">
         <button
           type="button"
           data-testid="composer-expanded-send"
@@ -94,7 +102,7 @@ function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse,
         >
           <Icon name="up" size={18} stroke={2.4} />
         </button>
-      </div>
+      </div>}
     </div>
   );
 }

@@ -1,11 +1,40 @@
 # Lessons: testing and validation
 
+- A manager route's response contract is also asserted by hub relay tests (#13234). When making a closed plan's
+  dismiss response idempotent, update both the manager's route test and the hub's end-to-end plan lifecycle test;
+  verify the returned state and persisted state, rather than only replacing the expected HTTP status.
+
+- Execute release collection steps against the actual build-directory layout (#11684). The installer is rendered at
+  `build-publish/install.sh`, while archives and indexes live in `build-publish/bin/`. A receipt that only hashes files
+  that happened to be copied cannot detect an omitted installer. Stop on failed copies, require bootstrap files before
+  binding the CLI/Web receipt, and test missing outputs as well as a complete build.
+
+- New relayed routes need both extension-scope inventories checked (#7100): `TestRouteScopes` records the exact
+  scope, and `TestEveryExtensionRouteIsBounded` records how ownership is enforced. Updating `extwire.RouteScopes`
+  alone leaves those checks failing. Exercise allowed and refused tokens, another manager's Todo and explicit manager
+  selectors, and body-named machines before recording the classification; keep every existing scope unchanged.
+  Regenerate the route inventory after merging additions so shared-prefix routes remain sorted.
+
+- A viewer's Close button existing, or being non-hittable, does not prove that its picture and tap recognizers are ready, or that a tap hid the chrome (#8562). The full-screen presentation may still be settling, the decoded page may still be a spinner, or a SpringBoard alert may cover the app. Dismiss the known icon-change alert, wait for the decoded `viewer-page-N` and a hittable Close before the first tap, and only then assert the hide/show sequence. A delayed-decode launch turns the old race into a deterministic failure; a longer poll after a mistimed tap only hides the synchronization gap.
+
 - Fixture teardown is part of a test's elapsed time (#5730). A scripted terminal whose shell is ready immediately
   does not need a fixed startup pause. When a test has finished its assertions, cancel background prompt checks
   owned by that fixture and join them before restoring package settings or closing sockets. Delivery/recovery tests
   must still await the check before their assertions; cancellation at teardown must not substitute for those checks.
   Keep normal detached delivery and production wait limits unchanged, and measure serial and partitioned commands
   separately when evaluating the gain.
+
+- A UI test that lands on the wrong page in the wrong language did not get its launch (#10109). xcodebuild installs the
+  app at the start of each run; a Live Activity the previous run left is stopped by that install, and liveactivitiesd
+  wakes the app in the background a few milliseconds before XCTest's launch, which then attaches to that argument-less
+  process. Longer waits never help: read SpringBoard's `OpenApplication … ForRequester(…)` lines around the launch, and
+  end what a test leaves (Debug builds end their Live Activities on SIGTERM). A test that waits for one of two
+  renderings (a folded box shows the caption, not the line) waits on the hub's own count first, then either rendering.
+
+- A fake peer recording a user line is not the send's completion (#9673). The desktop launcher's first message
+  continues in the background and still reads the shared confirmation timeout. After observing inbox receipt, wait
+  for that session's existing input lock before restoring the test's package globals; keep the drain on assertion
+  failure paths too. A fixed pause gives the race another schedule, not a happens-before relationship.
 
 - A transport fixture that already reads every reply should wake its request waiter from that reader (#5730).
   Register by request ID before sending, retain JSON-RPC errors, remove waiters on cancellation/EOF/write failure,
@@ -57,16 +86,27 @@
   the same derived data and suite selection; preserve failure propagation, integration exclusions and result-bundle
   inspection rather than increasing the execution timeout or dropping suites.
 
+- App-hosted simulator launch failures are not necessarily boot or product-test failures (#1738). A completed boot,
+  testmanagerd control connection and app installation can all precede a Mach -308 launch timeout without a test-bundle
+  proxy connection. Capture the host process and launchd/runtime-mount evidence before Xcode timeout cleanup, and keep
+  the app host distinct from the test bundle. Requiring both UDID and bundle ID misses launchd errors; filtering a large
+  raw log only after buffering it also discards the evidence. Neither an absent log nor a process presence proves a cause.
+  When an iPhone readiness probe passes but the later iPad launch fails, the iPad needs its own live scope and observer:
+  the iPhone's successful result, host samples and scoped log do not explain the other device's launch. An outer test
+  deadline can kill a background observer before its `finally` block writes status: preseed bounded unavailable records,
+  replace them atomically on completion, and use a separate process group plus a bounded drain/reaper. Test both probe
+  and result-inspection deadlines for deterministic status/evidence and no surviving watcher; success and strict-result
+  failure must still complete normally.
+
 - Sync replay must wait for its initial session, built transcript and pending-card snapshot before issuing user actions
   (#1112). Fixed startup sleeps can turn a tap on an unloaded card into a silent no-op; accepting a reply with no held
   request then falsely labels the later card snapshot as a resurrection. Require an actual request before delivering
   its reply and test a delayed initial snapshot. Streaming projection must pass the active turn and whether live text
-  is drawn, as the real page does. A pending wake joins the ordinary execution summary while the previous answer stays
-  in place; only when that turn's next words start streaming does the earlier narration fold into the inspectable work.
-  An idle or other-turn presentation still shows the last answer. Cover the ordered/no-tail shape, manual inspection,
+  is drawn, as the real page does. A wake opens an exchange of its own (#9140): the answer before it stays in place
+  while the woken work runs, streams and ends, and the woken work has its own summary.
+  An idle or other-turn presentation still shows the last answer. Cover the ordered shape, manual inspection,
   serialized reload and other turn IDs separately. When a merge retains the maintained renderer, reconcile tests
-  imported from a competing wake model instead of letting their old tail expectations reintroduce it, and do not treat
-  `hasPendingWake` as proof that new words are streaming (#3169).
+  imported from a competing wake model instead of letting their old expectations reintroduce it (#3169).
 
 - UI screenshot evidence must be unobscured, not merely present in the accessibility tree (#2705). A localized
   notification prompt left the chat's elements discoverable while covering the screenshot. Handle the current
@@ -81,7 +121,7 @@
 
 Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
-- Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel.
+- Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel. Taking a sleep out does not need the baseline lowered in the same change: only a rise fails, and with a base a changed file may not rise above its count at the merge base either (`docs/operations/testing.md`, "Count ratchets"). When the strict direction failed a fall too, a forgotten lowering broke `main` again and again (#2761, #5635), and baseline edits were the commonest conflict between parallel PRs.
 
 - To keep a fake hub answer out (a press past `cardAnswerWait`), block it on a channel the test closes, not a fixed sleep (2026-11-11, #4274). The assistant's `fakeHub` runs app answers under its lock, so a held answer blocks every other fake call: close the channel before the test touches the hub again, and register the close with `t.Cleanup` so a failed assertion cannot leave it blocked (`heldAnswer` in `server/internal/assistant/feishu_answer_ended_test.go`). Then wait for the last effect of the late path (its note), not for a fixed time.
 
@@ -103,6 +143,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - Run release privacy preflight with the actual selected build config (#1245): a scan without `PERSONA_CONFIG` can miss account-specific inputs. Generic provisioning profile labels already published in the default mapping or deployment fixture are not private merely because an account selects them. Classify only those exact literal labels under `app_store.provisioning_profiles`, reading the already published `origin/main` definitions rather than allowing a working-tree or unpublished commit to approve its own new label; keep custom/near-match labels, values under another key and explicit `private-words.txt` entries protected. Parse historical fixture data without executing it, and never work around the failure by dropping signing overrides, renaming registered resources or disabling the source/bundle privacy gates. Compound release commands use `set -euo pipefail` and stop on a rejected preflight before commit, push, archive or upload.
 
+- Signing a raw release binary does not update an archive made before signing (#10128). Recompress every signed binary before calculating `SHA256SUMS` and the manifest. Regression tests must decompress the artifact selected for upload and compare it with the signed raw bytes; command ordering and matching manifest hashes alone can still publish the pre-signing executable.
 - Separate code-signature verification from simulator entitlement context (#6192). An unsigned run had Keychain and saved-pairing failures; the final ad-hoc signed run passed those unchanged assertions. However, its embedded signature and ordinary `.xcent` were empty while `*-Simulated.xcent` contained three configured Keychain access groups. Check both and verify the actual signature; do not infer effective simulator entitlements solely from `codesign -d --entitlements`, or treat a signing difference as a proven root cause. Keep failed evidence, preserve persistence assertions, and do not extend simulator results to production Keychain access-group continuity or change registered profiles.
 - GUI send acceptance needs run-unique messages and appearance-scoped synthetic histories (#6192). Reusing the same old-hub conversation both scrolled the original seed outside the visible tail and left same-name replies that could falsely satisfy a later send assertion. Use fresh synthetic regular/main conversations for each appearance, give sends a unique suffix and retain the exact suffix across the cold relaunch. Keep the no-pairing-reinjection assertion, all history/main checks and previous failure evidence; do not delete old messages or weaken the expected reply.
 - Mirrored transport bytes must be compared from the same envelope (#6192). Calling a computed recording receipt dictionary twice performs two JSON encodings whose object-key ordering may differ. Capture one dictionary, then compare its canonical and compatibility values; separately test decoding and invalid-canonical precedence. Do not change production serialization or relax the same-envelope byte equality assertion.
@@ -122,7 +163,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - A web test that times out only in the full suite is usually loading or reading something inside its body (2026-11-06, #4955). Vitest reports the timeout as `STACK_TRACE_ERROR` at about 5000 ms (or the test's own budget). On unchanged master with `--maxWorkers=96`, 10 of 10 runs were red. `catalog.test` re-read every language's catalog files and loaded the admin catalogs in each test, `busy-motion.test` walked the whole source tree in each test, and `highlight-lazy.test` did its first `import("rehype-highlight")` inside the test, while the checks themselves take milliseconds. Load or read once at the top of the file instead (collection is not covered by the test timeout), and don't raise the timeout; #5326 (inlined catalogs under Vitest) and #5729 (Persona's warm-up) fixed other cases of the same kind. Two of the failures were not load. `initI18n` applied whichever overlapping call finished last, so a test that timed out mid-switch changed the next test's language (`a、b、c`); now only the latest call applies. `formatList` follows the system region, which under Node is the machine's locale, so on an en-SG machine `a, b and c` failed every run; tests that format set `navigator.languages` themselves.
 
-- A web test that waits a fixed number of `act` turns can still lose to a lazy chunk (2026-11-10, #2874). `RelayAccounts.test` pushed an account's page whose first item is a header, drawn by the `CodeViews` chunk under `lazyPage`; its first draw waits for a dynamic import, and under Vitest even importing a module that is already loaded takes event-loop turns, not just microtasks (2 to 8 `setImmediate` turns in three quiet runs). In one of three loaded full-suite runs that outlasted `settle`'s eight `act` turns and the header was missing; delaying the chunk by 300 ms failed the test every time. Load the chunks first with `beforeAll(() => loadPages(), 60_000)` (as `CodeViews.test` and `ime-enter.test` do), or wait for what the test looks for, rather than adding turns.
+- A web test that waits a fixed number of `act` turns can still lose to a lazy chunk (2026-11-10, #2874). `RelayAccounts.test` pushed an account's page whose first item is a header, drawn by the `CodeViews` chunk under `lazyPage`; its first draw waits for a dynamic import, and under Vitest even importing a module that is already loaded takes event-loop turns, not just microtasks (2 to 8 `setImmediate` turns in three quiet runs). In one of three loaded full-suite runs that outlasted `settle`'s eight `act` turns and the header was missing; delaying the chunk by 300 ms failed the test every time. Load the chunks first with `beforeAll(() => loadPages(), 60_000)` (as `CodeViews.test` and `ime-enter.test` do), or wait for what the test looks for, rather than adding turns. When a mocked lazy module is the boundary, delaying its real factory makes the gap deterministic; await that import inside `act` and then assert the mounted element with a bounded wait, so module resolution does not escape `act` (#7156).
 
 - A concurrency test that passes with `-race` can still fail without it (2026-11-06, #5908). `-race` slows the instrumented code, so the goroutines meet in a different order. `TestInstallClaimsOperation` passed 20 of 20 runs with `-race` and failed 13 to 29 of 40 without it. Without `-race` its second install usually ran only after the first had committed and used up the preview, and got a 403 from the market check that the PR's own `-race` runs never reached. Run a new concurrency test with `-count`, both with and without `-race`. For the interleaving that matters, set up the state directly instead of hoping two goroutines meet there (here: claim the operation, drop the preview, then install again).
 
@@ -130,12 +171,24 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - Assistant tests swap a service's hub with `setHub`, never `s.hub = h` (2026-11-11, #4006). The inbox's "Needs you" teller (`tellInboxNeedsYou`) reads `s.hub` on a goroutine of its own, and a test's service starts one at its first inbox read, so a plain assignment raced with it under `-race`. The teller reads the hub only under `needsYouMu`, and `setHub` swaps it under that lock. The teller is not the only reader: a timer armed while the service is set up (`directionsSoon`, which reads `s.hub` through `hello`) can fire during the test, on a `synctest` bubble's clock too, and nothing orders it after a swap. Where a test only needs a fake behavior, the fake hub does it under `f.mu` (`hangChannel`) and the hub is never swapped. A test with two racing readers can report one in a combined run and the other when run alone, so check each test in separate processes of its own. In the same run, two leader retry tests ended before their retry ran because `sendsTo` also counts sends the fake refused; the retry goroutine then read a package timing their cleanup restored. Such timings belong on the `Service` (`leaderResume`, like `taskRetry`), and a wait must see the effect it names (`deliveredTo`, the sends the fake took).
 
+- Prepared approval result counts need a resumable fake conversation and settled delivery lanes (#10455). Listing `s1` is not enough: the fake also needs `known["s1"]` for `resume_only`, or it records a refused direct try and its asynchronous queued retry as two sends. Mark the conversation known and wait for approval delivery plus relay draining before asserting exactly one terminal result; waiting for the first visible result hides the duplicate.
+
+- A snapshot observer must not own a prepared approval's lifecycle (#13303). `askOnPhone` replays connection snapshots and withdraws observers when they disappear. If it reattaches an unanswered prepared card through `awaitPrepared`, cancelling that observer takes the shared caller-cancellation path and removes the original card while its tool call is still waiting. Keep every active prepared card out of snapshot waiters, before clarification as well as after it; its original caller and prepared timer own cancellation, expiry and final delivery. A regression that only observes the flaky `pending = 0` outcome is not enough: assert that no observer is created, then clarify and resolve the original card exactly once.
+
+- Shortening a shared input window for one event must not expire another event's admission (#10480). `TestAvailabilityReplyWaitWithoutQueue` set `availInputFor` to 1 ms before starting its supervision round; an `inOrder` delay then expired the supervision input, recorded the round as `other`, and timed out the fixture. Scope the shortened window to the owner message and restore it immediately. Do not lengthen the assertion deadline or change production round attribution for a race the fixture created.
+
+- Waiting for an asynchronous event needs a threshold, not an exact global count (#10456). `TestReadinessAuthStatusRetry` waited for exactly two auth-status requests, but prefetch and the second readiness read could legitimately start a third first, so the check missed `==2` forever and timed out. Require the second request (`>=2`) and keep the old-node one-request control exact. Do not increase the deadline for a valid extra request.
+
+- A fake's one-shot hook keyed only by machine runs for whoever lists that machine next, a background goroutine included (2026-11-18, #10331). `TestACardMessageReopensOnlyItsOwnTask` armed `fakeHub.afterList["box"]` for the card message's own look at the task's agents. The acceptance before it had started the todo-token sync (`syncTodoTokens`), which lists the same machine; on a busy machine that list was still out when the hook was armed, took it and ran it in the background, so the card message never did (6 of 1000 runs at `-cpu 4`). Tie such a hook to the call under test (a context value the test sets, `listHooked`), not to whichever call comes next. To find who took one, print `debug.Stack()` where the hook fires and run until it fails.
+
 - The assistant bus writes `m.sessions` and `h.clients`; tests modifying them need the same lock (2026-11-06, #4822). `takeFleetSessions` writes `fleet.sessions` under `m.mu`. Direct test assignment to `n.m.sessions` produces DATA RACE with `-race -count=30` and can be overwritten by an old list still in transit. Use `editSessions` (first `settleAssistant`, then edit under `m.mu`) and `appClient(h)`, not direct assignment.
 
 - When multiple goroutines independently generate and send the same state, generation and sending need one lock (2026-11-06, #4822). On assistant connection, `FleetUp` sends each machine's list, while `Resync` snapshots also resend lists. Previously each called `decorated()` before leaving its lock, then `Tell` afterward; a stale list lacking the snapshot's "Persona" title sometimes reached hub last and stayed, failing `TestTheMainConversationIsAlwaysPersona` about 3% of the time. `publishList` now generates, deduplicates, and sends under `sentMu`. Waiting in tests for "the new list arrived" is insufficient: it may be that stale list.
 
 - Waiting for one effect does not wait for another made on a different goroutine (2026-11-09, #2152). A source page's tree changes first and its frame is sent later by the delivery goroutine (`ui_page_delivery.go`), so `TestPageNativeFiniteLoadStillStartsWithLoading`, which waited for the tree to say `loaded` and then counted delivered frames, failed only on busy CI. Wait for each effect you assert on (`pageAwait` for the frames too). To reproduce such a gap, slow the receiving side in a scratch copy (a fake `Notify` that sleeps 20 ms failed 10 of 10 runs), or run `go test -cpu 1 -count=60` with every core busy (4 of 60 failed); an idle machine passed 40 of 40.
 - A cancel on a fixed deadline counted from the start races the fake's own startup (2026-11-10, #2674). `TestToolCheckTimeoutStopsItsHelpers` gave the call 300 ms, but its fake had to start a shell and write its helper's pid first; on a busy machine the cancel came before there was a helper, and the test failed (1 of 30 runs with every core busy) without checking what it was about. Cancel once the fake shows it started (the pid file), and time the return from the cancel. Do not lengthen the deadline instead: it only makes the race rarer.
+- A short deadline meant to run out in one step races every step before it (2026-11-18, #10332). `TestRuntimeWorktreeCreateHasOneDeadline` and `TestRuntimeWorktreeDeleteHasOneDeadline` cut the node's one deadline to 600 / 500 ms and expected it to run out in `workspace.create` / `workspace.archive`. The git checks before those steps take longer the busier the machine is, so the deadline ran out in a check or in prepare instead (34 of 200 runs at `-cpu 1,4` with another test binary running). Run the deadline out on cue: pass the call a context whose `Done` the test closes (its `Err` `context.DeadlineExceeded`) when the fake receives the step under test, and time the return from that moment. Check that the node's own deadline ends a call nothing else ends as a separate step, with an upper bound only.
+- A listener's `Accept` returning does not mean the client's `DialContext` has (2026-11-14, #7574). `TestDialSocketCancel` cancelled as soon as its fake node accepted, to check that `nodeclient.Dial` keeps waiting for the answer; but Go checks the ctx once the connect completes, so a cancel in that gap failed the dial itself with `operation was canceled` (30 of 100 runs on Linux with 4 CPUs). To cancel "after connecting", wait for something the client sends only after connecting: the fake reads the request line first.
 - A child's `/proc/<pid>/environ` can read empty right after `exec.Cmd.Start` returns (2026-11-14, #7028). `Start` returns once the new program's close-on-exec has run, but the kernel lays out that program's environment later, in the ELF loader; reading it at once came back empty 1835 times in 2000 on the hub machine. `TestCodexTakeoverUsesOnlyTheSelectedWritersTerminalBridge` started `sleep 60` as its stand-in Codex writer and the takeover read the writer's environment a few calls later, so it refused with `codex_takeover_unavailable` about 3% of the time per subtest. A fixture whose code under test reads a child's `/proc` environment (or anything else set up after exec) waits until the child runs its own code: `/bin/sh -c 'echo ready; read -r line'` with stdin held open, then read that line. Keep the blocking step a builtin, since dash execs a last simple command such as `sleep` in place, which opens the same window again. A real process found by a scan has long been running.
 - A recovering assistant conversation's `busy` alone does not mark the end of its turn (2026-11-10, #3815). When recovery moves to the next model, `assistantSend` registers the replacement process (`spawnAssistant`) before it marks it busy and sends the retry, with the context snapshot and the mode sync in between. `sdkFixture.idle` waited for the registered process's `!busy`, so `TestAssistantRecoveryStopsAfterBothModelsAndTheirRetries` counted 2 of its 4 requests (9 of 400 runs on a busy Mac). The node publishes that gap as working (`busy || recovering` in `assistantSessions`); a wait for the end of a turn must use the same rule. To find such a gap, log the internal state at the moment the wait returns in a scratch test: slowing the fake CLI's `initialize`, the first guess, did not widen it.
 
@@ -251,6 +304,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   Style-specific tests pass `-ui.style` themselves. It launches through `launchPersona()`, which only performs a clean Demo Mode start and never overrides navigation. `UITestStyleTests` scans source (`launch()` and `launchPersona()` both count as omissions).
 - On compact screens, SwiftUI can inherit `assistant-sidebar` onto the drawer footer buttons, replacing their individual identifiers in XCUITest even though they remain visible. Query the actual exported tree: the shared test helpers first try the individual identifier, then the drawer-container identifier plus the exact localized label. Do not weaken the visibility or tap assertions, or use an app-wide Settings label that can match a hidden page.
 - Drawer-close swipes start on the visible pushed-aside page, not a fixed screen fraction: conversation rows deliberately own left swipes for Archive, and sidebar sizing can move a row under that fraction. Intersect the close surface with the window before choosing the start point; its full frame can extend offscreen. Keep the real swipe and the closed-drawer assertion.
+- A shell place root's ☰ is not Back (#8221): a generic `back()` there opens the drawer, while Assistant remains the drawn strip page underneath. Do not use `assistantDrawn()` alone to decide the next action: with the drawer open, choose `sidebar-main` to return to the main conversation, or the requested place directly instead of opening the drawer again (#9603).
 - Runtime CLI `defaults --set` uses the registration domain, not persisted preferences. Upgrade tests must seed a disposable app's real preferences while its simulator is shut down, verify the baseline reads them, then install in place and inspect persistence after startup cleanup. Resolve the app container before shutdown; `simctl get_app_container` cannot look it up in the Shutdown state. CFPreferences writes asynchronously: terminating the app does not make an immediate disk read authoritative. Resolve its preferences path, shut down the owned simulator to let writes finish, then inspect that file; do not add synchronous writes to production startup just to satisfy the test.
 - Tests using `ShellFinger` must launch with `-probes YES`; its page/selection assertions deliberately require the real shell probe. Migrating a test from platform tabs requires adding that probe argument, not weakening the helper to infer state from controls that remain mounted offscreen. An empty Shell composer exposes dictation instead of Send until text is entered; check the initial dictation/interrupt control and still require an enabled Send after typing.
 - Model switching coverage must follow the chosen UI's actual transport: the Shell sends `/model <alias>` to the conversation, while platform mode chips can use the modes endpoint. Assert the destination and command receipt in the mock log rather than applying a retired control's disabled-state or endpoint assumptions to the default UI. UI-test runners can have a separate protected pasteboard; verify copy payloads by pasting back into the owning app, not by reading the runner's clipboard.
@@ -269,6 +323,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - On the iOS 27.0 simulator `app.screenshot()` and `XCUIScreen.main.screenshot()` leave the keyboard's place blank (2026-11-09, #1580). Take keyboard screenshots with
   `xcrun simctl io <udid> screenshot` while it is up.
 - XCUITest misses the key bar during keyboard animation (the bar is moving with it); wait for the keyboard, pause, then tap.
+- `typeText` can return before a burst of Delete keys and the resulting SwiftUI resize have settled. Wait for the expected value and geometry with a bounded predicate before asserting either; an immediate frame read races the intended animation. After a sheet collapses, wait for `hasKeyboardFocus` before typing too: a visible keyboard does not prove that the field has accepted focus (#9807).
 - XCUITest `typeText` inserts text directly, bypassing the input method, so it cannot test pinyin marked text. Tap onscreen keys (`app.keys["y"].tap()`, space selects the first candidate).
   Third-party keyboards (2026-11-03, #909): outside the repository, build a tiny app with only a keyboard extension whose buttons use `textDocumentProxy` `setMarkedText` / `unmarkText` / `insertText` to enter fixed text.
   After `simctl install`, UI tests add it in **Settings › General › Keyboard › Keyboards › Add New Keyboard**, return to the app, and hold **Next keyboard** to select it (a tap toggles only the last two).
@@ -376,10 +431,51 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 path, and Gradle treats that path as the only input. A change to the Rust code rebuilt the library at the same path, and
 Gradle then called the tests up to date and skipped them. A deliberately broken rule still "passed". The fix:
 
-- The Exec task that builds the library declares it with `outputs.file(...)`.
-- The test task takes that task's outputs as inputs, with `inputs.files(buildHostCore)`.
+- The task that builds the library declares it as its output (`HostCoreLibrary` copies cargo's result into the build
+  directory, with the core's sources, manifests, lockfile and toolchain file as its inputs; #10712).
+- The test task takes that output as an input by its contents (`FileContentProperty`, `PathSensitivity.NONE`), which
+  also passes its path to the test JVM.
 
 **To check the setup**, break one rule on purpose and confirm the binding tests fail before trusting them.
+
+## Go's test cache can repeat a pass the change broke (2026-11-22, #12724)
+
+Every Go test command the repository's scripts run passes `-count=1`
+(`docs/operations/testing.md`, "Why tests stay uncached"), and dropping it to save time keeps coming up (#10613).
+The reason: Go reuses a test result while the test binary and what the test process itself recorded opening are
+unchanged, and it rechecks a recorded file only inside the module root (`computeTestInputsID` in `cmd/go`: "Do not
+recheck files outside the module, GOPATH, or GOROOT root"), so for `server/` the rest of the repository is
+invisible. Those inputs are exactly what check-fast sends to the packages that read them (the `spec/fixtures/*` rule in
+`scripts/ci/check_fast_map.py`, and `server_readers` in `scripts/test/check-fast.sh`), and what a child process reads,
+like the `go list` that `internal/archguard` runs, is never recorded at all.
+
+Reproduced on 2026-11-22 with Go 1.27.3 at `origin/main` a133f8cce9, from `server/` (`-run` keeps other tests out of
+it; a package with any failing test is never cached):
+
+```sh
+go test -run '^TestScriptOrStreamGoesByTheBytes$' ./internal/proto/           # ok 0.101s
+cp ../spec/fixtures/file-types/typescript.ts ../spec/fixtures/file-types/segment.ts
+go test -run '^TestScriptOrStreamGoesByTheBytes$' ./internal/proto/           # ok (cached)
+go test -count=1 -run '^TestScriptOrStreamGoesByTheBytes$' ./internal/proto/  # FAIL: segment fixture is 1018 bytes, not whole packets
+git checkout -- ../spec/fixtures/file-types/segment.ts
+```
+
+Inside the module the guards go stale the same way: after `go test -run '^TestContractsArePure$' ./internal/archguard/`
+passed, a new one-line package under `server/internal/` whose name ends in `wire` (which makes it a contract package
+the guard's list must name) still got `ok (cached)`, while `-count=1` failed with "… looks like a contract package but
+testdata/contracts.txt does not list it".
+
+What a hit would save, measured the same day with the build already cached (110 s to warm it on a loaded machine): the
+guard packages check-fast runs on every server change took 12 s uncached and 1 s cached, and its guard tests 10 to
+14 s uncached. Only packages the change did not reach can hit at all: the edited package and every package that imports
+it get a new test binary and run again. Caching also changes the run itself: `go test` passes `-test.testlogfile` only
+when the result may be cached, and `internal/office` failed only in that mode, because a test that lowered the file size
+limit also cut off that log (#8962, fixed by #8968).
+
+- Keep `-count=1` in every command whose result is reported as verification, and in any new entry point. A plain
+  `go test` while editing is fine, but its `ok (cached)` says nothing about the change.
+- A test cannot tell Go's cache about a file outside `server/` or about what a child process read, so a reader of
+  `spec/`, `schema/`, `sdk/go/`, `docs/` or client sources stays correct only while it runs uncached.
 
 ## Running the hosted CI lanes on a Mac (2026-11-09)
 
@@ -431,6 +527,11 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - A test that needs Postgres skips without `PERSONA_TEST_DATABASE_URL`, and a plain `go test` prints `ok` for its package. #5031 changed what `task_plan` answers and checked `internal/hub` without a database, so `TestSupervisedTaskOverTheBus`, which drives that answer end to end, never ran and went red on `main` (#5182). Before a change that touches what a database test covers, run its package with `scripts/test/test-server.sh <package>`, or `go test -v` and check for `SKIP` lines.
 - Allocation budgets are set from numbers measured on the hub machine (linux/amd64). The same tests read about 2 KB lower on an arm64 Mac, so #5150 passed `TestReindexOneRevAllocation` and `TestIndexWholeListAllocation` there and failed them on the hub (#5188). Judge a budget only from a `test-server.sh` run. To find where a regression comes from, compare `allocated(...)` in a probe at both commits; the Mac shows the same difference, so a `pprof -sample_index=alloc_space` profile of the measured call can be taken there.
 
+## Settle task outcomes and query review history by ref in Postgres tests (#13231)
+
+- Accepting a task review starts `goRecordTaskOutcome`, which asynchronously writes a `DecisionOutcome` receipt. Call `s.tasks.outcomeRuns.Wait()` before inspecting the task's decisions, then keep rejecting every non-outcome row; neither deleting the assertion nor treating that receipt as an owner click tests supersession. Cancelling a review does not start this writer.
+- `DB.Feed` returns a bounded, oldest-first conversation page. In a shared Postgres shard, older rows can fill all 500 entries and push the review written by the current test out of that page. For a to-do's review audit, query `FeedByRef` with `feedReview` and retain the conversation and `superseded_reason` assertions; increasing the page size only moves the intermittent failure.
+
 ## "Not listed" holds for a transcript the list never shows (2026-11-12, #5054)
 
 The node's list leaves out offline Claude transcripts under 2 KB (a hook probe's, `scanOffline`), and the fixtures of
@@ -440,9 +541,43 @@ listed" did, and its title check (the row takes the old session's title, read of
 transcript was long enough to be listed (`longTurn`). Before asserting a row is absent, assert it is there in the same
 setup.
 
+## A throwaway hub started from an Agent's terminal uses the real state directory (2026-11-17, #10096)
+
+An Agent that Persona started inherits `PERSONA_HOME`, and `identity.DataDir` takes it before `HOME`: a throwaway
+`personad hub run` with only `HOME=<tmp>` reads and writes the machine's real `~/.persona/hub.json` (a first run writes a
+default one), and `personad hub setup` then creates the shared `persona-postgres` container and writes its address into
+that file. Set `PERSONA_HOME=<tmp>/.persona` (and `HOME`), give the throwaway `hub.json` its own `database_url` and
+`listen` instead of running `hub setup`, and list the real state directory and `docker ps -a` afterwards. If it happened,
+remove only what the run created (check creation times first), never a file that was there before.
+
+## A simulator that ran against the mock hub uploads its recordings to the next hub it pairs with (2026-11-17, #9417)
+
+Recordings a UI test makes against the mock hub stay in the simulator's library, and the app syncs whatever the hub it
+is paired with doesn't have. Pairing the same simulator with a real hub afterwards (an end-to-end check) uploaded two
+test meetings there, which then sat in the owner's meeting list. Before pairing a simulator with a real hub, erase it,
+use another one, or move the earlier recordings out of the app's `Library/Application Support/Recordings/` while the
+app isn't running.
+
+## A made-up recording under a fixed id must never reach the hub, its delete included (2026-11-19, #10589)
+
+The replayed meeting (#9417) used one fixed id and was kept from uploading, but its Delete still queued
+`DELETE /api/v1/recordings/<that id>`. The hub answered `{"deleted": false}` and kept a tombstone for the id anyway; from
+then on every replay's entry was deleted by reconciliation while it played. Guarding the obvious calls (upload, the
+live read) is not enough for such an id: keep it out at the client (`ReplayedMeeting`: `APIClient` refuses any path or
+query naming it), make its delete local, and have reconciliation ignore the hub's word on it, since an older app may
+already have left the tombstone.
+
 ## The mock hub does not enforce device roles (2026-11-12, #4869)
 
 `scripts/mock/mock_hub.py` answers every request whatever the credential, so a watch feature checked only in a simulator against it can be refused on a real hub. The watch's Milk Frog shipped that way: its art requests got 403 from `allowed()` (the watch's `answer` token reads only `answerReads`), and the frog never appeared on a real watch. A new request from the watch (or any `answer`, `link` or extension credential) needs its path in the hub's allowlist, a case in `TestAnswerRoleOnlyWhatTheWatchDoes`, and one end-to-end call with a real token through `h.routes()` (`TestDeviceTokens`).
+
+## One machine can't show what a phone's network change does (2026-11-16, #8709)
+
+The live screen's route acceptance (#6398) ran the simulator on the same Mac as the node, so the hub relay and the direct route never shared a network the test could take away. On a real iPhone they do: both leave over Wi-Fi. Turning Wi-Fi off took the relays down with the direct route, their sockets said nothing, and the session sat on dead relays until the user opened the screen again.
+
+- Before calling a fallback done, ask what else leaves on the interface that fails. A path you fall back to can fail in the same event.
+- A transport that is a fallback needs its own silence rule. "The socket will throw" is not enough on a vanished interface.
+- With no screenshots, the timeline comes from the node's `screenlink:` lines in the hub journal, the hub's per-minute `traffic` lines (start, `elapsed_ms`) and the Mac's `log show` for `screensharingd` (each new sign-in is a new session, not a rejoin).
 
 ## A client's wire fixture comes from the hub's real answer (2026-11-15, #8310)
 
@@ -460,6 +595,27 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
 ## Keep service proxy routing out of server fixtures (2026-11-08, #1175)
 
 - Server test children must not inherit service proxy routing (#1175). An ambient HTTPS proxy redirected a local Git clone and synthetic voice DNS fixtures, and remained visible outside an extension sandbox. A local rejecting proxy reproduced all four failures; isolating only the test child's upper/lowercase HTTP, HTTPS, ALL and NO proxy variables made the unchanged fixtures pass. `server_test_env.clean_environment` removes that routing at launch; explicit fixture proxy setup still works. Preserve the parent's route for toolchain resolution, dependency preparation and publishing, rather than changing production proxy settings or increasing test deadlines.
+
+## A shell proxy sends the mock suites' loopback calls away (2026-11-18, #10465)
+
+- With `http_proxy` (or `HTTPS_PROXY`, `ALL_PROXY`) set in the shell, about 30 suites under `scripts/mock/` run by hand failed with socket timeouts: their `urlopen` calls to the mock on `127.0.0.1` went to the proxy. CI never sees it, since `scripts/ci/python-tests.py` starts every suite with the environment `server_test_env.clean_environment` cleans. By hand, unset the proxy variables or go through `python3 scripts/ci/python-tests.py`; a new suite opens loopback URLs with `build_opener(ProxyHandler({}))` (as `scripts/mock/test_todo_view_mock.py` does) and needs neither.
+
+## A moved file or block needs a test that fails when the old copy comes back (2026-11-20, #11476, #11543)
+
+When a file is split or a block moves to another file, branches written before the move still edit the old copy. Their
+merge stops on a modify/delete conflict (the old file is gone) or a content conflict (the block is gone), and the quick
+resolution keeps their side, so the old copy returns beside the new one and nothing fails at once. After #11288 split the
+MCP tool goldens into one file per tool, three PRs from before the split recreated the whole-list `mcp_tools.*.golden`
+files, and the per-tool files went stale until the prompt size ratchets failed on main (#11476). A domain block put back
+into `scripts/mock/mock_hub.py` after it moved into a module of its own would exist twice: the module's routes answer
+first, and the old copy's state goes its own way.
+
+- Ship the guard in the same PR as the move: a test that fails as soon as the old copy is back, by its file name or by
+  the names the block defined, and that names the file to edit instead. `TestNoWholeListMCPToolGoldens` in
+  `server/internal/hub` does it for the goldens; `MovedBlocksTests` in `scripts/mock/test_mock_domains.py` does it for
+  the mock hub's domains (a new move lists its names in that file's `MOVED`).
+- Leave a one-line pointer where the block was. It is what the person resolving the conflict sees on the other side of
+  the markers.
 
 ## When Go on the hub is older than the repository (2026-11-03, #984)
 
@@ -564,6 +720,8 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
   Detect real duplication via `client_msg_id` in mock `/mock/sent`: retries share an ID and both server/mock deduplicate it.
 - New test files require `xcodegen` first; otherwise `-only-testing:` selects nothing but xcodebuild still prints `** TEST SUCCEEDED **` (`Executed 0 tests`).
   Grep `Executed N tests` and require nonzero N (2026-11-01, first "passing" port-forwarding UI run executed none).
+- Pending-bubble UI tests need an idle session: since #6220, a message written while the Agent works is drawn in the queue strip
+  in sending, waiting and failed states; only an idle send stays a chat bubble (`PendingBubbleMenuTests`, `QueuePlacement`).
 - Mock resets between sorting cases also restore `updated_at` and `last_text`, or prior live pushes change later ordering.
   Capture original activity snapshots after all scenario fixtures are customized, preventing reset from overwriting intentional data. Read-and-return cases need fixtures with actual replies, not just list metadata with empty history.
 - **Build UI-test apps with simulator signing, without `CODE_SIGNING_ALLOWED=NO`** (2026-11-05, #1929). Unsigned executables lack `__TEXT,__entitlements`
@@ -628,6 +786,13 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
   screen, so `waitForExistence` on a row below the first screen never succeeds. `TodoPlanTests` waited for the NAS to-do, and a new section above
   it in the mock pushed it down: the test failed at its first check. Wait for the list's first row, then drag the list up slowly until the row is
   wholly inside the list's frame (`TodoPlanTests.scrollIntoView`), rather than counting on where the mock's rows land.
+- **What shows for a few seconds is gone by the next query** (2026-11-16, #9225). `waitForExistence` checks about once a second, so it takes
+  a second even when the element is already there, and each scroll and query adds more. `MeetingAttendanceUITests` waited for the answer, then
+  for its Speaking label, then read Stop Speaking with a bare `.exists`. The mock's 3-second answer kept that row up for 4.3 s, and the
+  read came 0.1 s after it went. The button looked missing while the screen recording showed it with the label the whole time. Make what
+  you check on last long (the mock's `speak_seconds`, restored in `addTeardownBlock`) and end it yourself (tap Stop Speaking).
+  To tell a race from a missing element, line up the result bundle's screen recording with its activity times.
+  The app's terminate and relaunch are good anchors.
 - Body-count tests (`RenderBudgetTests`) wait for the page to settle before measurement (2026-11-03, #475). Launch still loads/layouts history, and the first measured `rev` push
   gets blamed for those bubbles, looking like "unchanged-screen push redraws 6 bubbles"; order changes or a second measurement remove it. Now wait for unchanged counts for 1 second (`settled()`).
 
@@ -719,7 +884,7 @@ Retain allow/deny assertions for data directories, private tmp, and proxy. Negat
 
 - Three-page-shell right-swipe regressions must end at the same height as the message row, not drag from a top row to window center. Header changes can make that path exceed 45°, testing vertical scrolling instead. Use a horizontal in-row path, then verify the target page; such failures do not prove missing paging capability.
 
-- New `proto.Features` capabilities also require updating shared hello/manifest wire samples (`go test ./internal/hub -run '^TestWireSamples$' -update`). Check the diff contains only intended flags; capability-handler-only tests miss protocol-snapshot failures.
+- A new or removed feature flag no longer changes the shared hello and health wire samples: they carry a fixed list (`wireFeatures` in `server/internal/hub/wire_samples_test.go`, #11022), and `TestHelloAndHealthCarryTheHubsFeatures` checks the real one. Other new hello or health fields still need `go test ./internal/hub -run '^TestWireSamples$' -update`; check the diff contains only the intended fields.
 
 - SwiftUI Form Toggle accessibility frames can span the row. Taps at row fractions 0.88 or 0.95 can still miss on different devices (no POST). Select internal `toggle.switches.firstMatch`, wait for enabled/hittable, tap center, and assert values after service response. After adding system-message fixtures, locate quoted messages by ID, not the last array item, so mock 500s are not blamed on live sync.
 - Collapsed shell status rows retain the previous toast for transition; XCUITest nodes can still `exists` while video shows nothing. To wait until later long presses are unobstructed, assert not `hittable`, not destroyed.
@@ -897,6 +1062,10 @@ return a valid answer immediately for all others, and bound blocked requests too
   tap those instead, or find multiple elements. Each passes alone but fails in the suite.
 - Start cases with corresponding `-open…Fresh YES` / `-show…Fresh YES` to clear leftovers (Lark uses `-showLarkSendFresh` in both `LarkSendTests` and `LarkAttachmentFlowTests`).
   **Remove the flag** on the relaunch that tests persistence, or it clears the very data under test.
+- A `-open…Fresh` flag at a case's start protects only that case: a draft the case types is saved (1 s debounce) and appears in the
+  next suite that opens the chat without the flag (2026-11-15, #8543). Clean up in `addTeardownBlock`, which runs after a failure too,
+  unlike `defer`: relaunch with `-openDraftsFresh YES`, keep the app up about 2 s for the save, then terminate
+  (`AssistantModelPickerUITests`). Typed deletes are not reliable for this: after a relaunch the caret can sit before a restored draft.
 - After adding UI test classes, run the whole suite sequentially, not only the new case.
 - `./scripts/test/test-server.sh … -run 'A|B'` became `bash: B: command not found` on hub, running nothing (2026-11-05, #1830): remote shell reparses ssh arguments and treats `|` as a pipe.
   Add another quote layer: `-run "'A|B'"`. Exit codes alone can look like test failure; inspect the final log lines first.
@@ -1009,9 +1178,21 @@ The Mac-only `test_hub_restart_mac.py` fixture used an empty, non-executable `pe
 
 Use an executable fixture that logs calls and returns the documented result: 0 for a successful switch, 3 for no edge to switch. Assert that success avoids launchd and that the no-edge case restarts only the hub agent, skipping node agents. Run this Mac-only suite on macOS; Linux CI skips it: `cd scripts/test && python3 -B -m unittest -v test_hub_restart_mac`.
 
-## macOS awk stops on bytes that are not UTF-8 (2026-11-10, #2722)
+## macOS awk and sed stop on bytes that are not UTF-8 (2026-11-10, #2722; #11250)
 
 In a UTF-8 locale, `/usr/bin/awk` on macOS (version 20200816) stops at the first invalid byte sequence with `towc: multibyte conversion failure`, prints the record's raw bytes and exits 2; gawk and mawk on Linux read on, so CI never sees it. `install.sh` read every launchd file with awk, and vendors often ship binary property lists: each printed its bytes, and the Python tests reading the script's output with `text=True` crashed with `UnicodeDecodeError`. An awk that reads files it did not write runs with `LC_ALL=C`; plain substring matches mean the same in bytes. The Mac in hand may have no binary plist at all: the regression test writes one with `plistlib` (`FMT_BINARY`) into its own home.
+
+macOS sed (`sed 's/^/  /'`) stops the same way, with `sed: RE error: illegal byte sequence` and nothing after the bad line: check-fast's summary showed no log tail for a failed check whose output held such a byte (#11250). GNU sed reads on, and macOS `grep -q` still finds a match on another line. A sed over a command's output runs with `LC_ALL=C` too.
+
+## mawk holds a pipe's lines until 4 KiB or EOF (2026-11-19, #11017)
+
+mawk, the awk of Debian and Ubuntu (and so most likely of the hosted Linux runners, which install no gawk), reads a
+pipe in 4 KiB blocks and handles no line until a block fills or the input ends; `fflush()` only flushes its output.
+macOS awk, busybox awk and gawk handle each line as it arrives, so a filter meant to show a line live works on a Mac
+and stays silent on Linux until the producer exits: check-fast's "waiting for a go slot" line came out after the whole
+wait. `mawk -W interactive` fixes mawk but other awks reject it. A filter that must react to a line at once reads it in
+bash (`IFS= read -r`, which takes a pipe a byte at a time) and hands the rest to `cat`; check the live behaviour in a
+Debian container, not only on the Mac.
 
 ## Import guards read source files, not `go list` (2026-11-06, #5814)
 
@@ -1147,3 +1328,81 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
   there.
 
 - A temporary HOME does not keep a real node to its own transcripts (#8129). Besides its own config directory, a node takes the `CLAUDE_CONFIG_DIR` of every running claude process of the user (`server/internal/node/claudedirs.go`), so an end-to-end check that runs `personad node --stdio` beside the developer's own claudes lists their transcripts too, read-only, and can match sessions it never made. Pick out the run's own sessions (by ID, folder or engine, as `integrations/paseo/e2e/run.mjs` does), or run the node with the session scope (`PERSONA_NODE_SESSION_DIR`, as `integrations/paseo/e2e/codex.mjs` does) when every session it should see is under one folder. Keeping the node from that scan is no fix either: tried for the Paseo e2e (an environment switch, since dropped), it changed the node's timing enough that races elsewhere (the node tying a message's echo before the runtime's list named its transcript, a check reading the list before the node pushed it after the bridge left) failed four runs in five on Paseo 0.15.4, where the same bridge with the scan on passed five of five.
+
+## Fleet Live Activity tests need a live request and prompt waits (2026-11-18, #9693)
+
+- `-showFleetSample needsYou` is only an initial DEBUG sample. A paired hub's next Fleet event or foreground fetch replaces it; the default mock's empty Fleet turns it into All Caught Up before the Lock Screen appears. For an action test, enable the mock's permission Fleet and take the interaction id from that response, so the resolve assertion names the request whose Deny is visible.
+- The first Live Activities authorization prompt can appear after the Lock Screen wake, not before a single immediate `exists` check. Wait for either the activity's Deny or the system's Allow, answer the system prompt, and then wait for Deny. Clear any launch alert before Home, and keep the unlock teardown registered immediately after locking.
+
+## Workspace naming review reproductions (#7100)
+
+- Exercise a task save with Assistant defaults changed by another editor. Check the placeholder against the actual preview after the save, and keep the explicit draft separate from the refreshed saved baseline/revision. A failed follow-up read must not replay an acknowledged write or reset the preview computer/layout; include an empty computer choice as well as a different valid one.
+- A lazily imported editor can still add first-screen bytes through shared modules and preload metadata. Keep the general repository API free of React and reuse the existing editor-owned request-context guard when that avoids an extra shared chunk. Compare a normal build with one fixed clean main; retain the startup budget and the guard's credential/manager lifetime checks.
+- Tailwind's global stylesheet can also include utilities used only by a lazy editor. Keep that editor's unique rules in its own imported stylesheet, applying the existing utilities through a reference to the shared design tokens. This preserves its exact layout without charging those rules to every first screen.
+- Seed legacy PRs in persisted task progress without first reading the repository API: that read imports them. Pause the synthetic Node after source capture and inspect the real PostgreSQL association set and import receipt. Naming already imports before capture; a link-only edit changes the association revision but not the selected preparation digest. Changing a selected ref must still conflict, and a saved operation must survive restart without resolving again.
+- A Windows-looking `NodeContext` does not make a Linux process use Windows `filepath` semantics. Run the Windows-specific naming tests on Windows, or explicitly label any extracted lexical-path fixture and its substitutions. Cross-compilation checks compilation only. Keep settings syntax, target-native resolution, Node authorization and actual filesystem behavior as separate claims; never widen path permissions to make a host-mismatched reproduction pass.
+- Windows namespace prefixes can make `filepath.Rel` reject an equivalent ordinary path as a different volume. Test both workspace and private-state spellings, including drive and UNC forms; a failed containment comparison is not proof that a path is outside private state. Naming rejects these namespaces rather than stripping their special semantics.
+- A lazy settings subtree needs its own `PageBoundary` inside the surrounding settings page. Reproduce a chunk failure by blocking the browser's actual module request, then verify that sibling settings remain editable and their drafts can still save. Restore the resource and use the existing Reload action to verify recovery of the module and persisted rules; a mocked component or a JSX-shape assertion cannot establish that behavior.
+
+- An export-only change in a deferred editor need not reduce the first screen. Measure it, revert an ineffective trial, and inspect the shared code that startup actually ships. Remove duplicated work there while retaining validation and request-lifetime guards; keep the original budget and verify the normal app/public build.
+
+## Raw TCP test listeners get the port probe too (2026-11-19, #10659)
+
+`TestProxyRouteCarriesTheLinkAndItsStreams` saw one more "direct attempt" than the link made. The extra connection was the
+local node's port probe (`GET /`, `User-Agent: persona-ports`), which finds any new listener, plain TCP included, not only
+HTTP fakes. A raw listener that counts connections (`gatedDirectListener`, `link/ssh_test.go`) now counts only those
+that open with a TLS record (first byte `0x16`) and replays that byte before forwarding. Two traps on the way:
+
+- The first guess, a Happy Eyeballs second dial for a name with both address families, was wrong. Read the stray
+  connection's first bytes before explaining it.
+- Wrap the replayed connection by embedding the `net.Conn` interface, not `*net.TCPConn`. Embedding the concrete type
+  promotes `WriteTo`, which `io.Copy` uses instead of the overriding `Read`, so the replayed byte is silently dropped
+  and every forwarded TLS handshake fails.
+
+## A test repository's first branch follows the machine's `init.defaultBranch` (2026-11-19, #11017)
+
+A fresh test repository's first branch is whatever the machine's `init.defaultBranch` says: `main` on one machine,
+`master` on another. A test that then runs `git branch main` or `git checkout -b master` fails only where the setting
+matches. Name the first branch (`git init --initial-branch=<name>`, or `git branch -M` after the first commit), and run
+the suite with `GIT_CONFIG_GLOBAL` pointing at a file that sets `init.defaultBranch` to `main`, then to `master`.
+
+## Signal tests: a command that outlives the wait, a runner that ignores the signal (2026-11-19, #11017, #11026)
+
+- A test that waits for a signal to end a command must give the command far longer to live than the wait (#11017).
+  `test_heavy_slot.py`'s command slept 20 s under a 20 s wait. A lost signal could not pass (the command then exits
+  with its own status and catches nothing, which the test checks), but a timeout said nothing: the command never got
+  the signal and was still sleeping, or it got it and its parent had not exited yet on a slow machine. Let it sleep ten
+  times the wait, keep the wait generous, and on a timeout say which side stalled.
+
+- A signal test passes alone and hangs when its runner started it with that signal ignored (#11026). A non-interactive
+  bash starts its background jobs with SIGINT and SIGQUIT ignored, and `nohup` or a detached shell ignores SIGHUP; a
+  signal ignored when a shell starts can never be trapped there, so the script under test never sees it. GNU `timeout`
+  (coreutils 9.12 measured) passes an ignored SIGINT and SIGHUP on to its command and resets only SIGTERM, so a check
+  run under it keeps them ignored. `test_check_fast.py`'s SIGINT and SIGHUP tests timed out when check-fast ran that
+  suite (each check is a background job under `timeout`; 4 of 6) and passed on their own. They now start check-fast
+  with SIGINT, SIGHUP and SIGTERM at their defaults (`preexec_fn`, as a terminal would), and one test runs them with the
+  runner ignoring the signals (#11250). Do the same in a new signal test before blaming the change.
+
+## A script started with its stderr closed (2026-11-20, #11250)
+
+A caller can close a script's stderr (`2>&-`, some service managers). Every later redirection that copies it (`4>&2`)
+then fails, and whatever the script runs that way does not run: check-fast's jobs all ended "no status". Worse, the
+next file or pipe the script opens takes the free fd 2, and stderr writes land in it: macOS bash 3.2 leaves a process
+substitution's pipe there (`lsof` shows fd 2 as a PIPE after `done < <(…)`), which hid the failure in a run whose plan
+had used one. A script that copies stderr checks it at the start (`: 9>&2 || exec 2>/dev/null`) and goes on without
+what it would have shown there.
+
+## A delayed response test has to order the refreshes, not only their reads (2026-11-21, #10289)
+
+`PushInterceptsTests.lateResponseCannotOverwriteNewerRead()` held the first `intercepts` *call* and let the second one
+answer immediately, while the model keeps the answer of the refresh that *started* last (`revision` / `ticket`). Two
+refreshes started with `async let` and a direct `await` on the main actor are not ordered against each other: the
+second-started refresh can be the one that calls `intercepts` first, take the held answer, and then correctly win, so
+the test failed as "Old" on the hosted runner and passed 30/30 elsewhere. Gate the refreshes themselves: start the
+second one only after the first is holding its answer (yield from inside the fake, wait on an `AsyncStream`), then
+release it. No sleep is needed, and the refresh meant to be stale always is.
+
+- `xcodebuild -test-iterations N` repeats XCTest cases, not Swift Testing tests: with `-test-iterations 20`, Xcode 27.2
+  ran this Swift Testing suite once ("Test run with 9 tests in 1 suite"). Repeat a Swift Testing suite by looping
+  `xcodebuild … test-without-building` (about 20 s a run once built), and accept its `TEST EXECUTE SUCCEEDED`, not
+  `TEST SUCCEEDED`.

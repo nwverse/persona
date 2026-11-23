@@ -4,7 +4,8 @@
 //
 // Scenarios: login (any other name) · setup / setup-local / setup-remote · app (a lone hub, older computers, a restart
 // pending) · nopeers (a hub without the mesh API) · center (the center of a group: members, computers with several
-// paths, a service computer, one to pair again, one only a member has, an old ssh one) · member / member-offline (a
+// paths, a service computer, one to pair again, one only a member has, an old ssh one, a Linux ssh one to switch to
+// Persona Link: its name containing "fail" fails and rolls back) · member / member-offline (a
 // member hub, its center reachable or not; member-stale: the page still thinks the center is up, the hub knows better
 // and answers set-center with confirm_required) · empty (nothing but the hub's own machine). Adding computers works in every
 // signed-in scenario: a connector link containing "fail" fails to pair. Extensions: a built-in one, two installed (one
@@ -47,6 +48,25 @@ function fakeQr(n = 29): string[] {
   return grid.map((row) => row.join(""));
 }
 
+// A switch to Persona Link (#10662) walking its phases on the machine itself, as the hub's list would report them; the
+// page polls faster while one runs. A computer whose name contains "fail" fails installing and is put back on ssh.
+function switchToLink(machine: AdminMachine) {
+  const fails = /fail/i.test(machine.name);
+  const at = (phase: NonNullable<AdminMachine["link_switch"]>["phase"], extra: Partial<NonNullable<AdminMachine["link_switch"]>> = {}) => {
+    machine.link_switch = { available: false, reason: "in_progress", phase, at: new Date().toISOString(), ...extra };
+  };
+  at("checking");
+  const steps: [number, () => void][] = fails
+    ? [[2500, () => at("installing")], [5000, () => at("rolling_back", { error: "transfer_failed" })], [8000, () => (machine.link_switch = { available: true, phase: "failed", error: "transfer_failed", at: new Date().toISOString() })]]
+    : [
+        [2500, () => at("installing")],
+        [5000, () => (at("connecting"), Object.assign(machine, { kind: "link", online: false, transport: undefined }))],
+        [8000, () => (Object.assign(machine, { online: true, transport: "link", link: { version: VERSION, since: new Date().toISOString() } }), (machine.link_switch = { available: false, phase: "succeeded", at: new Date().toISOString() }))],
+      ];
+  for (const [ms, step] of steps) setTimeout(step, ms);
+  return machine.link_switch;
+}
+
 export function installMock(scenario: string) {
   const member = scenario.startsWith("member");
   const state: AdminState = {
@@ -60,14 +80,18 @@ export function installMock(scenario: string) {
   };
   let restart = { required: scenario === "app", reasons: scenario === "app" ? ["添加电脑「studio」", "TLS 监听改成 :18662"] : [] };
   const startedAt = iso(60 * 26 + 17);
-  // Usage sources (docs/server/usage-windows.md"Account-pool gateways"): one Relay that works, one generic that does not answer. Any key
-  // other than "wrong" tests fine; an address containing "dead" does not connect. The key is never given back.
+  // Usage sources (docs/server/usage-windows.md"Account-pool gateways"): one Relay that works, one relay read with an API key
+  // (#12311), one generic that does not answer. Any key other than "wrong" tests fine (a relay_key test with the key "hidden"
+  // answers that the relay shares no allowances with it); an address containing "dead" does not connect. The key is never given back.
   const usage: UsageSources = {
     enabled: true,
     poll_minutes: 5,
     limit: 8,
+    hidden_providers: [],
+    providers: ["claude", "codex", "kimi"],
     sources: [
       { id: "src-1a2b3c4d", name: "Relay", type: "relay", url: "https://gateway.example.com", has_key: true, enabled: true, status: { ok_at: iso(2), tried_at: iso(2), seen: { accounts: 12, windows: 31, listed: 14, providers: { codex: 8, claude: 4 } } } },
+      { id: "src-9c0d1e2f", name: "Shared relay", type: "relay_key", url: "https://relay.example.com/v1", has_key: true, enabled: true, status: { ok_at: iso(3), tried_at: iso(3), seen: { accounts: 7, windows: 20, listed: 9, providers: { claude: 5, codex: 1, antigravity: 1 } } } },
       { id: "src-5e6f7a8b", name: "Team pool", type: "generic", url: "https://pool.example.com/persona/usage", has_key: true, enabled: true, status: { ok_at: iso(95), tried_at: iso(1), error: "unreachable", seen: { accounts: 3, windows: 5, listed: 3, providers: { kimi: 3 } } } },
     ],
   };
@@ -103,6 +127,12 @@ export function installMock(scenario: string) {
           {
             id: "laptop", name: "旧笔记本", kind: "ssh", ssh_host: "laptop", online: true, transport: "ssh", node_version: "v1.3.9-4-gdef5678", node_mismatch: true, os: "darwin", state: "active", hub_id: SELF,
             paths: [{ via: "ssh", hub_id: SELF, id: "laptop", ok: true, rtt_ms: 15, active: true }],
+            link_switch: { available: false, reason: "unsupported_os" },
+          },
+          {
+            id: "build-box", name: "Build box", kind: "ssh", ssh_host: "build-box", online: true, transport: "ssh", node_version: VERSION, os: "linux", state: "active", hub_id: SELF,
+            paths: [{ via: "ssh", hub_id: SELF, id: "build-box", ok: true, rtt_ms: 6, active: true }],
+            link_switch: { available: true },
           },
         ]
       : member
@@ -422,6 +452,7 @@ export function installMock(scenario: string) {
       case "PUT /usage-sources":
         if (typeof body.enabled === "boolean") usage.enabled = body.enabled;
         if (typeof body.poll_minutes === "number") usage.poll_minutes = body.poll_minutes;
+        if (Array.isArray(body.hidden_providers)) usage.hidden_providers = body.hidden_providers as string[];
         return json(usage);
       case "POST /usage-sources": {
         if (usage.sources.length >= usage.limit) return fail(409, "too_many", "最多 8 个来源");
@@ -437,6 +468,8 @@ export function installMock(scenario: string) {
         const saved = body.id ? usageSource(String(body.id)) : undefined;
         const key = body.key || (saved && saved.url === url ? "saved" : "");
         if (!key || key === "wrong") return json({ ok: false, code: "unauthorized" });
+        if (body.type === "relay_key")
+          return json(key === "hidden" ? { ok: true, accounts: 0, windows: 0, listed: 0, providers: {}, quota_hidden: true } : { ok: true, accounts: 7, windows: 20, listed: 9, providers: { claude: 5, codex: 1, antigravity: 1 } });
         return json({ ok: true, accounts: 12, windows: 31, listed: 14, providers: { codex: 8, claude: 4 } });
       }
       case "GET /mesh":
@@ -522,6 +555,10 @@ export function installMock(scenario: string) {
         return json({ ok: true, name: machine.name });
       }
       if (m[2] === "/reconnect") return json({ ok: true });
+      if (m[2] === "/link-switch" && method === "POST") {
+        if (!machine.link_switch?.available) return fail(409, machine.link_switch?.reason || "unknown");
+        return json({ link_switch: switchToLink(machine) }, 202);
+      }
       if (m[2] === "/link-pair") return json({ pair_url: `persona://link?url=https%3A%2F%2Fhub.example.com%3A18662&machine=${id}&token=jp_mock`, expires_at: later(10), command: `persona-link pair 'persona://link?…&machine=${id}'` });
     }
     const mk = /^\/extensions\/-\/markets\/([^/?]+)(\/[a-z]+)?$/.exec(path);

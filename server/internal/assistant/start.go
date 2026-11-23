@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -53,14 +56,17 @@ var errRenameMain = i18n.Err("assistant-start.rename_main")
 var errWorkAssistant = i18n.Err("assistant-start.work_machine")
 
 // claudeMD is the assistant directory's CLAUDE.md (prompts/assistant/claude_md.md) for its machine here. Its machine
-// list is written from where the assistant actually runs: the ssh_host names are the hub machine's ssh aliases, which
-// work only for an assistant on the hub's own machine, and a link (or tailcat) machine has no ssh at all; from anywhere
-// else there is no command to give, only the Agents tools.
+// list identifies the local computer and the computers available for Agent work. The ssh_host aliases are only
+// meaningful from the hub machine.
 func (s *Service) claudeMD(ctx context.Context, here string, larkCLI bool) string {
+	return prompts.RenderAssistantClaudeMD(s.assistantPrompt(ctx, here, larkCLI, s.settings(ctx)))
+}
+
+func (s *Service) assistantPrompt(ctx context.Context, here string, larkCLI bool, settings Settings) prompts.AssistantClaudeMD {
 	hello := s.hello(ctx)
 	d := prompts.AssistantClaudeMD{Owner: strings.TrimSpace(hello.Owner), Notes: s.notes(ctx), ExtraDirs: s.kbExtraDirs(ctx),
 		KnowledgeDir: s.kb.dir, LarkCLI: larkCLI, Language: answerLanguage(hello.Locale),
-		BackgroundSupervisor: s.backgroundOn(s.settings(ctx))}
+		BackgroundSupervisor: s.backgroundOn(settings), UrgentCall: s.urgentPrompt(ctx)}
 	devices := s.devices(ctx)
 	if i := slices.IndexFunc(devices, func(d Device) bool { return d.ID == here }); i >= 0 {
 		d.OnHub = devices[i].Kind == "local"
@@ -73,7 +79,7 @@ func (s *Service) claudeMD(ctx context.Context, here string, larkCLI bool) strin
 		d.Machines = append(d.Machines, prompts.AssistantMachine{Name: m.Name, ID: m.ID, Local: local, SSHHost: m.SSHHost,
 			AgentsOnly: !local && !(d.OnHub && m.Kind == "ssh")})
 	}
-	return prompts.RenderAssistantClaudeMD(d)
+	return d
 }
 
 // prepare tells machine's node what it needs before a message to the assistant (node assistant.prepare) and answers
@@ -97,6 +103,19 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 // a skill's files always goes: plugins.assistant hands them out once, so skipping would leave the old files on the
 // machine until the CLAUDE.md changed.
 func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onlyChanged bool) (string, bool, error) {
+	// Read settings and publish both instruction files in the same per-directory order.
+	dir := s.assistantRel()
+	switch space {
+	case "":
+	case SpaceHealth:
+		dir = s.healthRel()
+	default:
+		// Only the health space has a directory so far (spaceCwd): another must never fall back to the assistant's.
+		return "", false, fmt.Errorf("space %q has no directory on this version", space)
+	}
+	key := machine + "\x00" + dir
+	s.prepareLocks.acquire(key)
+	defer s.prepareLocks.release(key)
 	if s.isWorkMachine(machine) {
 		return "", false, errWorkAssistant
 	}
@@ -115,9 +134,15 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	// The digest of the hub's own part lets the extensions' data instructions ride along when it changes (the
 	// conversation restarts for it anyway) instead of restarting it on their own (extmgr extension_assistant_data.go).
 	pluginParams := map[string]any{"machine_id": machine}
-	var own string
+	var own, onDemand string
 	if space != SpaceHealth {
-		own = s.claudeMD(ctx, machine, conns.LarkCLI)
+		settings := s.settings(ctx)
+		d := s.assistantPrompt(ctx, machine, conns.LarkCLI, settings)
+		own = prompts.RenderAssistantClaudeMD(d)
+		if settings.workGuideOn() {
+			d.WorkGuide = true
+			onDemand = prompts.RenderAssistantClaudeMD(d)
+		}
 		sum := sha256.Sum256([]byte(own))
 		pluginParams["base_digest"] = hex.EncodeToString(sum[:16])
 	}
@@ -127,13 +152,14 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	if len(plugins.Skills) == 0 {
 		plugins.Skills = json.RawMessage("null")
 	}
-	dir, md := s.assistantRel(), own+plugins.Instructions
+	md := own + plugins.Instructions
 	if space == SpaceHealth {
-		dir, md = s.healthRel(), s.healthClaudeMD(ctx, machine)
+		md = s.healthClaudeMD(ctx, machine)
 	}
-	key := machine + "\x00" + dir
 	digests, files := skillDigests(plugins.Skills)
-	given := preparedState{md: md, skills: digests}
+	deny := s.trackDenyDirs(ctx)
+	denyKey, _ := json.Marshal(deny)
+	given := preparedState{md: md, skills: digests, workGuide: onDemand != "", deny: string(denyKey)}
 	if onlyChanged && !files {
 		s.preparedMu.Lock()
 		same := s.prepared[key] == given
@@ -143,7 +169,11 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		}
 	}
 	params := map[string]any{"dir": dir, "claude_md": md,
-		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills}
+		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills, "deny_dirs": deny}
+	// Older nodes read only claude_md, so they retain the complete instructions.
+	if onDemand != "" {
+		params["work_guide_md"] = onDemand + plugins.Instructions
+	}
 	var prep struct {
 		Cwd  string   `json:"cwd"`
 		Need []string `json:"plugin_skills_need"`
@@ -171,8 +201,12 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	return prep.Cwd, true, nil
 }
 
-// preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md and the plugin skills (skillDigests).
-type preparedState struct{ md, skills string }
+// preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md, the plugin skills (skillDigests)
+// and the denied track directories (trackDenyDirs, as JSON).
+type preparedState struct {
+	md, skills, deny string
+	workGuide        bool
+}
 
 // skillDigests are the plugin skills of a plugins.assistant answer as prepareSpaceIf compares them, each one's plugin,
 // name and digest; files says whether any comes with its files.
@@ -245,18 +279,36 @@ func (s *Service) refreshInstructions(ctx context.Context) {
 // startOn starts a new conversation on machine: the directory prepared, the model configuration of p.Purpose ("" is
 // the main chat's) applied, then the node's assistant.send (headless: no herdr tab, streamed tokens, any launcher per message).
 func (s *Service) startOn(ctx context.Context, machine string, p StartParams, main bool) (proto.Session, error) {
-	if p.Space != "" && p.Space != SpaceHealth {
-		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
-	}
-	if p.PermissionMode == "" && p.GuestTools == nil {
-		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
-		if p.PermissionMode == "" {
-			p.PermissionMode = proto.ModeBypass
+	if proto.IsExternalLauncher(p.Launcher) {
+		scope, ok := ctx.Value(externalPickKey{}).(externalPickScope)
+		if !main || p.GuestTools != nil || p.Space != "" || p.Purpose != "" || !ok ||
+			p.Launcher != scope.pick.Launcher || p.Model != scope.pick.Model || p.NewSessionID != scope.execution.SessionID ||
+			!s.externalMainStartScope(ctx, machine, p.NewSessionID, scope.pick) {
+			return proto.Session{}, refusePick(http.StatusBadRequest, i18n.Err("external-adapter.scope_required"))
 		}
+	}
+	if !s.trackKnown(ctx, p.Space) {
+		return proto.Session{}, badRequest(fmt.Errorf("space %q: not a registered space", p.Space))
+	}
+	explicitPermission := strings.TrimSpace(p.PermissionMode)
+	if p.Origin == OriginInbox {
+		// A caller cannot elevate externally originated work. Only the AI twin's own saved override, applied after
+		// model resolution below, can replace its safe default. Default keeps the explicit Persona MCP allowlist
+		// effective: Plan rejects MCP before consulting it. The manager/node origin policy, not the launcher's mode,
+		// prevents externally visible work.
+		p.PermissionMode = ""
+	} else {
+		p.PermissionMode = explicitPermission
 	}
 	var cwd string
 	var err error
-	if p.GuestTools != nil {
+	if p.Space != "" {
+		// The space owns its directory, instructions and the node's outbound gate classification.
+		// Even a task's already-resolved cwd cannot replace the space's preparation.
+		cwd, err = s.prepareSpace(ctx, machine, p.Space)
+	} else if p.Cwd != "" {
+		cwd = p.Cwd
+	} else if p.GuestTools != nil {
 		cwd, err = s.guestPrepare(ctx, machine) // its own directory: none of the assistant's instructions, memory or skills
 	} else {
 		cwd, err = s.prepareSpace(ctx, machine, p.Space)
@@ -266,6 +318,19 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	params["model_source"] = s.startModelSource(ctx, p, main)
+	if p.TaskExecution {
+		params["task_execution"] = true
+		if p.LegacyTaskExecution {
+			params[devicewire.LegacyTaskExecution] = true
+		}
+	}
+	if p.Public {
+		params["public"] = true
+	}
+	if p.Origin != "" {
+		params["origin"] = p.Origin // the node enforces the origin from the process's first tool call, before start answers
+	}
 	if p.Model != "" {
 		params["model"] = p.Model // picked with the first message, as with a message (sendModel): a typed id too
 	}
@@ -289,32 +354,65 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	purpose := p.Purpose
 	if purpose == "" {
 		purpose = "assistant"
+		if main {
+			purpose = purposeMain
+		}
 	}
 	if p.Launcher != "" {
 		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
-		switch fit {
-		case mainChatRefused:
+		if fit == mainChatRefused {
 			return proto.Session{}, refusal
-		case mainChatGone:
-			delete(params, "launcher")
-			delete(params, "model") // picked for the launcher that is gone, not for the one it falls back to
 		}
+		// A missing launcher stays in params: finishMainChatModel owns its bounded rediscovery and explicitly configured
+		// substitutes. Dropping it here would silently turn the start into an ordinary default-launcher start.
 	}
-	if err := s.applyModel(ctx, purpose, params); err != nil {
+	if p.TaskModel != nil && p.TaskExecution {
+		params["launch"] = "headless"
+		if err := s.finishModel(ctx, purpose, params, *p.TaskModel); err != nil {
+			return proto.Session{}, err
+		}
+	} else if err := s.applyModel(ctx, purpose, params); err != nil {
 		return proto.Session{}, err
 	}
 	if params["launch"] != "headless" {
 		return proto.Session{}, badRequest(fmt.Errorf("purpose %q requires headless launch for assistant.send", purpose))
 	}
-	if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
-		return proto.Session{}, err
+	if !p.TaskExecution {
+		if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
+			return proto.Session{}, err
+		}
 	}
+	// A guest's profile is its own: the main chat's setting is for the user's conversations only. So is the Inbox AI
+	// twin's: it acts on what strangers sent, and the user's own setup (allow rules, hooks, MCP servers) stays out of it
+	// in Persona's profile (#10859).
+	fromSetting := p.GuestTools == nil && purpose != purposeAgent && s.withNewConversationProfile(ctx, machine, params)
 	used, _ := params["launcher"].(string)
+	// Settle permission_mode after model resolution so Model Configuration's permission_mode applies before falling
+	// back to the assistant default / bypassPermissions, while preserving Inbox and guest safety boundaries.
+	switch {
+	case p.Origin == OriginInbox:
+		mode, modeErr := s.inboxPermissionMode(ctx, machine, used)
+		if modeErr != nil {
+			return proto.Session{}, modeErr
+		}
+		params["permission_mode"] = mode
+	case p.GuestTools != nil:
+		params["permission_mode"] = ""
+	default:
+		mode, _ := params["permission_mode"].(string)
+		if mode == "" {
+			mode = cmp.Or(s.settings(ctx).DefaultPermissionMode, proto.ModeBypass)
+			params["permission_mode"] = mode
+		}
+		if explicitPermission == "" && !s.startPermissionModeSupported(ctx, machine, used, mode) {
+			delete(params, "permission_mode")
+		}
+	}
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
 	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
 	// can both change it. One hidden from the pickers still runs what it runs (withUnhidden, as finishMainChatModel
-	// reads it); one whose agent is not known here keeps the profile, which the node refuses for another agent, and
-	// startSignedIn starts again without it (#6884).
+	// reads it); one whose agent is not known here keeps the profile, which the node refuses for another agent before
+	// starting anything, and the start goes again without it: startSignedIn's, and the main chat's below (#6884).
 	if _, asked := params["config_dir"]; asked && used != "" && used != "claude" {
 		if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" && agent != "claude" {
 			delete(params, "config_dir")
@@ -326,13 +424,30 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			return proto.Session{}, refusePick(http.StatusBadRequest, err)
 		}
 	}
-	if err := s.validateSkillSelections(ctx, machine, "", params); err != nil {
+	if p.TaskExecution {
+		err = s.validateTaskSelections(ctx, machine, "", params, p.PromptSelections)
+	} else {
+		err = s.validateSkillSelections(ctx, machine, "", params)
+	}
+	if err != nil {
 		return proto.Session{}, err
 	}
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
+	if p.GuestTools == nil {
+		s.putCacheKeepalive(ctx, machine, "", main, params)
+	}
+	if main && p.Space == "" && p.GuestTools == nil {
+		ctx = context.WithValue(ctx, supervisionStartup{}, true)
+	}
 	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	if fromSetting && (nodeOutdated(err) || profileRefused(err)) {
+		// A node too old to be told a profile starts it where it always has; a launcher running another agent than
+		// Claude Code, which alone has profiles, starts without one.
+		delete(params, "config_dir")
+		err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	}
 	s.startRefused(ctx, machine, used, err) // Claude Code or the launcher missing: the readiness's claude step
 	if err != nil {
 		if d, ok := s.device(ctx, machine); ok {
@@ -340,17 +455,77 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		}
 		return proto.Session{}, err
 	}
-	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: p.PermissionMode,
+	finalMode, _ := params["permission_mode"].(string)
+	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: finalMode,
 		Effort: p.Effort, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
 	sess.MachineID, sess.Assistant, sess.State, sess.Space = machine, true, proto.StateWorking, p.Space
+	if strings.TrimSpace(p.Text) == "" && len(p.Images) == 0 {
+		sess.Status, sess.State = proto.StatusIdle, proto.StateIdle
+	}
+	if p.Human && (p.Origin == "" || p.Origin == OriginUser) && strings.TrimSpace(p.Text) != "" {
+		s.humanSent.noteForReply(sess.SessionID, firstReplySendID, p.Text)
+	}
+	sess.Effort, _ = params["effort"].(string)
 	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
 	return sess, nil
+}
+
+// inboxPermissionMode reads only the AI twin's own record. Plan, unknown values and modes the resolved launcher cannot
+// run return to default: Plan rejects the Persona MCP calls that investigation and inbox_suggest require before their
+// allowlist runs, and an unknown value must be normalized before the node's generic mode validation.
+func (s *Service) inboxPermissionMode(ctx context.Context, machine, used string) (string, error) {
+	record, err := s.modelRecord(ctx, purposeAgent)
+	if err != nil {
+		return "", i18n.Err("assistant-models.err_read_config", i18n.Args{"error": err.Error()})
+	}
+	mode := cmp.Or(record.Binding.PermissionMode, proto.ModeDefault)
+	if mode == proto.ModePlan || !slices.Contains(proto.PermissionModes, mode) ||
+		!s.startPermissionModeSupported(ctx, machine, used, mode) {
+		mode = proto.ModeDefault
+	}
+	return mode, nil
+}
+
+// putInboxPermissionMode replaces any caller-supplied value with the manager's own AI-twin decision. The separate wire
+// field lets a new node distinguish this choice from an older manager's caller-controlled permission_mode.
+func (s *Service) putInboxPermissionMode(ctx context.Context, machine, session string, params map[string]any, origin string, originKnown bool) error {
+	delete(params, assistantwire.InboxPermissionModeParam)
+	if !originKnown || origin != OriginInbox {
+		return nil
+	}
+	used, _ := params["launcher"].(string)
+	if used == "" {
+		if c, ok := s.session(ctx, machine, session); ok {
+			used = c.Launcher
+		}
+	}
+	mode, err := s.inboxPermissionMode(ctx, machine, used)
+	if err != nil {
+		return err
+	}
+	params[assistantwire.InboxPermissionModeParam] = mode
+	return nil
+}
+
+// startPermissionModeSupported checks an inherited or saved mode against the launcher the start finally runs on.
+// Unknown launchers keep the existing behavior: the node validates the start rather than the manager guessing a type.
+func (s *Service) startPermissionModeSupported(ctx context.Context, machine, used, mode string) bool {
+	if used == "" || used == "claude" {
+		return true
+	}
+	if l, ok := s.targetMachineLauncher(ctx, machine, used); ok {
+		return permissionModeSupported(cmp.Or(l.AgentType, l.Agent), l.PermissionModes, mode)
+	}
+	if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" {
+		return permissionModeSupported(agent, 0, mode)
+	}
+	return true
 }
 
 // start starts a conversation: on p.MachineID ("" the assistant's machine), or the main conversation.
 func (s *Service) start(ctx context.Context, p StartParams) (proto.Session, error) {
 	if p.Main && p.Space != "" {
-		return proto.Session{}, badRequest(errors.New("the health space has no main conversation"))
+		return proto.Session{}, badRequest(errors.New("a space has no main conversation"))
 	}
 	if p.GuestTools != nil && (p.Main || p.Space != "") {
 		return proto.Session{}, badRequest(errors.New("a guest conversation is neither the main one nor in a space"))
@@ -384,8 +559,8 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 			guestID = newGuestSessionID()
 			p.NewSessionID = guestID
 		}
-		// The Agent SDK bridge discovers its tools before assistant.send returns. Register the guest's restriction
-		// first, as roomCreate does, so that first discovery is the declared list rather than an empty one.
+		// The conversation's MCP server can discover its tools before assistant.send returns. Register the guest's
+		// restriction first, as roomCreate does, so that first discovery is the declared list rather than an empty one.
 		if err := s.guestSet(ctx, machine, guestID, p.GuestTools); err != nil {
 			return proto.Session{}, err
 		}
@@ -409,6 +584,8 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 	}
 	sess.Origin, sess.OriginRef, sess.OpenedBy = firstNonEmpty(p.Origin, OriginUser), p.OriginRef, p.OpenedBy
 	s.originSet(ctx, sess.MachineID, sess.SessionID, sess.Origin, sess.OriginRef, sess.OpenedBy)
+	// Its space, for when no computer lists it (conversation_space.go).
+	s.noteConversationSpaces(ctx, []db.ConversationSpace{{MachineID: sess.MachineID, SessionID: sess.SessionID, Space: p.Space}})
 	return sess, nil
 }
 
@@ -416,8 +593,12 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 // conversation_new's). Nobody is in front of it to sign in, so it starts signed in as a meeting's do (startSignedIn):
 // in the profile the assistant's conversations had, not a new private one with no login in it (#6015).
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
+	if p.modelSource.Role != "" {
+		ctx = context.WithValue(ctx, modelSourceKey{}, p.modelSource.Safe())
+	}
 	return s.startSignedIn(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
-		Origin: p.Origin, OriginRef: p.OriginRef})
+		Origin: p.Origin, OriginRef: p.OriginRef, MachineID: p.MachineID, Cwd: p.Cwd, TaskExecution: p.TaskExecution,
+		LegacyTaskExecution: p.LegacyTaskExecution, PromptSelections: p.PromptSelections, TaskModel: p.TaskModel, NewSessionID: p.NewSessionID})
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
@@ -427,8 +608,8 @@ func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, erro
 		p.Text = prompts.ProtectUserMessage(p.Text)
 	}
 	// The first message gets no client_msg_id of the manager's own (#5200): the node would tag its line with it, and the
-	// iPhone app, which matches its pending bubble by the id a line carries, would show the message twice. So it is not
-	// a message the hub vouched for, and an Always rule does not cover the turn it starts (the card is shown).
+	// iPhone app, which matches its pending bubble by the id a line carries, would show the message twice. An Always
+	// rule still needs a vouched client_msg_id. Missing-reply recovery can also use the vouched start in startOn.
 	sess, err := s.start(ctx, p)
 	if err != nil {
 		return proto.Session{}, err
@@ -453,8 +634,10 @@ type mainHandoff struct {
 	MachineID string    `json:"machine_id"`
 	Until     time.Time `json:"until"`
 	// For: the new main conversation it waits in, started without a message (Android starts it empty, then sends).
+	// A cleared external choice reserves this ID before its start, so retries cannot create another conversation.
 	For     string `json:"for,omitempty"`
 	Summary string `json:"summary,omitempty"`
+	Partial bool   `json:"partial,omitempty"`
 	Recent  []struct {
 		Role string `json:"role"`
 		Text string `json:"text"`
@@ -472,14 +655,24 @@ type mainBook struct {
 }
 
 func (s *Service) loadHandoff(ctx context.Context) mainHandoff {
+	h, _ := s.readHandoff(ctx)
+	return h
+}
+
+func (s *Service) readHandoff(ctx context.Context) (mainHandoff, error) {
 	if st := s.store(); st != nil {
 		var h mainHandoff
-		if ok, err := st.Setting(ctx, mainHandoffKey, &h); err != nil || !ok {
-			return mainHandoff{}
+		if _, err := st.Setting(ctx, mainHandoffKey, &h); err != nil {
+			return mainHandoff{}, err
 		}
-		return h
+		// A previously prepared handoff can contain verbatim turns. Deleting its
+		// source must not replay them into the next main conversation.
+		if h.From != "" && s.conversationAvailable(ctx, h.MachineID, h.From) != nil {
+			return mainHandoff{Pick: h.Pick}, nil
+		}
+		return h, nil
 	}
-	return s.main.handoff
+	return s.main.handoff, nil
 }
 
 func (s *Service) saveHandoff(ctx context.Context, h mainHandoff) error {
@@ -495,7 +688,10 @@ func (s *Service) saveHandoff(ctx context.Context, h mainHandoff) error {
 func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, error) {
 	s.main.mu.Lock()
 	defer s.main.mu.Unlock()
-	handoff := s.loadHandoff(ctx)
+	handoff, err := s.readHandoff(ctx)
+	if err != nil {
+		return proto.Session{}, err // an unreadable carried choice is not permission to fall back
+	}
 	empty := strings.TrimSpace(p.Text) == "" && len(p.Images) == 0
 	if handoff.From != "" && !empty {
 		p.Text = s.renderHandoff(ctx, handoff, p.Text)
@@ -511,10 +707,15 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 		// An unnamed tier can belong only to the client's displayed default, not to this carried setup it did not show.
 		p.ServiceTier = ""
 	}
+	externalCarried := carried != nil && proto.IsExternalLauncher(carried.Launcher)
 	if carried != nil {
-		// Held to what a message on it is held to: one that can't run here any more refuses this start, saying why
-		// with the same codes, and is dropped, so the next start runs on the default. Never a silent fallback.
-		if err := s.modelPickRefusal(ctx, s.settings(ctx).MachineID, carried.Launcher, s.requestCtxLang(ctx), true); err != nil {
+		if externalCarried {
+			ctx, p, handoff, err = s.prepareExternalMain(ctx, p, handoff)
+			if err != nil {
+				return proto.Session{}, refusePick(http.StatusBadRequest, err)
+			}
+		} else if err := s.modelPickRefusal(ctx, s.settings(ctx).MachineID, carried.Launcher, s.requestCtxLang(ctx), true); err != nil {
+			// Ordinary carried picks keep the existing one-refusal behavior. An external choice is retained for retry.
 			s.dropCarriedPick(ctx, handoff)
 			if !storedPickRefused(err) {
 				err = refusePick(http.StatusBadRequest, err) // it can't run assistant chats
@@ -530,19 +731,32 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	sess, err := s.startConversationOn(ctx, p, true)
 	if err != nil {
 		var refused *pickError
-		if carried != nil && errors.As(err, &refused) {
+		if carried != nil && !externalCarried && errors.As(err, &refused) {
 			s.dropCarriedPick(ctx, handoff) // its model can't reach that launcher's agent (pickedModelRefusal)
 		}
 		return proto.Session{}, err
 	}
-	if carried != nil {
+	if externalCarried {
+		kept, persisted := s.modelPickOf(ctx, sess.MachineID, sess.SessionID)
+		if sess.SessionID != p.NewSessionID || !persisted || kept != *carried ||
+			!s.externalMainStartScope(ctx, sess.MachineID, sess.SessionID, *carried) {
+			return proto.Session{}, refusePick(http.StatusBadRequest, i18n.Err("external-adapter.scope_required"))
+		}
+		sess.ModelPick = carried.wire() // persisted before the node was called
+	} else if carried != nil {
 		s.keepStartPick(ctx, &sess, carried.Launcher, carried.Model, carried.Effort, true)
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
+		if externalCarried && v.Main != "" && v.Main != sess.SessionID {
+			return i18n.Err("external-adapter.scope_required")
+		}
 		v.Main, v.MainMachineID = sess.SessionID, sess.MachineID
 		return nil
 	}); err != nil {
+		if externalCarried {
+			return proto.Session{}, err // retain the stable reservation until the route can be saved
+		}
 		s.logf("assistant: save main: %v", err)
 	}
 	if handoff.From != "" || handoff.Pick != nil {
@@ -597,7 +811,7 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 	now := time.Now().UTC()
 	handoff := mainHandoff{From: old, MachineID: machine, Until: now}
 	carried := false
-	if carry && found {
+	if carry && (found || s.historyKnown(ctx, machine, old)) {
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := s.call(cctx, machine, DeviceAssistantHandoff, map[string]any{"session_id": old}, &handoff)
 		cancel()
@@ -650,7 +864,14 @@ func (s *Service) clearMainLocked(ctx context.Context, expect string) (old, mach
 	}
 	cleared := mainHandoff{}
 	if old == "" {
-		cleared.Pick = s.loadHandoff(ctx).Pick // cleared again before a new one started: the pick still waits for it
+		h, readErr := s.readHandoff(ctx)
+		if readErr != nil {
+			return "", "", c, false, readErr
+		}
+		cleared.Pick = h.Pick // cleared again before a new one started: the pick still waits for it
+		if h.Pick != nil && proto.IsExternalLauncher(h.Pick.Launcher) {
+			cleared.For = h.For // a failed external start keeps its manager-reserved ID
+		}
 	} else if p, ok := s.modelPickOf(ctx, cfg.mainRouteMachine(), old); ok {
 		cleared.Pick = &p // the context is cleared, not the model the user picked for the main conversation
 	}
@@ -797,7 +1018,7 @@ func (s *Service) startRoutes() {
 			// MachineID one of the hub's machines instead of the assistant's (docs/protocol/protocol.md "REST (App → hub)").
 			Purpose   string `json:"purpose"`
 			MachineID string `json:"machine_id"`
-			Space     string `json:"space"` // "health": a conversation of the health space (docs/assistant/health.md)
+			Space     string `json:"space"` // a registered space, e.g. "health" (docs/assistant/health.md)
 			// ReportTasks: the tasks it opens are told back to it, as the main conversation's quiet ones are (#3192,
 			// reporters.go); a plugin's /agent hands their results on.
 			ReportTasks bool `json:"report_tasks"`
@@ -805,12 +1026,17 @@ func (s *Service) startRoutes() {
 			Guest *GuestSpec `json:"guest"`
 			// Via: how the user's app sent its first message when not typed in the app itself: "intent" (Siri,
 			// Shortcuts, an App Intent, which may run on a locked phone), "share" (the share sheet) or "card" (a card's
-			// button that wrote it). Such a message never counts as the user's own words (secret_handoff.go
+			// button that wrote it), or "handoff" (a generated context transfer). Such a message never counts as the
+			// user's own words (secret_handoff.go
 			// handoffUserTurn, the decision on #3962).
 			Via string `json:"via"`
 		}
-		if err := decodeLargeBody(w, r, &in, 32<<20); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+		if err := decodeLargeBody(w, r, &in, proto.MessageBodyLimit); err != nil {
+			writeBodyErr(w, err, err)
+			return
+		}
+		// A conversation not started has no agent yet: the limits every session gets unless its agent has its own.
+		if apierr.ImagesOverLimit(w, proto.HubImageLimits.For(""), len(in.Images)) {
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 110*time.Second)
@@ -821,8 +1047,12 @@ func (s *Service) startRoutes() {
 				return
 			}
 		}
-		if in.Space != "" && in.Space != SpaceHealth {
-			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: health or none", in.Space))
+		if !s.trackKnown(ctx, in.Space) {
+			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: not a registered space", in.Space))
+			return
+		}
+		if in.Space != "" && s.trackPolicy(ctx, in.Space).HideFromExtensions && r.Header.Get(RoleHeader) == roleExtension { // a start is a control: trust and grants widen reads only
+			apierr.WriteCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
 			return
 		}
 		if in.Model = strings.TrimSpace(in.Model); checkModelID(in.Model) != nil {
@@ -830,7 +1060,7 @@ func (s *Service) startRoutes() {
 			return
 		}
 		if in.Space != "" && in.Main {
-			apierr.Write(w, http.StatusBadRequest, errors.New("the health space has no main conversation"))
+			apierr.Write(w, http.StatusBadRequest, errors.New("a space has no main conversation"))
 			return
 		}
 		if in.MachineID != "" {
@@ -852,16 +1082,16 @@ func (s *Service) startRoutes() {
 			guestTools, in.ReportTasks = in.Guest.Tools, false // it hands nothing out
 		}
 		origin, ref := requestOrigin(r, in.Purpose)
-		sentence := in.Prompt // as the owner wrote it, for the route (route.go)
-		own := false          // only the user's words in it, as filled in (workspace_mention.go fillWorkspaces)
-		if in.Guest == nil {
+		own := false // only the user's words in it, as filled in (workspace_mention.go fillWorkspaces)
+		if in.Guest == nil && in.Via != "handoff" {
 			in.Prompt, own = s.fillWorkspaces(ctx, in.Prompt) // as SendParams does for the next messages
 		}
 		// The main conversation is the assistant's, on its machine.
 		ctx, note := withLauncherNote(ctx)
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, Model: in.Model, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, ServiceTier: in.ServiceTier, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
-			OpenedBy: requestOpener(r), GuestTools: guestTools, Human: own && in.Via == "" && assistantwire.HumanStartOf(r.Context())})
+			OpenedBy: requestOpener(r), GuestTools: guestTools,
+			Human: own && in.Via == "" && (assistantwire.HumanStartOf(r.Context()) || assistantwire.ReplyInputOf(r.Context()))})
 		var refused *pickError
 		switch {
 		case errors.As(err, &refused):
@@ -877,10 +1107,6 @@ func (s *Service) startRoutes() {
 		}
 		if in.ReportTasks && !in.Main {
 			s.markReporter(ctx, sess.MachineID, sess.SessionID)
-		}
-		// The owner's New chat: is it a direction? In the background; nothing waits for it (route.go).
-		if origin == OriginUser && !in.Main && in.Guest == nil && in.Space == "" && in.Purpose == "" && !in.ReportTasks {
-			go s.routeNewChat(sess.MachineID, sess.SessionID, sentence)
 		}
 		if *note != "" {
 			apierr.WriteJSON(w, map[string]any{"session": sess, "launcher_note": *note})
@@ -980,11 +1206,16 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 // messageParams is SendParams for a message that is the owner's own (owner), or one the manager writes in their
 // place (a channel's "answer again"), which preempts nothing.
 func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (map[string]any, error) {
+	if err := s.conversationAvailable(ctx, p.MachineID, p.SessionID); err != nil {
+		return nil, err
+	}
 	if p.Params == nil {
 		p.Params = map[string]any{}
 	}
 	delete(p.Params, "source") // app input cannot claim an automated author
 	delete(p.Params, "message_source")
+	approvalTarget, _ := p.Params["approval_reply_to"].(string)
+	delete(p.Params, "approval_reply_to") // approval metadata is never model input, including on a failed send
 	if id, _ := p.Params["client_msg_id"].(string); id != "" {
 		s.availOwnerSent(p.MachineID, p.SessionID, id, time.Now()) // a replay opens no reply wait (availability.go)
 	}
@@ -1008,14 +1239,26 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		err = s.validateSkillSelections(ctx, p.MachineID, p.SessionID, params)
 	}
 	switch {
-	case !p.Human || !own || marked: // anyone else's id, a person's carrying another's words (a mail handed on, the
+	case (!p.Human && !p.ReplyInput) || !own || marked: // anyone else's id, a person's carrying another's words (a mail handed on, the
 		// old main conversation's) or sent by Siri or the share sheet, never counts, nor does a person's id once
 		// another sent it (secret_handoff.go)
 		s.humanSent.voidSend(p.SessionID, id)
-	case err == nil: // the hub's word: a person's own app sent it (handoffUserTurn)
+	case err == nil && p.Human: // a paired device can also vouch for handoffUserTurn
 		s.humanSent.note(p.SessionID, id, sent)
+	case err == nil:
+		s.humanSent.noteForReply(p.SessionID, id, sent)
+	}
+	if err == nil && approvalTarget != "" && owner && p.Human && !p.ReplyInput && own && !marked {
+		handled, approvalErr := s.resolveAppOwnerReply(ctx, p.MachineID, p.SessionID, id, approvalTarget, text)
+		if approvalErr != nil {
+			return nil, badRequest(approvalErr, s.appLang(ctx, p.Lang))
+		}
+		if handled {
+			return map[string]any{ownerApprovalHandledParam: approvalTarget}, nil
+		}
 	}
 	if err == nil && said && owner {
+		s.endHeldChannelRuns(p.MachineID, p.SessionID)
 		s.ownerInterjects(p.SessionID, params)
 	}
 	return params, err
@@ -1046,16 +1289,41 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if params == nil {
 		params = map[string]any{}
 	}
+	params["model_source"] = s.conversationModelSource(ctx, p.MachineID, p.SessionID)
+	delete(params, "external")
+	delete(params, "cache_keepalive") // only the manager may attest a refresh role, including on early returns
+	if launcher, _ := params["launcher"].(string); proto.IsExternalLauncher(launcher) {
+		return nil, false, badRequest(i18n.Err("external-adapter.scope_required"), s.appLang(ctx, p.Lang))
+	}
+	// Keep the raw value until external admission checks it; ordinary conversations ignore it, even on an early return.
+	defer delete(params, "runtime")
+	delete(params, "origin") // only the manager's origin book may attest an existing conversation
+	delete(params, "origin_known")
+	origin, originKnown := s.managerOriginDecision(ctx, p.MachineID, p.SessionID, "", false)
+	if originKnown {
+		params["origin_known"] = true // an empty origin is an explicit ordinary decision, including on assistant.model
+	}
+	if origin != "" {
+		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
+		// first resumed process keeps its Inbox tool policy and its Lark gate cannot fall back to an ordinary conversation.
+		params["origin"] = origin
+	}
+	if err := s.putInboxPermissionMode(ctx, p.MachineID, p.SessionID, params, origin, originKnown); err != nil {
+		return nil, false, err
+	}
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
 	params["is_main"] = false
+	if err := s.putSupervisionInstructions(ctx, p.MachineID, p.SessionID, params); err != nil {
+		return nil, false, err
+	}
 	if err := s.roomRefusesSend(ctx, p.MachineID, p.SessionID, p.Lang); err != nil {
 		return nil, false, err // an ended room: 409 meeting_ended (meeting_room.go)
 	}
 	if s.isGuest(ctx, p.MachineID, p.SessionID) {
-		// A guest conversation keeps what it started on: no launcher, model, runtime or mode picked for a message
-		// (the node refuses a change too, node/assistant_guest.go).
-		for _, k := range []string{"launcher", "model", "effort", "model_fingerprint", "runtime", "permission_mode"} {
+		// A guest conversation keeps what it started on: no launcher, model or mode picked for a message (the node
+		// refuses a change too, node/assistant_guest.go).
+		for _, k := range []string{"launcher", "model", "effort", "model_fingerprint", "permission_mode"} {
 			delete(params, k)
 		}
 		return params, own, nil
@@ -1077,7 +1345,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 		}
 		return nil, false, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id is the app's user's to read
 	}
-	if text, ok := params["text"].(string); ok {
+	if text, ok := params["text"].(string); ok && !p.VerbatimText {
 		text, own = s.fillWorkspaces(ctx, text) // an @-mentioned workspace: where it is and what worked there (workspace_mention.go)
 		if main {
 			left := s.handoffFor(ctx, p.SessionID, text)
@@ -1106,16 +1374,30 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 // …/conversations/{id}/model, model_pick.go), its effort under the message's own: that is the user's choice for the
 // conversation, so it is never replaced; a pick that can't run here refuses the message, saying why in lang.
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any, lang i18n.Lang) error {
+	ctx = withLauncherPurpose(ctx, "assistant")
+	delete(p, "external")
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
+	delete(p, "idle_compaction")
+	if p["is_main"] == true {
+		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
+	}
+	s.putCacheKeepalive(ctx, machine, sid, p["is_main"] == true, p)
+	putMainCompactWindow(cfg, p)
+	if handled, err := s.logicalSendModel(ctx, machine, sid, p); handled {
+		return err
+	}
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
+	}
+	if cfg.ClaudeInteractive != nil && *cfg.ClaudeInteractive {
+		p["claude_interactive"] = true // what the conversation's Claude runs in (#10058, node/assistant_tui.go)
 	}
 	// A leader conversation and the background supervisor follow it too: the hub's own messages (supervision, digests)
 	// drive them and pick nothing, so a model a failed turn's recovery moved one to (node/assistant_recovery.go: Opus
 	// down to Haiku on a run of 429s) was carried over as what it runs, for good.
 	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine || s.isTaskConversation(ctx, machine, sid) ||
-		s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
+		s.startedByTask(sid) || s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
 	// The owner-visible recovery rule (#7824) covers the main conversation and the leader/background supervisors, but
 	// not worker Agent task conversations, whose cheaper-tier behavior stays unchanged. The node marks the protected
 	// ones so it can publish and persist the model-recovery marker only for them.
@@ -1129,71 +1411,162 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		p["model"], picked = m, true
 	}
 	l, _ := p["launcher"].(string)
+	if proto.IsExternalLauncher(l) {
+		return i18n.Err("external-adapter.scope_required") // only the kept pick, never a message's launcher
+	}
 	asked := l != "" // picked in the chat's menu for this message
 	if asked {
 		if err := s.otherKindPick(ctx, machine, sid, l); err != nil {
 			return err // another agent kind can't resume this conversation: refused, not swapped on the node
 		}
 	}
-	if !asked && !picked {
+	if !asked {
 		if pick, ok := s.modelPickOf(ctx, machine, sid); ok {
-			return s.sendOnPick(ctx, machine, sid, p, pick, lang)
+			if proto.IsExternalLauncher(pick.Launcher) {
+				if model, _ := p["model"].(string); picked && model != pick.Model {
+					return i18n.Err("external-adapter.scope_required") // change the persisted pick, not a message's model
+				}
+				return s.sendOnPick(ctx, machine, sid, p, pick, lang)
+			}
+			if !picked {
+				return s.sendOnPick(ctx, machine, sid, p, pick, lang)
+			}
+		}
+		// An unreadable pick book is not permission to switch a conversation that
+		// already runs externally back to the global default.
+		s.modelPicks.mu.Lock()
+		known := s.modelPicks.loaded
+		s.modelPicks.mu.Unlock()
+		if !known {
+			if c, ok := s.session(ctx, machine, sid); ok && proto.IsExternalLauncher(c.Launcher) {
+				return i18n.Err("assistant-model_pick.err_unreadable")
+			}
 		}
 	}
-	if l == "" && !followsSetting {
-		if c, known := s.session(ctx, machine, sid); known {
+	if l == "" {
+		c, known := s.session(ctx, machine, sid)
+		if known && c.SourceKind == proto.SourceRuntime {
+			// Preserve existing runtime inheritance unless the main chat has its
+			// own binding. That binding still passes the execution identity check.
+			if p["is_main"] != true {
+				return nil
+			}
+			record, err := s.modelRecord(ctx, purposeMain)
+			if err != nil {
+				return err
+			}
+			if record.Binding == (ModelBinding{}) {
+				return nil
+			}
+		}
+		if known && !followsSetting {
 			l = c.Launcher // no launcher picked: the one this conversation runs
 			if l != "" {
 				p["launcher"] = l
 			}
 			// And the model it runs, so no pick keeps it; one that is no model id (Claude's "<synthetic>") is not.
-			if _, asked := p["model"]; !asked && proto.ValidModelID(c.Model) {
-				p["model"] = c.Model
+			if _, asked := p["model"]; !asked {
+				model := c.Model // older nodes only report the transcript name
+				if c.RequestedModel != nil {
+					model = *c.RequestedModel
+				}
+				if proto.ValidModelID(model) {
+					p["model"] = model
+				}
 			}
 		}
 	}
-	// A launcher or model that is gone (a renamed managed launcher, a model the gateway dropped), or a launcher that
-	// can't run the assistant (a Paseo provider, a managed Codex one: launcher_mainchat.go) fails every turn: fall back
-	// to the assistant's launcher and its default. One picked for this message that can't run it is refused, saying why.
+	if proto.IsExternalLauncher(l) {
+		return i18n.Err("external-adapter.scope_required") // a side conversation cannot inherit an old external launcher
+	}
+	// One picked for this message that can't run the assistant is refused, saying why. Otherwise keep the conversation's
+	// binding intact: finishMainChatModel owns rediscovery and explicitly configured substitutes for a launcher that is
+	// gone or no longer compatible. Replacing it with launcherNow here would bypass that policy before it can run.
 	if l != "" {
 		model, _ := p["model"].(string)
 		fit, refusal := s.mainChatFit(ctx, machine, l)
 		switch {
 		case fit == mainChatRefused && asked:
 			return refusal
-		case fit != mainChatFits:
-			l = s.launcherNow(ctx)
-			s.logf("[%s] %s: its launcher can't run it any more, using %s", machine, short(sid), l)
-			p["launcher"] = l
-			delete(p, "model")
-		case model != "" && !picked && !s.launcherHasModel(ctx, machine, l, model):
-			s.logf("[%s] %s: model %s is not in %s's list any more, using its default", machine, short(sid), model, l)
-			delete(p, "model")
+		case fit == mainChatFits && model != "" && !picked:
+			resolved, ok := s.resolveLauncherModel(ctx, machine, l, model)
+			if !ok {
+				s.logf("[%s] %s: model %s is not in %s's list any more, using its default", machine, short(sid), model, l)
+				delete(p, "model")
+				leaveLauncherNote(ctx, i18n.T(lang, "assistant-start.model_missing", i18n.Args{"model": model, "launcher": l}))
+			} else if resolved != "" && resolved != model {
+				// The gateway echoed a routed name for an older node's row: send the launcher's clean declared id.
+				p["model"] = resolved
+			}
 		}
 	}
 	pickedLauncher := l != ""
+	// The background supervisor runs under its own purpose (which follows Main chat until it is set apart), whoever
+	// writes to it: the hub's relays already do (backgroundModel), so a message typed to it must too.
+	purpose := "assistant"
+	if p["is_main"] == true {
+		purpose = purposeMain
+	} else if s.isBackground(ctx, sid) {
+		purpose = purposeSupervise
+	}
 	if pickedLauncher {
 		if err := s.applyPickedModel(ctx, p); err != nil {
 			return err
 		}
-	} else if err := s.applyModel(ctx, "assistant", p); err != nil {
+	} else {
+		if err := preservePermissionMode(p, func() error { return s.applyModel(ctx, purpose, p) }); err != nil {
+			return err
+		}
+	}
+	if purpose == purposeMain {
+		if err := s.mainDefaultExecution(ctx, machine, sid, p); err != nil {
+			return err
+		}
+	}
+	_, err := s.finishMainChatModel(ctx, machine, purpose, p, pickedLauncher)
+	return err
+}
+
+// preservePermissionMode runs fn against an existing conversation's send params without letting a purpose's
+// configured permission_mode be injected into or overwrite the session's active permission mode.
+func preservePermissionMode(p map[string]any, fn func() error) error {
+	prevMode, hadMode := p["permission_mode"]
+	if err := fn(); err != nil {
 		return err
 	}
-	_, err := s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
-	return err
+	if hadMode {
+		p["permission_mode"] = prevMode
+	} else {
+		delete(p, "permission_mode")
+	}
+	return nil
 }
 
 // sendOnPick puts conversation sid's pick into p (sendModel): its launcher, model and effort (an effort sent with the
 // message wins), checked and fingerprinted like a message's pick. One that can't run on machine, or runs the other
 // agent kind (launcher_kind.go), refuses the message.
 func (s *Service) sendOnPick(ctx context.Context, machine, sid string, p map[string]any, pick modelPick, lang i18n.Lang) error {
-	if err := s.modelPickRefusal(ctx, machine, pick.Launcher, lang, true); err != nil {
+	if proto.IsExternalLauncher(pick.Launcher) {
+		var err error
+		ctx, err = s.externalPickContext(ctx, machine, sid, pick)
+		if err != nil {
+			return err
+		}
+	} else if err := s.modelPickRefusal(ctx, machine, pick.Launcher, lang, true); err != nil {
 		return err
 	}
 	if err := s.otherKindPick(ctx, machine, sid, pick.Launcher); err != nil {
 		return err
 	}
-	return s.applyPick(ctx, p, pick)
+	return preservePermissionMode(p, func() error { return s.applyPick(ctx, p, pick) })
+}
+
+// startedByTask: sid is a conversation a scheduled task started (origin task), also once it is no task's current
+// conversation (a task's "New chat next time", a deleted task): it follows the setting like the current one, which is
+// what the apps show for every conversation of that origin (#9248).
+func (s *Service) startedByTask(sid string) bool {
+	o, ok := s.conversationOrigins()
+	return ok && o[sid].origin == OriginTask
 }
 
 // isTaskConversation: sid on machine is a scheduled task's own conversation.
@@ -1205,6 +1578,7 @@ func (s *Service) isTaskConversation(ctx context.Context, machine, sid string) b
 // conversation has no title to change; a Codex one keeps the assistant's title (its tab is still renamed). The node
 // renames; a new title is the user's from now on. An extension's (p.Extension, as the hub's auth found it) is only a
 // hint (titleHinted): the hub still names a conversation it started, as it names the others.
+// An active direction updates its canonical name instead, preserving the ordinary title.
 func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, error) {
 	params := p.Params
 	if params == nil {
@@ -1218,7 +1592,9 @@ func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, 
 	if c, found := s.session(ctx, p.MachineID, p.SessionID); found && !c.Assistant {
 		return s.renameAgent(ctx, p, c)
 	}
-	if c, _ := s.session(ctx, p.MachineID, p.SessionID); c.Agent == "codex" {
+	directionTitle := strings.TrimSpace(title) != "" && p.Extension == "" &&
+		p.MachineID == s.settings(ctx).MachineID && s.isLeader(ctx, p.SessionID)
+	if c, _ := s.session(ctx, p.MachineID, p.SessionID); c.Agent == "codex" || directionTitle {
 		delete(params, "title") // only the assistant's title for Codex (its conversation_rename does the same)
 	}
 	out := json.RawMessage(`{"ok":true}`)
@@ -1230,6 +1606,10 @@ func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, 
 		}
 	}
 	switch {
+	case directionTitle:
+		if err := s.setDirectionName(ctx, p.SessionID, title, directionByUser); err != nil {
+			return nil, err
+		}
 	case strings.TrimSpace(title) == "":
 	case p.Extension != "":
 		s.titleHinted(p.MachineID, p.SessionID, title)

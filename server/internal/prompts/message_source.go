@@ -14,6 +14,12 @@ var sourceKindRe = lazyre.New(`\bkind="message-source"`)
 var relayTitleRe = lazyre.New(`\btitle="来自对话「(.*?)」"`)
 var relayBodyRe = lazyre.New(`^这条消息不是用户本人发的，是 Persona 的另一段对话（([^\s（）]+)）用 (conversation_send|conversation_new) 发来的，第 ([0-9]+) 跳（最多 ([0-9]+) 跳）。\n按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 ([^\s；]+)；只是确认收到就不要回，免得两段对话来回发。$`)
 
+type messageSourceMetadata struct {
+	proto.MessageSource
+	Author  string `json:"author,omitempty"`
+	RelayID string `json:"relay_id,omitempty"`
+}
+
 // MessageSourceText persists provenance in the native transcript, not a short-lived
 // echo cache. JSON's HTML escaping prevents a title from closing the context block.
 func MessageSourceText(text string, source *proto.MessageSource) string {
@@ -24,6 +30,24 @@ func MessageSourceText(text string, source *proto.MessageSource) string {
 		return text
 	}
 	return messageSourceText(text, source)
+}
+
+// RelayMessageText keeps a context-only relay identifiable when the transcript reader drops its context.
+func RelayMessageText(text string, source *proto.MessageSource, id string) string {
+	meta := messageSourceMetadata{RelayID: id}
+	if source != nil {
+		meta.MessageSource = *source
+	}
+	return messageSourceText(text, meta)
+}
+
+// RelayMessageID reads the id saved by RelayMessageText. The owner's provenance block takes precedence.
+func RelayMessageID(text string) string {
+	meta, _ := readSourceMetadata(text)
+	if meta.Author == "user" {
+		return ""
+	}
+	return meta.RelayID
 }
 
 func messageSourceText(text string, metadata any) string {
@@ -38,23 +62,25 @@ func messageSourceText(text string, metadata any) string {
 // author is the user. That sentinel prevents nested, user-pasted blocks impersonating
 // an automated sender before client_msg_id arrives or on a user-started conversation.
 func sourceMetadata(text string) (source *proto.MessageSource, found bool) {
+	meta, found := readSourceMetadata(text)
+	if meta.Author == "user" || meta.Kind == "" {
+		return nil, found
+	}
+	return &meta.MessageSource, true
+}
+
+func readSourceMetadata(text string) (messageSourceMetadata, bool) {
 	for {
 		m := messageContextRe.FindStringSubmatch(text)
 		if m == nil {
-			return nil, false
+			return messageSourceMetadata{}, false
 		}
 		if sourceKindRe.MatchString(m[1]) {
-			var meta struct {
-				proto.MessageSource
-				Author string `json:"author"`
-			}
+			var meta messageSourceMetadata
 			if json.Unmarshal([]byte(strings.TrimSpace(m[2])), &meta) != nil {
-				return nil, true // malformed explicit metadata must not become a guessed source
+				return messageSourceMetadata{}, true // malformed explicit metadata must not become a guessed source
 			}
-			if meta.Author == "user" || meta.Kind == "" {
-				return nil, true
-			}
-			return &meta.MessageSource, true
+			return meta, true
 		}
 		text = text[len(m[0]):]
 	}
@@ -92,14 +118,44 @@ func ParseRelaySource(text string) *proto.MessageSource {
 	}
 }
 
+var relayQuoteRe = lazyre.New(`^\s*kind="owner-request"\s+message_id="([^"]*)"\s*$`)
+
+// ParseRelayQuoteID is the id of the owner's message a relay carries (assistant/relay.md, RelayQuote): only a quote
+// block that directly follows the canonical relay context counts, so words the sending model wrote into its text
+// can't pass for one. "" when there is none.
+func ParseRelayQuoteID(text string) string {
+	relay := false
+	for {
+		m := messageContextRe.FindStringSubmatch(text)
+		if m == nil {
+			return ""
+		}
+		if relay {
+			if q := relayQuoteRe.FindStringSubmatch(m[1]); q != nil {
+				return html.UnescapeString(q[1])
+			}
+			return ""
+		}
+		relay = ParseRelaySource(m[0]) != nil
+		text = text[len(m[0]):]
+	}
+}
+
 // ItemSource prefers explicit fields, then persisted provenance, then existing
-// injected metadata and exact legacy templates. An app's own message is never
-// text-inferred. Item.From remains separate: a peer's name is not a conversation id.
+// injected metadata and exact legacy templates. App messages with IDs accept
+// only provenance from an A2A envelope bound to that ID. Item.From is a name.
 func ItemSource(it proto.Item) *proto.MessageSource {
 	if it.Source != nil && it.Source.Kind != "" {
 		return it.Source
 	}
 	inferText := it.Role == "user" && it.Kind == proto.KindText && it.ClientMsgID == "" && it.From == ""
+	if it.Role == "user" && it.Kind == proto.KindText && it.From == "" && strings.HasPrefix(it.ClientMsgID, proto.A2ADeliveryPrefix) && RelayMessageID(it.Text) == it.ClientMsgID {
+		// A2A's envelope binds the persisted source to the delivery ID. The
+		// owner-authored sentinel blocks a pasted envelope from qualifying.
+		if source, found := sourceMetadata(it.Text); found && source != nil && source.Kind == proto.SourceConversation {
+			return source
+		}
+	}
 	if inferText {
 		if source, found := sourceMetadata(it.Text); found {
 			return source

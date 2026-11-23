@@ -65,6 +65,18 @@ func (n *Node) mergeOpencodeRow(s *proto.Session) {
 	s.OutputTokens = r.OutputTokens
 	s.LastText, s.Model, s.UpdatedAt, s.Rev = r.LastText, r.Model, r.UpdatedAt, r.Rev
 	s.ContextTokens, s.ContextWindow = r.ContextTokens, r.ContextWindow
+	if r.PermissionMode != "" {
+		s.PermissionMode = r.PermissionMode
+	}
+	if r.Effort != "" {
+		s.Effort = r.Effort
+	}
+	if len(r.Efforts) > 0 {
+		s.Efforts = r.Efforts
+	}
+	if r.Launcher != "" && s.Launcher == "" {
+		s.Launcher = r.Launcher
+	}
 	if r.Status == proto.StatusBlocked {
 		s.Status = proto.StatusBlocked
 	}
@@ -136,7 +148,7 @@ func (n *Node) terminalOnlyCalls(ctx context.Context, method, id string, r termi
 	case "session.items":
 		return map[string]any{"items": []proto.Item{{ID: r.kind + "#0", Seq: 1, Role: "system", Kind: "notice", Text: r.notice,
 			TS: time.Now().UTC()}}, "has_more": false, "history": r.kind + "-pane:" + id, "to_seq": 1}, nil, true
-	case "session.item", "session.image":
+	case "session.item", "session.image", "session.visualization":
 		return nil, fmt.Errorf("no item"), true
 	case "session.watch", "session.unwatch":
 		return okResult(nil), nil, true

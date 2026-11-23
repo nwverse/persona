@@ -29,6 +29,10 @@ const featureMeetingLiveView = assistantwire.CapabilityMeetingLiveView
 // docs/assistant/meeting-minutes.md "Phase 2b: highlights"); only with meeting_live_view.
 const featureMeetingHighlights = assistantwire.CapabilityMeetingHighlights
 
+// featureMeetingNotes: the default manager takes a room meeting's notes role (#8851, docs/assistant/meeting-minutes.md
+// "The notes role (#8851)"); only with meeting_live_view, whose topics and highlights a notes room keeps.
+const featureMeetingNotes = assistantwire.CapabilityMeetingNotes
+
 // featureMeetingEcho: the default manager takes Persona's echo marked on a meeting's upload (#5905,
 // docs/assistant/meeting-minutes.md "Persona's echo"); only with meeting_attendance.
 const featureMeetingEcho = assistantwire.CapabilityMeetingEcho
@@ -83,6 +87,16 @@ func (h *Hub) meetingHighlightsFeatures() []string {
 		return nil
 	}
 	return []string{featureMeetingHighlights}
+}
+
+// meetingNotesFeatures is meeting_notes while the default manager names it beside meeting_live_view (and so
+// meeting_conversation and meeting_attendance); nothing otherwise, so a phone sends notes to no manager that would
+// read it as an unknown role (off).
+func (h *Hub) meetingNotesFeatures() []string {
+	if len(h.meetingLiveViewFeatures()) == 0 || !h.defaultManagerNames(assistantwire.CapabilityMeetingNotes) {
+		return nil
+	}
+	return []string{featureMeetingNotes}
 }
 
 // meetingEchoFeatures is meeting_echo while the default manager names it beside meeting_attendance (Persona speaks

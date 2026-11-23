@@ -109,6 +109,9 @@ func (m *Manifest) Validate() error {
 		if name == "quota" && !m.Permissions.LauncherKeys {
 			bad("contributes.quota needs permissions.launcher_keys (the user agrees that it reads quota with launchers' keys)")
 		}
+		if name == "usage" && !m.Permissions.LauncherKeys {
+			bad("contributes.usage needs permissions.launcher_keys (the user agrees that it reads usage with launchers' keys)")
+		}
 		if name == "api" && !slices.Contains(m.Activation(), OnStartup) {
 			bad("contributes.api: the app's API is there all the time: activation_events on_startup")
 		}
@@ -140,6 +143,18 @@ func (m *Manifest) Validate() error {
 		}
 		if name == "error_reports" && !m.Permissions.ErrorReports {
 			bad("contributes.error_reports needs permissions.error_reports (the user agrees that it gets the error and crash reports)")
+		}
+		if name == "repository_providers" {
+			// One host is one provider's, in a manifest as across extensions (claimClashes).
+			claimed := map[string]string{}
+			for _, it := range m.RepositoryProviders() {
+				for _, h := range it.Hosts {
+					if other, ok := claimed[h]; ok && other != it.ID {
+						bad("contributes.repository_providers: the host %q is in both %s and %s", h, other, it.ID)
+					}
+					claimed[h] = it.ID
+				}
+			}
 		}
 		if name == "auth_relay" && !m.Permissions.AuthRelay {
 			bad("contributes.auth_relay needs permissions.auth_relay (the user agrees that it completes the authorization links their Agents stop at)")
@@ -216,8 +231,12 @@ func (m *Manifest) Validate() error {
 	for _, msg := range m.offByDefaultProblems() {
 		bad("%s", msg)
 	}
-	if len(m.Secrets) > SecretsMost {
-		bad("secrets: more than %d", SecretsMost)
+	var entryLists []Field
+	if schema, err := ParseSchema(m.Configuration); err == nil {
+		entryLists = schema.EntryListFields()
+	}
+	if len(m.Secrets)+len(entryLists) > SecretsMost {
+		bad("secrets: more than %d fixed and entry-list declarations", SecretsMost)
 	}
 	seen := map[string]bool{}
 	for _, s := range m.Secrets {
@@ -231,6 +250,13 @@ func (m *Manifest) Validate() error {
 		if strings.TrimSpace(s.Title) == "" {
 			bad("secrets: %q has no title", s.Name)
 		}
+	}
+	for _, f := range entryLists {
+		name := f.Secret.Name
+		if seen[name] {
+			bad("secrets: %q is declared by both a fixed secret and an entry list (or by two lists)", name)
+		}
+		seen[name] = true
 	}
 	errs = append(errs, m.checkConfigured()...)
 	if err := m.Permissions.validate(); err != nil {
@@ -393,6 +419,13 @@ func (m *Manifest) Lint() []string {
 		for _, f := range s.Fields {
 			if looksSecret(f.Name) {
 				out = append(out, i18n.T(i18n.En, "extension-status.plaintext_secret", i18n.Args{"name": f.Name}))
+			}
+			if f.EntryList() {
+				for _, sub := range f.Items.Fields {
+					if looksSecret(sub.Name) {
+						out = append(out, i18n.T(i18n.En, "extension-status.plaintext_secret", i18n.Args{"name": f.Name + "[]." + sub.Name}))
+					}
+				}
 			}
 		}
 	}

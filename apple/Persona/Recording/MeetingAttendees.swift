@@ -41,6 +41,14 @@ import Foundation
         return hubDefault(model) ?? MeetingAttendanceDefaults.cachedRole()
     }
 
+    /// The role a room meeting starts in from the quick start's Invite (#8731): invited, the hub's default role if it
+    /// answers, else Listen (Persona answers on screen); not invited, off (notes where the hub takes it, `RecordingAttendance.room`).
+    static func invitedRole(_ model: AppModel, invited: Bool) -> MeetingAttendance {
+        guard invited else { return .off }
+        let role = defaultRole(model)
+        return role.answers ? role : .listener
+    }
+
     /// The hub takes the meeting conversation (#3862): `meeting_attendance` and `meeting_conversation` (from the last
     /// `hello`, kept for a start without the app in front, as `offered`).
     static func conversation(_ model: AppModel) -> Bool {
@@ -53,7 +61,8 @@ import Foundation
                                            photos: conversation && features.contains(MeetingAttendanceDefaults.photosFeature),
                                            liveView: liveView,
                                            highlights: liveView && features.contains(MeetingAttendanceDefaults.highlightsFeature),
-                                           transcription: liveView && features.contains(MeetingAttendanceDefaults.transcriptionFeature))
+                                           transcription: liveView && features.contains(MeetingAttendanceDefaults.transcriptionFeature),
+                                           notes: liveView && features.contains(MeetingAttendanceDefaults.notesFeature))
         return conversation
     }
 
@@ -79,6 +88,15 @@ import Foundation
         let features = model.hubFeatures
         guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.highlightsKey) }
         return features.contains(MeetingAttendanceDefaults.highlightsFeature)
+    }
+
+    /// …and the notes role (#8851), which comes only with the live view: a meeting Persona isn't invited to has its room
+    /// follow it anyway (topics, highlights), answering nothing.
+    static func notes(_ model: AppModel) -> Bool {
+        guard liveView(model) else { return false }
+        let features = model.hubFeatures
+        guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.notesKey) }
+        return features.contains(MeetingAttendanceDefaults.notesFeature)
     }
 
     /// …and hub transcription (phase 5), which comes only with the conversation and the live view: a meeting started now
@@ -219,7 +237,7 @@ import Foundation
     static func startAttendance(_ model: AppModel) -> RecordingAttendance {
         guard conversation(model) else { return defaultAttendance(model) }
         return .room(defaultRole(model), private: false, photos: photos(model), liveView: liveView(model),
-                     highlights: highlights(model), transcription: startTranscription(model))
+                     highlights: highlights(model), notes: notes(model), transcription: startTranscription(model))
     }
 
     /// A recording's attendance once it becomes a meeting again mid-recording, at `at` on its clock (a note turned into a

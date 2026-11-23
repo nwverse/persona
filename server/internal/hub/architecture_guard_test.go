@@ -52,7 +52,9 @@ func hubSources(t *testing.T) map[string]*ast.File {
 	return out
 }
 
-// readList reads a testdata list: one entry per line, `#` starts a comment, blank lines skipped.
+// readList reads a testdata list: one entry per line, `#` starts a comment, blank lines skipped. An entry or a comment
+// line that appears twice fails: the lists are union-merged (.gitattributes), which keeps both sides' copy of a line.
+// Other comment lines aren't checked, so a merge can keep a reworded comment's old wording next to the new one.
 func readList(t *testing.T, name string) []string {
 	t.Helper()
 	f, err := os.Open(filepath.Join("testdata", name))
@@ -61,15 +63,22 @@ func readList(t *testing.T, name string) []string {
 	}
 	defer f.Close()
 	var out []string
+	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := sc.Text()
+		key := strings.TrimSpace(line) // a comment line as a whole, an entry without its comment
 		if i := strings.Index(line, "#"); i >= 0 {
 			line = line[:i]
 		}
 		if line = strings.TrimSpace(line); line != "" {
+			key = line
 			out = append(out, line)
 		}
+		if key != "" && seen[key] {
+			t.Errorf("testdata/%s has %q twice (a merge kept both sides' copy): delete one", name, key)
+		}
+		seen[key] = true
 	}
 	if err := sc.Err(); err != nil {
 		t.Fatal(err)
@@ -272,7 +281,7 @@ func selectorString(e *ast.SelectorExpr) string {
 }
 
 // mergedListsCovered checks the loop `for pattern, key := range mergedLists`. The key is registered only when it is
-// already a relayed route, either as written or with the method prefix removed (extwire.Routes has no method).
+// already a relayed route, either as written or with the method prefix removed for a path-only relay entry.
 func mergedListsCovered(relayed []string) error {
 	var missing []string
 	for pattern := range mergedLists {
@@ -311,6 +320,27 @@ func parseHubSnippet(t *testing.T, src string) *ast.File {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// Extension scopes decide authorization; they are not a table of routes for the scoped-device matcher to register.
+// Keep this coupling pinned separately so making the general guard more permissive cannot hide it.
+func TestScopedDeviceRouteMatcherDoesNotRangeOverExtensionScopes(t *testing.T) {
+	const file = "scoped_tokens.go"
+	f := hubSources(t)[file]
+	if f == nil {
+		t.Fatalf("%s is missing", file)
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		rng, ok := n.(*ast.RangeStmt)
+		if !ok || !bodyRegistersRangeIdent(rng.Body, rangeNames(rng)) {
+			return true
+		}
+		if sel, ok := rng.X.(*ast.SelectorExpr); ok && selectorString(sel) == "extwire.RouteScopes" {
+			t.Errorf("%s registers scoped-device route patterns by ranging over extwire.RouteScopes; "+
+				"extension scopes are authorization metadata, not a relayed wire table; %s", file, guardDoc)
+		}
+		return true
+	})
 }
 
 func TestRangeOverAnUnknownIdentifierFailsTheGuard(t *testing.T) {

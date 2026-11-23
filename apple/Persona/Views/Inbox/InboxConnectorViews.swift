@@ -11,12 +11,16 @@ struct InboxConnectorDetailView: View {
     var item: InboxItem
     @State private var thread: ConnectorThreadModel
 
-    init(item: InboxItem) {
+    init(item: InboxItem, manager: String?) {
         self.item = item
-        _thread = State(initialValue: ConnectorThreadModel(connector: item.source, thread: item.connector?.thread ?? ""))
+        _thread = State(initialValue: ConnectorThreadModel(connector: item.source, thread: item.connector?.thread ?? "", manager: manager))
     }
 
     var body: some View {
+        content.environment(\.larkManager, thread.manager)
+    }
+
+    @ViewBuilder private var content: some View {
         if thread.loaded && (thread.unavailable || thread.chat.map { !Self.isConversation($0, source: item.source) } == true) {
             InboxConnectorTextView(item: item, problem: thread.failure, reread: reread)
         } else if thread.chat?.isGitHub == true {
@@ -26,7 +30,7 @@ struct InboxConnectorDetailView: View {
         } else {
             ConnectorThreadView(model: thread, source: item.accountName)
                 .navigationTitle(thread.chat.flatMap { $0.name.isEmpty ? nil : $0.name } ?? item.title)
-                .navigationSubtitle(ThreadLayout.subtitle(thread.chat, source: item.accountName))
+                .navigationSubtitleWhenSupported(ThreadLayout.subtitle(thread.chat, source: item.accountName))
                 .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -62,6 +66,8 @@ struct InboxConnectorTextView: View {
     @State private var context: String?
     @State private var failure: String?
     @State private var link: LinkTarget?
+    /// A to-do, knowledge entry or computer the item's link opened (a link to one of Persona's pages, #9926).
+    @State private var hubSheet: HubLinkSheet?
     @State private var retrying = false
 
     private var connector: InboxItem.Connector? { item.connector }
@@ -85,9 +91,12 @@ struct InboxConnectorTextView: View {
                 }
                 .padding(.vertical, Theme.Space.xs)
                 if let url = connector?.url.flatMap(URL.init(string:)) {
-                    Button { link = LinkTarget(url: url, manager: model.linkManager(item.manager)) } label: {
-                        Label(item.isAssistantRow ? String(localized: "Open the Chat") : ConnectorText.tightCJK(String(localized: "Open in \(item.accountName) [Inbox Connector Views 0e0e38]")), systemImage: Theme.Icon.safari).lineLimit(1)
+                    Button { open(url) } label: {
+                        // The assistant's own row opens its conversation in the app (#9928): a chat, not a web page.
+                        Label(item.isAssistantRow ? String(localized: "Open the Chat") : ConnectorText.tightCJK(String(localized: "Open in \(item.accountName) [Inbox Connector Views 0e0e38]")),
+                              systemImage: item.isAssistantRow ? Theme.Icon.conversation : Theme.Icon.safari).lineLimit(1)
                     }
+                    .accessibilityIdentifier("inbox.connector.open")
                 }
             } footer: {
                 if let to = connector?.replyTo, connector?.canReply == true {
@@ -126,7 +135,17 @@ struct InboxConnectorTextView: View {
         .sheet(item: $link) { t in
             if let key = model.assistantMain ?? model.assistantCurrent { LinkSheet(target: t, key: key) }
         }
+        .hubLinkSheet($hubSheet)
         #endif
+    }
+
+    /// The item's page: one of Persona's own (the assistant's conversation, a to-do…) in the app, any other in the web card.
+    private func open(_ url: URL) {
+        if let opened = model.openOwnLink(url) {
+            if case .sheet(let page) = opened { hubSheet = page }
+            return
+        }
+        link = LinkTarget(url: url, manager: model.linkManager(item.manager))
     }
 
     /// Retry in place of leaving and coming back: the conversation page first (read, it replaces this page), then the text.

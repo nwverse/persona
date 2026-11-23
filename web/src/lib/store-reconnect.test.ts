@@ -1,7 +1,7 @@
 // The socket's side of #1574: a drop is invisible inside the grace, a restart retries at once, and a resumed hello
 // refetches nothing while an ordinary one refreshes everything as before.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appSocketReady, applyMachine, checkSocket, connect, disconnect, getState, onAppSocket, onPrivateUIStream, onHubEvent, reconnectNow, refresh, reset } from "./store";
+import { appSocketReady, applyMachine, checkSocket, connect, disconnect, getState, onAppSocket, onHello, onPrivateUIStream, onHubEvent, reconnectNow, refresh, reset } from "./store";
 import { offlineNow } from "./feedback";
 import { liveEntry, resetLive } from "./live";
 import { messageFeedback } from "./message-send";
@@ -119,6 +119,17 @@ describe("reconnecting", () => {
       expect(appSocketReady()).toBe(false);
     } finally { offConnection(); offFrames(); }
   });
+  it("runs the hello hooks with that hello's features already in the state", () => {
+    // The desktop's registration (lib/attention-signals.ts) reads them in its hook: an empty list there took a current
+    // hub for one without desktop_unregister and closed this very socket.
+    const seen: string[][] = [];
+    const off = onHello(() => seen.push([...getState().features]));
+    const s = online(["desktop_unregister"]);
+    off();
+    expect(seen).toEqual([["desktop_unregister"]]);
+    expect(s.readyState).toBe(1);
+  });
+
   it("refuses an existing connection after its credential changes", () => {
     online(["extension_ui_stream_v1"]);
     vi.stubGlobal("localStorage", { getItem: () => "changed-token" });
@@ -336,6 +347,79 @@ describe("a slow refresh() does not put back an older snapshot", () => {
     for (let i = 0; i < 20; i++) await Promise.resolve();
   };
   const session = (machine_id: string, session_id: string, state: string) => ({ machine_id, session_id, state, title: session_id });
+
+  it("lets a fast hello supply the only initial sidebar reads", async () => {
+    online();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(fetched(fetcher).filter((p) => p === "/api/v1/assistant")).toHaveLength(1);
+    expect(fetched(fetcher).filter((p) => p === "/api/v1/todos")).toHaveLength(1);
+  });
+
+  it("shows cold sidebar data before a slow hello and refreshes again on hello", async () => {
+    const turns = holdFetch(["/assistant", "/todos"]);
+    connect();
+    last().open();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(turns["/assistant"]).toHaveLength(1);
+    expect(turns["/todos"]).toHaveLength(1);
+    turns["/assistant"][0]({ main: "initial" });
+    turns["/todos"][0]({ todos: [{ id: "initial" }] });
+    await settle();
+    expect(getState().assistant?.main).toBe("initial");
+    expect(getState().todos.map((todo) => todo.id)).toEqual(["initial"]);
+    expect(getState().loaded).toBe(false);
+    last().push({ type: "hello" });
+    turns["/assistant"][1]({ main: "current" });
+    turns["/todos"][1]({ todos: [{ id: "current" }] });
+    await settle();
+    expect(getState().assistant?.main).toBe("current");
+    expect(getState().todos.map((todo) => todo.id)).toEqual(["current"]);
+  });
+
+  it("discards a cold sidebar read that finishes after a newer hello read", async () => {
+    const turns = holdFetch(["/assistant", "/todos"]);
+    connect();
+    last().open();
+    await vi.advanceTimersByTimeAsync(300);
+    last().push({ type: "hello" });
+    turns["/assistant"][1]({ main: "current" });
+    turns["/todos"][1]({ todos: [{ id: "current" }] });
+    await settle();
+    turns["/assistant"][0]({ main: "old" });
+    turns["/todos"][0]({ todos: [{ id: "old" }] });
+    await settle();
+    expect(getState().assistant?.main).toBe("current");
+    expect(getState().todos.map((todo) => todo.id)).toEqual(["current"]);
+  });
+
+  it("retries failed cold sidebar reads on hello", async () => {
+    fetcher.mockImplementation(async () => new Response("{}", { status: 503 }));
+    connect();
+    last().open();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(getState().assistantError).toBeTruthy();
+    expect(getState().todosError).toBeTruthy();
+    holdFetch([], { "/assistant": { main: "recovered" }, "/todos": { todos: [{ id: "recovered" }] } });
+    last().push({ type: "hello" });
+    await settle();
+    expect(getState().assistant?.main).toBe("recovered");
+    expect(getState().todos.map((todo) => todo.id)).toEqual(["recovered"]);
+    expect(getState().assistantError).toBeNull();
+    expect(getState().todosError).toBeNull();
+  });
+
+  it("drops cold sidebar responses after the credential changes", async () => {
+    const turns = holdFetch(["/assistant", "/todos"]);
+    connect();
+    await vi.advanceTimersByTimeAsync(300);
+    vi.stubGlobal("localStorage", { getItem: () => "other-token" });
+    turns["/assistant"][0]({ main: "old" });
+    turns["/todos"][0]({ todos: [{ id: "old" }] });
+    await settle();
+    expect(getState().assistant).toBeNull();
+    expect(getState().todos).toEqual([]);
+    expect(getState().todosLoaded).toBe(false);
+  });
 
   it("a machines push that comes while GET /machines is out wins over its answer", async () => {
     const turns = holdFetch(["/machines"]);

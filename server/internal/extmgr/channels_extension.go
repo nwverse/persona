@@ -27,12 +27,33 @@ var channelSendTries = []time.Duration{time.Second, 2 * time.Second, 4 * time.Se
 // errCannotSend: the channel has nowhere to send to yet (WeChat before the owner's first message).
 var errCannotSend = errors.New("cannot send yet")
 
+type cannotSendError struct {
+	msg string
+}
+
+func (e cannotSendError) Error() string {
+	if e.msg != "" {
+		return e.msg
+	}
+	return errCannotSend.Error()
+}
+
+func (e cannotSendError) Unwrap() error { return errCannotSend }
+
 // extensionCall calls channel id's program.
 func (h *Manager) extensionCall(ctx context.Context, id, method string, params, out any) error {
 	if call := h.channels.call; call != nil { // tests: a program of their own
 		err := call(ctx, id, method, params, out)
 		if errors.Is(err, channel.ErrCannotSend) {
-			return errCannotSend
+			msg := strings.TrimSpace(err.Error())
+			if msg == channel.ErrCannotSend.Error() {
+				msg = ""
+			}
+			return cannotSendError{msg: msg}
+		}
+		var re *rpc.Error
+		if errors.As(err, &re) && re.Code == channel.CodeCannotSend {
+			return cannotSendError{msg: strings.TrimSpace(re.Message)}
 		}
 		return err
 	}
@@ -51,15 +72,19 @@ func (h *Manager) extensionCall(ctx context.Context, id, method string, params, 
 	err = hp.proc.Call(ctx, channel.InPlugin(method), p, out)
 	var re *rpc.Error
 	if errors.As(err, &re) && re.Code == channel.CodeCannotSend {
-		return errCannotSend
+		return cannotSendError{msg: strings.TrimSpace(re.Message)}
 	}
 	return err
 }
 
 // channelSendPiece sends one piece to channel id's owner (channels.send): again on a failure, with the same ref.
 func (h *Manager) channelSendPiece(ctx context.Context, id string, p channel.SendParams) (channel.SendResult, error) {
-	if _, ok := h.extensionChannel(id); !ok && h.channels.call == nil {
+	pc, ok := h.extensionChannel(id)
+	if !ok && h.channels.call == nil {
 		return channel.SendResult{}, fmt.Errorf("no channel %s", id)
+	}
+	if ok && !pc.item.Capabilities.ImagesOut {
+		p.Images = nil // only a channel that says it sends pictures gets them (#11986)
 	}
 	p.Contribution = ""
 	var out channel.SendResult

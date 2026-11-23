@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// A Cloudflare Access service token for one paired hub (docs/operations/network.md "Behind Cloudflare Access"): the hub
 /// is published through Cloudflare Tunnel with Access in front, which lets the apps through only with these two values as
@@ -117,5 +118,25 @@ open nonisolated class HubRedirects: NSObject, URLSessionTaskDelegate, @unchecke
     open func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(CloudflareAccess.follow(request, from: task.originalRequest))
+    }
+
+    /// Each finished request to the hub with its timings and sizes, for the app's on-device diagnostics (Settings ›
+    /// About › Developing Persona, #9460). Nil, and nothing is kept, unless the app set it.
+    public static var finished: (@Sendable (URLSessionTask, URLSessionTaskMetrics) -> Void)? {
+        get { observer.withLock { $0.finished } }
+        set { observer.withLock { $0.finished = newValue } }
+    }
+
+    /// The closure lives in a struct and is never the lock's whole state (#12624): `withLock` hands its state over
+    /// `inout`, and a bare function type there is reabstracted into a temporary and written back wrapped in two more
+    /// thunks, on reads too. Each request then deepened the next call until it overflowed the delegate queue's stack.
+    private struct Observer: Sendable {
+        var finished: (@Sendable (URLSessionTask, URLSessionTaskMetrics) -> Void)?
+    }
+
+    private static let observer = OSAllocatedUnfairLock(initialState: Observer())
+
+    open func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        Self.finished?(task, metrics)
     }
 }

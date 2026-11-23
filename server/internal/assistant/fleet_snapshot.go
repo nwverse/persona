@@ -95,9 +95,11 @@ func (s *Service) fleetTakeSnapshot(snap Snapshot) {
 			add(k[0])
 		}
 	}
-	for k := range oldLinks {
-		if _, ok := r.links[k]; !ok {
+	var left []SessionRef // the agents that left the open task they had (silent_turns.go quietTasksLeft)
+	for k, o := range oldLinks {
+		if l, ok := r.links[k]; !ok || l.TodoID != o.TodoID {
 			add(k[0])
+			left = append(left, SessionRef{MachineID: k[0], SessionID: k[1]})
 		}
 	}
 	for k, l := range r.completed {
@@ -131,7 +133,16 @@ func (s *Service) fleetTakeSnapshot(snap Snapshot) {
 		}
 	}
 	r.mu.Unlock()
-	s.askOnPhone(snap.Interactions)
+	s.quietTasksLeft(left) // before the lists are told: the rows go without it
+	// Apply interactions in the same order as their snapshot sequence numbers.
+	// A publisher superseded while applying the rest of its snapshot must not
+	// withdraw or restart a card from the current snapshot. Unsequenced direct
+	// applications are authoritative.
+	s.pubMu.Lock()
+	if snap.Seq == 0 || snap.Seq == s.seq {
+		s.askOnPhone(snap.Interactions)
+	}
+	s.pubMu.Unlock()
 	for _, mid := range changed {
 		s.sessionsChanged(mid)
 	}
@@ -148,7 +159,7 @@ func changedMachines(old, now map[string]SessionView) []string {
 	}
 	for id, v := range now {
 		o, ok := old[id]
-		if !ok || o.Title != v.Title || o.Archived != v.Archived || o.Origin != v.Origin || o.OriginRef != v.OriginRef || !slices.Equal(o.Queued, v.Queued) || o.MachineID != v.MachineID ||
+		if !ok || o.Title != v.Title || o.Archived != v.Archived || !slices.Equal(o.Tags, v.Tags) || o.Origin != v.Origin || o.OriginRef != v.OriginRef || !slices.Equal(o.Queued, v.Queued) || o.MachineID != v.MachineID ||
 			!sameModelPick(o.ModelPick, v.ModelPick) {
 			add(v.MachineID)
 			if ok {

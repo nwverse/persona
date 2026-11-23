@@ -86,8 +86,9 @@ describe("高亮", () => {
   });
 });
 
-it("wants a wide page for split views, code and diffs", () => {
+it("wants a wide page for split and columns views, code and diffs", () => {
   expect(wideView({ layout: "split", sections: [] })).toBe(true);
+  expect(wideView({ layout: "columns", sections: [] })).toBe(true);
   expect(wideView({ sections: [{ items: [{ type: "diff" }] }] })).toBe(true);
   expect(wideView({ sections: [{ items: [{ type: "row" }] }] })).toBe(false);
 });

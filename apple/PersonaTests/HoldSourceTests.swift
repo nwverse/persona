@@ -4,7 +4,7 @@ import Testing
 /// Pages keep no hold of their own (docs/apple/ios-state.md「Step 4」): how long a change waits while the user scrolls or
 /// cannot see the page, and when it lands, is `Hold`'s; a page only says what it is doing (`Hold.set`). Each page used
 /// to wait out its scrolls and cap its waits itself (#131, #178, #215), and one left out came back as a bug. Reads the
-/// sources next to this file, like `BackgroundCallbackTests`.
+/// sources next to this file, like `IconVocabularyTests`.
 struct HoldSourceTests {
     private static let ios = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     private static let waits = try! NSRegularExpression(pattern: #"Task\.sleep|asyncAfter|Timer\.(scheduled|publish)"#)
@@ -47,12 +47,12 @@ struct HoldSourceTests {
     /// The folders it reads are there (after a move, a check reading nothing passes for nothing).
     @Test func readsTheSources() {
         #expect(Self.sources(["Persona/Views"]).count > 50)
-        #expect(!Self.sources(["Mac"]).isEmpty)
+        #expect(Self.sources(["Persona/Features"]).count > 0)
     }
 
     @Test func scrollPhasesAreReportedNotWaitedOut() {
         var found: [String] = []
-        for (name, text) in Self.sources(["Persona", "Mac"]) {
+        for (name, text) in Self.sources(["Persona"]) {
             for b in Self.blocks(text, starting: ".onScrollPhaseChange") where Self.waits(b.body) {
                 found.append("\(name):\(b.line)")
             }
@@ -64,7 +64,7 @@ struct HoldSourceTests {
     /// not when: no timers in it, the cap and the settling are its `Hold`'s.
     @Test func feedsLeaveTheTimingToTheirHold() {
         var found: [String] = []
-        for (name, text) in Self.sources(["Persona/Views"]) {
+        for (name, text) in Self.sources(["Persona/Views", "Persona/Features"]) {
             for b in Self.blocks(text, starting: "final class ") where b.body.contains("withObservationTracking") && Self.waits(b.body) {
                 found.append("\(name):\(b.line)")
             }

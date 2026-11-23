@@ -24,17 +24,29 @@ func keptRefusal(code string) error {
 // remedyingTask is a task of the main conversation conv1, supervised, on box, whose start failed with failure.
 func remedyingTask(t *testing.T, s *Service, f *fakeHub, failure error) (Todo, *TaskPlan) {
 	t.Helper()
+	return remedyingTaskAs(t, s, f, failure, "conv1", "plan_r")
+}
+
+func remedyingTaskAs(t *testing.T, s *Service, f *fakeHub, failure error, supervisor, planID string) (Todo, *TaskPlan) {
+	t.Helper()
+	return remedyingTaskFrom(t, s, f, failure, supervisor, supervisor, planID)
+}
+
+// remedyingTaskFrom starts a task from origin's plan under an explicitly assigned supervisor. Keeping those two facts
+// separate models a main-created task later put under a manual leader without rewriting its persisted plan (#5732).
+func remedyingTaskFrom(t *testing.T, s *Service, f *fakeHub, failure error, origin, supervisor, planID string) (Todo, *TaskPlan) {
+	t.Helper()
 	ctx := context.Background()
 	f.mu.Lock()
 	f.failStart = failure
 	f.mu.Unlock()
-	todo, err := s.createTodo(ctx, "修登录", "修登录", "conv1", "plan_r")
+	todo, err := s.createTodo(ctx, "修登录", "修登录", origin, planID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.superviseTodo(ctx, todo.ID, "conv1", []string{"PR 合并"}, 0)
+	s.superviseTodo(ctx, todo.ID, supervisor, []string{"PR 合并"}, 0)
 	task := PlanTask{Title: "修登录", Prompt: "修登录", Machine: "box", Cwd: "/code/app", Permission: "bypassPermissions", TodoID: todo.ID}
-	p := &TaskPlan{ID: "plan_r", Conversation: "conv1", State: planStarted, Tasks: []PlanTask{task}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	p := &TaskPlan{ID: planID, Conversation: origin, State: planStarted, Tasks: []PlanTask{task}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	if err := s.savePlan(ctx, p); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +104,7 @@ func TestAStartWhoseTabIsKeptIsRemediedFirst(t *testing.T) {
 	waitFor(t, "the supervision message", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
 	for _, want := range []string{"Agent 没开起来，它的启动标签在电脑上保留到", "停在一个提问上「[oh-my-zsh] Would you like to update? [Y/n]」",
-		"| Last login:", "还能重试 3 次", "task_start_screen"} {
+		"| Last login:", "还能重试 3 次", "signal=failed"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("message lacks %q:\n%s", want, n)
 		}
@@ -217,6 +229,35 @@ func TestRemedyTurnEndLeavesARetryRunning(t *testing.T) {
 	}
 }
 
+// A retry parked in the admission queue is owned by the queue loop, not given up by turn-end or tab expiry.
+func TestRemedyLeavesAdmissionQueuedRetryAlive(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	todo, p := remedyingTask(t, s, f, keptRefusal(proto.CodeShellWaiting))
+	waitFor(t, "the supervision message", func() bool { return len(f.notices()) == 1 })
+	if err := s.patchPlanTask(ctx, p.ID, 0, func(pt *PlanTask) {
+		pt.Start.Until = time.Now().Add(-time.Second)
+		pt.Queue = &TaskQueue{
+			Reason:   "high load",
+			Key:      "admission_load",
+			Attempt:  1,
+			QueuedAt: time.Now().UTC(),
+			NextAt:   time.Now().Add(time.Minute).UTC(),
+			Retry:    true,
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.remedyTurnEnded(ctx, "conv1")
+	s.remedyWatch(ctx, todoNow(s, todo.ID), time.Now(), s.planHistoryOnce())
+	if got := todoNow(s, todo.ID); got.DoneAt != nil {
+		t.Fatalf("queued retry was given up: %+v", got)
+	}
+	if r := remedyState(t, s, p.ID); r == nil || r.State != remedying {
+		t.Fatalf("start state changed while queued: %+v", r)
+	}
+}
+
 // The kept tab expires with nobody remedying it (no supervision turn came, or the hub restarted): the supervisor's
 // tick fails the start for good and tells the user.
 func TestRemedyExpiresWithItsTab(t *testing.T) {
@@ -226,7 +267,7 @@ func TestRemedyExpiresWithItsTab(t *testing.T) {
 	if err := s.patchPlanTask(ctx, p.ID, 0, func(pt *PlanTask) { pt.Start.Until = time.Now().Add(-time.Second) }); err != nil {
 		t.Fatal(err)
 	}
-	s.remedyWatch(ctx, todoNow(s, todo.ID), time.Now())
+	s.remedyWatch(ctx, todoNow(s, todo.ID), time.Now(), s.planHistoryOnce())
 	if got := todoNow(s, todo.ID); got.DoneAt == nil {
 		t.Fatalf("not failed: %+v", got)
 	}

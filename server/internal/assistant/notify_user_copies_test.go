@@ -41,7 +41,7 @@ func notifyCopyService(t *testing.T, res NotifyResult) (*Service, *fakeHub) {
 // A notice the hub's low-distraction mode held for the briefing (a P1 one, or a repeat of a related key within 12
 // hours) gets no copy on the Feishu bot or the channels either, and marks none of them pushed: the scheduled task's
 // turn-end mirror then goes as it would without the notice (#8268).
-func TestNotifyUserHeldByLowDistractionSendsNoChannelCopy(t *testing.T) {
+func TestNotifyUserHeldByPushGradingSendsNoChannelCopy(t *testing.T) {
 	for _, reason := range []string{"ln_p1_held", "ln_dedup_12h"} {
 		t.Run(reason, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -127,7 +127,7 @@ func TestNotifyUserCopyNotConfirmedInTime(t *testing.T) {
 		defer landed() // a failure below must not leave the card's post hanging in the bubble
 		zero := 0
 		s.hub.(*fakeHub).notifyResult = NotifyResult{OK: true, Devices: &zero, Reason: "no_device"}
-		l := s.lang(t.Context()) // now: the fake hub answers nothing else while the card's post hangs
+		l := s.lang(t.Context())
 		start := time.Now()
 		out, err := runToolOn(s, "server", "main-conv", "notify_user", map[string]any{"title": "Reminder", "body": "Details"})
 		if err != nil {

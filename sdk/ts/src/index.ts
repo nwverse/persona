@@ -117,6 +117,15 @@ export interface Program {
   fetch?(req: Request): Response | Promise<Response>;
 }
 
+/**
+ * Returns a fetch for one settings.check. Only requests made through it carry the check's proxy; ordinary fetch and
+ * overlapping checks keep their own authority. An older hub's missing proxy leaves ordinary fetch behavior unchanged.
+ */
+export function settingsCheckFetch(params: wire.SettingsCheckParams): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
+  const proxy = params.proxy;
+  return (input, init) => globalThis.fetch(input, proxy ? ({ ...init, proxy } as RequestInit & { proxy: string }) : init);
+}
+
 /** Initialization RPC metadata; direct initializer calls have no raw frame and receive undefined. */
 export type ExactInitializer = (this: Program, init: Init, hub: Hub, call: ExactCall | undefined) => ReturnType<NonNullable<Program["init"]>>;
 const EXACT_INIT_KEY = "@persona/extension.exactInitParams";
@@ -610,6 +619,9 @@ export async function main(prog: Program) {
   // A last frame without a trailing newline is still a request (Go's bufio.Scanner returns it too).
   const last = (buf + decoder.decode()).trim();
   if (last) conn.line(last);
+  // Start accepted requests before closing the hub; a queued handler may need to issue its own hub call at EOF.
+  await Promise.resolve();
+  await Promise.resolve();
   await conn.shutdown();
   // rpc: none (only HTTP): the hub sends nothing on stdin; serve until it stops the program.
   if (server && !spoke) return;

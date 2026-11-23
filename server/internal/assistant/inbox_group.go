@@ -311,11 +311,12 @@ func (s *Service) askGroup(ctx context.Context, c assistantwire.InboxSource, t c
 	for _, e := range events {
 		seen[e.ID] = e
 	}
-	in := prompts.InboxGroupInput{Thread: t.Thread, New: t.Group.New, Context: t.Context, Events: jsonText(events)}
+	in := prompts.InboxGroupInput{Language: answerLanguage(hello.Locale), Thread: t.Thread, New: t.Group.New, Context: t.Context, Events: jsonText(events)}
 	if t.Kind == KindDM || t.Kind == KindBot { // a person or a bot on the other side: the batch's lines don't say which
 		in.Kind = s.inbox.kindWords(c.ID, t.Kind)
 	}
 	budget := groupOutputBudget(len(t.Group.New), len(events))
+	model := s.purposeModelFor(purposeTriage, "inbox_group")
 	retried := false
 	for {
 		in.Left = groupCalls - len(in.Calls)
@@ -326,7 +327,7 @@ func (s *Service) askGroup(ctx context.Context, c assistantwire.InboxSource, t c
 		sctx, scancel := context.WithTimeout(ctx, groupStepTimeout)
 		input := prompts.RenderInboxGroupInput(in)
 		in.Problem = "" // a correction is shown on the immediately following request only
-		err := s.inboxModelJSON(sctx, purposeTriage, system, input, budget, &out)
+		err := model.JSONMax(sctx, system, input, budget, &out)
 		scancel()
 		paused, _ := modelPaused(err)
 		var problem error

@@ -1,11 +1,27 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { UsageAccount } from "../lib/usage-windows";
-import { UsageBars, UsagePopover } from "./UsageBars";
+import { initI18n } from "../i18n";
+import { onDraftEvent, type DraftEvent } from "../lib/drafts";
+import { PINNED_USAGE_ACCOUNTS_KEY, resetPinnedUsageAccounts, type UsageAccount } from "../lib/usage-windows";
+import { UsageBars } from "./UsageBars";
+import { UsagePopover } from "./UsagePopover";
+import { unconnectedUsageProviders } from "./UsageUnconnected";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime();
 const H = 3600_000;
 const iso = (ms: number) => new Date(NOW + ms).toISOString();
+const balanceAccount = (id: string, amount: string, o: Partial<UsageAccount> = {}): UsageAccount => ({
+  id,
+  provider: "deepseek",
+  name: "DeepSeek",
+  sampled_at: iso(-12_000),
+  windows: [],
+  balance: { amount, currency: "CNY" },
+  ...o,
+});
 const account = (id: string, used5: number, used7: number, o: Partial<UsageAccount> = {}): UsageAccount => ({
   id,
   provider: "codex",
@@ -34,6 +50,24 @@ describe("the sidebar's usage strip", () => {
     expect(html).toMatch(/bg-accent[^>]*style="width:60%/);
     expect(html).toContain('aria-expanded="false"');
   });
+  it("opens its details on intent, including the gateway's retained-number warning", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<UsageBars accounts={[account("a", 10, 20, { problem: "unreachable" })]} now={NOW} />));
+      expect(host.querySelector("[role=dialog]")).toBeNull();
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-bars] > button")!.click());
+      await vi.waitFor(() => expect(host.querySelector("[role=dialog]")?.textContent).toContain("5h"));
+      const dialog = host.querySelector("[role=dialog]");
+      expect(dialog?.textContent).toContain("网关暂时读不到，显示的是上次的数字");
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-bars] > button")!.click());
+      expect(host.querySelector("[role=dialog]")).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
   it("marks a stale account", () => {
     expect(renderToStaticMarkup(<UsageBars accounts={[account("a", 10, 20, { stale: true })]} now={NOW} />)).toContain("数据已过期");
   });
@@ -41,6 +75,52 @@ describe("the sidebar's usage strip", () => {
     const kept = account("a", 10, 20, { stale_at: iso(-60_000) });
     expect(renderToStaticMarkup(<UsageBars accounts={[kept]} now={NOW} />)).toContain("数据已过期");
     expect(renderToStaticMarkup(<UsageBars accounts={[{ ...kept, stale_at: iso(60_000) }]} now={NOW} />)).not.toContain("数据已过期");
+  });
+});
+
+describe("a prepaid balance in the sidebar (#11825)", () => {
+  it("shows the amount and currency beside the two fullest window accounts", () => {
+    const html = renderToStaticMarkup(<UsageBars accounts={[balanceAccount("ds", "12.34"), account("a", 10, 20), account("b", 85, 30), account("c", 50, 60)]} now={NOW} />);
+    expect(html).toContain("CNY 12.34");
+    expect(html.match(/role="progressbar"/g)).toHaveLength(2); // the balance takes no bar
+    expect(html).toContain("账号 b");
+    expect(html).toContain("账号 c");
+    expect(html).not.toContain("账号 a");
+  });
+  it("shows a genuine zero as an amount, not as no data", () => {
+    const html = renderToStaticMarkup(<UsageBars accounts={[balanceAccount("ds", "0.00")]} now={NOW} />);
+    expect(html).toContain("CNY 0.00");
+    expect(html).toMatch(/text-orange[^>]*>CNY 0\.00/);
+    expect(html).not.toContain("余额无法读取");
+  });
+  it("shows a failed read as no amount and keeps healthy window accounts", () => {
+    const failed = balanceAccount("ds", "12.34", { balance: undefined, problem: "unreachable", stale: true });
+    const html = renderToStaticMarkup(<UsageBars accounts={[failed, account("a", 10, 20)]} now={NOW} />);
+    expect(html).toContain(">—<");
+    expect(html).toContain("账号 a");
+    expect(html.match(/role="progressbar"/g)).toHaveLength(1);
+    expect(html).toContain("opacity-60");
+    // the words behind it are the popover's (it is not first-screen code)
+    expect(renderToStaticMarkup(<UsagePopover accounts={[failed]} now={NOW} />)).toContain("余额无法读取");
+  });
+  it("shows the amount, the sample age and both kinds of account in the popover", () => {
+    const html = renderToStaticMarkup(<UsagePopover accounts={[balanceAccount("ds", "12.34"), account("a", 70, 10)]} now={NOW} />);
+    expect(html).toContain("预付余额");
+    expect(html).toContain("CNY 12.34");
+    expect(html).toContain("5h");
+    expect(html).toContain("70%");
+    expect(html.match(/role="progressbar"/g)).toHaveLength(2); // only the window account's bars
+  });
+  it("says in the popover why a balance is unavailable or is the last one", () => {
+    const never = balanceAccount("ds", "12.34", { balance: undefined, problem: "unreachable" });
+    expect(renderToStaticMarkup(<UsagePopover accounts={[never]} now={NOW} />)).toContain("暂时连不上 DeepSeek");
+    const kept = balanceAccount("ds", "12.34", { problem: "unreachable" });
+    expect(renderToStaticMarkup(<UsagePopover accounts={[kept]} now={NOW} />)).toContain("上次的余额");
+    const refused = balanceAccount("ds", "12.34", { balance: undefined, problem: "rejected" });
+    expect(renderToStaticMarkup(<UsagePopover accounts={[refused]} now={NOW} />)).toContain("Key");
+    expect(renderToStaticMarkup(<UsagePopover accounts={[refused]} now={NOW} />)).not.toContain("上次的余额");
+    const refusedKept = balanceAccount("ds", "12.34", { problem: "rejected" });
+    expect(renderToStaticMarkup(<UsagePopover accounts={[refusedKept]} now={NOW} />)).toContain("上次的余额");
   });
 });
 
@@ -64,6 +144,15 @@ describe("the popover", () => {
     const html = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
     expect(html.match(/data-pace-tick/g)).toHaveLength(1);
     expect(html.match(/用得偏快/g)).toHaveLength(1);
+  });
+  it("keeps an out-of-date account's numbers and reset but gives no pace, nor a tick (#12411)", () => {
+    const html = renderToStaticMarkup(<UsagePopover accounts={[account("a", 70, 10, { stale: true })]} now={NOW} />);
+    expect(html).toContain("已过期");
+    expect(html).toContain("70%");
+    expect(html).toContain("2 天 3 小时后重置");
+    expect(html).not.toContain("用得偏快");
+    expect(html).not.toContain("用得偏慢");
+    expect(html).not.toContain("data-pace-tick");
   });
   it("is a labelled dialog", () => {
     expect(renderToStaticMarkup(<UsagePopover accounts={[account("a", 1, 1)]} now={NOW} />)).toContain('role="dialog" aria-label="订阅额度"');
@@ -116,5 +205,291 @@ describe("where the numbers came from (#2595)", () => {
   it("puts the sources in the tooltip of a sidebar bar", () => {
     const html = renderToStaticMarkup(<UsageBars accounts={mixed().slice(0, 1)} now={NOW} />);
     expect(html).toContain("来源：MacBook · Relay");
+  });
+  it.each([
+    ["en", "No quota data connected"],
+    ["zh-Hans", "未接额度数据"],
+    ["ja", "利用量データ未連携"],
+  ])("keeps the launcher row and names its missing quota data in %s", async (lang, label) => {
+    await initI18n(lang);
+    try {
+      const html = renderToStaticMarkup(<UsageBars accounts={[]} unconnected={[{ id: "claude", title: "Claude Code", agent: "claude" }]} now={NOW} />);
+      expect(html).toContain("Claude Code");
+      expect(html).toContain(label);
+    } finally {
+      await initI18n("zh-Hans");
+    }
+  });
+  it("shows agy quota windows instead of its missing-data row", () => {
+    const live = [account("agy", 25, 75, { provider: "agy", name: "Antigravity", local: true })];
+    const unconnected = unconnectedUsageProviders([{ name: "agy", agent: "agy" }], live);
+    expect(unconnected).toEqual([]);
+    const strip = renderToStaticMarkup(<UsageBars accounts={live} unconnected={unconnected} now={NOW} />);
+    expect(strip).toContain("Antigravity");
+    expect(strip).toContain("75%");
+    expect(strip).not.toContain("未接额度数据");
+  });
+  it("says in plain words whether a provider is not read yet or can only be read through its relay (#12411)", () => {
+    const html = renderToStaticMarkup(
+      <UsagePopover
+        accounts={[]}
+        unconnected={[
+          { id: "claude", title: "Claude Code", agent: "claude" },
+          { id: "agy", title: "Antigravity", agent: "agy" },
+          { id: "deepseek", title: "DeepSeek", agent: "claude" },
+        ]}
+        now={NOW}
+      />,
+    );
+    expect(html).toContain("还没读到 Claude Code 的额度");
+    expect(html).toContain("还没读到 Antigravity 的额度");
+    // a launcher run through Claude Code against another provider is not Claude's subscription
+    expect(html.match(/还没读到 Claude Code/g)).toHaveLength(1);
+    expect(html).toContain("不能直接读这家服务商的额度");
+    expect(html).not.toMatch(/statusLine|网关/);
+  });
+  it("lists active providers without usage data and hands setup off to the assistant on click", () => {
+    const live = [account("c", 40, 75, { provider: "codex", name: "Codex Pro", local: true })];
+    const unconnected = unconnectedUsageProviders(
+      [
+        { name: "claude" },
+        { name: "codex", agent: "codex" },
+        { name: "agy", agent: "agy" },
+      ],
+      live,
+    );
+    expect(unconnected).toEqual([
+      { id: "claude", title: "Claude Code", agent: "claude" },
+      { id: "agy", title: "Antigravity", agent: "agy" },
+    ]);
+
+    const strip = renderToStaticMarkup(<UsageBars accounts={live} unconnected={unconnected} now={NOW} />);
+    expect(strip).toContain("Codex Pro");
+    expect(strip).toContain("Claude Code");
+    expect(strip).toContain("Antigravity");
+    expect(strip).toContain("未接额度数据");
+
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const events: DraftEvent[] = [];
+    const off = onDraftEvent("persona-new", (e) => events.push(e));
+    let closed = false;
+    try {
+      act(() => root.render(<UsagePopover accounts={live} unconnected={unconnected} now={NOW} onClose={() => { closed = true; }} />));
+      expect(host.textContent).toContain("让助手接入");
+      act(() => host.querySelector<HTMLButtonElement>("[data-usage-connect=claude]")!.click());
+      expect(closed).toBe(true);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "replace" });
+      expect((events[0] as { text: string }).text).toContain("Claude Code");
+    } finally {
+      off();
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+});
+
+describe("user-selected pinned usage accounts (#12418)", () => {
+  afterEach(() => {
+    resetPinnedUsageAccounts();
+    localStorage.removeItem(PINNED_USAGE_ACCOUNTS_KEY);
+  });
+
+  const sampleAccounts = (): UsageAccount[] => [
+    account("codex", 85, 30, { provider: "codex", name: "Codex Pro" }),
+    account("claude", 60, 40, { provider: "claude", name: "Claude Max" }),
+    account("agy", 15, 20, { provider: "agy", name: "Antigravity" }),
+    balanceAccount("ds", "12.34"),
+  ];
+  const sampleUnconnected = [{ id: "kimi", title: "Kimi", agent: "claude" }];
+
+  it("pins and unpins accounts from the popover, persists to localStorage, and resets to automatic", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<UsageBars accounts={sampleAccounts()} unconnected={sampleUnconnected} now={NOW} />));
+      const stripBtn = () => host.querySelector<HTMLButtonElement>("[data-usage-bars] > button")!;
+
+      // Default: top 2 window accounts (Codex Pro, Claude Max) + DeepSeek balance + unconnected row
+      expect(stripBtn().textContent).toContain("Codex Pro");
+      expect(stripBtn().textContent).toContain("Claude Max");
+      expect(stripBtn().textContent).not.toContain("Antigravity");
+      expect(stripBtn().textContent).toContain("CNY 12.34");
+      expect(stripBtn().textContent).toContain("Kimi");
+
+      // Open popover: all 4 accounts listed, none pinned, no reset bar
+      await act(async () => stripBtn().click());
+      await vi.waitFor(() => expect(host.querySelector("[data-usage-pin=agy]")).not.toBeNull());
+      expect(host.querySelector("[data-usage-reset-pins]")).toBeNull();
+      expect(host.querySelectorAll("[data-usage-pin]")).toHaveLength(4);
+      expect(host.querySelector("[data-usage-pin=agy]")?.getAttribute("aria-pressed")).toBe("false");
+
+      // Pin Antigravity only: collapsed strip shows Antigravity + unconnected row; popover still lists all 4 live + 1 unconnected
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-pin=agy]")!.click());
+      expect(localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY)).toBe('["agy"]');
+      expect(host.querySelector("[data-usage-pin=agy]")?.getAttribute("aria-pressed")).toBe("true");
+      expect(host.querySelector("[data-usage-reset-pins]")).not.toBeNull();
+      expect(stripBtn().textContent).toContain("Antigravity");
+      expect(stripBtn().textContent).not.toContain("Codex Pro");
+      expect(stripBtn().textContent).not.toContain("Claude Max");
+      expect(stripBtn().textContent).toContain("Kimi");
+      expect(host.querySelectorAll("[data-usage-pin]")).toHaveLength(4);
+      expect(host.querySelectorAll("[data-usage-connect]")).toHaveLength(1);
+
+      // Also pin Codex Pro and DeepSeek balance
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-pin=codex]")!.click());
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-pin=ds]")!.click());
+      expect(localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY)).toBe('["agy","codex","ds"]');
+      expect(stripBtn().textContent).toContain("Antigravity");
+      expect(stripBtn().textContent).toContain("Codex Pro");
+      expect(stripBtn().textContent).toContain("CNY 12.34");
+      expect(stripBtn().textContent).not.toContain("Claude Max");
+
+      // Unpin Antigravity
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-pin=agy]")!.click());
+      expect(localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY)).toBe('["codex","ds"]');
+      expect(stripBtn().textContent).not.toContain("Antigravity");
+      expect(stripBtn().textContent).toContain("Codex Pro");
+      expect(stripBtn().textContent).toContain("CNY 12.34");
+
+      // Reset to automatic
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-reset-pins]")!.click());
+      expect(localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY)).toBeNull();
+      expect(host.querySelector("[data-usage-reset-pins]")).toBeNull();
+      expect(stripBtn().textContent).toContain("Codex Pro");
+      expect(stripBtn().textContent).toContain("Claude Max");
+      expect(stripBtn().textContent).toContain("CNY 12.34");
+      expect(stripBtn().textContent).not.toContain("Antigravity");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("tolerates corrupt localStorage and syncs pinned accounts across tabs via storage events", async () => {
+    localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, "{bad-json");
+    const corruptHtml = renderToStaticMarkup(<UsageBars accounts={sampleAccounts()} now={NOW} />);
+    expect(corruptHtml).toContain("Codex Pro");
+    expect(corruptHtml).toContain("Claude Max");
+    expect(corruptHtml).not.toContain("Antigravity");
+
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, '["agy"]');
+      await act(async () => root.render(<UsageBars accounts={sampleAccounts()} now={NOW} />));
+      const stripBtn = () => host.querySelector<HTMLButtonElement>("[data-usage-bars] > button")!;
+      expect(stripBtn().textContent).toContain("Antigravity");
+      expect(stripBtn().textContent).not.toContain("Codex Pro");
+
+      // Simulate another tab changing the pinned selection
+      await act(async () => {
+        localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, '["claude"]');
+        window.dispatchEvent(new StorageEvent("storage", { key: PINNED_USAGE_ACCOUNTS_KEY, newValue: '["claude"]' }));
+      });
+      expect(stripBtn().textContent).toContain("Claude Max");
+      expect(stripBtn().textContent).not.toContain("Antigravity");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("falls back to automatic ranking when all pinned accounts are offline or expired, and lets the user reset", () => {
+    localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, '["offline-agy"]');
+    const strip = renderToStaticMarkup(<UsageBars accounts={sampleAccounts()} now={NOW} />);
+    expect(strip).toContain("Codex Pro");
+    expect(strip).toContain("Claude Max");
+    expect(strip).toContain("CNY 12.34");
+    expect(strip).not.toContain("Antigravity");
+
+    const popover = renderToStaticMarkup(<UsagePopover accounts={sampleAccounts()} now={NOW} />);
+    expect(popover).toContain("固定账号暂不可用");
+    expect(popover).toContain("恢复默认");
+  });
+
+  it.each([
+    ["en", "Pin Antigravity to sidebar", "Unpin Antigravity from sidebar", "Reset to automatic"],
+    ["zh-Hans", "将 Antigravity 固定到侧栏", "取消将 Antigravity 固定到侧栏", "恢复默认"],
+    ["ja", "Antigravity をサイドバーに固定", "Antigravity のサイドバー固定を解除", "自動表示に戻す"],
+  ])("localizes pin controls and reset action in %s", async (lang, pinLabel, unpinLabel, resetLabelText) => {
+    await initI18n(lang);
+    try {
+      const live = [account("agy", 20, 30, { provider: "agy", name: "Antigravity" })];
+      const unpinned = renderToStaticMarkup(<UsagePopover accounts={live} now={NOW} />);
+      expect(unpinned).toContain(`aria-label="${pinLabel}"`);
+      expect(unpinned).not.toContain(resetLabelText);
+
+      localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, '["agy"]');
+      const pinned = renderToStaticMarkup(<UsagePopover accounts={live} now={NOW} />);
+      expect(pinned).toContain(`aria-label="${unpinLabel}"`);
+      expect(pinned).toContain(resetLabelText);
+    } finally {
+      localStorage.removeItem(PINNED_USAGE_ACCOUNTS_KEY);
+      await initI18n("zh-Hans");
+    }
+  });
+});
+
+describe("provider cards with a reset timeline (#13173)", () => {
+  it("draws one card per provider with every account, 5h before 7d, and a timeline under each account", () => {
+    const claude = (id: string, name: string, h7: number): UsageAccount => ({
+      ...account(id, 10, 20, { provider: "claude", name }),
+      windows: [
+        { label: "7d", window_minutes: 10080, used_percent: 20, resets_at: iso(h7 * H) },
+        { label: "5h", window_minutes: 300, used_percent: 10, resets_at: iso(3 * H) },
+      ],
+    });
+    const html = renderToStaticMarkup(<UsagePopover accounts={[claude("1", "Later", 100), claude("2", "Sooner", 30), account("3", 1, 1)]} now={NOW} />);
+    expect(html.match(/data-usage-provider="/g)).toHaveLength(2);
+    expect(html).toContain("2 个账号");
+    expect(html.indexOf("Sooner")).toBeLessThan(html.indexOf("Later"));
+    expect(html.match(/data-usage-timeline/g)).toHaveLength(2); // one chart per card, not per account
+    expect(html.match(/data-timeline-row="/g)).toHaveLength(3);
+    const first = html.slice(html.indexOf("Sooner"));
+    expect(first.indexOf(">5h<")).toBeLessThan(first.indexOf(">7d<"));
+    expect(html).toContain("额度重置时间线");
+    // the chart's rows follow the quota list's order
+    const chart = html.slice(html.indexOf('data-timeline-row="2"'));
+    expect(chart.indexOf('data-timeline-row="2"')).toBeLessThan(chart.indexOf('data-timeline-row="1"'));
+  });
+  it("draws no timeline for a card whose accounts have no reset time", () => {
+    const a = account("a", 1, 1);
+    a.windows.forEach((w) => delete w.resets_at);
+    expect(renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />)).not.toContain("data-usage-timeline");
+  });
+  it("draws a protection line, flag and zone on a window that carries protect_percent, and nothing without it", () => {
+    const a = account("a", 10, 20);
+    a.windows[1].protect_percent = 95;
+    const html = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
+    expect(html.match(/data-protect-line/g)).toHaveLength(1);
+    expect(html).toContain("保护 95%");
+    expect(html).toContain("data-protect-zone");
+    expect(html).toContain("保护线在 95%");
+    expect(renderToStaticMarkup(<UsagePopover accounts={[account("b", 10, 20)]} now={NOW} />)).not.toContain("data-protect");
+  });
+  it("renders usage bars and popover typography with named text tokens instead of hard-coded pixel classes (#13211)", () => {
+    const a = account("a", 40, 65, {
+      provider: "claude",
+      name: "Work Claude",
+      plan: "Max",
+      sources: ["Relay"],
+      problem: "unreachable",
+    });
+    a.windows[1].protect_percent = 90;
+    a.windows.push({ label: "7d", window_minutes: 10080, used_percent: 50, resets_at: iso(30 * H), model: "Sonnet" });
+    const stripHtml = renderToStaticMarkup(<UsageBars accounts={[a, balanceAccount("ds", "12.34")]} now={NOW} />);
+    const popoverHtml = renderToStaticMarkup(<UsagePopover accounts={[a, balanceAccount("ds", "12.34")]} now={NOW} />);
+    const arbitraryPxFont = /text-\[(?:length:)?\d+(?:\.\d+)?px\]/;
+    expect(stripHtml).not.toMatch(arbitraryPxFont);
+    expect(popoverHtml).not.toMatch(arbitraryPxFont);
+    expect(stripHtml).toContain("text-submeta");
+    expect(popoverHtml).toContain("text-meta");
+    expect(popoverHtml).toContain("text-label");
+    expect(popoverHtml).toContain("text-submeta");
   });
 });

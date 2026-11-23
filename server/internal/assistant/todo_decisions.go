@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -38,7 +39,27 @@ func (s *Service) todoDecisionRoutes() {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"decisions": list})
+		type decisionView struct {
+			db.TodoDecisionRow
+			PhaseCompletedAt *time.Time `json:"phase_completed_at,omitempty"`
+		}
+		todo, hasTodo := s.todoNow(id)
+		views := make([]decisionView, 0, len(list))
+		var earlierLabel string
+		for _, row := range list {
+			view := decisionView{TodoDecisionRow: row}
+			if at, ok := completionOfDecision(row); ok {
+				view.PhaseCompletedAt = &at
+				if _, earlier := earlierOutcomeSummary(todo, row); hasTodo && earlier {
+					if earlierLabel == "" {
+						earlierLabel = i18n.T(s.requestLang(r), "assistant-tasks.earlier_phase_outcome")
+					}
+					view.Question = earlierLabel
+				}
+			}
+			views = append(views, view)
+		}
+		apierr.WriteJSON(w, map[string]any{"decisions": views})
 	})
 
 	// POST /api/v1/todos/{id}/decisions: write one {question, choice, reason?, supersedes_id?, source?, ref?}. A device
@@ -233,6 +254,9 @@ func decisionText(s string) string { return clip(strings.TrimSpace(s), decisionT
 // answered question is a decision of that todo. Only Claude Code's option questions (AskUserQuestion) count: approvals
 // and permissions are not decisions about the work, and a dismissed or failed card answered nothing.
 func (s *Service) cardDecisions(ctx context.Context, ix proto.Interaction, r proto.Resolution, status string) {
+	if err := s.ledgerCardDecisions(ctx, ix, r, status); err != nil {
+		s.logf("entries: card answer could not be recorded: %v", err)
+	}
 	st := s.todoDB()
 	if st == nil || status != "resolved" || r.Dismiss || ix.Kind != proto.IxQuestion || len(r.Answers) == 0 {
 		return
@@ -303,7 +327,7 @@ func (s *Service) agentDecisionTool(ctx context.Context, machine, session, name 
 		if len(list) == 0 {
 			return fmt.Sprintf("Todo %s (%q) has no decisions yet.", t.ID, t.Title), nil
 		}
-		b, _ := json.Marshal(map[string]any{"todo": map[string]string{"id": t.ID, "title": t.Title}, "decisions": agentDecisionViews(list)})
+		b, _ := json.Marshal(map[string]any{"todo": map[string]string{"id": t.ID, "title": t.Title}, "decisions": agentDecisionViews(t, list)})
 		return string(b), nil
 	}
 	var a struct {
@@ -352,24 +376,32 @@ func (s *Service) agentDecisionTool(ctx context.Context, machine, session, name 
 
 // agentDecisionView is a decision as todo_decisions gives it to an agent: who made the call, in words.
 type agentDecisionView struct {
-	ID         string `json:"id"`
-	Question   string `json:"question"`
-	Choice     string `json:"choice"`
-	Reason     string `json:"reason,omitempty"`
-	By         string `json:"by"` // user / agent
-	Supersedes string `json:"supersedes,omitempty"`
-	At         string `json:"at"`
+	ID               string     `json:"id"`
+	Question         string     `json:"question"`
+	Choice           string     `json:"choice"`
+	Reason           string     `json:"reason,omitempty"`
+	By               string     `json:"by"` // user / agent
+	Supersedes       string     `json:"supersedes,omitempty"`
+	At               string     `json:"at"`
+	PhaseCompletedAt *time.Time `json:"phase_completed_at,omitempty"`
+	SourceSession    string     `json:"source_session,omitempty"`
+	Historical       bool       `json:"historical,omitempty"`
 }
 
-func agentDecisionViews(list []db.TodoDecisionRow) []agentDecisionView {
+func agentDecisionViews(todo Todo, list []db.TodoDecisionRow) []agentDecisionView {
 	out := make([]agentDecisionView, 0, len(list))
 	for _, r := range list {
 		by := "user"
 		if r.Source == db.DecisionAgent || r.Source == db.DecisionOutcome {
 			by = "agent"
 		}
-		out = append(out, agentDecisionView{ID: r.ID, Question: r.Question, Choice: r.Choice, Reason: r.Reason, By: by,
-			Supersedes: r.SupersedesID, At: r.CreatedAt.UTC().Format(time.RFC3339)})
+		view := agentDecisionView{ID: r.ID, Question: r.Question, Choice: r.Choice, Reason: r.Reason, By: by,
+			Supersedes: r.SupersedesID, At: r.CreatedAt.UTC().Format(time.RFC3339)}
+		if at, ok := completionOfDecision(r); ok {
+			view.PhaseCompletedAt, view.SourceSession = &at, r.SourceSession
+			_, view.Historical = earlierPhase(todo, r)
+		}
+		out = append(out, view)
 	}
 	return out
 }
@@ -422,23 +454,28 @@ func (s *Service) renderTodoDecisionsContext(ctx context.Context, todoID string,
 		}
 		return strings.Compare(a.ID, b.ID)
 	})
-	titles := map[string]string{}
+	todos := map[string]Todo{}
 	agents := map[[2]string]string{}
 	for _, id := range ids {
 		if t, ok := s.todoNow(id); ok {
-			titles[id] = t.Title
+			todos[id] = t
 			for _, a := range t.Agents {
 				agents[[2]string{a.MachineID, a.SessionID}] = a.Title
 			}
 		}
 	}
 	loc := s.location(ctx)
-	d := prompts.TodoDecisions{Title: contextText(titles[todoID])}
+	d := prompts.TodoDecisions{Language: answerLanguage(s.hello(ctx).Locale), Title: contextText(todos[todoID].Title)}
 	for i, r := range list {
 		var source, asker, ancestor string
 		switch r.Source {
 		case db.DecisionOutcome: // todo_outcome.go: pulled out of a reply, the user did not make it
 			source = prompts.TodoDecisionOutcome
+			if todo, ok := todos[r.TodoID]; ok {
+				if _, earlier := earlierPhase(todo, r); earlier {
+					source = prompts.TodoDecisionEarlierOutcome
+				}
+			}
 		case db.DecisionAgent: // todo_decision_add, the agent's own call
 			source = prompts.TodoDecisionAgent
 		case db.DecisionThread:
@@ -448,7 +485,7 @@ func (s *Service) renderTodoDecisionsContext(ctx context.Context, todoID string,
 			asker = contextText(oneLine(strings.TrimSpace(agents[[2]string{r.SourceMachine, r.SourceSession}])))
 		}
 		if r.TodoID != todoID {
-			ancestor = strings.TrimSpace(titles[r.TodoID])
+			ancestor = strings.TrimSpace(todos[r.TodoID].Title)
 			if ancestor == "" {
 				ancestor = r.TodoID
 			}

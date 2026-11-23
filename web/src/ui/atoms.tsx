@@ -1,9 +1,10 @@
-import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Suspense, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
 import type { AgentState } from "../lib/types";
 import { Icon, type IconName } from "./icons";
 import { StatusMark } from "./StatusMark";
+import type { ToastLiftProps } from "./toast-lift";
 import { collapseMounted } from "../lib/disclosure";
 import { foldAllSeq, FoldMissed, type FoldRegion } from "../lib/fold-all";
 import { FeedbackGate, offlineNow } from "../lib/feedback";
@@ -111,31 +112,42 @@ export function IconButton({
   icon,
   label,
   onClick,
+  onKeyDown,
   active,
   size = 28,
   className = "",
   disabled,
   iconSize = 15,
+  pressed,
+  buttonRef,
 }: {
   icon: IconName;
   label: string;
   onClick?: (e: React.MouseEvent<HTMLElement>) => void;
+  onKeyDown?: React.KeyboardEventHandler<HTMLButtonElement>;
   active?: boolean;
   size?: number;
   className?: string;
   disabled?: boolean;
   iconSize?: number;
+  /** A button that turns a mode on and off (Overview's Arrange cards): whether it is on (aria-pressed, drawn as `active`). */
+  pressed?: boolean;
+  /** The button itself (not forwarded through `ref`: these buttons are plain, and a named prop keeps the call sites explicit). */
+  buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   return (
     <button
       type="button"
+      ref={buttonRef}
       aria-label={label}
+      aria-pressed={pressed}
       title={label}
       disabled={disabled}
       onClick={onClick}
+      onKeyDown={onKeyDown}
       className={cx(
         "touch-hit flex shrink-0 items-center justify-center rounded-[8px] transition-[background-color,color,transform] duration-150 enabled:active:scale-[0.94] disabled:opacity-40",
-        active ? "bg-hover text-ink" : "text-ink-3 enabled:hover:bg-hover enabled:hover:text-ink",
+        active || pressed ? "bg-hover text-ink" : "text-ink-3 enabled:hover:bg-hover enabled:hover:text-ink",
         className,
       )}
       style={{ width: size, height: size }}
@@ -386,6 +398,7 @@ export function Menu({
   width = 208,
   header,
   headerAsWritten = false,
+  focusScoped = false,
   container,
 }: {
   items: MenuItem[];
@@ -400,6 +413,8 @@ export function Menu({
   /** The header is or holds a name (a space's, a tab's, a worktree's): drawn as written. A label header is drawn in
    *  capitals, which would rewrite the name ("weather" as "WEATHER"). */
   headerAsWritten?: boolean;
+  /** Only this menu and its trigger own its keyboard actions (terminal toolbar). */
+  focusScoped?: boolean;
   /** Where the menu is put instead of the page's body: a full-screen layer above the menus' own (the image editor),
    *  whose look (its `dark`) the menu then takes. */
   container?: Element | null;
@@ -568,6 +583,7 @@ export function Menu({
       const { levels: ls, actives: act, subs: open, renaming: renamed } = live.current;
       if (composing(e) || renamed) return; // an input in the menu takes its own keys
       const t = e.target as HTMLElement | null;
+      if (focusScoped && t !== anchor && t?.closest("[data-menu]")?.getAttribute("data-menu") !== id) return;
       const typing = Boolean(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable));
       // a field elsewhere on the page keeps its letters and its Backspace
       if (typing && (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete")) return;
@@ -597,7 +613,7 @@ export function Menu({
       removeEventListener("keydown", key, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the handlers read `live`; only the menu's anchor and close change them
-  }, [anchor, onClose, id]);
+  }, [anchor, onClose, id, focusScoped]);
 
   const panelProps = (depth: number) => ({
     id,
@@ -880,7 +896,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
         // label over its explanation, both wrapping: the explanation never pushes the label (or the check) off the row
         <span className="min-w-0 flex-1">
           <span className="block break-words">{label}{tag}</span>
-          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words whitespace-pre-line text-ink-3">{detail}</span>
+          <span id={detailId} className="mt-0.5 block text-submeta leading-snug break-words whitespace-pre-line text-ink-3">{detail}</span>
         </span>
       ) : (
         <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}{tag}</span>
@@ -964,7 +980,7 @@ function RenameRow({ item, busy, onCommit, onCancel, refCb }: { item: MenuItem; 
         {busy && <Spinner size={12} />}
       </div>
       {below && (
-        <p id={hintId} role={problem ? "alert" : undefined} className={cx("px-0.5 pb-0.5 text-[11.5px] leading-snug break-words", problem ? "text-red" : "text-ink-3")}>
+        <p id={hintId} role={problem ? "alert" : undefined} className={cx("px-0.5 pb-0.5 text-submeta leading-snug break-words", problem ? "text-red" : "text-ink-3")}>
           {below}
         </p>
       )}
@@ -1041,6 +1057,41 @@ export function useExit(open: boolean, ms: number, play: () => (Animation | unde
 
 // ── modal dialog ────────────────────────────────────────
 
+const REVEAL_MARGIN = 8;
+
+/** Scrolls `scroller` so the field focused in it is in sight: its top when it is taller than the room. */
+function revealFocused(scroller: HTMLElement | null) {
+  const field = document.activeElement;
+  if (!scroller || !(field instanceof HTMLElement) || !field.matches("input, textarea, [contenteditable]") || !scroller.contains(field)) return;
+  const box = scroller.getBoundingClientRect();
+  const r = field.getBoundingClientRect();
+  if (r.top < box.top + REVEAL_MARGIN || r.height > box.height - 2 * REVEAL_MARGIN) scroller.scrollTop += r.top - box.top - REVEAL_MARGIN;
+  else if (r.bottom > box.bottom - REVEAL_MARGIN) scroller.scrollTop += r.bottom - box.bottom + REVEAL_MARGIN;
+}
+
+/** A sheet's body, once the keyboard has made the sheet shorter (--kb-h), scrolls its focused field back into sight.
+ *  By hand, inside the sheet: a document-level scrollIntoView could pan iOS's visual viewport away from --kb-top.
+ *  A frame later, so the keyboard's variables are written and the sheet laid out at its new height. */
+function useSheetReveal(body: React.RefObject<HTMLDivElement | null>, on: boolean) {
+  useEffect(() => {
+    if (!on) return;
+    const vv = window.visualViewport;
+    let frame = 0;
+    const later = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => revealFocused(body.current));
+    };
+    // the visual viewport on iOS; the window on Android, where the keyboard resizes the page itself
+    vv?.addEventListener("resize", later);
+    window.addEventListener("resize", later);
+    return () => {
+      cancelAnimationFrame(frame);
+      vv?.removeEventListener("resize", later);
+      window.removeEventListener("resize", later);
+    };
+  }, [body, on]);
+}
+
 /** A modal. Wide: a card in the middle of the page. Phone width (max-sm): a sheet up from the bottom of what the
  *  keyboard leaves visible (--kb-top / --kb-h), at most 90% of it, its body scrolling between the title and the footer,
  *  and Back closes it. Either way the focus moves in, Tab stays in, and goes back where it was when it closes
@@ -1074,7 +1125,14 @@ export function Dialog({
   // The dialog itself takes the focus, so a phone's keyboard does not come up for its first field (one with autoFocus
   // took it already). On close it goes back to the opener, unless the close moved it outside on purpose.
   useModalFocus(panel, open);
+  const body = useRef<HTMLDivElement>(null);
+  useSheetReveal(body, open && sheet);
   const backdrop = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    if (body.current) body.current.scrollTop = 0;
+    if (backdrop.current) backdrop.current.scrollTop = 0;
+  }, [open]);
   // what it showed when last open: a caller may clear what the body reads once it is closed, while it still leaves
   const kept = useRef({ title, children, footer });
   if (open) kept.current = { title, children, footer };
@@ -1091,7 +1149,12 @@ export function Dialog({
       inert={exit.leaving || undefined}
       className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/25 px-4 pt-[12vh] pb-8 backdrop-blur-[2px] dark:bg-black/45 max-sm:top-(--kb-top) max-sm:bottom-auto max-sm:h-(--kb-h) max-sm:items-end max-sm:overflow-hidden max-sm:p-0"
       style={{ animation: "fade-in 140ms ease-out both" }}
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+      onMouseDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        // The default mousedown focus change would blur the opener just after closing restores focus.
+        e.preventDefault();
+        onClose();
+      }}
     >
       {/* A column either way, so a tall body scrolls between the title and the footer: the card stops short of the
           backdrop's bottom padding (12vh above it, pb-8 below), the sheet at 90% of what the keyboard leaves. */}
@@ -1111,8 +1174,9 @@ export function Dialog({
             <IconButton icon="x" label={t("ui-atoms.close")} onClick={onClose} size={26} iconSize={14} />
           </div>
         )}
-        <div className={cx("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-2 pb-4", !shown.footer && "max-sm:pb-[calc(16px+env(safe-area-inset-bottom))]")}>{shown.children}</div>
-        {shown.footer && <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-inset px-4 py-2.5 max-sm:pb-[calc(10px+env(safe-area-inset-bottom))]">{shown.footer}</div>}
+        <div ref={body} data-dialog-body className={cx("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-2 pb-4 [overflow-anchor:none]", !shown.footer && "max-sm:pb-[calc(16px+env(safe-area-inset-bottom))]")}>{shown.children}</div>
+        {/* data-dialog-footer: what a toast on a phone keeps clear of (Toasts) */}
+        {shown.footer && <div data-dialog-footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-inset px-4 py-2.5 max-sm:pb-[calc(10px+env(safe-area-inset-bottom))]">{shown.footer}</div>}
       </div>
     </div>,
     document.body,
@@ -1152,7 +1216,7 @@ function dropToast(id: number) {
   setTimeout(() => removeToast(id), EXIT_MS.toast + 120); // the exit's end may never come (a hidden tab)
 }
 
-/** Holds every toast's time while the pointer or the focus is on one (WCAG 2.2.1), and lets it run on after. */
+/** Holds every toast's time while a mouse pointer or the focus is on one (WCAG 2.2.1), and lets it run on after. */
 function pauseToasts(on: boolean) {
   if (toastsPaused === on) return;
   toastsPaused = on;
@@ -1187,9 +1251,15 @@ export function toast(text: string, tone: Toast["tone"] = "info", action?: Toast
   toastsChanged();
 }
 
-export function Toasts() {
+const keyboardUp = () => keyboardFrame(window.innerHeight, window.visualViewport) !== undefined;
+
+/** The toasts. `lift` places them on a narrow screen (ui/toast-lift.tsx): phone-only, so the app hands it in from a
+ *  chunk of its own, loaded once the screen is narrow; until it is in, they sit at the bottom of the page, then move. */
+export function Toasts({ lift: Lift }: { lift?: ComponentType<ToastLiftProps> }) {
   const [, force] = useState(0);
+  const box = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<number, HTMLDivElement>());
+  const lifting = useMedia(NARROW_QUERY) && toasts.length > 0 && Lift !== undefined;
   // where each row was on screen just before the list changed, and the glides and exits that are running
   const before = useRef(new Map<number, number>());
   const glides = useRef(new Map<number, Animation>());
@@ -1241,7 +1311,8 @@ export function Toasts() {
   useEffect(() => pauseToasts(paused), [paused]);
   useEffect(() => () => pauseToasts(false), []);
   return createPortal(
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex flex-col items-center gap-2 px-4">
+    // narrow: `lift` places it in the visible frame (above the keyboard), over what sits at the frame's bottom
+    <div ref={box} aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex flex-col items-center gap-2 px-4">
       {toasts.map((item) => (
         <div
           key={item.id}
@@ -1251,8 +1322,9 @@ export function Toasts() {
           }}
           data-closing={item.leaving || undefined}
           inert={item.leaving || undefined}
-          onMouseEnter={() => setHovered(item.id)}
-          onMouseLeave={() => setHovered((h) => (h === item.id ? null : h))}
+          // a mouse only: a tap's compatibility mouseenter gets no mouseleave, and would hold the toast for good
+          onPointerEnter={(e) => e.pointerType === "mouse" && setHovered(item.id)}
+          onPointerLeave={(e) => e.pointerType === "mouse" && setHovered((h) => (h === item.id ? null : h))}
           onFocus={() => setFocused(item.id)}
           onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setFocused((f) => (f === item.id ? null : f))}
           className="pointer-events-auto flex max-w-md items-center gap-2 rounded-[10px] border border-tooltip-border bg-tooltip-bg px-3 py-2 text-[12.5px] text-tooltip-fg shadow-overlay"
@@ -1261,8 +1333,11 @@ export function Toasts() {
           {item.tone === "error" && <Icon name="warning" size={13} stroke={2.2} className="shrink-0 text-red" />}
           {item.tone === "ok" && <Icon name="check" size={13} stroke={2.6} className="text-green" />}
           <span className="min-w-0">{item.text}</span>
+          {/* On a touch screen the button's target (touch-hit) reaches at least 8 px past its word on either side and
+              44 px high, and the close button moves over so their targets meet there instead of the close button's
+              covering the gap: a tap just past the word still runs it. */}
           {item.action && (
-            <button type="button" className="ml-1 shrink-0 whitespace-nowrap font-semibold text-accent hover:underline"
+            <button type="button" className="touch-hit ml-1 shrink-0 whitespace-nowrap font-semibold text-accent hover:underline [@media(pointer:coarse)]:before:inset-x-[min(--spacing(-2),calc(50%-22px))]"
               onClick={() => { item.action?.run(); dropToast(item.id); }}>
               {item.action.label}
             </button>
@@ -1272,12 +1347,18 @@ export function Toasts() {
             aria-label={t("ui-atoms.close")}
             title={t("ui-atoms.close")}
             onClick={() => dropToast(item.id)}
-            className="touch-hit -mr-1.5 ml-0.5 flex size-5 shrink-0 items-center justify-center rounded-[5px] text-tooltip-muted transition-colors duration-150 hover:bg-tooltip-border hover:text-tooltip-fg"
+            className={cx("touch-hit -mr-1.5 ml-0.5 flex size-5 shrink-0 items-center justify-center rounded-[5px] text-tooltip-muted transition-colors duration-150 hover:bg-tooltip-border hover:text-tooltip-fg", item.action && "[@media(pointer:coarse)]:ml-3")}
           >
             <Icon name="x" size={12} stroke={2.2} />
           </button>
         </div>
       ))}
+      {/* after the rows: their refs are set before it measures them */}
+      {lifting && Lift && (
+        <Suspense fallback={null}>
+          <Lift box={box} rows={rows} keyboardUp={keyboardUp} />
+        </Suspense>
+      )}
     </div>,
     document.body,
   );

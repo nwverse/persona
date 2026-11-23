@@ -88,22 +88,37 @@ internal fun recentConversations(snapshot: AssistantSnapshot, limit: Int = RECEN
     val leaders = snapshot.leaders.toSet()
     return snapshot.conversations.distinctBy { it.key }
         .filter { it.key != snapshot.mainSession && it.sessionId !in leaders && !it.archived &&
-            it.sessionId != snapshot.backgroundSupervisor &&
-            automaticConversationOrigin(it.origin) != AssistantConversationOrigin.Task }
+            (snapshot.recentTaskChats == true || (it.sessionId != snapshot.backgroundSupervisor &&
+                automaticConversationOrigin(it.origin) != AssistantConversationOrigin.Task)) }
         .map { it to it.updated }
         .sortedWith(compareByDescending<Pair<Session, java.time.Instant?>> { it.second }.thenBy { it.first.sessionId })
-        .take(limit).map { it.first }
+        .map { it.first }
+        .let { orderConversations(it, snapshot.conversationOrder) }
+        .take(limit)
+}
+
+/** Saved chats first; unknown saved ids are skipped here, and new chats follow in the existing activity-time order. */
+internal fun orderConversations(activityOrdered: List<Session>, savedOrder: List<String>?): List<Session> {
+    if (savedOrder.isNullOrEmpty()) return activityOrdered
+    val byId = activityOrdered.associateBy { it.sessionId }
+    val listed = savedOrder.distinct().mapNotNull(byId::get)
+    val seen = listed.mapTo(HashSet()) { it.sessionId }
+    return listed + activityOrdered.filter { it.sessionId !in seen }
 }
 
 internal fun conversationGroups(
     snapshot: AssistantSnapshot,
     query: String,
     words: ConversationWords,
+    activeTag: String? = null,
 ): ConversationGroups {
+    // Filter the source snapshot once so main, directions, Recent and All chats all use the same exact tag match.
+    val filtered = if (activeTag.isNullOrEmpty()) snapshot
+        else snapshot.copy(conversations = snapshot.conversations.withConversationTag(activeTag))
     // The background supervisor (#4927) is built in: a conversation with the scheduled tasks' ones under All chats, found
     // by its name too, and never a direction whatever the leaders say.
-    val background = snapshot.backgroundSupervisor?.takeIf(String::isNotBlank)
-    val matches = snapshot.conversations.distinctBy { it.key }.filter {
+    val background = filtered.backgroundSupervisor?.takeIf(String::isNotBlank)
+    val matches = filtered.conversations.distinctBy { it.key }.filter {
         !it.archived && (query.isBlank() || it.conversationTitle(words).contains(query.trim(), ignoreCase = true) ||
                 it.lastText.orEmpty().contains(query.trim(), ignoreCase = true) ||
                 (it.sessionId == background && words.background.contains(query.trim(), ignoreCase = true)))
@@ -112,17 +127,19 @@ internal fun conversationGroups(
     // The leaders are the drawer's 常驻 group, under their names; a search matches the name too. Every other
     // conversation waits under one "All chats" row (there is no all-conversations page on this app): main and the
     // leaders are not listed twice.
-    val names = snapshot.directionNames
-    val directions = snapshot.leaders.filter { it != background }.mapNotNull { id ->
-        snapshot.conversations.firstOrNull { it.sessionId == id && it.key != snapshot.mainSession && !it.archived }
+    val names = filtered.directionNames
+    val directions = filtered.leaders.filter { it != background }.mapNotNull { id ->
+        filtered.conversations.firstOrNull { it.sessionId == id && it.key != filtered.mainSession && !it.archived }
     }.filter { query.isBlank() || it in matches || names[it.sessionId].orEmpty().contains(query.trim(), ignoreCase = true) }
     val listed = directions.mapTo(HashSet()) { it.key }
-    val others = matches.filter { it.key != snapshot.mainSession && it.key !in listed }
+    val others = orderConversations(
+        matches.filter { it.key != filtered.mainSession && it.key !in listed }, filtered.conversationOrder,
+    )
     return ConversationGroups(
-        snapshot.conversations.firstOrNull { it.key == snapshot.mainSession && !it.archived },
-        directions, others, names, snapshot.leaderCounts,
-        tree = snapshot.directionTree,
-        recent = if (query.isBlank()) recentConversations(snapshot) else emptyList(),
+        filtered.conversations.firstOrNull { it.key == filtered.mainSession && !it.archived },
+        directions, others, names, filtered.leaderCounts,
+        tree = filtered.directionTree,
+        recent = if (query.isBlank()) recentConversations(filtered) else emptyList(),
         background = background,
     )
 }
@@ -222,13 +239,21 @@ internal fun conversationWords() = ConversationWords(stringResource(R.string.ass
     stringResource(R.string.assistant_handoff), stringResource(R.string.assistant_handoff_named),
     stringResource(R.string.assistant_background_supervisor))
 
+/** A conversation's name as Persona's history shows it, in [resources]' language (Forward to's rows, #3901). */
+fun Session.personaConversationTitle(resources: android.content.res.Resources): String = conversationTitle(ConversationWords(
+    resources.getString(R.string.assistant_untitled), resources.getString(R.string.assistant_handoff),
+    resources.getString(R.string.assistant_handoff_named)))
+
 private val handoffTag = Regex("""<persona-context\b[^>]*?\btitle="([^"]*)"""")
+private val forwardKind = Regex("""\bkind="forward"""")
 
 /** "Hand to Persona: X" for text that is a `<persona-context title="X">` tag (attributes decoded), null for any other text. */
 internal fun handoffTitle(text: String, words: ConversationWords): String? {
     handoffTag.find(text)?.let { match ->
         val title = match.groupValues[1].replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">")
             .replace("&amp;", "&").trim()
+        // A forwarded message (#3901) names itself ("Forwarded from Claude · chat"); it was not handed to Persona.
+        if (title.isNotEmpty() && forwardKind.containsMatchIn(match.value)) return title
         return if (title.isEmpty()) words.handoff else words.handoff(title)
     }
     val start = text.trimStart()
@@ -253,6 +278,14 @@ internal suspend fun managerMainTarget(manager: String, snapshot: AssistantSnaps
     snapshot.mainSession?.takeIf { snapshot.managerId == manager } ?: resolve(manager)
 
 /** Null targets always enter the durable main queue before any network request. */
+/**
+ * The forwards over the composer after a send that never reached the outbox: [sent]'s card goes back in front of
+ * [held], once each (a forward the outbox already took is not placed again).
+ */
+internal fun restoreForwards(sent: List<persona.feature.chat.ChatLinkContext>,
+    held: List<persona.feature.chat.ChatLinkContext>): List<persona.feature.chat.ChatLinkContext> =
+    sent.filterNot { ref -> held.any { it.id == ref.id } } + held
+
 internal suspend fun sendAssistantMessage(
     main: MainConversationSender?, sender: MessageSender, session: SessionKey?, text: String, id: String,
 ) {
@@ -268,7 +301,7 @@ internal fun DeliveryState.pendingStatus(): PendingStatus? = when (this) {
     DeliveryState.Verifying -> PendingStatus.Verifying
     DeliveryState.NeedsConfirmation -> PendingStatus.NeedsReview
     DeliveryState.Rejected, DeliveryState.Refused -> PendingStatus.Refused
-    DeliveryState.Sent -> null
+    DeliveryState.Sent, DeliveryState.Held -> null
 }
 
 internal fun assistantStatus(session: Session?, messages: List<OutboxMessage>,
@@ -317,6 +350,8 @@ data class AssistantChatOptions(
     val showTopBar: Boolean = false,
     /** The conversation's manager is offline (docs/assistant/managers.md step 4): history only, this note where the composer was. */
     val readOnlyNote: String? = null,
+    /** Known before the live session row arrives: ordinary files still upload to Health storage. */
+    val healthChat: Boolean = false,
 )
 
 /**

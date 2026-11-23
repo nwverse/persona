@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // #3713: a to-do whose agent never started (the hub closes it, with its start error) waits on the owner in Needs you. Its
 // row reads open, not done, and says why in red; ticking it closes it for good (`done: true`, the hub clears the start
-// error). One whose work finished in a related to-do (the same plan) is history: Just finished, ticked, nothing asked.
+// error). One whose work finished in a related to-do (the same plan) is history: Done, ticked, nothing asked.
 // Its page agrees with its row (audit item 13): why it did not start, Retry (from its plan) or Hand to agent, which
 // reopens it only once handed over, and Complete closes it for good as the checkbox does; not Reopen. Its Retry is the
 // main chat's task card's (lib/feed retryTask): one on its way at a time from either, the reopened to-do shown at once.
@@ -25,6 +25,13 @@ vi.hoisted(() => {
 });
 
 const api = vi.fn(async (_path: string, _init?: unknown): Promise<unknown> => ({}));
+// The unrelated association section has a valid empty store, so its error Retry cannot shadow the task's Retry.
+const defaultReply = (path: string) => {
+  const repositoryRead = path.match(/^\/todos\/([^/]+)\/repositories(?:\?|$)/);
+  return repositoryRead
+    ? { schema_version: 1, manager: "assistant", todo_id: repositoryRead[1], revision: 0, repositories: [] }
+    : {};
+};
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   api: (path: string, init?: unknown) => api(path, init),
@@ -60,7 +67,7 @@ const before = { ...getState() };
 
 beforeEach(async () => {
   api.mockReset();
-  api.mockImplementation(async () => ({}));
+  api.mockImplementation(async (path) => defaultReply(path));
   launched.length = 0;
   seed({
     todos: [failed("waits", "Rotate the keys"), failed("gone", "Deploy the panel", "p"), finished, failed("again", "Renew the certificate", "p2"), failed("old", "Clean the build cache", undefined, 3 * 86_400_000)],
@@ -101,23 +108,27 @@ describe("a to-do whose agent never started", () => {
     expect((patch?.[1] as { json?: unknown })?.json).toEqual({ done: true });
   });
 
-  it("goes with the work that finished in its row: Just finished, behind it, done", () => {
+  it("goes with the work that finished in its row, behind it and immediately Done", async () => {
     expect(section("waiting")?.querySelector("[data-id=gone]")).toBeNull();
+    const done = section("done")!;
+    expect(done.getAttribute("data-todos")).toBe("3");
+    await act(async () => done.querySelector("button")!.click());
     const r = row("done")!;
-    expect(section("just_done")?.contains(r)).toBe(true);
+    expect(done.contains(r)).toBe(true);
     expect(r.getAttribute("data-members")).toBe("2");
   });
 });
 
 describe("the page of a to-do whose agent never started (audit item 13)", () => {
-  it("says why, offers Hand to agent, and Complete closes it for good as its checkbox does", async () => {
+  it("says why, offers Retry and Hand to agent, and Complete closes it for good as its checkbox does", async () => {
     await show("waits");
     const detail = host.querySelector("[data-testid=todos-detail-column]")!;
     expect(detail.querySelector("[data-testid=todo-detail-start-failed]")?.textContent).toContain("machine offline");
     expect(button(t("todos.reopen"))).toBeUndefined();
     expect(button(t("todos.hand_over"))).toBeTruthy();
-    // not from a plan: the hub could not start it again by itself
-    expect(button(t("todos.retry"))).toBeUndefined();
+    // no plan id of its own (a plan that took it over through todo_id keeps none, #8770): the hub finds the plan that
+    // binds it, and says so when there is none (#10365)
+    expect(button(t("todos.retry"))).toBeTruthy();
     expect(detail.textContent).toContain(t("todos.no_agents"));
     await act(async () => button(t("todos.complete"))!.click());
     await flush();
@@ -143,7 +154,7 @@ describe("the page of a to-do whose agent never started (audit item 13)", () => 
       }
       // the list's read stays out, so only the retry's answer can show the to-do reopened
       if (path === "/todos" && !(init as { method?: string })?.method) return new Promise(() => {});
-      return {};
+      return defaultReply(path);
     });
     await show("again");
     await act(async () => button(t("todos.retry"))!.click());
@@ -156,6 +167,63 @@ describe("the page of a to-do whose agent never started (audit item 13)", () => 
     expect(getState().todos.find((x) => x.id === "again")?.done_at).toBeFalsy();
     expect(host.querySelector("[data-testid=todo-detail-start-failed]")).toBeNull();
     expect(button(t("todos.retry"))).toBeUndefined();
+  });
+
+  it("offers its computer's other launcher first when its own can't start there, where the hub takes it (#10365)", async () => {
+    const { getFeedState } = await import("../lib/feed");
+    const { TASK_RETRY_LAUNCHER_FEATURE } = await import("../lib/start-retry");
+    const plan = { id: "p2", conversation: "conv", state: "started" as const, tasks: [{ title: "Renew the certificate", prompt: "", machine: "m1", cwd: "/w",
+      todo_id: "again", error: "terminal", error_code: "launcher_missing", error_args: { where: "terminal", launcher: "work" }, retry_with: ["claude", "work2"] }] };
+    getFeedState().plans[plan.id] = plan;
+    const features = getState().features;
+    try {
+      // an older hub would start the launcher that failed again: no such button
+      seed({ features: ["todo_seen"] });
+      await show("again");
+      expect(button(t("assistant-task-actions.use_launcher_instead", { launcher: "claude" }))).toBeUndefined();
+      seed({ features: ["todo_seen", TASK_RETRY_LAUNCHER_FEATURE] });
+      await show("again");
+      expect(button(t("todos.retry"))).toBeTruthy();
+      await act(async () => button(t("assistant-task-actions.use_launcher_instead", { launcher: "claude" }))!.click());
+      await flush();
+      expect(calls("POST", "/todos/again/retry")).toEqual([{ launcher: "claude" }]);
+    } finally {
+      delete getFeedState().plans[plan.id];
+      seed({ features });
+    }
+  });
+
+  it("answers the question its tab's shell stopped on, where the hub takes it, keeping Retry (#10365)", async () => {
+    const { getFeedState } = await import("../lib/feed");
+    const line = "[oh-my-zsh] Would you like to update? [Y/n]";
+    const plan = { id: "p2", conversation: "conv", state: "started" as const, tasks: [{ title: "Renew the certificate", prompt: "", machine: "m1", cwd: "/w",
+      todo_id: "again", error: "stopped on a question", error_code: "shell_waiting", error_args: { line, pane: "w1:p2", kind: "update", choices: "y,n,enter",
+        default: "y", kept_until: new Date(Date.now() + 5 * 60_000).toISOString() } }] };
+    getFeedState().plans[plan.id] = plan;
+    const features = getState().features;
+    const choice = () => document.querySelector<HTMLButtonElement>("[data-testid=shell-choice-n]");
+    try {
+      // an older hub cannot take the answer: Retry as before, no card
+      seed({ features: ["todo_seen"] });
+      await show("again");
+      await flush();
+      expect(choice()).toBeNull();
+      expect(button(t("todos.retry"))).toBeTruthy();
+      seed({ features: ["todo_seen", "todo_start_answer"] });
+      await show("again");
+      await vi.waitFor(async () => {
+        await flush();
+        expect(choice()).not.toBeNull();
+      }, { timeout: 5000, interval: 20 });
+      expect(button(t("todos.retry"))).toBeTruthy();
+      await act(async () => choice()!.click());
+      await flush();
+      expect(calls("POST", "/todos/again/start/answer")).toEqual([{ choice: "n" }]);
+      expect(calls("POST", "/todos/again/retry")).toEqual([]);
+    } finally {
+      delete getFeedState().plans[plan.id];
+      seed({ features });
+    }
   });
 
   it("reopens it when it is handed to an agent, not when the dialog only opens", async () => {

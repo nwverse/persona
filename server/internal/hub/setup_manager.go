@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -332,11 +331,12 @@ func (e *setupEnv) builtinActive(ctx context.Context) bool {
 	return false
 }
 
-// builtinOnline: the hub has the built-in manager on its bus as a service of its own (GET /api/v1/managers on loopback).
+// builtinOnline: the hub has the built-in manager on its bus as a service of its own (GET /api/v1/managers, from
+// loopback: loopbackClient).
 func (e *setupEnv) builtinOnline(ctx context.Context, cfg *Config) bool {
 	client, done := loopbackClient()
 	defer done()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort("127.0.0.1", portOf(cfg.Listen))+"/api/v1/managers", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, managerconf.CLIHubURL(cfg.Listen)+"/api/v1/managers", nil)
 	if err != nil {
 		return false
 	}

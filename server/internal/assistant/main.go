@@ -23,6 +23,8 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 
+	approvalops "github.com/nwverse/persona/server/internal/approval"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
@@ -342,7 +344,8 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	var ext *extmgr.Manager
 	// ConfigFile: its usage section (the account-pool gateways and their keys) is the devices', read and written there.
 	devs := devices.New(devices.Options{Store: database, ConfigFile: o.ConfigFile, TailcatKey: o.TailcatKey, ManagerID: o.ID,
-		Logf: log.New(stderr, "devices: ", log.LstdFlags).Printf,
+		Logf:         log.New(stderr, "devices: ", log.LstdFlags).Printf,
+		ProjectState: func(st devicewire.States) devicewire.States { return svc.logicalProjectStates(st) },
 		Answer: func(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
 			if !waitsOnPerson(method) && method != "mcp.tools" { // discovery watches reconnect after restart; actual tool calls hold idle
 				svc.nodeAnswering.Add(1)
@@ -356,13 +359,18 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			}
 			return svc.NodeRequest(ctx, machine, method, params) // the interactions, the MCP tools (fleet_events.go)
 		},
-		Event:    func(machine, event string, params json.RawMessage) bool { return svc.NodeEvent(machine, event, params) },
-		Detached: func(machine string) { svc.NodeDetached(machine) },
-		Location: func() *time.Location { return svc.location(context.Background()) },
+		Event:                  func(machine, event string, params json.RawMessage) bool { return svc.NodeEvent(machine, event, params) },
+		Detached:               func(machine string) { svc.NodeDetached(machine) },
+		HiddenAgentDirsChanged: func(machine string) { svc.HiddenAgentDirsChanged(machine) },
+		Location:               func() *time.Location { return svc.location(context.Background()) },
+		UpdateHandoffGrace:     func() time.Duration { return nodeUpdateHandoffGraceOf(svc.hello(context.Background())) },
+		PromptLanguage:         func() string { return answerLanguage(svc.hello(context.Background()).Locale) },
 		// The extensions' part of a node's connection and its events (internal/extmgr).
 		Own:         func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
 		OnConnected: func(machine string) { ext.NodeConnected(machine) },
 		OnEvent:     func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
+		// The messages held for a machine's Agents changed (devices held.go): its rows again, nothing else of a list.
+		HeldChanged: func(machine string) { svc.publishSessions(machine) },
 		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers_push.go).
 		// Not one waiting to be confirmed: it gets them when it is (trustChanged, machine_trust.go).
 		NodeCalls: func(ctx context.Context, machine string) []devicewire.NodeCall {
@@ -372,7 +380,16 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
 		},
 		Connected: func() bool { return bh.Client().Peer() != nil },
-		Hub:       lazyHost{c: func() *bus.Client { return bh.Client() }}})
+		// The official DeepSeek launchers' prepaid balances (#11825): the manager holds their sealed keys.
+		LauncherBalances: func(ctx context.Context) ([]proto.UsageAccount, bool) { return svc.LauncherBalances(ctx) },
+		// Usage sources of type extension (#12402): the extensions are made below; ext is read when a source is due.
+		UsageExtension: func(ctx context.Context, id, launcher string) (json.RawMessage, error) {
+			if ext == nil {
+				return nil, errors.New("extensions are not running")
+			}
+			return ext.UsageQuery(ctx, id, launcher)
+		},
+		Hub: lazyHost{c: func() *bus.Client { return bh.Client() }}})
 	// The extensions, connectors and bots (internal/extmgr): the data directory here, its own sections in manager.json
 	// (as moveConfig read and checked them) and its own secret.key.
 	ext = extmgr.New(extmgr.Options{Dir: home, ConfigFile: o.ConfigFile, Config: o.ExtConfig, SecretKey: o.SecretKey,
@@ -395,6 +412,9 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		LauncherReferences: func(ctx context.Context) []extmgr.LauncherReference { return svc.launcherReferences(ctx) },
 		AssistantMachine:   func() string { return svc.mainMachine(context.Background()) },
 		Ask:                func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) { return svc.AskCard(ctx, ix) },
+		AskPrepared: func(ctx context.Context, ix proto.Interaction, op approvalops.Operation) (approvalops.Outcome, error) {
+			return svc.AskPreparedCard(ctx, ix, op)
+		},
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
 		},
@@ -413,9 +433,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Logf: logf, Devices: devs, Extensions: ext, StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.TokenFirst})
 	// The knowledge base in its directory, kept as its manager.json's kb section says (over the hub's hello). The model
 	// providers' keys are sealed with its own secret.key.
-	svc = New(Options{Hub: bh, Store: func() Store { return database }, Logf: logf, Devices: devs,
+	assistantStore := repositorystore.New(database)
+	svc = New(Options{Hub: bh, Store: func() Store { return assistantStore }, Logf: logf, Devices: devs,
 		KB: &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
-		Trust: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile})
+		Trust: devs, AgentDirs: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
+		RemoteImageCache: filepath.Join(home, "cache", "remote-images")})
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
 	// When the north star's recording began (north_star.go).
 	go svc.northStarStarted(ctx)

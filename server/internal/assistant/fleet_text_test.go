@@ -2,8 +2,8 @@ package assistant
 
 import (
 	"encoding/json"
-	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -23,6 +23,10 @@ func TestLocalizedActivity(t *testing.T) {
 		{act("Grep", `{}`), "Searching", "検索中"},
 		{act("mcp__persona__mail_send", `{}`), "Calling mail_send", "mail_sendを呼び出し中"},
 		{act("AskUserQuestion", `{}`), "Asking you a question", "質問しています"},
+		{act("subagent", `{"name":"review_api","event":"started"}`), "Delegating: review_api", "サブタスク依頼中：review_api"},
+		{act("subagent", `{"name":"review_api","event":"interacted"}`), "Messaging subtask review_api", "サブタスクreview_apiに連絡中"},
+		{act("subagent", `{"name":"review_api","event":"completed"}`), "Subtask done: review_api", "サブタスク完了：review_api"},
+		{act("subagent", `{"event":"completed"}`), "Subtask done", "サブタスク完了"},
 		{"在做别的", "在做别的", "在做别的"},
 	} {
 		if got := activityText(i18n.En, c.zh); got != c.en {
@@ -148,34 +152,6 @@ func TestLocalizeSubagentTools(t *testing.T) {
 	}
 }
 
-// The node's reasons for running an Agent SDK conversation on the CLI read in the app's language, the cause as it was;
-// a reason the hub does not know, and Chinese, stay as they are.
-func TestRuntimeFallbackInEachLanguage(t *testing.T) {
-	for _, c := range []struct{ node, en string }{
-		{fmt.Sprintf(proto.FallbackShellLauncher, "kcc"), "Launcher kcc is a shell command on this computer; the Agent SDK can’t use its settings"},
-		{proto.FallbackNoNode + "exec: \"node\": not found", "No Node.js 22 or later: exec: \"node\": not found"},
-		{proto.FallbackNoClaude + "nope", "Can’t find claude: nope"},
-		{proto.FallbackNoBridge, "This personad doesn’t include the Agent SDK bridge"},
-		{proto.FallbackNoBridgeScript, "The Agent SDK bridge package has no bridge.mjs"},
-		{proto.FallbackReadBridge + "x", "Couldn’t read the Agent SDK bridge: x"},
-		{proto.FallbackWriteBridge + "y", "Couldn’t write the Agent SDK bridge: y"},
-		{proto.FallbackNoBridge + "，还有别的", proto.FallbackNoBridge + "，还有别的"},
-		{"别的原因", "别的原因"},
-		{"", ""},
-	} {
-		s := proto.Session{RuntimeFallback: c.node}
-		localizeSession(i18n.En, &s)
-		if s.RuntimeFallback != c.en {
-			t.Errorf("%q: %q", c.node, s.RuntimeFallback)
-		}
-		s = proto.Session{RuntimeFallback: c.node}
-		localizeSession(i18n.ZhHans, &s)
-		if s.RuntimeFallback != c.node {
-			t.Errorf("zh %q: %q", c.node, s.RuntimeFallback)
-		}
-	}
-}
-
 // What the node says about a Claude session outside Persona's terminals (why it is view only, that it waits on the
 // computer) goes out in the user's language; zh-Hans as the node wrote it, anything else untouched.
 func TestClaudeLiveTextInEachLanguage(t *testing.T) {
@@ -200,5 +176,40 @@ func TestClaudeLiveTextInEachLanguage(t *testing.T) {
 	localizeSession(i18n.En, &other)
 	if other.ReadOnlyReason != "仅查看：这个子 Agent 由父 Agent 驱动" {
 		t.Errorf("a reason the hub does not know was rewritten: %q", other.ReadOnlyReason)
+	}
+}
+
+// A computer-only dialog also tells the owner how to make it answerable from the phone next time (#5965).
+func TestClaudeComputerAttentionSuggestsTmuxOrPersona(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		lang i18n.Lang
+		want []string
+	}{
+		{"en", i18n.En, []string{"next time", "start claude", "tmux", "persona", "phone"}},
+		{"zh-Hans", i18n.ZhHans, []string{"下次", "启动 claude", "tmux", "persona", "手机"}},
+		{"ja", i18n.Ja, []string{"次回", "claudeを起動", "tmux", "persona", "スマホ"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := proto.Session{AttentionReason: proto.AttentionClaudeComputer}
+			localizeSession(c.lang, &s)
+			got := strings.ToLower(s.AttentionReason)
+			for _, want := range c.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("attention reason %q does not mention %q", s.AttentionReason, want)
+				}
+			}
+		})
+	}
+
+	// An older node still sends the sentence used before #5965; a new hub localizes it to the same guidance.
+	for _, lang := range []i18n.Lang{i18n.En, i18n.Ja} {
+		legacy := proto.Session{AttentionReason: proto.AttentionClaudeComputerBefore5965}
+		current := proto.Session{AttentionReason: proto.AttentionClaudeComputer}
+		localizeSession(lang, &legacy)
+		localizeSession(lang, &current)
+		if legacy.AttentionReason != current.AttentionReason {
+			t.Errorf("%s: legacy attention %q, want the localized current guidance %q", lang, legacy.AttentionReason, current.AttentionReason)
+		}
 	}
 }

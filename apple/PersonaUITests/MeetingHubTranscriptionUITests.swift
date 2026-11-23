@@ -117,13 +117,13 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
 
     // MARK: The start
 
-    /// With the flag and the hub ready, the start has a Transcription row (the hub's default, On This iPhone here); On the
-    /// Hub changes the line under Record to hub mode's privacy text.
+    /// With the flag and the hub ready, the quick start's Transcription line is a menu (the hub's default, This iPhone
+    /// here, #8731); Cloud changes the line under Start Meeting to hub mode's privacy text.
     @MainActor func testTheStartOffersOnTheHubWhileTheHubCanTranscribe() throws {
         let hub = try mockHub()
         let app = launchRecordings(hub)
         XCTAssertTrue(app.buttons["recording-meeting-start"].waitForExistence(timeout: 15), app.debugDescription)
-        let row = element(app, "meeting-transcription-start")
+        let row = element(app, "meeting-transcription-line")
         if !row.waitForExistence(timeout: 20) { reveal(row, in: app) }
         XCTAssertTrue(row.waitForExistence(timeout: 5), "no Transcription row with the hub ready: \(app.debugDescription)")
         let line = element(app, "recording-start-privacy")
@@ -136,8 +136,9 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
         // The row itself, settled (at the largest text sizes the line under Record scrolled it away).
         sleep(1)
         try shot(app, "start-row")
+        XCTAssertTrue(waitFor(5) { row.label.contains("本机 iPhone") }, "This iPhone by default: \(row.label)")
         row.tap()
-        let onHub = app.buttons["在 hub 上"].firstMatch
+        let onHub = app.buttons["云端 · Persona"].firstMatch
         XCTAssertTrue(onHub.waitForExistence(timeout: 5), "no On the Hub in the menu: \(app.debugDescription)")
         onHub.tap()
         reveal(line, in: app)
@@ -146,8 +147,9 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
     }
 
     /// The hub can't transcribe (`ready: false`), or has no hub transcription at all (`on: false`, as
-    /// MOCK_NO_MEETING_TRANSCRIPTION=1): no Transcription row, and the line under Record keeps privacy mode's words even
-    /// with the hub's default `hub` (a one-tap start then records on the phone too).
+    /// MOCK_NO_MEETING_TRANSCRIPTION=1): the Transcription line says This iPhone and is no menu (not ready with the hub's
+    /// default `hub`: in the warning words), and the line under Start Meeting keeps privacy mode's words (a one-tap start
+    /// then records on the phone too).
     @MainActor func testTheStartOffersNoHubWhenTheHubCantTranscribe() throws {
         let hub = try mockHub()
         try put(hub, "/api/v1/assistant", ["meeting_transcription_default": "hub"])
@@ -155,14 +157,14 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
             try post(hub, "/mock/meeting_transcription", switches)
             let app = launchRecordings(hub)
             XCTAssertTrue(app.buttons["recording-meeting-start"].waitForExistence(timeout: 15), app.debugDescription)
-            let privately = element(app, "meeting-private-start")
-            if !privately.waitForExistence(timeout: 15) { reveal(privately, in: app) }
-            XCTAssertTrue(privately.exists, "no room meeting's options: \(app.debugDescription)")
+            XCTAssertTrue(element(app, "meeting-invite-persona").waitForExistence(timeout: 15), "no room meeting's start: \(app.debugDescription)")
             // A launch goes by what the last hub said until this one's hello and settings are in.
-            let row = element(app, "meeting-transcription-start")
-            XCTAssertTrue(waitFor(20) { !row.exists }, "a Transcription row with the hub \(why)")
-            sleep(3)
-            XCTAssertFalse(row.exists, "and it stays away (\(why))")
+            let row = element(app, "meeting-transcription-line")
+            let words = why == "not ready" ? "云端现在用不了" : "本机 iPhone"
+            XCTAssertTrue(waitFor(20) { row.label.contains(words) }, "the line with the hub \(why): \(row.label)")
+            row.tap()
+            sleep(1)
+            XCTAssertFalse(app.buttons["云端 · Persona"].exists, "a Cloud choice with the hub \(why)")
             let line = element(app, "recording-start-privacy")
             reveal(line, in: app)
             XCTAssertFalse(line.label.contains("会经你的 hub"), "hub mode's words with the hub \(why): \(line.label)")
@@ -249,14 +251,18 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
         try shot(app, "page-fell-back")
         try lockScreen(app, "lock-fell-back", says: "本机转写")
 
-        // Stop, then the recording's page (Open Recording): how it was transcribed and how far the hub is (finishing until
-        // its final pass is done), with the stretches it has no audio for when there are any.
+        // Stop, then the recording's page (the after-meeting menu's Recording Details): how it was transcribed and how far
+        // the hub is (finishing until its final pass is done), with the stretches it has no audio for when there are any.
         let stop = app.buttons["recording-stop"].firstMatch
         XCTAssertTrue(stop.waitForExistence(timeout: 10), app.debugDescription)
         stop.tap()
         confirmStop(app)
-        let open = app.buttons["recording-wrapup-open"].firstMatch
-        XCTAssertTrue(open.waitForExistence(timeout: 30), "no Open Recording after Stop:\n\(app.debugDescription)")
+        // After the meeting (#8731 V3): the recording's page is the menu's Recording Details.
+        let menu = app.buttons["meeting-after-menu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 30), "no after-meeting menu:\n\(app.debugDescription)")
+        menu.tap()
+        let open = app.buttons["meeting-after-details"].firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 5), "no Recording Details:\n\(app.debugDescription)")
         open.tap()
         let facts = element(app, "recording-transcription")
         XCTAssertTrue(facts.waitForExistence(timeout: 30), "the recording's page doesn't say how it was transcribed:\n\(app.debugDescription)")
@@ -266,8 +272,9 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
         try shot(app, "detail")
     }
 
-    /// A hub-mode meeting started with the highlights too (#3862 phase 2b, `-showMeetingSample room-hub-highlights`): the
-    /// Highlights card holds no line and there is no Live box, so the hub's lines are on the Full Transcript page; an
+    /// A hub-mode meeting started with the highlights too (#3862 phase 2b, `-showMeetingSample room-hub-highlights`): on
+    /// the meeting room's Highlights page (#8731; the Live page has the newest lines) the card holds no line and the hub's
+    /// lines are on the Full Transcript page; an
     /// upstream problem puts the fallback notice under the card's title, and the transcript shows the phone's own lines
     /// under it.
     @MainActor func testWithTheHighlightsTheHubsLinesAreOneTapAway() throws {
@@ -277,9 +284,11 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
         app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-openChatsFresh", "YES",
                                "-showMeetingSample", "room-hub-highlights"]
         app.launchPinned()
+        let highlightsTab = app.buttons["meeting-room-tab-highlights"].firstMatch
+        XCTAssertTrue(highlightsTab.waitForExistence(timeout: 20), "no Highlights page:\n\(app.debugDescription)")
+        highlightsTab.tap()
         let card = element(app, "meeting-highlights")
         XCTAssertTrue(card.waitForExistence(timeout: 20), "no Highlights card:\n\(app.debugDescription)")
-        XCTAssertFalse(element(app, "meeting-live").exists, "a Live box beside the Highlights card")
         let transcript = card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch
         XCTAssertTrue(transcript.waitForExistence(timeout: 5), "no Full Transcript on the card:\n\(app.debugDescription)")
 
@@ -324,7 +333,7 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
 
     /// Stop asks first: its confirmation's Stop Recording.
     @MainActor private func confirmStop(_ app: XCUIApplication) {
-        let named = app.buttons["停止录音"].firstMatch
+        let named = app.buttons.matching(NSPredicate(format: "label IN %@", ["结束并生成纪要", "停止录音"])).firstMatch // the meeting room's End (#8731), else Stop Recording
         if named.waitForExistence(timeout: 5) { named.tap(); return }
         let dialog = app.sheets.firstMatch.exists ? app.sheets.firstMatch : app.alerts.firstMatch
         XCTAssertTrue(dialog.exists, "Stop didn't ask first:\n\(app.debugDescription)")

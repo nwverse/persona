@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,7 +72,10 @@ func oracleBuildFleetIn(l i18n.Lang, agents []oracleInput, ixs []proto.Interacti
 		if ix := n.card; ix != nil {
 			item.Kind, item.Detail = ix.Kind, clip(oneLine(interactionDetail(l, *ix)), fleetDetailMax)
 			item.Interaction, item.Since = ix.ID, unixSeconds(ix.CreatedAt)
-			if len(ix.Fields) > 0 {
+			// #12982: no buttons for a permission without a summary or a plan without a title.
+			blind := ix.Kind == proto.IxPermission && strings.TrimSpace(ix.Summary) == "" ||
+				ix.Kind == proto.IxPlan && strings.TrimSpace(planTitle(ix.Plan)) == ""
+			if len(ix.Fields) > 0 || blind {
 				item.Interaction = ""
 			}
 		}
@@ -215,7 +219,7 @@ func randomFleet(rng *rand.Rand) ([]fleetInput, []proto.Interaction, map[string]
 				State:     pick(proto.StateNeedsYou, proto.StateWorking, proto.StateUnread, proto.StateIdle, proto.StateWorking),
 				Title:     pick("", "Claude Code", "Fix the build", "a very long title that goes on and on past every limit", "two\nlines"),
 				Cwd:       pick("/code/app", "/code/web", ""),
-				SpaceName: pick("", "app", "web"), SlotName: pick("", "2", "tests"), SlotIndex: rng.IntN(3),
+				SpaceName: pick("", "app", "web"), SlotName: pick("", "2", "tests"), SlotIndex: int32(rng.IntN(3)),
 				LastText:  pick("", "done", "first line\nsecond", "a long reply that is clipped somewhere after sixty runes, really quite long"),
 				Assistant: rng.IntN(8) == 0, Quiet: rng.IntN(10) == 0, UpdatedAt: at(), StateSince: at(),
 				Agent: pick("claude", "codex"), IsSubagent: rng.IntN(6) == 0, BackgroundWorking: rng.IntN(4) == 0}

@@ -338,14 +338,14 @@ internal val AgentMachineGroup.headingCounts: List<Pair<Status, Int>>
 
 /**
  * A By Status section's one count, in its state's color (iOS `SectionHeader` with the section's tone): Awaiting reply
- * takes Unread's, Waiting in the background Working's (its header draws it lighter: `AgentTreeHeader.waitsInBackground`),
+ * and Just finished take Unread's, Waiting in the background Working's (its header draws it lighter: `AgentTreeHeader.waitsInBackground`),
  * Muted and Seen the idle one. Null for every other group.
  */
 internal val AgentListGroup.stateSectionCounts: List<Pair<Status, Int>>?
     get() {
         val status = when (id.takeIf { it.startsWith("state/") }?.removePrefix("state/")) {
             "needs" -> Status.NeedsYou
-            "unread", "awaiting" -> Status.Unread
+            "unread", "awaiting", "just_finished" -> Status.Unread
             "working", "background" -> Status.Working
             "waiting" -> Status.Waiting
             "muted", "idle" -> Status.Idle
@@ -392,3 +392,18 @@ internal val AgentListGroup.sectionCounts: List<Pair<Status, Int>>
  */
 internal val AgentListGroup.headingCounts: List<Pair<Status, Int>>
     get() = sectionCounts + (Status.Idle to (agentsIn(AgentState.Idle) + agentsIn(AgentState.Unknown)))
+
+/**
+ * By Machine section header counts (#9319): from the group's [AgentListGroup.rows] (and [AgentListGroup.waitingInBackground]),
+ * not from [AgentListGroup.stateCounts]. The shared agents_list fixtures / Rust / iOS / Harmony leave `state_counts` null for
+ * Machine groups; the feature layer counts here for `MachineSectionHeader`.
+ */
+internal fun machineHeadingCounts(group: AgentListGroup): List<Pair<Status, Int>> {
+    fun inState(state: AgentState) = group.rows.count { !it.isNestedSubtask && it.state == state }
+    val waiting = group.waitingInBackground
+    val section = listOf(AgentState.NeedsYou, AgentState.Working, AgentState.Unread).map { state ->
+        val count = inState(state)
+        state.designStatus to if (state == AgentState.Working) (count - waiting).coerceAtLeast(0) else count
+    }
+    return section + (Status.Idle to (inState(AgentState.Idle) + inState(AgentState.Unknown)))
+}

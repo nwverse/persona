@@ -1,6 +1,14 @@
-# Lessons: collaboration and process: multiple Agents changing the repo at once, commits, migration numbers, scripts
+# Lessons: collaboration and process: multiple Agents changing the repo at once, commits, migration names, scripts
 
 Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
+
+- Permission-mode audits must observe each actual writer (#10308): assistant calls can bypass the hub, and plan
+  hooks return `setMode` directly with a recorded `plan_then` fallback. Preserve authenticated actor metadata outside
+  client bodies, and distinguish a returned hook decision from runtime confirmation.
+
+- Disposable Postgres containers need `docker rm -fv`, not only `docker rm -f` (#8832): the image creates an anonymous
+  data volume even without a mount argument. Remove only the current fixture's container; never prune historical
+  volumes or change persistent database cleanup to repair a test fixture leak.
 
 - Remote-tracking refs and `FETCH_HEAD` are shared across worktrees (#2705). Another task's fetch can advance
   `origin/main` between inspection and local commit consolidation, turning an older tree into apparent reversions
@@ -11,6 +19,10 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
 - Privacy hooks must resolve the tracked default branch, not assume `origin/master` (#733). A new remote branch has an all-zero old SHA, so falling back to that SHA and skipping an unavailable range silently lets its first push through. Test real first pushes to an isolated bare repository, retain existing-ref and deletion controls, and refuse a new branch when no scan base is available.
 
 - PR merges and progress comments must be checked serially (#2024): `gh pr merge` can fail on a new conflict; if a compound shell command does not stop, the "merged" comment after it still goes out. Exit when the merge command fails, and read the PR's `state` again before posting a completion comment; mark it done only on `MERGED`. `mergeable: UNKNOWN` is not confirmation that it can merge, nor proof of a conflict; read back a definite state before acting. On a false report, edit the original comment first, keeping the verified results and the unfinished items; never leave two contradicting progress comments.
+- Lightweight semantic verification is not local build/test evidence. Require a dedicated exact-head runner status
+  at the automatic merge boundary, including cached approvals and merge retries. Baseline exceptions must name the
+  fixed comparison commit; never infer success from an interrupted remote run.
+
 - An unattended PR review service must bind every result to repository + PR + head SHA, and a pre-existing review must not bypass its own checks. Treat model failure, malformed findings, unavailable platform tests and GitHub read failures as not verified. Run manual and automated merges through the same shared-Git-directory lock and exact-head wrapper (`docs/operations/pr-review-automation.md`); an in-process lock alone cannot protect two service instances or a manual merge.
 
 - Migration inventories must distinguish actual extension packages from SDK templates, schema examples and duplicate application worktrees (#5956). Deduplicate real package IDs across repository copies before counting runtime kinds; a manifest with a command under `runtime` is executable even when `runtime.mode` is omitted. Finding and classifying authoring fixtures is not evidence of a third marketplace or additional migrated extensions.
@@ -49,11 +61,24 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   (`FeishuSearchXxx`…, otherwise names collide on `main` and the build fails); on merge or rebase conflicts, files outside your own directory always take the `origin/main` version; before pushing check
   that `git diff origin/main --stat` contains only your files (14fe469 once overwrote half the repo with an old copy; 941d067 restored it); when the main working tree has someone else's uncommitted changes,
   do your fix in `git worktree add --detach /tmp/x origin/main`.
-- Database migration numbers are split into ranges per lane (00x1…); before picking a number, check `server/internal/db/migrations/` in every worktree and `schema_migrations` in the `persona_test` database:
-  another lane's unmerged migration may already hold the number (2026-10-30, 0051 collided; switched to 0061).
-- Open PRs hold numbers too (`gh pr list --state open --json number,files`), and while a PR waits others merge: #1852's
-  migration went 0443 → 0451 → 0453 in a day. Check the number again right before merging. A data fix that merges under a
-  number databases already recorded never runs there, so keep the code that copes with the old rows as a backstop.
+- Hand-picked database migration numbers kept colliding: other worktrees and open PRs held numbers nobody could see
+  (2026-10-30 0051 became 0061; one PR's migration went 0443 → 0451 → 0453 in a day; 0421 merged into both sets, #872;
+  `db.go` still carries a `renumbered` list for four of them). Since #10618 a new migration is named by the UTC second
+  it is written, `$(date -u +%Y%m%d%H%M%S)_<name>.sql` in lower case, so there is nothing to pick or check first; the
+  numbered files up to 0561 stay as they are. `TestMigrationSets` and `scripts/ci/migration_freeze.py` refuse a new
+  numbered file, and a timestamp before 2026-11-18 00:00:00 UTC or more than a day ahead of now.
+- Two files of one second in one set are unlikely, not impossible, and no hosted CI runs on a PR to catch them before
+  both merge. `TestMigrationSets` fails then, and a hub or manager whose build has both refuses to start, before it
+  applies anything, until one is renamed. Keep the name of the one that merged first (a database may have recorded it)
+  and give the other a second of its own: `migration_freeze.py` lets one of two files that share a version on the base
+  be renamed. Two files of one second, one in the hub set and one in the manager set, are fine: each set records its
+  own part. One file in both sets is not, and `TestMigrationSets` refuses it: on a database both sides share it would
+  run once for each.
+- A migration that waits in a PR can merge after one written later. The runner applies whatever a database has not
+  recorded, in name order, so on a database that already ran the later one the earlier second runs after it, while a
+  new database runs them the other way round. Write a migration so that it doesn't depend on the order of ones written
+  at the same time, and run the migration tests again after merging `origin/main`. A data fix that merges under a
+  version databases already recorded never runs there, so keep the code that copes with the old rows as a backstop.
 - A migration already on the default branch is frozen (`scripts/ci/migration_freeze.py`, also from `scripts/check-fast.sh`): editing, deleting or renaming it fails. A comment-only or whitespace-only change passes. Repair an applied migration by adding a new one.
 - On 2026-11-01 `ios/` was renamed to `apple/` (the iOS, watch and macOS Apps and shared code are in the same XcodeGen project): when rebasing an old branch / worktree,
   files newly created under `ios/` must be moved to `apple/` by hand (git follows the rename for changes to existing files).
@@ -95,7 +120,15 @@ SDK synchronization intentionally replaces only the selected SDK subtree (#1471)
 
 ## Hosted CI path aggregation
 
-- Adding a hosted Web input must update the local `check-fast` selector too (#2559); the parity test intentionally fails when attention fixtures are omitted. Legacy JSON fixture members must be composed from their existing compatibility carrier, not repeated in a new test file or allowed by broadening the identifier registry. Fix the source of both failures rather than weakening portable guards.
+- Repository-wide caller guards should shortlist tracked files with a literal Git search, then inspect non-comment command
+  lines (#12258). An optional greedy prefix in the XcodeGen expression backtracked on long unrelated source lines and
+  exceeded 60 seconds; keep the same path exclusions, inspect working-tree edits, and fail on Git errors rather than
+  returning an empty inventory. Synthetic paths must not look like real dependency literals to the check-fast input
+  inventory; extensionless fixture scripts still exercise the same tracked-path scan. Build-mode guards must check
+  actual arguments per lane: the iOS 18.6 lane intentionally
+  requests only the simulator Rust-core slice, while release and the other Apple CI lanes still require the full framework.
+
+- The web lane's inputs outside `web/` are derived, not listed (#10619): `scripts/ci/paths.py` scans `web/src` and the web tests for the paths they name relative to themselves, and both CI's web lane and `check-fast` use that scan. The hand list it replaced named 6 of the ~25 fixture directories the tests read. Read a fixture by a path relative to the file (an import, `new URL("../…", import.meta.url)`, `join(__dirname, "../…")` or `".."` elements); a path built from the working directory or a variable root is invisible to the scan. Legacy JSON fixture members must be composed from their existing compatibility carrier, not repeated in a new test file or allowed by broadening the identifier registry. Fix the source of failures rather than weakening portable guards.
 
 - Native workflow-level PR path filters leave individually required checks pending when no run is created. Keep one always-triggered
   orchestrator, put filters in a tested selector, call platform workflows through `workflow_call`, and require only its final aggregate.
@@ -197,6 +230,13 @@ keeps the command's own failure fatal and consumes its complete output before
 applying the same content assertion; so does a grep without `-q` that reads all
 of it (`holds` in `scripts/ci/image-smoke.sh`, where `hub pair` writes a QR code
 after the link and failed two runs in three).
+
+Inside an `if`, the same early exit makes a check pass instead: with pipefail,
+`if strings "$APP/Persona" | grep -qx …; then exit 1; fi` takes the status of
+`strings`, killed by SIGPIPE (141) once grep stopped reading, so a match
+followed by more output than the pipe holds counts as no match. The release's
+DEBUG checks (the switch list and the runtime CLI's names) read all of `strings`
+in `scripts/release/debug_switches.py` for that reason (#10616, #10654).
 
 - In zsh, a glob that matches no files (`rm -rf /tmp/x-*`) makes the whole command fail (nomatch), and nothing after `&&` runs (2026-11-04: the end-to-end test never ran, yet the result was recorded as a failure).
   To clean temp directories use `find /tmp -maxdepth 1 -name 'x-*' -exec rm -rf {} +` or `setopt nullglob` first; before recording a check result, confirm the command actually ran.
@@ -310,3 +350,7 @@ Apple builds, where a cold build costs the most:
 - After merging `main`, `cannot find 'persona_core_…'` means the Rust core's XCFramework is stale: run
   `native/app-core/scripts/build-apple.sh` first. If `ContinuityFixture` reports a wrong `fold_id` argument, delete the old
   `PersonaCore*.swiftmodule` at the root of `Build/Products/<config>/` in DerivedData.
+
+- Finish static review, generated tool snapshots and fixture corrections before queuing expensive shared-runner verification. A dedupe key prevents repeated submissions of one commit/group set; it cannot coalesce a series of intermediate commits. While a run waits, collect further fixes into one candidate instead of queuing each edit. Reuse an earlier shard result only when its relevant source is unchanged, and record the exact candidate and baseline commits in the PR.
+
+- Inspect test-running Git hooks before remote-only verification: merging upstream can stage token or icon files and trigger local tests even when the feature itself changes server code. Keep privacy scanning enabled and run the triggered test suites through the prescribed remote workflow.

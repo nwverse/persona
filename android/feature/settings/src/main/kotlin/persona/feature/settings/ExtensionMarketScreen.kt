@@ -324,15 +324,26 @@ fun ExtensionCatalogPage(
     if (removing && extension != null) UninstallDialog(extension.label, onDismiss = { removing = false }, installedVersion = extension.installed,
         members = names.named(packMembers)) { keep, members ->
         removing = false
-        scope.launch { if (model.uninstall(keep, members = members)) feedback?.notice(ExtensionText.uninstalled(res, extension.label, members, model.removal)) }
+        scope.launch {
+            if (model.uninstall(keep, members = members) && model.state.value.removalNotice == null) {
+                feedback?.notice(ExtensionText.uninstalled(res, extension.label, members, model.removal))
+            }
+        }
     }
     // Others depend on it (#5611): asked as on its own page, then removed with them switched off.
     state.cascade?.let { ask ->
         val name = extension?.label ?: extensionId
         JDialog({ model.dismissCascade() }, title = stringResource(R.string.settings_ext_dependents_title), text = ExtensionText.cascade(res, ask, name),
             destructive = true, confirm = stringResource(R.string.settings_ext_dependents_remove) to {
-                scope.launch { if (model.confirmCascade()) feedback?.notice(ExtensionText.uninstalled(res, name, ask.members, model.removal)) }
+                scope.launch {
+                    if (model.confirmCascade() && model.state.value.removalNotice == null) {
+                        feedback?.notice(ExtensionText.uninstalled(res, name, ask.members, model.removal))
+                    }
+                }
             })
+    }
+    state.removalNotice?.let { notice ->
+        ExtensionRemovalWarningsSheet(notice, onDone = model::dismissRemovalNotice)
     }
     state.partial?.let { PackPartialDialog(it, extension?.label ?: extensionId, names) { model.dismissPartial() } }
 }
@@ -391,7 +402,7 @@ private fun LazyListScope.catalogExtensionBody(
         item("about-homepage") {
             val uri = LocalUriHandler.current
             JGroupItem(GroupPosition.of(count - 1, count)) {
-                JRow(stringResource(R.string.settings_ext_about_homepage), leadingIcon = PhIcons.ArrowSquareOut, chevron = false, onClick = { runCatching { uri.openUri(url) } })
+                JRow(stringResource(R.string.settings_ext_about_homepage), leadingIcon = PhIcons.ArrowSquareOut, chevron = false, onClick = { val _ = runCatching { uri.openUri(url) } })
             }
         }
     }
@@ -504,7 +515,9 @@ internal fun UninstallDialog(
     var keep by remember { mutableStateOf(true) }
     var withMembers by remember { mutableStateOf(false) }
     val version = installedVersion?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_extension_missing)
-    val text = stringResource(R.string.settings_extension_remove_version, version) + "\n\n" + stringResource(R.string.settings_ext_uninstall_text)
+    val cleanup = stringResource(if (keep) R.string.settings_ext_uninstall_keep_result else R.string.settings_ext_uninstall_delete_data_result)
+    val text = stringResource(R.string.settings_extension_remove_version, version) + "\n\n" +
+        stringResource(R.string.settings_ext_uninstall_text) + "\n\n" + cleanup
     JDialog(onDismiss, title = stringResource(R.string.settings_ext_uninstall_title, name), text = text,
         confirm = stringResource(R.string.settings_ext_uninstall) to { onConfirm(keep, withMembers && members.isNotEmpty()) }, destructive = true) {
         UninstallChoice(keep, { keep = it }, stringResource(R.string.settings_ext_keep_data), stringResource(R.string.settings_ext_keep_data_hint), "uninstall-keep-data")
@@ -560,6 +573,7 @@ fun ExtensionMarketsPage(extensions: ExtensionManagement?, onBack: () -> Unit) {
         return
     }
     val res = LocalResources.current
+    val assistant = currentAssistant()
     val model = remember(extensions, res) { MarketsModel(extensions, res) }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -567,7 +581,6 @@ fun ExtensionMarketsPage(extensions: ExtensionManagement?, onBack: () -> Unit) {
     var adding by remember { mutableStateOf(false) }
     var acting by remember { mutableStateOf<ExtensionMarket?>(null) }
     var tokenFor by remember { mutableStateOf<ExtensionMarket?>(null) }
-    var removing by remember { mutableStateOf<ExtensionMarket?>(null) }
     val uri = LocalUriHandler.current
     LaunchedEffect(model) { model.load() }
     val markets = state.markets
@@ -610,13 +623,13 @@ fun ExtensionMarketsPage(extensions: ExtensionManagement?, onBack: () -> Unit) {
                     JGroupItem(GroupPosition.of(index, markets.size)) {
                         JRow(market.label, subtitle = market.spec + "\n" + CatalogText.marketLine(res, market), subtitleLines = 3, leadingIcon = PhIcons.Cube,
                             trailing = when {
-                                state.working == market.id -> ({ JSpinner() })
+                                state.working == market.id || state.preparingRemoval == market.id -> ({ JSpinner() })
                                 !market.error.isNullOrBlank() -> ({ JIcon(PhIcons.WarningCircle, stringResource(R.string.settings_ext_unavailable), tint = PersonaTheme.palette.danger.dot) })
                                 market.signature?.failed == true -> ({ JIcon(PhIcons.WarningCircle, stringResource(R.string.settings_ext_market_bad_signature), tint = PersonaTheme.palette.danger.dot) })
                                 market.official -> ({ JTag(stringResource(R.string.settings_ext_market_official)) })
                                 else -> null
                             },
-                            chevron = true, enabled = state.working == null, onClick = { acting = market })
+                            chevron = true, enabled = state.working == null && state.preparingRemoval != market.id, onClick = { acting = market })
                     }
                 }
             }
@@ -657,9 +670,11 @@ fun ExtensionMarketsPage(extensions: ExtensionManagement?, onBack: () -> Unit) {
                 tokenFor = market
             }),
             market.homepage?.takeIf { ExtensionViewText.isHttps(it) }?.let { url ->
-                JAction(stringResource(R.string.settings_ext_open_homepage), icon = PhIcons.ArrowSquareOut, onClick = { runCatching { uri.openUri(url) } })
+                JAction(stringResource(R.string.settings_ext_open_homepage), icon = PhIcons.ArrowSquareOut, onClick = { val _ = runCatching { uri.openUri(url) } })
             },
-            JAction(stringResource(R.string.settings_ext_remove_market), icon = PhIcons.Trash, destructive = true, separatorBefore = true, onClick = { removing = market }),
+            JAction(stringResource(R.string.settings_ext_remove_market), icon = PhIcons.Trash, destructive = true, separatorBefore = true, onClick = {
+                scope.launch { model.prepareRemoval(market.id, assistant) }
+            }),
         ), { acting = null }, title = market.label, note = market.description?.takeIf { it.isNotBlank() })
     }
     if (adding) AddMarketSheet(state, onDismiss = { adding = false }) { spec, token ->
@@ -677,12 +692,15 @@ fun ExtensionMarketsPage(extensions: ExtensionManagement?, onBack: () -> Unit) {
             }
         }
     }
-    removing?.let { market ->
-        JDialog({ removing = null }, title = stringResource(R.string.settings_ext_remove_market_title, market.label), text = stringResource(R.string.settings_ext_remove_market_text),
-            confirm = stringResource(R.string.settings_ext_remove) to {
-                removing = null
-                scope.launch { if (model.remove(market.id)) feedback?.notice(res.getString(R.string.settings_ext_market_removed)) }
-            }, destructive = true)
+    state.removal?.let { removal ->
+        markets?.firstOrNull { it.id == removal.marketId }?.let { market ->
+            JDialog({ model.dismissRemoval() }, title = stringResource(R.string.settings_ext_remove_market_title, market.label),
+                text = marketRemovalText(res, removal.count),
+                confirm = stringResource(R.string.settings_ext_remove) to {
+                    model.dismissRemoval()
+                    scope.launch { if (model.remove(market.id)) feedback?.notice(res.getString(R.string.settings_ext_market_removed)) }
+                }, destructive = true)
+        }
     }
 }
 
@@ -720,7 +738,7 @@ private fun TokenSheet(market: ExtensionMarket, busy: Boolean, error: String? = 
                 // The browser, not an in-app page: GitHub's form needs the user's GitHub session.
                 val uri = LocalUriHandler.current
                 SettingsCaption(stringResource(R.string.settings_ext_token_create_hint))
-                JButton(stringResource(R.string.settings_ext_token_create), { runCatching { uri.openUri(GitHubTokenUrl) } }, kind = JButtonKind.Secondary,
+                JButton(stringResource(R.string.settings_ext_token_create), { val _ = runCatching { uri.openUri(GitHubTokenUrl) } }, kind = JButtonKind.Secondary,
                     size = JButtonSize.Small, icon = PhIcons.ArrowSquareOut)
             }
             error?.let { JInlineStatus(it, tone = InlineTone.Failed) }

@@ -14,17 +14,23 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     @Environment(\.horizontalSizeClass) private var widthClass
     /// Whether the list column shows (its button in the toolbar closes it).
     @State private var columns = SplitColumns.shown
+    /// What the split hands the pages under it, the same objects for its life (#10303): `SplitShowList`.
+    @State private var showList = SplitShowList()
+    @State private var pusher = SplitPush()
     @Binding var path: NavigationPath
     /// iOS: whether the list column is shown, remembered under this key (`SplitListMemory`), and slid by a finger
     /// (`SplitColumnControl`); nil: nothing kept, no slide.
     var listKey: String? = nil
     /// The pages the list opens (`navigationDestination`s), registered in both layouts.
     var destinations: Destinations
-    /// The Assistant | Agents switch over the page column, on a phone's tabs (iPhone Duo open: `pageTabSwitch`, #2623).
-    var pageSwitch = false
     /// The list column's own color, for the strip over it on the iPad (`SidebarTopFill`) and behind the phone's drawer;
     /// nil, the system sidebar's.
     var columnColor: Color? = nil
+    /// The Sidebar layout's page (#8359): `empty` draws the root the sidebar picked, and the path holds only what is
+    /// opened inside it. Its first page is the root itself (`firstPage`), and a pushed page always has Back.
+    var rootsSwap = false
+    /// The root the sidebar picked (`rootsSwap`): a new one, as a new path, slides a list laid over the page away.
+    var selection: AnyHashable? = nil
     #if os(iOS)
     /// The Sidebar layout on a phone's width (#6332): the list in this drawer, the pages one stack whose root is `empty`
     /// (`drawerLayout`); nil, the list at the stack's root as before. Set around this split only (`splitDrawer`): it is
@@ -48,15 +54,20 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     /// bars, the list's does not). Read under side bars only, where `topPad` uses them (`readsSafeTop`).
     @State private var listSafeTop: CGFloat = 0
     @State private var pageSafeTop: CGFloat = 0
+    #else
+    /// No system bars down the side off iOS (#9310): visionOS's split passes `SplitDetail` none, as the Mac's does.
+    private var sideBars: Bool { false }
     #endif
 
-    init(path: Binding<NavigationPath>, listKey: String? = nil, destinations: Destinations, pageSwitch: Bool = false,
-         columnColor: Color? = nil, @ViewBuilder sidebar: () -> Sidebar, @ViewBuilder empty: () -> Empty) {
+    init(path: Binding<NavigationPath>, listKey: String? = nil, destinations: Destinations, columnColor: Color? = nil,
+         rootsSwap: Bool = false, selection: AnyHashable? = nil,
+         @ViewBuilder sidebar: () -> Sidebar, @ViewBuilder empty: () -> Empty) {
         _path = path
         self.listKey = listKey
         self.destinations = destinations
-        self.pageSwitch = pageSwitch
         self.columnColor = columnColor
+        self.rootsSwap = rootsSwap
+        self.selection = selection
         self.sidebar = sidebar()
         self.empty = empty()
         #if os(iOS)
@@ -66,8 +77,12 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
         #endif
     }
 
+    /// The page in front is the first one: nothing under it to go back to. With roots (#8359) that is the root alone;
+    /// otherwise the first page the list opened, beside it.
+    private var firstPage: Bool { rootsSwap ? path.isEmpty : path.count <= 1 }
+
     var body: some View {
-        layout.environment(\.splitPush, SplitPush { [path = $path] value in path.wrappedValue.append(value) })
+        layout.environment(\.splitPush, pusher.set { [path = $path] value in path.wrappedValue.append(value) })
         #if os(iOS)
             .environment(\.splitDrawer, nil)
             .environment(\.splitSideBars, false)
@@ -101,7 +116,7 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 }
             }
             .navigationSplitViewStyle(.balanced)
-            .environment(\.splitDetail, SplitDetail(isFirstPage: path.count <= 1))
+            .environment(\.splitDetail, SplitDetail(isFirstPage: firstPage))
             // The detail column once came out a few points wide, the chat squeezed into it (2026-11-02, not reproduced):
             // what the columns and the stack did, for the next time (`log show --predicate 'category == "split"'`).
             .onChange(of: columns) { old, new in
@@ -115,6 +130,12 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 // back: the sidebar folded and unfolded on every tap.
                 sidebar.modifier(destinations)
                     #if os(iOS)
+                    // Roots (#8603): the column has its own fold button and each root its own sidebar button
+                    // (`ListButtonItem`; an Agent's chat its header's, or under side bars its side column's first item);
+                    // the system's toggle was not drawn again after a root's drill-down was popped. Under side bars (the
+                    // Duo on its side) too (#11636): there it was missing after a pop as well, and on an Agent's chat,
+                    // which removes the bar's title row the toggle is drawn in, always.
+                    .toolbar(removing: rootsSwap ? .sidebarToggle : nil)
                     .safeAreaPadding(.top, topPad(listSafeTop))
                     .background { readsSafeTop { listSafeTop = $0 } }
                     #endif
@@ -126,8 +147,6 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                     empty.modifier(destinations)
                 }
                 #if os(iOS)
-                // The stack's root page only: the pages opened on it carry their own (`SplitDetailPage`, #3680).
-                .safeAreaInset(edge: .top, spacing: 0) { if pageSwitch { PageTabSwitchRow() } }
                 .safeAreaPadding(.top, topPad(pageSafeTop))
                 .background { readsSafeTop { pageSafeTop = $0 } }
                 .background { columnControl }
@@ -153,8 +172,9 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
             #endif
             // On the whole split, not the detail stack: its pages are built from the destinations the sidebar
             // registered, in the sidebar's environment.
-            .environment(\.splitDetail, SplitDetail(isFirstPage: path.count <= 1, listHidden: columns == .detailOnly, pageSwitch: pageSwitch))
-            .environment(\.splitShowList, SplitShowList(show: { [columns = $columns] in
+            .environment(\.splitDetail, SplitDetail(isFirstPage: firstPage, listHidden: columns == .detailOnly,
+                                                     sideBars: sideBars, roots: rootsSwap))
+            .environment(\.splitShowList, showList.set(show: { [columns = $columns] in
                 withAnimation(Theme.Motion.layout) { columns.wrappedValue = SplitColumns.shown }
             }, hide: { [columns = $columns] in
                 withAnimation(Theme.Motion.layout) { columns.wrappedValue = .detailOnly }
@@ -162,6 +182,9 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
             #if os(iOS)
             // A pick that changes the page (an Agent, a place): a list laid over the page goes (#4852).
             .onChange(of: path) { hideOverlay() }
+            // A new root the sidebar picked, with no path to change (#8359): the content is already replaced, the list's
+            // sliding away is the only motion.
+            .onChange(of: selection) { hideOverlay() }
             #endif
             #endif
         } else {
@@ -192,13 +215,15 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     }
 
     #if os(iOS)
-    /// Under side bars both columns start lower, together (#4853): at least `Theme.Space.l`, as ChatGPT's open Duo, and
-    /// as low as the lower of their own tops (the system gives the page room for its bar there), so the column's head and
-    /// the page's top stay on one line. Set inside each column: the split's columns do not take a safe area given
-    /// around it.
+    /// Under side bars both columns start lower (#4853): at least `Theme.Space.l`, as ChatGPT's open Duo, so the column's
+    /// head and the conversation's top bar stay on one line. Never from the page's own top (#8359): that is the root's
+    /// navigation bar, 0 on the conversation (its bar floats over it), 82 pt on a place, 24 on an Agent's chat, and the
+    /// column's head followed it down on every page but the conversation. The column's head stays where the conversation
+    /// has it; a page with a bar of its own takes no more. Set inside each column: the split's columns do not take a safe
+    /// area given around it.
     private func topPad(_ own: CGFloat) -> CGFloat {
         guard sideBars else { return 0 }
-        return max(0, max(Theme.Space.l, listSafeTop, pageSafeTop) - own)
+        return max(0, max(Theme.Space.l, listSafeTop) - own)
     }
 
     /// A column's own top safe area, for `topPad`: read under side bars only, by a clear view behind the column, which comes
@@ -228,10 +253,11 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     /// it opens the drawer as on the conversation (`AssistantDrawerLayout.firstPages`). Behind the drawer, the column's
     /// color (the Agents list's own page color without one): its head and foot and the list are one surface, in dark mode too.
     private func drawerLayout(_ drawer: AssistantDrawer) -> some View {
-        AssistantDrawerLayout(drawer: drawer, enabled: path.count <= 1, backdrop: columnColor ?? Theme.groupedPage, firstPages: true, sidebar: { sidebar }, page:
+        // With roots (#8359) the drawer's drag works at the root, and a pushed page's back swipe has the first page too.
+        AssistantDrawerLayout(drawer: drawer, enabled: firstPage, backdrop: columnColor ?? Theme.groupedPage, firstPages: !rootsSwap, sidebar: { sidebar }, page:
             NavigationStack(path: $path) { empty.modifier(destinations) })
-            .environment(\.splitDetail, SplitDetail(isFirstPage: path.count <= 1, listHidden: true, drawer: true))
-            .environment(\.splitShowList, SplitShowList(show: { drawer.open() }))
+            .environment(\.splitDetail, SplitDetail(isFirstPage: firstPage, listHidden: true, drawer: true))
+            .environment(\.splitShowList, showList.set(show: { drawer.open() }))
     }
     #endif
 }
@@ -330,11 +356,13 @@ struct SplitDetail: Equatable {
     /// The page is a window of its own (the Mac's chat window), not a split's detail column: the window's title bar has
     /// its title.
     var ownWindow = false
-    /// The Assistant | Agents switch rides over each page of the column (a phone's tabs, `pageTabSwitch`, #3680).
-    var pageSwitch = false
     /// The Sidebar layout on a phone (#6332): the list is the drawer's, and a first page has the drawer's button where a
     /// back would be.
     var drawer = false
+    /// The system's bars run down the side (the open Duo on its side, #4853): their Show Sidebar brings the list back.
+    var sideBars = false
+    /// The list picks the page's root (#8359, `SplitNavigation(rootsSwap:)`): a root draws its own sidebar button.
+    var roots = false
 }
 
 extension EnvironmentValues {
@@ -355,23 +383,51 @@ extension EnvironmentValues {
 
 /// Brings a `SplitNavigation`'s list column back, or (the Sidebar layout's Persona page, its sidebar button, #6332)
 /// folds it away.
-struct SplitShowList {
-    var show: () -> Void
-    var hide: (() -> Void)? = nil
+///
+/// One for the split's life, its actions set again each time the split's body runs (`SplitNavigation`): made in the body,
+/// a value of closures never compared equal to the last, and every page under the split that reads it ran again with the
+/// split's body, and with each of them everything it hands closures down to (each message of the conversation). The
+/// split's body runs as a tab's page leaves the window and comes back: three or four times on each switch between the
+/// open iPhone Duo's tabs (#10303).
+@MainActor final class SplitShowList {
+    private(set) var show: () -> Void
+    private(set) var hide: (() -> Void)?
     /// Slides the list away if it lies over the page (#4852), for a pick that leaves the page as it was (the conversation
     /// picked while it is already there); beside the page it stays.
-    var hideOverlay: (() -> Void)? = nil
+    private(set) var hideOverlay: (() -> Void)?
+
+    init(show: @escaping () -> Void = {}, hide: (() -> Void)? = nil, hideOverlay: (() -> Void)? = nil) {
+        self.show = show
+        self.hide = hide
+        self.hideOverlay = hideOverlay
+    }
+
+    /// The split's current actions; the object handed down stays the same.
+    func set(show: @escaping () -> Void, hide: (() -> Void)? = nil, hideOverlay: (() -> Void)? = nil) -> SplitShowList {
+        self.show = show
+        self.hide = hide
+        self.hideOverlay = hideOverlay
+        return self
+    }
 }
 
-/// Appends a value to a `SplitNavigation`'s path.
-struct SplitPush {
-    var push: (any Hashable) -> Void
+/// Appends a value to a `SplitNavigation`'s path. One for the split's life, as `SplitShowList`.
+@MainActor final class SplitPush {
+    private(set) var push: (any Hashable) -> Void
+
+    init(push: @escaping (any Hashable) -> Void = { _ in }) {
+        self.push = push
+    }
+
+    func set(_ push: @escaping (any Hashable) -> Void) -> SplitPush {
+        self.push = push
+        return self
+    }
 }
 
 extension View {
-    /// A page the list opens: in the split's detail column its first page has no back button, and on a phone's tabs each
-    /// page there carries the Assistant | Agents switch (`SplitDetail.pageSwitch`, #3680). `ownsBack`: the page shows or
-    /// hides the system's back itself (an Agents chat); on iOS this leaves it alone, as an outer
+    /// A page the list opens: in the split's detail column its first page has no back button. `ownsBack`: the page
+    /// shows or hides the system's back itself (an Agents chat); on iOS this leaves it alone, as an outer
     /// `navigationBarBackButtonHidden(false)` wins over the page's own `true` (iPhone Duo's side bars, 2026-11-04: the
     /// system's back beside the chat's own, two backs). On the Mac the title row draws no ‹ for it: the chat's header
     /// has its own, shown only with a page under the chat (#1337).
@@ -391,9 +447,12 @@ private struct SplitDetailPage: ViewModifier {
             if ownsBack { content } else { content.navigationBarBackButtonHidden(split?.isFirstPage == true) }
         }
         #if os(iOS)
-        .modifier(PageTabSwitchInset(shown: split?.pageSwitch == true))
         // The Sidebar layout on a phone (#6332): a first page opens the drawer where its back would be.
         .modifier(DrawerButtonItem(shown: !ownsBack && split?.drawer == true && split?.isFirstPage == true))
+        // A first page with its list folded beside or over it (#8603): the sidebar's button where a back would be.
+        // Under side bars it is the side column's first item, where Back is on a sub-page (#11636).
+        .modifier(ListButtonItem(shown: !ownsBack && split?.roots == true && split?.drawer != true
+                                    && split?.isFirstPage == true && split?.listHidden == true))
         #endif
         #endif
     }
@@ -540,21 +599,50 @@ struct SplitPageMin: ViewModifier {
 /// The drawer's button at the leading edge of a first page's bar in the Sidebar layout on a phone (#6332): the persona's
 /// face as on the conversation (`ShellPersonaButton`, the inbox's mark), with how many Agents need the user. Only where
 /// it shows; everywhere else the page is left exactly as it was.
-struct DrawerButtonItem: ViewModifier {
+/// A root's button that brings its folded list back (#8603): the page was picked in the list, so where a back would be
+/// it has the sidebar's button, as the main conversation has. Not the system's toggle (removed on the roots' column):
+/// UIKit drew that on a root at first but not again after a page pushed on the root was popped (the open Duo upright,
+/// Inbox → an Agent's chat → Back), which left the root with no way back to the sidebar.
+struct ListButtonItem: ViewModifier {
     var shown: Bool
     @Environment(\.splitShowList) private var showList
 
     func body(content: Content) -> some View {
         if shown {
-            content.toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    ShellPersonaButton(id: "sidebar-drawer-button") { showList?.show() }
-                        .overlay(alignment: .topTrailing) { SidebarWaitingBadge() }
+            content
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { showList?.show() } label: {
+                            Label(String(localized: "Show Sidebar"), systemImage: Theme.Icon.sidebar).labelStyle(.iconOnly)
+                        }
+                        .accessibilityIdentifier("sidebar-show-button")
+                    }
                 }
-                .sharedBackgroundVisibility(.hidden)
-            }
         } else {
             content
+        }
+    }
+}
+
+struct DrawerButtonItem: ViewModifier {
+    var shown: Bool
+    @Environment(\.splitShowList) private var showList
+
+    func body(content: Content) -> some View {
+        if !shown {
+            content
+        } else if #available(iOS 26.0, *) {
+            content.toolbar { item.sharedBackgroundVisibility(.hidden) }
+        } else {
+            // iOS 18 (#6730): no glass behind the item to hide.
+            content.toolbar { item }
+        }
+    }
+
+    private var item: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            ShellPersonaButton(id: "sidebar-drawer-button") { showList?.show() }
+                .overlay(alignment: .topTrailing) { SidebarWaitingBadge() }
         }
     }
 }

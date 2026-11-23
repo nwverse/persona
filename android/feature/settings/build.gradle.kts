@@ -1,5 +1,7 @@
 plugins {
     id("persona.android.library")
+    // Its tests expect CoreText in Simplified Chinese (CoreTextFallback).
+    id("persona.coretext.zh")
     id("persona.compose")
     id("persona.hilt")
 }
@@ -50,8 +52,11 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test.ext:junit:1.3.0")
     implementation(project(":core:contracts"))
+    implementation(project(":core:data"))
     implementation(project(":core:hub"))
     implementation(project(":core:domain"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:navigation"))
+    // The link card for the welcome page's public guide (PairingScreen.kt); feature:chat does not depend on this module.
+    implementation(project(":feature:chat"))
 }

@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"path/filepath"
 
 	"github.com/nwverse/persona/server/internal/identity"
@@ -14,6 +15,7 @@ import (
 // fleetMachine is one machine as the moved code needs it; manager is the manager this assistant is (Service.id).
 type fleetMachine struct {
 	ID, Name, Home, DataDir string
+	HomeReal                string // Home with its links followed, when another path (proto.NodeInfo.HomeReal)
 	manager                 string
 }
 
@@ -34,7 +36,7 @@ func (s *Service) fleetMachines() []fleetMachine {
 	}
 	var out []fleetMachine
 	for _, d := range s.devs.List() {
-		out = append(out, fleetMachine{ID: d.ID, Name: d.Name, Home: d.Home, DataDir: d.DataDir, manager: s.id})
+		out = append(out, fleetMachine{ID: d.ID, Name: d.Name, Home: d.Home, HomeReal: d.HomeReal, DataDir: d.DataDir, manager: s.id})
 	}
 	return out
 }
@@ -50,7 +52,7 @@ func (s *Service) fleetMachine(id string) (fleetMachine, bool) {
 	if !ok {
 		return fleetMachine{}, false
 	}
-	return fleetMachine{ID: d.ID, Name: d.Name, Home: d.Home, DataDir: d.DataDir, manager: s.id}, true
+	return fleetMachine{ID: d.ID, Name: d.Name, Home: d.Home, HomeReal: d.HomeReal, DataDir: d.DataDir, manager: s.id}, true
 }
 
 // machineName is the machine's name, its id when there is none.
@@ -69,6 +71,9 @@ func (s *Service) nodeCall(ctx context.Context, machine, method string, params, 
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err
+	}
+	if method == DeviceSessionModes && devicewire.ModeActorOf(ctx) == nil {
+		ctx = devicewire.WithModeActor(ctx, devicewire.AssistantModeActor())
 	}
 	res, err := s.devs.CallNode(ctx, machine, method, raw)
 	if err != nil || out == nil || len(res) == 0 {
@@ -123,7 +128,7 @@ func (s *Service) assistantSessions(m fleetMachine) []proto.Session {
 // it started (its row), rather than where the hook ran: Claude Code gives a hook the shell's directory after the
 // model's `cd`, and a health conversation's card from health/reports or /tmp went to the lock screen and the channels
 // in full (#2368). Every node lists a running headless conversation in its start directory, so this holds for older
-// nodes too. A hook directory inside a health space stays (identity.CardCwd): a mix-up can only hide more. A card
+// nodes too. A hook directory inside a space stays (identity.CardCwd): a mix-up can only hide more. A card
 // with no listed row, or an agent's, keeps its own.
 func (s *Service) placeCard(ix *proto.Interaction) {
 	if ix.SessionID == "" {

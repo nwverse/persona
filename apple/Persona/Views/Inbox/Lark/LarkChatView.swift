@@ -237,7 +237,7 @@ struct LarkChatView: View {
         .background(pageBackground)
         .themedPage()
         .navigationTitle(conversation.name)
-        .navigationSubtitle([isTopic ? String(localized: "Lark Topic Group") : String(localized: "Lark [Inbox Event Views 7e4419]"), conversation.accountName].compactMap { $0 }.joined(separator: " · "))
+        .navigationSubtitleWhenSupported([isTopic ? String(localized: "Lark Topic Group") : String(localized: "Lark [Inbox Event Views 7e4419]"), conversation.accountName].compactMap { $0 }.joined(separator: " · "))
         .navigationBarTitleDisplayMode(.inline)
         // Keep the bar's material during push/pop instead of resolving its scroll-edge state after arrival.
         .toolbarBackground(.bar, for: .navigationBar)
@@ -311,9 +311,18 @@ struct LarkChatView: View {
                 askReceiptsAgain()
             }
         }
-        .task {
-            for await _ in LarkSync.shared.changes(of: conversation.key) {
+        // Follows its chat only while its page is in front (a hidden shell page stays mounted, #10337). Back in front it
+        // catches up once; the first appearance's load already fetches the page (`landed` is false until it finished).
+        .tabActiveTask {
+            let changes = LarkSync.shared.changes(of: conversation.key)
+            if landed {
                 await refreshLatest()
+                guard !Task.isCancelled else { return }
+                askReceiptsAgain()
+            }
+            for await _ in changes {
+                await refreshLatest()
+                guard !Task.isCancelled else { return }
                 askReceiptsAgain()
             }
         }
@@ -522,7 +531,7 @@ struct LarkChatView: View {
                 composer
             }
         }
-        .confirmationDialog("Start Over?", isPresented: $confirmDraftRecovery, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Start Over?", isPresented: $confirmDraftRecovery, titleVisibility: .visible, hasCancel: true) {
             Button("Clear Draft and Start Over", role: .destructive) {
                 Task {
                     do {
@@ -535,7 +544,7 @@ struct LarkChatView: View {
         } message: {
             Text("This clears this chat's draft, pending messages and attachments on this device. Messages already sent in Lark aren't affected.")
         }
-        .confirmationDialog("Restore to Current Lark Account?", isPresented: $confirmLegacyDraft, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Restore to Current Lark Account?", isPresented: $confirmLegacyDraft, titleVisibility: .visible, hasCancel: true) {
             Button("It's This Account, Restore") { restoreLegacyDraft() }.lineLimit(1)
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -802,8 +811,9 @@ struct LarkChatView: View {
     /// `untouchedSince`: Jump to Latest took the list to its end with the drag count at this; the finger has not taken it since,
     /// so it is still at the end even when the geometry just after the window changed says otherwise.
     private func refreshLatest(untouchedSince: Int? = nil) async {
-        guard !pager.hasNewer, let api = chatAPI, let r = try? await api.larkMessages(conversation.id, topic: isTopic),
-              !pager.hasNewer else { return } // (the window may have moved away meanwhile)
+        guard !Task.isCancelled, !pager.hasNewer, let api = chatAPI,
+              let r = try? await api.larkMessages(conversation.id, topic: isTopic),
+              !Task.isCancelled, !pager.hasNewer else { return } // (the window may have moved away meanwhile)
         problem = nil // it answers again (the Lark gateway signed in again, the network is back)
         switch pager.latest(r) {
         case .fresh(let fresh):
@@ -1634,10 +1644,11 @@ struct LarkMessageRow: View {
                 // Mine have no avatar; the empty slot keeps them as far from the left edge as others' are from the right.
                 Group {
                     if avatar {
-                        LarkAvatarImage(name: m.senderName, url: m.senderAvatar, size: Theme.Size.wellM)
-                            .onTapGesture { showProfile() }
-                            .accessibilityAddTraits(.isButton)
-                            .accessibilityLabel("\(m.senderName)'s profile")
+                        Button(action: showProfile) {
+                            LarkAvatarImage(name: m.senderName, url: m.senderPicture, size: Theme.Size.wellM)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(m.senderName)'s profile")
                     } else { Color.clear }
                 }
                 .scaledFrame(width: Theme.Size.wellM, height: avatar ? Theme.Size.wellM : Theme.Size.line)
@@ -1683,7 +1694,7 @@ struct LarkMessageRow: View {
 
     private func showProfile() {
         guard let id = message.senderID, !id.isEmpty else { return }
-        openProfile?(LarkPersonRef(id: id, name: message.senderName, avatar: message.senderAvatar, feedID: feedID))
+        openProfile?(LarkPersonRef(id: id, name: message.senderName, avatar: message.senderPicture, feedID: feedID))
     }
 
     private var recallNotice: String { message.recallNotice }

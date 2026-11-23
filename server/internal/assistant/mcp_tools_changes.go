@@ -34,24 +34,53 @@ func (c *mcpToolChanges) notify() {
 	c.cursor, c.changed = randomHex(16), make(chan struct{})
 }
 
-// The heartbeat lets the node re-resolve a pane whose identity arrived after its
-// first list, and bounds a watch across a lost link. It is not a discovery deadline.
-const mcpToolsHeartbeat = 30 * time.Second
+// mcpToolsHeartbeat is a discovery heartbeat, not a legacy startup wait. Revision-aware calls never use leaderListWait.
+var mcpToolsHeartbeat = 30 * time.Second
+
+// mcpToolsWatchEvent is a test-only observation hook. Production leaves it nil.
+var mcpToolsWatchEvent func(string)
+
+func noteMCPWatchEvent(event string) {
+	if mcpToolsWatchEvent != nil {
+		mcpToolsWatchEvent(event)
+	}
+}
+
+type revisionDiscoveryKey struct{}
 
 func (s *Service) sessionMCPToolsSince(ctx context.Context, machine, session string, assistant, guest bool, since string) map[string]any {
-	cursor, changed := s.mcpChanges.snapshot()
+	if since != "" {
+		ctx = context.WithValue(ctx, revisionDiscoveryKey{}, true)
+	}
+	ctx = context.WithValue(ctx, guardDecisionKey{}, &guardDecisionCapture{})
+	base, changed := s.mcpChanges.snapshot()
+	cursor := s.guardDiscoveryCursor(ctx, machine, session, assistant, base)
 	if since == cursor {
+		noteMCPWatchEvent("wait")
 		timer := time.NewTimer(mcpToolsHeartbeat)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
 			return map[string]any{"revision": cursor, "unchanged": true}
 		case <-timer.C:
-			return map[string]any{"revision": cursor, "unchanged": true}
+			noteMCPWatchEvent("heartbeat")
+			// A heartbeat also rechecks filter state: expiry and read recovery do not call notify themselves.
+			base, _ = s.mcpChanges.snapshot()
+			ctx = context.WithValue(ctx, guardDecisionKey{}, &guardDecisionCapture{})
+			next := s.guardDiscoveryCursor(ctx, machine, session, assistant, base)
+			if next == cursor {
+				return map[string]any{"revision": cursor, "unchanged": true}
+			}
+			cursor = next
 		case <-changed:
-			cursor, _ = s.mcpChanges.snapshot()
+			base, _ = s.mcpChanges.snapshot()
+			ctx = context.WithValue(ctx, guardDecisionKey{}, &guardDecisionCapture{})
+			cursor = s.guardDiscoveryCursor(ctx, machine, session, assistant, base)
 		}
 	}
+	// Filter with a fresh capture and return its decision as the revision too. An admission read and a list read may
+	// disagree transiently, but the list and revision a client caches always come from the same effective decision.
+	ctx = context.WithValue(ctx, guardDecisionKey{}, &guardDecisionCapture{})
 	tools, err := s.sessionMCPToolsChecked(ctx, machine, session, assistant, guest)
 	if err != nil {
 		return map[string]any{"error": err.Error()}
@@ -59,5 +88,5 @@ func (s *Service) sessionMCPToolsSince(ctx context.Context, machine, session str
 	if tools == nil {
 		tools = []proto.Tool{}
 	}
-	return map[string]any{"tools": tools, "revision": cursor}
+	return map[string]any{"tools": tools, "revision": s.guardDiscoveryCursor(ctx, machine, session, assistant, base)}
 }

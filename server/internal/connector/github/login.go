@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // Signing in from the app with GitHub's device flow (docs/extensions/connectors.md "Login supports"): the hub asks GitHub for a code
@@ -34,6 +35,8 @@ type deviceLogin struct {
 	// Account is the account the inbox was last read as (account.go), kept with the sign-in so that a restart does
 	// not forget it. It is not a secret; this is the one store the connector has.
 	Account *accountRecord `json:"account,omitempty"`
+	// InboxMessages preserves message identities across a restart, in the same store as the account.
+	InboxMessages map[string]inboxMessageRecord `json:"inbox_messages,omitempty"`
 }
 
 // devicePending is a device code waiting for the user.
@@ -257,7 +260,9 @@ func (c *Connector) postForm(ctx context.Context, path string, form url.Values, 
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return errors.New(Scrub(err.Error()))
+		// Transport errors may contain a proxy address or credentials, which Scrub only masks for GitHub tokens.
+		// Keep the remediation, not the underlying network diagnostic. Response read errors remain scrubbed below.
+		return i18n.Err("connector-github.device_unreachable")
 	}
 	defer resp.Body.Close()
 	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

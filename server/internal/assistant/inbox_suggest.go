@@ -37,7 +37,8 @@ type suggestIn struct {
 	Follow   *suggestFollow   `json:"follow"`
 	Reported *suggestReported `json:"reported"`
 	// Item names the event: needed from a conversation it was handed to (Hand to AI, inbox_handoff.go).
-	Item string `json:"item"`
+	Item           string `json:"item"`
+	ProcessingTurn string `json:"processing_turn"`
 }
 
 var errNotProcessing = i18n.ErrEnglish("inbox-errors.not_processing")
@@ -46,6 +47,8 @@ var errNotProcessing = i18n.ErrEnglish("inbox-errors.not_processing")
 type errSuggestion struct{ msg string }
 
 func (e errSuggestion) Error() string { return e.msg }
+
+var errStaleInboxTurn = errSuggestion{"this Inbox processing turn has been superseded or its processing_turn is missing; nothing was written; end this turn"}
 
 var errSuggestFiled = errSuggestion{"this inbox item is already filed, so the suggestion was not submitted and the user cannot see it; end this turn"}
 var errReportedFiled = errSuggestion{"this inbox item is already filed, so the reported step was not recorded; end this turn"}
@@ -166,6 +169,10 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			return "", nil, nil, false, errNotProcessing
 		}
 	}
+	if from == nil && in.ProcessingTurn != it.Agent.ProcessingTurn {
+		b.mu.Unlock()
+		return "", nil, nil, false, errStaleInboxTurn
+	}
 	if from == nil && (in.Kind != "" || in.Follow != nil) && !it.open() {
 		b.mu.Unlock()
 		return "", nil, nil, false, errSuggestFiled
@@ -236,12 +243,25 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		}
 	}
 	if in.Kind != "" && it.open() {
+		if from != nil {
+			for i := range it.Handoffs {
+				if it.Handoffs[i].MachineID == from.MachineID && it.Handoffs[i].SessionID == from.SessionID {
+					it.Handoffs[i].PendingSuggestion = false
+				}
+			}
+		}
 		if legacySuggestion(it) != nil {
 			it.SuggestSeq = max(it.SuggestSeq, 1)
 		}
-		it.SuggestSeq++
-		g := &InboxSuggestion{Version: it.SuggestSeq, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
+		g := &InboxSuggestion{Version: it.SuggestSeq + 1, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
 			Handback: in.Handback, Due: in.Due, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from}
+		if from != nil {
+			owner := *from
+			g.Owner = &owner
+		} else if it.Agent != nil {
+			g.Owner = &SessionRef{MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
+		}
+		g.SourceOf = suggestionReplyTarget(it)
 		if in.Kind == SuggestReply && !in.Handback {
 			g.MailTarget = mailTarget(*it)
 		}
@@ -250,7 +270,14 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 				g.MachineID = m.ID
 			}
 		}
+		if samePendingReply(it, g) {
+			// The reply and its authority/target are unchanged. Keep its card/version and any failed or uncertain
+			// attempt, while still saving this call's independently supplied recap/title/relationship updates.
+			goto suggestionKept
+		}
+		it.SuggestSeq++
 		it.Suggestion = g
+		inheritReplyUncertainty(it, g, g.Text)
 		var link *InboxChainLink
 		if from == nil {
 			it.Agent.Wake, it.Agent.Back = false, ""
@@ -289,6 +316,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		}
 		handed = handoffCardOf(it, g, in.Outcome)
 	}
+suggestionKept:
 	if in.Follow != nil && it.open() {
 		if g := legacySuggestion(it); g != nil {
 			it.SuggestSeq = max(it.SuggestSeq, 1)
@@ -330,9 +358,9 @@ func suggestWritesTitle(it *InboxItem) bool {
 }
 
 // inboxDraft keeps the reply drafted in conversation sessionID (inbox_draft, the older name): suggest with kind reply.
-func (s *Service) inboxDraft(ctx context.Context, sessionID, text, note string, proposed []DocChange) (string, *DocChange, error) {
-	id, refused, err := s.suggest(ctx, sessionID, suggestIn{Kind: SuggestReply, Text: text, Note: note, Changes: proposed})
-	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) {
+func (s *Service) inboxDraft(ctx context.Context, sessionID, text, note string, proposed []DocChange, processingTurn string) (string, *DocChange, error) {
+	id, refused, err := s.suggest(ctx, sessionID, suggestIn{Kind: SuggestReply, Text: text, Note: note, Changes: proposed, ProcessingTurn: processingTurn})
+	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) && !errors.Is(err, errStaleInboxTurn) {
 		return "", nil, nil
 	}
 	return id, refused, err

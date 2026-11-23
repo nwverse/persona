@@ -42,6 +42,7 @@ const (
 	nsActionCard    = "action_card"
 	nsNotifyUser    = "notify_user"
 	nsAuthorization = "authorization"
+	nsUrgentCall    = "urgent_call" // a matter that rang the owner's phone (urgent_call_tool.go), once however often it rang
 
 	// Where an interruption came from.
 	nsFromDot     = "dot" // the main conversation or a leader conversation
@@ -63,7 +64,7 @@ const (
 	outcomeUnknown = "unknown"
 )
 
-var nsCategories = []string{nsAskUser, nsActionCard, nsNotifyUser, nsAuthorization}
+var nsCategories = []string{nsAskUser, nsActionCard, nsNotifyUser, nsAuthorization, nsUrgentCall}
 
 // northStarSince is the setting saying when recording began, and by which build.
 type northStarSince struct {
@@ -215,7 +216,7 @@ func errCode(err error) string {
 }
 
 // ConversationSent: how an app's message to one of the assistant's conversations went, as the hub sent it.
-func (s *Service) ConversationSent(_ context.Context, r ConversationSent) {
+func (s *Service) ConversationSent(ctx context.Context, r ConversationSent) {
 	outcome := outcomeFailed
 	switch r.Outcome {
 	case assistantwire.ConversationDelivered:
@@ -226,6 +227,8 @@ func (s *Service) ConversationSent(_ context.Context, r ConversationSent) {
 	if outcome == outcomeFailed {
 		s.availOwnerFailed(r.MachineID, r.SessionID) // nothing was sent: no reply to wait for (availability.go)
 	}
+	// A direction's notes block counts as given only once the node took the send (direction_notes.go).
+	s.notesOwnerOutcome(ctx, r.SessionID, r.ClientMsgID, outcome != outcomeFailed)
 	s.recordSend(r.MachineID, r.SessionID, "resume", originApp, false, outcome, r.Code, r.Error)
 }
 
@@ -333,6 +336,9 @@ type InterruptExcluded struct {
 	// NotifyMissed counts the notify_user calls no device took when they were made, by why (notifyMissed): the hub
 	// handed them to no phone, computer or browser, so they did not interrupt the owner.
 	NotifyMissed map[string]int `json:"notify_missed"`
+	// CallSkipped counts the urgent calls that did not ring, by why (urgent_call_tool.go's gates, or no phone could
+	// take it): each went out as a P0 notification instead, counted under notify_user when a device took it.
+	CallSkipped map[string]int `json:"call_skipped"`
 }
 
 // InterruptSource is one source's count in one category.
@@ -379,7 +385,9 @@ type Availability struct {
 	ByOrigin      map[string]*Tally          `json:"by_origin"`
 	ByBuild       map[string]*Tally          `json:"by_build"`
 	Failures      []FailureReason            `json:"failures"`
-	Split         *AvailabilitySplit         `json:"split,omitempty"`
+	// FailuresByRole is the command's internal weekly aggregation seam; the daily JSON keeps its existing shape.
+	FailuresByRole map[string]map[string]int `json:"-"`
+	Split          *AvailabilitySplit        `json:"split,omitempty"`
 	// Gaps name what the window cannot see (docs/assistant/north-star.md "Coverage").
 	Gaps []string `json:"gaps"`
 }
@@ -439,7 +447,7 @@ func readNorthStar(ctx context.Context, st northStarStore, q northStarQuery) (No
 	if err != nil {
 		return ns, err
 	}
-	events, err := st.WorkEventsBetween(ctx, q.Since, q.Until, []string{notifyEvent, sendEvent, "ask_routed", "ask_escalated"})
+	events, err := st.WorkEventsBetween(ctx, q.Since, q.Until, []string{notifyEvent, sendEvent, "ask_routed", "ask_escalated", urgentCallEvent, urgentSkippedEvent})
 	if err != nil {
 		return ns, err
 	}
@@ -495,7 +503,7 @@ func readNorthStar(ctx context.Context, st northStarStore, q northStarQuery) (No
 
 func interruptions(q northStarQuery, roles convRoles, cards []db.NorthStarCard, events []db.WorkEvent, recorded func(time.Time) bool) Interruptions {
 	in := Interruptions{Categories: map[string]*InterruptCategory{}, Sources: []InterruptSource{},
-		Excluded: InterruptExcluded{NotifyMissed: map[string]int{}}}
+		Excluded: InterruptExcluded{NotifyMissed: map[string]int{}, CallSkipped: map[string]int{}}}
 	for _, c := range nsCategories {
 		in.Categories[c] = &InterruptCategory{BySource: map[string]int{}, ByKind: map[string]int{}}
 	}
@@ -575,6 +583,19 @@ func interruptions(q northStarQuery, roles convRoles, cards []db.NorthStarCard, 
 			}
 			todo, _ := e.Detail["todo"].(string)
 			count(nsNotifyUser, nsNotifyUser, e.MachineID, e.SessionID, todo, "")
+		case urgentCallEvent:
+			if test, _ := e.Detail["test"].(bool); test {
+				in.Excluded.Probe++ // Settings › Urgent calls › Test call
+				continue
+			}
+			why, _ := e.Detail["why"].(string)
+			count(nsUrgentCall, why, e.MachineID, e.SessionID, "", "")
+		case urgentSkippedEvent:
+			if test, _ := e.Detail["test"].(bool); test {
+				continue
+			}
+			reason, _ := e.Detail["reason"].(string)
+			in.Excluded.CallSkipped[reason]++
 		}
 	}
 	if !recorded(q.Since) {
@@ -592,7 +613,7 @@ func interruptions(q northStarQuery, roles convRoles, cards []db.NorthStarCard, 
 
 func availability(q northStarQuery, roles convRoles, attempts []nsAttempt, recordingSince *time.Time) Availability {
 	av := Availability{Conversations: []AvailabilityConversation{}, ByOp: map[string]*Tally{}, ByRole: map[string]*Tally{},
-		ByOrigin: map[string]*Tally{}, ByBuild: map[string]*Tally{}, Failures: []FailureReason{}, Gaps: []string{}}
+		ByOrigin: map[string]*Tally{}, ByBuild: map[string]*Tally{}, Failures: []FailureReason{}, FailuresByRole: map[string]map[string]int{}, Gaps: []string{}}
 	if roles.Main != "" {
 		av.Conversations = append(av.Conversations, AvailabilityConversation{SessionID: roles.Main, Role: roleMain})
 	}
@@ -617,7 +638,12 @@ func availability(q northStarQuery, roles convRoles, attempts []nsAttempt, recor
 		tally(av.ByOrigin, cmp.Or(a.Origin, "unknown")).add(a.Outcome)
 		tally(av.ByBuild, cmp.Or(a.Build, "before_recording")).add(a.Outcome)
 		if a.Outcome == outcomeFailed {
-			reasons[cmp.Or(a.Reason, "internal")]++
+			reason := cmp.Or(a.Reason, "internal")
+			reasons[reason]++
+			if av.FailuresByRole[a.Role] == nil {
+				av.FailuresByRole[a.Role] = map[string]int{}
+			}
+			av.FailuresByRole[a.Role][reason]++
 		}
 		if av.Split != nil {
 			if a.At.Before(av.Split.At) {
@@ -787,8 +813,13 @@ func (b briefNorthStar) lines(l i18n.Lang) []string {
 			return i18n.T(l, "assistant-north_star.not_recorded")
 		}
 		n := ns.Interruptions
-		v := i18n.T(l, "assistant-north_star.count", i18n.Args{"n": n.Total, "ask": n.Categories[nsAskUser].Count,
-			"cards": n.Categories[nsActionCard].Count, "notify": n.Categories[nsNotifyUser].Count, "auth": n.Categories[nsAuthorization].Count})
+		key := "assistant-north_star.count"
+		if n.Categories[nsUrgentCall].Count > 0 { // the urgent calls only when one rang, so the line is as it was without them
+			key = "assistant-north_star.count_calls"
+		}
+		v := i18n.T(l, key, i18n.Args{"n": n.Total, "ask": n.Categories[nsAskUser].Count,
+			"cards": n.Categories[nsActionCard].Count, "notify": n.Categories[nsNotifyUser].Count, "auth": n.Categories[nsAuthorization].Count,
+			"calls": n.Categories[nsUrgentCall].Count})
 		if n.Partial {
 			v += i18n.T(l, "assistant-north_star.partial")
 		}
@@ -892,7 +923,7 @@ func (s *Service) runFacts(ctx context.Context, t Task, now time.Time) string {
 	case t.Facts:
 		return s.briefStart(ctx, t, now)
 	case t.Report:
-		return s.northStarRunFacts(ctx, now)
+		return s.briefReportStart(ctx, t, now)
 	}
 	return ""
 }

@@ -52,6 +52,32 @@ func queueCall(t *testing.T, s *Service, method string, params map[string]any) (
 	return out, nil
 }
 
+func TestHonestPlanApprovalUsesRecordedMode(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name, kind, recorded, clientMode, want string
+		approve                                *bool
+	}{
+		{"recorded mode overrides the client", proto.IxPlan, "acceptEdits", proto.ModeBypass, "acceptEdits", &yes},
+		{"recorded mode fills an omitted client mode", proto.IxPlan, proto.ModeBypass, "", proto.ModeBypass, &yes},
+		{"legacy plan keeps the client mode", proto.IxPlan, "", "acceptEdits", "acceptEdits", &yes},
+		{"legacy plan keeps an omitted mode omitted", proto.IxPlan, "", "", "", &yes},
+		{"unknown recorded mode keeps the client's choice", proto.IxPlan, "futureMode", "default", "default", &yes},
+		{"recorded plan keeps the client's choice", proto.IxPlan, "plan", "acceptEdits", "acceptEdits", &yes},
+		{"rejection is not rewritten", proto.IxPlan, "acceptEdits", proto.ModeBypass, proto.ModeBypass, &no},
+		{"an unanswered plan is not rewritten", proto.IxPlan, "acceptEdits", proto.ModeBypass, proto.ModeBypass, nil},
+		{"another kind of approval is not rewritten", proto.IxPermission, "acceptEdits", proto.ModeBypass, proto.ModeBypass, &yes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ix := proto.Interaction{Kind: tc.kind, PlanThen: tc.recorded}
+			got := honest(ix, proto.Resolution{Approve: tc.approve, Mode: tc.clientMode})
+			if got.Mode != tc.want {
+				t.Fatalf("honest(%+v, mode %q) = mode %q, want %q", ix, tc.clientMode, got.Mode, tc.want)
+			}
+		})
+	}
+}
+
 // interactions.get is the interaction while it is pending, else how it ended; interactions.answer resolves only a
 // pending question of the session named, as the assistant's answer, and the history and the hub say so.
 func TestInteractionsQueue(t *testing.T) {
@@ -148,6 +174,10 @@ func TestResolveRoute(t *testing.T) {
 	if got := <-done; got.AnsweredBy != "" || got.Remembered || got.Answers["发吗？"] != "发" {
 		t.Fatalf("hook got %+v", got)
 	}
+	status, kept, err := ft.st.InteractionOutcome(context.Background(), ix.ID)
+	if err != nil || status != "resolved" || kept == nil || kept.AnsweredBy != "" || kept.Answers["发吗？"] != "发" {
+		t.Fatalf("an ordinary user's history answer changed: status %q, resolution %+v, err %v", status, kept, err)
+	}
 	if w := post(ix.ID, `{"answers":{"发吗？":"不发"}}`); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"already":true`) {
 		t.Fatalf("again: %d %s", w.Code, w.Body)
 	}
@@ -190,6 +220,45 @@ func TestResolveRouteRightAfterAnotherAnswer(t *testing.T) {
 	ft.s.fleet.mu.Unlock()
 	if w := post(); w.Code != http.StatusGone {
 		t.Fatalf("right after it ended: %d %s", w.Code, w.Body)
+	}
+}
+
+// The re-check of #10941: an extension's token that resolves a card over already is told it was answered, never the
+// answer (a health card's, or what was typed into a card's fields), right after the answer or from the history.
+func TestResolveRouteToAnExtension(t *testing.T) {
+	ft, ix, done := answerFleet(t)
+	h := ft.s.fleetHandler(http.NotFoundHandler())
+	post := func(role, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/api/v1/interactions/"+ix.ID+"/resolve", strings.NewReader(body))
+		if role != "" {
+			r.Header.Set(RoleHeader, role)
+		}
+		h.ServeHTTP(w, r)
+		return w
+	}
+	told := func(what string, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"already":true`) || strings.Contains(w.Body.String(), "resolution") ||
+			strings.Contains(w.Body.String(), "不发") {
+			t.Fatalf("%s: %d %s", what, w.Code, w.Body)
+		}
+	}
+	ft.s.fleet.mu.Lock()
+	p := ft.s.fleet.interactions[ix.ID]
+	p.claimed, p.resolution = true, &proto.Resolution{Answers: map[string]string{"发吗？": "不发"}}
+	ft.s.fleet.mu.Unlock()
+	told("right after the answer", post(roleExtension, `{}`))
+	ft.s.fleet.mu.Lock()
+	p.claimed, p.resolution = false, nil
+	ft.s.fleet.mu.Unlock()
+	if w := post("", `{"answers":{"发吗？":"不发"}}`); w.Code != http.StatusOK {
+		t.Fatalf("the owner's answer: %d %s", w.Code, w.Body)
+	}
+	<-done
+	told("from the history", post(roleExtension, `{}`))
+	if w := post("", `{}`); !strings.Contains(w.Body.String(), "不发") {
+		t.Fatalf("a device is told the answer: %d %s", w.Code, w.Body)
 	}
 }
 

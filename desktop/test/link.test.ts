@@ -10,6 +10,15 @@ test("Link commands have fixed argv and pairing credentials only on stdin", () =
   assert.equal(linkArguments({ action: "pair-active", value: "https://evil.test" }), undefined);
   assert.equal(linkArguments({ action: "rename", value: "x".repeat(41) }), undefined);
   assert.equal(linkArguments({ action: "pair-passive", value: "--help" }), undefined);
+  assert.deepEqual(linkArguments({ action: "plugin-install" }), { args: ["plugin", "install"] });
+  assert.deepEqual(linkArguments({ action: "plugin-uninstall" }), { args: ["plugin", "uninstall"] });
+});
+
+test("Link status forwards the Claude Code plugin's state words, never its directories or errors", () => {
+  const result = publicLinkStatus({ running: true, claude_plugin: { state: "installed", auto: true, version: "0.1.0", bundled: "0.1.0",
+    error: "C:\Users\someone\.claude: failed", config_dirs: [{ path: "/home/user/.claude", state: "installed" }] } });
+  assert.deepEqual(result, { running: true, claude_plugin: { state: "installed", auto: true, version: "0.1.0" } });
+  assert.deepEqual(publicLinkStatus({ claude_plugin: { state: "x".repeat(40), auto: "yes" } }), { claude_plugin: {} });
 });
 
 test("Link status never forwards config paths, credentials or logs", () => {

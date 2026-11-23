@@ -4,12 +4,16 @@ source "$(dirname "$0")/common.sh"
 lane="${1:-all}"
 [ "$#" -le 1 ] || { printf 'Usage: scripts/ci/server.sh [all|node|managers|other|build]\n' >&2; exit 2; }
 case "$lane" in all|node|managers|other|build) ;; *) printf 'Unknown server lane: %s\n' "$lane" >&2; exit 2 ;; esac
+# Go's build cache key holds each package's directory unless -trimpath is set: add it, so checkouts and worktrees
+# share compiled packages (#10614). The helper keeps the caller's GOFLAGS; vet clears -ldflags on its command line.
+GOFLAGS=$(sh scripts/test/go_trimpath.sh)
+export GOFLAGS
 
 if [ "$lane" = all ] || [ "$lane" = build ]; then
   ci_run 'Go formatting' 120 python3 scripts/ci/gofmt.py server sdk/go
-  ci_run 'Server vet' 600 bash -c 'cd server && go vet ./...'
+  ci_run 'Server vet' 600 bash -c 'cd server && go vet -ldflags= ./...'
   ci_run 'Server build' 600 bash -c 'cd server && go build ./...'
-  ci_run 'Windows node build and vet' 600 bash -c 'cd server && GOOS=windows GOARCH=amd64 go build ./... && GOOS=windows GOARCH=amd64 go vet ./...'
+  ci_run 'Windows node build and vet' 600 bash -c 'cd server && GOOS=windows GOARCH=amd64 go build ./... && GOOS=windows GOARCH=amd64 go vet -ldflags= ./...'
   # The release's tags (server/build-tags.txt, server/internal/buildtags): the programs build with them on Linux and
   # macOS, and the tunnel works with the tailscale.com subset they leave.
   ci_run 'Server programs with build-tags.txt' 600 bash -c 'cd server && t="$(cat build-tags.txt)" && go build -tags "$t" ./cmd/... && GOOS=darwin GOARCH=arm64 go build -tags "$t" ./cmd/...'
@@ -19,17 +23,24 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
 fi
 if [ "$lane" = build ]; then exit 0; fi
 
+if [ "$lane" = all ] || [ "$lane" = other ]; then
+  ci_run 'Non-root extension container isolation' 420 python3 scripts/ci/extension-container.py
+fi
+
 fixture="$(mktemp -d "${TMPDIR:-/tmp}/persona-ci-db.XXXXXX")"
 container="persona-ci-db-$(basename "$fixture" | tr '[:upper:]' '[:lower:]')"
 cleanup() {
-  docker rm -f "$container" >/dev/null 2>&1 || true
+  docker rm -fv "$container" >/dev/null 2>&1 || true
   rm -f "${fixture:?}/database.json"
   rmdir "$fixture" 2>/dev/null || true
 }
 trap cleanup EXIT
+# A disposable test database needs no durability: with fsync on, every commit waited for a busy CI disk and the
+# database became the slowest part of the shards (docs/operations/testing.md, "Affected checks").
 ci_run 'Postgres 18 fixture' 180 docker run --detach --name "$container" \
   -e POSTGRES_USER=persona -e POSTGRES_PASSWORD=ci-only -e POSTGRES_DB=persona_test \
-  -p 127.0.0.1::5432 postgres:18-alpine
+  -p 127.0.0.1::5432 postgres:18-alpine \
+  -c fsync=off -c synchronous_commit=off -c full_page_writes=off
 ci_run 'Postgres readiness' 90 python3 scripts/ci/postgres.py "$container" "$fixture/database.json"
 if [ "$lane" = all ] || [ "$lane" = node ]; then
   # The real-browser package has its own hosted runner, without build or other-package contention.

@@ -16,15 +16,21 @@ type DayMessage struct {
 
 // Detail is everything about one entity: its metadata, compressed context, a project's timeline, a chat's latest text.
 type Detail struct {
-	Kind    string          `json:"kind"`
-	ID      string          `json:"id"`
-	Path    string          `json:"path"` // absolute, for reading more with file tools
-	Meta    json.RawMessage `json:"meta"`
-	Summary string          `json:"summary,omitempty"`
-	Log     []string        `json:"log,omitempty"`
-	Recent  string          `json:"recent,omitempty"`
+	Kind        string            `json:"kind"`
+	ID          string            `json:"id"`
+	Path        string            `json:"path"` // absolute, for reading more with file tools
+	Meta        json.RawMessage   `json:"meta"`
+	Summary     string            `json:"summary,omitempty"`
+	Log         []string          `json:"log,omitempty"`
+	Recent      string            `json:"recent,omitempty"`
+	ProjectMode string            `json:"project_mode,omitempty"`
+	Freshness   *ProjectFreshness `json:"freshness,omitempty"`
+	Sources     []ProjectSource   `json:"sources,omitempty"`
 	// Links are the linked projects, chats and people, named and ranked.
 	Links []Entry `json:"links,omitempty"`
+	// Removed: the links the user removed by hand (meta's excluded), named as Links are; automatic organizing leaves
+	// them out until the user links them again or allows them again (allow_people, allow_chats, allow_projects).
+	Removed []Entry `json:"removed,omitempty"`
 	// Moments: a project's Moments posts (LinkMoments), newest first.
 	Moments []MomentRef `json:"moments,omitempty"`
 	// Segments: a recording's transcript (the app shows it; Recent has it as text for the assistant).
@@ -173,14 +179,25 @@ type Hit struct {
 
 // Entry is a row of a ranked list.
 type Entry struct {
-	Kind       string    `json:"kind"`
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	OneLine    string    `json:"one_line,omitempty"`
-	Importance string    `json:"importance,omitempty"`
-	Relevance  int       `json:"relevance"`
-	Tags       []string  `json:"tags,omitempty"`
-	Updated    time.Time `json:"updated"`
-	Extra      string    `json:"extra,omitempty"`  // projects: short / long · status; chats: dm / group…
-	Source     string    `json:"source,omitempty"` // chats: the source they came from (lark, mail, wechat, github…)
+	Kind        string            `json:"kind"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	OneLine     string            `json:"one_line,omitempty"`
+	Importance  string            `json:"importance,omitempty"`
+	Relevance   int               `json:"relevance"`
+	Tags        []string          `json:"tags,omitempty"`
+	Updated     time.Time         `json:"updated"`
+	Extra       string            `json:"extra,omitempty"` // projects: short / long · status; chats: dm / group…
+	ProjectMode string            `json:"project_mode,omitempty"`
+	Freshness   *ProjectFreshness `json:"freshness,omitempty"`
+	Sources     []ProjectSource   `json:"sources,omitempty"`
+	// Source is where it came from: a chat's source (lark, mail, wechat, github…); a document's, meeting's or event's
+	// connector, so an app can show which app a meeting was imported from (#8872).
+	Source string `json:"source,omitempty"`
+	// RecordingKind is a recording's kind: meeting, note or day (#8731), so a list can mark notes and all-day
+	// recordings among meetings. Absent on other kinds, and from a hub before it.
+	RecordingKind string `json:"recording_kind,omitempty"`
+	// MeetingID is a recording's imported meeting (#8872): the id of the meetings item it overlaps, as the meetings list
+	// has it, so a Meetings list shows the two as one row. Absent on other kinds, before a match, and from a hub before it.
+	MeetingID string `json:"meeting_id,omitempty"`
 }

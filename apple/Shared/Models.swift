@@ -32,6 +32,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var canDeploy: Bool? = nil
     var deployReason: String? = nil
     var deployPhase: String? = nil
+    /// Switching this SSH computer to Persona Link (#10662); nil from older hubs and managers.
+    var linkSwitch: MachineLinkSwitch? = nil
     /// OS and hardware (docs/server/machines.md); nil from hubs before machine monitoring, or a machine never connected.
     var system: MachineSystem?
     var engine: MachineEngine = .herdr
@@ -39,6 +41,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     /// The set of engine hosts the computer runs (docs/integrations/engines.md "Host sets"); nil from a hub before sets.
     /// `[]` is no terminal engine: `engine` still says herdr then, for older clients.
     var engineHosts: [String]? = nil
+    /// The host for a start without an explicit workspace host when the machine has a host set.
+    var engineDefault: String? = nil
     /// Operating it through Cua Driver; nil while the hub's plugin cua is off or it is not a Mac.
     var computer: MachineComputer? = nil
     /// Its ego lite for the assistant; nil while the hub's plugin ego is off or it is not a Mac.
@@ -70,11 +74,12 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, iphone, clipboard, route, trust, manager
-        case engineHosts = "engine_hosts"
+        case engineHosts = "engine_hosts", engineDefault = "engine_default"
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
         case canDeploy = "can_deploy", deployReason = "deploy_reason", deployPhase = "deploy_phase"
+        case linkSwitch = "link_switch"
         case hubID = "hub_id", hubName = "hub_name", machineUID = "machine_uid", hubGroup = "app_hub_group",
              groupLabel = "app_group_label"
     }
@@ -85,6 +90,32 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
         case "desktop": Theme.Icon.machine
         default: Theme.Icon.laptop
         }
+    }
+}
+
+/// An SSH computer's eligibility for, or progress through, the hub-owned switch to Persona Link (#10662).
+/// `phase` and the reason/error codes stay as wire words so newer hubs remain decodable; clients localize them.
+nonisolated struct MachineLinkSwitch: Codable, Hashable, Sendable {
+    var available: Bool
+    var reason: String?
+    var phase: String?
+    var error: String?
+    var rollbackUnconfirmed: Bool?
+    var at: Date?
+
+    init(available: Bool, reason: String? = nil, phase: String? = nil, error: String? = nil,
+         rollbackUnconfirmed: Bool? = nil, at: Date? = nil) {
+        self.available = available
+        self.reason = reason
+        self.phase = phase
+        self.error = error
+        self.rollbackUnconfirmed = rollbackUnconfirmed
+        self.at = at
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case available, reason, phase, error, at
+        case rollbackUnconfirmed = "rollback_unconfirmed"
     }
 }
 
@@ -113,10 +144,12 @@ extension Machine {
         canDeploy = try c.decodeIfPresent(Bool.self, forKey: .canDeploy)
         deployReason = try c.decodeIfPresent(String.self, forKey: .deployReason)
         deployPhase = try c.decodeIfPresent(String.self, forKey: .deployPhase)
+        linkSwitch = try? c.decodeIfPresent(MachineLinkSwitch.self, forKey: .linkSwitch)
         system = try c.decodeIfPresent(MachineSystem.self, forKey: .system)
         engine = try c.decodeIfPresent(MachineEngine.self, forKey: .engine) ?? .herdr
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
         engineHosts = try? c.decodeIfPresent([String].self, forKey: .engineHosts)
+        engineDefault = try? c.decodeIfPresent(String.self, forKey: .engineDefault)
         computer = try? c.decodeIfPresent(MachineComputer.self, forKey: .computer)
         browser = try? c.decodeIfPresent(MachineBrowser.self, forKey: .browser)
         iphone = try? c.decodeIfPresent(MachineIPhone.self, forKey: .iphone)
@@ -175,6 +208,13 @@ nonisolated extension Machine {
     var neverConnected: Bool {
         !online && (errorCode == "never_connected" || (isPending && (lastSeen?.timeIntervalSince1970 ?? 0) <= 0))
     }
+    /// Its disconnect is expected while the hub moves it from SSH to Persona Link, not a new connection failure.
+    var linkSwitchRunning: Bool {
+        switch linkSwitch?.phase {
+        case "checking", "installing", "connecting", "rolling_back": true
+        default: false
+        }
+    }
 }
 
 /// A machine across groups of hubs (docs/protocol/multi-hub.md): its group and the id its hub gives it.
@@ -210,14 +250,19 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     /// Tern's terminals (docs/integrations/engines.md): its sessions are spaces, its tabs slots, its blocks panes
     /// (`tern:<block id>`).
     static let tern = Self(rawValue: "tern")
+    /// Rex's terminals (docs/integrations/engines.md): its sessions are spaces, its windows slots, its blocks panes
+    /// (`rex:<block id>`).
+    static let rex = Self(rawValue: "rex")
     /// Paseo's agents (docs/integrations/paseo.md): no terminal; the node runs a bridge to the Paseo daemon.
     static let paseo = Self(rawValue: "paseo")
     /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
     static let cindy = Self(rawValue: "cindy")
+    /// T3 Code's threads (docs/integrations/engines.md "T3 Code"): no terminal; the node runs a bridge to T3 Code's server.
+    static let t3code = Self(rawValue: "t3code")
     /// No terminal engine: the empty host set (docs/integrations/engines.md "Host sets"), for a computer whose sessions
     /// are only the desktop apps' (#3302). Not a hub engine id: saved as `{"hosts": []}`, and not in `allCases`.
     static let noEngine = Self(rawValue: "none")
-    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .paseo, .cindy]
+    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .rex, .paseo, .cindy, .t3code]
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -226,8 +271,10 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrBoth: "herdr + Herdr App"
         case .orca: "Orca"
         case .tern: "Tern"
+        case .rex: "Rex"
         case .paseo: "Paseo"
         case .cindy: "Cindy"
+        case .t3code: "T3 Code"
         case .noEngine: String(localized: "No Terminal Engine")
         default: rawValue
         }
@@ -239,8 +286,10 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrBoth: String(localized: "Sessions from both the terminal and the desktop app")
         case .orca: String(localized: "Terminals in Orca")
         case .tern: String(localized: "Terminals in Tern")
+        case .rex: String(localized: "Terminals in Rex")
         case .paseo: String(localized: "Agents in Paseo")
         case .cindy: String(localized: "Agents in Cindy")
+        case .t3code: String(localized: "Agents in T3 Code")
         case .noEngine: String(localized: "Sessions of the desktop apps only")
         default: nil
         }
@@ -279,14 +328,18 @@ nonisolated struct MachineScreenVideo: Codable, Hashable, Sendable {
     /// The node has asked macOS for this helper version's grant (once), so Persona Screen is in System Settings' list;
     /// false while macOS's alert is still to come.
     var asked = false
+    /// The ffmpeg with libx264 the user installed on the Mac, as its node found and tested it ("ffmpeg 9.0.2", #8859):
+    /// x264 can be turned on for the Mac's live screen. Nil: none, or an older node.
+    var x264: String? = nil
 
-    enum CodingKeys: String, CodingKey { case version, codecs, permission, asked }
+    enum CodingKeys: String, CodingKey { case version, codecs, permission, asked, x264 }
 
-    init(version: Int = 0, codecs: [String] = [], permission: String? = nil, asked: Bool = false) {
+    init(version: Int = 0, codecs: [String] = [], permission: String? = nil, asked: Bool = false, x264: String? = nil) {
         self.version = version
         self.codecs = codecs
         self.permission = permission
         self.asked = asked
+        self.x264 = x264
     }
 
     init(from decoder: Decoder) throws {
@@ -295,6 +348,7 @@ nonisolated struct MachineScreenVideo: Codable, Hashable, Sendable {
         codecs = (try? c.decodeIfPresent([String].self, forKey: .codecs)) ?? []
         permission = try c.decodeIfPresent(String.self, forKey: .permission)
         asked = (try? c.decodeIfPresent(Bool.self, forKey: .asked)) ?? false
+        x264 = (try? c.decodeIfPresent(String.self, forKey: .x264)) ?? nil
     }
 
     /// The node offers the video channel at all: the Picture / Quality switcher appears only then (#3954).
@@ -334,6 +388,50 @@ nonisolated struct MachineScreenInput: Codable, Hashable, Sendable {
     var granted: Bool { reads && permission == "granted" }
 }
 
+/// What a Mac can do for the live screen's Phone Screen mode (#9314, docs/extensions/computer-use.md "Phone Screen"): its
+/// node's Persona Input can show one window on a portrait virtual display (`version`, the request set it speaks), and
+/// whether that helper may move windows (Accessibility). Absent from a Mac without it or an older node: no mode offered.
+nonisolated struct MachinePhoneScreen: Codable, Hashable, Sendable {
+    var version = 0
+    /// Accessibility (moving windows) for Persona Input: granted | missing.
+    var permission: String? = nil
+
+    var offered: Bool { version > 0 }
+    var granted: Bool { permission == "granted" }
+}
+
+/// A request for Phone Screen (#9314): `op` start (`width` × `height`, the picture in points), windows, place (`pid`,
+/// `window`) or stop, for the live screen whose RFB stream carries `pair`.
+nonisolated struct PhoneScreenRequest: Encodable, Sendable {
+    var pair: String
+    var op: String
+    var width: Double? = nil
+    var height: Double? = nil
+    var pid: Int32? = nil
+    var window: UInt32? = nil
+}
+
+/// What the Mac answered: the virtual display and every display (start), the windows, the one placed.
+nonisolated struct PhoneScreenReply: Decodable, Sendable {
+    var display: MachineDisplay?
+    var displays: [MachineDisplay]?
+    var windows: [PhoneScreenWindow]?
+    var placed: PhoneScreenWindow?
+}
+
+/// One of the Mac's windows for Phone Screen: its app, title, and whether it is on the phone's display now.
+nonisolated struct PhoneScreenWindow: Decodable, Hashable, Sendable, Identifiable {
+    var pid: Int32
+    var window: UInt32
+    var app: String
+    var bundle: String?
+    var title: String
+    var minimized: Bool?
+    var placed: Bool?
+
+    var id: String { "\(pid)/\(window)" }
+}
+
 /// A Mac the assistant may operate through Cua Driver (the hub's plugin cua, docs/extensions/computer-use.md). `enabled`: the user
 /// turned it on for this machine; the rest is what its node found when last asked, and only for an enabled one.
 nonisolated struct MachineComputer: Codable, Hashable, Sendable {
@@ -355,6 +453,8 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
     var screenSharing = false
     /// 「扩展开着时不自动锁屏」 is on for it (#1507 b2).
     var noAutoLock = false
+    /// x264 is on for its live screen (#8859; the plugin's screen_x264): its own ffmpeg encodes on a direct LAN route.
+    var screenX264 = false
     /// cua or lcu. Nil from a hub that only knows Cua Driver.
     var backend: String? = nil
     /// The official ChatGPT desktop app is installed (LCU's runtime).
@@ -365,11 +465,13 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
     var screenVideo: MachineScreenVideo? = nil
     /// Pixel scrolling (#7775); nil from a Mac without Persona Input or an older node.
     var screenInput: MachineScreenInput? = nil
+    /// Phone Screen (#9314); nil from a node or helper without it.
+    var phoneScreen: MachinePhoneScreen? = nil
 
     enum CodingKeys: String, CodingKey {
         case enabled, installed, version, daemon, accessibility, desktop, ready, note, job, backend, chatgpt, displays
         case screenRecording = "screen_recording", screenSharing = "screen_sharing", noAutoLock = "no_auto_lock", screenVideo = "screen_video"
-        case screenInput = "screen_input"
+        case screenInput = "screen_input", screenX264 = "screen_x264", phoneScreen = "phone_screen"
     }
 
     init(enabled: Bool = false, installed: Bool = false, version: String? = nil, daemon: Bool = false, accessibility: String? = nil,
@@ -403,6 +505,7 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
         job = try? c.decodeIfPresent(ComputerJob.self, forKey: .job)
         screenSharing = try c.decodeIfPresent(Bool.self, forKey: .screenSharing) ?? false
         noAutoLock = try c.decodeIfPresent(Bool.self, forKey: .noAutoLock) ?? false
+        screenX264 = (try? c.decodeIfPresent(Bool.self, forKey: .screenX264)) ?? false
         backend = try c.decodeIfPresent(String.self, forKey: .backend)
         chatgpt = try c.decodeIfPresent(Bool.self, forKey: .chatgpt) ?? false
         // An unreadable list only costs the display choice, not the machine.
@@ -411,6 +514,7 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
         screenVideo = (try? c.decodeIfPresent(MachineScreenVideo.self, forKey: .screenVideo)) ?? nil
         // An unreadable one only costs pixel scrolling (wheel notches instead).
         screenInput = (try? c.decodeIfPresent(MachineScreenInput.self, forKey: .screenInput)) ?? nil
+        phoneScreen = (try? c.decodeIfPresent(MachinePhoneScreen.self, forKey: .phoneScreen)) ?? nil
     }
 
     /// The node has said how it is (a never-asked one has neither a verdict nor a note).
@@ -443,10 +547,13 @@ nonisolated struct MachineBrowser: Codable, Hashable, Sendable {
     var screenVideo: MachineScreenVideo? = nil
     /// As `MachineComputer.screenInput` (#7775).
     var screenInput: MachineScreenInput? = nil
+    /// Phone Screen (#9314), as for the computer.
+    var phoneScreen: MachinePhoneScreen? = nil
 
     enum CodingKeys: String, CodingKey {
         case enabled, installed, version, imported, analytics, ready, note, job, displays
         case setUp = "set_up", screenSharing = "screen_sharing", screenVideo = "screen_video", screenInput = "screen_input"
+        case phoneScreen = "phone_screen"
     }
 
     init(enabled: Bool = false, installed: Bool = false, version: String? = nil, setUp: Bool = false, imported: Bool = false,
@@ -478,6 +585,7 @@ nonisolated struct MachineBrowser: Codable, Hashable, Sendable {
         displays = (try? c.decodeIfPresent([MachineDisplay].self, forKey: .displays)) ?? []
         screenVideo = (try? c.decodeIfPresent(MachineScreenVideo.self, forKey: .screenVideo)) ?? nil
         screenInput = (try? c.decodeIfPresent(MachineScreenInput.self, forKey: .screenInput)) ?? nil
+        phoneScreen = (try? c.decodeIfPresent(MachinePhoneScreen.self, forKey: .phoneScreen)) ?? nil
     }
 
     /// The node has said how it is.
@@ -493,14 +601,17 @@ nonisolated struct MachineDisplay: Codable, Hashable, Sendable {
     var width: Double
     var height: Double
     var main: Bool = false
+    /// Pixels per point (2 for Retina, #9314): Screen Sharing draws each display at its own pixels. 0 from an older node.
+    var scale: Double = 0
 
-    init(id: Int, x: Double, y: Double, width: Double, height: Double, main: Bool = false) {
+    init(id: Int, x: Double, y: Double, width: Double, height: Double, main: Bool = false, scale: Double = 0) {
         self.id = id
         self.x = x
         self.y = y
         self.width = width
         self.height = height
         self.main = main
+        self.scale = scale
     }
 
     init(from decoder: Decoder) throws {
@@ -511,6 +622,7 @@ nonisolated struct MachineDisplay: Codable, Hashable, Sendable {
         width = try c.decode(Double.self, forKey: .width)
         height = try c.decode(Double.self, forKey: .height)
         main = try c.decodeIfPresent(Bool.self, forKey: .main) ?? false
+        scale = (try? c.decodeIfPresent(Double.self, forKey: .scale)) ?? 0
     }
 
     var frame: CGRect { CGRect(x: x, y: y, width: width, height: height) }
@@ -539,6 +651,8 @@ nonisolated struct ComputerJob: Codable, Hashable, Sendable {
     var code: String? = nil
     /// An iPhone job's iPhone.
     var device: String? = nil
+    /// The computer's start time, shared by every status for this job.
+    var started: Date? = nil
 
     var running: Bool { state == "running" }
 }
@@ -547,10 +661,28 @@ extension Machine {
     var engineName: String {
         engineHosts?.isEmpty == true ? MachineEngine.noEngine.name : engines.first { $0.id == engine.rawValue }?.name ?? engine.name
     }
+
+    /// The host a new session uses without a workspace. Older hubs report only the legacy engine.
+    nonisolated var defaultStartHost: String? {
+        guard engineHosts?.isEmpty != true else { return nil }
+        if let engineDefault, !engineDefault.isEmpty { return engineDefault }
+        return engine == .herdrBoth ? MachineEngine.herdr.rawValue : engine.rawValue
+    }
+
+    /// An explicit workspace host wins over the machine default, provided the machine enables it.
+    nonisolated func startsInHerdr(host: String?) -> Bool {
+        let herdr = MachineEngine.herdr.rawValue
+        let legacyHerdr = engine == .herdr || engine == .herdrBoth
+        guard engineHosts?.contains(herdr) ?? legacyHerdr else { return false }
+        if let host, !host.isEmpty { return host == herdr }
+        return defaultStartHost == herdr
+    }
 }
 
 nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     var name: String
+    /// What people call it where it has a name of its own: a Persona-managed provider's name, or the label a runtime
+    /// gives its provider (Paseo's "Grok" for `grok`, #8261); nil for the others, which go by `name` (`title`).
     var displayName: String? = nil
     var baseURL: String?
     var model: String?
@@ -572,7 +704,27 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     /// A Codex launcher the computer starts in a shell pane the user picked (Run Agent Here) and keeps that pane when the
     /// start fails (#5504); nil from an older computer, where Run Agent Here offers Claude Code only.
     var runHere: Bool? = nil
+    /// The permission modes a start on it takes when its agent is not Claude Code (#8261, the node's `permission_modes`:
+    /// Paseo's Grok, OpenCode or Codex): `default`, its own approval, sent as no mode, and `bypassPermissions` where it
+    /// has an Allow Everything (`StartModes.listed`). Nil for Claude Code's launchers, which take its five, for the
+    /// others, which take none, and from an older computer.
+    var permissionModes: [String]? = nil
     var id: String { name }
+    /// What the pickers show: its display name, the built-in CLI's name on older hubs, or its startup name.
+    var title: String {
+        let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = trimmed?.isEmpty == false ? trimmed : nil
+        return Self.traeCLITitle(name: name, source: source, agent: runtimeAgent, baseURL: baseURL, displayName: label) ?? label ?? name
+    }
+    /// Older hubs and runtime providers can supply a legacy label. Keep other labels chosen by the user.
+    static func traeCLITitle(name: String, source: String?, agent: String?, baseURL: String?, displayName: String?) -> String? {
+        guard name == "traex" || name == "traecli" || name == "trae-cli",
+              displayName.map(Session.isTraeCLIName) ?? true else { return nil }
+        if agent == MachineEngine.paseo.rawValue { return Session.traeCLIName }
+        guard isMachineSource(source), agent == "traex" || agent == "traecli" || agent == "trae-cli" || baseURL == "(traex)"
+        else { return nil }
+        return Session.traeCLIName
+    }
     /// The launcher that starts the session in Claude's desktop app (docs/integrations/claude-integration.md「New sessions
     /// in the desktop app」): with no folder it runs in the app's scratch folder, and a new folder is made for it.
     var startsInDesktopApp: Bool { source == Self.claudeDesktopSource || source == Self.codexAppSource }
@@ -582,10 +734,24 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     static let codexAppSource = "codex_app"
     /// A Codex start sends its first message with it and waits for the thread Codex makes.
     var isCodex: Bool { agent == "codex" }
+    /// A CLI launcher discovered on the computer, including the source-less responses of older hubs.
+    private var isMachineLauncher: Bool { Self.isMachineSource(source) }
+    private static func isMachineSource(_ source: String?) -> Bool {
+        source == nil || source == "" || source == "zshrc" || source == "path" || source == "builtin"
+    }
+    /// The node starts Oh My Pi only under its own launcher name.
+    var startsOmp: Bool {
+        guard name == "omp", isMachineLauncher else { return false }
+        guard let kind = runtimeAgent, !kind.isEmpty else { return true }
+        return kind == "omp"
+    }
     /// The hub's configured kind wins when present; an empty or missing value falls back to the node's agent.
     var runtimeAgent: String? { agentType?.isEmpty == false ? agentType : agent }
     /// Starting it needs a first message: a Codex on a computer that cannot open it without one.
     var needsFirstMessage: Bool { isCodex && promptOptional != true }
+    /// It runs omp (docs/integrations/omp.md): omp's own config.yml picks its model and thinking level, so a start on it
+    /// takes no permission mode, effort, ultracode or model, and its first message goes with the start.
+    var isOmp: Bool { runtimeAgent == "omp" }
 
     enum CodingKeys: String, CodingKey {
         case name, model, agent, assistant, health, source
@@ -593,11 +759,13 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
         case baseURL = "base_url"
         case promptOptional = "prompt_optional"
         case runHere = "run_here"
+        case permissionModes = "permission_modes"
     }
 }
 
 nonisolated extension Launcher {
-    /// A health record this app cannot read is left out, never the launcher (the list is what New Agent starts from).
+    /// A health record this app cannot read is left out, never the launcher (the list is what New Agent starts from);
+    /// so is a `display_name`, `agent_type` or `permission_modes` it cannot read (#8261).
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
@@ -611,6 +779,7 @@ nonisolated extension Launcher {
         promptOptional = try c.decodeIfPresent(Bool.self, forKey: .promptOptional)
         source = try c.decodeIfPresent(String.self, forKey: .source)
         runHere = try c.decodeIfPresent(Bool.self, forKey: .runHere)
+        permissionModes = (try? c.decodeIfPresent([String].self, forKey: .permissionModes)) ?? nil
     }
 }
 
@@ -635,10 +804,16 @@ nonisolated struct LauncherHealth: Codable, Hashable, Sendable {
 
 extension Launcher {
     /// Runs Claude Code or Codex, or is an agent runtime's launcher that says it can: what the Persona assistant can
-    /// use (headless `claude -p`, `codex app-server`, the runtime). Other agents (TRAEX…) are left out; the node
+    /// use (headless `claude -p`, `codex app-server`, the runtime). Other agents (TRAE CLI…) are left out; the node
     /// refuses them with a reason too.
     var runsAssistant: Bool {
-        assistant == true || (baseURL != "(traex)" && (agent == nil || agent == "" || agent == "claude" || agent == "codex"))
+        if let assistant { return assistant }
+        guard baseURL != "(traex)" else { return false }
+        // Older hubs can ignore purpose=assistant. A runtime's provider is not a shell command, and managed Codex
+        // launchers cannot start the assistant's app-server. Keep the shell fallback for hubs without capabilities.
+        let managed = source == "persona" || source == LegacyNames.product
+        guard isMachineLauncher || managed, !(managed && agent == "codex") else { return false }
+        return agent == nil || agent == "" || agent == "claude" || agent == "codex"
     }
 }
 
@@ -652,7 +827,8 @@ nonisolated struct ModelPick: Codable, Hashable, Sendable {
 }
 
 /// A launcher or provider the main chat can't run on a machine, and why in the hub's words
-/// (`unavailable` of `GET …/machines/{id}/launchers?purpose=assistant`, #5033).
+/// (`unavailable` of `GET …/machines/{id}/launchers?purpose=assistant`, #5033). New Agent's list (`agent.new`) has
+/// the same shape for the Persona-managed providers whose own-service rule leaves them out there (#8109).
 nonisolated struct UnavailableLauncher: Codable, Identifiable, Hashable, Sendable {
     var name: String
     var displayName: String?
@@ -685,14 +861,22 @@ nonisolated struct LauncherModels: Codable, Hashable, Sendable {
     /// Model Settings' list (#943): the machine whose CLI answered.
     var machine: String? = nil
 
+    /// The node confirms this launcher and host can honor a model for this start. Absent on older nodes.
+    var supportsStartModel: Bool? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case agent, models, locked, machine
+        case supportsStartModel = "supports_start_model"
+    }
+
     /// The agent takes a model ID typed by hand (#1644): Claude Code's `--model` / `/model` and Codex's `--model` take any
     /// string, and so does a work agent started in herdr (`pi`, the Cursor CLI, the Antigravity CLI: `workagent.go`).
-    /// The hub remembers typed IDs for these. Other agents' lists are empty (no model row).
+    /// New Agent separately supports a typed ID for a native Oh My Pi start.
     static func takesTypedModel(agent: String) -> Bool {
         agent == "claude" || agent == "codex" || agent == "pi" || agent == "cursor" || agent == "agy"
     }
 
-    /// A typed ID can reach the agent: one of those two, and the launcher does not pass its own --model.
+    /// The shared model settings can take a typed ID and the launcher does not pass its own --model.
     var takesTypedModel: Bool { locked == nil && Self.takesTypedModel(agent: agent) }
 }
 
@@ -803,10 +987,15 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var rewind: Bool?
     /// Rewind Code and Chat as well (`rewind_code`).
     var rewindCode: Bool?
+    /// The permission modes an agent that is not Claude Code's takes (#8261, `permission_modes`: Paseo's Grok, OpenCode
+    /// or Codex): `default`, its own approval, and `bypassPermissions` where it has an Allow Everything
+    /// (`Session.listedModes`). Nil from an older node, on any other row, or a value this app cannot read.
+    var permissionModes: [String]?
 
     enum CodingKeys: String, CodingKey {
         case read, send, interrupt, approve, terminal, attach, modes, takeover, close, rename, model, rewind
         case rewindCode = "rewind_code"
+        case permissionModes = "permission_modes"
     }
 
     init(from decoder: Decoder) throws {
@@ -824,6 +1013,7 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
         model = try? c.decodeIfPresent(Bool.self, forKey: .model)
         rewind = try? c.decodeIfPresent(Bool.self, forKey: .rewind)
         rewindCode = try? c.decodeIfPresent(Bool.self, forKey: .rewindCode)
+        permissionModes = try? c.decodeIfPresent([String].self, forKey: .permissionModes)
     }
 }
 
@@ -907,6 +1097,13 @@ nonisolated struct SessionChildren: Codable, Hashable, Sendable {
     }
 }
 
+/// A native Codex speed choice advertised for this session. Labels stay localized in the client; these are wire metadata.
+nonisolated struct SessionServiceTier: Codable, Hashable, Sendable {
+    var id: String
+    var name: String
+    var description: String? = nil
+}
+
 nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var machineID: String
     var sessionID: String
@@ -917,7 +1114,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var tabID: String?
     var workspaceID: String?
     var agentName: String?
-    /// The coding agent in the pane: "claude" (or nil, from older hubs), "codex" or "traex" (TRAEX, an in-house Codex fork);
+    /// The coding agent in the pane: "claude" (or nil, from older hubs), "codex" or "traex" (TRAE CLI);
     /// for a session a runtime lists (DSH…, docs/integrations/runtimes.md), the agent it runs.
     var agent: String? = nil
     var sourceKind: String? = nil
@@ -974,10 +1171,20 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// a flag that puts that mode in its shift+tab cycle (`bypass_available`, #1379, read off the process by the node).
     /// False while unknown and from older hubs; then Allow Everything is only a start's choice.
     var bypassAvailable: Bool = false
+    /// Allow Everything was picked for this Claude Code while it cannot reach it with shift+tab (`bypassAvailable` false):
+    /// the node restarts it in that mode once its turn is over, resuming the same conversation (`bypass_pending`, #6476).
+    /// Until then `permissionMode` stays the mode it runs in. False from older hubs.
+    var bypassPending: Bool = false
     var effort: String? = nil
+    var pendingEffort: String? = nil
+    var effortChangeFailed: Bool? = nil
     /// The levels `effort` may be set to when they are not Claude Code's (`SessionModes.effortOptions`): a Codex thread
     /// the hub drives through its app-server, where only the effort changes (node/codex_effort.go). Nil elsewhere.
     var efforts: [String]? = nil
+    /// The native Codex speed the hub last acknowledged (`service_tier`), nil while unknown. Never an optimistic pick.
+    var serviceTier: String? = nil
+    /// The native speed choices this session advertises (`service_tiers`), including `default` for Standard.
+    var serviceTiers: [SessionServiceTier]? = nil
     /// The launcher / model / effort picked for this assistant conversation (#5033, `model_pick`); nil: it follows the
     /// Main chat default or keeps what it runs. Only the manager names it, on assistant conversations.
     var modelPick: ModelPick? = nil
@@ -1000,6 +1207,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var assistant: Bool
     /// An assistant conversation moved out of the sidebar (listed under Archived; nothing is deleted).
     var archived: Bool? = nil
+    /// Manager-owned visibility; active supervised tasks are exempt.
+    var hiddenByDirectory: Bool? = nil
     /// The assistant's space it belongs to (the hub's `space`, docs/assistant/health.md): `healthSpace` for a health conversation,
     /// nil for the assistant's own. Not a host's space (`spaceKind` / `spaceID` are herdr's and Orca's).
     var assistantSpace: String? = nil
@@ -1031,6 +1240,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var queued: [String]?
     /// The last this many queued messages came from other conversations and arrive when this turn ends (#4342).
     var queuedRelayed: Int? = nil
+    /// In a Persona chat, the owner's messages that could not go in and that the assistant keeps and sends again by
+    /// itself, oldest first (#10194): drawn as the owner's bubbles marked not delivered, on every device.
+    var undelivered: [UndeliveredMessage]? = nil
     /// The user's own messages come first; only these can be edited, reordered, deleted or sent now.
     var ownQueuedCount: Int {
         let count = queued?.count ?? 0
@@ -1130,6 +1342,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// The extension whose token opened an assistant conversation (protocol.md「Origin of assistant chats」); nil for any
     /// other. Such a chat never attends a meeting (#2981).
     var openedBy: String? = nil
+    /// What of `origin` opened it (`origin_ref`): for Lark /agent and another extension's, that extension's id, which the
+    /// rows draw the icon of when `openedBy` is not there (`ConversationOpener`, #10358). Nil from hubs that do not say.
+    var originRef: String? = nil
     /// The last compaction the user asked for in an assistant conversation (POST …/compact, #1727): running, done or
     /// failed. Nil from hubs without `assistant_compact`, and before the first one.
     var compaction: CompactionRun? = nil
@@ -1154,6 +1369,18 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// for the lists' order and folds (`AgentListOrder.awaitsReply`) and for every word, color and question a row shows:
     /// a muted one is plain Seen everywhere, so callers say whether it is muted.
     func awaitsYourReply(muted: Bool) -> Bool { state == .idle && awaitsReply && !muted }
+    func isJustFinished(muted: Bool) -> Bool { state == .idle && work?.justFinished == true && !muted }
+
+    /// Group actions check mute preferences only for flagged idle rows.
+    func needsSeen(muted: @autoclosure () -> Bool = false) -> Bool {
+        state == .unread || (isJustFinished(muted: false) && !muted())
+    }
+
+    mutating func markLocallySeen() {
+        if state == .unread { state = .idle }
+        if work?.justFinished == true { work?.justFinished = nil }
+    }
+
     /// Waiting in the background (#6045): working, but all it runs is waiting. Shown apart from Working and lighter, and
     /// left out of Working's counts and filter; whatever acts on a working agent (stop, queue) still treats it as one.
     /// A list copy whose state was rewritten to working because a child is working is not waiting in the background.
@@ -1263,11 +1490,17 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         default: nil
         }
     }
+    private static let nodeReadOnlyPrefix = "仅查看：" // i18n-ignore: the node's prefix it strips
+
     var sourceSubtitle: String? {
         guard let sourceLabel else { return nil }
         let detail = sourceKind == "identity_conflict" ? nil : agentName.flatMap { $0.isEmpty ? nil : $0 }
         let label = detail.map { sourceLabel + " · " + $0 } ?? sourceLabel
-        let reason = readOnlyReason.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Sending isn't allowed from this source yet")
+        // The node writes some reasons with their own "View only: " in Chinese, which this line adds already (#7803;
+        // Android's `READ_ONLY_PREFIX`).
+        let given = readOnlyReason.map { $0.hasPrefix(Self.nodeReadOnlyPrefix) ? String($0.dropFirst(Self.nodeReadOnlyPrefix.count)) : $0 }
+        let reason = given.map { $0.trimmingCharacters(in: .whitespaces) }.flatMap { $0.isEmpty ? nil : $0 }
+            ?? String(localized: "Sending isn't allowed from this source yet")
         return canSend ? label : String(localized: "\(label) · View only: \(reason)", comment: "A session's source, and why it can only be viewed")
     }
 
@@ -1277,21 +1510,29 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var hostKind: String? {
         guard let paneID, !paneID.isEmpty else { return nil }
         let kind = paneID.firstIndex(of: ":").map { String(paneID[..<$0]) } ?? ""
-        return ["orca", "herdr-core", "botmux", "tern"].contains(kind) ? kind : "herdr"
+        return ["orca", "herdr-core", "botmux", "tern", "rex"].contains(kind) ? kind : "herdr"
     }
 
-    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr or Tern pane a terminal; nil
+    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr, Tern or Rex pane a terminal; nil
     /// for the rest (Orca, runtimes, apps), which carry no source label.
     var source: SessionSource? {
         switch hostKind {
         case "botmux": .feishu
-        case "herdr", "herdr-core", "tern": .terminal
+        case "herdr", "herdr-core", "tern", "rex": .terminal
         default: nil
         }
     }
 
     var isCodex: Bool { agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history" }
     var isTraex: Bool { agent == "traex" }
+    static let traeCLIName = "TRAE CLI"
+    /// Display labels sent for this agent during rolling upgrades.
+    static func isTraeCLIName(_ label: String) -> Bool {
+        switch label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "traex", "traecli", "trae-cli", "trae cli": true
+        default: false
+        }
+    }
     /// Claude Code (or an older hub that does not name the agent): what the Claude-only controls (modes, /clear,
     /// /model) are for. Any other agent — named or not yet known to this app — does not get them.
     var isClaude: Bool { !isCodex && (agent == nil || agent == "" || agent == "claude") }
@@ -1302,17 +1543,37 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// A declared modes capability wins, including a runtime such as Orca or agy; an older hub that omits it keeps the old rule.
     /// As on the web, a non-assistant must be live, while an assistant can apply its modes to the next run even while offline.
     var canChangeModes: Bool { canSend && (assistant || status.isLive) && (capabilities?.modes ?? (assistant || isClaude)) }
+    /// The permission modes an agent that is not Claude Code's switches between (#8261, `capabilities.permission_modes`:
+    /// Paseo's Grok, OpenCode or Codex): its own approval and Allow Everything. Only with two or more, never for a
+    /// Persona conversation, nor where Claude Code's modes stand (`capabilities.modes`, or a Claude Code row from a node
+    /// that does not say).
+    var listedModes: [String]? {
+        guard let list = capabilities?.permissionModes, list.count >= 2, !assistant, capabilities?.modes != true,
+              capabilities?.modes != nil || !isClaude else { return nil }
+        return list
+    }
+    /// The listed modes can be switched now (`POST …/modes`): it runs and takes messages.
+    var canSwitchListedModes: Bool { canSend && status.isLive && listedModes != nil }
     /// Only the thinking effort changes from the phone, among `efforts` (the hub says so by listing them): a Codex
-    /// thread driven through its app-server. Claude Code and the assistant change both, the rest neither.
-    var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !(efforts ?? []).isEmpty }
-    /// Who the user talks to in this session: "Claude", "Codex", "TRAEX", or what the hub calls a runtime's agent ("DSH",
+    /// thread driven through its app-server. Claude Code, the assistant and a runtime that declares `capabilities.modes`
+    /// (such as Antigravity) change both, the rest neither.
+    var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !canChangeModes && !(efforts ?? []).isEmpty }
+    /// Who the user talks to in this session: "Claude", "Codex", "TRAE CLI", or what the hub calls a runtime's agent ("DSH",
     /// a Paseo provider's label such as "Grok"). Never the engine of several providers that runs it: a row that names
     /// only Paseo (no label of its own, or the node's "Paseo") names its provider by its launcher instead (#8144).
     var agentLabel: String {
         if isCodex { return "Codex" }
-        if isTraex { return "TRAEX" }
+        if isTraex || agent == "traecli" || agent == "trae-cli" { return Self.traeCLIName }
         if isClaude { return "Claude" }
-        if Self.namesOnlyEngine(agent: agent, label: agentLabelHint), let launcher, !launcher.isEmpty { return launcher }
+        let namesOnlyEngine = Self.namesOnlyEngine(agent: agent, label: agentLabelHint)
+        if let launcher, !launcher.isEmpty {
+            if Self.providerEngines.contains(agent?.lowercased() ?? ""),
+               ["traex", "traecli", "trae-cli"].contains(launcher.lowercased()),
+               namesOnlyEngine || (agentLabelHint.map(Self.isTraeCLIName) ?? false) {
+                return Self.traeCLIName
+            }
+            if namesOnlyEngine { return launcher }
+        }
         return agentLabelHint ?? agent ?? "Claude"
     }
     /// The engines that run agents of several providers and report every agent that is neither Claude Code nor Codex
@@ -1346,9 +1607,13 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case queuedRelayed = "queued_relayed"
+        case undelivered
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
+        case pendingEffort = "pending_effort", effortChangeFailed = "effort_change_failed"
+        case hiddenByDirectory = "hidden_by_directory"
+        case serviceTier = "service_tier", serviceTiers = "service_tiers"
         case modelPick = "model_pick"
         case canFork = "can_fork"
         case sourceKind = "source_kind", sourceThreadID = "source_thread_id", sourceInstanceID = "source_instance_id",
@@ -1359,7 +1624,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case codexRoute = "codex_route", codexRouteNote = "codex_route_note"
         case agentLabelHint = "agent_label"
         case agentSurface = "agent_surface"
-        case permissionMode = "permission_mode", bypassAvailable = "bypass_available"
+        case permissionMode = "permission_mode", bypassAvailable = "bypass_available", bypassPending = "bypass_pending"
         case contextTokens = "context_tokens", contextWindow = "context_window"
         case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
         case repoRoot = "repo_root", worktree, branch
@@ -1371,7 +1636,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion, suggestionRisky = "suggestion_risky",
              starting, awaitingFirstMessage = "awaiting_first_message", startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
-             turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", turnErrorResetsAt = "turn_error_resets_at", turnErrorResumes = "turn_error_resumes", externalURL = "external_url", channels, origin, openedBy = "opened_by", compaction, work,
+             turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", turnErrorResetsAt = "turn_error_resets_at", turnErrorResumes = "turn_error_resumes", externalURL = "external_url", channels, origin, originRef = "origin_ref", openedBy = "opened_by", compaction, work,
              runtime, runtimeFallback = "runtime_fallback", manager, modelFallback = "model_fallback", modelRestore = "model_restore"
     }
 
@@ -1422,8 +1687,13 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         model = try c.decodeIfPresent(String.self, forKey: .model)
         permissionMode = try c.decodeIfPresent(String.self, forKey: .permissionMode)
         bypassAvailable = (try? c.decodeIfPresent(Bool.self, forKey: .bypassAvailable)).flatMap { $0 } ?? false
+        bypassPending = (try? c.decodeIfPresent(Bool.self, forKey: .bypassPending)).flatMap { $0 } ?? false
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
+        pendingEffort = try c.decodeIfPresent(String.self, forKey: .pendingEffort)
+        effortChangeFailed = try c.decodeIfPresent(Bool.self, forKey: .effortChangeFailed)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
+        serviceTier = try c.decodeIfPresent(String.self, forKey: .serviceTier)
+        serviceTiers = try c.decodeIfPresent([SessionServiceTier].self, forKey: .serviceTiers)
         // The conversation's own pick (#5033): an odd one never drops the session, which then follows its default.
         modelPick = (try? c.decodeIfPresent(ModelPick.self, forKey: .modelPick)).flatMap { $0 }
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
@@ -1438,6 +1708,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
             ?? legacy.decodeIfPresent(Bool.self, forKey: HubNaming.Field(LegacyNames.startedByField)) ?? false
         assistant = try c.decodeIfPresent(Bool.self, forKey: .assistant) ?? false
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived)
+        hiddenByDirectory = try c.decodeIfPresent(Bool.self, forKey: .hiddenByDirectory)
         assistantSpace = try c.decodeIfPresent(String.self, forKey: .assistantSpace).flatMap { $0.isEmpty ? nil : $0 }
         spaceKind = try c.decodeIfPresent(String.self, forKey: .spaceKind)
         spaceID = try c.decodeIfPresent(String.self, forKey: .spaceID)
@@ -1455,6 +1726,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         stateSince = try c.decodeIfPresent(Date.self, forKey: .stateSince)
         queued = try c.decodeIfPresent([String].self, forKey: .queued)
         queuedRelayed = try c.decodeIfPresent(Int.self, forKey: .queuedRelayed)
+        undelivered = try? c.decodeIfPresent([UndeliveredMessage].self, forKey: .undelivered) // a malformed one never hides the row
         background = try c.decodeIfPresent([BackgroundTask].self, forKey: .background)
         listWaiting = try c.decodeIfPresent(Bool.self, forKey: .listWaiting)
         listBackgroundCount = try c.decodeIfPresent(Int.self, forKey: .listBackgroundCount)
@@ -1499,6 +1771,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         channels = try c.decodeIfPresent([String].self, forKey: .channels)
         origin = try c.decodeIfPresent(String.self, forKey: .origin)
         openedBy = try c.decodeIfPresent(String.self, forKey: .openedBy)
+        originRef = try? c.decodeIfPresent(String.self, forKey: .originRef) // an odd one never drops the session
         compaction = try? c.decodeIfPresent(CompactionRun.self, forKey: .compaction) // an odd one never drops the session
         work = try? c.decodeIfPresent(WorkState.self, forKey: .work) // an odd one never drops the session
         hubGroup = try c.decodeIfPresent(String.self, forKey: .hubGroup)
@@ -1526,6 +1799,50 @@ nonisolated struct LenientText: Codable, Hashable, Sendable {
     }
 }
 
+/// One of `Session.undelivered`: the owner's message the assistant keeps after it could not go in (#10194).
+nonisolated struct UndeliveredMessage: Codable, Hashable, Sendable, Identifiable {
+    /// Its client_msg_id.
+    var id: String
+    var text: String
+    /// How many pictures it carries.
+    var images: Int? = nil
+    var at: Date
+    /// `waiting`: sent again by itself; `failed`: it gave up (Retry / Delete).
+    var state: String
+    var attempts: Int? = nil
+    var nextAt: Date? = nil
+    var error: String? = nil
+    var deleteOnly: Bool? = nil
+    /// An Agent message held by its computer's manager. Its error is the complete status line.
+    var computer: String? = nil
+
+    static let agentHoldFeature = "agent_message_hold"
+    var heldForComputer: Bool { computer?.isEmpty == false }
+    var heldStatus: String? {
+        guard heldForComputer else { return nil }
+        if let error, !error.isEmpty { return error }
+        return gaveUp ? String(localized: "Delivery status unknown") : String(localized: "Waiting to send")
+    }
+
+    /// The hub's names (`proto.UndeliveredMessage`): one enum, #10775 (`delete_only`) and #10440 (`next_at`) each added one.
+    private enum CodingKeys: String, CodingKey {
+        case id, text, images, at, state, attempts, error, computer
+        case nextAt = "next_at", deleteOnly = "delete_only"
+    }
+
+    var gaveUp: Bool { state == "failed" }
+    var canRetry: Bool { gaveUp && deleteOnly != true }
+
+    /// The row's kept messages to draw: not one the transcript has (`landed`: its items' client_msg_ids) nor one this
+    /// phone still draws as sending or arriving (`drawn`: those bubbles' ids), compared case-insensitively. The row can
+    /// come before the send's answer, or lag behind the transcript's line (web `shownUndelivered`).
+    static func shown(_ list: [UndeliveredMessage]?, landed: [String], drawn: [String]) -> [UndeliveredMessage] {
+        guard let list, !list.isEmpty else { return [] }
+        let skip = Set((landed + drawn).map { $0.lowercased() })
+        return list.filter { !skip.contains($0.id.lowercased()) }
+    }
+}
+
 /// A session's work state (docs/assistant/agent-work.md): the hub triages each stopped turn into done or blocked on something
 /// named, with one line for the lists. Only `phase` is always there.
 nonisolated struct WorkState: Codable, Hashable, Sendable {
@@ -1543,6 +1860,8 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
     var resetsAt: Date? = nil
     var attempts: Int? = nil
     var max: Int? = nil
+    /// A recently finished turn nobody has seen. Hubs predating the flag omit it.
+    var justFinished: Bool? = nil
     /// The agent it waits for.
     var agent: WorkAgent? = nil
     /// What the work produced: pull requests, commits, documents, builds (`WorkArtifact`). Nil from a hub without them.
@@ -1553,7 +1872,7 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case phase, on, line, wait, then, attempts, max, agent, artifacts, closeout
-        case wakeAt = "wake_at", resetsAt = "resets_at"
+        case wakeAt = "wake_at", resetsAt = "resets_at", justFinished = "just_finished"
     }
 
     init(from decoder: Decoder) throws {
@@ -1567,6 +1886,7 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
         resetsAt = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
         attempts = try c.decodeIfPresent(Int.self, forKey: .attempts)
         max = try c.decodeIfPresent(Int.self, forKey: .max)
+        justFinished = try c.decodeIfPresent(Bool.self, forKey: .justFinished)
         agent = try c.decodeIfPresent(WorkAgent.self, forKey: .agent)
         // New (#3612): one that does not decode is as if there were none, never the whole work state failing.
         artifacts = try? c.decodeIfPresent([WorkArtifact].self, forKey: .artifacts)
@@ -2430,12 +2750,21 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var outcome: ToolOutcome? = nil
     /// kind == .notice: an upstream refusal, drawn as a line of its own after the exchange (#4489, `RefusalNotice`).
     var modelRefusal: ModelRefusal? = nil
+    /// Text belonging to the work summary, including when the node sends it unfolded.
+    var narration: Bool? = nil
+    /// A generated heartbeat acknowledgement from a DONT_NOTIFY envelope.
+    var codexHeartbeatQuiet: Bool? = nil
     /// What the model requests this item stands for used (#5426). Older hubs omit it.
     var usage: [TokenUsage]? = nil
+    /// Raw record identity for a text item with a positional ID, stable before clipping. Older nodes omit it.
+    var sourceFingerprint: String? = nil
+    /// The model that wrote this assistant item, including tool work after the last words. Older hubs omit it.
+    var model: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage
-        case modelRefusal = "model_refusal"
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage, model
+        case modelRefusal = "model_refusal", narration, codexHeartbeatQuiet = "codex_heartbeat_quiet"
+        case sourceFingerprint = "source_fingerprint"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id", supervisionUser = "supervision_user"
     }
@@ -2456,6 +2785,9 @@ nonisolated enum InteractionKind: String, Codable, Sendable {
 nonisolated struct QuestionOption: Codable, Hashable, Sendable {
     var label: String
     var description: String?
+    /// "defer" on a manager work card's put-off choices (#6753): picking one only clears the card on the hub and sends
+    /// nothing to the Agent. Missing on every other option.
+    var action: String?
 
     /// "Take the longest one (Recommended)" → ("Take the longest one", true): the words to show and whether Claude recommends it.
     /// The answer sent back keeps the original label. Phone and watch draw 「推荐」 instead of the suffix.
@@ -2510,8 +2842,12 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     /// Whether this question's runtime can release its waiter without an answer (`cancel` on Resolution).
     var canCancel: Bool?
     var plan: String?
+    /// The permission mode a plan-mode start goes on in after approval (#3784). Older hubs and sessions omit it.
+    var planThen: String?
     var toolInput: JSONValue?
     var summary: String?
+    /// A script ask's opt-in reply-Markdown rendering; missing and unrecognized values stay literal (#10857).
+    var format: String?
     var screen: String?
     /// The screen's dialog as the hub read it (newer hubs): answer with `Resolution.option`.
     var dialog: ScreenDialog?
@@ -2594,6 +2930,19 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var foldedAsText: LenientText? = nil
     var foldedSideText: LenientText? = nil
 
+    /// A server-owned exact proposal. These fields never turn another approval into an Always grant.
+    var approvalBatchID: String?
+    var approvalItemID: String?
+    var ownerProposal: Bool?
+    var noExpiry: Bool?
+    var ownerApprovalPhrases: [String]?
+    var ownerApprovalPhrase: String? {
+        guard kind == .permission, ownerProposal == true, let approvalBatchID, !approvalBatchID.isEmpty,
+              !machineID.isEmpty, !sessionID.isEmpty,
+              let phrase = ownerApprovalPhrases?.first, !phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return phrase
+    }
+
     var sessionKey: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
     /// The session the card is shown on. Answering still uses `id` and `sessionID`.
     var requestHome: String {
@@ -2613,15 +2962,17 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var screenDialog: ScreenParser.Dialog? { dialog?.parsed ?? screen.flatMap(ScreenParser.dialog) }
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
+        case id, kind, questions, plan, summary, format, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
         case suggestion, canCancel = "can_cancel"
+        case planThen = "plan_then"
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", alwaysHonored = "always_honored",
              toolTitle = "tool_title", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
              mutedFlag = "muted", elicitation, mcpServerName = "mcp_server_name", mcpConfigSource = "mcp_config_source",
              agentID = "agent_id", agentType = "agent_type", foldedUnderText = "folded_under", foldedAsText = "folded_as",
-             foldedSideText = "folded_side"
+             foldedSideText = "folded_side", approvalBatchID = "approval_batch_id", approvalItemID = "approval_item_id",
+             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases"
     }
 }
 
@@ -2699,6 +3050,8 @@ nonisolated struct Resolution: Codable, Sendable, Equatable {
     /// An MCP form or link (`Elicitation.resolution`): accept, decline or cancel, and with a form's accept what was filled in.
     var action: String?
     var content: [String: JSONValue]?
+    /// Runtime-only exact proposal reply. Excluded from CodingKeys so it can never become an ordinary resolution field.
+    var ownerApprovalPhrase: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, cancel, option, options, values, reason, action, content
