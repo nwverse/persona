@@ -441,7 +441,7 @@ func TestRuleLocal(t *testing.T) {
 		ok    bool
 	}{{[]string{"127.0.0.1"}, true}, {[]string{"::1"}, true}, {[]string{"[::1]"}, true}, {[]string{"localhost"}, true},
 		{[]string{LocalHost}, true}, {[]string{"127.0.0.2"}, false}, {[]string{"*.persona.internal"}, false}, {nil, false}} {
-		if got := (Rule{Hosts: c.hosts}).Local(); got != c.ok {
+		if got := (Rule{Hosts: c.hosts}).Loopback(); got != c.ok {
 			t.Errorf("%v: %v", c.hosts, got)
 		}
 	}
