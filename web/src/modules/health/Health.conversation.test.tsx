@@ -21,7 +21,7 @@ vi.mock("./reports", async (orig) => ({
   ...(await orig<typeof import("./reports")>()),
   startHealthConversation: () => (hub.started++, new Promise(() => {})),
 }));
-vi.mock("../chat/ChatView", () => ({
+vi.mock("../../views/chat/ChatView", () => ({
   ChatView: ({ mid, sid, headerActions, placeholder }: { mid: string; sid: string; headerActions?: React.ReactNode; placeholder?: string }) => <div><p data-chat data-placeholder={placeholder}>{`${mid}/${sid}`}</p>{headerActions}</div>,
 }));
 

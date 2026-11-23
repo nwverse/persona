@@ -1749,15 +1749,6 @@ if MOCK_SIDE_SESSIONS:
              30, "缓存没命中，依赖每次都重新装。", **dict(_desktop, parent_agent_id=SIDE_CHAT)),
     ]
 
-# MOCK_SIDE_UNREAD=1 (#13496), with MOCK_SIDE_SESSIONS=1: the /btw question was answered and both it and the side chat
-# finished a reply nobody has seen, while the review itself was seen. Its row is Unread for its sides alone, and the
-# sidebar names the newer one ("+1" for the other) and opens it in one click.
-MOCK_SIDE_UNREAD = MOCK_SIDE_SESSIONS and os.environ.get("MOCK_SIDE_UNREAD") == "1"
-if MOCK_SIDE_UNREAD:
-    for _s in SESSIONS:
-        if _s["session_id"] in (SIDE_BTW, SIDE_CHAT):
-            _s.update(status="idle", state="unread", pending_interactions=0, seen_at=ago(minutes=40))
-
 # MOCK_SESSIONS_MANY=<n> (#4410): n more idle sessions, enough to page an Agents list several pages deep with
 # MOCK_SESSIONS_LIST=1. GET /mock/sessions/touch moves the newest of them to now: the list's revision changes and every
 # cursor of the old one answers 409 cursor_expired, as the hub's do once a frozen view has expired.
@@ -6743,11 +6734,8 @@ TRANSCRIPTION_MODE = {"ready": os.environ.get("MOCK_MEETING_TRANSCRIPTION_READY"
                       "fatal": "", "line_seconds": 4, "final_seconds": 2}
 TRANSCRIPTIONS = {}  # Protected by RECORDINGS_LOCK, including socket callbacks and final-pass timers.
 # The final pass's progress (#13461, docs/assistant/meeting-minutes.md "Gaps and the final pass"): while the mock's own
-# pass runs, transcription carries final_done (0: it replays in one step) and end. MOCK_MEETING_FINISHING=<done>,<end>
-# (recording seconds) shows every complete meeting recording with no transcription of its own as a hub-mode meeting whose
-# final pass has done <done> of <end>, for shots of the minutes line; its minutes stay as MOCK_RECORDING_MINUTES says.
-MEETING_FINISHING = tuple(float(x) for x in os.environ["MOCK_MEETING_FINISHING"].split(",")) \
-    if os.environ.get("MOCK_MEETING_FINISHING") else None
+# pass runs, transcription carries final_done (0: it replays in one step) and end. A pass in progress on a recording without
+# a transcription of its own, for shots of the minutes line, is MOCK_MEETING_FINISHING's (meeting_finishing_mock.py).
 TRANSCRIPTION_SCRIPT = ("我们先把 export cap 保持在 4 MB。", "Let's revisit pricing next week.",  # i18n-ignore: synthetic speech, never translated
                         "Alice 负责检查 export test。", "Bo will share the notes tomorrow.")  # i18n-ignore: synthetic speech
 
@@ -6893,12 +6881,7 @@ def transcription_gaps(t):
 def transcription_view(rid):
     t = TRANSCRIPTIONS.get(rid)
     if not meeting_transcription_on(): return None
-    if not t:
-        rec = RECORDINGS.get(rid)
-        if MEETING_FINISHING and isinstance(rec, dict) and rec.get("kind") == "meeting" and rec.get("complete"):
-            done, end = MEETING_FINISHING
-            return {"mode": "hub", "state": "finishing", "gaps": [], "final_done": min(done, end), "end": end}
-        return None
+    if not t: return None
     if t["mode"] == "device": return {"mode": "device"}
     out = {"mode": "hub", "state": t["state"], "gaps": transcription_gaps(t) if rid not in RECORDINGS_TRIMMED else []}
     if t.get("problem"): out["problem"] = t["problem"]
@@ -17881,15 +17864,14 @@ if os.environ.get("MOCK_TAB_PANES"):
              "summary": "go test ./auth/...", "tool_input": {"command": "go test ./auth/..."}})
 if MOCK_SIDE_SESSIONS:
     # #7944: the /btw question's card (with side folding the hub sends it folded_under the review, folded_as "side"), and
-    # what each side session said; MOCK_SIDE_UNREAD answered the card
-    if not MOCK_SIDE_UNREAD:
-        INTERACTIONS.append(
-            {"id": "ix_side_btw", "machine_id": "macbook", "session_id": SIDE_BTW, "session_title": "btw: 这个 PR 现在能合吗",
-             "cwd": "/Users/me/code/weather", "kind": "question", "created_at": ago(minutes=4), "expires_at": later(minutes=26),
-             "tool_name": "AskUserQuestion", "tool_use_id": "toolu_side_btw",
-             "questions": [{"question": "两条命名建议要不要等改完再合？", "header": "合并", "multi_select": False, "options": [
-                 {"label": "等改完再合", "description": "命名统一以后再合进主分支"},
-                 {"label": "现在就合", "description": "命名之后单独提一个改动"}]}]})
+    # what each side session said (MOCK_SIDE_UNREAD, side_unread_mock.py, answers the card)
+    INTERACTIONS.append(
+        {"id": "ix_side_btw", "machine_id": "macbook", "session_id": SIDE_BTW, "session_title": "btw: 这个 PR 现在能合吗",
+         "cwd": "/Users/me/code/weather", "kind": "question", "created_at": ago(minutes=4), "expires_at": later(minutes=26),
+         "tool_name": "AskUserQuestion", "tool_use_id": "toolu_side_btw",
+         "questions": [{"question": "两条命名建议要不要等改完再合？", "header": "合并", "multi_select": False, "options": [
+             {"label": "等改完再合", "description": "命名统一以后再合进主分支"},
+             {"label": "现在就合", "description": "命名之后单独提一个改动"}]}]})
     ITEMS[SIDE_BTW] = [it("user", "text", 6, text="btw 这个 PR 现在能合吗"),
                        it("assistant", "text", 4, text="逻辑和测试都没问题。想先确认一下：两条命名建议要不要等改完再合？")]
     ITEMS[SIDE_CHAT] = [it("user", "text", 12, text="命名建议你倾向哪种写法？"),
@@ -25843,7 +25825,6 @@ MOCK_HELP = [
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts, exact lookup and by to-do (todo=, #6662); list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
     "MOCK_SIDE_SESSIONS=1  Three Claude desktop side sessions of the PR review (parent_agent_id, #5935): one waiting for you with its card, one a stopped side of a side; the hub folds them into the review's chat (sessions_side_fold, #7944) unless MOCK_SIDE_FOLD=0",
-    "MOCK_SIDE_UNREAD=1  With MOCK_SIDE_SESSIONS=1: the side chat and the answered /btw question each have an unread reply, the review itself seen (#13496)",
     "MOCK_SESSIONS_CATALOG=1  With MOCK_SESSIONS_LIST=1: catalog=1, place= and space= on the paged list, a Windows PC, one repository on two computers and a plain notes folder on two",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
