@@ -39,8 +39,14 @@ func ValidDevelopmentCommit(commit string) bool {
 }
 
 func (t DevelopmentTarget) Valid() bool {
-	build := strconv.FormatInt(t.Build, 10)
-	_, err := time.Parse("200601021504", build)
-	return len(build) == 12 && err == nil && ValidDevelopmentCommit(t.Commit) && t.Version == fmt.Sprintf("web-dev-%s-%d", t.Commit[:12], t.Build) &&
+	return validBuild(t.Build) && ValidDevelopmentCommit(t.Commit) && t.Version == fmt.Sprintf("web-dev-%s-%d", t.Commit[:12], t.Build) &&
 		t == DevelopmentBuild(t.Commit, t.Version, t.Build)
+}
+
+// validBuild is a build number as update.ParseNumber reads one, YYYYMMDDHHMM, checked here: a contract package
+// imports no business package (internal/archguard).
+func validBuild(build int64) bool {
+	s := strconv.FormatInt(build, 10)
+	_, err := time.Parse("200601021504", s)
+	return len(s) == 12 && err == nil
 }

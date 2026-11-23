@@ -127,6 +127,7 @@ struct PersonaApp: App {
                 // Refresh the health summary snapshot while unlocked, so a locked-phone phone_health_summary
                 // call later can serve it instead of HealthKit's inaccessible-database error.
                 Task { await HealthTool.refreshSnapshot() }
+                Task { await HealthIntakeSync.shared.refresh(model: model) }
                 SiriCalls.askOnce(paired: model.hub != nil) // a build with app.siri_calls only (#9290)
                 BackgroundLocation.shared.cameToFront() // offers Always once after a read refused in the background
                 #endif
@@ -518,10 +519,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         AppModel.shared.wakeLinks(group)
         #if os(iOS)
         HomeWidgetData.shared.refresh() // the calendar, Health and the usage the widgets show, when due
+        let intakeSync = Task { await HealthIntakeSync.shared.refresh(model: .shared) }
         #endif
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
             #if os(iOS)
+            intakeSync.cancel()
             HomeWidgetWriter.shared.flush() // the hub woke it for the widgets (#5721), or anything they show changed
             #endif
             if UIApplication.shared.applicationState == .background { AppModel.shared.suspendLinks() }
@@ -663,8 +666,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     AppDelegate.inBackground("take-recommendation", done: done) { await NotificationActions.take(decision, group: key?.group ?? ref?.group) }
                     return
                 }
-                if let ixID, let resolution = NotificationActions.resolution(action: action, text: text) {
-                    // A button on the notification: settle it in the background, the app stays where it is.
+                if let ixID, let resolution = NotificationActions.resolution(action: action, text: text),
+                   NotificationActions.answerable(ixID, among: AppModel.shared.pendingInteractions) {
+                    // A button on the notification: settle it in the background, the app stays where it is. A card its
+                    // task's supervisor holds is not settled from here: the tap opens its session below, as a plain tap does.
                     AppDelegate.resolveFromNotification(ixID, group: key?.group ?? ref?.group, resolution, action: action, done: done)
                     return
                 }

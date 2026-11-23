@@ -454,6 +454,41 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   4. Compare the four dietary values against the entries written to Health (kcal / g, rounded to one decimal). If other sources also wrote entries, compare with the relevant Health totals. `resting_energy` should match available basal-energy data; it may be absent when no source recorded it. A missing value stays absent, rather than becoming zero.
   5. Add another food entry in 薄荷健康, wait until it is visible in Health, and query again. The day's total should include both entries; no previous-day entry should enter today's total. This check verifies the source app → Health → Persona → hub path.
 
+## Syncing to Apple Health
+
+On iPhone, **Settings › Health › Sync to Apple Health** is off by default. It is hidden in demo mode and on other
+devices, and requires a hub with `health_intake`. Turning it on requests write access to water and protein, then
+backfills all records, including imported history, at their original times. Turning it off stops sync and keeps
+samples already written. This is one-way: Apple Health edits do not change Persona's intake records.
+
+Each record writes one sample with its record UUID as `HKMetadataKeySyncIdentifier`, sync version 1, and
+`HKMetadataKeyWasUserEntered`. Replaying history uses the same identifier and version. Undoing a record deletes the
+sample with that identifier; HealthKit permits deletion only of samples Persona itself saved. Other apps' samples
+are untouched. This opt-in sync is separate from the AI's `phone_health_write_sample` tool, which still requires
+confirmation for each sample and never writes water or protein or deletes data.
+
+The device stores a protected, backup-excluded cursor bound to the group and actual hub identity selected when sync was enabled. Another hub
+does not inherit consent or progress; explicitly enabling sync there starts from zero. A missing cursor also starts
+from zero. The client reads the full-device-only changes stream, including tombstones, in sequence order. It saves
+progress only after each HealthKit operation succeeds and stops on the first write, delete, network or checkpoint
+failure. The next trigger retries that entry. Settings shows the last completed sync, missing write permissions,
+or the last failure. After allowing write access in system settings, the next trigger continues from that cursor.
+
+Triggers are foreground entry, a successful local record or undo, `health_intake` broadcasts, and the existing hub
+wake for widgets. The phone must be unlocked before each operation. No new background task or delivery entitlement
+is added; a closed app without a widget catches up when next opened. Turning sync off does not remove past samples.
+
+Simulator verification establishes storage behavior, not physical-device lock, iCloud or background delivery.
+The iOS 27.2 simulator's Health app does not expose the nutrition views used for visual acceptance. As part of
+rollout, the user verifies visible water/protein entries, replay and undo in the Health app on their physical iPhone
+using the TestFlight build, before enabling sync on real records.
+
+`HealthIntakeSyncTests` uses a fake writer for cursor, failure and hub-scope cases. The opt-in
+`HealthIntakeHealthKitTests` integration suite (`TEST_RUNNER_PERSONA_HEALTH_LIVE=1`, after granting the system write
+sheet on a disposable simulator) checks both types against the real HealthKit store: same-version replay stays at
+one sample; deletion and repeated deletion of a missing identifier succeed and leave zero. With Xcode 27.2 and the
+iOS 27.2 simulator these checks pass; repeat them on a physical iPhone before release.
+
 ## Automatic workout reports (iOS)
 
 Settings → Health → Automatic workout reports is off by default. Enabling it requests

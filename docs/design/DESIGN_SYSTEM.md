@@ -29,6 +29,16 @@ This table only points the way. Values and rules live in the sections it names, 
 | A new setting | Settings, showing its current value | principles 2 and 3 |
 | Any UI change | the UI change self-check | 1.4 |
 
+## Apple Health intake sync (#13291)
+
+Audience: people who want their Persona water and protein records in Apple Health. Reuse Settings › Health's
+`SettingsForm`, `SettingsSwitchRow`, secondary status text and caution color. The iPhone-only switch is off by default
+and hidden in demo mode. Its footer explains historical backfill, undo and keeping already written samples on
+disable. Status shows the last complete sync time, denied write types or the last failure. The Health home's final
+Today row uses the existing `NavigationLink` to this same page and disappears while sync is enabled for this hub.
+No new visual token, component style, polling loop or background task is introduced. All text ships in English,
+Simplified Chinese and Japanese; use Apple Health / Apple 健康 consistently.
+
 ## Product design principles
 
 The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.

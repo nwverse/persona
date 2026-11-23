@@ -1,6 +1,282 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "When sync is on, water and protein records are written to Apple Health on this iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When sync is on, water and protein records are written to Apple Health on this iPhone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同期をオンにすると、水分とたんぱく質の記録がこのiPhoneのAppleヘルスケアに書き込まれます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开同步后，喝水和蛋白质会写进这台 iPhone 的 Apple 健康。"
+          }
+        }
+      }
+    },
+    "Say “I drank 300 ml of water”, or take a photo of a meal in the field below, to log it in Health. When sync is on, it is also written to Apple Health." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Say “I drank 300 ml of water”, or take a photo of a meal in the field below, to log it in Health. When sync is on, it is also written to Apple Health."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「水を300 ml飲んだ」と伝えるか、下の入力欄で食事を撮影すると健康に記録できます。同期をオンにするとAppleヘルスケアにも書き込まれます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说「喝了 300 毫升水」，或在下面的输入框拍一张饭，就记进健康；打开同步后也会写进 Apple 健康。"
+          }
+        }
+      }
+    },
+    "Couldn't read the intake changes. Try again later." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the intake changes. Try again later."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記録の変更を読み込めませんでした。後でもう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取记录的变化，请稍后再试。"
+          }
+        }
+      }
+    },
+    "The intake record has an invalid amount or time." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The intake record has an invalid amount or time."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記録の量または時刻が無効です。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条记录的数量或时间无效。"
+          }
+        }
+      }
+    },
+    "Couldn't connect. Try again later." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't connect. Try again later."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続できませんでした。後でもう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接，请稍后再试。"
+          }
+        }
+      }
+    },
+    "Last write failed: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last write failed: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前回の書き込みに失敗：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次写入失败：%@"
+          }
+        }
+      }
+    },
+    "Apple Health hasn't allowed writing this intake type." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Health hasn't allowed writing this intake type."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appleヘルスケアでこの種類の記録の書き込みが許可されていません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 健康没有允许写入这类记录。"
+          }
+        }
+      }
+    },
+    "Apple Health hasn't allowed writing protein." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Health hasn't allowed writing protein."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appleヘルスケアでたんぱく質の書き込みが許可されていません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 健康没有允许写入蛋白质。"
+          }
+        }
+      }
+    },
+    "Apple Health hasn't allowed writing water." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Health hasn't allowed writing water."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appleヘルスケアで水分の書き込みが許可されていません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 健康没有允许写入饮水。"
+          }
+        }
+      }
+    },
+    "Apple Health hasn't allowed writing water or protein." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Health hasn't allowed writing water or protein."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appleヘルスケアで水分とたんぱく質の書き込みが許可されていません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 健康没有允许写入饮水或蛋白质。"
+          }
+        }
+      }
+    },
+    "Off by default. When enabled, all your water and protein records, including earlier records, are written to Apple Health on this iPhone. Undoing a record removes its sample. Turning this off keeps samples already written." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off by default. When enabled, all your water and protein records, including earlier records, are written to Apple Health on this iPhone. Undoing a record removes its sample. Turning this off keeps samples already written."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "初期設定はオフです。オンにすると、過去の記録を含む水分とたんぱく質の全記録が、このiPhoneのAppleヘルスケアに書き込まれます。記録を取り消すと対応するデータも削除されます。オフにしても書き込み済みのデータは残ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认关闭。打开后，全部饮水和蛋白质记录（包括历史记录）会写入这台 iPhone 的 Apple 健康。撤销记录时会删除对应的数据。关闭后保留已写入的数据。"
+          }
+        }
+      }
+    },
+    "Sync to Apple Health" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync to Apple Health"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appleヘルスケアに同期"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步到 Apple 健康"
+          }
+        }
+      }
+    },
     "%@ · %lld need you [To-dos Filter]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -170099,6 +170375,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "バックグラウンドで処理中…"
+          }
+        }
+      }
+    },
+    "Supervisor is handling this" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supervisor is handling this"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "監督者が対応中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "督办者处理中"
+          }
+        }
+      }
+    },
+    "This went to its task's supervisor first. It comes to you only if the supervisor passes it up." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This went to its task's supervisor first. It comes to you only if the supervisor passes it up."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "これはまずタスクの監督者に渡されました。監督者が上げたときだけ、あなたに届きます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这张卡先交给了任务的督办者。督办者上交后，才会到你这里。"
           }
         }
       }
