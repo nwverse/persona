@@ -155,6 +155,20 @@ The AI twin's own saved mode is authorization metadata, not a caller's model cho
 
 Origin attestation, the Inbox MCP/tool gate and Lark outbound policy are unchanged in every combination.
 
+### Ordinary assistant permission defaults on resume (#13653)
+
+The manager sends its current default as `default_permission_mode` and marks a deliberate generic choice with
+`permission_mode_explicit` on `assistant.send`, `session.send` and `assistant.model`. The node persists that explicit
+provenance as `app_mode_explicit` in the existing `node_model` JSON. Neither field changes the model fingerprint, the
+public client API or the Inbox/guest policy.
+
+| Pair or state | What happens |
+| --- | --- |
+| New manager, new node | A new or stopped process uses the explicit conversation mode first, then the current manager default, then legacy state/transcript evidence. A live process keeps its current mode. |
+| New manager, older node | The older node ignores both fields and retains its legacy resume behavior until updated. Initial starts still receive the ordinary `permission_mode`. |
+| Older manager, new node | Both fields are absent, so the node retains the legacy `AppMode` / in-memory / transcript precedence and built-in `bypassPermissions` fallback. |
+| Legacy state without `app_mode_explicit` | Its `AppMode` is treated as inherited when a current manager supplies a default. An explicit choice made after the upgrade persists with the marker and wins thereafter. |
+
 ### Node connection lanes (#10660)
 
 A manager and a node built since #10660 frame their connection on four lanes (protocol.md "Lanes"); any older end

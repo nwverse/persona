@@ -110,17 +110,19 @@ func TestDefaultPermissionNewConversationInheritance(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if sent := f.sends[len(f.sends)-1]; sent["permission_mode"] != wantMode || sess.PermissionMode != wantMode {
+				if sent := f.sends[len(f.sends)-1]; sent["permission_mode"] != wantMode || sent["default_permission_mode"] != wantMode ||
+					sent["permission_mode_explicit"] != nil || sess.PermissionMode != wantMode {
 					t.Fatalf("%+v inherited %v / %s, want %s", p, sent, sess.PermissionMode, wantMode)
 				}
 			}
 			for _, override := range proto.PermissionModes {
 				sess, err := s.Start(context.Background(), StartParams{PermissionMode: override, Untitled: true})
-				if err != nil || sess.PermissionMode != override || f.sends[len(f.sends)-1]["permission_mode"] != override {
+				if err != nil || sess.PermissionMode != override || f.sends[len(f.sends)-1]["permission_mode"] != override ||
+					f.sends[len(f.sends)-1]["default_permission_mode"] != nil || f.sends[len(f.sends)-1]["permission_mode_explicit"] != true {
 					t.Fatalf("explicit %s lost to %s: %+v %v", override, mode, sess, err)
 				}
 			}
-			// Existing conversations keep their saved mode on later turns; the manager default is not injected.
+			// A conversation the manager does not know returns before model/default resolution and keeps the caller's params.
 			for _, override := range []string{"", "default", "plan"} {
 				params := map[string]any{"text": "next"}
 				if override != "" {
@@ -131,8 +133,8 @@ func TestDefaultPermissionNewConversationInheritance(t *testing.T) {
 				if override != "" {
 					want = override
 				}
-				if err != nil || got["permission_mode"] != want {
-					t.Fatalf("existing conversation overwritten: %v %v", got, err)
+				if err != nil || got["permission_mode"] != want || got["default_permission_mode"] != nil || got["permission_mode_explicit"] != nil {
+					t.Fatalf("unknown conversation was resolved: %v %v", got, err)
 				}
 			}
 			before := len(f.sends)
@@ -145,6 +147,33 @@ func TestDefaultPermissionNewConversationInheritance(t *testing.T) {
 				t.Fatalf("replacement main lost default: %v", err)
 			}
 		})
+	}
+}
+
+func TestDefaultPermissionExistingConversationPrecedence(t *testing.T) {
+	f := newFakeHub().withMachine()
+	s := newTestService(t, f)
+	setSettings(t, s, func(v *Settings) {
+		v.DefaultPermissionMode = proto.ModeBypass
+		v.Main, v.MainMachineID = "existing", "server"
+	})
+
+	got, err := s.SendParams(context.Background(), SendParams{MachineID: "server", SessionID: "existing", Params: map[string]any{"text": "next"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["default_permission_mode"] != proto.ModeBypass || got["permission_mode"] != nil {
+		t.Fatalf("current default was not sent separately: %v", got)
+	}
+
+	got, err = s.SendParams(context.Background(), SendParams{MachineID: "server", SessionID: "existing", Params: map[string]any{
+		"text": "explicit", "permission_mode": "plan", "default_permission_mode": "default",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["permission_mode"] != "plan" || got["default_permission_mode"] != nil {
+		t.Fatalf("explicit mode was replaced by the default: %v", got)
 	}
 }
 
@@ -181,7 +210,8 @@ func TestDefaultPermissionGuestDoesNotInherit(t *testing.T) {
 	f, s, _ := guestService(t)
 	setSettings(t, s, func(v *Settings) { v.DefaultPermissionMode = proto.ModeBypass })
 	w := postConversation(t, s, `{"prompt":"hello","guest":{"tools":["lark_agent_reply"]}}`)
-	if w.Code != 200 || f.sends[len(f.sends)-1]["permission_mode"] != "" {
+	if w.Code != 200 || f.sends[len(f.sends)-1]["permission_mode"] != "" || f.sends[len(f.sends)-1]["default_permission_mode"] != nil ||
+		f.sends[len(f.sends)-1]["permission_mode_explicit"] != nil {
 		t.Fatalf("guest inherited permissions: %d %s %v", w.Code, w.Body, f.sends)
 	}
 }

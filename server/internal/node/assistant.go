@@ -405,6 +405,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	// External authority and the raw runtime must be checked before guest/resume normalization can replace options.
 	requested := executionOption(options)
+	callerModeExplicit := requested.PermissionModeExplicit && mode != ""
 	public := requested.Public // audience belongs to this input, even when launcher normalization replaces execution
 	requestedLauncher := launcherOr(launcher, st.Launcher)
 	if proto.IsExternalLauncher(requestedLauncher) || requested.External != nil {
@@ -463,7 +464,25 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return "", errAssistantOriginUnknown
 	}
 	if mode == "" && guest == nil {
-		mode = st.AppMode
+		running := false
+		if resume {
+			n.mu.Lock()
+			p := n.procs[id]
+			running = p != nil && p.alive()
+			n.mu.Unlock()
+		}
+		// A deliberate conversation choice wins. Otherwise a stopped/new process follows the manager's current default;
+		// legacy AppMode/transcript evidence is used only when an older manager supplied no default. A live process
+		// keeps its mode until a later stopped-process resume.
+		if st.AppModeExplicit {
+			mode = st.AppMode
+		}
+		if mode == "" && !running {
+			mode = requested.DefaultPermissionMode
+		}
+		if mode == "" {
+			mode = st.AppMode
+		}
 		if mode == "" {
 			mode = n.assistantModeOf(id)
 		}
@@ -953,7 +972,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		n.state.put(id, st)
 	}
 
-	n.persistModes(id, mode, effort) // after saving state, including defaults filled on resume
+	n.persistModes(id, mode, effort, callerModeExplicit && origin != originInbox && guest == nil) // after saving state, including defaults filled on resume
 	if err := n.idleCompactBeforeInput(ctx, p); err != nil {
 		return "", err
 	}

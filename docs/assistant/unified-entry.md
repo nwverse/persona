@@ -1275,7 +1275,8 @@ direction's project, and never written into the notes (`docs/assistant/todos.md`
 
 On the web, the same settings group has **Direction and new-chat permissions**, a link to the existing
 `default_permission_mode` control. Directions and new assistant conversations share that default; changing it affects
-new conversations, not a running chat's saved mode. Settings search indexes both the Direction notes and permission
+new conversations and stopped-process resumes without an explicit conversation choice. It does not interrupt a live
+process or override an explicit mode. Settings search indexes both the Direction notes and permission
 labels, so either name reaches the control.
 
 The assistant uses the same record through `persona_settings`: `list` exposes each current direction as

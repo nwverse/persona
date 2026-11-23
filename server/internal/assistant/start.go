@@ -444,8 +444,12 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			mode = cmp.Or(s.settings(ctx).DefaultPermissionMode, proto.ModeBypass)
 			params["permission_mode"] = mode
 		}
-		if explicitPermission == "" && !s.startPermissionModeSupported(ctx, machine, used, mode) {
+		if explicitPermission != "" {
+			params[assistantwire.PermissionModeExplicitParam] = true
+		} else if !s.startPermissionModeSupported(ctx, machine, used, mode) {
 			delete(params, "permission_mode")
+		} else {
+			params[assistantwire.DefaultPermissionModeParam] = mode
 		}
 	}
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
@@ -1252,6 +1256,8 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	if p.Params == nil {
 		p.Params = map[string]any{}
 	}
+	delete(p.Params, assistantwire.DefaultPermissionModeParam)
+	delete(p.Params, assistantwire.PermissionModeExplicitParam)
 	delete(p.Params, "source") // app input cannot claim an automated author
 	delete(p.Params, "message_source")
 	approvalTarget, _ := p.Params["approval_reply_to"].(string)
@@ -1375,6 +1381,25 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 			return params, own, nil
 		}
 	}
+	// sendModel has successful early returns for native and external picks. Attach mode provenance at their common
+	// exit too; on an error the params are not sent. Inbox keeps its dedicated policy, and guests returned above.
+	defer func() {
+		if origin == OriginInbox {
+			return
+		}
+		if mode, _ := params["permission_mode"].(string); strings.TrimSpace(mode) != "" {
+			params[assistantwire.PermissionModeExplicitParam] = true
+			return
+		}
+		used, _ := params["launcher"].(string)
+		if proto.IsExternalLauncher(used) {
+			return
+		}
+		mode := cmp.Or(cfg.DefaultPermissionMode, proto.ModeBypass)
+		if s.startPermissionModeSupported(ctx, p.MachineID, used, mode) {
+			params[assistantwire.DefaultPermissionModeParam] = mode
+		}
+	}()
 	if err := s.sendModel(ctx, p.MachineID, p.SessionID, params, s.appLang(ctx, p.Lang)); err != nil {
 		var other *launcherOtherKind
 		if errors.As(err, &other) {
