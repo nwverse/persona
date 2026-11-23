@@ -125,7 +125,7 @@ async function watchdog() {
 
   process.on("disconnect", () => { void finish(outcome(1, null, { parentLost: true }), false); });
   process.on("message", (message) => {
-    if (message?.type === "deadline" && session && !finished) {
+    if (message?.type === "deadline" && session && !finishing && !finished) {
       clearTimeout(timer);
       let timeout;
       try { timeout = timeoutValue(message.timeout); }

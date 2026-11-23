@@ -10,7 +10,10 @@ import { test } from "node:test";
 const runner = fileURLToPath(new URL("./process-group.mjs", import.meta.url));
 const linux = process.platform === "linux";
 const workerSource = `import { setInterval } from "node:timers";
-process.on("SIGTERM", () => {});
+import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {
+  if (process.env.PERSONA_TEST_TERM_FILE) writeFileSync(process.env.PERSONA_TEST_TERM_FILE, "cleanup started");
+});
 setInterval(() => {}, 1_000);`;
 const controlSource = `${workerSource}
 process.on("disconnect", () => process.exit(0));`;
@@ -77,6 +80,7 @@ async function exercise(mode, control) {
   const source = join(dir, "worker.mjs");
   const ready = join(dir, "ready.json");
   const release = join(dir, "release");
+  const term = join(dir, "term");
   await writeFile(fixture, fixtureSource);
   await writeFile(source, workerSource);
   let child;
@@ -85,6 +89,7 @@ async function exercise(mode, control) {
   try {
     child = spawn(process.execPath, [runner, "--timeout-ms", mode === "timeout" ? "0" : "5000", "--", process.execPath, fixture, mode, ready, source, release], {
       detached: true, stdio: ["ignore", "pipe", "pipe", "ipc"],
+      env: { ...process.env, PERSONA_TEST_TERM_FILE: term },
     });
     let output = "";
     child.stdout.on("data", (chunk) => { output += chunk; });
@@ -100,7 +105,13 @@ async function exercise(mode, control) {
     assert.ok(state.workers.every(alive));
 
     let result;
-    if (mode === "normal") await writeFile(release, "release the normally completing fixture");
+    if (mode === "normal") {
+      await writeFile(release, "release the normally completing fixture");
+      await until(() => access(term).then(() => true, () => false), "normal cleanup to start");
+      // This maximum-size deadline arrives after finish() has started its async
+      // cleanup. It must be ignored, not left as a live timer after the result.
+      child.send({ type: "deadline", timeout: 2_147_483_647 });
+    }
     if (mode === "timeout") child.send({ type: "deadline", timeout: 150 });
     if (mode === "abrupt") {
       process.kill(child.pid, "SIGKILL");
