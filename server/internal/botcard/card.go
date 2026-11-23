@@ -1,4 +1,4 @@
-package feishubot
+package botcard
 
 import (
 	"bytes"

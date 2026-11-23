@@ -4,6 +4,7 @@
 # libraries of this list (TestLibrariesAreLeaves), so a module that uses one reaches no manager, hub, node, store or
 # other module. Add one only when a module needs it and it passes that test; never add a business package.
 internal/apierr
+internal/botcard
 internal/channel
 internal/compat
 internal/i18n

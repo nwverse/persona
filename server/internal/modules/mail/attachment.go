@@ -55,8 +55,16 @@ func fileAsAttachment(part *gomail.Part) *gomail.Part {
 	if part == nil {
 		return nil
 	}
-	if inline, ok := part.Header.(*gomail.InlineHeader); ok && isFilePart(inline.Header) {
-		part.Header = &gomail.AttachmentHeader{Header: inline.Header}
+	switch h := part.Header.(type) {
+	case *gomail.InlineHeader:
+		if isFilePart(h.Header) {
+			part.Header = &gomail.AttachmentHeader{Header: h.Header}
+		}
+	case *gomail.AttachmentHeader:
+		disp := headerToken(h.Get("Content-Disposition"))
+		if (disp == "inline" && !isFilePart(h.Header)) || (disp != "attachment" && strings.HasPrefix(contentMediaType(h.Header), "text/")) {
+			part.Header = &gomail.InlineHeader{Header: h.Header}
+		}
 	}
 	return part
 }
@@ -84,6 +92,14 @@ func staysInline(mediaType string) bool {
 func headerToken(value string) string {
 	token, _, _ := strings.Cut(value, ";")
 	return strings.ToLower(strings.TrimSpace(token))
+}
+
+// contentMediaType is h's lowercased media type, falling back to headerToken when a parameter fails to parse.
+func contentMediaType(h gomessage.Header) string {
+	if mt, _, err := h.ContentType(); err == nil {
+		return mt
+	}
+	return headerToken(h.Get("Content-Type"))
 }
 
 // hasParam reports whether a raw header value carries a non-empty key parameter in any form (key=, or the RFC 2231

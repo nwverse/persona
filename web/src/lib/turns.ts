@@ -93,6 +93,8 @@ export interface Segment {
   /** The exchange ended in a model API error or an interruption after everything in it (turnLines, lineError): its last
    *  words are not a finished reply, and say so (cindy's "This reply did not complete", #5314). */
   cut?: boolean;
+  /** A settled user turn without a visible response or an explicit closing notice. */
+  emptyResponse?: boolean;
   /** What its items used (#5426, lib/turn-usage.ts): every item counts, those it does not show too (a tool's result, a
    *  Codex turn's duration, a stopped turn's notice); each subagent counts once in the chat, in the exchange that
    *  launched it (chatLines' lineUsage). Absent when none of them carries tokens. */
@@ -761,14 +763,14 @@ export function supervisionTool(rawName?: string): "notify_user" | "ask_user" | 
 }
 
 /** Visibility is round-wide and derived again after every page merge. Arguments alone never prove success. */
-function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Item>, live: boolean, routineMainRelay = false): { visible: boolean; completedSilent: boolean } {
+function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Item> | undefined, live: boolean, routineMainRelay = false): { visible: boolean; completedSilent: boolean } {
   if (ordered.some((i) => i.supervisionUser || i.fold?.supervision_user || (injectedOf(i)?.state === "supervise" && injectedOf(i)?.level === "user"))) return { visible: true, completedSilent: false };
   let silent = false;
   for (const use of ordered) {
     if (use.kind !== "tool_use") continue;
     const name = supervisionTool(use.tool_name);
     if (!name) continue;
-    const result = use.tool_use_id ? results.get(use.tool_use_id) : undefined;
+    const result = use.tool_use_id ? results?.get(use.tool_use_id) : undefined;
     // ask_user waits for a person before it has a result; never bury its pending answer card.
     if (!result) {
       if (name === "ask_user" && live) return { visible: true, completedSilent: false };
@@ -920,8 +922,9 @@ export function buildBlocks(items: Item[], background = false): Block[] {
 }
 
 /** The transcript's "Interrupted" notice: a line of its own after the exchange it stopped. */
-function isInterruptNotice(it: Item): boolean {
-  return it.kind === "notice" && !it.task && (it.text ?? "").includes("中断"); // i18n-ignore: the transcript's interrupt notice
+export function isInterruptNotice(it: Item): boolean {
+  // The hub may already have localized the canonical transcript marker.
+  return it.kind === "notice" && !it.task && (it.text === "已中断" || it.text === "Interrupted" || it.text === "中断しました"); // i18n-ignore: transcript markers
 }
 
 export type ChatLine =
@@ -974,7 +977,14 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
   }
   // stopped after everything it did (not an exchange that went on after it): its last words are not a finished reply
   const end = segs.at(-1), at = t.ordered.at(-1)?.seq ?? 0;
-  if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && n.seq > at)) end.cut = true;
+  if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && (!end.answer || n.seq > at))) end.cut = true;
+  const user = end?.user;
+  if (end && user && !live && !end.answer && !t.trailing.length && isOwnMessage(user) && !user.queued && !isLoopTick(user) &&
+      !end.steps.some((step) => step.kind === "visualization" || (step.kind === "image" && step.item.role === "assistant") ||
+        (step.kind === "tool" && !step.result && supervisionTool(step.use.tool_name) === "supervision_finish" && step.use.tool_input?.visibility === "silent")) &&
+      !supervisionVisibility(ordered, results, false).completedSilent) {
+    end.emptyResponse = true;
+  }
   // what a stopped turn's notice carries (a Codex turn's total) is its last exchange's
   if (end) for (const n of t.trailing) countUsage(end, n);
   segs.forEach((seg, k) => {
