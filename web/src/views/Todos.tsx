@@ -1864,7 +1864,7 @@ const TodoListItem = memo(function TodoListItem({
           <div className="mt-1 truncate text-[11.5px] text-ink-3">
             <span className="font-medium text-orange">{t(`todos.delivery_${held.state}`)}</span>
             {held.gate && <> · {t("todos.delivery_gate", { gate: held.gate })}</>}
-            {held.unblock && ["user", "agent", "other"].includes(held.unblock) && <> · {t(`todos.unblock_${held.unblock}`)}</>}
+            {held.unblock && ["user", "agent", "other", "supervisor"].includes(held.unblock) && <> · {t(`todos.unblock_${held.unblock}`)}</>}
           </div>
         )}
 

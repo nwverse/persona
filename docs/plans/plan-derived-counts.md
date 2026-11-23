@@ -289,14 +289,14 @@ linkAttention's predicate (`assistant/fleet_attention.go`) move into fleetcount,
 inputs and rendering its Tally (section 6.2); add `agents_needs_you`, replaying the needs-you fixture through the
 adapter. fleetInputsInto and foldSidesIn stay. *Conflict:* the four repair PRs, whose `fleet_live.go` hunks were in
 fleetInputsInto (lines 170 and 180), closed unmerged on 2026-11-22; #12986 (a draft) edits needItem (line 485), one of
-the moved names; the moved functions start at line 254. `fleet_attention.go` has 0. *Gate:* D15, and #12899's domain
-rules with its shared session identity, agentref (section 6.2). *Rollback:* revert. *Done:*
+the moved names; the moved functions start at line 254. `fleet_attention.go` has 0. *Gate:* D15, #12899's domain
+rules, and agentref, the shared session identity that follows them (section 6.2). *Rollback:* revert. *Done:*
 TestLinkAttentionFollowsTheSharedFixtures, TestLiveActivityKeepsItsOwnCount, TestFleetCountsCodexRootsOnly,
 TestFleetCountsASideUnderItsParent and TestSnapshotNeedsYouIsTheState pass unchanged; FleetState and Link bytes are
 identical on the fixtures; the core's tests run on their own (`go test -p 4`, `GOFLAGS=-trimpath`), and the core and
 its adapter pass their domain-rules hooks; the whole round's benchmark holds the gate in section 6.2; the known
 internal/assistant failures on main are unchanged. *Revised 2026-11-22 in #10613:* a core and its adapter, gated on
-the domain rules rather than a domain-package list, with an allocation gate on the whole round.
+the domain rules and agentref rather than a domain-package list, with an allocation gate on the whole round.
 
 **6. The schema and generated types.** *Change:* schema/wire/counts.schema.json (`x-out` ts, swift, go, kotlin;
 `x-guard` arkts, rust), its four outputs, `.gitattributes` rows and a `schema/wire/README.md` row; samples from step 5's
@@ -334,13 +334,15 @@ lists while the app holds its 50-row window: sessions outside it that wait with 
 quiet tasks' agents or in muted spaces leave, and the switcher counts such a session once, not once per card. That is
 the written rule (the needs-you fixture, and `docs/protocol/protocol.md` ("Agent directory visibility") for hidden
 sessions), applied under D1, with a self-check. *Conflict:* `ShellCounts.kt` and `HubManagers.kt` 0;
-`Root.kt` (#11660d, #5969d) is not touched. *Gate:* steps 3 to 7b, D1, D10 (mixed support) and D13 (a missing view).
-*Rollback:* revert, or turn off the hub feature. *Done:* ShellCountsTest, with a paged case (a wait with no card
+`Root.kt` (#11660d, #5969d) is not touched. *Gate:* steps 3 to 7b, D1, D10 (mixed support) and D13 (a missing view),
+and the Inbox plan's step A4, which brings the Kotlin domain kit after the client domain guard and #13024 (section
+6.2). *Rollback:* revert, or turn off the hub feature. *Done:* ShellCountsTest, with a paged case (a wait with no card
 outside the window: counted from the view, not by the fallback), a hidden case (a directory-hidden session's card: left
 out by the view, counted by the fallback) and a switcher case (a Persona conversation's card counts with a view and
 without), AgentsNeedsYouFixtureTest (the marked case at today's value, the view-path case at the fixture's) and the
 surfaces replay pass; `scripts/app/android.sh shots` in three styles, light and dark, shows today's numbers where the
-list is complete and no hide rule matches a waiting session.
+list is complete and no hide rule matches a waiting session. *Revised 2026-11-22 in #10613:* it also waits for the
+Inbox step that brings the domain kit its reducer is built on.
 
 **9. iOS reads `agents_needs_you`.** *Change:* the tab badge and the switcher's agents share read the view, and the
 Home Agents widget's number, for the whole hub (D2), as is the app icon's; the switcher adds its
@@ -351,11 +353,13 @@ several assistants, the switcher: where a session and a child folded under it bo
 2, iOS switcher). Both are the written rule, applied under D1, with a self-check. *Conflict:*
 `AppModel.swift` 4 (#11456d, #11282, #7517, #2051), `AssistantScope.swift` the four repair PRs, `HomeWidgetWriter.swift`
 and `AppIconBadge.swift` 0; `AgentsNeedsYouRows.swift`, which the four repair PRs touch, stays as it is, since the
-fallback and the list's section keep reading it. *Gate:* steps 3 to 7b, D1, D10 and D13; D2 for the widget.
-*Rollback:* revert. *Done:* AgentsNeedsYouFixtureTests (any marked case at today's value, the view-path case at the
-fixture's), AppIconBadgeTests, AssistantBadgesTests (a Persona conversation's card counts with a view and without) and
+fallback and the list's section keep reading it. *Gate:* steps 3 to 7b, D1, D10 and D13, and PersonaDomainKit with
+the client domain guard (section 6.2); D2 for the widget. *Rollback:* revert. *Done:* AgentsNeedsYouFixtureTests
+(any marked case at today's value, the view-path case at the fixture's), AppIconBadgeTests, AssistantBadgesTests (a
+Persona conversation's card counts with a view and without) and
 HomeWidgetTests pass; the PR names the `docs/apple/performance.md` rules followed (P1, P4, P6) with countBadges timings
-before and after from an optimized build, light and dark screenshots, and the Xcode used.
+before and after from an optimized build, light and dark screenshots, and the Xcode used. *Revised 2026-11-22 in
+#10613:* it also waits for the domain kit its reducer is built on.
 
 **10. Web and desktop read `agents_needs_you`.** **Visible:** muted agents leave the tab title, favicon and Dock; cards
 on no session join; quiet agents leave on bounded hubs. Under D17 the same number also adds Persona's questions and
@@ -365,10 +369,11 @@ today's rule (section 3.3 item 7). Its rule already matches the view's otherwise
 number does not change. Separately, in a bug issue of its own, the Dock resets to 0 on sign-out and hub change.
 *Conflict:* `sessions.ts` and `current-assistant.ts` meet the repair PRs; `manager-attention.ts` has
 #10920, #10396d; `attention-signals.ts` #8290, #1995d; `SidebarParts.tsx` (12) is untouched. *Gate:* steps 3 to 7b,
-D1, D2, D10 and D13. *Rollback:* revert, or turn off the hub feature. *Done:* vitest through check-fast, with a
+D1, D2, D10 and D13, and the web's domain kit with its lint rules (section 6.2). *Rollback:* revert, or turn off the
+hub feature. *Done:* vitest through check-fast, with a
 switcher case (a Persona conversation's card counts with a view and without); `npm run build` after merging
 `origin/main` (FIRST_SCREEN_BUDGET); light and dark screenshots; the desktop e2e reads the Dock equal to the web's
-number, and 0 after sign-out.
+number, and 0 after sign-out. *Revised 2026-11-22 in #10613:* it also waits for the domain kit its reducer is built on.
 
 **11. Persona Link and the Live Activity on the same definition** (server only, **visible**). *Change:* Link's and
 FleetState's `needsYou` become `agents_needs_you`, with Persona conversations with a standing card as a named part (D4);
@@ -547,6 +552,12 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   accepted, since the built-in manager updates with the hub and diagnostics name an external manager's build. A change
   of unit, such as unread against action items, is a new id. Under D5 clients name their ids, so a new id for every
   refinement would cost a client release each time.
+- **D19** The main conversation's waiting count and its exact list (new with the owner's 2026-11-22 scope revision):
+  only current questions the user must answer, authorizations only the user can give and deliveries explicitly
+  requiring user acceptance count. Unstarted or failed-start tasks, agent permission requests, terminal dialogs and
+  superseded questions stay with the supervisor and do not inflate this number. Selecting it opens exactly those
+  counted items on iPhone and the shared web/Mac UI. This surface does not change D1's Agents-list badge, D8's To-dos
+  count or their rows, and it does not settle D11's open routed-terminal case for those other surfaces.
 
 ### 6.2 What the decisions change in the steps
 
@@ -568,7 +579,7 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   - Web, Android in its three styles, and iOS, one PR each, after the fixture PR: the Needs you header and filter count
     the badge's rows, with the Muted and Assistant is looking groups (D6); `surfaces.json` gains a `web.agents_section`
     row. HarmonyOS is out of scope.
-- **Step 5** follows D15 and lands after #12899's domain rules and its shared session identity, agentref; the domain
+- **Step 5** follows D15 and lands after #12899's domain rules and agentref, the session identity after them; the domain
   slice scaffold writes both packages' skeletons first. fleetcount imports no proto and has no type parameters, and its
   values are always valid: closed sets for State, Role, Lineage, Muting, Visibility, Placement (its own row, or under an
   `agentref.Ref`), CardStanding, Holding, Why and Surface; Agent and Card are built only through staged builders that
@@ -597,7 +608,7 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   times cards) and the PR shows. ns/op is not gated on a shared machine.
   *Revised 2026-11-22 in #10613:* builders, Slots, closed sets and a Tally visitor in place of records and the
   caller's values inside them; the open PRs' lines are left alone instead of waiting for them; the allocation gate is on
-  the whole round.
+  the whole round; agentref comes after #12899, not with it.
 - **Step 6** has no `surfaces` map (D5) and an optional top-level `totals` (D12); `held` carries the muted and held
   reasons (D11). Quiet rows reach the view only at section 3.2's cost, so until then a client draws them from its own
   list. docs/protocol/counts.md records each refinement with the manager build that applies it (D18).
@@ -624,8 +635,13 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   under D10. Step 9 also moves the app icon and the Home widgets to the whole hub (D2), or step 12 does. Step 10 also
   draws D17's number on the Dock, the taskbar, the tab title and the favicon, and carries D3's Link part, since
   `spec/fixtures/attention` and its web replay change there anyway, so the fixture is rewritten once (else step 11
-  carries it).
-  *Revised 2026-11-22 in #10613:* domain modules with adapters in place of one small pure reducer.
+  carries it). Each step waits for its platform's domain kit and checks, which the Inbox plan's client steps bring
+  (`docs/plans/plan-inbox-vertical-slice.md`, sections 3.3 and 4): Android for :core:domainkit, which Inbox A4 creates
+  with :core:inbox:domain after A2, the client domain guard and #13024 (an unused result is a compile error in every
+  Android module); iOS for PersonaDomainKit (Inbox I1, after the same guard); the web and desktop for web/src/domain-kit
+  and its lint rules (Inbox W1).
+  *Revised 2026-11-22 in #10613:* domain modules with adapters in place of one small pure reducer, after their
+  platform's domain kit.
 - **Step 11:** D4's headline, with Lock Screen screenshots of a sessionless item.
 - **Step 12:** the Inbox after D7; To-dos after D8, the server's `todos_needs_you` after steps 5 to 7 and each client
   when it draws the hub's phases, with screenshots of the To-dos widget's new number and the outcome commented on

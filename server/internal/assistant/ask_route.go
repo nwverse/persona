@@ -64,6 +64,7 @@ type askRoute struct {
 	// timeout only puts it back on the apps (ringAsks), not ringing them a second time. An approval restored so (a
 	// permission or a plan) is not: no conversation may answer it, so its timeout rings.
 	maybeTold bool
+	delivered bool // this rung has actually received the card, rather than merely queued its signal
 	// With push tiering on (push_quiet.go) a card that runs past its last rung goes back to its task's supervisor once
 	// more (reminded), and when that hold runs out too it stays there (parked) until someone answers or escalates it,
 	// or the switch goes off, when it climbs on as before. An owner-only card's absolute deadline and needs_you release
@@ -175,10 +176,13 @@ func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder [
 		return nil, "", "", false
 	}
 	switch t.Supervision.state(t) {
-	case reviewNeedsUser, reviewAccepted, reviewCancelled:
+	case reviewAccepted, reviewCancelled:
 		return nil, "", "", false
 	}
-	lead := t.Supervision.Supervisor
+	if t.Supervision.state(t) == reviewNeedsUser && !t.Supervision.assigned() {
+		return nil, "", "", false
+	}
+	lead := s.effectiveSupervisor(ctx, cfg, t)
 	if s.agentSupervised(t) {
 		if ix.Kind != proto.IxScreen {
 			return nil, "", "", false
@@ -186,7 +190,7 @@ func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder [
 		lead, _ = s.supervisorAboveTask(ctx, t)
 	}
 	if ix.Kind == proto.IxScreen {
-		if s.ixInHealth(ctx, ix) || s.todoInHealth(ctx, t) {
+		if s.ixPolicy(ctx, ix).ConfirmOutbound || s.todoPolicy(ctx, t).ConfirmOutbound {
 			return nil, "", "", false
 		}
 		if lead == "" || lead == cfg.Main {
@@ -198,6 +202,9 @@ func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder [
 		return []string{to}, t.ID, home, to != ""
 	}
 	if lead != cfg.Main && slices.Contains(cfg.Leaders, lead) {
+		if t.Supervision.assigned() {
+			return []string{lead}, t.ID, home, true // only owner-decision escalations go to main
+		}
 		return []string{lead, cfg.Main}, t.ID, home, true
 	}
 	return []string{s.ownSupervisor(cfg)}, t.ID, home, true
@@ -208,6 +215,8 @@ func (s *Service) routeAsk(ix proto.Interaction) bool {
 	if !routable(ix) {
 		return false
 	}
+	s.supervise.routingMu.Lock()
+	defer s.supervise.routingMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	ladder, todo, home, ok := s.askLadder(ctx, ix)
@@ -234,6 +243,9 @@ func (s *Service) routeAsk(ix proto.Interaction) bool {
 
 // signalAsk tells conversation to that task todo's card ix (step: the rung it reached) waits for it.
 func (s *Service) signalAsk(todo, to string, ix proto.Interaction, step int) {
+	if s.askAlreadyQueued(todo, to) {
+		return
+	}
 	s.signal(superviseSignal{Todo: todo, Kind: sigAsk, To: to, Machine: ix.MachineID, Session: ix.SessionID,
 		Key: fmt.Sprintf("%s@%d", ix.ID, step)})
 }

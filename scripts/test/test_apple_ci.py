@@ -45,8 +45,9 @@ class AppleOfflineUnitSchemeTests(unittest.TestCase):
         self.assertEqual((default['test']['language'], default['test']['region']), ('zh-Hans', 'CN'))
 
     def test_offline_build_and_execution_share_the_unit_only_scheme(self):
-        common = self.script.split('  IOS_COMMON=(', 1)[1].split('\n', 2)[:2]
-        self.assertEqual(common[0], '"${XCODE[@]}" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests" \\')
+        common = self.script.split('  IOS_COMMON=(', 1)[1].split('\n', 3)[:3]
+        self.assertEqual(common[0], 'xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\')
+        self.assertEqual(common[1], '    -clonedSourcePackagesDirPath "$SPM/SourcePackages" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests" \\')
         self.assertNotIn('-scheme Persona ', ''.join(common))
         for marker in ('"${IOS_UNIT_SELECTION[@]}" build-for-testing',
                        '"${IOS_UNIT_SELECTION[@]}" \\\n    -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building',
@@ -56,6 +57,25 @@ class AppleOfflineUnitSchemeTests(unittest.TestCase):
         self.assertIn('BUILD_SECONDS=1800', self.script)
         self.assertIn('UNIT_SECONDS=1800', self.script)
         self.assertIn("result ios-unit \"$SIM\" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests", self.script)
+
+    def test_offline_project_keeps_the_real_host_without_embedded_watch_or_share(self):
+        script = self.script
+        self.assertIn('OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"', script)
+        self.assertIn('ci_run \'Generate iPhone-only offline unit-test project\' 120 bash -c', script)
+        self.assertIn('xcodegen dump --spec "$spec" --type json > "$output/Persona.whole.json"', script)
+        self.assertIn('python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json"', script)
+        self.assertIn('ci_run \'Generate offline unit-test Xcode project\' 120 xcodegen generate \\\n'
+                      '    --spec "$OUTPUT/PersonaOfflineUnitTests.json" --project-root "$SOURCE/apple" \\\n'
+                      '    --project "$SOURCE/apple"', script)
+        self.assertLess(script.index('Generate iPhone-only offline unit-test project'),
+                        script.index("ci_run 'Build iOS offline unit tests'"))
+        self.assertIn('IOS_COMMON=(xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\\n'
+                      '    -clonedSourcePackagesDirPath "$SPM/SourcePackages" -scheme PersonaOfflineUnitTests', script)
+        self.assertNotIn('PERSONA_LEAN_DEV_BUILD=YES', script)
+        self.assertIn('ci_run \'Generate Apple project\' 120 xcodegen generate --spec "$SOURCE/apple/project.yml" --project "$SOURCE/apple"', script)
+        self.assertIn('ci_run \'Unsigned iOS and embedded watch/extensions build\' 1800 "${XCODE[@]}" -scheme Persona', script)
+        self.assertIn('ci_run \'Generate offline unit-test Xcode project\'', script)
+        self.assertIn('xcodegen dump --spec "$spec"', script)
 
     def test_local_ui_test_entry_keeps_default_scheme_and_ui_target(self):
         ui_test = (ROOT / 'scripts/app/ui-test.sh').read_text()
@@ -212,10 +232,124 @@ class AppleCIPreparationTests(unittest.TestCase):
         for lane in ('ios', 'ios-focused', 'ios-regressions'):
             current = script.replace('      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \\\n      --derived-data "$output/ios-tests" &',
                                      '      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &')
+            offline_generation = script[script.index("  # The same real Persona test host and all of PersonaTests"):
+                                       script.index("  # A generic destination must retain the host's single runnable architecture.")]
+            current = current.replace(offline_generation, '')
+            current = current.replace('OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"\n', '')
+            current = current.replace('xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\\n'
+                                      '    -clonedSourcePackagesDirPath "$SPM/SourcePackages"',
+                                      '"${XCODE[@]}"')
+            # #13281 independently brings the iPhone observer's bounded
+            # lifecycle in line with the existing regular-iPad observer.
+            readiness_start = current.index('    mkdir -p "$watch_log"', current.index("ci_run 'Verify hosted iOS test readiness'"))
+            readiness_end = current.index('    trap stop_watcher EXIT TERM INT', readiness_start) + len('    trap stop_watcher EXIT TERM INT')
+            current_readiness = '''    mkdir -p "$watch_log"
+    printf "%s\\n" "collection incomplete; bounded unavailable evidence retained; no launch cause established" > "$watch_log/observer.status.pending"
+    mv "$watch_log/observer.status.pending" "$watch_log/observer.status.txt"
+    printf "%s\\n" "{\\"unavailable\\":\\"observer did not complete; no host-process verdict\\"}" > "$watch_log/host-final.pending"
+    mv "$watch_log/host-final.pending" "$watch_log/host-final.json"
+    for product in 0 1 2; do
+      printf "%s\\n" "unavailable: product collection incomplete" > "$watch_log/product-$product-architecture.pending"
+      mv "$watch_log/product-$product-architecture.pending" "$watch_log/product-$product-architecture.txt"
+      printf "%s\\n" "incomplete" > "$watch_log/product-$product-architecture.status.pending"
+      mv "$watch_log/product-$product-architecture.status.pending" "$watch_log/product-$product-architecture.txt.status.txt"
+      printf "%s\\n" "unavailable: product collection incomplete" > "$watch_log/product-$product-libraries.pending"
+      mv "$watch_log/product-$product-libraries.pending" "$watch_log/product-$product-libraries.txt"
+      printf "%s\\n" "incomplete" > "$watch_log/product-$product-libraries.status.pending"
+      mv "$watch_log/product-$product-libraries.status.pending" "$watch_log/product-$product-libraries.txt.status.txt"
+    done
+    for product in 0 1; do
+      printf "%s\\n" "unavailable: bundle signature collection incomplete" > "$watch_log/product-$product-bundle-signature.pending"
+      mv "$watch_log/product-$product-bundle-signature.pending" "$watch_log/product-$product-bundle-signature.txt"
+      printf "%s\\n" "incomplete" > "$watch_log/product-$product-bundle-signature.status.pending"
+      mv "$watch_log/product-$product-bundle-signature.status.pending" "$watch_log/product-$product-bundle-signature.txt.status.txt"
+    done
+    # Noninteractive Bash gives the observer a separate process group only with
+    # job control enabled. The bounded runner must never signal this group.
+    set -m
+    python3 "$ci_root/scripts/ci/apple_readiness_watch.py" \\
+      --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \\
+      --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \\
+      --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \\
+      --output "$watch_log" --seconds 900 &
+    watcher=$!
+    set +m
+    stop_watcher() {
+      local code=$?
+      trap - EXIT TERM INT
+      # A fast probe may finish while the product checks are still running.
+      # Give those bounded commands the existing short drain before asking the
+      # observer to stop its polling, then let final evidence finish naturally.
+      for _ in $(seq 1 50); do
+        [ -e "$watch_log/product-ready" ] && break
+        kill -0 "$watcher" 2>/dev/null || break
+        sleep 0.1
+      done
+      : > "$watch_log/observer.stop"
+      # The observer stops polling after its bounded product phase, then
+      # completes final evidence. The outer 900-second deadline still owns a
+      # stuck watcher; never kill it before that final collection.
+      wait "$watcher" || true
+      # Close any remaining descendant after the watcher has finished.
+      kill -KILL "-$watcher" 2>/dev/null || true
+      wait "$watcher" || true
+      exit "$code"
+    }
+    trap stop_watcher EXIT TERM INT'''
+            self.assertEqual(current[readiness_start:readiness_end], current_readiness)
+            previous_readiness = '''    mkdir -p "$watch_log"
+    python3 "$ci_root/scripts/ci/apple_readiness_watch.py" \\
+      --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \\
+      --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \\
+      --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \\
+      --output "$watch_log" --seconds 900 &
+    watcher=$!
+    stop_watcher() {
+      local code=$?
+      trap - EXIT TERM INT
+      if kill -0 "$watcher" 2>/dev/null; then
+        mkdir -p "$watch_log"
+        : > "$watch_log/observer.stop"
+        kill -TERM "$watcher" 2>/dev/null || true
+      fi
+      # This wait is inside the original readiness deadline. The outer process
+      # group deadline still bounds a stuck watcher and all its child commands.
+      wait "$watcher" || true
+      exit "$code"
+    }
+    trap stop_watcher EXIT TERM INT'''
+            current = current[:readiness_start] + previous_readiness + current[readiness_end:]
+            current = current.replace('OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"\n', '')
+            current = current.replace('xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\\n'
+                                      '    -clonedSourcePackagesDirPath "$SPM/SourcePackages"',
+                                      '"${XCODE[@]}"')
             current = current.replace(wire, '')
             current = current.replace(' || [ "$LANE" = ios-ipad-diagnostic ]', '').replace('|ios-ipad-diagnostic', '')
             current = current.replace('      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; diagnostics="$9"; lane="${10}"; shift 10',
                                       '      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8')
+            current = current.replace('''        for _ in $(seq 1 50); do
+          [ -e "$watch_log/product-ready" ] && break
+          kill -0 "$watcher" 2>/dev/null || break
+          sleep 0.1
+        done
+        : > "$watch_log/observer.stop"
+        # Let the stop-aware observer finish bounded final evidence. The
+        # existing readiness deadline remains the hard outer bound.
+        wait "$watcher" || true
+        if kill -0 "$watcher" 2>/dev/null; then
+          kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
+        fi
+        wait "$watcher" || true
+''', '''        : > "$watch_log/observer.stop"
+        for _ in $(seq 1 50); do
+          kill -0 "$watcher" 2>/dev/null || break
+          sleep 0.1
+        done
+        if kill -0 "$watcher" 2>/dev/null; then
+          kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
+        fi
+        wait "$watcher" || true
+''')
             current = current.replace('      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "$DIAGNOSTICS" "$LANE" "${IOS_COMMON[@]}" \\',
                                       '      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "${IOS_COMMON[@]}" \\')
             current = current.replace('        if [ "$lane" = ios-ipad-diagnostic ]; then\n          timeout --kill-after=5s 180s python3 "$ci_root/scripts/ci/apple_diagnostics.py" \\\n            "$output" "$diagnostics" --scope regular || true\n        fi\n', '')
@@ -450,7 +584,7 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('-derivedDataPath "$OUTPUT/ios-device"', script[device_build:device_check])
         self.assertIn('python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \\\n'
                       '    "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"', script[device_check:simulator_build])
-        self.assertIn('IOS_COMMON=("${XCODE[@]}" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests"', script)
+        self.assertIn('IOS_COMMON=(xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\', script)
         self.assertIn('python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \\\n'
                       '    "$OUTPUT/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app"', script[simulator_check:create])
         guards = (ROOT / 'scripts/ci/guards.sh').read_text()

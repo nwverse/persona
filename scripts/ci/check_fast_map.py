@@ -166,6 +166,11 @@ TABLE = (
          ("scripts/test/test_name_freezes.py",)),
         (("scripts/test/name_freezes.py",), ("scripts/mock/test_mock_hub.py",)),
     ),
+    # The Android modules where a dropped result is still a warning (#13024): test_android_return_values.py reads their
+    # list in android/build-logic and the call sites it names in the modules' sources.
+    (
+        (("android/*",), ("scripts/test/test_android_return_values.py",)),
+    ),
     # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
     (
         (("server/*", "web/src/*", "web/e2e/*", "scripts/*", "sdk/*", "apple/*", "android/*", "integrations/*",
@@ -188,6 +193,7 @@ TABLE = (
         (("apple/project.yml", "apple/app-entitlements.yml", "apple/watch-and-share.yml", "apple/lean-dev-build.yml",
           "apple/siri-calls.yml", "scripts/app/sim.sh", "scripts/app/ui-test.sh", "scripts/app/perf-test.sh",
           "scripts/app/share-from-apps.sh", "scripts/app/lean-build-note.sh", "scripts/app/island_peer.sh",
+          "scripts/app/stamp_debug_build_info.sh",
           "scripts/diag/stream-scroll/run-ios.sh", "scripts/release/release.sh", "scripts/ci/apple.sh",
           "native/iphone-bridge/build.sh"), ("scripts/test/test_apple_dev_build.py",)),
         (("native/app-core/scripts/build-apple.sh",), ("scripts/test/test_app_core_apple_build.py",)),

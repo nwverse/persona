@@ -67,12 +67,8 @@ struct KnowledgeView: View {
         List {
             // Search covers every kind: the chips (one of them lit) would say otherwise.
             if !searching {
-                #if os(macOS)
-                kindBar // not in a section: the Mac's inset list gave it an empty header band and a rule (#830)
-                #else
                 Section { kindBar }
                     .listSectionSpacing(.compact)
-                #endif
             }
             if searching {
                 searchResults
@@ -92,16 +88,10 @@ struct KnowledgeView: View {
         #if os(iOS) || os(visionOS)
         .recordingRename($renamingRecording)
         #endif
-        #if os(macOS)
-        .modifier(MacBelowTitleRowIfAsked()) // under Knowledge's title in the window: the list starts below it (#1243)
-        #endif
         .themedPage()
-        .detailTitle(String(localized: "Knowledge")) // pushed in Persona's page: ‹ Knowledge in the title row on the Mac
+        .detailTitle(String(localized: "Knowledge"))
         .navigationBarTitleDisplayMode(.inline)
         .pageToolbar {
-            #if os(macOS)
-            MacToolbarMiddle() // the menu by the search field, clear of the title row's Knowledge (#830)
-            #endif
             #if os(iOS)
             if shell != nil {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -128,9 +118,6 @@ struct KnowledgeView: View {
         .environment(\.knowledgeSettingsAPI, listContext)
         .onChange(of: kind) { showIgnored = false }
         .refreshable { await load() }
-        #if os(macOS)
-        .macRefreshes { await load() } // ⌘R: no pull to refresh on the Mac
-        #endif
         // Entries open with view-based links, not `navigationDestination(for:)`: this page is itself pushed with
         // `navigationDestination(isPresented:)`, and a value-pushed page on top of that lands *under* it (docs/lessons/ios.md):
         // a hit seemed not to open, and back showed the entry's ⚠️ placeholder (2026-10-31).
@@ -959,13 +946,9 @@ struct KnowledgeDetailView: View {
                     .accessibilityLabel("Tag")
             }
         }
-        #if os(macOS)
-        .macLinkPanel($link) // the Mac's panel at the trailing edge; picks go to Persona
-        #else
         .sheet(item: $link) { t in
             if let key = model.assistantMain ?? model.assistantCurrent { LinkSheet(target: t, key: key) }
         }
-        #endif
         .sheet(isPresented: $editing) {
             KBTagEditor(entry: shown) { await load() }
                 .environment(\.knowledgeSettingsAPI, capturedAPI)
@@ -987,10 +970,6 @@ struct KnowledgeDetailView: View {
                 Task { await deleteFacts() }
             }
         }
-        #if DEBUG && os(macOS)
-        // `-showKBEditor YES` with `-showKnowledgeEntry <kind>/<id>`: the tag editor open (Mac screenshots).
-        .onAppear { if UserDefaults.standard.bool(forKey: "showKBEditor") { editing = true } }
-        #endif
         #if DEBUG
         // `-showKnowledgeDay YES` with `-showKnowledgeEntry chats/<id> -showKnowledgeSearch <text>`: the day of the
         // first message found, opened at it (screenshots).
@@ -1011,9 +990,6 @@ struct KnowledgeDetailView: View {
         .task { await load() }
         .environment(\.knowledgeSettingsAPI, capturedAPI)
         .refreshable { await load() }
-        #if os(macOS)
-        .macRefreshes { await load() }
-        #endif
     }
 
     // MARK: Header
@@ -1061,15 +1037,9 @@ struct KnowledgeDetailView: View {
         }
     }
 
-    // The phone's two buttons share the row; the Mac's are the regular size, side by side at the leading edge
-    // (docs/apple/mac-design.md: no buttons the width of the page, #2318).
-    #if os(macOS)
-    private static let buttonsFill: CGFloat? = nil
-    private static let buttonsSize = ControlSize.regular
-    #else
+    // The two buttons share the row, at the large size.
     private static let buttonsFill: CGFloat? = .infinity
     private static let buttonsSize = ControlSize.large
-    #endif
 
     /// A project's status when it is not the usual Active.
     private var projectStatus: String? {
@@ -1692,10 +1662,6 @@ struct KBDayView: View {
             .listStyle(.insetGrouped)
             .themedPage()
             .navigationBarTitleDisplayMode(.inline)
-            #if os(macOS)
-            // The day and its chat in the title bar's row (#855); a principal item would say the day twice.
-            .pageTitle(Self.title(day), subtitle: chatName)
-            #else
             .navigationTitle(Self.title(day))
             .pageToolbar {
                 ToolbarItem(placement: .principal) {
@@ -1705,7 +1671,6 @@ struct KBDayView: View {
                     }
                 }
             }
-            #endif
             .task(id: day) {
                 await load()
                 // Laid out first, then to the found message (a few rows above it stay in sight).
@@ -1847,17 +1812,9 @@ struct KBTagEditor: View {
                 }
                 Section {
                     Slider(value: $relevance, in: 0...100, step: 5)
-                    #if os(macOS)
-                        .labelsHidden() // its empty label column took the left half of the row
-                    #endif
                 } header: { Text("Relevance to Me \(Int(relevance))") }
                 Section {
-                    #if os(macOS)
-                    // A grouped Mac form shows a titled field as label + trailing value: the hint read as a label.
-                    TextField(String(localized: "Separate with spaces"), text: $tags, prompt: Text("Separate with spaces")).labelsHidden()
-                    #else
                     TextField(String(localized: "Separate with spaces"), text: $tags)
-                    #endif
                 } header: { Text("Tags") }
                 if entry.kind == KBKind.projects.rawValue {
                     Section("Project") {
@@ -1896,10 +1853,6 @@ struct KBTagEditor: View {
             }
         }
         .presentationDetents([.medium, .large])
-        #if os(macOS)
-        // This sheet did not pick up macLook's grouped form (cause unknown): the two-column one cut rows off.
-        .macSheet()
-        #endif
     }
 
     private func save() async {

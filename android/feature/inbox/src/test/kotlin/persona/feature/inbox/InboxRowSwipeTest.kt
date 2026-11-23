@@ -239,7 +239,7 @@ class InboxRowSwipeTest {
     private fun aScreenReaderGetsTheSameActionOnTheRow(kind: Kind) {
         mount()
         assertEquals(listOf("Done"), actionLabels(kind))
-        row(kind).fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions)!!.single().action()
+        val _ = row(kind).fetchSemanticsNode().config.getOrNull(SemanticsActions.CustomActions)!!.single().action()
         rule.waitForIdle()
         assertEquals(1, dones)
         done = true

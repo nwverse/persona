@@ -502,6 +502,8 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
             }
             // Within 45° of horizontal: steeper is the page's own scrolling.
             guard abs(dx) > abs(dy) else { return refused("direction") }
+            // The To Decide pager's card pages sideways itself (#12831, `SwipePageMark`): a drag on it is the pager's.
+            if SwipePageMark.covers(start, in: view) { return refused("a pager's swipe") }
             if Self.pushed(at: start, in: view, beyond: firstPages ? 2 : 1) {
                 #if DEBUG
                 ShellTrace.shared.note("pan refused: pushed")
@@ -714,6 +716,30 @@ struct DrawerPan {}
 #endif
 
 #if os(iOS) || os(visionOS)
+/// Marks a view whose sideways drags the drawer and the strip leave alone, either way (the To Decide pager's card, #12831):
+/// a drag that starts inside a mounted mark is the view's own.
+struct SwipePageMark: UIViewRepresentable {
+    final class Marker: UIView {}
+    /// The marks on screen, held weakly: the drawer asks only when a drag begins.
+    @MainActor private static let marks = NSHashTable<Marker>.weakObjects()
+
+    func makeUIView(context: Context) -> Marker {
+        let v = Marker()
+        v.isUserInteractionEnabled = false
+        Self.marks.add(v)
+        return v
+    }
+
+    func updateUIView(_ uiView: Marker, context: Context) {}
+
+    /// Whether `point` (in `view`) is inside a mark shown in the same window.
+    @MainActor static func covers(_ point: CGPoint, in view: UIView) -> Bool {
+        marks.allObjects.contains { m in
+            m.window != nil && m.window === view.window && !m.isHidden && m.convert(m.bounds, to: view).contains(point)
+        }
+    }
+}
+
 /// Marks a list row whose swipe to the left the drawer and the strip leave alone (a sidebar conversation's Archive):
 /// they look for it in the cell under the finger.
 struct SwipeRowMark: UIViewRepresentable {
@@ -802,12 +828,10 @@ struct AssistantSidebar: View {
     /// The Sidebar layout's folds (the rows part): the places and Persona's chats, remembered on this device.
     @StoredValue("sidebar.fold.places") private var placesFolded = false
     @StoredValue("sidebar.fold.chats") private var chatsFolded = false
+    /// The To-dos places under the To-dos row (#10465), folded by the owner only: open at first, never by itself.
+    @StoredValue("sidebar.fold.todos") private var todosFolded = false
     @State private var own = AssistantSidebarUI()
     private var ui: AssistantSidebarUI { shared ?? own }
-    #if os(macOS)
-    /// Its header is in the title bar's row (#830): past the traffic lights when the window's sections column is hidden.
-    @Environment(\.macTitleRowLeading) private var titleRowLeading
-    #endif
     /// Whether Recent is folded, kept on this device (#6228): default open, the choice survives relaunches.
     @StoredValue("assistant.sidebar.recent.folded") private var recentFolded = false
     private let taskChats = AssistantTaskChatsStore.shared
@@ -848,18 +872,9 @@ struct AssistantSidebar: View {
         let archived = shownArchived
         VStack(spacing: 0) {
             topBar
-                #if os(macOS)
-                // Starts where the other sections' titles do (`MacPageTitle`: `l`, past the traffic lights when the
-                // sections column is hidden), #3179.
-                .padding(.leading, max(Theme.Space.l, titleRowLeading))
-                .padding(.trailing, Theme.Space.xl)
-                // The title bar's row: centred on it as the other sections' titles are, so it does not jump (#830).
-                .frame(height: Theme.Size.macToolbarHeight)
-                #else
                 .padding(.horizontal, Theme.Space.xl)
                 .padding(.top, besideBar ? AssistantTopBar.topInset : Theme.Space.s)
                 .padding(.bottom, Theme.Space.s)
-                #endif
             // A list (not a stack in a scroll view) for its rows' own swipe: a conversation swipes left to Archive. On the
             // Mac it selects the open conversation: ↑ / ↓ open the next, Delete archives (`MacListKeys`, #2113).
             MacSelectingList(selection: Binding(get: { current }, set: { key in if let key, key != current { open(key) } })) {
@@ -877,34 +892,17 @@ struct AssistantSidebar: View {
                         results(searchRows(all))
                     }
                 }
-                #if os(macOS)
-                // The list's own margin is the shell's rows' `s` (`MacSidebarRow`, Inbox's Source): the shade and the rows'
-                // words line up with the other sections' columns (#3179).
-                .listRowInsets(EdgeInsets())
-                #else
                 .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.s, bottom: 0, trailing: Theme.Space.s))
-                #endif
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            #if os(macOS)
-            .modifier(MacListKeys(current: { current }, delete: { key in
-                guard key != model.assistantMain, !model.isBackgroundSupervisor(key.sessionID) else { return }
-                Task { await model.archiveConversation(key, true) }
-            }))
-            #endif
             .environment(\.defaultMinListRowHeight, 0)
             .contentMargins(.bottom, Theme.Space.l, for: .scrollContent)
             .scrollDismissesKeyboard(.interactively)
             footer
         }
-        #if os(macOS)
-        // Conversation rows cover the system selection with this color (`macListRow`).
-        // Paint the entire column with it too, including the title, actions and unused space.
-        .background(Theme.pageBackground)
-        #endif
         #if os(iOS)
         // A column (the iPad's split, the open iPhone Duo) keeps out of the keyboard only while its own search field is
         // typed in, so the chats found stay above it. Another field's keyboard, above all a sheet's over the page, shrank
@@ -1256,11 +1254,7 @@ extension AssistantSidebar {
                 } else {
                     // A hub without a roster has no switcher: with several hubs the title keeps a hub menu under it (#12594).
                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                        #if os(macOS)
-                        Text(model.assistantShownName).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
-                        #else
                         Text(model.assistantShownName).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
-                        #endif
                         HubSwitcher(compact: true)
                     }
                 }
@@ -1308,11 +1302,7 @@ extension AssistantSidebar {
 
     /// The header sits in the Mac's title bar row: one line.
     private var macTitleRow: Bool {
-        #if os(macOS)
-        true
-        #else
         false
-        #endif
     }
 
     /// Settings on the page `AppModel.settingsPath` names (the switcher's Manage Assistants…): the way this sidebar has
@@ -1324,11 +1314,7 @@ extension AssistantSidebar {
     /// The split's list column (a wide display), beside the conversation's top bar: the header is that bar's row, with
     /// the shell's places or without. The drawer keeps its own; on the Mac both sit in the title bar's row already (#830).
     private var besideBar: Bool {
-        #if os(macOS)
-        false
-        #else
         drawer == nil
-        #endif
     }
 
     /// The open search field; in the BeautifulUI style SidebarNav's.
@@ -1365,7 +1351,7 @@ extension AssistantSidebar {
                 action(String(localized: "Inbox"), Theme.Icon.inbox, id: "sidebar-inbox", count: InboxStore.shared.unreadCount, place: .inbox, run: openInbox)
                 starredRow
                 if TodoStore.shared.isSupported {
-                    action(String(localized: "To-dos"), Theme.Icon.todo, id: "sidebar-todos", count: TodoStore.shared.sidebarCount, place: .todos, run: { (openTodos ?? openInbox)() })
+                    todosRow { (openTodos ?? openInbox)() }
                 }
                 action(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, place: .routines, run: openRoutines)
                 action(String(localized: "Knowledge"), Theme.Icon.knowledge, place: .knowledge, run: openKnowledge)
@@ -1377,18 +1363,7 @@ extension AssistantSidebar {
                 extensionRows
             }
         } else {
-            #if os(macOS)
-            // One row as the conversations' (#2113): New Chat is the title row's button and ⇧⌘N, Knowledge the window's
-            // sections column (2026-11-05 user: not twice). Headed by nothing: a heading over one row is noise.
-            if !AppStyle.current.usesBeautifulUI {
-                macPlace(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, run: openRoutines)
-                if let openHealth { macPlace(String(localized: "Health"), Theme.Icon.health, run: openHealth) }
-            } else {
-                phoneActions
-            }
-            #else
             phoneActions
-            #endif
         }
     }
 
@@ -1468,30 +1443,6 @@ extension AssistantSidebar {
         .accessibilityIdentifier("sidebar-extension-\(p.owner)-\(p.id)")
     }
 
-    #if os(macOS)
-    /// Whether the places to go are one row of the list (the Mac's plain styles) rather than the phone's big rows.
-    private var macPlaces: Bool { !isShell && !AppStyle.current.usesBeautifulUI }
-
-    /// A place to go at the top of the Mac's list: a conversation row's size, its symbol where a conversation has its mark.
-    private func macPlace(_ title: String, _ symbol: String, run: @escaping () -> Void) -> some View {
-        Button(action: run) {
-            HStack(spacing: Theme.Sidebar.gap) {
-                Image(systemName: symbol).resizable().scaledToFit().foregroundStyle(.secondary)
-                    .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
-                    .scaledFrame(width: Theme.Sidebar.mark)
-                Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, Theme.Sidebar.rowPadding)
-            .scaledFrame(minHeight: Theme.Sidebar.row)
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("sidebar-" + title)
-    }
-    #endif
 
     /// The sidebar's first row in every layout: the main conversation, as "Main Chat" with the main conversation's symbol
     /// in the places' symbol column (#9973). The assistant's face and name are the head's right above it; this row had
@@ -1550,6 +1501,77 @@ extension AssistantSidebar {
         }
     }
 
+    /// To-dos: on the V1 path (#10465) with its places folded under it (`TodoPlaceRows`), else the one row it always was.
+    @ViewBuilder private func todosRow(run: @escaping () -> Void) -> some View {
+        #if os(iOS)
+        if TodosV1.shared.isOn && !TodoWorkspace.shared.holdsToday {
+            TodoPlaceRows(shown: shownPlace == .todos, open: run, folded: $todosFolded) { selected, run, fold in
+                todosHead(selected: selected, run: run, fold: fold)
+            } row: { item in
+                todoPlaceRow(item)
+            }
+        } else {
+            action(String(localized: "To-dos"), Theme.Icon.todo, id: "sidebar-todos", count: TodoStore.shared.sidebarCount, place: .todos, run: run)
+        }
+        #else
+        action(String(localized: "To-dos"), Theme.Icon.todo, id: "sidebar-todos", count: TodoStore.shared.sidebarCount, place: .todos, run: run)
+        #endif
+    }
+
+    #if os(iOS)
+    /// The To-dos row over its places: its chevron beside it, not in it (the row keeps its own tap), and one shade
+    /// across both, as a Pinned direction's row (`AssistantSidebarDirection`). In BeautifulUI the chevron lies over the
+    /// row's end, where the row keeps room for it, so the row keeps its siblings' height.
+    @ViewBuilder private func todosHead(selected: Bool, run: @escaping () -> Void, fold: TodoPlacesFold?) -> some View {
+        let title = String(localized: "To-dos")
+        let count = TodoStore.shared.sidebarCount
+        if let fold {
+            if AppStyle.current.usesBeautifulUI {
+                BUISidebarRow(title, symbol: Theme.Icon.styled(Theme.Icon.todo), isActive: selected, action: run) {
+                    if count > 0 { CountBadge(count: count, look: .needs) }
+                    Color.clear.scaledFrame(width: Theme.Size.tapTarget)
+                }
+                .accessibilityIdentifier("sidebar-todos")
+                .overlay(alignment: .trailing) { fold.overRow() }
+            } else {
+                plainAction(title, Theme.Icon.todo, id: "sidebar-todos", count: count, run: run)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .safeAreaInset(edge: .trailing, spacing: Theme.Space.flush) { fold }
+                    .background {
+                        if selected { SidebarSelectedShade() }
+                    }
+            }
+        } else {
+            action(title, Theme.Icon.todo, id: "sidebar-todos", count: count, place: .todos, run: run)
+        }
+    }
+
+    /// A To-dos place under To-dos: the sidebar's row, set in so its symbol is where To-dos' words start (BeautifulUI's
+    /// row by its own measures), its part of N said in words. Its own function, so the rows every sidebar draws keep
+    /// their stack frames (`MainPagesStackTests`).
+    @ViewBuilder private func todoPlaceRow(_ item: TodoPlaceRowItem) -> some View {
+        let count = item.count > 0 ? StateName.count(.needsYou, item.count) : ""
+        Group {
+            if AppStyle.current.usesBeautifulUI {
+                BUISidebarRow(item.title, symbol: Theme.Icon.styled(item.symbol), isActive: item.selected, indent: 1, action: item.run) {
+                    if item.count > 0 { CountBadge(count: item.count, look: .needs) }
+                }
+                .accessibilityLabel(item.title)
+                .accessibilityValue(count)
+                .accessibilityIdentifier(item.identifier)
+            } else {
+                HStack(spacing: Theme.Sidebar.gap) {
+                    Color.clear.scaledFrame(width: Theme.Sidebar.glyphColumn)
+                    plainAction(item.title, item.symbol, id: item.identifier, count: item.count, selected: item.selected, run: item.run)
+                        .accessibilityLabel(item.title)
+                        .accessibilityValue(count)
+                }
+            }
+        }
+        .padding(.top, item.gapBefore ? Theme.Space.m : Theme.Space.flush)
+    }
+    #endif
+
     /// A place to go; `place`: what it shows beside the Sidebar layout's sidebar, its row shaded while it does.
     @ViewBuilder private func action(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, place: ShellPage? = nil,
                                      run: @escaping () -> Void) -> some View {
@@ -1597,16 +1619,25 @@ extension AssistantSidebar {
         // The leader conversations are the Directions group, in the hub's order, under each direction's name
         // (docs/assistant/unified-entry.md "Leader conversations"); then Recent, the newest few of the other chats,
         // whoever opened them (#4873, #5195); everything else is one tap away in All Chats (#4331).
-        let directions = AssistantSidebarGroups.directions(all, leaders: model.assistantLeaders, main: main)
+        let directions = AssistantSidebarGroups.directions(
+            all, leaders: model.assistantLeaders, main: main, outside: model.outsideDirections)
         if !directions.isEmpty {
             heading(String(localized: "Directions")) { EmptyView() }
-            // Each folds open to its to-dos (#4352, AssistantSidebarDirections.swift). The secretary group has no row
-            // here: the main conversation's own row stands for it (#4331).
-            ForEach(directions) { s in
-                AssistantSidebarDirection(direction: model.directionTree?.leader(s.sessionID), id: s.sessionID,
-                                          name: model.directionNames[s.sessionID] ?? s.title, isShell: isShell, drawer: drawer,
-                                          selected: s.key == current, selectedFill: Self.selectedFill, lead: s.key) { shades in
-                    row(s, named: model.directionNames[s.sessionID], drawsShade: shades)
+            // Each tappable direction folds open to its to-dos (#4352). A targetless outside direction is deliberately
+            // plain content: no button, disclosure, conversation menu or swipe (#8236). The secretary group has no row.
+            ForEach(directions) { entry in
+                let selected = entry.session.map { $0.key == current }
+                    ?? entry.target.map { model.inHub($0) == current } ?? false
+                let name = model.directionNames[entry.id] ?? entry.session?.title ?? entry.outside?.name ?? ""
+                AssistantSidebarDirection(
+                    direction: entry.canDisclose ? model.directionTree?.leader(entry.id) : nil,
+                    id: entry.id, name: name, isShell: isShell, drawer: drawer,
+                    selected: selected, selectedFill: Self.selectedFill, lead: entry.session?.key) { shades in
+                    if let session = entry.session {
+                        row(session, named: model.directionNames[entry.id], drawsShade: shades)
+                    } else {
+                        outsideRow(entry, named: name, selected: selected, drawsShade: shades)
+                    }
                 }
             }
         }
@@ -1832,10 +1863,7 @@ extension AssistantSidebar {
                 ConversationSourceMark(source: source, channels: s.channels, opener: opener) // what opened it, or its latest message's channel
                 Spacer(minLength: Theme.Space.xs)
                 // What waits on you under a direction ("N need you", #4331); what runs is the mark after it (#6626).
-                if let counts {
-                    Text(counts).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-                }
-                RowStateMark(state: s.state, working: leadWorking)
+                directionStatus(counts, state: s.state, running: leadWorking)
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Sidebar.rowPadding)
@@ -1912,6 +1940,62 @@ extension AssistantSidebar {
         }
     }
 
+    /// The direction status shared by conversation-backed and outside rows. `state` is the row's own conversation state;
+    /// an outside row passes idle so its bound Agent's state never replaces the tree's running value (#8236).
+    @ViewBuilder private func directionStatus(_ counts: String?, state: AgentState, running: Bool) -> some View {
+        if let counts {
+            Text(counts).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+        }
+        RowStateMark(state: state, working: running)
+    }
+
+    /// An outside reporting direction. Its label deliberately reuses the conversation row's mark, title, metrics and
+    /// status, but none of `row`'s conversation tag, preview, menu or swipe actions. Only a complete Agent target gets
+    /// a button; targetless content has no button trait and tapping it does nothing.
+    @ViewBuilder private func outsideRow(
+        _ entry: AssistantSidebarGroups.DirectionEntry, named: String, selected: Bool, drawsShade: Bool
+    ) -> some View {
+        if let target = entry.target {
+            Button {
+                drawer?.close()
+                openTodoAgentChat(model.inHub(target), in: model)
+            } label: {
+                outsideLabel(entry, named: named, selected: selected, drawsShade: drawsShade, interactive: true)
+            }
+            .buttonStyle(.plain)
+            .contentShape(.rect)
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityIdentifier("sidebar-outside-direction")
+        } else {
+            outsideLabel(entry, named: named, selected: false, drawsShade: false, interactive: false)
+        }
+    }
+
+    private func outsideLabel(
+        _ entry: AssistantSidebarGroups.DirectionEntry, named: String, selected: Bool, drawsShade: Bool, interactive: Bool
+    ) -> some View {
+        let counts = entry.outside?.counts.label
+        let running = entry.outside?.running ?? false
+        return HStack(spacing: Theme.Space.m) {
+            if !isShell { ConversationMark(id: entry.id) }
+            titleText(named, named: true)
+            Spacer(minLength: Theme.Space.xs)
+            directionStatus(counts, state: .idle, running: running)
+        }
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.vertical, Theme.Sidebar.rowPadding)
+        .scaledFrame(minHeight: Theme.Sidebar.row)
+        .background {
+            if selected && drawsShade { SidebarSelectedShade() }
+        }
+        .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous),
+                       isEnabled: interactive && drawsShade)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([named, counts, running ? AgentState.working.label : nil]
+            .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+        .accessibilityIdentifier("sidebar-outside-direction")
+    }
+
     /// The row's state as VoiceOver says it: its mark's (`RowStateMark`), so a lead that spins for what runs under it
     /// (`under`) says Working too.
     private func stateWord(_ s: Session, under: Bool = false) -> String? {
@@ -1927,11 +2011,7 @@ extension AssistantSidebar {
 
     /// The Mac's place is a row like the conversations': no line between it and them.
     private var macPlacesGroup: Bool {
-        #if os(macOS)
-        macPlaces
-        #else
         false
-        #endif
     }
 
     /// Persona's face and name with where it runs (a tap: its profile), Settings on the right (the tab bar is hidden while
@@ -1945,15 +2025,7 @@ extension AssistantSidebar {
                 AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: nil)
             }
         } else {
-            #if os(macOS)
-            if macPlacesGroup {
-                AssistantStatusLine(machineID: machineID, openProfile: openProfile)
-            } else {
-                AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: openSettings)
-            }
-            #else
             AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: openSettings)
-            #endif
         }
     }
 
@@ -2096,42 +2168,6 @@ private struct AssistantProfileFooter: View {
     }
 }
 
-#if os(macOS)
-/// The Mac's foot of the list (#2113): one small line, where Persona runs and whether it is up, as a Mac app's status
-/// at the bottom of its sidebar; a click opens its profile, as the phone's card does.
-private struct AssistantStatusLine: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.tabIsActive) private var inFront
-    let machineID: String
-    let openProfile: () -> Void
-
-    var body: some View {
-        let machine = model.machine(model.hubRef(machineID), inFront: inFront)
-        let online = machine?.online ?? false
-        let place = machine?.name ?? machineID
-        let state = online ? String(localized: "Online") : String(localized: "Offline [Machine Entity be1b4f]")
-        VStack(spacing: 0) {
-            Divider()
-            Button(action: openProfile) {
-                HStack(spacing: Theme.Space.s) {
-                    Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
-                        .scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
-                    Text("\(model.assistantShownName) \(state) · \(place)").lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                .font(Theme.Font.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, Theme.Space.l)
-                .padding(.vertical, Theme.Space.s)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .help("View \(model.assistantShownName)'s Profile")
-            .accessibilityLabel("\(model.assistantShownName), \(state), \(place), view profile")
-        }
-    }
-}
-#endif
 
 /// A conversation's round mark in the sidebar: a chat bubble in a soft color picked by its id, so neighbours differ.
 struct ConversationMark: View {
@@ -2159,10 +2195,42 @@ nonisolated enum AssistantSidebarGroups {
         var sessions: [Session]
     }
 
-    /// The sidebar's Directions: the listed leader conversations in `leaders`' order (the hub's), never the main one;
-    /// a leader the list does not hold (archived, another manager's) is left out.
-    static func directions(_ sessions: [Session], leaders: [String], main: SessionKey?) -> [Session] {
-        leaders.compactMap { id in sessions.first { $0.sessionID == id && $0.key != main } }
+    /// One row in Directions, keyed by the hub's opaque direction id. A real conversation wins if both representations
+    /// exist. `target` belongs only to an outside direction and is navigation metadata, never row or fold identity.
+    struct DirectionEntry: Identifiable {
+        var id: String
+        var session: Session?
+        var outside: DirectionTree.Direction?
+
+        init(id: String, session: Session? = nil, outside: DirectionTree.Direction? = nil) {
+            self.id = id
+            self.session = session
+            self.outside = outside
+        }
+
+        var target: SessionKey? { session == nil ? outside?.externalTarget : nil }
+        /// A targetless outside row has no navigation and no disclosure chevron, even if its tree entry lists tasks.
+        var canDisclose: Bool { session != nil || target != nil }
+    }
+
+    /// The sidebar's Directions in `leaders`' order (the hub's), never the main one. Listed conversations come first;
+    /// otherwise a current outside direction can stand on its own. An id described by neither stays omitted (#8236).
+    static func directions(
+        _ sessions: [Session], leaders: [String], main: SessionKey?,
+        outside: [String: DirectionTree.Direction] = [:]
+    ) -> [DirectionEntry] {
+        var conversations: [String: Session] = [:]
+        for session in sessions where conversations[session.sessionID] == nil {
+            conversations[session.sessionID] = session
+        }
+        return leaders.compactMap { id in
+            if id == main?.sessionID { return nil }
+            if let session = conversations[id] { return DirectionEntry(id: id, session: session) }
+            if let direction = outside[id], direction.isExternal {
+                return DirectionEntry(id: id, outside: direction)
+            }
+            return nil
+        }
     }
 
     /// How many conversations the sidebar's Recent lists (#4873); the rest are in All Chats.

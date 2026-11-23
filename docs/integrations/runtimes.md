@@ -225,7 +225,8 @@ The list carries only recent sessions (`rt.recent`). A caller reading an older p
 
 `integrations/runtime-sdk/examples/echo-runtime.mjs`: sessions in memory; it "thinks" briefly and then echoes back whatever it receives, asking for a permission first if the message contains `ask`.
 About a hundred lines, and it's the skeleton for a new runtime: replace `sessions` with your session storage, `reply` with your Agent, and the item mapping with your own
-(see `integrations/dsh/lib/map.js`).
+(see `integrations/dsh/lib/map.js`). Keep its entry check, which compares real paths: Node loads the entry module by its real path, so
+comparing `process.argv[1]` with `import.meta.url` as given skips the program when the path goes through a symlink (#12848).
 
 ```js
 import { createRuntime, light } from '<Persona>/integrations/runtime-sdk/index.js'
@@ -447,7 +448,9 @@ assistant status, and verifies the worker is a strict process descendant of the 
 caller's session from the worker's process tree, not from the CLI request. Antigravity runs each active assistant chat
 in its own ACP process, separate from the Agents' shared process. An idle assistant worker exits after five minutes
 without work; the next send or mode change resumes the chat in a fresh worker. A forked assistant chat gets its own
-worker when first used. An active turn or unanswered permission keeps the worker alive.
+worker when first used. An active turn or unanswered permission keeps the worker alive, and so does an Agent turn
+running in the same companion: the assistant that supervises it hears from it when it ends, so the five minutes count
+from the end of the last such turn (#13471).
 
 A runtime that declares `caps.assistant` must:
 

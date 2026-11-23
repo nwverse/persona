@@ -378,13 +378,13 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 	// the runtime's — one key for this runtime's tool, which the manager keeps under this session id, so it never
 	// reaches another session or another tool. Only for a runtime that asked for it in its hello (caps.keep_always: it
 	// keeps no rule itself; a runtime whose always is a narrower rule of its own must not get the whole tool), only
-	// when the card offers it (an always_label), and never in the health space or on a card with fields.
+	// when the card offers it (an always_label), and never in a space or on a card with fields.
 	h.mu.Lock()
 	keepAlways := h.hello.Caps.KeepAlways
 	h.mu.Unlock()
 	ix.AlwaysKeys = nil
 	if keepAlways && ix.Kind == proto.IxPermission && strings.TrimSpace(ix.AlwaysLabel) != "" && strings.TrimSpace(ix.ToolName) != "" &&
-		len(ix.Fields) == 0 && !runtimeHealth(h, ix) {
+		len(ix.Fields) == 0 && !runtimeInSpace(h, ix) {
 		ix.AlwaysKeys = []string{"runtime:" + rt + ":tool:" + ix.ToolName}
 	}
 	ix.CreatedAt = now
@@ -421,15 +421,15 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 	return res, nil
 }
 
-// runtimeHealth: the card's session is in the health space (its cwd or the row's), where every write is confirmed
+// runtimeInSpace: the card's session is in a space (its cwd or the row's), where every write is confirmed
 // (docs/assistant/health.md "Outbound"). A directory inside the space counts: a tool's `cd` may have left either there
-// (identity.InHealthSpace, #2368).
-func runtimeHealth(h *runtimeConn, ix proto.Interaction) bool {
-	if identity.InHealthSpace(ix.Cwd) {
+// (identity.InSpace, #2368).
+func runtimeInSpace(h *runtimeConn, ix proto.Interaction) bool {
+	if identity.InSpace(ix.Cwd) {
 		return true
 	}
 	s, ok := h.row(ix.SessionID)
-	return ok && (s.Space == identity.SpaceHealth || identity.InHealthSpace(s.Cwd))
+	return ok && (s.Space != "" || identity.InSpace(s.Cwd))
 }
 
 // runtimeModes is a runtime row's modes capability, the apps' Claude Code chips: the runtime declared caps.modes (the

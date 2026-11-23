@@ -53,7 +53,7 @@ var openTables = []string{"push_device_retirements", "lock_tests", "client_ops",
 	"device_sessions", "live_activities", "phone_tools", "node_sessions", "mail_accounts", "interactions", "settings",
 	"inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "machine_usage",
 	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user", "hub_push_sent", "urgent_calls", "model_usage",
-	"conversation_histories", "assistant_conversation_spaces", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates"}
+	"conversation_histories", "assistant_conversation_spaces", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates", "assistant_entries", "assistant_captures"}
 
 // open empties what TRUNCATE openTables CASCADE did, a table only the cascade reaches included, and leaves a table
 // that had no row in that cascade its files: it truncates only what has a row.
@@ -1935,5 +1935,45 @@ func TestConnectorSecrets(t *testing.T) {
 	}
 	if _, ok, _ := d.ConnectorSecret(ctx, "example"); ok {
 		t.Fatal("still there after delete")
+	}
+}
+
+// A partially created Codex App conversation keeps requested settings through the manager's typed state.put/load
+// boundary until the desktop confirms them; successful setup then clears that intent durably.
+func TestNodeSessionsDesktopPendingSettingsRoundTrip(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	want := NodeSession{Launcher: "codex-app", Cwd: "/work/project", Model: "confirmed-model",
+		DesktopPendingModel: "requested-model", DesktopPendingEffort: "high",
+		ModelSource: json.RawMessage(`{"kind":"desktop","model":"confirmed-model"}`)}
+	if err := d.PutNodeSession(ctx, "server", "desktop-pending", want); err != nil {
+		t.Fatal(err)
+	}
+	load := func() NodeSession {
+		t.Helper()
+		rows, err := d.NodeSessions(ctx, "server")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := rows["desktop-pending"]
+		if !ok {
+			t.Fatal("desktop session was not restored")
+		}
+		var source struct{ Kind, Model string }
+		if err := json.Unmarshal(got.ModelSource, &source); err != nil || source.Kind != "desktop" || source.Model != want.Model {
+			t.Fatalf("model source was not preserved with pending settings: %s (%v)", got.ModelSource, err)
+		}
+		return got
+	}
+	got := load()
+	if got.Launcher != want.Launcher || got.Cwd != want.Cwd || got.Model != want.Model ||
+		got.DesktopPendingModel != want.DesktopPendingModel || got.DesktopPendingEffort != want.DesktopPendingEffort {
+		t.Fatalf("pending settings round trip = %+v", got)
+	}
+	got.DesktopPendingModel, got.DesktopPendingEffort = "", ""
+	if err := d.PutNodeSession(ctx, "server", "desktop-pending", got); err != nil {
+		t.Fatal(err)
+	}
+	if cleared := load(); cleared.DesktopPendingModel != "" || cleared.DesktopPendingEffort != "" || cleared.Model != want.Model {
+		t.Fatalf("confirmed setup did not clear pending settings: %+v", cleared)
 	}
 }

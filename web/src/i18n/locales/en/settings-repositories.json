@@ -44,5 +44,11 @@
   "host_mismatch": "Use an address on {hosts} for {provider}, without credentials.",
   "source_unavailable": "{provider} is unavailable, so it can't read this address now.",
   "invalid_url_sources": "Use a GitHub or GitLab HTTP(S) or git SSH link, or an address on a host one of your sources lists, without credentials. Choose the provider for a self-hosted instance.",
-  "retry": "Try again"
+  "retry": "Try again",
+  "task_workflow": "Task follow-up (optional)",
+  "task_workflow_row": "Task follow-up: {value}",
+  "task_workflow_isolated": "Separate isolated tasks (default)",
+  "task_workflow_isolated_hint": "Each new task runs independently in its own space, keeping changes separate.",
+  "task_workflow_shared_branch": "Shared feature branch",
+  "task_workflow_shared_branch_hint": "Follow-up tasks reuse the same space and wait in line when it is busy; multi-repository work opens together."
 }

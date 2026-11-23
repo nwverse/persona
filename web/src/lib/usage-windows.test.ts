@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { initI18n } from "../i18n";
 import { balanceAccounts, balanceEmpty, balanceText } from "./usage-balance";
-import { accountPace, countdown, fullest, isBalanceAccount, liveAccounts, pace, planNote, resetLabel, sampleAge, sourceNames, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { accountPace, countdown, fullest, groupByProvider, isBalanceAccount, liveAccounts, pace, parsePinnedUsageAccounts, planNote, providerTimeline, providerTitle, remainingText, resetLabel, sampleAge, selectSidebarUsageAccounts, sortedWindows, sortForCard, sourceNames, timelinePosition, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime(); // local time, so same-day checks do not depend on the zone
 const at = (ms: number) => new Date(NOW + ms).toISOString();
@@ -195,5 +195,108 @@ describe("prepaid balances (#11825)", () => {
     expect(kept[0].balance).toBeUndefined();
     expect(kept[0].problem).toBe("unreachable");
     expect(isBalanceAccount(kept[0])).toBe(true); // the provider still names a balance row, so the popover can say why
+  });
+});
+
+describe("pinned sidebar usage accounts (#12418)", () => {
+  const bal = (id: string, amount: string): UsageAccount => ({ id, provider: "deepseek", name: "DeepSeek", windows: [], sampled_at: at(-60_000), balance: { amount, currency: "CNY" } });
+  const live = (): UsageAccount[] => [
+    account("codex", 85, { provider: "codex", name: "Codex Pro" }),
+    account("claude", 60, { provider: "claude", name: "Claude Max" }),
+    account("agy", 15, { provider: "agy", name: "Antigravity" }),
+    bal("ds", "12.34"),
+  ];
+
+  it("parses stored IDs with deduplication and tolerates malformed JSON", () => {
+    expect(parsePinnedUsageAccounts(null)).toEqual([]);
+    expect(parsePinnedUsageAccounts("")).toEqual([]);
+    expect(parsePinnedUsageAccounts("{not-json")).toEqual([]);
+    expect(parsePinnedUsageAccounts('{"a":1}')).toEqual([]);
+    expect(parsePinnedUsageAccounts('["agy", "codex", "agy", "", "  ", 42, " ds "]')).toEqual(["agy", "codex", "ds"]);
+  });
+
+  it("keeps automatic top-2 + balance behavior when nothing is pinned", () => {
+    const picked = selectSidebarUsageAccounts(live(), []);
+    expect(picked.custom).toBe(false);
+    expect(picked.bars.map((a) => a.id)).toEqual(["codex", "claude"]);
+    expect(picked.balances.map((a) => a.id)).toEqual(["ds"]);
+  });
+
+  it("selects pinned window and balance accounts in pinned order", () => {
+    const onlyAgy = selectSidebarUsageAccounts(live(), ["agy"]);
+    expect(onlyAgy.custom).toBe(true);
+    expect(onlyAgy.bars.map((a) => a.id)).toEqual(["agy"]);
+    expect(onlyAgy.balances).toEqual([]);
+
+    const mixed = selectSidebarUsageAccounts(live(), ["agy", "ds", "codex"]);
+    expect(mixed.custom).toBe(true);
+    expect(mixed.bars.map((a) => a.id)).toEqual(["agy", "codex"]);
+    expect(mixed.balances.map((a) => a.id)).toEqual(["ds"]);
+
+    const onlyBalance = selectSidebarUsageAccounts(live(), ["ds"]);
+    expect(onlyBalance.custom).toBe(true);
+    expect(onlyBalance.bars).toEqual([]);
+    expect(onlyBalance.balances.map((a) => a.id)).toEqual(["ds"]);
+  });
+
+  it("shows surviving pinned accounts on partial loss and falls back cleanly when all pinned accounts are offline", () => {
+    const partial = selectSidebarUsageAccounts(live(), ["gone", "agy"]);
+    expect(partial.custom).toBe(true);
+    expect(partial.bars.map((a) => a.id)).toEqual(["agy"]);
+    expect(partial.balances).toEqual([]);
+
+    const fallback = selectSidebarUsageAccounts(live(), ["gone-1", "gone-2"]);
+    expect(fallback.custom).toBe(false);
+    expect(fallback.bars.map((a) => a.id)).toEqual(["codex", "claude"]);
+    expect(fallback.balances.map((a) => a.id)).toEqual(["ds"]);
+  });
+});
+
+describe("provider cards and the reset timeline (#13173)", () => {
+  const acct = (id: string, name: string, provider: string, windows: UsageWindow[], sampled = at(-60_000)): UsageAccount => ({ id, name, provider, windows, sampled_at: sampled });
+  it("lists the 5h window, then 7d, then the rest, per-model allowances last", () => {
+    const a = acct("a", "A", "claude", [{ ...win("7d", 10080, 1, 3 * H), model: "Fable" }, win("1d", 1440, 1, H), win("7d", 10080, 1, 5 * H), win("5h", 300, 1, H)]);
+    expect(sortedWindows(a).map((w) => `${w.label}${w.model ? "*" : ""}`)).toEqual(["5h", "7d", "1d", "7d*"]);
+  });
+  it("sorts a card's accounts by the 7d reset, soonest first, those without one last, then by name", () => {
+    const a1 = acct("1", "Zed", "claude", [win("5h", 300, 1, H), win("7d", 10080, 1, 48 * H)]);
+    const a2 = acct("2", "Amy", "claude", [win("7d", 10080, 1, 5 * H)]);
+    const a3 = acct("3", "Bob", "claude", [win("5h", 300, 1, H)]);
+    const a4 = acct("4", "Abe", "claude", [win("7d", 10080, 1)]); // no reset time
+    expect(sortForCard([a1, a3, a4, a2]).map((a) => a.name)).toEqual(["Amy", "Zed", "Abe", "Bob"]);
+  });
+  it("groups by provider in the hub's order, with the newest sample of each", () => {
+    const g = groupByProvider([acct("1", "A", "claude", [], at(-5 * H)), acct("2", "B", "codex", [], at(-H)), acct("3", "C", "claude", [], at(-2 * H))]);
+    expect(g.map((x) => [x.provider, x.accounts.length, x.sampledAt])).toEqual([["claude", 2, at(-2 * H)], ["codex", 1, at(-H)]]);
+    expect(providerTitle("xai")).toBe("xAI");
+    expect(providerTitle("codex")).toBe("Codex");
+  });
+  it("puts 24 hours at 45% of the shared axis and 7 days at the end, capped", () => {
+    expect(timelinePosition(0)).toBe(0);
+    expect(timelinePosition(6 * H)).toBeCloseTo(0.1125, 6);
+    expect(timelinePosition(24 * H)).toBeCloseTo(0.45, 6);
+    expect(timelinePosition(72 * H)).toBeCloseTo(0.45 + (48 / 144) * 0.55, 6);
+    expect(timelinePosition(7 * 24 * H)).toBeCloseTo(1, 6);
+    expect(timelinePosition(30 * 24 * H)).toBe(1);
+    expect(timelinePosition(-H)).toBe(0);
+  });
+  it("makes a row per account in the given order, a lane per plan window from now to its reset", () => {
+    const a = acct("a", "A", "claude", [win("7d", 10080, 1, 48 * H), win("5h", 300, 1, 2 * H)]);
+    const b = acct("b", "B", "claude", [win("7d", 10080, 1, 20 * 24 * H)]);
+    const rows = providerTimeline([b, a], NOW);
+    expect(rows.map((r) => r.account.id)).toEqual(["b", "a"]);
+    expect(rows[1].lanes.map((l) => [l.label, l.long, Number(l.end.toFixed(4)), l.remainingMs])).toEqual([["5h", false, 0.0375, 2 * H], ["7d", true, 0.45 + (24 / 144) * 0.55 > 0 ? Number((0.45 + (24 / 144) * 0.55).toFixed(4)) : 0, 48 * H]]);
+    expect(rows[0].lanes[0].end).toBe(1); // beyond 7 days runs to the end of the axis
+  });
+  it("leaves out windows without a reset time, ended ones and per-model allowances, and an account with none has no row", () => {
+    const a = acct("a", "A", "claude", [win("5h", 300, 1), win("7d", 10080, 1, -H), { ...win("7d", 10080, 1, 3 * H), model: "Fable" }]);
+    expect(providerTimeline([a], NOW)).toEqual([]);
+  });
+  it("writes the time left short, in each language's units", async () => {
+    await initI18n("zh-Hans");
+    expect(remainingText(40 * 60_000)).toBe("40 分钟");
+    expect(remainingText(1.5 * H)).toBe("1.5 小时");
+    expect(remainingText(50 * H)).toBe("2 天 2 小时");
+    expect(remainingText(48 * H)).toBe("2 天");
   });
 });

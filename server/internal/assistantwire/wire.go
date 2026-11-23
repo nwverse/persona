@@ -316,6 +316,11 @@ type Notification struct {
 	// RelatedKey links the push to what it is about (a to-do id, a PR URL, a subject): in low-distraction mode the same key pushes
 	// at most once in 12 hours, and same-minute P1 conclusion pushes with it merge into one intercepted entry.
 	RelatedKey string `json:"related_key,omitempty"`
+	// Depth is how long the owner needs for it (attention.go): DepthQuick ("" too) or DepthDeep, which fragment mode
+	// keeps for a block of time instead of interrupting. Track is the track the push comes from ("" for none), which
+	// immersive mode lets through when it is the track in focus. Older hubs drop both.
+	Depth string `json:"depth,omitempty"`
+	Track string `json:"track,omitempty"`
 }
 
 // Push levels a Notification may carry (hub low-distraction mode, docs/server/server.md "Push policy").
