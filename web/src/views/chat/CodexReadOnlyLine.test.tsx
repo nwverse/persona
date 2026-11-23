@@ -94,4 +94,34 @@ describe("CodexReadOnlyLine", () => {
     expect(actionWrap.className).toContain("flex-wrap");
     expect(actionWrap.className).toContain("justify-end");
   });
+
+  it("triggers takeOverRequested from an inactive view layer and keeps the portaled dialog open across view switches", async () => {
+    state.api.mockResolvedValue({
+      running: true, can_resume: true, token: "tok-term", cwd: "/work",
+      transcript_path: "/tmp/t", continuation_prompt: "Continue",
+    });
+    const onConsumed = vi.fn();
+    // Simulate Chat layer hidden/inert while Terminal view is active, and header ⋯ triggering Take over.
+    act(() => root.render(
+      <div inert aria-hidden>
+        <CodexReadOnlyLine session={readOnlyCodex} visible takeOverRequested onTakeOverConsumed={onConsumed} />
+      </div>,
+    ));
+    await flush();
+    expect(onConsumed).toHaveBeenCalledTimes(1);
+    expect(state.api.mock.calls.map(([p, opts]) => [p, opts?.method ?? "GET"])).toEqual([
+      ["/machines/m1/codex/codex-1/takeover", "GET"],
+    ]);
+    expect(document.body.textContent).toContain(t("chat-takeover.takeover_running_confirm"));
+
+    // Switching back to Chat view (clearing inert) keeps the exact same dialog mounted without re-triggering GET.
+    act(() => root.render(
+      <div>
+        <CodexReadOnlyLine session={readOnlyCodex} visible takeOverRequested={false} onTakeOverConsumed={onConsumed} />
+      </div>,
+    ));
+    await flush();
+    expect(state.api).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain(t("chat-takeover.takeover_running_confirm"));
+  });
 });

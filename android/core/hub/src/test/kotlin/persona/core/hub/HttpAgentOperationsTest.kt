@@ -125,12 +125,11 @@ class HttpAgentOperationsTest {
             assertEquals("no launcher", rejected.message.shown)
             assertEquals("/api/v1/ops/$failedOpId", server.takeRequest().path)
 
-            // 503 assistant_offline on direct start or /ops/{id} returns Rejected so the receipt clears.
+            // Ambiguous 503 assistant_offline stays Unknown so the receipt is preserved rather than starting twice.
             val offlineOpId = "77777777-7777-4777-8777-777777777777"
             server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"assistant offline","code":"assistant_offline"}"""))
             server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"assistant offline","code":"assistant_offline"}"""))
-            val offlineRejected = api.startCodexContinuation(key, info, offlineOpId) as AgentStartResult.Rejected
-            assertEquals("assistant offline", offlineRejected.message.shown)
+            assertEquals(AgentStartResult.Unknown, api.startCodexContinuation(key, info, offlineOpId))
             server.takeRequest(); server.takeRequest()
             Unit
         }

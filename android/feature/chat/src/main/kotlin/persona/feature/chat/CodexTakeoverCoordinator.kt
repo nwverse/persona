@@ -18,6 +18,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -73,6 +75,12 @@ interface CodexTakeoverClient {
     }
 }
 
+/** Atomic reservation result from [ContinuationReceiptStore.reserveOrGet]. */
+data class ContinuationReceiptReservation(
+    val operationId: String,
+    val isExisting: Boolean,
+)
+
 /**
  * Persists unconfirmed continuation `operation_id` receipts scoped by hub pairing and canonical session key so closing
  * a preview, switching entry points (Agents / Space / Chat), or restarting the app always reconciles the same
@@ -81,23 +89,72 @@ interface CodexTakeoverClient {
  */
 interface ContinuationReceiptStore {
     suspend fun get(scope: String, key: SessionKey): String?
-    suspend fun put(scope: String, key: SessionKey, operationId: String)
-    suspend fun remove(scope: String, key: SessionKey)
+    /** Atomically returns any existing receipt or reserves and persists a fresh operation id under a lock. */
+    suspend fun reserveOrGet(
+        scope: String,
+        key: SessionKey,
+        createOperationId: () -> String,
+    ): ContinuationReceiptReservation
+    /** Removes the stored receipt only if it still equals [expectedOperationId], never clobbering a concurrent op. */
+    suspend fun removeIfMatches(scope: String, key: SessionKey, expectedOperationId: String): Boolean
+    /** Clears receipts for [scope], or all scopes when [scope] is null (e.g. unpair / eraseAll). */
+    suspend fun clearScope(scope: String?) = Unit
+    suspend fun clearScopes(scopes: Collection<String>) {
+        scopes.forEach { clearScope(it) }
+    }
+    /** Drops any persisted receipts whose pairing scope is not in [validScopes]. */
+    suspend fun retainScopes(validScopes: Set<String>) = Unit
 }
 
 internal fun continuationReceiptKey(scope: String, key: SessionKey): String =
     "$scope|${GroupKeys.raw(key.machineId)}|${key.sessionId}"
 
+internal fun continuationReceiptScopeOf(storageKey: String): String =
+    storageKey.substringBefore('|', missingDelimiterValue = "")
+
 class InMemoryContinuationReceiptStore(
     private val map: MutableMap<String, String> = mutableMapOf(),
 ) : ContinuationReceiptStore {
     private val lock = Mutex()
-    override suspend fun get(scope: String, key: SessionKey): String? = lock.withLock { map[continuationReceiptKey(scope, key)] }
-    override suspend fun put(scope: String, key: SessionKey, operationId: String) = lock.withLock {
-        map[continuationReceiptKey(scope, key)] = operationId
+    override suspend fun get(scope: String, key: SessionKey): String? = lock.withLock {
+        map[continuationReceiptKey(scope, key)]?.takeIf(String::isNotBlank)
     }
-    override suspend fun remove(scope: String, key: SessionKey) = lock.withLock {
-        val _ = map.remove(continuationReceiptKey(scope, key))
+
+    override suspend fun reserveOrGet(
+        scope: String,
+        key: SessionKey,
+        createOperationId: () -> String,
+    ): ContinuationReceiptReservation = lock.withLock {
+        val storageKey = continuationReceiptKey(scope, key)
+        val existing = map[storageKey]?.takeIf(String::isNotBlank)
+        if (existing != null) {
+            ContinuationReceiptReservation(existing, isExisting = true)
+        } else {
+            val next = createOperationId()
+            map[storageKey] = next
+            ContinuationReceiptReservation(next, isExisting = false)
+        }
+    }
+
+    override suspend fun removeIfMatches(scope: String, key: SessionKey, expectedOperationId: String): Boolean = lock.withLock {
+        val storageKey = continuationReceiptKey(scope, key)
+        if (map[storageKey] != expectedOperationId) return@withLock false
+        map.remove(storageKey)
+        true
+    }
+
+    override suspend fun clearScope(scope: String?) = lock.withLock {
+        if (scope == null) {
+            map.clear()
+        } else {
+            val prefix = "$scope|"
+            map.keys.removeAll { it.startsWith(prefix) }
+        }
+    }
+
+    override suspend fun retainScopes(validScopes: Set<String>) = lock.withLock {
+        if (validScopes.isEmpty()) map.clear()
+        else map.keys.removeAll { continuationReceiptScopeOf(it) !in validScopes }
     }
 }
 
@@ -120,17 +177,79 @@ class PersistentContinuationReceiptStore(
         }
     }
 
-    override suspend fun put(scope: String, key: SessionKey, operationId: String) = lock.withLock {
+    override suspend fun reserveOrGet(
+        scope: String,
+        key: SessionKey,
+        createOperationId: () -> String,
+    ): ContinuationReceiptReservation = lock.withLock {
         withContext(ioDispatcher) {
-            check(prefs.edit().putString(continuationReceiptKey(scope, key), operationId).commit()) {
-                "Failed to persist continuation operation receipt"
+            val storageKey = continuationReceiptKey(scope, key)
+            val existing = prefs.getString(storageKey, null)?.takeIf(String::isNotBlank)
+            if (existing != null) {
+                ContinuationReceiptReservation(existing, isExisting = true)
+            } else {
+                val next = createOperationId()
+                check(prefs.edit().putString(storageKey, next).commit()) {
+                    "Failed to persist continuation operation receipt"
+                }
+                ContinuationReceiptReservation(next, isExisting = false)
             }
         }
     }
 
-    override suspend fun remove(scope: String, key: SessionKey) = lock.withLock {
+    override suspend fun removeIfMatches(scope: String, key: SessionKey, expectedOperationId: String): Boolean = lock.withLock {
         withContext(ioDispatcher) {
-            val _ = prefs.edit().remove(continuationReceiptKey(scope, key)).commit()
+            val storageKey = continuationReceiptKey(scope, key)
+            if (prefs.getString(storageKey, null) != expectedOperationId) return@withContext false
+            prefs.edit().remove(storageKey).commit()
+        }
+    }
+
+    override suspend fun clearScope(scope: String?) = lock.withLock {
+        withContext(ioDispatcher) {
+            if (scope == null) {
+                val _ = prefs.edit().clear().commit()
+            } else {
+                val prefix = "$scope|"
+                val matching = prefs.all.keys.filter { it.startsWith(prefix) }
+                if (matching.isNotEmpty()) {
+                    val editor = prefs.edit()
+                    matching.forEach(editor::remove)
+                    val _ = editor.commit()
+                }
+            }
+        }
+    }
+
+    override suspend fun clearScopes(scopes: Collection<String>) {
+        if (scopes.isEmpty()) return
+        val prefixes = scopes.map { "$it|" }
+        lock.withLock {
+            withContext(ioDispatcher) {
+                val matching = prefs.all.keys.filter { key -> prefixes.any(key::startsWith) }
+                if (matching.isNotEmpty()) {
+                    val editor = prefs.edit()
+                    matching.forEach(editor::remove)
+                    val _ = editor.commit()
+                }
+            }
+        }
+    }
+
+    override suspend fun retainScopes(validScopes: Set<String>) = lock.withLock {
+        withContext(ioDispatcher) {
+            if (validScopes.isEmpty()) {
+                if (prefs.all.isNotEmpty()) {
+                    val _ = prefs.edit().clear().commit()
+                }
+            } else {
+                val stale = prefs.all.keys.filter { continuationReceiptScopeOf(it) !in validScopes }
+                if (stale.isNotEmpty()) {
+                    val editor = prefs.edit()
+                    stale.forEach(editor::remove)
+                    val _ = editor.commit()
+                }
+            }
         }
     }
 
@@ -164,6 +283,7 @@ class CodexTakeoverCoordinator(
     private val onSuccessToast: (String) -> Unit,
     private val receiptStore: ContinuationReceiptStore = InMemoryContinuationReceiptStore(),
     private val newOperationId: () -> String = { UUID.randomUUID().toString() },
+    private val dispatchScope: CoroutineScope = DefaultDispatchScope,
 ) {
     sealed interface Pending {
         val session: Session
@@ -242,12 +362,14 @@ class CodexTakeoverCoordinator(
         activeSessionKey = session.key
         scope.launch {
             val receiptScope = api.receiptScope(session)
+            var checkedOpId: String? = null
             try {
                 val existingOpId = receiptStore.get(receiptScope, session.key)
                 if (existingOpId != null) {
+                    checkedOpId = existingOpId
                     activeAction = ActiveAction.CheckContinuation
                     val result = api.continuationOperation(session, existingOpId)
-                    handleContinuationResult(receiptScope, session, result)
+                    handleContinuationResult(receiptScope, session, existingOpId, result)
                     return@launch
                 }
                 val info = api.takeoverInfo(session)
@@ -259,7 +381,7 @@ class CodexTakeoverCoordinator(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                reportContinuationFailure(receiptScope, session, error)
+                reportContinuationFailure(receiptScope, session, checkedOpId, error)
             } finally {
                 busy = false
                 activeAction = null
@@ -268,11 +390,14 @@ class CodexTakeoverCoordinator(
         }
     }
 
-    /** Reconcile an unconfirmed continuation start against `GET /api/v1/ops/{id}` without starting a second session. */
-    fun checkContinuation(session: Session) {
+    /**
+     * Strictly read-only reconciliation against `GET /api/v1/ops/{operationId}` bound to the original [operationId].
+     * Never falls back to posting a new continuation start even if another surface already cleared the stored receipt.
+     */
+    fun checkContinuation(session: Session, operationId: String) {
         if (inFlight) return
         val api = client ?: run {
-            reportFailure(UnsupportedOperationException("Codex continuation unavailable")) { checkContinuation(session) }
+            reportFailure(UnsupportedOperationException("Codex continuation unavailable")) { checkContinuation(session, operationId) }
             return
         }
         busy = true
@@ -281,22 +406,13 @@ class CodexTakeoverCoordinator(
         scope.launch {
             val receiptScope = api.receiptScope(session)
             try {
-                val opId = receiptStore.get(receiptScope, session.key)
-                if (opId == null) {
-                    if (!session.canContinueCodex) return@launch
-                    activeAction = ActiveAction.Continue
-                    val info = api.takeoverInfo(session)
-                    if (!info.canResume) pending = Pending.Continuation(session, info)
-                    else executeContinuation(api, session, info)
-                } else {
-                    val result = api.continuationOperation(session, opId)
-                    handleContinuationResult(receiptScope, session, result)
-                }
+                val result = api.continuationOperation(session, operationId)
+                handleContinuationResult(receiptScope, session, operationId, result)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 val message = operationFeedback(error).text.resolve(res)
-                onFailure(message, res.getString(R.string.chat_takeover_check_status)) { checkContinuation(session) }
+                onFailure(message, res.getString(R.string.chat_takeover_check_status)) { checkContinuation(session, operationId) }
             } finally {
                 busy = false
                 activeAction = null
@@ -338,7 +454,7 @@ class CodexTakeoverCoordinator(
                 activeSessionKey = null
                 when (current) {
                     is Pending.Takeover -> reportFailure(error) { takeOver(current.session) }
-                    is Pending.Continuation -> reportContinuationFailure(receiptScope, current.session, error)
+                    is Pending.Continuation -> reportContinuationFailure(receiptScope, current.session, null, error)
                 }
             } finally {
                 confirmingAction = null
@@ -368,7 +484,7 @@ class CodexTakeoverCoordinator(
             } catch (error: Exception) {
                 pending = null
                 activeSessionKey = null
-                reportContinuationFailure(receiptScope, current.session, error)
+                reportContinuationFailure(receiptScope, current.session, null, error)
             } finally {
                 confirmingAction = null
                 if (pending == null) activeSessionKey = null
@@ -406,36 +522,58 @@ class CodexTakeoverCoordinator(
         onSuccessToast(res.getString(R.string.chat_takeover_done))
     }
 
+    private data class ContinuationDispatch(
+        val operationId: String,
+        val outcome: Result<AgentStartResult>,
+    )
+
     private suspend fun executeContinuation(
         api: CodexTakeoverClient,
         session: Session,
         info: CodexTakeoverInfo,
     ) {
         val receiptScope = api.receiptScope(session)
-        val existingOpId = receiptStore.get(receiptScope, session.key)
-        val result = if (existingOpId != null) {
-            if (confirmingAction == ActiveAction.Continue) confirmingAction = ActiveAction.CheckContinuation
-            api.continuationOperation(session, existingOpId)
-        } else {
-            val opId = newOperationId()
-            // Persist durably before sending so any lost response or restart reconciles against /ops/{opId}.
-            receiptStore.put(receiptScope, session.key, opId)
-            api.startContinuation(session, info, opId)
+        // Dispatch atomic reservation + POST + terminal receipt cleanup on a process-lived scope so dismissing a
+        // dialog or preview right after committing the UUID still sends the POST instead of stranding a 404 receipt.
+        val dispatch = dispatchScope.async {
+            val reservation = receiptStore.reserveOrGet(receiptScope, session.key, newOperationId)
+            val outcome = runCatching {
+                if (reservation.isExisting) api.continuationOperation(session, reservation.operationId)
+                else api.startContinuation(session, info, reservation.operationId)
+            }
+            outcome.exceptionOrNull()?.let { if (it is CancellationException) throw it }
+            val result = outcome.getOrNull()
+            if (result is AgentStartResult.Created || result is AgentStartResult.Rejected) {
+                receiptStore.removeIfMatches(receiptScope, session.key, reservation.operationId)
+            }
+            ContinuationDispatch(reservation.operationId, outcome)
+        }.await()
+        val failure = dispatch.outcome.exceptionOrNull()
+        if (failure != null) {
+            pending = null
+            activeSessionKey = null
+            reportContinuationFailure(receiptScope, session, dispatch.operationId, failure)
+            return
         }
-        handleContinuationResult(receiptScope, session, result)
+        handleContinuationResult(receiptScope, session, dispatch.operationId, dispatch.outcome.getOrThrow())
     }
 
-    private suspend fun handleContinuationResult(receiptScope: String, session: Session, result: AgentStartResult) {
+    private suspend fun handleContinuationResult(
+        receiptScope: String,
+        session: Session,
+        operationId: String,
+        result: AgentStartResult,
+    ) {
         when (result) {
             is AgentStartResult.Created -> {
-                receiptStore.remove(receiptScope, session.key)
+                receiptStore.removeIfMatches(receiptScope, session.key, operationId)
                 pending = null
                 activeSessionKey = null
                 onAdopted(session, result.session)
                 onSuccessToast(res.getString(R.string.chat_takeover_continued))
             }
             is AgentStartResult.Rejected -> {
-                receiptStore.remove(receiptScope, session.key)
+                receiptStore.removeIfMatches(receiptScope, session.key, operationId)
                 pending = null
                 activeSessionKey = null
                 val message = result.message.resolve(res)
@@ -448,7 +586,7 @@ class CodexTakeoverCoordinator(
                 onFailure(
                     res.getString(R.string.chat_takeover_continue_pending),
                     res.getString(R.string.chat_takeover_check_status),
-                ) { checkContinuation(session) }
+                ) { checkContinuation(session, operationId) }
             }
             AgentStartResult.Unknown -> {
                 pending = null
@@ -456,15 +594,21 @@ class CodexTakeoverCoordinator(
                 onFailure(
                     res.getString(R.string.chat_takeover_continue_unknown),
                     res.getString(R.string.chat_takeover_check_status),
-                ) { checkContinuation(session) }
+                ) { checkContinuation(session, operationId) }
             }
         }
     }
 
-    private suspend fun reportContinuationFailure(receiptScope: String, session: Session, error: Throwable) {
+    private suspend fun reportContinuationFailure(
+        receiptScope: String,
+        session: Session,
+        operationId: String?,
+        error: Throwable,
+    ) {
         val message = operationFeedback(error).text.resolve(res)
-        if (receiptStore.get(receiptScope, session.key) != null) {
-            onFailure(message, res.getString(R.string.chat_takeover_check_status)) { checkContinuation(session) }
+        val boundOpId = operationId ?: receiptStore.get(receiptScope, session.key)
+        if (boundOpId != null) {
+            onFailure(message, res.getString(R.string.chat_takeover_check_status)) { checkContinuation(session, boundOpId) }
         } else {
             onFailure(message, res.getString(persona.core.designsystem.R.string.designsystem_retry)) { continueInNewSession(session) }
         }
@@ -479,6 +623,7 @@ class CodexTakeoverCoordinator(
     companion object {
         const val REASON_ENCRYPTED_CONTEXT = "encrypted_context"
         const val REASON_UNAVAILABLE = "unavailable"
+        private val DefaultDispatchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
         fun continuationOnlyInfo(error: Throwable, original: CodexTakeoverInfo): CodexTakeoverInfo? {
             val code = (error as? HubCodedFailure)?.code ?: HubFailure.from(error).code

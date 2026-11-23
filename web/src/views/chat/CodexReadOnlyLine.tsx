@@ -44,6 +44,8 @@ export function CodexReadOnlyLine({
   session,
   visible,
   stopped,
+  takeOverRequested = false,
+  onTakeOverConsumed,
   continueRequested = false,
   onContinueConsumed,
   onPendingChange,
@@ -52,6 +54,8 @@ export function CodexReadOnlyLine({
   visible: boolean;
   /** Present when an exited Codex session has both `terminal` (`StoppedAgentLine`) and `takeover` capabilities. */
   stopped?: StoppedCodexTerminal;
+  takeOverRequested?: boolean;
+  onTakeOverConsumed?: () => void;
   continueRequested?: boolean;
   onContinueConsumed?: () => void;
   onPendingChange?: (pending: boolean) => void;
@@ -76,6 +80,8 @@ export function CodexReadOnlyLine({
             key={`${session.machine_id}:${session.session_id}`}
             session={session}
             variant="compact"
+            takeOverRequested={takeOverRequested}
+            onTakeOverConsumed={onTakeOverConsumed}
             continueRequested={continueRequested}
             onContinueConsumed={onContinueConsumed}
             onPendingChange={onPendingChange}

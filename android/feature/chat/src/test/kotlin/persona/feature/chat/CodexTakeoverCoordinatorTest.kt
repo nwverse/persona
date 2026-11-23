@@ -129,6 +129,7 @@ class CodexTakeoverCoordinatorTest {
             onFailure = { msg, _, _ -> fail("Unexpected failure: $msg") },
             onSuccessToast = { toasts += it },
             newOperationId = { "11111111-1111-4111-8111-111111111111" },
+            dispatchScope = scope,
         )
 
         coordinator.takeOver(source)
@@ -191,6 +192,7 @@ class CodexTakeoverCoordinatorTest {
                 nextOp++
                 "00000000-0000-4000-8000-00000000000$nextOp"
             },
+            dispatchScope = scope,
         )
 
         coordinator.continueInNewSession(source)
@@ -249,6 +251,7 @@ class CodexTakeoverCoordinatorTest {
             onSuccessToast = {},
             receiptStore = firstStore,
             newOperationId = { "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+            dispatchScope = scope,
         )
         firstCoordinator.continueInNewSession(source)
         assertEquals(listOf("GET-A", "START-A:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), calls)
@@ -266,6 +269,7 @@ class CodexTakeoverCoordinatorTest {
             onSuccessToast = {},
             receiptStore = secondStore,
             newOperationId = { "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" },
+            dispatchScope = scope,
         )
         secondCoordinator.continueInNewSession(source.copy(machineId = GroupKeys.machine("m1", "g12345678")))
         assertEquals(
@@ -312,6 +316,7 @@ class CodexTakeoverCoordinatorTest {
                 nextOp++
                 "00000000-0000-4000-8000-00000000000$nextOp"
             },
+            dispatchScope = scope,
         )
 
         coordinator.continueInNewSession(source)
@@ -355,6 +360,7 @@ class CodexTakeoverCoordinatorTest {
             onAdopted = { _, next -> adopted += next },
             onFailure = { msg, _, _ -> fail("Unexpected failure: $msg") },
             onSuccessToast = {},
+            dispatchScope = scope,
         )
 
         coordinator.takeOver(source)
@@ -535,5 +541,155 @@ class CodexTakeoverCoordinatorTest {
         }
         rule.onNodeWithTag("chat-takeover-primary").assertIsDisplayed().assertTextEquals("New session")
         rule.onAllNodesWithTag("chat-takeover-more").assertCountEquals(0)
+    }
+
+    @Test fun atomicReserveOrGetAndRemoveIfMatchesPreventConcurrentClobbering() = kotlinx.coroutines.runBlocking {
+        val prefsName = "test_codex_atomic_${java.util.UUID.randomUUID()}"
+        val store = PersistentContinuationReceiptStore(context, prefsName, Dispatchers.Unconfined)
+        val key = SessionKey("m1", "s1")
+
+        val first = store.reserveOrGet("hub-a/p1", key) { "11111111-1111-4111-8111-111111111111" }
+        assertFalse(first.isExisting)
+        assertEquals("11111111-1111-4111-8111-111111111111", first.operationId)
+
+        var createdSecond = false
+        val second = store.reserveOrGet("hub-a/p1", key) {
+            createdSecond = true
+            "22222222-2222-4222-8222-222222222222"
+        }
+        assertTrue(second.isExisting)
+        assertFalse("Existing receipt must be returned without generating a new UUID", createdSecond)
+        assertEquals("11111111-1111-4111-8111-111111111111", second.operationId)
+
+        // Mismatched expectedOperationId never deletes another operation's receipt.
+        assertFalse(store.removeIfMatches("hub-a/p1", key, "22222222-2222-4222-8222-222222222222"))
+        assertEquals("11111111-1111-4111-8111-111111111111", store.get("hub-a/p1", key))
+        assertTrue(store.removeIfMatches("hub-a/p1", key, "11111111-1111-4111-8111-111111111111"))
+        assertNull(store.get("hub-a/p1", key))
+    }
+
+    @Test fun longLivedDispatchScopeCompletesStartAndCleansReceiptWhenUiScopeCancels() {
+        val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val postGate = CompletableDeferred<AgentStartResult>()
+            val calls = mutableListOf<String>()
+            val source = codexSession(canResume = false, running = false)
+            val created = Session(machineId = "m1", sessionId = "bg-created", status = "working", agent = "codex")
+            val store = InMemoryContinuationReceiptStore()
+            val client = object : CodexTakeoverClient {
+                override fun receiptScope(session: Session) = "hub-a/p1"
+                override suspend fun takeoverInfo(session: Session): CodexTakeoverInfo = plan(running = false, canResume = true)
+                override suspend fun takeover(session: Session, token: String, confirmStop: Boolean): Session = error("unused")
+                override suspend fun startContinuation(session: Session, info: CodexTakeoverInfo, operationId: String): AgentStartResult {
+                    calls += "START:$operationId"
+                    return postGate.await()
+                }
+                override suspend fun continuationOperation(session: Session, operationId: String): AgentStartResult = error("unused")
+            }
+            val coordinator = CodexTakeoverCoordinator(
+                res = context.resources,
+                client = client,
+                scope = uiScope,
+                onAdopted = { _, _ -> },
+                onFailure = { _, _, _ -> },
+                onSuccessToast = {},
+                receiptStore = store,
+                newOperationId = { "cccccccc-cccc-4ccc-8ccc-cccccccccccc" },
+                dispatchScope = backgroundScope,
+            )
+
+            coordinator.continueInNewSession(source)
+            assertEquals(listOf("START:cccccccc-cccc-4ccc-8ccc-cccccccccccc"), calls)
+            assertEquals("cccccccc-cccc-4ccc-8ccc-cccccccccccc", kotlinx.coroutines.runBlocking { store.get("hub-a/p1", source.key) })
+
+            // Cancel the UI scope (e.g. closing the full-screen preview or navigating back) mid-POST.
+            uiScope.cancel()
+            // Completing the background POST still reconciles and removes the persisted receipt cleanly.
+            postGate.complete(AgentStartResult.Created(created))
+            assertNull(kotlinx.coroutines.runBlocking { store.get("hub-a/p1", source.key) })
+        } finally {
+            uiScope.cancel()
+            backgroundScope.cancel()
+        }
+    }
+
+    @Test fun checkContinuationIsStrictlyReadOnlyAndNeverFallsBackToPostAfterReceiptCleared() {
+        val calls = mutableListOf<String>()
+        var checkAction: (() -> Unit)? = null
+        val source = codexSession(canResume = false, running = false)
+        val store = InMemoryContinuationReceiptStore()
+        val client = object : CodexTakeoverClient {
+            override fun receiptScope(session: Session) = "hub-a/p1"
+            override suspend fun takeoverInfo(session: Session): CodexTakeoverInfo {
+                calls += "GET"
+                return plan(running = false, canResume = true)
+            }
+            override suspend fun takeover(session: Session, token: String, confirmStop: Boolean): Session = error("unused")
+            override suspend fun startContinuation(session: Session, info: CodexTakeoverInfo, operationId: String): AgentStartResult {
+                calls += "START:$operationId"
+                return AgentStartResult.Unknown
+            }
+            override suspend fun continuationOperation(session: Session, operationId: String): AgentStartResult {
+                calls += "OPS:$operationId"
+                return AgentStartResult.Unknown
+            }
+        }
+        val coordinator = CodexTakeoverCoordinator(
+            res = context.resources,
+            client = client,
+            scope = scope,
+            onAdopted = { _, _ -> },
+            onFailure = { _, label, action ->
+                assertEquals("Check status", label)
+                checkAction = action
+            },
+            onSuccessToast = {},
+            receiptStore = store,
+            newOperationId = { "dddddddd-dddd-4ddd-8ddd-dddddddddddd" },
+            dispatchScope = scope,
+        )
+
+        coordinator.continueInNewSession(source)
+        assertNotNull(checkAction)
+        // Simulate another surface finishing and clearing the receipt before the stale toast button is tapped.
+        kotlinx.coroutines.runBlocking {
+            assertTrue(store.removeIfMatches("hub-a/p1", source.key, "dddddddd-dddd-4ddd-8ddd-dddddddddddd"))
+        }
+
+        // Tapping "Check status" must only issue read-only GET /ops/{boundOpId}, never GET /takeover or POST /sessions.
+        checkAction!!.invoke()
+        assertEquals(
+            listOf(
+                "GET",
+                "START:dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "OPS:dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            ),
+            calls,
+        )
+    }
+
+    @Test fun persistentReceiptStoreClearScopeAndRetainScopesForgetPairingData() = kotlinx.coroutines.runBlocking {
+        val prefsName = "test_codex_clear_${java.util.UUID.randomUUID()}"
+        val store = PersistentContinuationReceiptStore(context, prefsName, Dispatchers.Unconfined)
+        val keyA = SessionKey("m1", "s1")
+        val keyB = SessionKey("m2", "s2")
+        val keyC = SessionKey("m3", "s3")
+
+        store.reserveOrGet("hub-a/gen-1", keyA) { "op-a" }
+        store.reserveOrGet("hub-b/gen-2", keyB) { "op-b" }
+        store.reserveOrGet("hub-c/gen-3", keyC) { "op-c" }
+
+        store.clearScopes(listOf("hub-a/gen-1"))
+        assertNull(store.get("hub-a/gen-1", keyA))
+        assertEquals("op-b", store.get("hub-b/gen-2", keyB))
+        assertEquals("op-c", store.get("hub-c/gen-3", keyC))
+
+        store.retainScopes(setOf("hub-c/gen-3"))
+        assertNull(store.get("hub-b/gen-2", keyB))
+        assertEquals("op-c", store.get("hub-c/gen-3", keyC))
+
+        store.clearScope(null)
+        assertNull(store.get("hub-c/gen-3", keyC))
     }
 }

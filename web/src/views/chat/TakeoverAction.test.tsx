@@ -12,7 +12,7 @@ vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof impor
 import { ApiError } from "../../lib/api";
 import type { Session } from "../../lib/types";
 import { t } from "../../i18n";
-import TakeoverAction from "./TakeoverAction";
+import TakeoverAction, { takeoverMenuLabels } from "./TakeoverAction";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -205,5 +205,23 @@ describe("TakeoverAction interactions", () => {
     await flush();
     expect(state.api).toHaveBeenCalledTimes(1);
     expect(state.launch).not.toHaveBeenCalled();
+  });
+
+  it("takeOverRequested is one-shot consumed and takeoverMenuLabels exposes both menu strings", async () => {
+    expect(takeoverMenuLabels()).toEqual({
+      takeOver: t("chat-takeover.takeover"),
+      continueNew: t("chat-takeover.takeover_new"),
+    });
+    let requested = true;
+    const consume = vi.fn(() => { requested = false; });
+    state.api.mockResolvedValue(plan({ running: true, can_resume: true }));
+    act(() => root.render(
+      <TakeoverAction session={baseSession} variant="compact" takeOverRequested={requested} onTakeOverConsumed={consume} />,
+    ));
+    await flush();
+    expect(consume).toHaveBeenCalledTimes(1);
+    expect(requested).toBe(false);
+    expect(state.api.mock.calls.map(([, opts]) => opts?.method ?? "GET")).toEqual(["GET"]);
+    expect(document.body.textContent).toContain(t("chat-takeover.takeover_running_confirm"));
   });
 });

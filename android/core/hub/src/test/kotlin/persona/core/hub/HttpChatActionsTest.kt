@@ -518,23 +518,35 @@ class HttpChatActionsTest {
             assertEquals(AgentStartResult.Unknown, actions.startCodexContinuation(session, info, unknownOpId))
             server.takeRequest(); server.takeRequest()
 
-            // 503 assistant_offline (direct or via /ops/{id}) proves nothing started -> Rejected so user may retry once back.
+            // Ambiguous 503 assistant_offline (no delivered="none", or receipt state="unknown") stays Unknown so the
+            // receipt is preserved per docs/protocol/protocol.md (manager may have forwarded session.start before bus drop).
             val offlineOpId = "66666666-6666-4666-8666-666666666666"
             server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"assistant is offline","code":"assistant_offline"}"""))
             server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"missing"}"""))
-            val offlineDirect = actions.startCodexContinuation(session, info, offlineOpId) as AgentStartResult.Rejected
-            assertEquals("assistant is offline", offlineDirect.message.shown)
+            assertEquals(AgentStartResult.Unknown, actions.startCodexContinuation(session, info, offlineOpId))
             server.takeRequest(); server.takeRequest()
 
             server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"manager offline","code":"assistant_offline"}"""))
-            val offlineOps = actions.codexContinuationOperation(session, offlineOpId) as AgentStartResult.Rejected
-            assertEquals("manager offline", offlineOps.message.shown)
+            val opsFailure = runCatching { actions.codexContinuationOperation(session, offlineOpId) }.exceptionOrNull() as HubFailure
+            assertEquals(503, opsFailure.status)
+            assertEquals("assistant_offline", opsFailure.code)
             server.takeRequest()
 
             val encodedOffline = java.util.Base64.getEncoder().encodeToString("""{"error":"recorded offline","code":"assistant_offline"}""".toByteArray())
             server.enqueue(MockResponse().setBody("""{"kind":"start","state":"unknown","result":{"status":503,"body":"$encodedOffline"}}"""))
-            val offlineReceipt = actions.codexContinuationOperation(session, offlineOpId) as AgentStartResult.Rejected
-            assertEquals("recorded offline", offlineReceipt.message.shown)
+            assertEquals(AgentStartResult.Unknown, actions.codexContinuationOperation(session, offlineOpId))
+            server.takeRequest()
+
+            // Only explicit hub-confirmed non-start (delivered="none" or receipt state="failed") returns Rejected.
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"not forwarded","code":"assistant_offline","delivered":"none"}"""))
+            server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"missing"}"""))
+            val definiteRefusal = actions.startCodexContinuation(session, info, offlineOpId) as AgentStartResult.Rejected
+            assertEquals("not forwarded", definiteRefusal.message.shown)
+            server.takeRequest(); server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"kind":"start","state":"failed","result":{"status":503,"body":"$encodedOffline"}}"""))
+            val failedReceipt = actions.codexContinuationOperation(session, offlineOpId) as AgentStartResult.Rejected
+            assertEquals("recorded offline", failedReceipt.message.shown)
             server.takeRequest()
             Unit
         }

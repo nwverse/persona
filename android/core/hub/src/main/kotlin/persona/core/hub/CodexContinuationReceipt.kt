@@ -24,7 +24,6 @@ import java.util.UUID
  */
 internal object CodexContinuationReceipt {
     private val DefiniteNonStartStatuses = setOf(400, 401, 403, 404, 422)
-    private const val CODE_ASSISTANT_OFFLINE = "assistant_offline"
 
     fun startBody(
         machineId: String,
@@ -65,18 +64,14 @@ internal object CodexContinuationReceipt {
         val state = receipt["state"]?.jsonPrimitive?.contentOrNull
         if (receipt["kind"]?.jsonPrimitive?.contentOrNull?.let { it != "start" } == true) return AgentStartResult.Unknown
         if (state == "pending") return AgentStartResult.Pending
-        val result = receipt["result"] as? JsonObject
-        val encoded = result?.get("body")?.jsonPrimitive?.contentOrNull
-        val body = encoded?.let {
-            runCatching {
-                JsonCodec.parseToJsonElement(String(Base64.getDecoder().decode(it), Charsets.UTF_8)).jsonObject
-            }.getOrNull()
-        }
-        // `assistant_offline` proves nothing reached the manager and no start ran (docs/protocol/protocol.md).
-        if (body?.get("code")?.jsonPrimitive?.contentOrNull == CODE_ASSISTANT_OFFLINE) {
-            return AgentStartResult.Rejected(rejectionText(body["error"]?.jsonPrimitive?.contentOrNull))
-        }
-        if (state == "unknown" || body == null) return AgentStartResult.Unknown
+        // Only terminal "done" or hub-confirmed "failed" resolve the receipt; "unknown" (including mid-call bus drop /
+        // 503 assistant_offline per docs/protocol/protocol.md) must keep the receipt so the client never double-starts.
+        if (state == "unknown") return AgentStartResult.Unknown
+        val result = receipt["result"] as? JsonObject ?: return AgentStartResult.Unknown
+        val encoded = result["body"]?.jsonPrimitive?.contentOrNull ?: return AgentStartResult.Unknown
+        val body = runCatching {
+            JsonCodec.parseToJsonElement(String(Base64.getDecoder().decode(encoded), Charsets.UTF_8)).jsonObject
+        }.getOrNull() ?: return AgentStartResult.Unknown
         return when (state) {
             "done" -> outcome(body, fallbackMachineId)
             "failed" -> AgentStartResult.Rejected(rejectionText(body["error"]?.jsonPrimitive?.contentOrNull))
@@ -84,12 +79,9 @@ internal object CodexContinuationReceipt {
         }
     }
 
-    /** Maps `GET /api/v1/ops/{id}` HTTP failures: 404 stays Unknown, `503 assistant_offline` proves non-start. */
-    fun operationFailure(failure: HubFailure): AgentStartResult? = when {
-        failure.status == 404 -> AgentStartResult.Unknown
-        failure.status == 503 && failure.code == CODE_ASSISTANT_OFFLINE -> AgentStartResult.Rejected(rejectionText(failure.message))
-        else -> null
-    }
+    /** Maps `GET /api/v1/ops/{id}` HTTP failures: 404 means no receipt is recorded yet (Unknown); transport errors throw. */
+    fun operationFailure(failure: HubFailure): AgentStartResult? =
+        if (failure.status == 404) AgentStartResult.Unknown else null
 
     suspend fun startWithReconciliation(
         machineId: String,
@@ -126,8 +118,9 @@ internal object CodexContinuationReceipt {
         raw?.takeIf { it.isNotBlank() && !it.startsWith("HTTP ") }?.let(CoreText::plain) ?: CoreText.of(Key.StartRejected)
 
     private fun isDefiniteNonStart(failure: HubFailure): Boolean {
+        // Per docs/protocol/protocol.md, 503 assistant_offline can follow a mid-call bus drop after the manager
+        // forwarded session.start, so only explicit delivered="none" or terminal client/conflict refusals clear it.
         if (failure.delivered == "none") return true
-        if (failure.status == 503 && failure.code == CODE_ASSISTANT_OFFLINE) return true
         if (failure.status == 409 && failure.code != "op_id_reused") return true
         return failure.status in DefiniteNonStartStatuses && failure.delivered != "unknown"
     }

@@ -7,7 +7,14 @@ import type { Session } from "../../lib/types";
 import { Button, Dialog, IconButton, Menu, toast, useMenu } from "../../ui/atoms";
 import { upsertSession } from "../../lib/store";
 
-/** Localized label for the top-bar overflow menu entry, loaded lazily with this chunk to stay off the first screen. */
+/** Localized labels for the top-bar overflow menu entries, loaded lazily with this chunk to stay off the first screen. */
+export function takeoverMenuLabels(): { takeOver: string; continueNew: string } {
+  return {
+    takeOver: t("chat-takeover.takeover"),
+    continueNew: t("chat-takeover.takeover_new"),
+  };
+}
+
 export function takeoverContinueLabel(): string {
   return t("chat-takeover.takeover_new");
 }
@@ -15,12 +22,17 @@ export function takeoverContinueLabel(): string {
 export default function TakeoverAction({
   session,
   variant = "default",
+  takeOverRequested = false,
+  onTakeOverConsumed,
   continueRequested = false,
   onContinueConsumed,
   onPendingChange,
 }: {
   session: Session;
   variant?: "default" | "compact";
+  /** One-shot request from the top-bar overflow menu (e.g. Terminal view); consumed via [onTakeOverConsumed]. */
+  takeOverRequested?: boolean;
+  onTakeOverConsumed?: () => void;
   /** One-shot request from the top-bar overflow menu; consumed immediately via [onContinueConsumed] so reconnects never replay it. */
   continueRequested?: boolean;
   onContinueConsumed?: () => void;
@@ -85,6 +97,16 @@ export default function TakeoverAction({
     } catch (e) { toast(errorText(e), "error"); }
     finally { setLoading(false); }
   };
+
+  const prepareRef = useRef(prepare);
+  prepareRef.current = prepare;
+  const takeOverConsumedRef = useRef(onTakeOverConsumed);
+  takeOverConsumedRef.current = onTakeOverConsumed;
+  useEffect(() => {
+    if (!takeOverRequested) return;
+    takeOverConsumedRef.current?.();
+    void prepareRef.current();
+  }, [takeOverRequested]);
 
   const continueRef = useRef(continueNew);
   continueRef.current = continueNew;
