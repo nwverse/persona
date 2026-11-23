@@ -21,6 +21,46 @@ import (
 	"github.com/nwverse/persona/server/internal/update"
 )
 
+func TestDevelopmentProgressStatusAndCleanup(t *testing.T) {
+	for _, c := range []struct{ operation, first, step, next string }{
+		{"build", "fetch", "go_build", "downloading"},
+		{"backup", "quiesce", "archive_files", "updated"},
+		{"prepare_backup", "verify_snapshot", "prepare_artifacts", "rolled_back"},
+	} {
+		t.Run(c.operation, func(t *testing.T) {
+			h, _, _, _ := updatingHub(t, newPublisher(t, "unused", 202611021700), update.Release)
+			u := h.upd
+			first := update.DevelopmentStep(c.operation, c.first, true)
+			u.startDevelopmentPhase(first, "legacy")
+			if v, _ := getUpdate(t, u); v.DevelopmentProgress == nil || v.DevelopmentProgress.Step != c.first {
+				t.Fatalf("missing initial development step: %+v", v.DevelopmentProgress)
+			}
+			var late func(update.DevelopmentProgress)
+			p := update.DevelopmentStep(c.operation, c.step, true)
+			done, total := int64(0), int64(3)
+			p.ItemDone, p.ItemTotal, p.ElapsedSeconds = &done, &total, 29
+			u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, _ any, report func(update.DevelopmentProgress)) error {
+				late = report
+				report(p)
+				v, raw := getUpdate(t, u)
+				if got := v.DevelopmentProgress; got == nil || got.Step != c.step || got.Phase != first.Phase ||
+					got.ItemDone == nil || *got.ItemDone != 0 || got.ElapsedSeconds != p.ElapsedSeconds || raw["progress"] != "legacy" {
+					t.Fatalf("wrong in-flight status: %+v", v)
+				}
+				return nil
+			}
+			if err := u.runDevelopment(context.Background(), c.operation, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			u.set(c.next, "next", "")
+			late(p)
+			if v, raw := getUpdate(t, u); v.State != c.next || raw["development_progress"] != nil || raw["progress"] != "next" {
+				t.Fatalf("stale progress after the phase: %+v", v)
+			}
+		})
+	}
+}
+
 func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T) {
 	for _, corrupt := range []bool{false, true} {
 		t.Run(fmt.Sprint(corrupt), func(t *testing.T) {
@@ -40,7 +80,7 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 			version := update.DevelopmentVersion{ID: "snapshot-fixture", Version: "web-dev-older", Build: 202611010001, Commit: strings.Repeat("b", 40), UpdatedAt: "2026-11-01T10:00:00Z"}
 			prepared := filepath.Join(u.dir, "development", "prepare_backup-fixture", "artifacts")
 			phases := make(chan string, 8)
-			u.devRun = func(ctx context.Context, cfg *update.DevelopmentConfig, dir, operation string, input map[string]any, result any) error {
+			u.devRun = func(ctx context.Context, cfg *update.DevelopmentConfig, dir, operation string, input map[string]any, result any, report func(update.DevelopmentProgress)) error {
 				phases <- operation
 				var response any
 				switch operation {
@@ -48,7 +88,8 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 					response = map[string]any{"backups": []update.DevelopmentVersion{version}}
 				case "prepare_backup":
 					if corrupt {
-						return errors.New("corrupt snapshot")
+						report(update.DevelopmentStep(operation, "verify_snapshot", cfg.Backup.Builtin))
+						return errors.New("corrupt snapshot at /fixture/private/snapshot")
 					}
 					if input["backup_id"] != version.ID {
 						return errors.New("wrong backup")
@@ -90,6 +131,12 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 			}
 			if corrupt {
 				waitFor(t, "preparation failure", func() bool { return u.view().State == "failed" })
+				v, raw := getUpdate(t, u)
+				want := su(u.h.requestLang(httptest.NewRequest(http.MethodGet, "/", nil)), "development_step_verify_snapshot")
+				if raw["development_progress"] != nil || !strings.Contains(v.Error, "prepare_backup.log") ||
+					!strings.Contains(v.Error, want) || strings.Contains(v.Error, "/fixture/private") {
+					t.Fatalf("failure did not clear progress or safely name the step: %v", raw)
+				}
 				if len(execs()) != 0 {
 					t.Fatal("restarted with corrupt backup")
 				}
@@ -376,7 +423,7 @@ func TestDevelopmentBackupsAPIDistinguishesFailureFromEmptyList(t *testing.T) {
 	u.loaded, u.settings.Source = true, "web-dev"
 	h.cfg.Update.Development = &update.DevelopmentConfig{Backup: update.DevelopmentBackupConfig{Quiesce: []string{"pause"}, Resume: []string{"resume"}}}
 	failed := true
-	u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, _ any) error {
+	u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, _ any, _ func(update.DevelopmentProgress)) error {
 		if failed {
 			return errors.New("fixture unavailable backup directory")
 		}
@@ -548,7 +595,7 @@ func TestDevelopmentRepeatedCheckDoesNotMutatePublishedCandidate(t *testing.T) {
 			published := &update.Published{Manifest: &update.Manifest{Version: "frozen", Build: 202611130001}, Development: candidate}
 			u.release, u.running = published, active
 			u.settings.History = []updateRecord{{Source: "web-dev", Commit: candidate.Commit, Result: "rolled_back", ToBuild: 202611120001, ToVersion: "previous-attempt"}}
-			u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, result any) error {
+			u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, result any, _ func(update.DevelopmentProgress)) error {
 				*result.(*update.DevelopmentCandidate) = *candidate
 				return nil
 			}
@@ -634,7 +681,7 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				os.Mkdir(filepath.Join(filepath.Dir(target), "persona-manager.new"), 0700)
 			}
 			var phases []string
-			u.devRun = func(ctx context.Context, c *update.DevelopmentConfig, dir, operation string, input map[string]any, result any) error {
+			u.devRun = func(ctx context.Context, c *update.DevelopmentConfig, dir, operation string, input map[string]any, result any, _ func(update.DevelopmentProgress)) error {
 				phases = append(phases, operation)
 				if operation == failure {
 					return errors.New("fixture phase failed")
