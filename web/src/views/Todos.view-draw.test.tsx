@@ -70,6 +70,14 @@ const render = async (todos: Todo[], features = ["todo_view"]) => {
   await flush();
 };
 const sections = () => host.querySelector<HTMLElement>('[data-testid="todos-sections"]');
+// The sections as drawn, without the badge's marks: those follow the hub's needs_you whenever the hub sent a view
+// (lib/todo-triage.ts hubNeedsYou), switches or not, so the badge, the tray and the hub keep one number.
+const drawn = () => {
+  const s = sections()?.cloneNode(true) as HTMLElement | undefined;
+  s?.querySelectorAll('[data-testid="todo-owner-mark"], [data-testid="todo-owner-count"]').forEach((m) => m.remove());
+  return s?.outerHTML;
+};
+const marks = () => Object.fromEntries([...host.querySelectorAll<HTMLElement>('[data-testid="todo-owner-mark"]')].map((m) => [m.closest<HTMLElement>("[data-todo]")?.dataset.todo, m.dataset.need]));
 const placed = () =>
   Object.fromEntries(
     [...host.querySelectorAll<HTMLElement>('[data-testid="todo-section"]')].map((s) => [s.dataset.section, [...s.querySelectorAll<HTMLElement>("[data-todo]")].map((r) => r.dataset.todo)]),
@@ -102,14 +110,16 @@ describe("To-dos sections from the hub's view", () => {
     it(`draws exactly as before without ${name}`, async () => {
       const features = name === "the hub's todo_view" ? ["todo_seen"] : ["todo_view"];
       await render(plain, features);
-      const before = sections()?.outerHTML;
+      const before = drawn();
       expect(placed()).toEqual({ other: ["todo_ask", "todo_old", "todo_run"] });
       await act(async () => root.unmount());
       root = createRoot(host);
       off();
       await render(withViews, features);
       expect(sections()?.dataset.todoSource).toBeUndefined();
-      expect(sections()?.outerHTML).toBe(before);
+      expect(drawn()).toBe(before);
+      // the marks are the hub's: Needs you counts, a working one does not, a row without a view keeps the web's rule
+      expect(marks()).toEqual({ todo_ask: "owner_decides", todo_old: "unattended" });
     });
   }
 });
