@@ -135,14 +135,13 @@ func TestAgentsLeftWithoutATask(t *testing.T) {
 	})
 }
 
-// agent_start always leaves a to-do: the calling conversation is its origin and main supervises it, including a
-// leader and with agent_tasks / main_tasks_quiet off (#5732). Tracking no longer depends on either switch.
+// agent_start always leaves a tracked task: the calling direction lead owns its own starts, otherwise main does.
 func TestAgentStartIsATaskFromAnyConversation(t *testing.T) {
 	args := json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"看看 CI 为什么挂了"}`)
 	ctx := context.Background()
 	for _, c := range []struct {
-		conv, told string
-	}{{"conv2", startToldMain}, {"lead1", startToldMain}, {"conv1", startToldHere}} {
+		conv, told, supervisor string
+	}{{"conv2", startToldMain, "conv1"}, {"lead1", startToldHere, "lead1"}, {"conv1", startToldHere, "conv1"}} {
 		s, _ := newQuietService(t)
 		setSettings(t, s, func(v *Settings) {
 			v.AgentTasks, v.MainTasksQuiet, v.Leaders = new(true), new(false), []string{"lead1"}
@@ -155,13 +154,13 @@ func TestAgentStartIsATaskFromAnyConversation(t *testing.T) {
 		if todo.Quiet || todo.Origin != c.conv || len(todo.Agents) != 1 || todo.Agents[0].SessionID != "s1" || todo.Title != "看看 CI 为什么挂了" {
 			t.Fatalf("%s: todo = %+v", c.conv, todo)
 		}
-		if v := todo.Supervision; v == nil || v.Supervisor != "conv1" || len(v.DoneWhen) != 0 {
+		if v := todo.Supervision; v == nil || v.Supervisor != c.supervisor || len(v.DoneWhen) != 0 {
 			t.Fatalf("%s: supervision = %+v", c.conv, todo.Supervision)
 		}
 		if !strings.Contains(res, "a task of this conversation (its card is in the conversation; "+c.told+").") || feedKinds(s, c.conv) != "task" {
 			t.Fatalf("%s: result %q, feed %q", c.conv, res, feedKinds(s, c.conv))
 		}
-		if c.conv != "conv1" && feedKinds(s, "conv1") != "task" {
+		if c.supervisor != c.conv && feedKinds(s, "conv1") != "task" {
 			t.Fatalf("%s: main feed %q", c.conv, feedKinds(s, "conv1"))
 		}
 	}
