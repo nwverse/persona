@@ -248,8 +248,8 @@ struct TodosListLayoutTests {
 }
 
 extension TodosListLayoutTests {
-    /// The search looks through the open rows' titles and notes, case and accents aside, whatever the choice: the
-    /// sections stay, every fold opens, the counts are what matches, and closed to-dos wait for the search's next step.
+    /// The search looks through every row's title and notes, open and closed, case and accents aside, whatever the choice:
+    /// the sections stay, every fold opens, the counts are what matches, and what closed comes last.
     @Test func theSearchKeepsTheSectionsAndOpensTheFolds() {
         let rows = [filed("k", TodoListSection.needsYou), filed("c", TodoListSection.canWait), filed("w", TodoListSection.working),
                     filed("t", TodoListSection.todo), filed("s", TodoListSection.someday), filed("d", TodoListSection.done)]
@@ -262,13 +262,55 @@ extension TodosListLayoutTests {
         i.query = "  kyoto "
         let out = TodosListLayout.layout(i)
         #expect(out.searching)
-        #expect(out.groups.map(\.id) == [TodoListSection.needsYou, TodoListSection.todo, "tail:someday"], "the choice set aside")
+        #expect(out.groups.map(\.id) == [TodoListSection.needsYou, TodoListSection.todo, "tail:someday", "done:today"],
+                "the choice set aside, what closed last")
         #expect(out.groups[0].count == 1 && out.groups[0].folds.first?.open == true && out.groups[0].folds.first?.keys == ["/c"])
         #expect(out.groups[1].keys == ["/t"], "a match in the notes, its accent aside")
         #expect(out.groups[2].tail?.open == true)
-        #expect(!out.groups.flatMap(\.drawnKeys).contains("/d"), "closed to-dos come with the search's next step")
+        #expect(out.groups[3].keys == ["/d"] && out.groups[3].count == 1
+                && out.groups[3].title == String(localized: "Done today [To-dos List]"), "a closed match, under Done today")
         i.query = "nothing like it"
         #expect(TodosListLayout.layout(i).groups.isEmpty)
+    }
+
+    /// While searching, every closed match comes last, from any day, by the day it closed as the Filter's Done lists them
+    /// (its headings saying Done), the newest first under every sort; the hits worked out elsewhere are taken as given.
+    @Test func closedMatchesComeLastByTheDayTheyClosed() throws {
+        let cal = Calendar(identifier: .gregorian)
+        let ago = { (days: Int, minutes: Int) in cal.date(byAdding: .day, value: -days, to: self.now)!.addingTimeInterval(Double(-minutes * 60)) }
+        let rows = [filed("open", TodoListSection.todo), filed("w", TodoListSection.working),
+                    filed("d0", TodoListSection.done), filed("d1", TodoListSection.done), filed("d3a", TodoListSection.done),
+                    filed("d3b", TodoListSection.done), filed("d30", TodoListSection.done), filed("other", TodoListSection.done)]
+        var i = input(rows, items: [
+            TodoItem(id: "open", title: "Book the ryokan"), TodoItem(id: "w", title: "Draft the newsletter"),
+            TodoItem(id: "d0", title: "Ryokan shortlist", doneAt: ago(0, 5)),
+            TodoItem(id: "d1", title: "Ryokan budget", doneAt: ago(1, 0)),
+            TodoItem(id: "d3a", title: "Call the ryokan", doneAt: ago(3, 30), priority: "high"),
+            TodoItem(id: "d3b", title: "Email the ryokan", doneAt: ago(3, 10), dueAt: now, priority: "low"),
+            TodoItem(id: "d30", title: "Old ryokan notes", doneAt: ago(30, 0)),
+            TodoItem(id: "other", title: "Taxes", doneAt: ago(2, 0))])
+        i.query = "ryokan"
+        for sort in TodosListSort.allCases {
+            i.sort = sort
+            let out = TodosListLayout.layout(i)
+            #expect(out.groups.map(\.id) == [TodoListSection.todo, "done:today", "done:yesterday", "done:week", "done:earlier"],
+                    "\(sort)")
+            #expect(out.groups.flatMap(\.keys) == ["/open", "/d0", "/d1", "/d3b", "/d3a", "/d30"], "newest first, \(sort)")
+            #expect(out.groups.map(\.count) == [1, 1, 1, 2, 1])
+            #expect(out.groups.dropFirst().map(\.title) == [
+                String(localized: "Done today [To-dos List]"), String(localized: "Done yesterday [To-dos List]"),
+                String(localized: "Done this week [To-dos List]"), String(localized: "Done earlier [To-dos List]")])
+        }
+        // The calm list (only plain to-dos open): its card, then the closed matches by day all the same.
+        let calm = input([filed("open", TodoListSection.todo), filed("d1", TodoListSection.done)],
+                         items: [TodoItem(id: "open", title: "Book the ryokan"), TodoItem(id: "d1", title: "Ryokan budget", doneAt: ago(1, 0))])
+        var c = calm
+        c.query = "ryokan"
+        let out = TodosListLayout.layout(c)
+        #expect(out.calm && out.groups.map(\.id) == ["plain", "done:yesterday"])
+        // Hits from elsewhere (the model's, found off the main actor) are what the list shows.
+        i.hits = ["d30": TodoSearchHit()]
+        #expect(TodosListLayout.layout(i).groups.flatMap(\.keys) == ["/d30"])
     }
 }
 

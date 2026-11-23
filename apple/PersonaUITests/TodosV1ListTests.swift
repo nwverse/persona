@@ -349,6 +349,42 @@ final class TodosV1ListTests: XCTestCase {
         XCTAssertTrue(element("todos.new.title").waitForNonExistence(timeout: 10))
     }
 
+    /// The search looks through closed to-dos too (#10465): "crash" lists Fix login crash, which waits, and Fix widget
+    /// refresh crash, closed an hour ago and seen (the mock is put back after), last under the day it closed (Done today,
+    /// or Done yesterday in the hour after midnight), which the list leaves out or folds away before the search; the
+    /// closed one opens its page, and Back is the results again, the words still in the field. Launched in English only
+    /// because the system's search controls carry no identifier and are found by their words; what the test checks of
+    /// ours is by identifier.
+    @MainActor func testTheSearchFindsClosedToDosAndBackKeepsTheWords() throws {
+        guard let hub = env["PERSONA_TODOS_HUB"] else { throw XCTSkip("needs MOCK_TODO_VIEW=1 (PERSONA_TODOS_HUB)") }
+        let base = try XCTUnwrap(URL(string: hub))
+        defer { _ = try? mock(base, "GET", "mock/reset") }
+        _ = try mock(base, "PUT", "api/v1/todos/t08/seen") // seen: Done, no longer Just finished
+        launch(hub, ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-todos.v1.byProject", "NO", "-todos.v1.sort", "suggested"],
+               layout: "separate")
+        XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
+        XCTAssertTrue(element("todos.row.t01").waitForExistence(timeout: 20))
+        let open = element("todos.row.t04"), closed = element("todos.row.t08")
+        let doneDay = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'todos.section.done:'")).firstMatch
+        XCTAssertFalse(closed.exists, "not in the list before the search")
+        let field = searchField()
+        field.tap()
+        field.typeText("crash")
+        XCTAssertTrue(closed.waitForExistence(timeout: 10), "a closed match:\n\(app.debugDescription)")
+        XCTAssertTrue(open.waitForExistence(timeout: 5) && doneDay.waitForExistence(timeout: 5),
+                      "an open match, and the heading of the day it closed:\n\(app.debugDescription)")
+        XCTAssertGreaterThan(closed.frame.minY, open.frame.minY, "what closed comes last")
+        XCTAssertFalse(element("todos.row.t01").exists, "a row that does not match")
+        closed.tap()
+        XCTAssertTrue(element("todo.toggleDone").waitForExistence(timeout: 20), "no to-do page:\n\(app.debugDescription)")
+        back()
+        XCTAssertTrue(closed.waitForExistence(timeout: 10), "Back is the results again:\n\(app.debugDescription)")
+        XCTAssertTrue(open.exists && !element("todos.row.t01").exists, "the same results")
+        let kept = app.searchFields.firstMatch
+        XCTAssertTrue(kept.waitForExistence(timeout: 5), "no search field:\n\(app.debugDescription)")
+        XCTAssertEqual(kept.value as? String, "crash", "the words are kept")
+    }
+
     /// The frames the list draws, for the review (no checks beyond reaching them).
     @MainActor func testFrames() throws {
         guard env["PERSONA_TODOS_FRAMES"] == "1", let hub = env["PERSONA_TODOS_HUB"], let dir = env["PERSONA_SHOTS"] else {
@@ -432,7 +468,7 @@ final class TodosV1ListTests: XCTestCase {
             away()
         }
         if wants("~scrolled") || wants("~end") || wants("~someday-open") || wants("~canwait-open") || wants("~drawer")
-            || wants("~search") || wants("~search-results") || wants("~search-empty") {
+            || wants("~search") {
             fresh([])
         }
         if wants("~canwait-open") {
@@ -468,16 +504,25 @@ final class TodosV1ListTests: XCTestCase {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
             sleep(1)
         }
-        if wants("~search") || wants("~search-results") || wants("~search-empty") {
+        if wants("~search") {
+            searchField().tap()
+            shot("~search")
+        }
+        // Each search from a fresh launch: an open match by its title (Kyoto), an open and a closed one (crash: Waiting,
+        // then Done today last), a title and a notes match (photo: the notes' sentence on line 2, its words marked), and
+        // nothing (its words, then Search Chats).
+        for (frame, words) in [("~search-results", "Kyoto"), ("~search-done", "crash"), ("~search-notes", "photo"),
+                               ("~search-empty", "Kyoto ryokan booking form")] where wants(frame) {
+            let base = try XCTUnwrap(URL(string: hub))
+            // Fix widget refresh crash seen, so it is in Done (put back after), the closed match under Done today.
+            if frame == "~search-done" { _ = try mock(base, "PUT", "api/v1/todos/t08/seen") }
+            defer { if frame == "~search-done" { _ = try? mock(base, "GET", "mock/reset") } }
+            fresh([])
             let field = searchField()
             field.tap()
-            if wants("~search") { shot("~search") }
-            field.typeText("Kyoto")
-            if wants("~search-results") { shot("~search-results") }
-            if wants("~search-empty") {
-                field.typeText(" ryokan booking form")
-                shot("~search-empty")
-            }
+            field.typeText(words)
+            _ = element("todos.searchChats").waitForExistence(timeout: 5) // the search has settled
+            shot(frame)
         }
         // The calm list, the mock's other to-dos deleted (put back after): one card with no heading, no Filter; then
         // the card's only row, a one-line one, swiped.

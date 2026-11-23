@@ -4,12 +4,13 @@ import SwiftUI
 /// One to-do on the V1 list (#10465; docs/design/proposals/todos-redesign.md 3.4, "Row anatomy"; DESIGN_SYSTEM 3.4 "The
 /// work-item row" with the tick in the source mark's slot), compact as Reminders' rows: one 12-pt padding above and
 /// below; the tick; the semibold title ("!" before it on a high-priority one) with its time in words ("Due Fri", "16m
-/// ago"); line 2, the mark and the hub's line in words; line 3, what the grouping does not already say. No door and no
-/// chevron: the row is its own way to its asks. It reads its own cell only (`TodosListModel.Row`), so a run's new line
-/// draws this row alone (P5), and takes the list's model, not closures, so a list update that leaves it alone does not
-/// draw it again (P6). The tick is a button of its own (a 22-pt ring hit as a finger's square without growing the row,
-/// spoken as the title with Done or Not done, HIG-006 and HIG-007); the rest of the row opens the to-do and is spoken
-/// as one element, with the swipe's actions and Delete… as its own.
+/// ago"); line 2, the mark and the hub's line in words (a search's result found by its notes says the sentence that
+/// matched, `TodoFoundText`); line 3, what the grouping does not already say. No door and no chevron: the row is its
+/// own way to its asks. It reads its own cell only (`TodosListModel.Row`), so a run's new line draws this row alone
+/// (P5), and takes the list's model, not closures, so a list update that leaves it alone does not draw it again (P6).
+/// The tick is a button of its own (a 22-pt ring hit as a finger's square without growing the row, spoken as the title
+/// with Done or Not done, HIG-006 and HIG-007); the rest of the row opens the to-do and is spoken as one element, with
+/// the swipe's actions and Delete… as its own.
 struct TodoListRow: View {
     var row: TodosListModel.Row
     /// What the tick, Mark Done and the row's actions do (`TodosListModel.tapTick`).
@@ -23,7 +24,11 @@ struct TodoListRow: View {
             tickButton(c)
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 titleLine(c)
-                if let said = c.said { lineTwo(said, mark: c.mark, unsaved: c.unsaved, markDone: c.markDone) }
+                if let found = c.found {
+                    foundLine(found, mark: c.mark)
+                } else if let said = c.said {
+                    lineTwo(said, mark: c.mark, unsaved: c.unsaved, markDone: c.markDone)
+                }
                 if let caption = c.caption {
                     Text(caption)
                         .font(Theme.Font.caption)
@@ -130,6 +135,15 @@ struct TodoListRow: View {
         .font(Theme.Font.secondary)
     }
 
+    /// Line 2 of a search's result found by its notes: the mark, then the sentence that matched, its words marked.
+    private func foundLine(_ found: TodoFoundLine, mark: TodoMark?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
+            if let mark { TodoMarkView(mark: mark) }
+            TodoFoundText(line: found)
+        }
+        .font(Theme.Font.secondary)
+    }
+
     /// The title, after "!" in the caution tone on a high-priority to-do, the mark kept with the first word where the
     /// title wraps (Reminders' mark; the row's spoken label says "High priority").
     static func title(_ c: TodoRowContent) -> AttributedString {
@@ -166,6 +180,37 @@ struct TodoListRow: View {
             out += part
         }
         return out
+    }
+}
+
+/// The sentence of a to-do's notes that a search matched (DESIGN_SYSTEM 3.4 "List controls": a row found by what is
+/// inside it): in the secondary color, the words in the primary on the accent's soft ground, as search in chat marks a
+/// match; from a few characters before the first match, fewer as the text grows, as the chat search cuts its lines
+/// (`AssistantSearchMerge.lead(for:)`), so the words stay in sight on two lines. The model found the sentence and the
+/// words off the main actor; this only colors them. Its own view, so only it reads the text size.
+struct TodoFoundText: View {
+    @Environment(\.dynamicTypeSize) private var size
+    let line: TodoFoundLine
+
+    var body: some View {
+        Text(Self.marked(line, lead: AssistantSearchMerge.lead(for: size)))
+            .lineLimit(2)
+    }
+
+    static func marked(_ line: TodoFoundLine, lead: Int) -> AttributedString {
+        let (shown, marks) = AssistantSearchMerge.led(line.text, line.marks, lead: lead)
+        var text = AttributedString(shown)
+        text.foregroundColor = .secondary
+        let utf16 = shown.utf16
+        for m in marks where m.count == 2 {
+            let lo = min(max(0, m[0]), utf16.count), hi = min(max(lo, m[1]), utf16.count)
+            guard lo < hi, let a = String.Index(utf16.index(utf16.startIndex, offsetBy: lo), within: shown),
+                  let b = String.Index(utf16.index(utf16.startIndex, offsetBy: hi), within: shown),
+                  let range = Range(a..<b, in: text) else { continue }
+            text[range].foregroundColor = .primary
+            text[range].backgroundColor = Theme.accentTint
+        }
+        return text
     }
 }
 

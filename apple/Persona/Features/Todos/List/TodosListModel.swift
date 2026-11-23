@@ -84,6 +84,8 @@ final class TodosListModel {
             var projects: [TodoProject]
             /// The owner's write on it still on the device (`TodoOutbox`): a tick waiting out its Undo, a new to-do.
             var pending: TodoRowWrite?
+            /// What the list's search found in it, while the list searches.
+            var search: TodoSearchHit?
         }
 
         fileprivate init(id: String, inputs: Inputs, content: TodoRowContent) {
@@ -112,11 +114,14 @@ final class TodosListModel {
     var sort: TodosListSort = .suggested {
         didSet { if sort != oldValue { relayout() } }
     }
-    /// The search field's words (`TodosListLayout.Input.query`): this list's, never kept. A search looks through every
-    /// open to-do, whatever the place (places pick where, search finds any to-do).
+    /// The search field's words: this list's, never kept. A search looks through every to-do, open and closed, whatever
+    /// the place (places pick where, search finds any to-do) and the Filter's choice (`searchedWords`).
     var query = "" {
-        didSet { if query != oldValue { relayout() } }
+        didSet { if query != oldValue { search() } }
     }
+    /// The words the list shows the results of (`TodosListLayout.Input.query`): `query` once the to-dos were looked
+    /// through off the main actor (P4); "" while the list does not search. A cleared field ends the search at once.
+    private(set) var searchedWords = ""
     /// The place the list shows (`TodosPlaces.holds`): another one lands on All, at once, as the owner's own pick.
     var place: TodoPlaceRef = .all {
         didSet {
@@ -164,6 +169,13 @@ final class TodosListModel {
     @ObservationIgnored private var now = Date.distantPast
     /// A minute passed while the list was held: every row's time is said again once it rests, not mid-glide.
     @ObservationIgnored private var clockWaits = false
+    /// What the search found in the current assistant's to-dos (`TodoSearch`), by id, and the to-dos it looked through:
+    /// a push while the list searches looks through the ones it changed again (`refreshHits`).
+    @ObservationIgnored private var hits: [String: TodoSearchHit] = [:]
+    @ObservationIgnored private var hitsFrom: [String: TodoItem] = [:]
+    /// The search looking, and for which words.
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var searchingFor: String?
     /// The place's rows as last worked out, and what from: the place's numbers and its layout share one pass (P4).
     @ObservationIgnored private var placeRowsMemo: (place: TodoPlaceRef, now: Date, filed: [TodoFiled], items: [String: TodoItem],
                                                     rows: [TodoFiled])?
@@ -288,6 +300,88 @@ final class TodosListModel {
     func refresh() async {
         await deps.store.refresh(api: deps.api())
     }
+
+    // MARK: The search
+
+    /// The field's words changed: the list looks off the main actor, a newer key taking over from a look under way, so a
+    /// burst of keys lands once for the last words, and shows what it showed until then; cleared, the list is back at
+    /// once.
+    private func search() {
+        let words = TodoSearch.words(query)
+        if words.isEmpty {
+            stopLooking()
+            guard !searchedWords.isEmpty else { return }
+            searchedWords = ""
+            hits = [:]
+            hitsFrom = [:]
+            return relayout()
+        }
+        // These words are being looked for (a key, or a push looked through again): that look lands.
+        if words == searchingFor { return }
+        // A space typed after the words, or back to the words shown: nothing to look for but what the store changed
+        // while another look was under way, which skipped it.
+        if words == searchedWords {
+            stopLooking()
+            if refreshHits() { relayout() }
+            return
+        }
+        look(for: words)
+    }
+
+    private func stopLooking() {
+        searchTask?.cancel()
+        searchTask = nil
+        searchingFor = nil
+    }
+
+    /// Looks through the current assistant's to-dos for `words` off the main actor (`TodoSearch.find` stops early once
+    /// a newer look cancels it).
+    private func look(for words: String) {
+        stopLooking()
+        searchingFor = words
+        searchTask = Task { [weak self] in
+            guard !Task.isCancelled, let items = self.map({ $0.searchedItems($0.snapshot) }) else { return }
+            let found = await TodoSearch.find(items, words: words)
+            guard !Task.isCancelled, let self, self.searchingFor == words else { return }
+            self.searchTask = nil
+            self.searchingFor = nil
+            self.hits = found
+            self.hitsFrom = items
+            self.searchedWords = words
+            self.refreshHits() // the store moved while it looked
+            self.relayout()
+        }
+    }
+
+    /// The to-dos the search looks through: the current assistant's rows (`countsSource.filed`), the ones the list draws.
+    private func searchedItems(_ from: Snapshot) -> [String: TodoItem] {
+        var items: [String: TodoItem] = [:]
+        items.reserveCapacity(from.filed.count)
+        for row in from.filed { items[row.id] = from.items[row.id] }
+        return items
+    }
+
+    /// The store moved while the list searches: the to-dos it changed are looked through again here, as a push changes a
+    /// few; many at once (a first read) are looked through off the main actor again, the results drawn until then. A
+    /// search still looking does this as it lands. True when the hits changed here (the caller lays the list out).
+    @discardableResult private func refreshHits() -> Bool {
+        guard !searchedWords.isEmpty, searchingFor == nil else { return false }
+        let items = searchedItems(snapshot)
+        guard items != hitsFrom else { return false }
+        let changed = items.compactMap { id, item in hitsFrom[id] == item ? nil : id }
+        guard changed.count <= Self.lookedThroughHere else {
+            look(for: searchedWords)
+            return false
+        }
+        for id in hitsFrom.keys where items[id] == nil { hits[id] = nil }
+        for id in changed { hits[id] = items[id].flatMap { TodoSearch.hit($0, words: searchedWords) } }
+        hitsFrom = items
+        return true
+    }
+
+    /// How many changed to-dos a push may have looked through on the main actor: a few dozen take well under a
+    /// millisecond (`TodoSearchTests`).
+    private static let lookedThroughHere = 64
 
     // MARK: The owner's writes (the tick, the swipe, the menu, New To-Do)
 
@@ -556,6 +650,7 @@ final class TodosListModel {
             if ready != next.ready { ready = next.ready }
             if numbersOnly { return recountPlace() }
         }
+        refreshHits()
         recountPlace()
         guard hold.wait() else { return landAll(force: clock, animated: true) }
         if clock { clockWaits = true }
@@ -583,7 +678,7 @@ final class TodosListModel {
     /// land "at once, alone, and the rest goes on waiting"): onto the list as drawn, saying what they say now.
     private func landNeeds() {
         // The place's rows only (all of them while searching): one outside it is never drawn here, so it never lands.
-        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let searching = !searchedWords.isEmpty
         let rows = searching ? snapshot.filed : placeRows(snapshot.filed, items: snapshot.items, at: now)
         let needs = rows.filter { row in
             row.section == TodoListSection.needsYou && layout.sections[TodosListLayout.key(row)] != TodoListSection.needsYou
@@ -698,11 +793,11 @@ final class TodosListModel {
         return here && Self.grouped(byProject, calm: calm, choice: choice, searching: searching)
     }
 
-    /// The list for the place, or, while the search field has words, every open to-do that matches them, whatever the
-    /// place and the choice.
+    /// The list for the place, or, while the search field has words, every to-do that matches them, open and closed,
+    /// whatever the place and the choice.
     private func makeLayout(_ from: Snapshot) -> TodosListLayout.Output {
         let projects = from.projects
-        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let searching = !searchedWords.isEmpty
         let rows = searching ? from.filed : placeRows(from.filed, items: from.items, at: now)
         if place == .upcoming && !searching {
             return TodoUpcomingLayout.layout(rows, items: from.items, now: now, calendar: deps.calendar())
@@ -710,7 +805,8 @@ final class TodosListModel {
         return TodosListLayout.layout(.init(
             rows: rows, items: from.items, choice: TodosPlaces.filters(place) ? choice : .all,
             byProject: byProject && (searching || TodosPlaces.groupsByProject(place)), sort: sort, unfolded: unfolded,
-            query: query, now: now, calendar: deps.calendar(), projectName: { TodoProjectLogic.name($0, in: projects) }))
+            query: searchedWords, hits: searching ? hits : nil, now: now, calendar: deps.calendar(),
+            projectName: { TodoProjectLogic.name($0, in: projects) }))
     }
 
     /// Each row's content, worked out again only where its facts, its view, its filing, the grouping or the clock
@@ -721,7 +817,7 @@ final class TodosListModel {
         let projects = snapshot.projects
         // A project's place names its project in its title: line 3 leaves it out; Upcoming's headings name the days
         // (neither while searching, which lists any to-do under the sections).
-        let placed = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let placed = searchedWords.isEmpty
         let inProject = place.project != nil && placed
         let underDay = place == .upcoming && placed
         for filed in snapshot.filed {
@@ -731,7 +827,7 @@ final class TodosListModel {
                                     underDay: underDay, projects: projects,
                                     pending: snapshot.writes[filed.id].map {
                                         TodoRowWrite(write: $0.write, waits: $0.waits && !$0.answered, unsure: $0.unsure)
-                                    })
+                                    }, search: placed ? nil : hits[filed.id])
             if let cell = cells[key], !force, cell.inputs == inputs {
                 if !held, let waiting = cell.waiting {
                     cell.waiting = nil
@@ -742,7 +838,7 @@ final class TodosListModel {
             let content = TodoRowContentLogic.content(filed, item: item, view: inputs.view, byProject: grouped,
                                                       inProject: inProject, underItsDay: underDay, now: now, calendar: calendar,
                                                       projectName: { TodoProjectLogic.name($0, in: projects) },
-                                                      pending: inputs.pending)
+                                                      pending: inputs.pending, search: inputs.search)
             if let cell = cells[key] {
                 cell.inputs = inputs
                 if held {

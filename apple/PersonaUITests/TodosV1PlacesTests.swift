@@ -49,6 +49,29 @@ final class TodosV1PlacesTests: XCTestCase {
         XCTAssertTrue(target.exists, "no \(row) in the drawer:\n\(app.debugDescription)")
     }
 
+    /// `method` `path` on the mock hub, waited for.
+    @MainActor private func call(_ hub: String, _ method: String, _ path: String) throws {
+        var request = URLRequest(url: try XCTUnwrap(URL(string: hub + "/" + path)))
+        request.httpMethod = method
+        request.setValue("Bearer mock", forHTTPHeaderField: "Authorization")
+        let done = expectation(description: path)
+        URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
+        wait(for: [done], timeout: 20)
+    }
+
+    /// The list's search field, opened: the system's, at the foot or folded to ⌕ (found by its words: it carries no
+    /// identifier of ours).
+    @MainActor private func searchField() -> XCUIElement {
+        let field = app.searchFields.firstMatch
+        if !(field.exists && field.isHittable) {
+            let button = app.buttons.matching(NSPredicate(format: "identifier == 'Search' OR label ==[c] 'search'")).allElementsBoundByIndex
+                .first(where: \.isHittable)
+            if let button { button.tap() } else { app.collectionViews.firstMatch.swipeDown(velocity: .slow) }
+        }
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no search field:\n\(app.debugDescription)")
+        return field
+    }
+
     /// The list's title as a menu: the navigation bar's title button (the system's title menu has no identifier of its
     /// own; the bar's other buttons have theirs).
     @MainActor private func titleMenu() -> XCUIElement {
@@ -277,8 +300,8 @@ final class TodosV1PlacesTests: XCTestCase {
     }
 
     /// The Sidebar layout's frames on an iPad on its side (`ipad11-landscape/closed`): the places in the sidebar with the
-    /// one shown shaded, on Today, on a project and on All To-dos, and a place picked while a to-do is pushed: its root,
-    /// swapped in without a pop.
+    /// one shown shaded, on Today, on a project and on All To-dos, the list searching, and a place picked while a to-do is
+    /// pushed: its root, swapped in without a pop.
     @MainActor private func padFrames(_ hub: String, _ extra: [String], wants: (String) -> Bool, shot: (String) -> Void) throws {
         XCUIDevice.shared.orientation = .landscapeLeft
         let relaunch = { (args: [String]) in try self.relaunch(hub, extra + args, layout: "sidebar") }
@@ -286,6 +309,19 @@ final class TodosV1PlacesTests: XCTestCase {
             try relaunch(["-openTodoPlace", place, "-todos.v1.upcomingCalendar", "NO"])
             _ = element("sidebar-todos-place-today").waitForExistence(timeout: 20)
             shot(frame)
+        }
+        // The list searching (#10465): an open and a closed match (Fix widget refresh crash seen, so it is in Done; the
+        // mock put back after), whatever the place shown, Today.
+        if wants("~search") {
+            try call(hub, "PUT", "api/v1/todos/t08/seen")
+            defer { try? call(hub, "GET", "mock/reset") }
+            try relaunch(["-openTodoPlace", "today", "-todos.v1.upcomingCalendar", "NO"])
+            _ = element("sidebar-todos-place-today").waitForExistence(timeout: 20)
+            let field = searchField()
+            field.tap()
+            field.typeText("crash")
+            _ = element("todos.row.t08").waitForExistence(timeout: 10)
+            shot("~search")
         }
         if wants("~swap") {
             try relaunch(["-openTodoPlace", "project:kyoto"])
