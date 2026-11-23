@@ -846,7 +846,7 @@
   },
   {
     "name": "agent_supervise",
-    "description": "Main or a lead: adopt an Agent on no open task, e.g. from agent_start. Creates a to-do/card, supervision signals and task_review closeout, as task_plan does. The background supervisor reviews it unless assistant.main_supervises_own_tasks is on; the answer names the supervisor, and main can still review. Already your task: done_when/expect_minutes change its brief scope (prefer task_scope). Another conversation's task stays theirs; use agent_transfer to move it.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Main or a direction’s lead can adopt an Agent on no open task for supervision and task_review. Omit role for a worker. A leader needs done_when and a non-work-trust computer. It gets instructions to plan and review direct workers, who cannot delegate. On your open task, use task_scope for done_when/expect_minutes. Use agent_transfer to move another conversation's task.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -865,6 +865,12 @@
         "title": {
           "type": "string",
           "description": "the task in a short line (English, under 20 characters); empty: the agent's title"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "leader"
+          ]
         },
         "done_when": {
           "type": "array",

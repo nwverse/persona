@@ -583,7 +583,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		return
 	}
 	opts.Manager = manager
-	opts.NoPrivate = restrictedAgentData(r) // external Agent clients cannot see a space's conversations
+	opts.NoPrivate = h.spacesHidden(r) // external Agent clients cannot see a space's conversations, but the user's own extension (#13246)
 	if values, lookup := r.URL.Query()["session_id"]; lookup {
 		if len(values) != 1 || values[0] == "" || opts.Machine == "" || opts.Since != "" || opts.Cursor != "" {
 			sessionListErr(w, errors.New("exact session lookup requires one nonempty session_id and machine_id, without since or cursor"))

@@ -1,15 +1,9 @@
 import Foundation
 import UserNotifications
-#if os(macOS)
-import AppKit
-#else
 import UIKit
-#endif
 
-/// Registers for APNs and tells the hub where to push (interactions, finished turns). The iPhone and the Mac app the
-/// same way, as kind `iphone` / `mac`: same bundle id, so the same APNs topic, and both through the relay for a hub
-/// without the app's key. While the Mac app is connected the hub leaves the agents' alerts to it (MacAttentionWatcher
-/// posts them); a Mac never gets the phone's wake pushes.
+/// Registers for APNs and tells the hub where to push (interactions, finished turns), as kind `iphone`, through the
+/// relay for a hub without the app's key.
 final class PushRegistrar {
     static let shared = PushRegistrar()
 
@@ -258,13 +252,8 @@ final class PushRegistrar {
         #else
         let env = "production"
         #endif
-        #if os(macOS)
-        let kind = "mac"
-        let features: [String]? = nil
-        #else
         let kind = "iphone"
         let features: [String]? = Self.features(RequestClientMetadata.current)
-        #endif
         let base = APIClient.DeviceBody(deviceID: Self.deviceID, name: UIDevice.current.name, kind: kind, apnsToken: hex,
                                         apnsEnv: env, topic: Bundle.main.bundleIdentifier, features: features)
         // A hub without the app's APNs key pushes through the relay, sealed to this group's key (docs/operations/push-relay.md);
@@ -395,11 +384,7 @@ extension PushRegistrar.System {
         },
         allowed: { await UNUserNotificationCenter.current().notificationSettings().authorizationStatus.allowsNotifications },
         register: {
-            #if os(macOS)
-            NSApplication.shared.registerForRemoteNotifications()
-            #else
             UIApplication.shared.registerForRemoteNotifications()
-            #endif
         },
         hubs: {
             // The keychain read stays off the main thread (docs/apple/performance.md P1).
