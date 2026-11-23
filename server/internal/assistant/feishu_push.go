@@ -44,6 +44,7 @@ type todoReminderSend struct {
 	owner                   string
 	pairedAt                time.Time
 	private                 bool
+	space                   string // the track the notice is said for when private
 	noticeTitle, noticeBody string
 	botAttempted            bool
 }
@@ -51,7 +52,11 @@ type todoReminderSend struct {
 // feishuTodoReminder keeps the claimed reminder's Feishu copy alive within the mirror's existing retry bounds.
 // Each attempt rechecks readiness in feishuTodoPush; the phone push and reminder claim are never repeated.
 func (s *Service) feishuTodoReminder(machine, session, title, body string, todo Todo) {
-	send := &todoReminderSend{}
+	s.feishuTodoReminderSend(machine, session, title, body, todo, &todoReminderSend{})
+}
+
+// feishuTodoReminderSend is feishuTodoReminder starting from send (a privacy decision the reminder already took).
+func (s *Service) feishuTodoReminderSend(machine, session, title, body string, todo Todo, send *todoReminderSend) {
 	// A delayed callback must not replay an ambiguous send after the provider's one-hour UUID retention.
 	expires := time.Now().Add(time.Hour).Round(0)
 	for attempt := 0; ; attempt++ {
@@ -96,25 +101,28 @@ func (s *Service) feishuTodoPush(ctx context.Context, machine, session, title, b
 // keeps its conversation link, context-free reply routing and body exactly as before.
 func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, title, body, key string, r *copyReport, todo *Todo) error {
 	reminder, _ := ctx.Value(todoReminderSendKey{}).(*todoReminderSend)
-	private := false
+	private, space := false, ""
 	if todo != nil {
-		private = reminder != nil && reminder.private
+		if reminder != nil {
+			private, space = reminder.private, reminder.space // as the reminder decided for every copy (todo_plan.go)
+		}
 		if !private && todo.Origin != "" {
-			space, known := s.selfSpace(ctx, todo.Origin)
-			private = !known || space == SpaceHealth
+			var known bool
+			space, known = s.selfSpace(ctx, todo.Origin)
+			private = !known || s.trackPolicy(ctx, space).Redact
 		}
 		if reminder != nil {
-			reminder.private = private // once hidden, a missing source can never restore the notes
+			reminder.private, reminder.space = private, space // once hidden, a missing source can never restore the notes
 		}
 	}
 	if private {
 		if reminder != nil {
 			if reminder.noticeTitle == "" {
-				reminder.noticeTitle, reminder.noticeBody = healthNotice(s.botLang(ctx))
+				reminder.noticeTitle, reminder.noticeBody = s.redactedNotice(ctx, s.botLang(ctx), space)
 			}
 			title, body = reminder.noticeTitle, reminder.noticeBody
 		} else {
-			title, body = healthNotice(s.botLang(ctx))
+			title, body = s.redactedNotice(ctx, s.botLang(ctx), space)
 		}
 	}
 	st, err := s.feishuStatus(ctx)
@@ -158,7 +166,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 			}
 			ac.card.Tag(i18n.T(l, kind), feishubot.Neutral)
 		}
-		// A generic health notice must not identify the private to-do through its navigation metadata.
+		// A generic space notice must not identify the private to-do through its navigation metadata.
 		if i == len(cards)-1 && session != "" && !private {
 			if todo != nil {
 				web := todoLink(strings.TrimRight(st.PublicURL, "/"), todo.ID)
@@ -241,7 +249,7 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 		return // its notify_user already went to Feishu
 	}
 	sess, ok := s.session(ctx, machine, session)
-	if !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth { // a health task's runs stay off Feishu (health.go)
+	if !ok || sess.WokeByTask && !main || s.trackPolicy(ctx, spaceOf(sess)).Redact { // the runs of a space that redacts stay off Feishu (health.go)
 		return
 	}
 	if s.transientRetryTurn(ctx, sess) {
@@ -465,8 +473,9 @@ func leadAndRest(md string, n int) (lead, rest string) {
 // seen, muted, a recent notify_user, a turn asked from the bot, an inbox agent's, a quiet task's, a supervision turn's
 // and the turn of a supervised task's Agent (#8270) are all dropped before this is called. The sender still leaves out
 // the conversations that have their own Feishu path: the main conversation (the sync mirror), a scheduled task's own
-// conversation (its pushes mirror) and health, and posts nothing without the pushes switch.
-func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text, place string) {
+// conversation (its pushes mirror) and a turn notifyFinished redacted (redact), and posts nothing without the pushes
+// switch.
+func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text, place string, redact bool) {
 	ctx, cancel := context.WithTimeout(feishuSendAs(context.Background(), "agent_done", machine, sess.SessionID), 30*time.Second)
 	defer cancel()
 	f, ready := s.feishuFeatures(ctx)
@@ -474,8 +483,7 @@ func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text
 		return
 	}
 	session := sess.SessionID
-	if sess.Assistant || s.mainSessionRep(machine, session) || s.taskSessionRep(machine, session) ||
-		spaceOf(sess) == SpaceHealth {
+	if sess.Assistant || s.mainSessionRep(machine, session) || s.taskSessionRep(machine, session) || redact {
 		return
 	}
 	l := s.botLang(ctx)

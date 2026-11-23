@@ -575,13 +575,7 @@ func TestTranscriptionInstructionsLanguage(t *testing.T) {
 		asked := len(live.Starts())
 		if releasePrevious != nil {
 			releasePrevious()
-			deadline := time.Now().Add(time.Second)
-			for len(previous.Starts()) < 3 && time.Now().Before(deadline) {
-				time.Sleep(time.Millisecond)
-			}
-			if len(previous.Starts()) < 3 {
-				t.Fatal("the delayed start was not recorded")
-			}
+			waitFor(t, "the delayed start was not recorded", func() bool { return len(previous.Starts()) >= 3 })
 			previous, releasePrevious = nil, nil
 		}
 		tc, _, err := dialTr(t, srv, TranscriptionContribution, http.Header{extwire.HeaderRole: {roleFull}, extwire.HeaderLang: {tt.hub}})

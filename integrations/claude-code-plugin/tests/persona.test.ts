@@ -1,6 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import { applyStepOverride, homeDir, mergeOverride, nextBackoff, readPoll, socketPath, verdict } from '../hooks/bridge'
+import { register } from '../hooks/register'
 
 const SESSION = '11111111-2222-3333-4444-555555555555'
 
@@ -14,6 +15,7 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
   const aborted: string[] = []
   const steps: { model: string; effort?: string | number; agentId?: string }[] = []
   let holdSubmit = false
+  let settleSubmit: ((outcome: 'reject' | 'drop') => void) | undefined
   let abortError: string | undefined
   let sessionModel = 'claude-sonnet-5-5'
   mock.env(on, env)
@@ -33,7 +35,15 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
   })
   on('prompt.submit', (_$, e) => {
     submitted.push({ text: e.text, origin: e.origin })
-    if (holdSubmit) return new Promise(() => {})
+    if (holdSubmit) {
+      return new Promise<{ drop: string }>((resolve, reject) => {
+        settleSubmit = outcome => {
+          settleSubmit = undefined
+          if (outcome === 'reject') reject(new Error('submit failed'))
+          else resolve({ drop: 'dropped' })
+        }
+      })
+    }
     return { text: e.text }
   })
   on('turn.step', async function* (_$, e) {
@@ -57,6 +67,11 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
     setHoldSubmit(v: boolean) {
       holdSubmit = v
     },
+    finishSubmit(outcome: 'reject' | 'drop') {
+      const settle = settleSubmit
+      if (settle === undefined) throw new Error('no held prompt.submit')
+      settle(outcome)
+    },
     setAbortError(err: string | undefined) {
       abortError = err
     },
@@ -69,6 +84,10 @@ function world(on: On, polls: Answer[], env: Record<string, string> = { HOME: '/
 const start = { cwd: '/work', surface: 'desktop', isInteractive: true } as const
 
 describe('persona plugin', () => {
+  test('loads the module and exports its registration hook', () => {
+    expect(typeof register).toBe('function')
+  })
+
   test('submits the node’s message as the person’s words and says so', async ($, on) => {
     const w = world(on, [{ status: 200, body: { messages: [{ id: 'm1', text: 'go ahead and merge', deadline_ms: 9_000 }] } }])
     await $.session.start(start)
@@ -101,18 +120,43 @@ describe('persona plugin', () => {
     await $.session.start(start)
     await w.clock.settle()
 
-    // While prompt.submit waits behind the running turn, advancing the settle window acks the queued message and polls on.
+    // The settle window releases polling, but cannot prove delivery or produce a final message ack.
     await w.clock.advance(250)
     await w.clock.settle()
 
     expect(w.submitted).toEqual([{ text: 'also check edge cases', origin: { kind: 'plugin', name: 'persona', asUser: true } }])
     expect(w.aborted).toEqual(['turn-main-1'])
     expect(w.requests.filter(r => r.url.endsWith('/ack')).map(r => r.body)).toEqual([
-      { session_id: SESSION, id: 'm-busy', submitted: true },
       { session_id: SESSION, id: 'int-1', submitted: true },
       { session_id: SESSION, id: 'int-2', submitted: false, reason: 'no_turn' },
     ])
   })
+
+  for (const busy of [false, true]) {
+    for (const outcome of ['reject', 'drop'] as const) {
+      const state = busy ? 'busy' : 'idle'
+      const result = outcome === 'reject' ? 'rejection' : 'drop'
+      const reason = outcome === 'reject' ? 'failed' : 'dropped'
+      test(`reports a delayed ${state} submit ${result} only as ${reason}`, async ($, on) => {
+        const w = world(on, [
+          { status: 200, body: { messages: [{ id: 'm-delayed', text: 'delayed owner follow-up', deadline_ms: 9_000 }] } },
+        ])
+        w.setHoldSubmit(true)
+        if (busy) await $.turn.start({ text: 'initial task', turnId: 'turn-main-delayed' })
+        await $.session.start(start)
+        await w.clock.settle()
+        await w.clock.advance(250)
+        await w.clock.settle()
+
+        w.finishSubmit(outcome)
+        await w.clock.settle()
+
+        expect(w.requests.filter(r => r.url.endsWith('/ack')).map(r => r.body)).toEqual([
+          { session_id: SESSION, id: 'm-delayed', submitted: false, reason },
+        ])
+      })
+    }
+  }
 
   test('applies session-only model and effort switches on main-loop turn.step and yields when desktop changes model', async ($, on) => {
     const w = world(on, [

@@ -271,6 +271,12 @@ func (s *Service) savedSettings(ctx context.Context) (Settings, bool) {
 
 // updateSettings changes the saved settings with fn (which may refuse) and saves them.
 func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) (Settings, error) {
+	return s.updateSettingsSave(ctx, fn, nil)
+}
+
+// updateSettingsSave is updateSettings with an optional atomic writer for state that must change with the settings.
+// The ordinary path still writes only the assistant setting; a custom writer receives the store and complete value.
+func (s *Service) updateSettingsSave(ctx context.Context, fn func(*Settings) error, save func(context.Context, Store, Settings) error) (Settings, error) {
 	b := &s.prefs
 	b.change.Lock()
 	defer b.change.Unlock()
@@ -287,8 +293,18 @@ func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) 
 	if proto.IsExternalLauncher(v.Launcher) {
 		return Settings{}, i18n.Err("external-adapter.purpose_unsupported")
 	}
-	if st := s.store(); st != nil {
-		if err := st.PutSetting(ctx, settingsKey, v); err != nil {
+	st := s.store()
+	if st == nil && save != nil {
+		return Settings{}, errors.New("no database on this hub")
+	}
+	if st != nil {
+		var err error
+		if save != nil {
+			err = save(ctx, st, v)
+		} else {
+			err = st.PutSetting(ctx, settingsKey, v)
+		}
+		if err != nil {
 			return Settings{}, err
 		}
 	}
@@ -594,7 +610,8 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 		return nil
 	}
 	v := s.effective(ctx, saved)
-	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone}
+	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone,
+		ExtensionOwners: s.extensionOwners(ctx), Attention: s.attentionProfile(ctx)}
 	if tasks != nil && todos != nil {
 		if placed, err := s.directionKeep(ctx, v); err != nil {
 			s.logf("assistant: keep: %v", err)
@@ -663,6 +680,12 @@ func (s *Service) leadSessions(ctx context.Context, v Settings) []SessionRef {
 	for _, id := range v.Leaders {
 		if id == "" || id == v.Main {
 			continue
+		}
+		if d := b.m[id]; loaded && d != nil && d.Outside != nil {
+			if d.Outside.MachineID != "" && d.Outside.SessionID != "" {
+				out = append(out, SessionRef{MachineID: d.Outside.MachineID, SessionID: d.Outside.SessionID})
+			}
+			continue // never keep a synthetic direction id as though it were a conversation
 		}
 		machine := v.MachineID
 		if d := b.m[id]; loaded && d != nil && d.MachineID != "" {
@@ -779,8 +802,8 @@ type assistantView struct {
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
-// assistant's own conversations; space "health" lists the health space's instead (docs/assistant/health.md), with that
-// space's directory as Cwd.
+// assistant's own conversations; a space (space "health") lists that space's instead (docs/assistant/health.md), with
+// that space's directory as Cwd.
 func (s *Service) view(ctx context.Context, withArchived bool, space ...string) assistantView {
 	sp := ""
 	if len(space) > 0 {
@@ -827,7 +850,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		SupervisionBatchMinutes:      supervisionBatchMinutesOf(v),
 		NextSuggestions:              v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
-		out.Cwd = s.spaceCwd(d, sp)
+		out.Cwd = s.spaceCwd(ctx, d, sp)
 		var list []proto.Session
 		if s.fleetOn() {
 			// Select the headless conversations before copying, decorating or serializing the inventory: coding
@@ -860,8 +883,8 @@ func (s *Service) profileRoutes() {
 		}
 		archived := r.URL.Query().Get("archived")
 		space := r.URL.Query().Get("space")
-		if !validSpace(space) {
-			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: health or none", space))
+		if !s.trackKnown(r.Context(), space) {
+			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: not a registered space", space))
 			return
 		}
 		out := s.view(r.Context(), archived == "1" || archived == "true", space)
@@ -997,10 +1020,10 @@ func (s *Service) memory(ctx context.Context, op map[string]any, out any) error 
 	}
 	space, _ := op["space"].(string)
 	delete(op, "space")
-	if !validSpace(space) {
-		return badRequest(fmt.Errorf("space %q: health or none", space))
+	if !s.trackKnown(ctx, space) {
+		return badRequest(fmt.Errorf("space %q: not a registered space", space))
 	}
-	cwd := s.spaceCwd(d, space) // the health space keeps a memory of its own (docs/assistant/health.md)
+	cwd := s.spaceCwd(ctx, d, space) // a space keeps a memory of its own (docs/assistant/health.md)
 	if cwd == "" {
 		return errMemoryMachineOffline
 	}

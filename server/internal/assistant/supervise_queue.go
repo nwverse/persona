@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -48,15 +49,18 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 		ParkedDue:           slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkedDue }),
 		ParkDecided:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkDecided }),
 		Decisions: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool {
-			return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot
+			return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot || e.Kind == sigCardlessWait
 		}),
 		Inbox: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigInbox }),
 		Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), PushGrading: askedIn(list) && s.quietModeOn(ctx)})
 }
 
-// recheckDigestTo preserves the supervisor already persisted for a queued signal. New dispatch uses digestTo's
-// main-supervision policy; revalidating an existing relay must not rehome it merely because that policy changed.
+// recheckDigestTo honors explicit moves through the same policy as immediate dispatch. Otherwise it preserves
+// a queued legacy supervisor: a default-policy change alone is not permission to rehome an existing relay.
 func (s *Service) recheckDigestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
+	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.assigned() {
+		return s.digestTo(ctx, cfg, g)
+	}
 	if g.To != "" {
 		return s.digestTo(ctx, cfg, g)
 	}
@@ -97,6 +101,8 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return msg, false, true
 	}
+	now := time.Now()
+	signals, deferred := s.partitionFinalWakeSignals(ctx, signals, now, "drain")
 	var retry []superviseSignal
 	ctx, signals, retry = s.allStoppedBatch(ctx, signals)
 	if len(retry) > 0 {
@@ -105,6 +111,10 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	here, web := s.settings(ctx), s.webBase(ctx)
 	groups := map[string][]superviseSignal{}
 	entries := map[string][]prompts.SuperviseEntry{}
+	for i, g := range signals {
+		signals[i] = s.currentSupervisorSignal(g)
+	}
+	signals = mergeSignals(nil, signals)
 	for _, g := range signals {
 		if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil && g.Kind == sigNeedsYou {
 			if _, known := s.taskNeedsRecheck(ctx, t); !known {
@@ -133,6 +143,9 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 			}
 		}
 		if e, ok := s.digestEntry(ctx, g, web); ok {
+			if g.Kind == sigAsk {
+				g.Cards = e.Asks
+			}
 			// A worker reassigned to an Agent needs the ordinary dispatcher, not assistant.send to its old conversation.
 			if _, handled, _ := s.leaderRoute(g); handled {
 				return msg, false, true
@@ -145,7 +158,7 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 			entries[target] = append(entries[target], e)
 		}
 	}
-	if len(groups) == 0 {
+	if len(groups) == 0 && len(deferred) == 0 {
 		return msg, true, false
 	}
 	next := msg
@@ -169,13 +182,14 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	}
 	b := &s.relays
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	q := b.st.Queue[to]
 	if len(q) == 0 || q[0] != msg {
+		b.mu.Unlock()
 		return msg, false, true
 	}
 	// Do not change the identity or destination of a send that may already have landed.
 	if !msg.TriedAt.IsZero() && (next.Text != msg.Text || len(groups) > 1 || len(groups[to]) == 0) {
+		b.mu.Unlock()
 		return msg, false, true
 	}
 	state := b.st
@@ -195,11 +209,31 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	// Save moves and the corresponding source removal together, before anything can send the new payload.
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, relayKey, state); err != nil {
+			b.mu.Unlock()
 			return msg, false, true
 		}
 	}
 	b.st = state
+	b.mu.Unlock()
+	s.restoreDrainedWakeSignals(ctx, deferred, web, now)
 	return next, len(groups[to]) == 0, false
+}
+
+// restoreDrainedWakeSignals runs only after the durable source queue no longer carries deferred idles. Queue
+// admission already reserved their fingerprints and turn receipts; release both before making the signals pending
+// again, or an expired wakeup would be deduplicated and restart replay would skip them as told.
+func (s *Service) restoreDrainedWakeSignals(ctx context.Context, deferred []superviseSignal, web string, now time.Time) {
+	if len(deferred) == 0 {
+		return
+	}
+	s.supervise.dedupMu.Lock()
+	s.forgetSupervision(ctx, deferred, web)
+	s.turnsUntold(ctx, deferred)
+	s.supervise.dedupMu.Unlock()
+	for i := range deferred {
+		deferred[i].batchTo, deferred[i].batchUntil = "", time.Time{}
+	}
+	s.restoreDigest(deferred, now, time.Time{})
 }
 
 // Read the payload that is actually queued, rather than the last in-memory digest (which may have drained).

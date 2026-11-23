@@ -201,7 +201,7 @@ func mayAsk(sess *proto.Session, triage bool) bool {
 // not one whose news goes elsewhere (an inbox draft, a Feishu thread, a quiet task's conversation), not too old.
 func (s *Service) replyWaits(machine string, sess proto.Session, now time.Time) bool {
 	if sess.HiddenByDirectory() || !sess.AwaitsReply || sess.State != proto.StateIdle || now.Sub(sess.UpdatedAt) > replyOldest ||
-		spaceOf(sess) == SpaceHealth { // its questions are not for the lock screen (doneAlert)
+		spaceOf(sess) != "" { // a space's questions are not for the lock screen (doneAlert); no ctx here, so any space
 		return false
 	}
 	return !s.mutedAs(machine, sess.SessionID, sess.SpaceName) && !s.isInboxAgent(sess.SessionID) &&

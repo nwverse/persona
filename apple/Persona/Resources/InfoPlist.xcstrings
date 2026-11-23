@@ -254,6 +254,29 @@
         }
       }
     },
+    "NSLocationAlwaysAndWhenInUseUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona reads your location only when the assistant needs it to answer you, for example when you ask “How far am I from home?” while Persona isn't open. When you move a long way, iOS may wake Persona in the background, but it doesn't record where you go."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personaが位置情報を読み取るのは、アシスタントが質問に答えるのに必要なときだけです。たとえばPersonaを開いていないときに「家まであとどれくらい？」と尋ねた場合です。大きく移動したときは、iOSがバックグラウンドでPersonaを起動することがありますが、移動の記録は残しません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只在助手需要回答你的问题时才读取位置，例如你没打开 Persona 时问「我离家还有多远」。你移动较远时，iOS 可能会在后台唤醒 Persona，但它不会记录你的行踪。"
+          }
+        }
+      }
+    },
     "NSLocationWhenInUseUsageDescription": {
       "extractionState": "manual",
       "localizations": {

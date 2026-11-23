@@ -74,25 +74,29 @@ func (s *Service) checkTaskSourceRestore(ctx context.Context, previous, next Tas
 	return nil
 }
 
-// A health task may choose its computer and model, but its directory and instructions belong to the space.
+// A space's task may choose its computer and model, but its directory and instructions belong to the space.
 // Check both edited candidates and stored tasks; validation in the editor alone cannot protect old records.
 func checkTaskExecutionSpace(t Task) error {
-	if t.Space == SpaceHealth && t.Cwd != "" {
+	if t.Space != "" && t.Cwd != "" {
+		if t.Space != SpaceHealth {
+			return i18n.Err("assistant-schedule.execution_space_directory")
+		}
 		return i18n.Err("assistant-schedule.execution_health_directory")
 	}
 	return nil
 }
 
-// Before continuing a Health assistant, verify its actual cwd against the node's canonical Health directory.
+// Before continuing a space's assistant, verify its actual cwd against the node's canonical directory of the space
+// (a space without one fails: prepareSpace refuses it).
 func (s *Service) taskSourceCwd(ctx context.Context, t Task) (string, bool) {
-	if t.Space != SpaceHealth {
+	if t.Space == "" {
 		return "", true
 	}
 	c, known := s.session(ctx, t.MachineID, t.SessionID)
-	if !known || !c.Assistant || c.Space != SpaceHealth {
+	if !known || !c.Assistant || c.Space != t.Space {
 		return "", false
 	}
-	cwd, err := s.prepareSpace(ctx, t.MachineID, SpaceHealth)
+	cwd, err := s.prepareSpace(ctx, t.MachineID, t.Space)
 	return cwd, err == nil && cwd != "" && c.Cwd == cwd
 }
 
@@ -119,10 +123,7 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 		ex.Agent = s.launcherAgent(withUnhidden(ctx, ex.Launcher), machine, ex.Launcher)
 		if ex.Cwd == "" {
 			if d, ok := s.device(ctx, machine); ok {
-				ex.Cwd = s.assistantCwd(d)
-				if t.Space == SpaceHealth {
-					ex.Cwd = s.healthCwd(d)
-				}
+				ex.Cwd = s.spaceCwd(ctx, d, t.Space) // "" for a space without a directory, never the assistant's
 			}
 		}
 		return ex, nil

@@ -84,6 +84,15 @@ func TestLarkLiteralPrefixIndependentReadSafety(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(directoryRoot, "sub"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	nestedDirectory := filepath.Join(directoryRoot, "a", "b", "c")
+	if err := os.MkdirAll(nestedDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Reach the filesystem root without assuming how many components t.TempDir contains.
+	rootAscent, err := filepath.Rel(nestedDirectory, string(filepath.Separator))
+	if err != nil {
+		t.Fatal(err)
+	}
 	directoryFile := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(directoryFile, []byte("fixture"), 0o600); err != nil {
 		t.Fatal(err)
@@ -129,6 +138,13 @@ func TestLarkLiteralPrefixIndependentReadSafety(t *testing.T) {
 		{"zsh parameter modifier clears binding", `READER=/tmp/reader.sh; echo $HOME:F:READER=7:h; $READER list`, 1},
 		{"quoted zsh parameter modifier clears binding", `READER=/tmp/reader.sh; echo "$HOME:F:READER=7:h"; $READER list`, 1},
 		{"special parameter modifier clears binding", `READER=/tmp/reader.sh; echo $#HOME:F:READER=7:h; $READER list`, 1},
+		{"zsh tilde flag subscript clears binding", `READER=/tmp/reader.sh; echo $~HOME[READER=7]; $READER list`, 1},
+		{"zsh equals flag subscript clears binding", `READER=/tmp/reader.sh; ls $=HOME[READER=7]; $READER list`, 1},
+		{"zsh caret flag subscript clears binding", `READER=/tmp/reader.sh; cat $^HOME[READER=7]; $READER list`, 1},
+		{"zsh plus flag subscript clears binding", `READER=/tmp/reader.sh; echo $+HOME[READER=7]; $READER list`, 1},
+		{"zsh non ASCII subscript clears binding", `READER=/tmp/reader.sh; echo $é[READER=7]; $READER list`, 1},
+		{"zsh tilde modifier glob clears binding", `READER=/tmp/reader.sh; echo $~HOME:F:READER=7:h/*; $READER list`, 1},
+		{"zsh glob qualifier clears binding to CLI", `READER=/tmp/reader.sh; X='mp(e:READER=lark-c\li:)'; echo /[t]$~X; $READER im +messages-send --chat-id oc_example --text hello`, 1},
 		{"dollar at is not scalar", `echo "$@"; READER=/tmp/reader.sh; $READER list`, 1},
 		{"dollar star is not scalar", `echo $*; READER=/tmp/reader.sh; $READER list`, 1},
 		{"array parameter is not scalar", `echo ${X[1]}; READER=/tmp/reader.sh; $READER list`, 1},
@@ -154,6 +170,10 @@ func TestLarkLiteralPrefixIndependentReadSafety(t *testing.T) {
 		{"parent relative executable stays unknown", `cd /tmp; READER=./../reader.sh; $READER list`, 1},
 		{"system bin directory stays unknown", `cd /bin; READER=./cat; $READER list`, 1},
 		{"system usr bin directory stays unknown", `cd /usr/bin; READER=./cat; $READER list`, 1},
+		{"joined bin directory stays unknown", `cd /; READER=./bin/cat; lark-cli docs +fetch --doc-id example | $READER`, 1},
+		{"joined usr bin directory stays unknown", `cd /usr; READER=./bin/cat; lark-cli docs +fetch --doc-id example | $READER`, 1},
+		{"joined root usr bin directory stays unknown", `cd /; READER=./usr/bin/cat; lark-cli docs +fetch --doc-id example | $READER`, 1},
+		{"nested cwd system directory stays unknown", `cd ` + nestedDirectory + `; bash -c 'cd ` + rootAscent + `; READER=./usr/bin/cat; lark-cli docs +fetch --doc-id example | $READER'`, 1},
 		{"parent relative gate read stays unknown", `cd /tmp; REQUEST=../example/scripts/ex.sh; $REQUEST GET /health`, 1},
 		{"nested relative CLI stays unknown", `cd /tmp; READER=./sub/lark-cli; $READER docs +fetch --doc-id example`, 1},
 		{"pushd stays unknown", `pushd /tmp; READER=./reader.sh; $READER list`, 1},
@@ -172,6 +192,7 @@ func TestLarkLiteralPrefixCodexShellApprovalShapes(t *testing.T) {
 		{"wrapped named descriptor", `/bin/zsh -lc 'READER=/tmp/reader.sh; ls /tmp {READER}>/dev/null; $READER list'`, 1},
 		{"wrapped zsh subscript", `/bin/zsh -lc 'READER=/tmp/reader.sh; echo $HOME[READER=7]; $READER list'`, 1},
 		{"wrapped zsh modifier", `/bin/zsh -lc 'READER=/tmp/reader.sh; ls $HOME:F:READER=7:h; $READER list'`, 1},
+		{"wrapped zsh glob qualifier clears binding to CLI", `/bin/zsh -lc 'READER=/tmp/reader.sh; X="mp(e:READER=lark-c\li:)"; ls /[t]$~X; $READER im +messages-send --chat-id oc_example --text hello'`, 1},
 		{"wrapped gate write", `/bin/zsh -lc 'REQUEST=/tmp/example/scripts/ex.sh; ls /tmp 2>&1; $REQUEST POST /messages/example/recall'`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards, gate) })
@@ -202,7 +223,7 @@ func TestLarkLiteralPrefixPermissionModes(t *testing.T) {
 			n.procs[testThread] = &assistantProc{id: testThread, agent: "claude", origin: tc.origin, cwd: cwd, exited: make(chan struct{})}
 			n.persistModes(testThread, tc.mode, "")
 			if tc.health {
-				n.gates().markHealth(testThread)
+				n.gates().markSpace(testThread)
 			}
 			fh.answer = func(proto.Interaction) proto.Resolution { no := false; return proto.Resolution{Allow: &no} }
 			decision, reason, err := n.larkCheck(context.Background(), testThread, cwd, tc.command,

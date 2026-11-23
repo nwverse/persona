@@ -416,7 +416,7 @@ func TestCLICallAgentToolsGoAsThePaneAgent(t *testing.T) {
 	n.mu.Unlock()
 	ask := mcpRelay(t, n, hub)
 	for _, name := range callerTools {
-		if assistantwire.IsA2ATool(name) || name == "secret_store" {
+		if assistantwire.IsA2ATool(name) || name == "secret_store" || strings.HasPrefix(name, "resource_") {
 			continue // bound to the calling process, not to the pane a request names (TestCLICallAgentToolsRefuseUnknownCallers)
 		}
 		got := ask(map[string]any{"kind": "cli.call", "name": name, "args": map[string]any{"tasks": []any{}}, "pane": "w1:p1",
@@ -475,7 +475,7 @@ func TestCLICallAgentToolsRefuseUnknownCallers(t *testing.T) {
 	}
 	// An A2A tool reads or writes the caller's own mailbox, so the node binds it to the process that calls (a2aCaller),
 	// never to the pane or session a request names: here no process is known, though the pane runs a live Agent (#12706).
-	for _, name := range append(append([]string{}, assistantwire.A2AToolNames...), "secret_store") {
+	for _, name := range append(append([]string{}, assistantwire.A2AToolNames...), "secret_store", "resource_status", "resource_acquire", "resource_get", "resource_renew", "resource_release", "resource_cancel") {
 		refused(name+" naming an Agent's pane", sockRequest{Name: name, Pane: "w1:p1"}, "A2A requires a verified local session")
 		refused(name+" naming an Agent's session", sockRequest{Name: name, Pane: "w1:p1", SessionID: "sess-live"}, "A2A requires a verified local session")
 		refused(name+" naming a known Codex thread", sockRequest{Name: name, CodexThreadID: thread}, "A2A requires a verified local session")

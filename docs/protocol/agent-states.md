@@ -17,7 +17,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 | `interrupted` Interrupted by restart | Was running before a restart, and the restart took herdr's panes with it (#1917) | — | The record has a pane, the start time is earlier than this node's start, and there's no live agent now | Light gray, with "Continue" |
 | `unknown` Unknown | The host recognized the agent but can't tell its state | `unknown` | — | Gray |
 
-A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread.
+A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread. A stopped session with `turn_error_code: "upstream_unavailable"` (#13372) keeps its wire `state` (`unread` or `idle`) and client badge counts unchanged, while server-side `agents_list` and the Assistant live snapshot group it under `Needs you` so stalled external `/loop` and coding Agent sessions remain visible.
 
 List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running.
 
@@ -63,8 +63,9 @@ forgotten. So a stopped session carries `awaits_reply` (`state` is unchanged; ol
   `done` with something missing or waited for, and no closeout at all leave the words to decide, as before. The node marks the session `asks_read`; only without it (an older node, a
   host that does not say) the manager reads `last_text` itself, and only when it was not cut.
 - **Still waiting** (`awaits_reply`, the manager's): Unread or Seen, no pending interaction (that is Needs You), no model
-  error, no background work or `/loop`, and either the triage says it waits on the user (not put off on its card:
-  `work.deferred`), or the triage has no word on the turn (off, not yet, unsure) and the turn has `asks`. A turn the triage
+  error, no background work or `/loop`, and either triage found an answerable user wait (not put off on its card:
+  `work.deferred`), or triage has no word on the turn (off, not yet, unsure) and the turn has `asks`. A model's
+  summary alone is not a user wait: it must have a grounded question or an authorization link. A turn the triage
   found done does not count (a closing "shall I also…" is an offer).
 - **Lists**: a Seen, not muted agent with `awaits_reply` gets its own rank, Awaiting Reply, after Unread and before Working;
   it and its space stay out of Idle Spaces and the "N more idle" folds, and its row shows what it asks (the triage's line when
@@ -267,7 +268,11 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
   or still isn't recorded after 10 minutes.
   Once a list shows it recorded, the mark still holds the rows of other lists that have not read since (the web: 15 seconds), so a row does not turn Unread again until its own list reads;
   a count read with such a row leaves it out of Unread too (`web/src/lib/seen-outbox.ts`).
-- Rule: herdr `done` and `seen_at` earlier than the session's last update time (the transcript's newest timed line, i.e. when the turn ended; Claude Code's untimed trailing metadata does not count, #5967) → `unread`, otherwise `idle`.
+- A parent and the side sessions folded into it (`docs/protocol/protocol.md` "Session hierarchy") are seen separately: the parent's row shows Unread while one of its sides is
+  (`children.sides_unread`), and viewing the parent records only the parent. The web names that side on the parent's row and opens it in one click (`docs/web/web.md`
+  "Side sessions live in their parent's chat", #13496); its own mark on the parent leaves the row Unread while a side is. iOS, Mac and Android fold the same way but do not name the side yet (#13524).
+- Rule: herdr `done` and `seen_at` earlier than the session's last conversational activity → `unread`, otherwise `idle`.
+  Claude Code's trailing metadata (#5967) and a Codex command result recorded after its turn closed do not count as a new turn.
   So if it does another turn after you looked, it becomes Unread again.
 
 ### Ordering

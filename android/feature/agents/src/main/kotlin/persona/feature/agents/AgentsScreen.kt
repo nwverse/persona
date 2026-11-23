@@ -322,7 +322,18 @@ internal fun AgentsScreen(
         val archiveAction = if (archives?.api?.supports(row.session.key) == true && row.session.canArchiveAgent &&
             everyRequest.none { it.sessionKey == row.session.key }) JAction(stringResource(R.string.agents_action_archive),
                 icon = PhIcons.Archive, enabled = archiveState.busy == null && !archiveState.loading && !operations.busy) { archiveTarget = row.session } else null
-        if (!row.session.isLive) listOfNotNull(JAction(stringResource(R.string.agents_action_open_read_only), onClick = { openRow(row) }), archiveAction,
+        val forkOnline = groups.stateFor(row.session.machineId, connection) == ConnectionState.Online &&
+            page.machines.firstOrNull { it.id == row.session.machineId }?.online != false
+        val forkAction: (() -> Unit)? = if (row.session.canFork && !row.session.archived && model.hasOperations) ({
+            model.fork(row.session) { forked -> open(forked) }
+        }) else null
+        if (!row.session.isLive) listOfNotNull(
+            JAction(stringResource(R.string.agents_action_open_read_only), onClick = { openRow(row) }),
+            forkAction?.let {
+                JAction(stringResource(persona.feature.chat.R.string.chat_menu_fork), PersonaIcons.forkChat,
+                    enabled = !operations.busy && forkOnline, onClick = it)
+            },
+            archiveAction,
             JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !operations.busy) { operationDialog = AgentOperationDialog.Delete(row.session) }
                 .takeIf { row.session.canDelete })
         else AgentSessionMenuItems(row, row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row), operations.busy,
@@ -336,6 +347,8 @@ internal fun AgentsScreen(
             onClose = { operationDialog = AgentOperationDialog.Close(row.session) },
             // A Codex app-server thread the phone may join live (iOS "Join live").
             onAttach = if (row.session.canAttach) ({ model.attach(row.session) }) else null,
+            onFork = forkAction,
+            forkOnline = forkOnline,
             onInterrupt = { model.interrupt(row.session) },
             onLinkTodo = { pickingTodoForSession = row.session },
             onUnlinkTodo = row.session.todo?.let { todo -> { model.unlinkTodo(todo.id, row.session) } },
@@ -1358,6 +1371,8 @@ internal fun AgentSessionMenuItems(
     onOpen: () -> Unit, onPin: () -> Unit, onMute: () -> Unit, onRead: () -> Unit,
     onRename: () -> Unit, onStopLoop: () -> Unit, onHandoff: () -> Unit, onClose: () -> Unit,
     onAttach: (() -> Unit)? = null,
+    onFork: (() -> Unit)? = null,
+    forkOnline: Boolean = true,
     /** Stops its turn; offered while it works or needs you and can be interrupted (iOS `AgentRowMenu`). */
     onInterrupt: (() -> Unit)? = null,
     onLinkTodo: (() -> Unit)? = null,
@@ -1380,6 +1395,16 @@ internal fun AgentSessionMenuItems(
             add(JAction(stringResource(R.string.agents_action_link_todo), PhIcons.ListChecks, enabled = !busy, onClick = onLinkTodo))
         }
         onAttach?.let { add(JAction(stringResource(R.string.agents_action_attach), PhIcons.PlugsConnected, enabled = !busy, onClick = it)) }
+        if (onFork != null) {
+            val turnRunning = row.state == AgentState.Working || row.state == AgentState.NeedsYou
+            add(JAction(
+                stringResource(persona.feature.chat.R.string.chat_menu_fork),
+                PersonaIcons.forkChat,
+                enabled = !busy && forkOnline && !turnRunning,
+                subtitle = if (turnRunning) stringResource(persona.feature.chat.R.string.chat_menu_fork_wait_turn) else null,
+                onClick = onFork,
+            ))
+        }
         // Renaming changes the terminal tab and Claude's /rename; a session without a terminal renames where its node says it
         // can (a runtime's title, #6294).
         if (session.canRename) add(JAction(stringResource(R.string.agents_action_rename), PhIcons.NotePencil, enabled = !busy, onClick = onRename))

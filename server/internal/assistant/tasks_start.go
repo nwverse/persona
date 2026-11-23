@@ -129,7 +129,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		// Remembered by startTaskAgent once admission fixed the folder that runs: its repository is the kind, never
 		// the one the plan was made from when the workspace is in another (#8259).
 		p.Tasks[i].rememberKind = remember
-		if scheduleGrants(ctx) && ownerStarts(ctx) && p.Tasks[i].Schedule != "" && !p.Tasks[i].Readonly && !s.inHealth(ctx, p.Conversation) {
+		if scheduleGrants(ctx) && ownerStarts(ctx) && p.Tasks[i].Schedule != "" && !p.Tasks[i].Readonly && !s.selfPolicy(ctx, p.Conversation).ConfirmOutbound {
 			p.Tasks[i].grantSchedule = p.Tasks[i].Schedule // added once admission fixed the folder (startTaskAgent)
 		}
 	}
@@ -140,6 +140,8 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	if !ok {
 		return nil, errPlanNotOpen
 	}
+	planOwners := map[string]Todo{}
+	planQueuedKeys := map[string]bool{}
 	for i := range p.Tasks {
 		t := &p.Tasks[i]
 		if err := s.checkPlannedInbox(ctx, p.Conversation, *t); err != nil {
@@ -213,12 +215,30 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			// Persist the approved edges, including edges inherited from a reused to-do.
 			t.After = cleanIDs(slices.Concat(t.After, todo.After))
 			t.Queue = s.prerequisiteQueue(ctx, *t, s.requestBlockers(ctx, *t))
+		} else if t.Workspace != nil && t.Workspace.Mode == workspaceExisting && (!t.WorkspaceInferred || t.Workspace.Queue) && t.WorkspaceResolved != nil {
+			effMachine := s.effectiveBoardMachine(t.Machine)
+			wsPath := t.WorkspaceResolved.Path
+			wsKey := effMachine + "\x00" + s.taskDirKey(ctx, t.Machine)(wsPath)
+			owner := s.taskWorkspaceOwner(ctx, t.Machine, wsPath, t.TodoID, false)
+			if owner == nil {
+				if prev, ok := planOwners[wsKey]; ok {
+					cp := prev
+					owner = &cp
+				}
+			}
+			if owner != nil && s.shouldQueueExistingWorkspace(ctx, *t, owner) {
+				q := s.workspaceQueueEntry(ctx, effMachine, wsPath, owner.ID, owner.Title, false, nil)
+				t.Queue = &q
+				planQueuedKeys[wsKey] = true
+			} else if owner == nil {
+				planOwners[wsKey] = Todo{ID: todo.ID, Title: todo.Title}
+			}
 		}
 		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
 		// Its stage kind from that brief; how it is handed out is kept for every later look (task_stage_kind.go).
 		s.restage(ctx, todo.ID, func(st *todoStage) { st.Readonly = t.Readonly })
-		// Every conversation-dispatched task is supervised by the main conversation; its origin still names where it
-		// was handed out (#5732). A task leader's worker keeps its leader Agent through supervisors[i].
+		// The planning lead owns its task from the first dispatch; main owns its own plans. A task leader's worker
+		// keeps its leader Agent through supervisors[i].
 		if sup := supervisors[i]; sup != "" {
 			if t.Parent == "" && t.ReuseTodo == "" && sup != p.Conversation {
 				s.taskCard(ctx, sup, todo.ID, "")
@@ -251,8 +271,32 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		}
 	}
 	s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, p)})
+	// Pre-claim workspaces that have a later queued sibling in this same plan so deterministic FIFO order holds
+	// before goroutines reach admitTaskWorkspace.
+	for i := range p.Tasks {
+		task := p.Tasks[i]
+		if task.TodoID == "" || task.Error != "" || task.Queue != nil || task.Workspace == nil ||
+			task.Workspace.Mode != workspaceExisting || (task.WorkspaceInferred && !task.Workspace.Queue) || task.WorkspaceResolved == nil {
+			continue
+		}
+		effMachine := s.effectiveBoardMachine(task.Machine)
+		wsKey := effMachine + "\x00" + s.taskDirKey(ctx, task.Machine)(task.WorkspaceResolved.Path)
+		if planQueuedKeys[wsKey] {
+			s.preclaimWorkspace(ctx, effMachine, task.WorkspaceResolved.Path, task.TodoID)
+		}
+	}
+	var queuedRecheck []workspaceTarget
 	for i := range p.Tasks {
 		if task := p.Tasks[i]; task.TodoID != "" && task.Error == "" {
+			if task.Queue != nil && task.Queue.Key == workspaceQueueKey && task.Queue.Workspace != nil {
+				held := task.ReuseTodo
+				if held == "" && task.InboxItem != "" {
+					held = task.TodoID
+				}
+				s.releaseTakenTodo(held)
+				queuedRecheck = append(queuedRecheck, workspaceTarget{machine: task.Queue.Workspace.Machine, path: task.Queue.Workspace.Path})
+				continue
+			}
 			s.startPlanTaskAsync(p.ID, p.Conversation, i, task, false, func() {
 				held := task.ReuseTodo
 				if held == "" && task.InboxItem != "" {
@@ -261,6 +305,9 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				s.releaseTakenTodo(held) // linked or failed: the todo is no longer in the gap
 			})
 		}
+	}
+	for _, target := range queuedRecheck {
+		s.drainWorkspaceQueue(ctx, target.machine, target.path)
 	}
 	return p, nil
 }
@@ -292,6 +339,11 @@ func (s *Service) failPlanSupervision(ctx context.Context, todo Todo, t *PlanTas
 // if the scope changed between accepting the card and preparing dispatch.
 func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, t *PlanTask) error {
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		if v.assigned() {
+			supervisor = v.Supervisor // a transfer that won before this write stays authoritative
+		} else if s.isLeader(ctx, supervisor) {
+			v.SupervisorSource = "plan"
+		}
 		if t.Continues == "" {
 			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(t.DoneWhen), t.ExpectMinutes
 			return true
@@ -352,6 +404,9 @@ func (s *Service) reusableTodo(ctx context.Context, conversation, id string, tak
 	}
 	if s.requestStartPending(ctx, t) {
 		return nil, notReusable(id, "an approved start for this request piece is already waiting or its launch is unconfirmed")
+	}
+	if s.workspaceQueuePending(ctx, t) {
+		return nil, notReusable(id, "a start for this to-do is already queued for its workspace")
 	}
 	if s.startRemedying(ctx, t) {
 		return nil, notReusable(id, "its start is being remedied in the tab its computer keeps: use task_retry")
@@ -588,6 +643,9 @@ func (s *Service) releaseStoppedAgents(ctx context.Context, id string, stopped [
 	s.logf("task %s: let go of %d stopped agent(s) for the agent taking it over", id, len(stopped))
 	s.linksChanged(ctx)
 	s.todosChanged(ctx)
+	for _, a := range stopped {
+		s.drainWorkspaceQueue(ctx, a.MachineID, a.Cwd)
+	}
 	return nil
 }
 
@@ -675,6 +733,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
 	var lost startLinkLost
 	var quota *gatewayQuotaWaitError
+	var wsWait *workspaceBusyQueueError
 	if !t.startWithoutReplay() && errors.As(err, &lost) && lost.back {
 		// The link took the start's answer and the machine, back, does not show the agent: start it once more, with
 		// a whole start's time of its own (the first may have spent its own on the dead link). Not counted against
@@ -684,7 +743,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		defer rcancel()
 		ctx = rctx
 		mid, sid, err = s.startTaskAgent(ctx, &t, retry)
-	} else if !t.startWithoutReplay() && err != nil && ctx.Err() == nil && !startStalled(err) && !errors.As(err, &quota) {
+	} else if !t.startWithoutReplay() && err != nil && ctx.Err() == nil && !startStalled(err) && !errors.As(err, &quota) && !errors.As(err, &wsWait) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
 		// launcher failure may move a flexible task, after verifying its directory on the destination.
 		// An unknown result (the wait ran out or the link dropped while the answer was out) already went through
@@ -788,6 +847,10 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			s.logf("task %s: queued launch unconfirmed, not replaying: %v", t.TodoID, err)
 			return
 		}
+	}
+	if errors.As(err, &wsWait) {
+		s.queueWorkspaceBusy(planID, i, t, wsWait, retry)
+		return
 	}
 	// An admission-gate refusal means the machine or direction is briefly full, not that the start failed: park the
 	// task in the admission queue (no failTodo, no failure receipt) and let the queue loop retry it (task_queue.go).

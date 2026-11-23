@@ -128,12 +128,12 @@ afterEach(() => {
 });
 
 async function open() {
-  act(() => root.render(<NewAgent open onClose={() => {}} />));
+  await act(async () => root.render(<NewAgent open onClose={() => {}} />));
   await flush();
 }
 
 async function openPanel() {
-  act(() => pill().click());
+  await act(async () => pill().click());
   await act(async () => vi.dynamicImportSettled());
   await flush();
   expect(panel()).not.toBeNull();

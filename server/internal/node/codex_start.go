@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -203,12 +204,19 @@ func codexExecutionArgs(argv []string, e modelExecution) []string {
 // given (adoptedPane: a switch from Claude Code, engine_switch.go) it starts there, and a start that fails leaves that
 // pane open: what it left in front is for the caller to clear.
 func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launcher string, argv []string, execution modelExecution, prompt, ws, tabName, mode string) (*proto.Session, error) {
+	if execution.Source.Role == "" {
+		execution.Source.Role = "task_agent"
+	}
+	execution.Source.Session = "" // a fresh Codex thread has no Persona session ID yet
 	waiting := strings.TrimSpace(prompt) == ""
 	if waiting {
 		prompt = ""
 	}
 	if mode == "bypassPermissions" {
 		argv = n.codexBypassArgv(launcher, argv)
+	}
+	if err := n.checkCodexWritableSymlinks(ctx, launch, launcher, argv, cwd); err != nil {
+		return nil, err
 	}
 	if n.codexOnSharedDaemon(argv) {
 		if err := codexDaemonSocketGone(n.codexHome()); err != nil {
@@ -234,7 +242,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if runtime.GOOS == "windows" {
 		prompt = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(inertControls(prompt))
 	}
-	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: cwd})
+	b, _ := json.Marshal(codexStartFile{Source: execution.Source, Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return nil, err
 	}
@@ -324,7 +332,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	id = n.codexPublicID(n.codexPaneHome(pane), id)
 	n.bindPane(pane, id)
 	n.namePersonaTab(ctx, pane, id) // the tab was marked before the thread was known (personatab.go)
-	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort, TaskInstructions: execution.TaskInstructions}
+	st := sessionState{ModelSource: execution.Source, Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort, TaskInstructions: execution.TaskInstructions}
 	if st.TaskInstructions != "" && slices.Contains(argv, codexTaskConfig(st.TaskInstructions)) {
 		st.TaskInstructionChannel = "codex"
 	}
@@ -544,8 +552,9 @@ const (
 // codexStartFile is what `personad codex-start` runs: the launcher's words (variables set in front, `A=1 codex …`,
 // then the command and its arguments) and the first message.
 type codexStartFile struct {
-	Argv   []string `json:"argv"`
-	Prompt string   `json:"prompt"`
+	Source modelhttp.Source `json:"model_source,omitzero"`
+	Argv   []string         `json:"argv"`
+	Prompt string           `json:"prompt"`
 	// Agent is the HERDR_AGENT the words run with (hostherdr.go): "codex" for a Codex started in a herdr pane; "" leaves
 	// the variable as it is (tab-start, other hosts).
 	Agent string `json:"agent,omitempty"`
@@ -591,6 +600,12 @@ func CodexStart(args []string) error {
 		env = append(withoutEnv(env, []string{herdrAgentEnv}), herdrAgentEnv+"="+f.Agent)
 		explicit = append(explicit, herdrAgentEnv+"="+f.Agent)
 	}
+	if f.Source.Role != "" {
+		bin, _ := os.Executable()
+		sourceEnv := modelSourceEnvironment(f.Source, bin)
+		env = append(withoutEnv(env, envNames(sourceEnv)), sourceEnv...)
+		explicit = append(explicit, sourceEnv...)
+	}
 	for len(words) > 0 && shellcmd.AssignRe.MatchString(words[0]) {
 		env = append(env, words[0])
 		explicit = append(explicit, words[0])
@@ -626,8 +641,20 @@ func CodexStart(args []string) error {
 			argv = append([]string{argv[0], "--no-daemon"}, argv[1:]...)
 		}
 	}
+	if filepath.Base(words[0]) == "codex" && (filepath.IsAbs(words[0]) || runtime.GOOS == "windows") {
+		home, _ := os.UserHomeDir()
+		cwd, _ := os.Getwd()
+		argv, env = codexModelSource(argv, env, cwd, home)
+	}
 	if f.Prompt != "" { // a resume without a message (`personad tab-start`, pi.go) runs the words alone
 		argv = append(argv, "--", f.Prompt)
+	}
+	if filepath.Base(argv[0]) == "codex" {
+		home, _ := os.UserHomeDir()
+		cwd, _ := os.Getwd()
+		if err := guardCodexWritableSymlinks(context.Background(), argv, env, cwd, home); err != nil {
+			return fmt.Errorf("%s %w", codexStartError, err)
+		}
 	}
 	path, argv, env, _ = codexStartExec(path, argv, env, explicit)
 	if err := codexStartCommandLine(argv); err != nil {
@@ -688,6 +715,19 @@ while [ "$1" != -- ]; do
   shift
 done
 shift
+if [[ -n "${PERSONA_MODEL_SOURCE_BIN-}" && -n "${PERSONA_MODEL_SOURCE_HOSTS-}" ]]; then
+  function __persona_source_codex { "${PERSONA_MODEL_SOURCE_BIN}" model-source codex "$@"; }
+  if [[ -n "${ZSH_VERSION-}" ]] && (( $+functions[codex] )); then
+    functions[__persona_source_user_codex]=$functions[codex]
+    function codex { __persona_source_user_codex "$@"; }
+  elif [[ -n "${BASH_VERSION-}" ]] && builtin declare -F codex >/dev/null; then
+    eval "$(builtin declare -f codex | sed '1s/codex/__persona_source_user_codex/')"
+    function codex { __persona_source_user_codex "$@"; }
+  else
+    function codex { __persona_source_codex "$@"; }
+  fi
+  function command { if [[ "$1" == codex ]]; then shift; __persona_source_codex "$@"; else builtin command "$@"; fi; }
+fi
 "$@"
 `
 

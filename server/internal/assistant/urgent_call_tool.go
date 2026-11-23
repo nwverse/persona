@@ -65,6 +65,9 @@ type urgentAsk struct {
 	Rule          string `json:"rule"`
 	Happening     string `json:"happening"`
 	InteractionID string `json:"interaction_id"`
+	// matter is the matter's key kept from its own title when only its words, not its track, redacted it: redacted
+	// titles all read alike and would make unrelated matters one (urgentMatter).
+	matter string
 }
 
 // toolUrgentCall is urgent_call: ring the owner's phone about a matter, when the gates let it; otherwise the matter
@@ -87,8 +90,12 @@ func (s *Service) toolUrgentCall(ctx context.Context, machine, self string, args
 	if s.justMeNow(machine, self) {
 		return justMeNotice(s.lang(ctx)), nil
 	}
-	if s.inHealth(ctx, self) { // the lock screen hears there is news, not what it is (health.go)
-		a.Title, a.Body = healthNotice(s.lang(ctx))
+	// The lock screen hears there is news, not what it is, when what it would say is redacted (health.go).
+	if space, _ := s.selfSpace(ctx, self); s.exitPolicy(ctx, a.Title+"\n"+a.Body, self, space).Redact {
+		if !s.trackPolicy(ctx, space).Redact {
+			a.matter = urgentMatter(a)
+		}
+		a.Title, a.Body = s.redactedNotice(ctx, s.lang(ctx), space)
 	}
 	a.Title = clipRunesTo(a.Title, urgentTitleMax)
 	st := s.urgentStore()
@@ -128,6 +135,9 @@ func (s *Service) toolUrgentCall(ctx context.Context, machine, self string, args
 func urgentMatter(a urgentAsk) string {
 	if a.InteractionID != "" {
 		return "ix:" + a.InteractionID
+	}
+	if a.matter != "" {
+		return a.matter
 	}
 	return "title:" + strings.ToLower(a.Title)
 }
