@@ -195,6 +195,18 @@ func setSuperviseTimings(s *Service, p superviseTimings) {
 	s.superviseTimes = p
 }
 
+// rearmDigest puts s back on the short timings and arms the digest timer for what is pending, as queueing an
+// immediate signal does, under the same locks as setSuperviseTimings: the real timer runs again from here.
+func rearmDigest(s *Service) {
+	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.superviseTimes = shortSuperviseTimings
+	s.scheduleDigestLocked(time.Now())
+}
+
 // pendingCardlessSignal reads the pending claim. On a service with a store it reads the outbox (the relay state's
 // supervise_pending, which is what is persisted), as supervisePendingDurably does: a digest takes what it delivers out
 // of the in-memory pending signals until it ends, while the outbox keeps the claim until its delivery is acknowledged,
