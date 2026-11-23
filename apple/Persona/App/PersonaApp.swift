@@ -188,7 +188,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ = KeyboardState.shared // watches the keyboard from the start: a card may come while it is already up
         UNUserNotificationCenter.current().delegate = self
         Task { await ExtensionNotificationActions.preserveAndRegister { NotificationActions.categories } }
-        Modules.registry.launch() // the active modules' launch hooks, as the Meta glasses' set-up (docs/apple/ios.md, "Modules")
+        ModuleState.shared.launch() // the active modules' launch hooks, as the Meta glasses' set-up (docs/apple/ios.md, "Modules")
         #if os(iOS)
         QuickAction.publish()
         // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the

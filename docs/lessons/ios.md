@@ -31,6 +31,15 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## An inactive scene opens no hub socket, so no hello arrives (2026-11-24, #13849)
+
+A simulator app driven by `personactl` with a system prompt up (Photos, notifications) or no visible Simulator window
+stays `inactive` (`personactl state` shows `appState`). It reads the hub over HTTP, so pages fill in and the runtime CLI
+says `online`, but it never opens its WebSocket, so no hello arrives and nothing gated on hello features changes:
+the mock's log has no `GET /api/v1/ws` from the app. Answer the prompts (or grant them with `simctl privacy` before the
+launch) and check `appState` is `active` before taking a screenshot of hello-gated UI, such as a module the hub turns
+off (`MOCK_HUB_MODULES`).
+
 ## What a development build redid with nothing changed (2026-11-19, #10713)
 
 `scripts/app/sim.sh` rebuilt more than the change it was run for (`docs/operations/testing.md`, "Development builds"):

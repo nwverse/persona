@@ -3,6 +3,7 @@
 # depends only on the standard library, third-party packages, the contract packages (contracts.txt) and the other
 # libraries of this list (TestLibrariesAreLeaves), so a module that uses one reaches no manager, hub, node, store or
 # other module. Add one only when a module needs it and it passes that test; never add a business package.
+internal/apierr
 internal/botcard
 internal/channel
 internal/compat
@@ -10,9 +11,11 @@ internal/i18n
 internal/identity
 internal/lazyre
 internal/modelretry
+internal/netproxy
 internal/osproc
 internal/procinfo
 internal/prompts
+internal/secretkey
 internal/tokenuse
 internal/transcript
 github.com/nwverse/persona/sdk/go/ext

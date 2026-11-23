@@ -1570,7 +1570,8 @@ explicit user-facing actions still follow the usual visibility rules.
 
 - **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
   the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
-  `conversation`, `followup` or `patrol`. A `followup` counts only as a scheduled follow-up (the hub gives those the
+  `conversation`, `followup` or `patrol`. Web also folds `notice` rounds such as delivery PR follow-ups under the same
+  setting. A `followup` counts only as a scheduled follow-up (the hub gives those the
   task's title): Persona continuing the user's own work after a usage limit reset (`injected.state: limit_continue`),
   waking the chat for what it waits on (`wake`) or an untitled follow-up is not a background round, so the answer to
   the user's question never folds away. Like a supervision round it lasts until the next genuine input; a queued user
