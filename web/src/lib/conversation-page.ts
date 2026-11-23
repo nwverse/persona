@@ -32,8 +32,9 @@ export function conversationRoute(mid: string, sid: string, sessions: Record<str
   return s?.assistant || own ? conversationPage(sid, mid, s?.manager ?? manager ?? (own ? chosenManager() ?? undefined : undefined)) : { name: "session", mid, sid };
 }
 
-/** A space's conversation's page: the health space's own page, any other domain space's `/tracks/<slug>/<sid>`, where
- *  its plan cards, questions and tasks show (the bare `/s/…` chat is an agent's and shows none of them). */
+/** A space's conversation's page: its track's `/tracks/<slug>/<sid>` (the health space's too, which the health module's
+ *  track page opens), where its plan cards, questions and tasks show (the bare `/s/…` chat is an agent's and shows none
+ *  of them). */
 export function spacePage(space: string, sid: string): Route {
-  return space === "health" ? { name: "health", sid } : { name: "track", slug: space, sid };
+  return { name: "track", slug: space, sid };
 }
