@@ -550,6 +550,9 @@ type BriefFacts struct {
 	Day *BriefDay
 	// Setup: the lines of the weekly recommended-setup block (#5085), ready to read; none leaves the section out.
 	Setup []string
+	// Captures: the quick-capture lines (#13502), ready to read; a sensitive capture is only counted. None leaves the
+	// section out.
+	Captures []string
 }
 
 // BriefDay is today's all-day recording in the evening routine's facts (#4741), the day's parts merged by time; the
