@@ -1,5 +1,9 @@
 package persona.feature.agents
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -8,6 +12,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
@@ -35,7 +41,9 @@ import kotlinx.coroutines.delay
 import java.time.Instant
 import persona.core.designsystem.FeedbackNotice
 import persona.core.designsystem.FeedbackStyle
+import persona.core.designsystem.Tokens
 import persona.core.designsystem.rememberToastState
+import persona.feature.chat.CodexTakeoverBusyPill
 import persona.feature.chat.CodexTakeoverClient
 import persona.feature.chat.CodexTakeoverDialogs
 import persona.feature.chat.codexTakeoverMenuActions
@@ -174,23 +182,30 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
             onClose = { operationDialog = AgentOperationDialog.Close(row.session) },
             onDelete = { operationDialog = AgentOperationDialog.Delete(row.session) })
     }
-    SpaceScreen(space, page.machines, pending, page.preferences, operations.busy,
-        canStart = workspace != null && page.machines.any { it.id == space?.machineId && it.online }, toast = toast, now = now,
-        onDismiss = navigator::back, onOpen = ::openRow,
-        onNewTab = { creationModel?.startIn(AgentSpacePreset(it.machineId, requireNotNull(workspace), it.cwd, it.name)); newAgent = true },
-        spaceMenu = { shown ->
-            val session = shown.members.first().session
-            val unread = shown.members.filter { it.unseen }
-            AgentSpaceMenu(session, shown.preferenceKey in page.preferences.pins.spaces, shown.preferenceKey in page.preferences.mutes.spaces,
-                operations.busy, onPin = { model.spacePin(session) }, onMute = { model.spaceMute(session) },
-                onRename = { operationDialog = AgentOperationDialog.RenameSpace(session) },
-                onMarkRead = unread.takeIf { it.isNotEmpty() }?.let { rows -> { confirmRead = rows } })
-        },
-        sessionMenu = rowMenu, title = route.title,
-        onMachine = { navigator.navigate(MachineSpacesRoute(it)) },
-        // The page's list arrives a moment after it opens: no "No running agents" flash before that.
-        loaded = page.sessions.isNotEmpty() || page.machines.isNotEmpty(),
-        onClose = { row -> closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) } })
+    Box(Modifier.fillMaxSize()) {
+        SpaceScreen(space, page.machines, pending, page.preferences, operations.busy || takeoverCoordinator.inFlight,
+            canStart = workspace != null && page.machines.any { it.id == space?.machineId && it.online }, toast = toast, now = now,
+            onDismiss = navigator::back, onOpen = ::openRow,
+            onNewTab = { creationModel?.startIn(AgentSpacePreset(it.machineId, requireNotNull(workspace), it.cwd, it.name)); newAgent = true },
+            spaceMenu = { shown ->
+                val session = shown.members.first().session
+                val unread = shown.members.filter { it.unseen }
+                AgentSpaceMenu(session, shown.preferenceKey in page.preferences.pins.spaces, shown.preferenceKey in page.preferences.mutes.spaces,
+                    operations.busy, onPin = { model.spacePin(session) }, onMute = { model.spaceMute(session) },
+                    onRename = { operationDialog = AgentOperationDialog.RenameSpace(session) },
+                    onMarkRead = unread.takeIf { it.isNotEmpty() }?.let { rows -> { confirmRead = rows } })
+            },
+            sessionMenu = rowMenu, title = route.title,
+            onMachine = { navigator.navigate(MachineSpacesRoute(it)) },
+            // The page's list arrives a moment after it opens: no "No running agents" flash before that.
+            loaded = page.sessions.isNotEmpty() || page.machines.isNotEmpty(),
+            onClose = { row -> closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) } })
+        if (takeoverClient != null) CodexTakeoverBusyPill(
+            takeoverCoordinator,
+            page.sessions,
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = Tokens.Space.page, vertical = Tokens.Space.l),
+        )
+    }
     operationDialog?.let { dialog ->
         val machine = page.machines.firstOrNull { it.id == dialog.session.machineId }
         AgentOperationDialog(dialog, model, machine?.displayName, creationModel?.service, machine) { operationDialog = null }

@@ -261,12 +261,13 @@ fun JDialog(
     destructive: Boolean = false,
     confirmEnabled: Boolean = true,
     confirmLoading: Boolean = false,
+    dismissEnabled: Boolean = !confirmLoading,
     content: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
     val shortcutHelpOwner = androidx.compose.runtime.remember { Any() }
     val densities = currentTextDensities()
-    val dismissRequest: () -> Unit = if (confirmLoading) ({}) else onDismiss
+    val dismissRequest: () -> Unit = if (!dismissEnabled) ({}) else onDismiss
     androidx.compose.runtime.CompositionLocalProvider(
         LocalReadingInset provides 0.dp,
         LocalHardwareShortcutHelpOwner provides shortcutHelpOwner,
@@ -296,7 +297,7 @@ fun JDialog(
             }
         },
         dismissButton = dismiss?.let { (label, action) -> {
-            RetainedTextDensity(densities) { InterfaceContent { JButton(label, action, kind = JButtonKind.Quiet, size = JButtonSize.Medium, enabled = !confirmLoading) } }
+            RetainedTextDensity(densities) { InterfaceContent { JButton(label, action, kind = JButtonKind.Quiet, size = JButtonSize.Medium, enabled = dismissEnabled) } }
         } },
     )
     HardwareShortcutHelp(shortcutHelpOwner)

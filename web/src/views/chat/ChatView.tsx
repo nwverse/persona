@@ -572,16 +572,23 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const canCompose = sessionCan(session, "send");
   // a stopped Agent (#4754): a read-only line with Terminal and Resume where the composer goes
   const stoppedLine = composerSlot(session, { assistant: Boolean(assistant), offline: Boolean(offlineLine) }) === "stopped";
-  // a read-only Codex session with explicit takeover/continuation: replaces the disabled composer with a single footer bar
+  // a read-only Codex session with explicit takeover/continuation: replaces the disabled composer (and merges with
+  // StoppedAgentLine when an exited Codex thread also carries `terminal`) so takeover lives in one footer bar
   const isCodexSession = Boolean(session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server"));
   const codexReadOnlyLine = Boolean(!assistant && !stoppedLine && !offlineLine && isCodexSession && !canCompose && session?.capabilities?.takeover);
+  const codexStoppedTakeover = Boolean(stoppedLine && isCodexSession && session?.capabilities?.takeover);
+  const codexFooterTakeover = codexReadOnlyLine || codexStoppedTakeover;
   const [takeoverPending, setTakeoverPending] = useState(false);
-  const [continueTakeoverSignal, setContinueTakeoverSignal] = useState(0);
+  const [continueTakeoverRequested, setContinueTakeoverRequested] = useState(false);
   useEffect(() => {
     setTakeoverPending(false);
-    setContinueTakeoverSignal(0);
+    setContinueTakeoverRequested(false);
   }, [draftKey]);
-  const triggerContinueTakeover = useCallback(() => setContinueTakeoverSignal((n) => n + 1), []);
+  useEffect(() => {
+    if (!codexFooterTakeover) setContinueTakeoverRequested(false);
+  }, [codexFooterTakeover]);
+  const triggerContinueTakeover = useCallback(() => setContinueTakeoverRequested(true), []);
+  const consumeContinueTakeover = useCallback(() => setContinueTakeoverRequested(false), []);
   // one function while this chat stays put: the header takes it, and must not draw again for every pushed item
   const openTerminal = useCallback(
     () => (switchable ? setView("term") : navigate({ name: "session", mid, sid, view: "term" })),
@@ -2423,8 +2430,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         team={team}
         sides={sideControl}
         panel={chrome}
-        hideTakeoverButtons={codexReadOnlyLine || takeoverPending}
-        onContinueTakeover={codexReadOnlyLine ? triggerContinueTakeover : undefined}
+        hideTakeoverButtons={codexFooterTakeover || takeoverPending}
+        onContinueTakeover={codexFooterTakeover ? triggerContinueTakeover : undefined}
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
       {!embedded && banner}
@@ -2680,17 +2687,19 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {picker && pickParts.Bar && <pickParts.Bar pick={picker} chat={forwardFrom} onEnd={endPick} />}
         {/* kept while a call is on (its draft, attachments and quotes stay), the bar in its place */}
         <div ref={composerBox} className="shrink-0" hidden={takeover || Boolean(picker)}>
-        {session && (codexReadOnlyLine || takeoverPending) && (
+        {session && (codexFooterTakeover || takeoverPending) && (
           <CodexReadOnlyLine
             session={session}
-            visible={codexReadOnlyLine}
-            continueSignal={continueTakeoverSignal}
+            visible={codexFooterTakeover}
+            stopped={codexStoppedTakeover ? { mid, sid, onTerminal: openTerminal } : undefined}
+            continueRequested={continueTakeoverRequested}
+            onContinueConsumed={consumeContinueTakeover}
             onPendingChange={setTakeoverPending}
           />
         )}
-        {stoppedLine ? (
+        {stoppedLine && !codexStoppedTakeover ? (
           <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} />
-        ) : !codexReadOnlyLine && (
+        ) : !codexFooterTakeover && (
         <Composer
           draftKey={draftKey}
           placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}

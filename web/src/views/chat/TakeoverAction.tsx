@@ -15,13 +15,15 @@ export function takeoverContinueLabel(): string {
 export default function TakeoverAction({
   session,
   variant = "default",
-  continueSignal,
+  continueRequested = false,
+  onContinueConsumed,
   onPendingChange,
 }: {
   session: Session;
   variant?: "default" | "compact";
-  /** Incrementing trigger from the top-bar overflow menu to start continuation through this same instance. */
-  continueSignal?: number;
+  /** One-shot request from the top-bar overflow menu; consumed immediately via [onContinueConsumed] so reconnects never replay it. */
+  continueRequested?: boolean;
+  onContinueConsumed?: () => void;
   /** True while a request or confirmation dialog is active, so hosts keep this mounted across SSE updates. */
   onPendingChange?: (pending: boolean) => void;
 }) {
@@ -86,13 +88,13 @@ export default function TakeoverAction({
 
   const continueRef = useRef(continueNew);
   continueRef.current = continueNew;
-  const lastSignal = useRef(0);
+  const consumedRef = useRef(onContinueConsumed);
+  consumedRef.current = onContinueConsumed;
   useEffect(() => {
-    if (continueSignal && continueSignal !== lastSignal.current) {
-      lastSignal.current = continueSignal;
-      void continueRef.current();
-    }
-  }, [continueSignal]);
+    if (!continueRequested) return;
+    consumedRef.current?.();
+    void continueRef.current();
+  }, [continueRequested]);
 
   const continueElsewhere = () => {
     if (!plan) return;

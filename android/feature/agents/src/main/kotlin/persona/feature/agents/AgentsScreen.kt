@@ -49,6 +49,7 @@ import persona.core.domain.showsStarCard
 import persona.core.domain.showsStarPill
 import persona.core.navigation.*
 import persona.feature.chat.ChatSourceNote
+import persona.feature.chat.CodexTakeoverBusyPill
 import persona.feature.chat.CodexTakeoverClient
 import persona.feature.chat.CodexTakeoverDialogs
 import persona.feature.chat.codexTakeoverMenuActions
@@ -966,6 +967,11 @@ internal fun AgentsScreen(
         )
         if (sidebar == null) AgentsFeedNote(feed, latestPage, Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
             .padding(horizontal = Tokens.Space.page).padding(bottom = Tokens.Space.l))
+        if (takeoverClient != null) CodexTakeoverBusyPill(
+            takeoverCoordinator,
+            page.sessions,
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = Tokens.Space.page, vertical = Tokens.Space.l),
+        )
         persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
     }
     }
@@ -1038,35 +1044,80 @@ internal fun AgentsScreen(
             it.machineId == historyMachine && it.sessionId == historySession
         }
         JFullScreen({ historyMachine = null; historySession = null }) {
-            persona.feature.chat.ChatDestination(ChatRoute(requireNotNull(historyMachine), requireNotNull(historySession)), navigator,
-                historyReadOnly = true, onHistoryBack = { historyMachine = null; historySession = null },
-                historyFooter = {
-                    if (target != null && target.canContinueCodex && takeoverClient != null) {
-                        ChatSourceNote(
-                            session = target,
-                            modifier = Modifier.navigationBarsPadding(),
-                            takeover = takeoverCoordinator,
-                            takeoverEnabled = connection == ConnectionState.Online && page.machines.any { it.id == target.machineId && it.online },
-                        )
-                    } else Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        creation?.error?.let { Text(it.resolve(), style = PersonaTheme.type.caption) }
-                        // A Codex history thread or a runtime's session is not resumed in a terminal from the phone.
-                        val sourced = target?.takeIf { it.hasSource }
-                        if (sourced != null) Text(sourced.readOnlyNotice.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-                        else JButton(stringResource(if (creation?.pending?.request?.resumeSessionId == historySession) R.string.agents_history_check_resume else R.string.agents_history_resume),
-                            loading = creation?.starting == true,
-                            enabled = creationModel != null && creation?.initialized == true && creation.starting != true &&
-                                target != null && (creation.pending != null ||
-                                (connection == ConnectionState.Online && page.machines.any { it.id == target.machineId && it.online })),
-                            onClick = { target?.let {
-                                if (it.isLive && creation?.pending == null) {
-                                    historyMachine = null
-                                    historySession = null
-                                    open(it.key)
-                                } else creationModel?.resume(it)
-                            } }, modifier = Modifier.fillMaxWidth())
+            // Host feedback, toasts and takeover dialogs inside JFullScreen's own window so failure/retry feedback
+            // is visible above the preview instead of hidden behind it (Super Rule 5).
+            val historyToast = persona.core.designsystem.rememberToastState()
+            val historyToastScope = rememberCoroutineScope()
+            val historyRes = agentResources()
+            val historyFeedback = remember(historyToast, historyToastScope, historyRes) {
+                object : AppFeedback {
+                    override fun failure(error: Throwable, operation: Boolean): Boolean {
+                        if (!operation) return true
+                        val text = persona.core.designsystem.operationFeedback(error).text.resolve(historyRes)
+                        historyToastScope.launch { historyToast.show(FeedbackNotice(text, style = FeedbackStyle.Error)) }
+                        return true
                     }
-                })
+                    override fun notice(message: String): Boolean = notice(message, FeedbackStyle.Info)
+                    override fun notice(message: String, style: FeedbackStyle): Boolean {
+                        if (style == FeedbackStyle.Success && feedback?.notice(message, style) == true) return true
+                        historyToastScope.launch { historyToast.show(FeedbackNotice(message, style = style)) }
+                        return true
+                    }
+                    override fun notice(message: String, action: FeedbackAction): Boolean = notice(message, action, FeedbackStyle.Info)
+                    override fun notice(message: String, action: FeedbackAction, style: FeedbackStyle): Boolean {
+                        historyToastScope.launch { historyToast.show(FeedbackNotice(message, action = action, style = style)) }
+                        return true
+                    }
+                }
+            }
+            CompositionLocalProvider(LocalAppFeedback provides historyFeedback) {
+                val historyTakeoverCoordinator = rememberCodexTakeoverCoordinator(
+                    client = takeoverClient,
+                    sessions = model.sessions,
+                    onOpenSession = null,
+                    fallbackToast = historyToast,
+                    successFeedback = feedback,
+                    onCompleted = { _, adopted ->
+                        historyMachine = null
+                        historySession = null
+                        open(adopted.key)
+                    },
+                )
+                Box(Modifier.fillMaxSize()) {
+                    persona.feature.chat.ChatDestination(ChatRoute(requireNotNull(historyMachine), requireNotNull(historySession)), navigator,
+                        historyReadOnly = true, onHistoryBack = { historyMachine = null; historySession = null },
+                        historyFooter = {
+                            if (target != null && target.canContinueCodex && takeoverClient != null) {
+                                val targetHubOnline = groups.stateFor(target.machineId, connection) == ConnectionState.Online
+                                ChatSourceNote(
+                                    session = target,
+                                    modifier = Modifier.navigationBarsPadding(),
+                                    takeover = historyTakeoverCoordinator,
+                                    takeoverEnabled = targetHubOnline && page.machines.any { it.id == target.machineId && it.online },
+                                )
+                            } else Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                                creation?.error?.let { Text(it.resolve(), style = PersonaTheme.type.caption) }
+                                // A Codex history thread or a runtime's session is not resumed in a terminal from the phone.
+                                val sourced = target?.takeIf { it.hasSource }
+                                if (sourced != null) Text(sourced.readOnlyNotice.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                                else JButton(stringResource(if (creation?.pending?.request?.resumeSessionId == historySession) R.string.agents_history_check_resume else R.string.agents_history_resume),
+                                    loading = creation?.starting == true,
+                                    enabled = creationModel != null && creation?.initialized == true && creation.starting != true &&
+                                        target != null && (creation.pending != null ||
+                                        (groups.stateFor(target.machineId, connection) == ConnectionState.Online && page.machines.any { it.id == target.machineId && it.online })),
+                                    onClick = { target?.let {
+                                        if (it.isLive && creation?.pending == null) {
+                                            historyMachine = null
+                                            historySession = null
+                                            open(it.key)
+                                        } else creationModel?.resume(it)
+                                    } }, modifier = Modifier.fillMaxWidth())
+                            }
+                        })
+                    if (takeoverClient != null) CodexTakeoverDialogs(historyTakeoverCoordinator)
+                    persona.core.designsystem.JToastHost(historyToast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
+                }
+            }
         }
     }
     if (takeoverClient != null) CodexTakeoverDialogs(takeoverCoordinator)

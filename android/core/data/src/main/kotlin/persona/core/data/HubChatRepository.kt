@@ -296,7 +296,10 @@ class HubChatRepository(
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = delegate.rewind(session, target, restore)
         override suspend fun codexTakeoverInfo(session: Session) = delegate.codexTakeoverInfo(session)
         override suspend fun codexTakeover(session: Session, token: String, confirmStop: Boolean) = delegate.codexTakeover(session, token, confirmStop)
-        override suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo) = delegate.startCodexContinuation(session, info)
+        override suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo, operationId: String) =
+            delegate.startCodexContinuation(session, info, operationId)
+        override suspend fun codexContinuationOperation(session: Session, operationId: String) =
+            delegate.codexContinuationOperation(session, operationId)
     }
 
     /** The composer shares interruption state with menu actions. Failed requests leave it unchanged. */

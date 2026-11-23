@@ -425,18 +425,29 @@ class HttpChatActionsTest {
         }
     }
 
-    @Test fun codexTakeoverEndpointsEncodePathsUseSlowPostAndPreserve409Code() = runBlocking {
+    @Test fun codexTakeoverEndpointsEncodePathsUseSlowPostAndPreserve409Code(): Unit = runBlocking {
         MockWebServer().use { server ->
             val http = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
             val slow = mutableListOf<String>()
             val fast = mutableListOf<String>()
-            val actions = HttpChatActions({ path, method, body ->
-                slow += "$method $path"
-                http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
-            }) { path, method, body ->
-                fast += "$method $path"
-                http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
-            }
+            val sentHeaders = mutableListOf<Map<String, String>>()
+            val actions = HttpChatActions(
+                slowRequest = { path, method, body ->
+                    slow += "$method $path"
+                    http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
+                },
+                request = { path, method, body ->
+                    fast += "$method $path"
+                    http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
+                },
+                slowRequestWithHeaders = { path, method, body, headers ->
+                    slow += "$method $path"
+                    sentHeaders += headers
+                    val builder = Request.Builder().url(server.url(path)).method(method, body)
+                    headers.forEach { (k, v) -> builder.header(k, v) }
+                    http.newCall(builder.build()).execute()
+                },
+            )
             val session = Session(
                 machineId = "mac one",
                 sessionId = "thread/1",
@@ -471,12 +482,15 @@ class HttpChatActionsTest {
             assertEquals(CODEX_TAKEOVER_CONTINUE_ONLY, conflict.code)
             server.takeRequest()
 
+            // Continuation posts to /api/v1/sessions with X-Persona-Op-Id, launcher=codex, async=false, and original todo_id.
+            val opId = "11111111-1111-4111-8111-111111111111"
             server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"mac one","session_id":"new-thread","status":"working"}}"""))
-            val continued = actions.startCodexContinuation(session, info)
-            assertEquals(SessionKey("mac one", "new-thread"), continued.key)
+            val continued = actions.startCodexContinuation(session, info, opId) as AgentStartResult.Created
+            assertEquals(SessionKey("mac one", "new-thread"), continued.session.key)
             val startReq = server.takeRequest()
             assertEquals("POST", startReq.method)
             assertEquals("/api/v1/sessions", startReq.path)
+            assertTrue(sentHeaders.last().values.contains(opId))
             val startJson = JsonCodec.parseToJsonElement(startReq.body.readUtf8()).jsonObject
             assertEquals("codex", startJson["launcher"]?.jsonPrimitive?.content)
             assertEquals("Continue here", startJson["prompt"]?.jsonPrimitive?.content)
@@ -484,6 +498,26 @@ class HttpChatActionsTest {
             assertEquals("todo-9", startJson["todo_id"]?.jsonPrimitive?.content)
             assertTrue(slow.contains("POST $expectedPath"))
             assertTrue(slow.contains("POST /api/v1/sessions"))
+
+            // Lost POST response reconciles against GET /api/v1/ops/{opId} without returning a false rejection on 404.
+            val lostOpId = "22222222-2222-4222-8222-222222222222"
+            val encodedSession = java.util.Base64.getEncoder().encodeToString(
+                """{"session":{"machine_id":"","session_id":"reconciled-1","status":"working"}}""".toByteArray(),
+            )
+            server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":"gateway lost"}"""))
+            server.enqueue(MockResponse().setBody("""{"kind":"start","state":"done","result":{"status":200,"body":"$encodedSession"}}"""))
+            val reconciled = actions.startCodexContinuation(session, info, lostOpId) as AgentStartResult.Created
+            assertEquals(SessionKey("mac one", "reconciled-1"), reconciled.session.key)
+            assertEquals("/api/v1/sessions", server.takeRequest().path)
+            assertEquals("/api/v1/ops/$lostOpId", server.takeRequest().path)
+
+            // 404 on /ops/{id} after an uncertain 502 stays Unknown (never Rejected).
+            val unknownOpId = "33333333-3333-4333-8333-333333333333"
+            server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":"lost"}"""))
+            server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"missing"}"""))
+            assertEquals(AgentStartResult.Unknown, actions.startCodexContinuation(session, info, unknownOpId))
+            server.takeRequest(); server.takeRequest()
+            Unit
         }
     }
 }

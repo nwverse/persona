@@ -19,12 +19,25 @@ class HttpChatActions internal constructor(
     /** For a rewind (null: [request]): the node walks Claude's /rewind for up to 90 s and the hub waits 100 s to hear why. */
     private val slowRequest: (suspend (String, String, RequestBody?) -> Response)? = null,
     private val request: suspend (String, String, RequestBody?) -> Response,
+    /** Slow lane with custom headers (e.g. `X-Persona-Op-Id` on idempotent session starts); falls back to [slowRequest]. */
+    private val slowRequestWithHeaders: (suspend (String, String, RequestBody?, Map<String, String>) -> Response)? = null,
 ) : ChatActions {
+    internal constructor(
+        slowRequest: (suspend (String, String, RequestBody?) -> Response)? = null,
+        request: suspend (String, String, RequestBody?) -> Response,
+    ) : this(slowRequest, request, null)
+
     constructor(connection: OkHttpHubConnection) : this(
-        { path, method, body -> connection.request(path, method, body, readTimeoutSeconds = REWIND_READ_TIMEOUT_SECONDS) },
-        connection::request)
+        slowRequest = { path, method, body -> connection.request(path, method, body, readTimeoutSeconds = REWIND_READ_TIMEOUT_SECONDS) },
+        request = connection::request,
+        slowRequestWithHeaders = { path, method, body, headers ->
+            connection.request(path, method, body, headers = headers, readTimeoutSeconds = REWIND_READ_TIMEOUT_SECONDS)
+        },
+    )
 
     private val slow get() = slowRequest ?: request
+    private suspend fun slowWithHeaders(path: String, method: String, body: RequestBody?, headers: Map<String, String>): Response =
+        slowRequestWithHeaders?.invoke(path, method, body, headers) ?: slow(path, method, body)
 
     private val lock = Mutex()
     private val uncertain = mutableMapOf<Pair<SessionKey, String>, ChatAction>()
@@ -214,26 +227,34 @@ class HttpChatActions internal constructor(
         }
     }
 
-    override suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo): Session {
+    override suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo, operationId: String): AgentStartResult {
         require(session.machineId.isNotBlank() && info.cwd.isNotBlank())
-        val payload = AgentStartRequest(
+        val body = CodexContinuationReceipt.startBody(session.machineId, info, session.todo?.id)
+        return CodexContinuationReceipt.startWithReconciliation(
             machineId = session.machineId,
-            cwd = info.cwd,
-            launcher = "codex",
-            prompt = info.continuationPrompt,
-            agentType = "codex",
-            async = false,
-            todoId = session.todo?.id,
+            operationId = operationId,
+            post = { headers ->
+                slowWithHeaders(api("sessions"), "POST", body, headers).use { response ->
+                    if (!response.isSuccessful) throw HubFailure.from(response)
+                    JsonCodec.parseToJsonElement(response.body?.string().orEmpty()).jsonObject
+                }
+            },
+            fetchOperation = { opId -> codexContinuationOperation(session, opId) },
         )
-        val body = compatibleRequestBody(
-            "/api/v1/sessions",
-            JsonCodec.encodeToString(payload).toRequestBody("application/json; charset=utf-8".toMediaType()),
-        )!!
-        return slow(api("sessions"), "POST", body).use { response ->
-            if (!response.isSuccessful) throw HubFailure.from(response)
-            val created = JsonCodec.decodeFromString<CodexTakeoverResponse>(response.body?.string().orEmpty()).session
-            if (created.machineId.isBlank()) created.copy(machineId = session.machineId) else created
+    }
+
+    override suspend fun codexContinuationOperation(session: Session, operationId: String): AgentStartResult {
+        java.util.UUID.fromString(operationId)
+        val receipt = try {
+            request(api("ops", operationId), "GET", null).use { response ->
+                if (!response.isSuccessful) throw HubFailure.from(response)
+                JsonCodec.parseToJsonElement(response.body?.string().orEmpty()).jsonObject
+            }
+        } catch (failure: HubFailure) {
+            if (failure.status == 404) return AgentStartResult.Unknown
+            throw failure
         }
+        return CodexContinuationReceipt.receiptOutcome(receipt, session.machineId)
     }
 
     override suspend fun info(session: Session): SessionInfo =

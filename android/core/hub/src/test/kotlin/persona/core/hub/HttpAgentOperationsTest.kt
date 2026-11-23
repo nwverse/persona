@@ -104,16 +104,26 @@ class HttpAgentOperationsTest {
             assertEquals("POST", postReq.method)
             assertEquals(expectedPath, postReq.path)
 
+            val opId = "44444444-4444-4444-8444-444444444444"
             server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"","session_id":"continued-1","status":"working"}}"""))
-            val created = api.startCodexContinuation(key, info, todoId = "todo-7")
-            assertEquals(SessionKey("mac one", "continued-1"), created.key)
+            val created = api.startCodexContinuation(key, info, opId, todoId = "todo-7") as AgentStartResult.Created
+            assertEquals(SessionKey("mac one", "continued-1"), created.session.key)
             val startReq = server.takeRequest()
             assertEquals("POST", startReq.method)
             assertEquals("/api/v1/sessions", startReq.path)
+            assertEquals(opId, startReq.getHeader("X-Persona-Op-Id"))
             val startJson = JsonCodec.parseToJsonElement(startReq.body.readUtf8()).jsonObject
             assertEquals("codex", startJson["launcher"]?.jsonPrimitive?.content)
             assertEquals("todo-7", startJson["todo_id"]?.jsonPrimitive?.content)
             assertEquals(false, startJson["async"]?.jsonPrimitive?.boolean)
+
+            // Reconciling a failed receipt returns Rejected so the caller may safely retry fresh.
+            val failedOpId = "55555555-5555-4555-8555-555555555555"
+            val encodedError = java.util.Base64.getEncoder().encodeToString("""{"error":"no launcher"}""".toByteArray())
+            server.enqueue(MockResponse().setBody("""{"kind":"start","state":"failed","result":{"status":409,"body":"$encodedError"}}"""))
+            val rejected = api.codexContinuationOperation(key, failedOpId) as AgentStartResult.Rejected
+            assertEquals("no launcher", rejected.message.shown)
+            assertEquals("/api/v1/ops/$failedOpId", server.takeRequest().path)
         }
     }
 }

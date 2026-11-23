@@ -181,13 +181,29 @@ describe("TakeoverAction interactions", () => {
     expect(document.body.textContent).toContain(t("chat-takeover.reason_unavailable"));
   });
 
-  it("continueSignal triggers continuation and reports pending state across SSE updates", async () => {
+  it("continueRequested is one-shot consumed and never replays after cancel and remount", async () => {
     const pendingChanges: boolean[] = [];
+    let requested = true;
+    const consume = vi.fn(() => { requested = false; });
     state.api.mockResolvedValue(plan({ can_resume: false, reason: "encrypted_context" }));
-    act(() => root.render(<TakeoverAction session={baseSession} variant="compact" continueSignal={0} onPendingChange={(p) => pendingChanges.push(p)} />));
-    act(() => root.render(<TakeoverAction session={baseSession} variant="compact" continueSignal={1} onPendingChange={(p) => pendingChanges.push(p)} />));
+    act(() => root.render(
+      <TakeoverAction session={baseSession} variant="compact" continueRequested={requested} onContinueConsumed={consume} onPendingChange={(p) => pendingChanges.push(p)} />,
+    ));
     await flush();
+    expect(consume).toHaveBeenCalledTimes(1);
+    expect(requested).toBe(false);
+    expect(state.api).toHaveBeenCalledTimes(1);
     expect(pendingChanges.at(-1)).toBe(true);
     expect(document.body.textContent).toContain(t("chat-takeover.reason_encrypted_context"));
+
+    // Simulate offline unmount followed by reconnect remount with the consumed prop: no duplicate GET or launch.
+    act(() => root.unmount());
+    root = createRoot(host);
+    act(() => root.render(
+      <TakeoverAction session={baseSession} variant="compact" continueRequested={requested} onContinueConsumed={consume} onPendingChange={(p) => pendingChanges.push(p)} />,
+    ));
+    await flush();
+    expect(state.api).toHaveBeenCalledTimes(1);
+    expect(state.launch).not.toHaveBeenCalled();
   });
 });

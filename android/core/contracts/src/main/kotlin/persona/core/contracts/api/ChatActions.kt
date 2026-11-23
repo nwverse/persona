@@ -133,9 +133,13 @@ interface ChatActions {
     suspend fun codexTakeover(session: Session, token: String, confirmStop: Boolean): Session =
         throw UnsupportedOperationException("Codex takeover unavailable")
 
-    /** Start an independent Codex continuation session carrying the source transcript extract and linked to-do. */
-    suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo): Session =
+    /** Start an independent Codex continuation session carrying the source transcript extract and linked to-do under [operationId]. */
+    suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo, operationId: String): AgentStartResult =
         throw UnsupportedOperationException("Codex continuation unavailable")
+
+    /** Reconcile an unconfirmed Codex continuation start (`GET /api/v1/ops/{operationId}`). */
+    suspend fun codexContinuationOperation(session: Session, operationId: String): AgentStartResult =
+        throw UnsupportedOperationException("Codex continuation receipt unavailable")
 }
 
 /** What "Rewind to here" restores: the conversation alone, or the files changed after the message too. */

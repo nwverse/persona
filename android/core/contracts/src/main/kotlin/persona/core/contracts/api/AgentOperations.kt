@@ -34,9 +34,12 @@ interface AgentOperations {
     /** Explicitly take over a read-only Codex CLI session (`POST /api/v1/machines/{mid}/codex/{sid}/takeover`). */
     suspend fun codexTakeover(key: SessionKey, token: String, confirmStop: Boolean): Session =
         throw UnsupportedOperationException("Codex takeover unavailable")
-    /** Start an independent Codex continuation session carrying the source transcript extract and linked to-do. */
-    suspend fun startCodexContinuation(key: SessionKey, info: CodexTakeoverInfo, todoId: String? = null): Session =
+    /** Start an independent Codex continuation session carrying the source transcript extract and linked to-do under [operationId]. */
+    suspend fun startCodexContinuation(key: SessionKey, info: CodexTakeoverInfo, operationId: String, todoId: String? = null): AgentStartResult =
         throw UnsupportedOperationException("Codex continuation unavailable")
+    /** Reconcile an unconfirmed Codex continuation start (`GET /api/v1/ops/{operationId}`). */
+    suspend fun codexContinuationOperation(key: SessionKey, operationId: String): AgentStartResult =
+        throw UnsupportedOperationException("Codex continuation receipt unavailable")
 }
 
 /** An ambiguous write must be verified before repeating a one-shot action. */

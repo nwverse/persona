@@ -70,4 +70,24 @@ describe("CodexReadOnlyLine", () => {
     expect(host.querySelector("[data-codex-readonly-line]")).toBeNull();
     expect(document.body.textContent).toContain(t("chat-takeover.reason_encrypted_context"));
   });
+
+  it("merges Terminal, Resume, and compact takeover controls for stopped Codex sessions with terminal capability", async () => {
+    const onTerminal = vi.fn();
+    const stoppedCodex = {
+      ...readOnlyCodex,
+      status: "offline",
+      capabilities: { read: true, send: false, terminal: true, takeover: { running: false, can_resume: true } },
+    } as Session;
+    act(() => root.render(
+      <CodexReadOnlyLine session={stoppedCodex} visible stopped={{ mid: "m1", sid: "codex-1", onTerminal }} />,
+    ));
+    await flush();
+    expect(host.querySelector("[data-stopped-agent]")).toBeTruthy();
+    expect(host.querySelector("[data-codex-readonly-line]")).toBeTruthy();
+    const labels = [...host.querySelectorAll("button")].map((b) => b.textContent?.trim());
+    expect(labels).toContain(t("chat-chatview.terminal"));
+    expect(labels).toContain(t("chat-chatview.resume"));
+    expect(labels).toContain(t("chat-takeover.takeover"));
+    expect(host.querySelector(`button[aria-label="${t("chat-chatview.more_actions")}"]`)).toBeTruthy();
+  });
 });

@@ -127,23 +127,29 @@ class HttpAgentOperations(
         return if (adopted.machineId.isBlank()) adopted.copy(machineId = key.machineId) else adopted
     }
 
-    override suspend fun startCodexContinuation(key: SessionKey, info: CodexTakeoverInfo, todoId: String?): Session {
+    override suspend fun startCodexContinuation(key: SessionKey, info: CodexTakeoverInfo, operationId: String, todoId: String?): AgentStartResult {
         require(key.machineId.isNotBlank() && info.cwd.isNotBlank())
-        val payload = AgentStartRequest(
+        val body = CodexContinuationReceipt.startBody(key.machineId, info, todoId)
+        return CodexContinuationReceipt.startWithReconciliation(
             machineId = key.machineId,
-            cwd = info.cwd,
-            launcher = "codex",
-            prompt = info.continuationPrompt,
-            agentType = "codex",
-            async = false,
-            todoId = todoId,
+            operationId = operationId,
+            post = {
+                val text = directRequest("POST", listOf("sessions"), body, slow = true, operationId = operationId)
+                JsonCodec.parseToJsonElement(text).jsonObject
+            },
+            fetchOperation = { opId -> codexContinuationOperation(key, opId) },
         )
-        val body = compatibleRequestBody(
-            "/api/v1/sessions",
-            JsonCodec.encodeToString(payload).toRequestBody("application/json; charset=utf-8".toMediaType()),
-        )!!
-        val text = directRequest("POST", listOf("sessions"), body, slow = true, operationId = UUID.randomUUID().toString())
-        val created = JsonCodec.decodeFromString<CodexTakeoverResponse>(text).session
-        return if (created.machineId.isBlank()) created.copy(machineId = key.machineId) else created
+    }
+
+    override suspend fun codexContinuationOperation(key: SessionKey, operationId: String): AgentStartResult {
+        UUID.fromString(operationId)
+        val receipt = try {
+            val text = directRequest("GET", listOf("ops", operationId))
+            JsonCodec.parseToJsonElement(text).jsonObject
+        } catch (failure: HubFailure) {
+            if (failure.status == 404) return AgentStartResult.Unknown
+            throw failure
+        }
+        return CodexContinuationReceipt.receiptOutcome(receipt, key.machineId)
     }
 }
