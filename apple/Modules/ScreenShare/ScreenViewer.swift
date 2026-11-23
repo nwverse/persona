@@ -127,25 +127,13 @@ struct ScreenEntry: View {
     let call: ToolCall
 
     var body: some View {
-        if let ref = Self.machine(call.name, input: call.input, chat: scope?.machine, machines: model.machines), model.canShowScreen(ref) {
+        if let ref = ComputerSteps.machine(call.name, input: call.input, chat: scope?.machine, machines: model.machines), model.canShowScreen(ref) {
             Button { model.openVNC(ref) } label: {
                 Label("VNC", systemImage: Theme.Icon.screen).font(Theme.Font.labelStrong).lineLimit(1)
             }
             .themedButton()
             .accessibilityIdentifier("tool-screen")
         }
-    }
-
-    /// The Mac a tool call operates: the one computer_* names (by id or name, in the chat's group of hubs), or the
-    /// chat's own for an agent's Cua Driver tools (mcp__cua-driver__click…).
-    static func machine(_ name: String, input: JSONValue, chat: MachineRef?, machines: [Machine]) -> MachineRef? {
-        let base = ToolPresentation.baseName(name)
-        if base == "computer_state" || base == "computer_run" {
-            guard let named = input["machine"]?.string, !named.isEmpty else { return nil }
-            let group = chat?.group ?? ""
-            return machines.first { $0.group == group && ($0.id == named || $0.name.caseInsensitiveCompare(named) == .orderedSame) }?.ref
-        }
-        return ComputerSteps.isCuaTool(name) ? chat : nil
     }
 }
 

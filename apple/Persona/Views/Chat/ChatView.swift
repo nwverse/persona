@@ -2741,8 +2741,9 @@ struct ChatView: View {
             let column = VStack(spacing: Theme.Space.m) {
                 if style == .assistant, viewing == nil { taskFooter }
                 // An agent operating a Mac (its own Cua Driver): with its running work, over the box (#1343).
-                if style == .dev, viewing == nil, ComputerActivityPill.shows(computerActivity) {
-                    ComputerActivityPill(activity: computerActivity, from: key).frame(maxWidth: .infinity, alignment: .leading)
+                if style == .dev, viewing == nil, ModuleViews.any(.chatFooter, .init(from: key, activity: computerActivity)) {
+                    ModuleViews(place: .chatFooter, context: .init(from: key, activity: computerActivity))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if !cardsDocked, !pendingCards.isEmpty {
                     PendingCards(cards: pendingCards, room: footerRoom)
@@ -3560,7 +3561,7 @@ struct ChatView: View {
             if status.isActive, session?.canInterrupt == true {
                 Button { Task { await model.interrupt(key) } } label: { Label("Interrupt [Composer Buttons f9d193]", systemImage: Theme.Icon.interrupt) }
             }
-            ScreenMenu(machine: nil, recent: computerActivity?.machine, from: key)
+            ModuleViews(place: .chatMenu, context: .init(recent: computerActivity?.machine, from: key))
             if let s = session {
                 Button { UIPasteboard.general.string = s.cwd } label: { Label("Copy Directory", systemImage: Theme.Icon.folder) }
                 if s.status.isLive && s.canClose {
@@ -3643,7 +3644,8 @@ struct ChatView: View {
                     Label(model.isMuted(key) ? String(localized: "Unmute [Chat View 3834f9]") : String(localized: "Mute"), systemImage: model.isMuted(key) ? Theme.Icon.unmute : Theme.Icon.mute)
                 }
             }
-            ScreenMenu(machine: session?.assistant == true ? nil : key.machineRef, recent: computerActivity?.machine, from: key)
+            ModuleViews(place: .chatMenu, context: .init(machine: session?.assistant == true ? nil : key.machineRef,
+                                                         recent: computerActivity?.machine, from: key))
             Divider()
             if let s = session {
                 if s.canTerminal {

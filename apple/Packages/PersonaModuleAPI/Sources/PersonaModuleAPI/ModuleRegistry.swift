@@ -11,7 +11,6 @@ public struct ModuleRegistrar<Host: ModuleHost> {
     var composerActions: [ComposerAction<Host>] = []
     var views: [(Host.Place, ModuleView<Host>)] = []
     var settingsEntries: [ModuleSettingsEntry<Host>] = []
-    var signOutHooks: [() -> Void] = []
     var capabilities: [ObjectIdentifier: Any] = [:]
     var problems: [String] = []
 
@@ -64,12 +63,6 @@ public struct ModuleRegistrar<Host: ModuleHost> {
         settingsEntries.append(ModuleSettingsEntry(id: id, module: module.id, info: info, row: row) { AnyView(page()) })
     }
 
-    /// Runs when this device signs out of its hubs (`ModuleSlot.hubSessionLifecycle`): forget what the module kept for them.
-    public mutating func onSignOut(_ run: @escaping () -> Void) {
-        guard allows(.hubSessionLifecycle) else { return }
-        signOutHooks.append(run)
-    }
-
     /// Provides an interface the core declares and asks for (`ModuleSlot.capabilities`): the core does without it when
     /// no active module provides one. One provider per interface.
     public mutating func provide<Capability>(_ type: Capability.Type, _ value: Capability) {
@@ -102,7 +95,6 @@ public struct ModuleRegistry<Host: ModuleHost> {
     private let launchHooks: [(ModuleID, () -> Void)]
     private let urlHandlers: [(URL) -> Bool]
     private let placeViews: [Host.Place: [ModuleView<Host>]]
-    private let signOutHooks: [() -> Void]
     private let capabilities: [ObjectIdentifier: Any]
     private let modules: [any PersonaModule<Host>]
     private let isEnabled: @MainActor (any PersonaModule<Host>) -> Bool
@@ -125,7 +117,6 @@ public struct ModuleRegistry<Host: ModuleHost> {
         var placeViews: [Host.Place: [ModuleView<Host>]] = [:]
         var settings: [ModuleSettingsEntry<Host>] = []
         var settingIDs = Set<String>()
-        var signOut: [() -> Void] = []
         var capabilities: [ObjectIdentifier: Any] = [:]
         var seen = Set<ModuleID>()
         var actionIDs = Set<String>()
@@ -167,7 +158,6 @@ public struct ModuleRegistry<Host: ModuleHost> {
                     problems.append("\(descriptor.id): settings entry \(entry.id) is already taken")
                 }
             }
-            signOut += registrar.signOutHooks
             for (key, value) in registrar.capabilities {
                 if capabilities[key] == nil { capabilities[key] = value } else {
                     problems.append("\(descriptor.id): provides a capability another module provides")
@@ -184,7 +174,6 @@ public struct ModuleRegistry<Host: ModuleHost> {
         self.urlHandlers = handlers
         self.placeViews = placeViews
         self.settingsEntries = settings
-        self.signOutHooks = signOut
         self.capabilities = capabilities
         self.modules = modules
         self.isEnabled = isEnabled
@@ -222,11 +211,6 @@ public struct ModuleRegistry<Host: ModuleHost> {
 
     /// The settings entry with this id, nil when no active module offers it.
     public func settingsEntry(id: String) -> ModuleSettingsEntry<Host>? { settingsEntries.first { $0.id == id } }
-
-    /// This device signed out of its hubs: every active module forgets what it kept for them.
-    public func signedOut() {
-        for hook in signOutHooks { hook() }
-    }
 
     /// The active module's implementation of a core interface, nil when none provides it.
     public func capability<Capability>(_ type: Capability.Type) -> Capability? {

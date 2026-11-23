@@ -29,17 +29,15 @@ private enum PlaceHost: ModuleHost {
 private struct ScreenModule: PersonaModule {
     typealias Host = PlaceHost
     var descriptor = ModuleDescriptor(id: "screen-share", hubGated: true,
-                                      slots: [.toolbarItems, .chatAccessories, .chatCardKinds, .settings, .hubSessionLifecycle, .capabilities])
+                                      slots: [.toolbarItems, .chatAccessories, .chatCardKinds, .settings, .capabilities])
     let isAvailable = true
     let log: Log
 
     func register(into registrar: inout ModuleRegistrar<PlaceHost>) {
-        let log = log
         registrar.view(at: .chatMenu) { c in Text("VNC · \(c.machine ?? "?")") }
         registrar.view(at: .chatFooter, when: { $0.machine != nil }) { _ in Text("Controlling") }
         registrar.view(at: .toolCall) { _ in Text("VNC") }
         registrar.settingsEntry(id: "live-screen", info: .init(title: "Live Screen")) { Text("page") }
-        registrar.onSignOut { log.lines.append("forgot sign-ins") }
         registrar.provide(Screen.self, FakeScreen())
     }
 }
@@ -58,15 +56,13 @@ struct PlaceSlotsTests {
         #expect(Set(r.views(at: .chatMenu).map(\.id) + footer.map(\.id)).count == 2)
     }
 
-    @Test func settingsEntriesSignOutAndCapabilities() {
+    @Test func settingsEntriesAndCapabilities() {
         let log = Log()
         let r = ModuleRegistry<PlaceHost>(modules: [ScreenModule(log: log)])
         #expect(r.settingsEntries.map(\.id) == ["live-screen"])
         #expect(r.settingsEntry(id: "live-screen")?.info.title == "Live Screen")
         #expect(r.settingsEntry(id: "live-screen")?.row() == nil) // the host's plain link
         #expect(r.settingsEntry(id: "other") == nil)
-        r.signedOut()
-        #expect(log.lines == ["forgot sign-ins"])
         #expect(r.capability(Screen.self)?.canShow("mac") == true)
     }
 
@@ -78,9 +74,7 @@ struct PlaceSlotsTests {
             #expect(r.views(at: .chatMenu).isEmpty && r.views(at: .chatFooter).isEmpty && r.views(at: .toolCall).isEmpty)
             #expect(r.settingsEntries.isEmpty)
             #expect(r.capability(Screen.self) == nil)
-            r.signedOut()
         }
-        #expect(log.lines.isEmpty)
     }
 
     @Test func undeclaredSlotsAndDuplicatesAreRefused() {
@@ -91,7 +85,7 @@ struct PlaceSlotsTests {
         #expect(r.views(at: .chatFooter).isEmpty)
         #expect(r.settingsEntries.isEmpty)
         #expect(r.capability(Screen.self) == nil)
-        #expect(r.problems.count == 5)
+        #expect(r.problems.count == 4)
 
         struct Twin: PersonaModule {
             typealias Host = PlaceHost

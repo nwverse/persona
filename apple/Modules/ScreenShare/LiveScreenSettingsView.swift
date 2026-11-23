@@ -86,10 +86,10 @@ struct LiveScreenSettingsRow: View {
 
     var body: some View {
         if LiveScreenSettingsView.isShown(machines: model.machines) {
-            SettingsListLink(value: SettingsPage.liveScreen) {
+            SettingsListLink(value: SettingsPage.module("live-screen")) {
                 SettingsRow(title: String(localized: "Live Screen"), symbol: Theme.Icon.screen, tint: Theme.accent, look: .oneLine)
             }
-            .settingsListRow(SettingsPage.liveScreen)
+            .settingsListRow(SettingsPage.module("live-screen"))
             .accessibilityIdentifier("settings-live-screen")
         }
     }

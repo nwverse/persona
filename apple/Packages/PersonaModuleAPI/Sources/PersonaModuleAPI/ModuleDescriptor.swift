@@ -48,7 +48,7 @@ public enum ModuleSlot: String, CaseIterable, Sendable {
     case helloHooks = "hello_hooks"
     /// Hub frames a module handles (`AppModel`'s hub-event switch). Declared, not served.
     case frameHandlers = "frame_handlers"
-    /// Work when the hub session connects or ends: today the sign-out (`onSignOut`). Served.
+    /// Work when the hub session connects or ends. Declared, not served.
     case hubSessionLifecycle = "hub_session_lifecycle"
     /// Phone tools the hub can call. Declared, not served.
     case phoneTools = "phone_tools"
@@ -68,7 +68,7 @@ public enum ModuleSlot: String, CaseIterable, Sendable {
     public var isServed: Bool {
         switch self {
         case .launchHooks, .deepLinks, .composerActions, .settings, .chatCardKinds, .chatAccessories, .toolbarItems,
-             .hubSessionLifecycle, .capabilities: true
+             .capabilities: true
         default: false
         }
     }

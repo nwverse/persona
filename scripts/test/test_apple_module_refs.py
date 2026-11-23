@@ -43,8 +43,14 @@ MODULE_LIST = "apple/Persona/App/Modules.swift"
 SKIP_PARTS = {"PersonaTests", "PersonaUITests", "PersonaWatchTests", "Tests", "verify"}
 
 DECLARATION = re.compile(
-    r"^(?:(?:@\w+(?:\([^)\n]*\))?|public|internal|fileprivate|private|final|nonisolated|indirect)\s+)*"
+    r"^((?:(?:@\w+(?:\([^)\n]*\))?|public|internal|fileprivate|private|final|nonisolated|indirect)\s+)*)"
     r"(?:struct|class|enum|protocol|actor|typealias)\s+([A-Z]\w*)", re.M)
+
+
+def declared(code):
+    """The type names a file declares at its top level for other files: a `private` or `fileprivate` one is the file's
+    own (no other file can name it), so a core type of the same name is not a reference to it."""
+    return [name for mods, name in DECLARATION.findall(code) if not re.search(r"\b(?:private|fileprivate)\b", mods)]
 
 
 def blank(src):
@@ -116,7 +122,7 @@ def symbols(files):
     for rel in files:
         module = owner(rel)
         if module:
-            out[module].update(DECLARATION.findall(blank((ROOT / rel).read_text(encoding="utf-8", errors="replace"))))
+            out[module].update(declared(blank((ROOT / rel).read_text(encoding="utf-8", errors="replace"))))
     return out
 
 
@@ -212,7 +218,7 @@ class AppleModuleRefsTests(unittest.TestCase):
     def test_declarations(self):
         src = ("nonisolated struct GlassesError: Error {}\n@Observable\n@MainActor\nfinal class MetaGlasses {\n"
                "    enum Inner {}\n}\nprivate struct Helper {}\n// struct Commented {}\n")
-        self.assertEqual(DECLARATION.findall(blank(src)), ["GlassesError", "MetaGlasses", "Helper"])
+        self.assertEqual(declared(blank(src)), ["GlassesError", "MetaGlasses"])  # a private type is the file's own
 
     def test_compare(self):
         self.assertEqual(compare({"a": {"x": 2}}, {"a": {"x": 1}}), (["a: x 1 -> 2"], []))
