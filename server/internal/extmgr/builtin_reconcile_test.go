@@ -16,7 +16,7 @@ import (
 func TestBuiltinExtensionsAreBuiltinNodePrograms(t *testing.T) {
 	h, _ := extensionTestHub(t)
 	ids := []string{cuaExtensionID, egoExtensionID}
-	if imessageport.Factory() != nil { // without the module there is no built-in Messages extension (TestManagerWithoutIMessage)
+	if imessageport.Factory() != nil { // the iMessage extension is its module's: absent without it (persona_without_imessage, persona_core_only)
 		ids = append(ids, imessageExtensionID)
 	}
 	for _, id := range ids {

@@ -74,6 +74,8 @@ internal fun ChatHeader(
     /** Branches the whole conversation up to its latest completed turn into a new session and opens it (#12996). */
     onForkSession: (() -> Unit)? = null,
     forking: Boolean = false,
+    /** Explicit Codex takeover / continuation coordinator shared with the bottom read-only bar. */
+    takeover: CodexTakeoverCoordinator? = null,
     menuOpen: MutableState<Boolean> = remember { mutableStateOf(false) },
     actions: @Composable RowScope.() -> Unit = {},
 ) {
@@ -189,6 +191,9 @@ internal fun ChatHeader(
                 ) {},
             )
             TerminalResume.Hidden -> Unit
+        }
+        if (session != null && takeover != null && !session.archived) {
+            addAll(codexTakeoverMenuActions(session, takeover, enabled = online && machine?.online != false))
         }
         onSearch?.let { add(JAction(stringResource(R.string.chat_chrome_search), PhIcons.MagnifyingGlass, onClick = it)) }
         onFiles?.let { add(JAction(stringResource(R.string.chat_chrome_files), PhIcons.FolderSimple, onClick = it)) }

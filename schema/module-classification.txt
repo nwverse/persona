@@ -174,6 +174,7 @@ go server/internal/node/clipshare core
 go server/internal/node/imessageport core
 go server/internal/node/machdiag core
 go server/internal/node/nodekit core
+go server/internal/node/screenport core
 go server/internal/node/transcripttail core
 go server/internal/nodeclient core
 go server/internal/nodecmd core
@@ -248,15 +249,13 @@ go server/plugins core
 # Module code still in core paths.
 go server/internal/transcribelive voice
 go server/internal/lark lark
-go server/internal/screen screen-share
-go server/internal/screenlink screen-share
+go server/internal/screen core
 go server/internal/iphone phone-extra
 go server/internal/iphonectl phone-extra
 go server/internal/node/iphone phone-extra
 go server/internal/protectedapps computer-use
 go server/internal/orcart/... engines-extra
 go server/internal/terncli engines-extra
-go server/cmd/vncbench screen-share
 go server/internal/rexcli engines-extra
 go server/internal/assistant/kbhistory knowledge-ui
 go server/internal/assistant/kbsent knowledge-ui
