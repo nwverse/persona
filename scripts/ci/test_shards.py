@@ -215,7 +215,7 @@ class ShardTests(unittest.TestCase):
     def test_source_server_shard_installs_the_pinned_bundler(self):
         workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
         setup = """      - uses: oven-sh/setup-bun@v2
-        if: matrix.shard == 'other'
+        if: matrix.shard == 'other' || matrix.shard == 'core-other'
         with:
           bun-version: '1.4.2'
 """
@@ -233,12 +233,13 @@ class ShardTests(unittest.TestCase):
 
     def test_server_workflow_covers_build_and_every_test_shard(self):
         workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
-        self.assertIn("shard: [node, managers, other, build]", workflow)
+        self.assertIn("shard: [node, managers, other, build, core-node, core-managers, core-other]", workflow)
         self.assertIn("fail-fast: false", workflow)
         self.assertIn('scripts/ci/server.sh "$CI_SERVER_SHARD"', workflow)
         script = (ROOT / "scripts/ci/server.sh").read_text()
         for label in ("Go formatting", "Server vet", "Server build", "Windows node build and vet", "Go SDK tests",
-                      "Server programs with build-tags.txt", "Tunnel tests with build-tags.txt"):
+                      "Server programs with build-tags.txt", "Tunnel tests with build-tags.txt", "Core-only hub smoke",
+                      "Builds without each module", "Server $shard tests with Postgres, core only"):
             self.assertIn(label, script)
         self.assertIn('lane="${1:-all}"', script)
 
