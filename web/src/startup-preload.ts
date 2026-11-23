@@ -541,10 +541,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // 285 B in each language, measured in one environment against main c04291e493 after merging it (ja 484,098 B to
 // 484,383 B; en 481,251 B to 481,536 B, zh-Hans 481,974 B to 482,259 B). Main had 108 B of room, so the budget is
 // main's 484,206 B ceiling plus those 285 B.
-// #11394: the Unpin toast says the chat's open tasks went back to the main chat (conversation-menu leader_ended): 28 B
-// more in ja against main ff661f01b0 (measured ja 475,893 B to 475,921 B; en 5 B more, zh-Hans 2 B less). The budget
-// is main's 484,491 B plus those 28 B, keeping main's room.
-export const FIRST_SCREEN_BUDGET = 484_519;
+export const FIRST_SCREEN_BUDGET = 484_491;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
