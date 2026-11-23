@@ -941,7 +941,8 @@ struct MeetingLiveBox: View {
                 if caption == nil, cannot == nil { behind(lines.last) }
             }
             if shown.fellBack {
-                MeetingTranscriptionFallbackNotice(words: MeetingTranscriptionWords.fallback(hub, phoneCannot: cannot != nil), phone: phoneWords)
+                let notice = MeetingTranscriptionWords.fallbackNotice(hub, service: transcription.service, phoneCannot: phoneWords)
+                MeetingTranscriptionFallbackNotice(words: notice.words, phone: notice.phone)
             } else if let phoneWords {
                 MeetingTranscriptionFallbackNotice(words: phoneWords, identifier: "meeting-phone-cannot-transcribe")
             }
