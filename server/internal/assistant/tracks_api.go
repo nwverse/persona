@@ -192,6 +192,12 @@ func (s *Service) trackCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.prepareTrackSoon(in.Slug)
+	if e, ok := s.trackEntryOf(ctx, in.Slug); ok {
+		// Its rhythms become its scheduled tasks once, now (track_rhythms.go); the track stands either way.
+		if err := s.createTrackRhythms(ctx, e); err != nil {
+			s.logf("tracks: %q: rhythms: %v", in.Slug, err)
+		}
+	}
 	s.answerTrack(ctx, w, in.Slug, http.StatusCreated)
 }
 

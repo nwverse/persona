@@ -844,6 +844,8 @@ func (s *Service) push(ctx context.Context, n Notification) {
 // alerting the phone (notify_user shows that to the model).
 func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult, error) {
 	n.ID, n.Kind = "ntf_"+randomHex(8), NotifyPush
+	// A track's push_cap holds the level (track_attention.go).
+	s.capTrackPush(ctx, &n)
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}
