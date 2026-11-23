@@ -57,12 +57,16 @@ const transcriptionProblemFixtures = "../../../../spec/fixtures/meeting-transcri
 
 func waitFor(t testing.TB, what string, ok func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if ok() {
-			return
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(5 * time.Second)
+	for !ok() {
+		select {
+		case <-tick.C:
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", what)
 		}
 	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 func golden(t *testing.T, name, got string) {
