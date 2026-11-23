@@ -2823,6 +2823,24 @@ activation; the node's retirement latch prevents recovery and idle-compaction wo
 when offline nodes reconnect. Deleting a conversation cascades through segment history and queue content, retaining
 only deletion markers and minimal offline closure identities.
 
+`conversations_switch` and `POST /api/v1/assistant/conversation-switches` coordinate an explicit set of these logical
+switches without adding another engine protocol. The settings-backed batch stores each conversation's before-image,
+target, expected epoch and operation ID before starting anything. Busy items wait for their current turn and pending
+work; no interrupt or synthetic message completes a batch. When an activated batch item has no durable input pending,
+the coordinator accepts the completed switch immediately. If real input is pending, the first-turn acceptance/refusal
+rules above remain unchanged. A late preparation failure cannot return an activated operation to `in_doubt`;
+reconciliation continues from the activated state. The existing history loop and session-list changes wake queued items
+after a restart.
+
+The batch response distinguishes queued, switching, switched and refused items; one refusal does not cancel independent
+items. `restore_batch_id` creates a new, itself-restorable batch toward the original per-conversation settings rather
+than a global default. It only includes completed items whose current epoch and execution still match that batch's
+target. A conversation changed independently is reported and left alone. Empty requested model/effort retain launcher-
+default behavior, while a saved empty permission mode restores explicit `default` instead of inheriting the fallback.
+Preview creates neither state nor a phone confirmation; MCP execution uses one existing whole-batch outbound
+confirmation and the caller's space-scoped conversation lookup. Full-role HTTP routes and batch status are documented in
+[../protocol/protocol.md](../protocol/protocol.md).
+
 `GET/PUT /api/v1/assistant/segments` controls **new switches**, enabled by default. Disabling it keeps segment routing,
 reads and recovery running. A manager binary from before segment routing is **not a safe downgrade after a switch**:
 it could resume the retired first segment and fork the conversation. Roll back with a segment-aware manager and the

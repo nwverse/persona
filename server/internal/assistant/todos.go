@@ -282,7 +282,6 @@ func (s *Service) ensureTodosLoaded(ctx context.Context) error {
 	if loaded {
 		s.backfillPlanSupervisors(ctx)
 		s.restoreSupervisePending(ctx)
-		s.retryOwnerWaits(ctx) // crash recovery resumes only explicitly undelivered owner pushes
 		// The links as read are the ones the marks go by from now on: one that goes away later syncs its machine
 		// again (syncLinkedTodoTokens), even before any of the links changed.
 		s.syncLinkedTodoTokens()
