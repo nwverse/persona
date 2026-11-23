@@ -232,6 +232,9 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingTranscriptionFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
 	out = append(out, h.assistantSearchFeatures()...)
+	if h.defaultManagerNames(assistantwire.CapabilityHealthIntake) {
+		out = append(out, assistantwire.CapabilityHealthIntake)
+	}
 	if h.defaultManagerNames(assistantwire.CapabilityAssistantSegments) {
 		out = append(out, assistantwire.CapabilityAssistantSegments)
 	}
@@ -251,7 +254,7 @@ func (h *Hub) features() []string {
 	out = append(out, "assistant_views", "assistant_html_bridge")
 	for _, f := range h.extReport().Features {
 		switch f {
-		case assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
+		case assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
 			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
 			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
 			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, direction sessions, start speed, the side-session fold, remote images, the To-dos view, its answers and its history
@@ -773,6 +776,7 @@ func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCa
 		Name          string                    `json:"name"`
 		Machine       string                    `json:"machine"`
 		Sender        string                    `json:"sender"`
+		Extension     string                    `json:"extension"`
 		Request       json.RawMessage           `json:"request"`
 		Hash          string                    `json:"hash"`
 	}
@@ -808,6 +812,10 @@ func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCa
 		}
 		h.dropRevokedToken(from, a.Hash)
 		out = map[string]any{}
+	case extwire.HubMachinesPairLink:
+		out, err = h.hubMachinesPairLink(ctx, from, a.Extension, a.Request)
+	case extwire.HubMachinesStatus:
+		out, err = h.hubMachinesStatus(from, a.Request)
 	default:
 		return nil, true, errors.New("hub: no method " + p.Method)
 	}

@@ -358,6 +358,9 @@ func turnErrorCode(text string) string {
 		// Before the classes below: a gateway's words for it may say "not supported" next to "model". The node resent
 		// the turn once with every tool loaded and starts the conversation that way from now on (#10365).
 		return proto.TurnErrorToolSearchUnsupported
+	case assistantwire.ImageLimitErrorText(t):
+		// Accumulated pictures pushed the request past the model API's size or multi-image limit (#13045).
+		return proto.TurnErrorImagesTooLarge
 	case modelretry.AccountExhausted(t):
 		// Explicit upstream account-pool exhaustion (#13372): ahead of model_route in case the message also names the model.
 		return proto.TurnErrorUpstreamUnavailable
@@ -423,7 +426,7 @@ func signedOut(c proto.Session) bool {
 // agent's record says so).
 func userTurnError(code string) bool {
 	switch code {
-	case proto.TurnErrorNotLoggedIn, proto.TurnErrorAuthFailed, proto.TurnErrorModelRoute, proto.TurnErrorModelFallbackUnavailable:
+	case proto.TurnErrorNotLoggedIn, proto.TurnErrorAuthFailed, proto.TurnErrorModelRoute, proto.TurnErrorModelFallbackUnavailable, proto.TurnErrorImagesTooLarge:
 		return true
 	}
 	return false

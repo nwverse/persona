@@ -55,9 +55,12 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 		Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), PushGrading: askedIn(list) && s.quietModeOn(ctx)})
 }
 
-// recheckDigestTo preserves the supervisor already persisted for a queued signal. New dispatch uses digestTo's
-// main-supervision policy; revalidating an existing relay must not rehome it merely because that policy changed.
+// recheckDigestTo honors explicit moves through the same policy as immediate dispatch. Otherwise it preserves
+// a queued legacy supervisor: a default-policy change alone is not permission to rehome an existing relay.
 func (s *Service) recheckDigestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
+	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.assigned() {
+		return s.digestTo(ctx, cfg, g)
+	}
 	if g.To != "" {
 		return s.digestTo(ctx, cfg, g)
 	}
@@ -99,7 +102,11 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 		return msg, false, true
 	}
 	now := time.Now()
-	signals, deferred := s.partitionFinalWakeSignals(ctx, signals, now, "drain")
+	var deferred []superviseSignal
+	if msg.TriedAt.IsZero() {
+		signals, deferred = s.partitionFinalWakeSignals(ctx, signals, now, "drain")
+	}
+	// A tried message cannot change its text or identity; do not let wake partitioning strand it at the queue head.
 	var retry []superviseSignal
 	ctx, signals, retry = s.allStoppedBatch(ctx, signals)
 	if len(retry) > 0 {
@@ -108,6 +115,10 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	here, web := s.settings(ctx), s.webBase(ctx)
 	groups := map[string][]superviseSignal{}
 	entries := map[string][]prompts.SuperviseEntry{}
+	for i, g := range signals {
+		signals[i] = s.currentSupervisorSignal(g)
+	}
+	signals = mergeSignals(nil, signals)
 	for _, g := range signals {
 		if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil && g.Kind == sigNeedsYou {
 			if _, known := s.taskNeedsRecheck(ctx, t); !known {
@@ -136,6 +147,9 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 			}
 		}
 		if e, ok := s.digestEntry(ctx, g, web); ok {
+			if g.Kind == sigAsk {
+				g.Cards = e.Asks
+			}
 			// A worker reassigned to an Agent needs the ordinary dispatcher, not assistant.send to its old conversation.
 			if _, handled, _ := s.leaderRoute(g); handled {
 				return msg, false, true
@@ -196,6 +210,19 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 			delete(state.Queue, to)
 		}
 	}
+	// Keep a durable copy of every deferred idle in the queue rewrite itself. If the process stops before the
+	// in-memory restoration below, startup reloads this outbox entry instead of losing the only remaining copy.
+	if len(deferred) > 0 {
+		state.SupervisePending = maps.Clone(state.SupervisePending)
+		if state.SupervisePending == nil {
+			state.SupervisePending = map[string]superviseSignal{}
+		}
+		for _, g := range deferred {
+			if _, newer := state.SupervisePending[g.id()]; !newer {
+				state.SupervisePending[g.id()] = g
+			}
+		}
+	}
 	// Save moves and the corresponding source removal together, before anything can send the new payload.
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, relayKey, state); err != nil {
@@ -209,9 +236,9 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	return next, len(groups[to]) == 0, false
 }
 
-// restoreDrainedWakeSignals runs only after the durable source queue no longer carries deferred idles. Queue
-// admission already reserved their fingerprints and turn receipts; release both before making the signals pending
-// again, or an expired wakeup would be deduplicated and restart replay would skip them as told.
+// restoreDrainedWakeSignals runs only after the durable queue rewrite and outbox restoration have committed together.
+// Queue admission reserved the signals' fingerprints and turn receipts; release those matching reservations before the
+// in-memory retry, while the durable outbox independently covers a restart before this step runs.
 func (s *Service) restoreDrainedWakeSignals(ctx context.Context, deferred []superviseSignal, web string, now time.Time) {
 	if len(deferred) == 0 {
 		return

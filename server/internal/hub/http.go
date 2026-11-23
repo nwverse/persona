@@ -833,17 +833,18 @@ func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 }
 
 type sessionStartRequest struct {
-	MachineID       string        `json:"machine_id"`
-	Cwd             string        `json:"cwd"`
-	Launcher        string        `json:"launcher"`
-	AgentType       string        `json:"agent_type,omitempty"`
-	WorkSession     bool          `json:"work_session,omitempty"`
-	Model           string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
-	Prompt          string        `json:"prompt"`
-	ClientMsgID     string        `json:"client_msg_id,omitempty"`
-	Images          []proto.Image `json:"images,omitempty"`
-	ResumeSessionID string        `json:"resume_session_id"`
-	WorkspaceID     string        `json:"workspace_id"`
+	MachineID        string        `json:"machine_id"`
+	Cwd              string        `json:"cwd"`
+	Launcher         string        `json:"launcher"`
+	AgentType        string        `json:"agent_type,omitempty"`
+	WorkSession      bool          `json:"work_session,omitempty"`
+	Model            string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
+	Prompt           string        `json:"prompt"`
+	ClientMsgID      string        `json:"client_msg_id,omitempty"`
+	Images           []proto.Image `json:"images,omitempty"`
+	ResumeSessionID  string        `json:"resume_session_id"`
+	WorkspaceID      string        `json:"workspace_id"`
+	DesktopProjectID string        `json:"desktop_project_id"`
 	// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
 	// Checked by the node (an older node ignores it and starts in its engine).
 	Host           string `json:"host,omitempty"`
@@ -954,6 +955,7 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 			return
 		}
 	}
+	inferredAgentType := p.AgentType == ""
 	if p.AgentType == "" {
 		for _, launcher := range m.cfg.Launchers {
 			if launcher.Name == p.Launcher {
@@ -977,7 +979,7 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if strings.TrimSpace(p.Prompt) != "" {
 		p.Images = append(p.Images, handoffImages...)
 	}
-	async := startsAsync(p.Async, p.ResumeSessionID, p.Launcher, p.AgentType)
+	async := startsAsync(p.Async, p.ResumeSessionID, p.Launcher, p.AgentType) && !desktopStartLauncher(p.Launcher)
 	nameAfterStart := async
 	parent := r.Context()
 	if r.Header.Get("X-Persona-Op-Id") != "" {
@@ -985,8 +987,7 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		parent = context.WithoutCancel(parent)
 	}
 	startedAt := time.Now()
-	budget := startBudget(async && !p.WorkSession)
-	ctx, cancel := context.WithDeadline(parent, startedAt.Add(budget))
+	ctx, cancel := context.WithDeadline(parent, startedAt.Add(startBudgetForLauncher(async && !p.WorkSession, p.Launcher)))
 	defer cancel()
 	var res struct {
 		Session      proto.Session `json:"session"`
@@ -1005,6 +1006,7 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	// The manager says what it runs on (Models › Agents, a model picked for this start) and names its tab
 	// (agents_link.go).
 	note, err := h.agentStartParams(ctx, m, params, name)
+	cancel()
 	if err != nil {
 		var refused *startRefused
 		if errors.As(err, &refused) {
@@ -1014,8 +1016,23 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		callErr(w, err) // 503 assistant_offline without the manager (the machine is its to reach), else 502
 		return
 	}
+	// Defaults and fallback launchers are resolved by the manager. Use what will actually run for both the node's
+	// acknowledgement mode and the total start budget, without retaining the shorter resolution deadline.
 	resolvedLauncher, _ := params["launcher"].(string)
 	resolvedAgent, _ := params["agent_type"].(string)
+	if inferredAgentType && resolvedLauncher != p.Launcher && resolvedAgent == p.AgentType {
+		resolvedAgent = "" // a fallback must not inherit the originally requested launcher's inferred type
+		delete(params, "agent_type")
+	}
+	if resolvedAgent == "" {
+		for _, configured := range m.cfg.Launchers {
+			if configured.Name == resolvedLauncher && configured.AgentType != "" {
+				resolvedAgent = configured.AgentType
+				params["agent_type"] = resolvedAgent
+				break
+			}
+		}
+	}
 	if handoff {
 		if resolvedLauncher != p.Launcher {
 			writeErr(w, http.StatusConflict, i18n.Err("hub-context_handoff.launcher_missing"))
@@ -1023,13 +1040,25 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		}
 		params["require_launcher"] = true
 	}
-	async = startsAsync(p.Async, p.ResumeSessionID, resolvedLauncher, resolvedAgent)
-	if resolvedBudget := startBudget(async && !p.WorkSession); resolvedBudget != budget {
-		// The manager may have found a synchronous launcher after the request was admitted.
-		cancel()
-		resolvedCtx, cancelResolved := context.WithDeadline(parent, startedAt.Add(resolvedBudget))
-		defer cancelResolved()
-		ctx = resolvedCtx
+	askedAsync, _ := params["async"].(bool)
+	async = startsAsync(askedAsync, p.ResumeSessionID, resolvedLauncher, resolvedAgent) && !desktopStartLauncher(resolvedLauncher)
+	nameAfterStart = async
+	params["async"] = async
+	ctx, cancel = context.WithDeadline(parent, startedAt.Add(startBudgetForLauncher(async && !p.WorkSession, resolvedLauncher)))
+	defer cancel()
+	if tabName, _ := params["tab_name"].(string); !async && name == "" && nameFrom != "" && strings.TrimSpace(tabName) == "" && p.ResumeSessionID == "" {
+		// An initially async start did not ask the manager for a name. It now waits for creation, so name it first.
+		var named struct {
+			Name string `json:"name"`
+		}
+		nameCtx, nameCancel := context.WithTimeout(ctx, 15*time.Second)
+		err := h.asstOf(h.machineOwner(m.cfg.ID)).call(nameCtx, assistantwire.MethodAgentTabName, map[string]any{"prompt": nameFrom}, &named)
+		nameCancel()
+		if err != nil {
+			h.logf("tab name: %v", err)
+		} else if named.Name != "" {
+			params["tab_name"] = named.Name
+		}
 	}
 	method := "session.start"
 	if p.WorkSession {
@@ -1184,6 +1213,17 @@ func startBudget(async bool) time.Duration {
 		return 15 * time.Second
 	}
 	return 100 * time.Second
+}
+
+func desktopStartLauncher(launcher string) bool {
+	return launcher == "claude-desktop" || launcher == "codex-app"
+}
+
+func startBudgetForLauncher(async bool, launcher string) time.Duration {
+	if desktopStartLauncher(launcher) {
+		return 3 * time.Minute // seed (30s), import (15s), and first message (up to 2m)
+	}
+	return startBudget(async)
 }
 
 // ---- WebSocket ----

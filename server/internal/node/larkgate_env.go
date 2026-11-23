@@ -68,6 +68,9 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 	var bases []string // the addresses opened for this process
 	env = []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "PERSONA_ASSISTANT_BIN=" + bin,
 		"PERSONA_SPACE=" + space}
+	if kind := n.trackKind(cwd); kind != "" {
+		env = append(env, trackKindEnv+"="+kind) // track_kind_env.go
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cfg := n.assistantLark(ctx)
@@ -109,15 +112,21 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
+		wroteBase := false
 		for _, k := range keys {
 			if held[k] || !envName.MatchString(k) || compat.ReservedEnv(k) || k == "PATH" {
 				continue
 			}
 			v := g.Env[k]
 			if k == g.BaseEnv && base != "" {
-				v = base
+				v, wroteBase = base, true
 			}
 			env = append(env, k+"="+v)
+		}
+		// The address is the process's way to the proxy even when the gate names no other environment of its own: it
+		// must not stay out just because g.Env is empty or lacks g.BaseEnv (#13540).
+		if base != "" && !wroteBase && !held[g.BaseEnv] && envName.MatchString(g.BaseEnv) && !compat.ReservedEnv(g.BaseEnv) && g.BaseEnv != "PATH" {
+			env = append(env, g.BaseEnv+"="+base)
 		}
 	}
 	// A gate gone (the plugin switched off, the skill removed): its command goes too.

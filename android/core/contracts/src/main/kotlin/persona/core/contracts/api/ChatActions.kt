@@ -41,6 +41,10 @@ interface ChatActions {
     suspend fun execute(session: Session, action: ChatAction): ChatActionResult
     suspend fun verify(session: Session, action: ChatAction): ChatActionResult
 
+    /** Answer the failed start's terminal question (feature `start_continue`), returning the session the hub kept. */
+    suspend fun continueStart(session: Session, choice: String): Session =
+        throw UnsupportedOperationException("Session start answers unavailable")
+
     /**
      * Pull everything queued while the agent works back out and re-queue the indexes in [keep], in order
      * (POST …/queue, the node's session.queue.edit); returns what was queued before the edit and, in a Persona conversation,

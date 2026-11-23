@@ -177,9 +177,10 @@ type Settings struct {
 	// Leaders are the side conversations the user made leaders (#3133, supervise_leader.go): a task one hands out with
 	// task_plan is supervised by it instead of the main conversation. Empty (the default): only the main one supervises.
 	Leaders []string `json:"leaders,omitempty"`
-	// BriefingWaits tunes only the deterministic wait rows in morning/evening facts. Nil uses the supervision
-	// thresholds documented by briefingWaitsOf; changes go through persona_settings' ordinary owner approval.
-	BriefingWaits *BriefingWaits `json:"briefing_waits,omitempty"`
+	// BriefingWaits tunes only the deterministic wait rows in morning/evening facts: the briefing module's setting
+	// (internal/modules/briefing, Waits), kept here as stored, also while the module is off. Nil uses the module's
+	// defaults (the supervision thresholds); changes go through persona_settings' ordinary owner approval (modules.go).
+	BriefingWaits moduleValue `json:"briefing_waits,omitempty"`
 	// InterjectBackground: a message the user sends while a Claude conversation is still answering moves what runs in
 	// the foreground (Bash commands, subagents) to the background, so the message is taken up at once instead of after
 	// them (Claude Code 2.1.139 or later, node/assistant_interject.go). nil is off (the default). A round the
@@ -271,6 +272,12 @@ func (s *Service) savedSettings(ctx context.Context) (Settings, bool) {
 
 // updateSettings changes the saved settings with fn (which may refuse) and saves them.
 func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) (Settings, error) {
+	return s.updateSettingsSave(ctx, fn, nil)
+}
+
+// updateSettingsSave is updateSettings with an optional atomic writer for state that must change with the settings.
+// The ordinary path still writes only the assistant setting; a custom writer receives the store and complete value.
+func (s *Service) updateSettingsSave(ctx context.Context, fn func(*Settings) error, save func(context.Context, Store, Settings) error) (Settings, error) {
 	b := &s.prefs
 	b.change.Lock()
 	defer b.change.Unlock()
@@ -287,8 +294,18 @@ func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) 
 	if proto.IsExternalLauncher(v.Launcher) {
 		return Settings{}, i18n.Err("external-adapter.purpose_unsupported")
 	}
-	if st := s.store(); st != nil {
-		if err := st.PutSetting(ctx, settingsKey, v); err != nil {
+	st := s.store()
+	if st == nil && save != nil {
+		return Settings{}, errors.New("no database on this hub")
+	}
+	if st != nil {
+		var err error
+		if save != nil {
+			err = save(ctx, st, v)
+		} else {
+			err = st.PutSetting(ctx, settingsKey, v)
+		}
+		if err != nil {
 			return Settings{}, err
 		}
 	}
@@ -595,7 +612,7 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 	}
 	v := s.effective(ctx, saved)
 	p := &Profile{MachineID: v.MachineID, Main: v.Main, MainMachineID: v.MainMachineID, Launcher: v.Launcher, Timezone: v.Timezone,
-		ExtensionOwners: s.extensionOwners(ctx)}
+		ExtensionOwners: s.extensionOwners(ctx), Attention: s.attentionProfile(ctx)}
 	if tasks != nil && todos != nil {
 		if placed, err := s.directionKeep(ctx, v); err != nil {
 			s.logf("assistant: keep: %v", err)
@@ -664,6 +681,12 @@ func (s *Service) leadSessions(ctx context.Context, v Settings) []SessionRef {
 	for _, id := range v.Leaders {
 		if id == "" || id == v.Main {
 			continue
+		}
+		if d := b.m[id]; loaded && d != nil && d.Outside != nil {
+			if d.Outside.MachineID != "" && d.Outside.SessionID != "" {
+				out = append(out, SessionRef{MachineID: d.Outside.MachineID, SessionID: d.Outside.SessionID})
+			}
+			continue // never keep a synthetic direction id as though it were a conversation
 		}
 		machine := v.MachineID
 		if d := b.m[id]; loaded && d != nil && d.MachineID != "" {
@@ -828,7 +851,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		SupervisionBatchMinutes:      supervisionBatchMinutesOf(v),
 		NextSuggestions:              v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
-		out.Cwd = s.spaceCwd(d, sp)
+		out.Cwd = s.spaceCwd(ctx, d, sp)
 		var list []proto.Session
 		if s.fleetOn() {
 			// Select the headless conversations before copying, decorating or serializing the inventory: coding
@@ -1001,7 +1024,7 @@ func (s *Service) memory(ctx context.Context, op map[string]any, out any) error 
 	if !s.trackKnown(ctx, space) {
 		return badRequest(fmt.Errorf("space %q: not a registered space", space))
 	}
-	cwd := s.spaceCwd(d, space) // a space keeps a memory of its own (docs/assistant/health.md)
+	cwd := s.spaceCwd(ctx, d, space) // a space keeps a memory of its own (docs/assistant/health.md)
 	if cwd == "" {
 		return errMemoryMachineOffline
 	}

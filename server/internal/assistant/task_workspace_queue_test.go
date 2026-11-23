@@ -79,22 +79,33 @@ func planWorkspaceQueueTask(t *testing.T, s *Service, chat string, task map[stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := s.toolTaskPlan(context.Background(), chat, raw)
-	if err != nil {
-		t.Fatalf("task_plan(%v): %v", task["title"], err)
-	}
-	items, plans, err := s.feed(context.Background(), chat, time.Time{})
+	// The plan this call made is chat's plan that was not there before it. On Postgres, task_plans and assistant_feed
+	// are not emptied between tests: chat's feed can begin with plans earlier tests made there, and its first page end
+	// before this one. A task queued without asking answers with no plan id to read it by (task_terminal_test.go), and
+	// in a synctest bubble the plan's time is the time before the call.
+	ctx := context.Background()
+	before, err := s.conversationPlans(ctx, chat)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := len(items) - 1; i >= 0; i-- {
-		if items[i].Kind == feedPlan {
-			if p := plans[items[i].Ref]; p != nil {
-				return out, p
-			}
+	known := make(map[string]bool, len(before))
+	for _, p := range before {
+		known[p.ID] = true
+	}
+	out, err := s.toolTaskPlan(ctx, chat, raw)
+	if err != nil {
+		t.Fatalf("task_plan(%v): %v", task["title"], err)
+	}
+	after, err := s.conversationPlans(ctx, chat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range after {
+		if !known[p.ID] {
+			return out, p
 		}
 	}
-	t.Fatalf("no plan in feed for %s", chat)
+	t.Fatalf("task_plan(%v) made no plan in %s", task["title"], chat)
 	return "", nil
 }
 
