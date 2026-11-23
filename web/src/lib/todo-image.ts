@@ -10,7 +10,7 @@ import { base64File } from "./attachments";
 import { fitPicture, type FitStep } from "./image-scale";
 import { MAX_PICTURE_SOURCE } from "./image-limits";
 
-/** The manager's limits for one to-do image (maxPhotoBytes and maxPhotoSide, server/internal/assistant/meeting_photos.go). */
+/** The manager's limits for one to-do image (maxPhotoBytes and maxPhotoSide, server/internal/assistant/todo_images.go). */
 export const TODO_IMAGE_BYTES = 1024 * 1024;
 export const TODO_IMAGE_SIDE = 4096;
 /** More pixels than this (8K by 6K: decoding holds four bytes a pixel) are not decoded; nor are more than
