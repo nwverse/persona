@@ -13,10 +13,80 @@ import (
 
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+// Adaptive chunk bounds for node.update.chunk over Persona Link / relayed RPC (#13761): each chunk is sent
+// synchronously as JSON base64 (~4/3 raw size), so keeping each chunk well under the Link pong timeout avoids starving
+// WebSocket pings on slow or high-RTT connections (both framed and unframed) while ramping quickly on fast links.
+const (
+	nodeUpdateMinChunk    = 16 << 10
+	nodeUpdateInitChunk   = 64 << 10
+	nodeUpdateMaxChunk    = proto.MachineFileUploadChunkBytes // 256 KiB raw (~341 KiB JSON base64)
+	nodeUpdateChunkStep   = 4 << 10
+	nodeUpdateTargetFloor = 250 * time.Millisecond
+	nodeUpdateTargetCap   = 1500 * time.Millisecond
+)
+
+type nodeUpdateChunkSizer struct {
+	min, max, cur int
+	target        time.Duration
+}
+
+func newNodeUpdateChunkSizer(pingTimeout time.Duration) *nodeUpdateChunkSizer {
+	if pingTimeout <= 0 {
+		pingTimeout = link.PingTimeout
+	}
+	target := min(max(pingTimeout/4, nodeUpdateTargetFloor), nodeUpdateTargetCap)
+	maxChunk := min(nodeUpdateMaxChunk, proto.UploadChunkBytes)
+	init := nodeUpdateInitChunk
+	if defaultTarget := link.PingTimeout / 4; target < defaultTarget {
+		init = int(int64(nodeUpdateInitChunk) * int64(target) / int64(defaultTarget))
+		maxChunk = int(int64(maxChunk) * int64(target) / int64(defaultTarget))
+	}
+	maxChunk = max((maxChunk/nodeUpdateChunkStep)*nodeUpdateChunkStep, nodeUpdateMinChunk)
+	s := &nodeUpdateChunkSizer{
+		min:    nodeUpdateMinChunk,
+		max:    maxChunk,
+		target: target,
+	}
+	s.cur = s.clamp(init)
+	return s
+}
+
+func (s *nodeUpdateChunkSizer) next() int { return s.cur }
+
+func (s *nodeUpdateChunkSizer) observe(sent int, elapsed time.Duration, stats rpc.LaneStats) {
+	if sent <= 0 {
+		return
+	}
+	var desired int
+	if elapsed <= 0 {
+		desired = s.cur * 2
+	} else {
+		desired = int(float64(sent) * s.target.Seconds() / elapsed.Seconds())
+	}
+	if desired > s.cur {
+		// Grow at most 2x per chunk so a single highly-compressible section cannot jump straight to max.
+		desired = min(desired, s.cur*2)
+	}
+	if stats.Framed && stats.RTT > 2*s.target {
+		// Frames are already queueing toward the ping deadline: hold steady or shrink, never grow.
+		desired = min(desired, s.cur)
+		if stats.RTT > 3*s.target {
+			desired = min(desired, s.cur/2)
+		}
+	}
+	s.cur = s.clamp(desired)
+}
+
+func (s *nodeUpdateChunkSizer) clamp(n int) int {
+	n = (n / nodeUpdateChunkStep) * nodeUpdateChunkStep
+	return min(max(n, s.min), s.max)
+}
 
 // The desired deployment survives a hub restart. Only the node's local recovery
 // transaction lives beside its executable; hub state stays in Postgres settings.
@@ -360,21 +430,31 @@ func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDe
 	if _, err := f.Seek(begin.Offset, io.SeekStart); err != nil {
 		return err
 	}
-	buf := make([]byte, proto.UploadChunkBytes)
+	pingTimeout := link.PingTimeout
+	if m.d != nil {
+		_, pingTimeout, _ = m.d.linkPingTimes()
+	}
+	sizer := newNodeUpdateChunkSizer(pingTimeout)
+	buf := make([]byte, sizer.max)
 	for offset := begin.Offset; offset < stat.Size(); {
-		n, err := io.ReadFull(f, buf[:min(int64(len(buf)), stat.Size()-offset)])
+		want := min(int64(sizer.next()), stat.Size()-offset)
+		n, err := io.ReadFull(f, buf[:want])
 		if err != nil {
 			return explain(i18n.Err("devices-deploy.read_package_failed", i18n.Args{"err": err.Error()}), err)
 		}
 		var chunk struct {
 			Offset int64 `json:"offset"`
 		}
+		began := time.Now()
 		if err := peer.Call(ctx, "node.update.chunk", map[string]any{"id": begin.ID, "offset": offset, "data": buf[:n]}, &chunk); err != nil {
 			return explain(i18n.Err("devices-deploy.transfer_failed", i18n.Args{"err": err.Error()}), err)
 		}
 		offset += int64(n)
 		if chunk.Offset != offset {
 			return i18n.Err("devices-deploy.wrong_offset")
+		}
+		if offset < stat.Size() {
+			sizer.observe(n, time.Since(began), peer.LaneStats())
 		}
 	}
 	if err := m.d.CheckDevelopmentTarget(ctx, record.Development); err != nil {

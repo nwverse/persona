@@ -118,10 +118,11 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 
 Windows: herdr has native Windows support since 0.9.5; except live terminal, capabilities match above. Orca works too. See [windows.md](../operations/windows.md), "herdr."
 
-Antigravity CLI panes show chat history once the pane's conversation ID is known. Two sources report it, and either is
+**Antigravity CLI panes** show chat history once the pane's conversation ID is known. Two sources report it, and either is
 enough: Persona's own hooks (below) and the hook installed by `herdr integration install antigravity-cli`. Persona reads
-that conversation's local `transcript.jsonl` from the node's Antigravity data directory and uses the ID to restore
-Persona-started panes with `agy --conversation`. The pane's row is then titled after that conversation, as the Antigravity
+that conversation's local `transcript.jsonl` from the node's Antigravity data directory, or `transcript_full.jsonl` when
+the compact export is absent. Switching export sources resets the history cursor. The node uses the conversation ID to
+restore Persona-started panes with `agy --conversation`. The pane's row is then titled after that conversation, as the Antigravity
 companion titles it: the companion's title, else agy's own (its `cache/conversation_metadata.json`), else the first
 message typed into it (#13639). agy sets no terminal title, so until one of these is known the row has the shell's title
 or herdr's tab name. Until an ID is known the pane remains accessible through the terminal and can still receive prompts.

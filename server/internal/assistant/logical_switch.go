@@ -204,6 +204,19 @@ func (s *Service) logicalRoleRequired(ctx context.Context, machine, id string) (
 	return policy != "" || slices.Contains(cfg.Leaders, id) || id == cfg.BackgroundSupervisor || id == cfg.Main && cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks, nil
 }
 
+func (s *Service) conversationSwitchBusy(machine, id string, row proto.Session) bool {
+	if row.Starting || row.Status == proto.StatusWorking || row.Status == proto.StatusBlocked || row.PendingInteractions > 0 ||
+		backgroundRunning(row) || len(row.Queued) > 0 || (row.Compaction != nil && row.Compaction.State == proto.CompactionRunning) {
+		return true
+	}
+	for _, ix := range s.pendingInteractions() {
+		if ix.SessionID == id && ix.MachineID == machine {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p logicalSwitchRequest) (any, error) {
 	st, ok := s.store().(logicalSwitchStore)
 	if !ok {
@@ -238,13 +251,8 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 	if !known || !row.Assistant || row.PaneID != "" || s.isWorkMachine(p.MachineID) {
 		return nil, logicalRefusal(ctx, "unavailable")
 	}
-	if row.Starting || row.Status == proto.StatusWorking || row.Status == proto.StatusBlocked || row.PendingInteractions > 0 || backgroundRunning(row) || len(row.Queued) > 0 || (row.Compaction != nil && row.Compaction.State == proto.CompactionRunning) {
+	if s.conversationSwitchBusy(machine, id, row) {
 		return nil, logicalRefusal(ctx, "busy")
-	}
-	for _, ix := range s.pendingInteractions() {
-		if ix.SessionID == id && ix.MachineID == machine {
-			return nil, logicalRefusal(ctx, "busy")
-		}
 	}
 	target, err := s.logicalTarget(ctx, p.MachineID, p.Launcher)
 	if err != nil {
