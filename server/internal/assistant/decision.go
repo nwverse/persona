@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -124,6 +125,17 @@ func decisionTerminal(t Todo, label string) *SessionRef {
 type reviewDecision struct {
 	WhyOwner, Reason, Recommend, CostOfWaiting string
 	Options                                    []DecisionOption
+}
+
+// decisionPushLevel is the push level of a decision the owner is asked, by why it is theirs. Choosing what comes
+// first (priority) is the owner's call but no emergency: P1, in Needs you without ringing through low-distraction
+// mode. A step that cannot be undone, one others will see, a delivery to accept or what only the owner knows stays
+// P0 (decision rights: a2eb5451's "update the profile now?" rang as P0 on 2026-11-23).
+func decisionPushLevel(why string) string {
+	if why == whyPriority {
+		return assistantwire.LevelP1
+	}
+	return assistantwire.LevelP0
 }
 
 // neverDefault: the decision is never taken by default (it cannot be undone, or other people will see it).

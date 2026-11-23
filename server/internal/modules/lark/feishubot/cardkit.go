@@ -17,9 +17,6 @@ import (
 // codeUUIDUsed: a write's uuid was used a moment ago, so this is a retry of one that landed.
 const codeUUIDUsed = 200770
 
-// codeStreamClosed: the card is not streaming (CardKit turns streaming off ten minutes after it was turned on).
-const codeStreamClosed = 300309
-
 // CardCreate makes a card entity of card (its JSON 2.0) and returns its id. An entity never sent costs nothing, so a
 // create that is retried is harmless.
 func (c *Client) CardCreate(ctx context.Context, card string) (string, error) {
@@ -63,7 +60,3 @@ func (c *Client) cardWrite(ctx context.Context, op, method, path string, body ma
 
 // cardUUID is the uuid of entity id's write seq: the same write sent again is the same uuid.
 func cardUUID(id string, seq int64) string { return "ck-" + id + "-" + strconv.FormatInt(seq, 10) }
-
-// StreamClosed: the card is not streaming, so text cannot be streamed into it (turned off, or past CardKit's ten
-// minutes): it can be turned on again (CardSettings).
-func StreamClosed(err error) bool { return errorCode(err) == codeStreamClosed }

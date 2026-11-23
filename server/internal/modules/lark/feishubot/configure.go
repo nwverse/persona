@@ -15,34 +15,13 @@ import (
 // Both endpoints need the app's own tenant token and the `application:application:patch` scope, which the
 // platform does not open by itself: that one switch is the only manual step left besides creating the app.
 
-// consoleURL is the developer console for this client's cloud: the app list, "" for a private deployment
-// (its console address is not known). c.console overrides the cloud the domain says (tests).
+// consoleURL is the developer console for this client's cloud (ConsoleURL); c.console overrides the cloud the domain
+// says (tests).
 func (c *Client) consoleURL() string {
 	if c.console != "" {
 		return c.console
 	}
-	switch c.domain {
-	case DomainFeishu:
-		return DomainFeishu + "/app"
-	case DomainLark:
-		return DomainLark + "/app"
-	}
-	return ""
-}
-
-// ConsoleURL is the developer console the bind step links out to: the app list on the two clouds, "" for a
-// private deployment (its console address is not known).
-func ConsoleURL(domain string) string {
-	return New("", "", domain).consoleURL()
-}
-
-// AppConsoleURL is the console page of one app (its credentials, capabilities, permissions and versions).
-func AppConsoleURL(domain, appID string) string {
-	base := ConsoleURL(domain)
-	if base == "" || appID == "" {
-		return ""
-	}
-	return base + "/" + appID
+	return ConsoleURL(c.domain)
 }
 
 // The scopes and events the bot needs (docs/extensions/bots.md "What to do on the Open Platform"). Group messaging is
@@ -50,31 +29,6 @@ func AppConsoleURL(domain, appID string) string {
 // review, and the group gate works without it.
 var configureScopes = []string{"im:message:send_as_bot", "contact:user.base:readonly", "cardkit:card:write"}
 var configureEvents = []string{"im.message.receive_v1", "card.action.trigger", "p2p_chat_create", "im.message.recalled_v1", EventP2PEntered}
-
-// ConfigureIssue is why AutoConfigure stopped, in one word: the app shows a sentence and a console link.
-type ConfigureIssue string
-
-const (
-	IssueNone          ConfigureIssue = ""               // everything it tried worked
-	IssueBotCapability ConfigureIssue = "bot_capability" // the app has no bot capability yet (open-platform code 210041)
-	IssuePatchScope    ConfigureIssue = "patch_scope"    // application:application:patch is not open on the app
-	IssueNotSelfBuilt  ConfigureIssue = "not_self_built" // the app was not created in the developer console (210001)
-	IssueUnderReview   ConfigureIssue = "under_review"   // a version is already under review (210302): taken as submitted
-	IssueIncompatible  ConfigureIssue = "incompatible"   // a config error the app cannot fix from here (210031/210032/210034)
-	IssueUnreachable   ConfigureIssue = "unreachable"    // the call itself failed (network, rate limit): retried on the next bind
-	IssueNoApp         ConfigureIssue = "no_app"         // the app id or the secret was rejected
-)
-
-// ConfigureReport is what AutoConfigure did. Published means a version is pending review (or one already
-// was); a private deployment reports Skipped with no Issue.
-type ConfigureReport struct {
-	Configured bool           // scopes, events and the long-connection mode were set
-	Published  bool           // the publish was submitted (or one was already under review)
-	VersionID  string         // the version the publish created, when the answer carried one
-	Skipped    bool           // nothing was tried (a private domain)
-	Issue      ConfigureIssue // "" when everything it tried worked
-	Detail     string         // the platform's own words for a failure, for the log only
-}
 
 // AutoConfigure opens the scopes and events with the long-connection subscription mode, then submits the
 // publish (which creates the version when none is pending). It runs on the freshly saved credentials; the
@@ -147,11 +101,4 @@ func configureIssue(err error) (ConfigureIssue, string) {
 		return IssuePatchScope, apiErr.Msg
 	}
 	return IssueUnreachable, fmt.Sprintf("%d %s", apiErr.Code, apiErr.Msg)
-}
-
-// CredentialRejected reports whether err is the open platform rejecting the app id or the secret (the token
-// call's own codes): the bind step answers with one plain sentence instead of the raw error.
-func CredentialRejected(err error) bool {
-	var apiErr *APIError
-	return errors.As(err, &apiErr) && apiErr.Op == "token" && (apiErr.Code == 10003 || apiErr.Code == 10014)
 }
