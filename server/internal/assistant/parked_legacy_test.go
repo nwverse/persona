@@ -249,7 +249,7 @@ func TestLegacyOwnerPriorityPreservesOwnerDecisions(t *testing.T) {
 	for _, when := range []string{"before reconciliation", "after reconciliation", "stored while ledger fails"} {
 		t.Run(when, func(t *testing.T) {
 			database := &ledgerDown{DB: taskRecoveryDatabase(t)}
-			s, firstHub, task := newSupervisedServiceOn(t, database)
+			s, _, task := newSupervisedServiceOn(t, database)
 			holdDigest(s)
 			ctx := context.Background()
 			legacyOwnerPark(t, s, task.ID)
@@ -276,13 +276,12 @@ func TestLegacyOwnerPriorityPreservesOwnerDecisions(t *testing.T) {
 				t.Fatalf("missing or duplicated owner decision: %+v, review %+v, %v", decisions, r, err)
 			}
 			// Immediate delivery can move the pending signal between two reads. Wait for one settled form in a single loop:
-			// the recovered signal is still pending, or exactly one real message carried it across both managers.
-			// An urgent decision can finish on the first manager before restart; its durable ACK must prevent replay.
+			// the recovered signal is still pending, or exactly one real message carried it; never both nor neither.
 			var pending []string
 			var delivered int
 			waitFor(t, "the recovered park decision to settle", func() bool {
 				pending = pendingKinds(again, task.ID)
-				delivered = strings.Count(strings.Join(append(firstHub.notices(), hub.notices()...), "\n"), "signal=park_decided")
+				delivered = strings.Count(strings.Join(hub.notices(), "\n"), "signal=park_decided")
 				return slices.Equal(pending, []string{sigParkDecided}) && delivered == 0 || len(pending) == 0 && delivered == 1
 			})
 			if len(pending) > 0 && (!slices.Equal(pending, []string{sigParkDecided}) || delivered != 0) {

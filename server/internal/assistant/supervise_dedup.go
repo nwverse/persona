@@ -230,8 +230,8 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 	}, nil
 }
 
-// ackSupervisionDedupLocked marks reservations as delivered. An empty Key distinguishes a confirmed delivery or
-// durable queue admission from a crash after reservation. Re-emitting the same event after restart must not turn a
+// ackSupervisionDedupLocked confirms current plan/transfer assignments and stable per-source events.
+// An empty Key distinguishes a confirmed delivery or durable queue admission from a crash after reservation. Re-emitting the same event after restart must not turn a
 // delivered fingerprint into a reservation retry. Use the fingerprints actually rendered: digestEntry mutates
 // start-remedy observation times and must never be called again after delivery. dedupMu is held by sendDigest.
 func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []superviseSignal, rendered ...map[[2]string]string) {
@@ -249,6 +249,13 @@ func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []super
 	for _, g := range signals {
 		stable := g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo ||
 			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
+		if !stable {
+			// Unmarked legacy deliveries retain their established acknowledgment path.
+			t, ok := s.todoNow(g.Todo)
+			if !ok || !t.Supervision.assigned() {
+				continue
+			}
+		}
 		key := ""
 		if len(rendered) > 0 {
 			key = rendered[0][[2]string{g.id(), g.Key}]
