@@ -37,6 +37,7 @@ import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { StatusMark } from "../../ui/StatusMark";
 import { useVoiceAsking } from "../../lib/voice/calls";
+import { InteractionMarks, ModuleCard, useCardRenderer } from "../../core/ChatSlots";
 import { useComposition } from "../../lib/ime";
 import { ErrorNotice } from "../../ui/ErrorNotice";
 import { reportBoundary } from "../../lib/error-reports";
@@ -108,6 +109,8 @@ type CardKeys = ReturnType<typeof useCardKeys>;
  */
 /** The card the voice is asking about (docs/web/web.md "Voice"): InteractionCard says so, Card marks its kicker row. */
 const AskedByVoice = createContext(false);
+/** What modules mark the card with (core/module-host.ts `interaction.asked`): Card draws it in its kicker row. */
+const CardMarks = createContext<React.ReactNode>(null);
 /** The answer on its way for the card, as a line for its footer ("Sending: Allowed"); empty when none, or for its first
  *  moment online. InteractionCard says so (lib/card-answer.ts usePendingLine, past the card's own state) and disables
  *  every answer meanwhile. */
@@ -128,6 +131,7 @@ const QueueSlot = createContext<{ position: number; total: number; open: boolean
 
 export function Card({ title, titleContent, kicker, onDismiss, busy, children, footer, looking = false, cardKeys, tapGuard }: { title: string; titleContent?: React.ReactNode; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys; tapGuard?: { ref: RefObject<HTMLDivElement | null> } }) {
   const asked = useContext(AskedByVoice);
+  const marks = useContext(CardMarks);
   const sending = useContext(SendingAnswer);
   const from = useContext(AskedFrom);
   // the answer row stuck at the bottom of the box while the card's body is below it: the row says what it answers
@@ -170,6 +174,7 @@ export function Card({ title, titleContent, kicker, onDismiss, busy, children, f
                   <span className="truncate">{t("voice.asking_mark")}</span>
                 </span>
               )}
+              {marks}
             </div>
             <div ref={head} className="text-[13.5px] font-medium text-ink">{titleContent ?? title}</div>
           </div>
@@ -1427,6 +1432,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
   const { pending, line } = usePendingLine(ix);
   // a card a task's supervisor holds is not the user's yet: what it asks, read-only, never its answers
   const held = supervisorHeld(ix);
+  const renderer = useCardRenderer(ix.kind);
   const card = held ? <SupervisorHeldCard key={ix.id} ix={ix} />
     : isSessionReview(ix) ? <SessionReviewCard key={ix.id} ix={ix} />
     : ix.kind === "question" && ix.tool_name === "persona_tool_loop" ? <ToolLoopCard key={ix.id} ix={ix} />
@@ -1435,8 +1441,11 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : isSecretHandoff(ix) ? <SecretHandoffCard key={ix.id} ix={ix} />
     : ix.kind === "permission" ? <PermissionCardFrame key={ix.id} ix={ix} />
-    : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
+    : ix.kind === "elicitation" ? <ElicitationCard ix={ix} />
+    // a kind the core has no card for, drawn by the module that names it (core/module-host.ts `cardRenderers`)
+    : renderer ? <ModuleCard key={ix.id} module={renderer} interaction={ix} /> : <ScreenCard ix={ix} />;
   const asked = useVoiceAsking(ix);
+  const marks = <InteractionMarks interaction={ix} />;
   // a permission card says it in its body (PermissionBody); a secret run's or hand-off's card has none, so it says it here
   const from = ix.folded_under && (ix.kind !== "permission" || isSecretRun(ix) || isSecretHandoff(ix)) ? permissionFrom(ix) : "";
   // what it asks in one line, as the folded cards' line says it (the command of a tool approval, a question)
@@ -1448,6 +1457,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
   return (
     <div data-card={ix.id} className="contents">
       <AskedByVoice.Provider value={asked}>
+        <CardMarks.Provider value={marks}>
         <SendingAnswer.Provider value={line}>
           <AskedFrom.Provider value={from}>
             <CardAbout.Provider value={about}>
@@ -1459,6 +1469,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
             </CardAbout.Provider>
           </AskedFrom.Provider>
         </SendingAnswer.Provider>
+        </CardMarks.Provider>
       </AskedByVoice.Provider>
     </div>
   );
