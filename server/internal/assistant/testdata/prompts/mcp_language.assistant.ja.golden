@@ -1023,14 +1023,13 @@
   },
   {
     "name": "interaction_answer",
-    "description": "Answer another agent's question for the user, in their place, when they said what to answer or told you to decide. Only a question can be answered this way: a tool permission, a plan and a terminal dialog are theirs to decide in the app, and the assistant's own question is never answered by itself. Every question must be answered by its own wording, with the option labels it offers; free text is not accepted (the user answers that in the app, or you use agent_send). A multi-select takes an array of labels. A card a 督办 message handed you before the user (a task you supervise) is yours to answer when it is the agent's own call: give reason, and the answer is kept as the task's decision; what the user must decide goes to them with ask_escalate.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Answer another agent's card for the user, in their place, when they said what to answer or told you to decide. Answer each question by its own wording with an option label it offers; no free text (use agent_send). A multi-select takes an array of labels. A card a 督办 message handed you (a task you supervise) is yours to decide: answer a question, or allow or deny a tool permission or a plan with allow, giving reason; it is kept as the task's decision, never as the user's. Forms, secrets and approvals that send or reply in the user's name, spend money or delete are the user's: ask_escalate them. Never other approvals, terminal dialogs or the assistant's own questions.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
         "machine",
         "session_id",
-        "interaction_id",
-        "answers"
+        "interaction_id"
       ],
       "properties": {
         "machine": {
@@ -1062,16 +1061,20 @@
             ]
           }
         },
+        "allow": {
+          "type": "boolean",
+          "description": "a permission or plan card: true allows (approves), false denies"
+        },
         "reason": {
           "type": "string",
-          "description": "optional: in a sentence, why this answer (kept with the task's decision when a 督办 message handed you the card)"
+          "description": "in a sentence, why this answer (kept with the task's decision)"
         }
       }
     }
   },
   {
     "name": "ask_escalate",
-    "description": "Hand the cards a task's agents wait on to the user, when a 督办 message gave them to you first and the user must decide: a tool permission or a plan (no conversation approves those), or a question that is irreversible, seen by other people, changes the goal or goes against a decision already made on the task. Every card of the task the user has not been told of goes to them at once, as one reminder (in the user's push grading it pushes only when why_owner or p0 says it is theirs alone), with your reason and recommendation on it; their answers go straight to the agents and are kept as the task's decisions. Only the task's supervisor and the main conversation can. A leader's escalation is told to the main conversation too, so don't ask the user the same thing again yourself.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Hand the cards a task's agents wait on to the user, when a 督办 message gave them to you first and only the user can decide: a form or secret; an approval that sends or replies in their name, spends money or deletes; a question that is irreversible, seen by others, changes the goal or contradicts a decision made on the task. Other permissions and plans are yours (interaction_answer); no card reaches the user on a timeout. Every card of the task the user has not been told of goes to them at once, as one reminder (with push grading on it pushes only for why_owner or p0), with your reason and recommendation; their answers go to the agents and are kept as the task's decisions. Only the task's supervisor and main can; main is told of a leader's escalation, so don't ask the user again.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [

@@ -905,8 +905,8 @@ type Supervise struct {
 	// they wait here before going up a rung.
 	Asked      bool
 	AskMinutes int
-	// PushGrading: the owner's push grading switch is on: a card is never handed to the user on a timeout, and ask_escalate
-	// pushes only what is the owner's alone (why_owner).
+	// PushGrading: the owner's push grading switch is on: ask_escalate pushes only what is the owner's alone (why_owner).
+	// No card is handed to the user on a timeout either way.
 	PushGrading bool
 	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
 	// owner_cannot_answer; #3804).
