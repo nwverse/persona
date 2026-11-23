@@ -284,6 +284,7 @@ func (it *InboxItem) listed() InboxItem {
 		}
 		a.Pending, a.Wake, a.SentOf, a.Lost = nil, false, "", nil
 		a.ProcessingTurn = ""
+		a.InterruptedByDisable = false
 		a.DeferredAt, a.WakeSlot = nil, false
 		c.Agent = &a
 	}
