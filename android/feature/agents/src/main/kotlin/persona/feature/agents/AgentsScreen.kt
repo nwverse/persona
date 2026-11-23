@@ -856,18 +856,19 @@ internal fun AgentsScreen(
                         val slot = repoSlots[entry.key]
                         AgentSpaceHeader(stringResource(R.string.agents_child_tasks, entry.count), !entry.expanded,
                             onToggle = {
-                                // Codex subtasks (ChatsView.swift:3289). Arm one frame ahead of mutating
-                                // `expandedTasks` so `exitFade` attaches `fadeOutSpec` before rows leave
-                                // composition while idle rows keep null specs and zero GraphicsLayers.
+                                // Codex subtasks (ChatsView.swift:3289). Prepare exit fade one frame ahead without
+                                // arming placement yet so a hub push in that prep frame cannot steal the fold's tap,
+                                // while idle rows keep null specs and zero GraphicsLayers.
                                 val parentId = entry.parent.id
                                 val collapse = entry.expanded
                                 if (reduceMotion) {
                                     expandedTasks = if (collapse) expandedTasks - parentId else expandedTasks + parentId
                                 } else {
-                                    listTapMotion.arm(ListTapMotionKind.State)
+                                    listTapMotion.prepareExitFade()
                                     androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
                                     tapMotionScope.launch {
                                         androidx.compose.runtime.withFrameNanos { }
+                                        listTapMotion.arm(ListTapMotionKind.State)
                                         expandedTasks = if (collapse) expandedTasks - parentId else expandedTasks + parentId
                                     }
                                 }

@@ -1507,6 +1507,118 @@ class ListTapMotionTest {
         assertFalse(motion.hasActiveShifts())
     }
 
+    @Test fun noOpTapAfterStaleRebaseDisarmsImmediately() {
+        rule.mainClock.autoAdvance = false
+        var rows by mutableStateOf(listOf("A", "B", "C", "D"))
+        var epoch by mutableStateOf(0)
+        val state = LazyListState()
+        val motion = ListTapMotion()
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = false, style = AppStyle.Glass) {
+                BindListTapMotion(motion)
+                LazyColumn(Modifier.width(411.dp).height(320.dp), state = state) {
+                    val tap = ListTapLazyScope(this, motion, state, epoch = epoch)
+                    with(tap) {
+                        items(rows, key = { it }) { title ->
+                            Box(Modifier.height(48.dp).fillMaxWidth().testTag("row-$title"))
+                        }
+                    }
+                    tap.commit()
+                }
+            }
+        }
+        settle()
+
+        // Pending tap awaits epoch 2 (e.g., Expand All on an already-expanded list).
+        motion.arm(ListTapMotionKind.State, awaitPage = true, epoch = 2)
+        // Stale epoch 1 hub page arrives and rebases armedBaseline.
+        rows = listOf("Hub", "A", "B", "C", "D")
+        epoch = 1
+        Snapshot.sendApplyNotifications()
+        repeat(2) { rule.mainClock.advanceTimeByFrame() }
+        motion.cancelShiftsAndResetBaseline()
+
+        // Tap's epoch 2 lands with no diff relative to the rebased epoch 1 list -> must disarm promptly.
+        epoch = 2
+        Snapshot.sendApplyNotifications()
+        motion.land(2)
+        repeat(4) { rule.mainClock.advanceTimeByFrame() }
+        assertNull("no-op tap after stale rebase stayed armed", motion.kind)
+        assertFalse(motion.captured)
+
+        // A subsequent unrelated hub update reusing epoch 2 must snap rather than animating.
+        val beforeD = top("row-D")
+        rows = listOf("Hub2", "Hub", "A", "B", "C", "D")
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeByFrame()
+        assertEquals(0, motion.shiftPx("D"))
+        assertTrue("hub insert did not move D", top("row-D") > beforeD + 20f)
+    }
+
+    @Test fun prepareExitFadeDoesNotLetHubPushInPrepFrameStealLocalFold() {
+        rule.mainClock.autoAdvance = false
+        var rows by mutableStateOf(listOf("A", "B", "C"))
+        val motion = ListTapMotion()
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = false, style = AppStyle.Glass) {
+                BindListTapMotion(motion)
+                LazyColumn(Modifier.width(160.dp).height(320.dp).background(Color.White).testTag("shot")) {
+                    val tap = ListTapLazyScope(this, motion)
+                    with(tap) {
+                        items(rows, key = { it }) { title ->
+                            Box(
+                                Modifier
+                                    .height(48.dp)
+                                    .fillMaxWidth()
+                                    .background(if (title == "B") Color.Red else Color.Blue)
+                                    .testTag("row-$title"),
+                            )
+                        }
+                    }
+                    tap.commit()
+                }
+            }
+        }
+        settle()
+
+        // Prep frame attaches fadeOutSpec without arming placement.
+        motion.prepareExitFade()
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeByFrame()
+        // A hub push arrives during the prep frame -> must NOT consume the tap or animate.
+        rows = listOf("Hub", "A", "B", "C")
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeByFrame()
+        assertNull("prep frame should not arm placement kind", motion.kind)
+        assertFalse("hub push in prep frame captured tap", motion.captured)
+        assertEquals(0, motion.shiftPx("C"))
+        // Draw the prep frame (mirroring Choreographer's per-frame draw) so B's fadeOut GraphicsLayer is populated.
+        assertTrue("B should be visible before fold", redPixels() > 20)
+
+        val beforeHub = top("row-Hub")
+        val beforeC = top("row-C")
+        // Next frame: local fold arms placement and removes B.
+        motion.arm(ListTapMotionKind.State)
+        rows = listOf("Hub", "A", "C")
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeByFrame()
+        val earlyFadeRed = redPixels()
+        val traceC = (1..8).map {
+            rule.mainClock.advanceTimeByFrame()
+            top("row-C")
+        }
+        rule.mainClock.advanceTimeBy(500)
+        val afterC = top("row-C")
+        val lateFadeRed = redPixels()
+
+        assertTrue("removed row B did not fade out ($earlyFadeRed -> $lateFadeRed)", earlyFadeRed > 10 && lateFadeRed < earlyFadeRed / 2)
+        assertEquals("hub row moved during fold", beforeHub, top("row-Hub"), 1f)
+        assertTrue(
+            "row C did not spring after hub push during prep frame ($beforeC -> $afterC via $traceC)",
+            abs(beforeC - afterC) > 8f && traceC.any { y -> (y - beforeC) * (y - afterC) < 0f && abs(y - beforeC) > 4f && abs(y - afterC) > 4f },
+        )
+    }
+
     @Test fun staleShiftSafetyNetClearsAfterDisarm() {
         rule.mainClock.autoAdvance = false
         var rows by mutableStateOf(listOf("A", "B"))

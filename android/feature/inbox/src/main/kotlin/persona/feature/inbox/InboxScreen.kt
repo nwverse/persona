@@ -279,16 +279,17 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             return
         }
         // The large title comes back on this frame, with no spring (InboxView.swift:152-153). The
-        // removal waits until that frame has been laid out, then arms one frame ahead so `exitFade`
-        // attaches `fadeOutSpec` before the row leaves composition (InboxView.swift:632-634).
+        // removal waits until that frame has been laid out, then prepares `exitFade` for one frame
+        // without arming placement yet so a hub push cannot steal the removal's tap (InboxView.swift:632-634).
         after?.invoke()
         val job = scope.launch {
             try {
                 androidx.compose.runtime.withFrameNanos { }
                 androidx.compose.runtime.withFrameNanos { }
-                listTapMotion.arm(ListTapMotionKind.State)
+                listTapMotion.prepareExitFade()
                 androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
                 androidx.compose.runtime.withFrameNanos { }
+                listTapMotion.arm(ListTapMotionKind.State)
                 asked.forEach { pending[it.id] = done }
                 applyVisual()
             } finally {
@@ -300,12 +301,13 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.NonCancellable).launch { send() }
         }
     }
-    /** [ListTapMotion.arm], then the list write on the next frame, so the spec is already measured. */
+    /** Prepares exit fade for one frame, then arms and writes on the next frame so a hub push cannot steal the tap. */
     fun animateChange(block: () -> Unit) {
-        listTapMotion.arm(ListTapMotionKind.State)
+        listTapMotion.prepareExitFade()
         androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
         scope.launch {
             androidx.compose.runtime.withFrameNanos { }
+            listTapMotion.arm(ListTapMotionKind.State)
             block()
         }
     }

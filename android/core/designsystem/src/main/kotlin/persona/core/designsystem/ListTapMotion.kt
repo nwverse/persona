@@ -212,6 +212,7 @@ class ListTapMotion {
      * [epoch] is the build that will contain this tap's change.
      */
     fun arm(next: ListTapMotionKind, awaitPage: Boolean = false, epoch: Int = 0) {
+        preparingFade = false
         armedBaseline = composed
         armedLandings = landings
         armedEpoch = epoch
@@ -329,6 +330,7 @@ class ListTapMotion {
      * rows never spring across a viewport jump.
      */
     fun onProgrammaticScroll() {
+        preparingFade = false
         cancelShiftsAndResetBaseline()
         if (kind != null || plainKind != null || diffReady) disarm()
     }
@@ -572,7 +574,10 @@ class ListTapMotion {
         val stale = awaitPage && kind != null && epoch >= 0 && epoch != armedEpoch
         if (stale) {
             // This older page is now what is laid out on screen before [armedEpoch] arrives;
-            // rebase [armedBaseline] so an earlier hub insert cannot cancel out the tap's index diff.
+            // keep [composed], [composedKeys], and [armedBaseline] in sync so a later no-op tap
+            // disarms immediately and an earlier hub insert cannot mask the tap's index diff.
+            composed = keys
+            composedKeys = keys
             armedBaseline = keys
             holdKeys(keys, epoch)
             return
@@ -587,6 +592,7 @@ class ListTapMotion {
     }
 
     fun disarm() {
+        preparingFade = false
         plainKind = null
         kind = null
         placedSpec = null
@@ -600,6 +606,25 @@ class ListTapMotion {
         visibleNow()?.let { pruneRetained(it) }
         // The spring still has a tail at the token duration (about 1.3% at 300 ms). Cutting it
         // jumps. Each shift removes itself when it settles.
+    }
+
+    /**
+     * Enables `exitFade` (`fadeOutSpec`) for one prep frame before a local synchronous removal
+     * calls [arm], without letting a hub push in that prep frame consume the placement diff.
+     */
+    internal var preparingFade by mutableStateOf(false)
+        private set
+    internal var fadePrepToken by mutableIntStateOf(0)
+        private set
+
+    fun prepareExitFade() {
+        if (themeReduce || !hasTheme) return
+        preparingFade = true
+        fadePrepToken++
+    }
+
+    internal fun clearExitFadePrep() {
+        preparingFade = false
     }
 
     /** How many rows still remember a place. A scroll must not keep every row that passed through. */
@@ -667,8 +692,8 @@ private class RowShift(
  */
 @Composable
 fun BindListTapMotion(motion: ListTapMotion, keys: List<Any>? = null) {
-    val live = keys ?: motion.composedKeys
-    val latest = rememberUpdatedState(live)
+    val explicitKeys = rememberUpdatedState(keys)
+    fun currentKeys(): List<Any> = explicitKeys.value ?: motion.composedKeys
     val reduce = PersonaTheme.reduceMotion
     val theme = PersonaTheme.motion
     val hostScope = rememberCoroutineScope()
@@ -697,6 +722,18 @@ fun BindListTapMotion(motion: ListTapMotion, keys: List<Any>? = null) {
         else if (motion.captured && keys != motion.composedKeys) motion.seal()
         motion.noteComposed(keys)
     }
+    LaunchedEffect(motion.fadePrepToken, reduce) {
+        if (!motion.preparingFade) return@LaunchedEffect
+        if (reduce) {
+            motion.clearExitFadePrep()
+            return@LaunchedEffect
+        }
+        val token = motion.fadePrepToken
+        // Allow the prep frame and the following mutation frame; if nothing armed, return to idle.
+        withFrameNanos { }
+        withFrameNanos { }
+        if (motion.fadePrepToken == token) motion.clearExitFadePrep()
+    }
     LaunchedEffect(motion.generation, reduce) {
         if (motion.kind == null) return@LaunchedEffect
         if (reduce) {
@@ -704,25 +741,24 @@ fun BindListTapMotion(motion: ListTapMotion, keys: List<Any>? = null) {
             return@LaunchedEffect
         }
         val generation = motion.generation
-        val base = motion.armedBaseline
         val tick = motion.armedLandings
         val waiting = motion.awaitPage
-        if (latest.value != base) {
-            finishMovingKeys(motion, generation)
-            return@LaunchedEffect
-        }
         if (!waiting) {
+            if (currentKeys() != motion.armedBaseline) {
+                finishMovingKeys(motion, generation)
+                return@LaunchedEffect
+            }
             // This frame draws the spec while the rows are still where the tap found them. The list
             // write is the next frame (Inbox), so a tap that never writes drops on the one after that.
             withFrameNanos { }
             if (motion.generation != generation) return@LaunchedEffect
-            if (latest.value != base) {
+            if (currentKeys() != motion.armedBaseline) {
                 finishMovingKeys(motion, generation)
                 return@LaunchedEffect
             }
             withFrameNanos { }
             if (motion.generation != generation) return@LaunchedEffect
-            if (latest.value == base) motion.disarm() else finishMovingKeys(motion, generation)
+            if (currentKeys() == motion.armedBaseline) motion.disarm() else finishMovingKeys(motion, generation)
             return@LaunchedEffect
         }
         // Landings only. A key list from a page built before the tap must not finish this wait.
@@ -736,11 +772,12 @@ fun BindListTapMotion(motion: ListTapMotion, keys: List<Any>? = null) {
             return@LaunchedEffect
         }
         // withFrameNanos resumes before this frame's composition. Wait out that frame, then the next,
-        // so a landing cannot clear the flag before the page is captured.
+        // so a landing cannot clear the flag before the page is captured. Compare against the current
+        // [motion.armedBaseline] (which may have been rebased by an intervening stale hub page).
         repeat(2) {
             withFrameNanos { }
             if (motion.generation != generation) return@LaunchedEffect
-            if (motion.captured || latest.value != base) {
+            if (motion.captured || currentKeys() != motion.armedBaseline) {
                 finishMovingKeys(motion, generation)
                 return@LaunchedEffect
             }
@@ -806,20 +843,27 @@ private fun LazyItemScope.moving(
     modifier: Modifier, motion: ListTapMotion, key: Any, pin: LazyListState?, stick: Boolean,
 ): Modifier {
     val scope = rememberCoroutineScope()
-    val armed = androidx.compose.runtime.remember(motion) {
+    val fadeInArmed = androidx.compose.runtime.remember(motion) {
         derivedStateOf { motion.kind != null && motion.hasTheme && !motion.reduceMotion }
     }
+    val fadeOutArmed = androidx.compose.runtime.remember(motion) {
+        derivedStateOf { (motion.kind != null || motion.preparingFade) && motion.hasTheme && !motion.reduceMotion }
+    }
     DisposableEffect(motion, key) { onDispose { motion.forget(key) } }
-    return exitFade(modifier.then(RowMoveElement(motion, key, scope, pin, stick)), armed, motion.liveFade)
+    return exitFade(modifier.then(RowMoveElement(motion, key, scope, pin, stick)), fadeInArmed, fadeOutArmed, motion.liveFade)
 }
 
-/** Reads [armed] so only this wrapper recomposes when a tap starts or ends, not the row body. */
+/** Reads [fadeInArmed]/[fadeOutArmed] so only this wrapper recomposes when a tap starts or ends, not the row body. */
 @Composable
 private fun LazyItemScope.exitFade(
-    modifier: Modifier, armed: State<Boolean>, fade: FiniteAnimationSpec<Float>,
+    modifier: Modifier,
+    fadeInArmed: State<Boolean>,
+    fadeOutArmed: State<Boolean>,
+    fade: FiniteAnimationSpec<Float>,
 ): Modifier {
-    val activeFade = if (armed.value) fade else null
-    return modifier.animateItem(fadeInSpec = activeFade, placementSpec = null, fadeOutSpec = activeFade)
+    val fadeIn = if (fadeInArmed.value) fade else null
+    val fadeOut = if (fadeOutArmed.value) fade else null
+    return modifier.animateItem(fadeInSpec = fadeIn, placementSpec = null, fadeOutSpec = fadeOut)
 }
 
 /**
