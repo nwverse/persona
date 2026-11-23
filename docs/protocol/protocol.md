@@ -6461,6 +6461,26 @@ turn ran. Reusing an operation ID requires the same request. Query
 and `in_doubt`. An unfinished operation serializes changes to that conversation. Ordinary model picks never initiate
 this operation; older clients retain the existing cross-engine refusal.
 
+For an explicit multi-conversation operation, a full-access client sends
+`POST /api/v1/assistant/conversation-switches` with `{conversation_ids, machine_id?, launcher, model?, effort?,
+permission_mode?, preview?}`. A preview is read-only and creates no batch, operation or confirmation. Execution returns a
+batch ID, per-item before/target images, expected epochs, operation IDs and outcomes. `ready`, `queued`, `switching`,
+`switched` and `refused` distinguish the plan and its progress. `GET /api/v1/assistant/conversation-switches/{batch}`
+reconciles and reads the durable batch. A batch has at most 50 items; items are independent: one refusal does not roll back the others.
+The MCP tool `conversations_switch` exposes the same operation with the caller's conversation-space isolation and one
+existing outbound confirmation for the whole actionable batch; `batch_id` reads status.
+
+A busy item remains in the persisted queue until its turn, background work, queued input and pending interactions have
+settled. The coordinator neither interrupts work nor sends a synthetic message. If activation completed with no durable
+input pending, it resolves that batch operation accepted; with pending input, the ordinary first-input acceptance or
+rollback protocol remains authoritative. Stored operation IDs make a manager restart replay-safe.
+
+`POST /api/v1/assistant/conversation-switches` with `{restore_batch_id, preview?}` plans a new batch back to each
+completed item's exact saved machine, launcher, requested model, effort and permission mode. Empty model/effort retain
+launcher-default meaning; an empty saved permission becomes explicit `default` rather than inheriting the fallback's
+mode. Restore itself saves a new before-image and queues busy items. An unfinished original item, an epoch mismatch or
+an independently changed execution is refused and left untouched; restoring never overwrites a newer user choice.
+
 `GET/PUT /api/v1/assistant/segments` reads/writes `{enabled}` (default true). Disabling new switches never disables
 routing of existing segments. Queued inputs retain their original `client_msg_id`; a sending/in-doubt input fences
 later input until reconciled. Definitive first-turn refusal restores the source at a higher epoch. The source is

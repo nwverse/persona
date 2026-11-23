@@ -1589,11 +1589,17 @@ explicit user-facing actions still follow the usual visibility rules.
   receipt, using the same paged history and full-record renderer. Opening it marks nothing seen. Full transcript and
   feed APIs are unchanged. The hub suppresses unread only for the matching latest silent round: earlier genuinely
   visible unread work remains unread, working and needs-you states win, and a failed transcript read fails open.
+  An accepted review is internal only when the hub resolves the task's current plan with `user_requested=false` and
+  finds at least one source: a current-round completed (`clean` or `blocking`) `auto_review`, `round>0` after rework,
+  or a nonempty `parent` for a leader's internal subtask. Its successful `task_review` receipt carries
+  `background=true`; the receipt, tool call and reply stay in Background activity. `user_check`, `needs_user`, an
+  unmarked legacy review, or missing/ambiguous source metadata stays visible. The attention-cache version changes
+  with this classification so an older visible verdict is recomputed.
   Existing daily-briefing totals keep their meaning; a separate exact silently-handled daily total is out of scope
   because round metrics do not record visibility.
 - **Not folded** (the visibility rule supervision rounds use, `supervisionVisible` / `fold.supervision_user` from
   `server/internal/transcript/fold_supervision.go`): a round that used `ask_user` or `notify_user` successfully, a pending
-  `ask_user` while it runs, a `task_review` with an `accepted` or `needs_user` verdict card, or a `supervision_finish`
+  `ask_user` while it runs, a `task_review` with an unmarked `accepted` or any `needs_user` verdict card, or a `supervision_finish`
   with user visibility. A completed round with a nonblank final reply also stays open, even if delivery tools were
   unavailable, unless it settled with silent visibility. The full reply uses the ordinary reply bubble so its
   formatting and links remain available. Its work keeps the usual collapsed summary. Intermediate narration,
@@ -2816,6 +2822,24 @@ repeated. Retired callers lose manager tool authority immediately. Physical appr
 activation; the node's retirement latch prevents recovery and idle-compaction work on that segment. Closure is retried
 when offline nodes reconnect. Deleting a conversation cascades through segment history and queue content, retaining
 only deletion markers and minimal offline closure identities.
+
+`conversations_switch` and `POST /api/v1/assistant/conversation-switches` coordinate an explicit set of these logical
+switches without adding another engine protocol. The settings-backed batch stores each conversation's before-image,
+target, expected epoch and operation ID before starting anything. Busy items wait for their current turn and pending
+work; no interrupt or synthetic message completes a batch. When an activated batch item has no durable input pending,
+the coordinator accepts the completed switch immediately. If real input is pending, the first-turn acceptance/refusal
+rules above remain unchanged. A late preparation failure cannot return an activated operation to `in_doubt`;
+reconciliation continues from the activated state. The existing history loop and session-list changes wake queued items
+after a restart.
+
+The batch response distinguishes queued, switching, switched and refused items; one refusal does not cancel independent
+items. `restore_batch_id` creates a new, itself-restorable batch toward the original per-conversation settings rather
+than a global default. It only includes completed items whose current epoch and execution still match that batch's
+target. A conversation changed independently is reported and left alone. Empty requested model/effort retain launcher-
+default behavior, while a saved empty permission mode restores explicit `default` instead of inheriting the fallback.
+Preview creates neither state nor a phone confirmation; MCP execution uses one existing whole-batch outbound
+confirmation and the caller's space-scoped conversation lookup. Full-role HTTP routes and batch status are documented in
+[../protocol/protocol.md](../protocol/protocol.md).
 
 `GET/PUT /api/v1/assistant/segments` controls **new switches**, enabled by default. Disabling it keeps segment routing,
 reads and recovery running. A manager binary from before segment routing is **not a safe downgrade after a switch**:
