@@ -5,15 +5,15 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "../../../i18n";
 import { BUSY_MOTION, spinStyle } from "../../../lib/busy-motion";
-import { announced, barLine, barStatus, sinceText, type BarAction, type BarLine, type OrbPhase } from "../../../lib/voice/bar-line";
-import { voiceCalls, useVoiceSnapshot } from "../../../lib/voice/calls";
-import type { VoiceConversation } from "../../../lib/voice/conversation";
-import { chooseVoice, listVoices } from "../../../lib/voice/support";
+import { announced, barLine, barStatus, sinceText, type BarAction, type BarLine, type OrbPhase } from "../bar-line";
+import { voiceCalls, useVoiceSnapshot } from "../calls";
+import type { VoiceConversation } from "../conversation";
+import { chooseVoice, listVoices } from "../support";
 import type { Interaction, Session } from "../../../lib/types";
 import { Button, cx, Dialog, EASE, Menu, useMenu, useNow, type MenuItem } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
 import { StatusMark } from "../../../ui/StatusMark";
-import { resolve } from "../Interactions";
+import { resolve } from "../../../views/chat/Interactions";
 
 export function VoiceBar({ call, session, cards, label, persona, onStopAgent }: {
   call: VoiceConversation;

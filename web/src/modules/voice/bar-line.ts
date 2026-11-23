@@ -1,8 +1,8 @@
 // What the voice bar says (docs/assistant/voice.md 6.2), as iOS's VoiceBarLine.swift: the first line beside the orb, and the
 // second line about the bound conversation with the buttons that go with it. Pure: the bar only draws them.
 import { t } from "../../i18n";
-import { sessionCan } from "../format";
-import type { Interaction, Session } from "../types";
+import { sessionCan } from "../../lib/format";
+import type { Interaction, Session } from "../../lib/types";
 import type { VoicePhase } from "./conversation";
 import { runOpen, stampDate, type VoiceFailure, type VoiceLink, type VoiceRun } from "./wire";
 

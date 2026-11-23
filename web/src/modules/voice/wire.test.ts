@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Item } from "../types";
+import type { Item } from "../../lib/types";
 import { parseFrame, resendFrame, startFrame, textFrame, INTERRUPT_FRAME, voiceSocketURL } from "./frames";
 import { cutLine, recentLines, runOpen, stampDate, validExtensionID } from "./wire";
 

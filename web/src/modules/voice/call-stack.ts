@@ -2,10 +2,10 @@
 // resampling) and the browser's side of it (audio.ts and the capture worklet's address, the cues, the pace check).
 // calls.ts imports this with import() when the page's first call starts, so the first screen does not carry it; the
 // first-screen modules import these only as types.
-import { getToken } from "../api";
-import { BASE } from "../base";
-import { extRoot } from "../extension-api";
-import { getSession } from "../store";
+import { getToken } from "../../lib/api";
+import { BASE } from "../../lib/base";
+import { extRoot } from "../../lib/extension-api";
+import { getSession } from "../../lib/store";
 import { BrowserVoiceAudio } from "./audio";
 import type { VoiceContexts } from "./audio-contexts";
 import type { VoiceDeps } from "./conversation";

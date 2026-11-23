@@ -7,7 +7,7 @@
 // conversation, its audio, uplink and resampling: call-stack.ts) is a chunk of its own, imported when the page's first
 // call starts, together with the page's parts for it (`ui`); until then the call's types are all this module takes from it.
 import { useSyncExternalStore } from "react";
-import { reportBoundary } from "../error-reports";
+import { reportBoundary } from "../../lib/error-reports";
 import { closeContexts, openContexts, type VoiceContexts } from "./audio-contexts";
 import type { VoiceConversation, VoiceDeps, VoiceSnapshot } from "./conversation";
 import { DEFAULT_OUTPUT_RATE, type VoiceLine } from "./wire";
