@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"slices"
 	"sort"
@@ -13,11 +12,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
+
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -1603,7 +1605,7 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 		s.workEvent("", "", todoReopenedEvent, reopenedEvent) // a wrong "done" in the work stats (agents_work_wrong_done.go)
 	}
 	if closing != nil {
-		s.threadPost(id, *closing) // after the lock: it looks the todo up again
+		s.chat().ThreadPost(id, *closing) // after the lock: it looks the todo up again
 		s.sourceReportSoon(id, sourceReportWait)
 	}
 	return out, doneKeys, true
@@ -1981,7 +1983,7 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 	t := s.todos.todos[id]
 	var before Todo
 	var failKeys [][2]string
-	var closing *threadEvent
+	var closing *larkhost.ThreadEvent
 	if t != nil {
 		before = copyTodoLocked(t)
 		closing = threadClosing(t.DoneAt == nil, reason, "")
@@ -2004,7 +2006,7 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 		return false, db.ErrTodoNotFound
 	}
 	if closing != nil {
-		s.threadPost(id, *closing)
+		s.chat().ThreadPost(id, *closing)
 		s.sourceReportSoon(id, threadPostSettle) // no outcome is coming for a start that failed
 	}
 	if len(failKeys) > 0 {
@@ -2224,4 +2226,16 @@ func cleanPromptTitle(prompt string) string {
 		}
 	}
 	return ""
+}
+
+// threadClosing is what the topic is told when a todo became done (nil when it did not): why, when the hub's judge
+// closed it or its agent never started.
+func threadClosing(becameDone bool, startError, doneReason string) *larkhost.ThreadEvent {
+	switch {
+	case !becameDone:
+		return nil
+	case startError != "":
+		return &larkhost.ThreadEvent{Kind: larkhost.ThreadTodoFailed, Text: clip(oneLine(startError), 80)}
+	}
+	return &larkhost.ThreadEvent{Kind: larkhost.ThreadTodoDone, Text: clip(oneLine(doneReason), 80)}
 }
