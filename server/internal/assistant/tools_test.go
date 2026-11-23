@@ -1129,7 +1129,10 @@ func TestAgentStartDefiniteFailuresStayErrors(t *testing.T) {
 // definite failure. This is the release-side control for the detached failure write above.
 func TestAgentStartCallerCancellationKeepsUnknownResultNeutral(t *testing.T) {
 	s, f := newQuietServiceOn(t, todoTestDB(t))
-	agentStartTimeoutOf(t, time.Second)
+	// The bound running out is what makes the start unknown here (the fake never answers, and the detached start
+	// outlives the caller's cancel). It also covers the reads before the node is asked, the model configuration from
+	// Postgres among them: one second was not always enough for those on a loaded machine (#14159).
+	agentStartTimeoutOf(t, 3*time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	f.slowStart = true
 	f.onStart = func(*fakeHub, map[string]any) { cancel() }
