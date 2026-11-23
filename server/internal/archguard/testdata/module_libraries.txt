@@ -1,0 +1,10 @@
+# The core libraries a module may import (docs/architecture/core-and-modules.md "Guards"): leaf packages that hold no
+# state of the core's, the same in every build, which depend only on the standard library, external modules, the
+# contract packages and other packages of this list (TestModuleLibrariesAreLeaves checks it, transitively). A module
+# reaches anything else of the core through modapi or a contract package. Add a package only if it is such a leaf.
+internal/apierr
+internal/i18n
+internal/lazyre
+internal/netproxy
+internal/prompts
+internal/secretkey

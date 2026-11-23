@@ -112,10 +112,17 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
   import `internal/modules/all` to run as the manager does (`internal/assistant/modules_link_test.go`), and nothing
   else of `internal/modules`. Known violations would go into `testdata/module_imports_baseline.txt`, which only shrinks
   (a stale line fails); it is empty.
-- **`TestModulesUseOnlyTheSPI`**: every file of a module, tests included, imports only the standard library, `modapi` and
-  the other contract packages (pure, so nothing more comes with them), its own packages, and the modules its
-  `module.json` needs. A module it only wants may be left out of the build (`persona_without_<id>`), so it is reached
-  through the kernel, never imported. Each module directory has a `module.json` whose id is the directory's name.
+- **`TestModulesUseOnlyTheSPI`**: every file of a module, tests included, imports only the standard library, external
+  modules (a library from outside this repository, such as an IMAP client, cannot import the core), `modapi` and the
+  other contract packages (pure, so nothing more comes with them), the core libraries, its own packages, and the
+  modules its `module.json` needs. A module it only wants may be left out of the build (`persona_without_<id>`), so it is
+  reached through the kernel, never imported. Each module directory has a `module.json` whose id is the directory's name.
+- **The core libraries** (`testdata/module_libraries.txt`: `i18n`, `lazyre`, `prompts`, `apierr`, `netproxy`,
+  `secretkey`) are the leaf packages every part uses the same way: localization, lazily compiled patterns, prompt
+  files, API errors, proxies and sealing secrets. `TestModuleLibrariesAreLeaves` checks that each depends, transitively,
+  only on the standard library, external modules, contract packages and other listed libraries, so importing one brings
+  no state or part of the core into a module. A package that is not such a leaf is reached through `modapi` or a
+  contract package, never by listing it.
 - **`TestContractsArePure`** covers `modapi` like every contract package, and the hub's
   `TestHubDoesNotImportTheManager` (`server/internal/hub/architecture_guard_test.go`) forbids `internal/modules`.
 - `scripts/test/test_module_schema.py` checks every `module.json` against `schema/module.schema.json`, refuses invalid

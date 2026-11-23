@@ -21,6 +21,8 @@ const (
 	modulesDir = "internal/modules"
 	modulesAll = "internal/modules/all"
 	modulesDoc = `see docs/architecture/core-and-modules.md "Guards"`
+	// repoPath prefixes every Go module of this repository (the server's, the SDK's); an import outside it is external.
+	repoPath = "github.com/nwverse/persona/"
 )
 
 // goFile is one .go file's package (its directory under the server module), whether it is a test, and its imports.
@@ -133,9 +135,11 @@ type moduleManifest struct {
 
 // moduleImportProblems checks the modules under root/internal/modules: each directory but all has a module.json whose
 // id is its name, and every file in it (tests and every build constraint included) imports only the standard library,
-// internal/modapi and the other contract packages, its own packages, and the modules its manifest needs. A module it
-// only wants may be left out of the build (persona_without_<id>), so it is reached through the kernel, never imported.
-func moduleImportProblems(t *testing.T, root string, files []goFile, contracts []string) (problems []string, checked int) {
+// external modules (a library outside this repository cannot import the core), internal/modapi and the other contract
+// packages, the core libraries (testdata/module_libraries.txt, leaves: TestModuleLibrariesAreLeaves), its own packages,
+// and the modules its manifest needs. A module it only wants may be left out of the build (persona_without_<id>), so it
+// is reached through the kernel, never imported.
+func moduleImportProblems(t *testing.T, root string, files []goFile, contracts, libraries []string) (problems []string, checked int) {
 	t.Helper()
 	entries, err := os.ReadDir(filepath.Join(root, modulesDir))
 	if err != nil {
@@ -170,10 +174,12 @@ func moduleImportProblems(t *testing.T, root string, files []goFile, contracts [
 				switch {
 				case !inServer && !strings.Contains(strings.SplitN(imp, "/", 2)[0], "."): // the standard library
 				case !inServer && slices.Contains(contracts, imp):
+				case !inServer && !strings.HasPrefix(imp, repoPath): // an external module
 				case !inServer:
-					problems = append(problems, "module "+id+" ("+f.pkg+"/"+f.name+") imports "+imp+", outside the standard library: "+
-						"a module uses only modapi, the contract packages and the modules it needs")
-				case slices.Contains(contracts, rel), slices.ContainsFunc(allowed, func(a string) bool { return under(rel, a) }):
+					problems = append(problems, "module "+id+" ("+f.pkg+"/"+f.name+") imports "+imp+", another module of this "+
+						"repository: a module uses only modapi, the contract packages, the core libraries and the modules it needs")
+				case slices.Contains(contracts, rel), slices.Contains(libraries, rel),
+					slices.ContainsFunc(allowed, func(a string) bool { return under(rel, a) }):
 				default:
 					problems = append(problems, "module "+id+" ("+f.pkg+"/"+f.name+") imports "+rel+": a module reaches the core only "+
 						"through internal/modapi (add what it needs to modapi.Host) and imports another module only when its "+
@@ -189,7 +195,8 @@ func moduleImportProblems(t *testing.T, root string, files []goFile, contracts [
 // A module uses only the module API (moduleImportProblems).
 func TestModulesUseOnlyTheSPI(t *testing.T) {
 	root := filepath.Join("..", "..")
-	problems, checked := moduleImportProblems(t, root, scanGoFiles(t, root), readList(t, "contracts.txt"))
+	problems, checked := moduleImportProblems(t, root, scanGoFiles(t, root), readList(t, "contracts.txt"),
+		readList(t, "module_libraries.txt"))
 	for _, p := range problems {
 		t.Errorf("%s; %s", p, modulesDoc)
 	}
@@ -198,8 +205,40 @@ func TestModulesUseOnlyTheSPI(t *testing.T) {
 	}
 }
 
+// The core libraries modules may import (testdata/module_libraries.txt) are leaves: each depends, transitively, only on
+// the standard library, external modules, the contract packages and other listed libraries, so importing one brings
+// no state or part of the core into a module. None is a module or under internal/modules.
+func TestModuleLibrariesAreLeaves(t *testing.T) {
+	contracts := readList(t, "contracts.txt")
+	libraries := readList(t, "module_libraries.txt")
+	if len(libraries) == 0 {
+		t.Fatal("testdata/module_libraries.txt lists nothing")
+	}
+	for _, lib := range libraries {
+		if under(lib, modulesDir) || slices.Contains(contracts, lib) {
+			t.Errorf("testdata/module_libraries.txt lists %s, a module or a contract package: list only core libraries; %s", lib, modulesDoc)
+			continue
+		}
+		for _, dep := range goList(t, "{{if not .Standard}}{{.ImportPath}}{{end}}", true, lib) {
+			rel, ok := strings.CutPrefix(dep, modulePath)
+			switch {
+			case !ok && !strings.HasPrefix(dep, repoPath): // an external module
+			case !ok && slices.Contains(contracts, dep):
+			case !ok:
+				t.Errorf("core library %s depends on %s, another module of this repository: a library modules may import "+
+					"depends only on contracts and other libraries; %s", lib, dep, modulesDoc)
+			case rel == lib, slices.Contains(contracts, rel), slices.Contains(libraries, rel):
+			default:
+				t.Errorf("core library %s depends on %s, which is neither a contract nor a listed library: a module importing "+
+					"it would reach the core; take it off testdata/module_libraries.txt or cut the dependency; %s", lib, rel, modulesDoc)
+			}
+		}
+	}
+}
+
 // The guards see files no default build compiles: a core file only persona_core_only builds that imports a module,
-// a Windows-only module file that imports the core, and a module that imports one it only wants are each caught.
+// a Windows-only module file that imports the core, a module that imports one it only wants, and one that imports
+// another module of this repository are each caught; an external module and a listed core library are not.
 func TestModuleGuardsSeeEveryBuild(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel, body string) {
@@ -221,16 +260,18 @@ func TestModuleGuardsSeeEveryBuild(t *testing.T) {
 	write("internal/modules/briefing/b.go", "package briefing\n\nimport (\n\t_ \"encoding/json\"\n\t_ "+imp("internal/modapi")+
 		"\n\t_ "+imp("internal/modules/voice")+"\n)\n")
 	write("internal/modules/voice/module.json", `{"id":"voice","api":1,"origin":"builtin"}`)
-	write("internal/modules/voice/v.go", "//go:build !persona_without_voice\n\npackage voice\n")
+	write("internal/modules/voice/v.go", "//go:build !persona_without_voice\n\npackage voice\n\nimport (\n\t_ \"example.com/imap\"\n\t_ "+
+		imp("internal/i18n")+"\n\t_ \"github.com/nwverse/persona/other\"\n)\n")
 	files := scanGoFiles(t, root)
 
 	violations, used := coreModuleImports(files, []string{"internal/manager"})
 	if want := []string{"internal/assistant internal/modules/briefing"}; !slices.Equal(violations, want) || !used["internal/manager"] {
 		t.Fatalf("core imports %v (roots %v), want %v", violations, used, want)
 	}
-	problems, checked := moduleImportProblems(t, root, files, []string{"internal/modapi"})
-	if checked != 2 || len(problems) != 2 || !strings.Contains(problems[0]+problems[1], "imports internal/assistant") ||
-		!strings.Contains(problems[0]+problems[1], "imports internal/modules/voice") {
+	problems, checked := moduleImportProblems(t, root, files, []string{"internal/modapi"}, []string{"internal/i18n"})
+	all := strings.Join(problems, "\n")
+	if checked != 2 || len(problems) != 3 || !strings.Contains(all, "imports internal/assistant") ||
+		!strings.Contains(all, "imports internal/modules/voice") || !strings.Contains(all, "imports github.com/nwverse/persona/other") {
 		t.Fatalf("checked %d modules, problems %q", checked, problems)
 	}
 }
