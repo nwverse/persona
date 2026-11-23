@@ -176,12 +176,21 @@ export function planNote(a: UsageAccount): string {
 
 export const windowKey = (w: UsageWindow) => `${w.label}:${w.window_minutes}:${w.model ?? ""}`;
 
-/** The accounts the sidebar draws bars for: the two with the fullest window, stale ones last. A balance account has
- *  no bar (it is shown as an amount instead), so it never takes one of these places. */
+/** The usage provider ID shared by older node samples, gateways and visibility settings. */
+export function canonicalUsageProvider(provider: string): string {
+  const id = provider.trim().toLowerCase();
+  return id === "agy" ? "antigravity" : id;
+}
+
+/** The sidebar takes the two fullest windows, with stale accounts last. Rank whole percentages as shown on the bar
+ *  so changes below the displayed precision keep the same order. Balance accounts have their own rows. */
 export function topAccounts(accounts: UsageAccount[], n = 2): UsageAccount[] {
   return accounts
     .filter((a) => !isBalanceAccount(a))
-    .sort((a, b) => Number(!!a.stale) - Number(!!b.stale) || fullest(b) - fullest(a))
+    .sort((a, b) => Number(!!a.stale) - Number(!!b.stale)
+      || Math.round(fullest(b)) - Math.round(fullest(a))
+      || canonicalUsageProvider(a.provider).localeCompare(canonicalUsageProvider(b.provider))
+      || a.id.localeCompare(b.id))
     .slice(0, n);
 }
 
@@ -362,16 +371,22 @@ export interface ProviderGroup {
 /** The accounts grouped by provider (account type), groups in the order the hub first listed them. */
 export function groupByProvider(accounts: UsageAccount[]): ProviderGroup[] {
   const by = new Map<string, UsageAccount[]>();
-  for (const a of accounts) by.set(a.provider, [...(by.get(a.provider) ?? []), a]);
+  for (const a of accounts) {
+    const provider = canonicalUsageProvider(a.provider);
+    by.set(provider, [...(by.get(provider) ?? []), a]);
+  }
   return [...by].map(([provider, list]) => {
     const newest = list.reduce((m, a) => Math.max(m, Date.parse(a.sampled_at) || -Infinity), -Infinity);
     return { provider, accounts: sortForCard(list), sampledAt: Number.isFinite(newest) ? new Date(newest).toISOString() : "" };
   });
 }
 
-const PROVIDER_TITLES: Record<string, string> = { xai: "xAI", deepseek: "DeepSeek", kimi: "Kimi", agy: "Antigravity" };
+const PROVIDER_TITLES: Record<string, string> = { xai: "xAI", deepseek: "DeepSeek", kimi: "Kimi" };
 /** A provider's name for a card title: its own spelling when known, else the id with a capital. */
-export const providerTitle = (p: string) => PROVIDER_TITLES[p] ?? p.charAt(0).toUpperCase() + p.slice(1);
+export function providerTitle(provider: string): string {
+  const id = canonicalUsageProvider(provider);
+  return PROVIDER_TITLES[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+}
 
 const HOUR_MS = 3600_000;
 /** The shared axis: now, then these hours from now. The first 24 hours take 45% of the width, 1 to 7 days the other 55%. */
@@ -459,7 +474,7 @@ function pollUsage() {
     const mine = ++seq;
     const current = () => !dead && mine === seq;
     api<{ accounts?: UsageAccount[]; hidden_providers?: string[] }>("/usage/windows")
-      .then((r) => current() && publishUsage(r.accounts ?? emptyAccounts, true, r.hidden_providers?.length ? r.hidden_providers.map((p) => p.toLowerCase()) : noProviders))
+      .then((r) => current() && publishUsage(r.accounts ?? emptyAccounts, true, r.hidden_providers?.map(canonicalUsageProvider) ?? noProviders))
       .catch((e: unknown) => {
         if (!current()) return;
         const missing = e instanceof ApiError && e.status === 404;
@@ -496,7 +511,7 @@ export function useUsageWindows(): UsageAccount[] {
   return useSyncExternalStore(subscribeUsage, () => usageAccounts, () => emptyAccounts);
 }
 
-/** The providers the owner hid from the usage bars (lowercase), so nothing else in the strip lists them either (#13179). */
+/** The canonical providers the owner hid from the usage bars, so the strip leaves them out everywhere (#13179). */
 export function useHiddenUsageProviders(): readonly string[] {
   return useSyncExternalStore(subscribeUsage, () => usageHidden, () => noProviders);
 }

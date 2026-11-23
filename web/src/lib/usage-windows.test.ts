@@ -142,6 +142,22 @@ describe("which accounts show", () => {
     expect(topAccounts([account("a", 20), account("b", 90, { stale: true })]).map((a) => a.id)).toEqual(["a", "b"]);
     expect(fullest({ ...account("x", 1), windows: [win("5h", 300, 30), win("7d", 10080, 70)] })).toBe(70);
   });
+  it("keeps tied sidebar percentages in provider and ID order across polls", () => {
+    const first = [
+      account("third", 38.1),
+      account("second", 38.4, { provider: "agy" }),
+      account("first", 38, { provider: "antigravity" }),
+    ];
+    const next = [
+      account("first", 38.4, { provider: "agy" }),
+      account("third", 38.4),
+      account("second", 38, { provider: "antigravity" }),
+    ];
+    for (const poll of [first, next]) {
+      expect(topAccounts(poll).map((a) => a.id)).toEqual(["first", "second"]);
+    }
+    expect(topAccounts([account("low", 38), account("high", 39)]).map((a) => a.id)).toEqual(["high", "low"]);
+  });
 });
 
 describe("accounts with several sources and per-model windows (#2595)", () => {

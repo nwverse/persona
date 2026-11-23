@@ -50,6 +50,17 @@ describe("the sidebar's usage strip", () => {
     expect(html).toMatch(/bg-accent[^>]*style="width:60%/);
     expect(html).toContain('aria-expanded="false"');
   });
+  it("shows Antigravity and Codex by default when the hub has reconciled the quota windows", () => {
+    const html = renderToStaticMarkup(<UsageBars accounts={[
+      account("gemini", 3, 38, { provider: "antigravity", name: "Antigravity · Gemini", machines: ["Computer"], sources: ["External"] }),
+      account("claude", 0, 0, { provider: "antigravity", name: "Antigravity · Claude/GPT" }),
+      account("pro", 20, 23, { name: "Codex Pro" }),
+    ]} now={NOW} />);
+    expect(html.match(/role="progressbar"/g)).toHaveLength(2);
+    expect(html).toContain("Antigravity · Gemini");
+    expect(html).toContain("Codex Pro");
+    expect(html).not.toContain("Antigravity · Claude/GPT");
+  });
   it("opens its details on intent, including the gateway's retained-number warning", async () => {
     const host = document.createElement("div");
     document.body.appendChild(host);
@@ -125,6 +136,15 @@ describe("a prepaid balance in the sidebar (#11825)", () => {
 });
 
 describe("the popover", () => {
+  it("puts local and external Antigravity aliases in one provider card", () => {
+    const html = renderToStaticMarkup(<UsagePopover accounts={[
+      account("local", 3, 38, { provider: "agy", name: "Antigravity" }),
+      account("external", 0, 0, { provider: "antigravity", name: "Antigravity · Claude/GPT" }),
+    ]} now={NOW} />);
+    expect(html.match(/data-usage-provider=/g)).toHaveLength(1);
+    expect(html).toContain('data-usage-provider="antigravity" aria-label="Antigravity"');
+    expect(html).toContain("Antigravity · Claude/GPT");
+  });
   it("lists every window with percent, countdown, sample age and the pace", () => {
     // 5h window, 2h elapsed = 40% expected: 70% is over; 7d window, 5 days elapsed (~71%): 10% is under
     const html = renderToStaticMarkup(<UsagePopover accounts={[account("a", 70, 10)]} now={NOW} />);
@@ -228,6 +248,16 @@ describe("where the numbers came from (#2595)", () => {
     expect(strip).toContain("Antigravity");
     expect(strip).toContain("75%");
     expect(strip).not.toContain("未接额度数据");
+  });
+  it.each(["agy", "antigravity"])("matches %s usage and visibility for either Antigravity launcher alias", (provider) => {
+    const launchers = [
+      { name: "native-agy", agent: "agy" },
+      { name: "native-antigravity", display_name: "Native quota", agent_type: "antigravity" },
+      { name: "relay", agent: "agy", base_url: "https://relay.example.com" },
+    ];
+    const live = [account("gemini", 3, 38, { provider, name: "Antigravity · Gemini" })];
+    expect(unconnectedUsageProviders(launchers, live).map((p) => p.id)).toEqual(["relay"]);
+    expect(unconnectedUsageProviders(launchers, [], [provider]).map((p) => p.id)).toEqual(["relay"]);
   });
   it("says in plain words whether a provider is not read yet or can only be read through its relay (#12411)", () => {
     const html = renderToStaticMarkup(
