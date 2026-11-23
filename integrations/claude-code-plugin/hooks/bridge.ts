@@ -21,9 +21,10 @@ export const PERMISSION_GRACE_MS = 500
 /** Maximum total time one permission request keeps renewing before falling back to passthrough. */
 export const PERMISSION_MAX_WAIT_MS = 24 * 60 * 60 * 1_000
 
-/** Retry spacing and maximum consecutive transient errors on /permission before falling back to passthrough. */
+/** Retry spacing on transient /permission errors; initial errors fail fast, while already-registered cards reconnect up to 2 minutes (matching nodeclient.ResumeWait). */
 export const PERMISSION_RETRY_MS = 1_000
 export const PERMISSION_MAX_ERRORS = 3
+export const PERMISSION_RECONNECT_MS = 2 * 60 * 1_000
 
 /** Maximum serialized permission request body sent to the node (matches node's 4 MiB /permission cap). */
 export const PERMISSION_BODY_MOST = 4 * 1024 * 1024
@@ -253,8 +254,8 @@ export function canonicalJson(value: unknown): string {
   return encode(value)
 }
 
-/** Tool call lookup key shared by PreToolUse pairing and PostToolUse fallback matching. */
-export function toolCallKey(toolName: string, toolInput: unknown, stripAnswers = false): string {
+/** Tool call lookup key isolated by `agentId`, shared by PreToolUse pairing and PostToolUse fallback matching. */
+export function toolCallKey(toolName: string, toolInput: unknown, stripAnswers = false, agentId = ''): string {
   let input: unknown = isRecord(toolInput) ? toolInput : {}
   if (stripAnswers && isRecord(input) && 'answers' in input) {
     const copy: Record<string, unknown> = {}
@@ -263,13 +264,13 @@ export function toolCallKey(toolName: string, toolInput: unknown, stripAnswers =
     }
     input = copy
   }
-  return `${toolName}\0${canonicalJson(input)}`
+  return `${agentId}\0${toolName}\0${canonicalJson(input)}`
 }
 
-/** Extracts `(toolName, toolUseId, toolInput)` from `classic.PreToolUse` (flat on Claude Code 2.1.330, or nested). */
+/** Extracts `(agentId, toolName, toolUseId, toolInput)` from `classic.PreToolUse` (flat on 2.1.330, or nested). */
 export function extractPreToolUse(
   raw: unknown,
-): { toolName: string; toolUseId: string; toolInput: Record<string, unknown> } | undefined {
+): { agentId: string; toolName: string; toolUseId: string; toolInput: Record<string, unknown> } | undefined {
   if (!isRecord(raw)) return undefined
   const toolName =
     typeof raw.tool === 'string' && raw.tool !== ''
@@ -279,41 +280,70 @@ export function extractPreToolUse(
         : ''
   const toolUseId = typeof raw.tool_use_id === 'string' ? raw.tool_use_id : ''
   if (toolName === '' || toolUseId === '') return undefined
+  const agentId = typeof raw.agent_id === 'string' ? raw.agent_id : ''
   if (isRecord(raw.tool_input)) {
-    return { toolName, toolUseId, toolInput: raw.tool_input }
+    return { agentId, toolName, toolUseId, toolInput: raw.tool_input }
   }
   const toolInput: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(raw)) {
     if (!PRE_TOOL_META.has(k) && v !== undefined) toolInput[k] = v
   }
-  return { toolName, toolUseId, toolInput }
+  return { agentId, toolName, toolUseId, toolInput }
 }
 
 const CACHE_MOST = 128
 
-/** Bounded FIFO cache pairing `classic.PreToolUse` `tool_use_id`s with subsequent `classic.PermissionRequest` events. */
+/**
+ * Bounded cache pairing `classic.PreToolUse` `tool_use_id`s with subsequent `classic.PermissionRequest` events.
+ * Calls are isolated by `agent_id`. When two or more uncompleted identical calls overlap for the same
+ * `(agent_id, tool, input)`, that key is marked ambiguous and `takePreTool` leaves `tool_use_id` empty rather than
+ * guessing (preventing a completion for call 1 from withdrawing call 2's card).
+ */
 export type PreToolCache = {
   pending: Map<string, string[]>
+  ambiguous: Map<string, Set<string>>
   order: { key: string; id: string }[]
   completed: Set<string>
   completedOrder: string[]
 }
 
 export function createPreToolCache(): PreToolCache {
-  return { pending: new Map(), order: [], completed: new Set(), completedOrder: [] }
+  return {
+    pending: new Map(),
+    ambiguous: new Map(),
+    order: [],
+    completed: new Set(),
+    completedOrder: [],
+  }
 }
 
 export function recordPreTool(cache: PreToolCache, raw: unknown): void {
   const info = extractPreToolUse(raw)
   if (info === undefined || cache.completed.has(info.toolUseId)) return
-  const key = toolCallKey(info.toolName, info.toolInput)
-  let ids = cache.pending.get(key)
-  if (ids === undefined) {
-    ids = []
-    cache.pending.set(key, ids)
+  const key = toolCallKey(info.toolName, info.toolInput, false, info.agentId)
+  const amb = cache.ambiguous.get(key)
+  if (amb !== undefined) {
+    amb.add(info.toolUseId)
+    return
   }
-  if (ids.includes(info.toolUseId)) return
-  ids.push(info.toolUseId)
+  let ids = cache.pending.get(key)
+  if (ids !== undefined) {
+    // Drop already-completed entries before checking for concurrent ambiguity.
+    ids = ids.filter(id => !cache.completed.has(id))
+    if (ids.length === 0) cache.pending.delete(key)
+    else cache.pending.set(key, ids)
+  }
+  if (ids !== undefined && ids.length > 0) {
+    if (ids.includes(info.toolUseId)) return
+    // Multiple concurrent uncompleted calls share the exact same (agent_id, tool, input): mark ambiguous.
+    const set = new Set<string>(ids)
+    set.add(info.toolUseId)
+    cache.ambiguous.set(key, set)
+    cache.pending.delete(key)
+    for (const id of ids) removeOrder(cache, id)
+    return
+  }
+  cache.pending.set(key, [info.toolUseId])
   cache.order.push({ key, id: info.toolUseId })
   while (cache.order.length > CACHE_MOST) {
     const oldest = cache.order.shift()
@@ -321,17 +351,26 @@ export function recordPreTool(cache: PreToolCache, raw: unknown): void {
   }
 }
 
-export function takePreTool(cache: PreToolCache, toolName: string, toolInput: unknown): string {
-  const key = toolCallKey(toolName, toolInput)
+export function takePreTool(
+  cache: PreToolCache,
+  toolName: string,
+  toolInput: unknown,
+  agentId = '',
+  hasActiveSameKey = false,
+): string {
+  const key = toolCallKey(toolName, toolInput, false, agentId)
+  if (cache.ambiguous.has(key)) return ''
   const ids = cache.pending.get(key)
   if (ids === undefined || ids.length === 0) return ''
-  while (ids.length > 0) {
-    const id = ids.shift()!
-    removeOrder(cache, id)
-    if (ids.length === 0) cache.pending.delete(key)
-    if (!cache.completed.has(id)) return id
+  const live = ids.filter(id => !cache.completed.has(id))
+  cache.pending.delete(key)
+  for (const id of ids) removeOrder(cache, id)
+  if (live.length === 0) return ''
+  if (live.length > 1 || hasActiveSameKey) {
+    cache.ambiguous.set(key, new Set(live))
+    return ''
   }
-  return ''
+  return live[0] ?? ''
 }
 
 export function markToolCompleted(cache: PreToolCache, toolUseId: string): void {
@@ -347,7 +386,24 @@ export function markToolCompleted(cache: PreToolCache, toolUseId: string): void 
   for (const [key, ids] of cache.pending) {
     if (ids.includes(toolUseId)) removePending(cache, key, toolUseId)
   }
+  for (const [key, set] of cache.ambiguous) {
+    if (set.delete(toolUseId) && set.size === 0) {
+      cache.ambiguous.delete(key)
+    }
+  }
   removeOrder(cache, toolUseId)
+}
+
+/** Clears pending and ambiguous PreToolUse state for an agent when its turn completes. */
+export function clearAgentPreTools(cache: PreToolCache, agentId: string): void {
+  const prefix = `${agentId}\0`
+  for (const key of [...cache.pending.keys()]) {
+    if (key.startsWith(prefix)) cache.pending.delete(key)
+  }
+  for (const key of [...cache.ambiguous.keys()]) {
+    if (key.startsWith(prefix)) cache.ambiguous.delete(key)
+  }
+  cache.order = cache.order.filter(item => !item.key.startsWith(prefix))
 }
 
 export function isToolCompleted(cache: PreToolCache, toolUseId: string): boolean {

@@ -6,12 +6,14 @@ import {
   PERMISSION_GRACE_MS,
   PERMISSION_MAX_ERRORS,
   PERMISSION_MAX_WAIT_MS,
+  PERMISSION_RECONNECT_MS,
   PERMISSION_RETRY_MS,
   PERMISSION_WAIT_MS,
   POLL_WAIT_MS,
   SUBMIT_QUEUE_SETTLE_MS,
   applyStepOverride,
   buildPermissionPayload,
+  clearAgentPreTools,
   createPreToolCache,
   hasPermissionDecision,
   homeDir,
@@ -50,6 +52,7 @@ type PermissionAuth = { sock: string; session: string }
 
 type ActivePerm = {
   reqId: string
+  sock: string
   sessionId: string
   toolUseId: string
   toolName: string
@@ -84,7 +87,9 @@ export const register: Register = on => {
       activeTurn = undefined
     }
     try {
-      handleTurnDone($, activePerms, permissionAuth, e.turnId, e.agentId ?? '')
+      const agentId = e.agentId ?? ''
+      clearAgentPreTools(preToolCache, agentId)
+      handleTurnDone($, activePerms, e.turnId, agentId)
     } catch {
       // Turn cleanup never blocks turn completion.
     }
@@ -115,7 +120,7 @@ export const register: Register = on => {
 
   on('classic.PostToolUse', ($, e, next) => {
     try {
-      handleToolDone($, preToolCache, activePerms, permissionAuth, e, 'post_tool_use')
+      handleToolDone($, preToolCache, activePerms, e, 'post_tool_use')
       return next(e)
     } catch {
       return next(e)
@@ -124,7 +129,7 @@ export const register: Register = on => {
 
   on('classic.PermissionDenied', ($, e, next) => {
     try {
-      handleToolDone($, preToolCache, activePerms, permissionAuth, e, 'permission_denied')
+      handleToolDone($, preToolCache, activePerms, e, 'permission_denied')
       return next(e)
     } catch {
       return next(e)
@@ -142,12 +147,19 @@ export const register: Register = on => {
       }
       const toolName = typeof rec?.tool_name === 'string' ? rec.tool_name : ''
       if (toolName === '') return next(e)
+      const agentId = typeof rec?.agent_id === 'string' ? rec.agent_id : ''
+      const toolKey = toolCallKey(toolName, rec?.tool_input, toolName === 'AskUserQuestion', agentId)
+      const hasActiveSameKey = [...activePerms.values()].some(
+        p => p.sessionId === sessionId && p.toolKey === toolKey,
+      )
       const explicitToolUseId = typeof rec?.tool_use_id === 'string' ? rec.tool_use_id : ''
-      const toolUseId = explicitToolUseId !== '' ? explicitToolUseId : takePreTool(preToolCache, toolName, rec?.tool_input)
+      const toolUseId =
+        explicitToolUseId !== ''
+          ? explicitToolUseId
+          : takePreTool(preToolCache, toolName, rec?.tool_input, agentId, hasActiveSameKey)
       if (isToolCompleted(preToolCache, toolUseId)) {
         return next(e)
       }
-      const agentId = typeof rec?.agent_id === 'string' ? rec.agent_id : ''
       const now = await $.clock.now().catch(() => 0)
       const reqId = `p_${now}_${++permSeq}`
       let resolveCancel!: () => void
@@ -156,10 +168,11 @@ export const register: Register = on => {
       })
       const entry: ActivePerm = {
         reqId,
+        sock: auth.sock,
         sessionId,
         toolUseId,
         toolName,
-        toolKey: toolCallKey(toolName, rec?.tool_input, toolName === 'AskUserQuestion'),
+        toolKey,
         agentId,
         cancelled: false,
         cancelPromise,
@@ -218,10 +231,12 @@ export const register: Register = on => {
 
         const startedAt = await $.clock.now().catch(() => now)
         let errors = 0
+        let connected = false
+        let disconnectStartedAt: number | undefined
         while (!entry.cancelled) {
           const currentNow = await $.clock.now().catch(() => startedAt)
           if (currentNow - startedAt >= PERMISSION_MAX_WAIT_MS) {
-            void notifyPermissionDone($, auth.sock, {
+            void notifyPermissionDone($, entry.sock, {
               session_id: sessionId,
               req_id: reqId,
               ...(toolUseId !== '' ? { tool_use_id: toolUseId } : {}),
@@ -229,10 +244,10 @@ export const register: Register = on => {
             })
             return passthrough()
           }
-          const fetchP = fetchPermission($, auth.sock, body).then(answer => ({ kind: 'http' as const, answer }))
+          const fetchP = fetchPermission($, entry.sock, body).then(answer => ({ kind: 'http' as const, answer }))
           const winner = await Promise.race([fetchP, coreDecisionPromise, cancelPromise])
           if (winner === 'core') {
-            void notifyPermissionDone($, auth.sock, {
+            void notifyPermissionDone($, entry.sock, {
               session_id: sessionId,
               req_id: reqId,
               ...(toolUseId !== '' ? { tool_use_id: toolUseId } : {}),
@@ -255,13 +270,24 @@ export const register: Register = on => {
             return passthrough()
           }
           if (ans.action === 'renew') {
+            connected = true
+            disconnectStartedAt = undefined
             errors = 0
             continue
           }
-          // Transient error (e.g. node restarting): retry briefly, otherwise hand back safely.
-          errors++
-          if (errors >= PERMISSION_MAX_ERRORS) {
-            return passthrough()
+          // Transient error (e.g. node restarting): an initial connection fails fast; a request that already reached
+          // the node keeps retrying across the 2-minute hub reclaim window (matching nodeclient.ResumeWait).
+          if (!connected) {
+            errors++
+            if (errors >= PERMISSION_MAX_ERRORS) {
+              return passthrough()
+            }
+          } else {
+            const failNow = await $.clock.now().catch(() => currentNow)
+            if (disconnectStartedAt === undefined) disconnectStartedAt = failNow
+            if (failNow - disconnectStartedAt >= PERMISSION_RECONNECT_MS) {
+              return passthrough()
+            }
           }
           const retryWinner = await Promise.race([
             sleep($, PERMISSION_RETRY_MS).then(() => 'retry' as const),
@@ -269,7 +295,7 @@ export const register: Register = on => {
             cancelPromise,
           ])
           if (retryWinner === 'core') {
-            void notifyPermissionDone($, auth.sock, {
+            void notifyPermissionDone($, entry.sock, {
               session_id: sessionId,
               req_id: reqId,
               ...(toolUseId !== '' ? { tool_use_id: toolUseId } : {}),
@@ -318,17 +344,17 @@ function handleToolDone(
   $: Engine,
   preToolCache: PreToolCache,
   activePerms: Map<string, ActivePerm>,
-  auth: PermissionAuth | undefined,
   raw: unknown,
   reason: 'post_tool_use' | 'permission_denied',
 ): void {
   const rec = asRecord(raw)
   const toolUseId = typeof rec?.tool_use_id === 'string' ? rec.tool_use_id : ''
   const toolName = typeof rec?.tool_name === 'string' ? rec.tool_name : ''
+  const agentId = typeof rec?.agent_id === 'string' ? rec.agent_id : ''
   if (toolUseId !== '') markToolCompleted(preToolCache, toolUseId)
   if (activePerms.size === 0) return
 
-  const sessionId = typeof rec?.session_id === 'string' && rec.session_id !== '' ? rec.session_id : auth?.session ?? ''
+  const sessionId = typeof rec?.session_id === 'string' ? rec.session_id : ''
   const matched: ActivePerm[] = []
   if (toolUseId !== '') {
     for (const entry of activePerms.values()) {
@@ -338,27 +364,32 @@ function handleToolDone(
     }
   }
   if (matched.length === 0 && toolName !== '') {
-    const key = toolCallKey(toolName, rec?.tool_input, toolName === 'AskUserQuestion')
+    const key = toolCallKey(toolName, rec?.tool_input, toolName === 'AskUserQuestion', agentId)
+    const unpaired: ActivePerm[] = []
     for (const entry of activePerms.values()) {
       if (
         entry.toolUseId === '' &&
         entry.toolKey === key &&
         (sessionId === '' || entry.sessionId === sessionId)
       ) {
-        matched.push(entry)
-        break
+        unpaired.push(entry)
       }
+    }
+    // Only match by (agent_id, tool, input) when unambiguous; multiple identical unpaired calls must not guess.
+    if (unpaired.length === 1 && unpaired[0] !== undefined) {
+      matched.push(unpaired[0])
     }
   }
   for (const entry of matched) {
     entry.cancel()
     activePerms.delete(entry.reqId)
-    if (auth !== undefined && entry.sessionId !== '') {
-      void notifyPermissionDone($, auth.sock, {
+    if (entry.sock !== '' && entry.sessionId !== '') {
+      void notifyPermissionDone($, entry.sock, {
         session_id: entry.sessionId,
         req_id: entry.reqId,
         ...(toolUseId !== '' || entry.toolUseId !== '' ? { tool_use_id: toolUseId || entry.toolUseId } : {}),
         ...(toolName !== '' ? { tool_name: toolName } : {}),
+        ...(agentId !== '' ? { agent_id: agentId } : {}),
         reason,
       })
     }
@@ -368,30 +399,32 @@ function handleToolDone(
 function handleTurnDone(
   $: Engine,
   activePerms: Map<string, ActivePerm>,
-  auth: PermissionAuth | undefined,
   turnId: string,
   agentId: string,
 ): void {
   if (activePerms.size === 0) return
-  const bySession = new Map<string, string[]>()
+  const byTarget = new Map<string, { sock: string; sessionId: string; reqIds: string[] }>()
   for (const entry of [...activePerms.values()]) {
     if (entry.agentId !== agentId) continue
     entry.cancel()
     activePerms.delete(entry.reqId)
-    const list = bySession.get(entry.sessionId) ?? []
-    list.push(entry.reqId)
-    bySession.set(entry.sessionId, list)
-  }
-  if (auth !== undefined) {
-    for (const [sid, reqIds] of bySession) {
-      void notifyPermissionDone($, auth.sock, {
-        session_id: sid,
-        req_ids: reqIds,
-        turn_id: turnId,
-        ...(agentId !== '' ? { agent_id: agentId } : {}),
-        reason: 'turn_complete',
-      })
+    if (entry.sock === '' || entry.sessionId === '') continue
+    const targetKey = `${entry.sock}\0${entry.sessionId}`
+    let group = byTarget.get(targetKey)
+    if (group === undefined) {
+      group = { sock: entry.sock, sessionId: entry.sessionId, reqIds: [] }
+      byTarget.set(targetKey, group)
     }
+    group.reqIds.push(entry.reqId)
+  }
+  for (const group of byTarget.values()) {
+    void notifyPermissionDone($, group.sock, {
+      session_id: group.sessionId,
+      req_ids: group.reqIds,
+      turn_id: turnId,
+      ...(agentId !== '' ? { agent_id: agentId } : {}),
+      reason: 'turn_complete',
+    })
   }
 }
 

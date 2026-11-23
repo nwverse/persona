@@ -25,18 +25,19 @@ import (
 // do not run Persona's managed persona-hooks. When the session loads Persona's plugin with the
 // "permissions" capability and passes ccPluginServesPermissions, the plugin bridges classic.PermissionRequest
 // over POST /claude-plugin/v1/permission using renewable long polls (each <= 25 s under Claude Code's 30 s
-// fetch limit) keyed by a stable req_id. Each distinct req_id spawns one background goroutine reusing
-// hooks.go's card builders, hookdecided.go dedup, and n.ask(ctx, ix), naturally supporting concurrent
+// fetch limit) keyed by (session_id, pid, req_id). Each distinct request spawns one background goroutine
+// reusing hooks.go's card builders, hookdecided.go dedup, and n.ask(ctx, ix), naturally supporting concurrent
 // "Also waiting" prompts. Computer-side completions (classic.PostToolUse, classic.PermissionDenied,
 // turn.complete, or a slower local hook winning the race) call POST /claude-plugin/v1/permission-done to
-// cancel n.ask and withdraw the phone card immediately.
+// cancel n.ask and withdraw the phone card immediately (recording answered_by: "terminal" for verified
+// PostToolUse approvals).
 
 const (
 	// ccPluginPermBodyMost allows large ExitPlanMode plans or Write/Edit tool_input payloads on /permission.
 	ccPluginPermBodyMost    = 4 << 20
 	ccPluginPermRequestMost = ccPluginPermBodyMost + (64 << 10)
 	// ccPluginPermDoneTTL retains settled permission results and completion receipts briefly so a racing
-	// renewal poll observes the final decision or passthrough instead of opening a duplicate card.
+	// renewal poll or early turn/tool completion observes the final outcome instead of opening a duplicate card.
 	ccPluginPermDoneTTL = 2 * time.Minute
 	// ccPluginPersonaHookTTL bounds how long a remembered persona-hooks process stays in memory.
 	ccPluginPersonaHookTTL = 24 * time.Hour
@@ -50,12 +51,21 @@ var (
 	ccPluginPermIdleTTL = 90 * time.Second
 )
 
+// ccPluginPermID scopes a plugin permission request to one live Claude process and session so two concurrent
+// processes generating the same req_id in the same millisecond never collide.
+type ccPluginPermID struct {
+	sessionID string
+	pid       int
+	reqID     string
+}
+
 type ccPluginPersonaHook struct {
 	pid int
 	at  time.Time
 }
 
 type ccPluginPerm struct {
+	id        ccPluginPermID
 	reqID     string
 	sessionID string
 	pid       int
@@ -64,6 +74,7 @@ type ccPluginPerm struct {
 	agentID   string
 	permKey   string
 	createdAt time.Time
+	decided   *terminalDecided
 
 	mu        sync.Mutex
 	waiters   int
@@ -105,10 +116,17 @@ func (p *ccPluginPerm) finish(action string, decision map[string]any) {
 }
 
 func (p *ccPluginPerm) cancelAsPassthrough() {
+	p.cancelWithReason(false)
+}
+
+func (p *ccPluginPerm) cancelWithReason(terminal bool) {
 	p.mu.Lock()
 	alreadyDone := p.done
 	cancel := p.cancel
 	if !alreadyDone {
+		if terminal && p.decided != nil {
+			p.decided.Store(true)
+		}
 		p.done = true
 		p.doneAt = time.Now()
 		p.action = "passthrough"
@@ -225,6 +243,27 @@ func (r *ccPluginRegistry) hasActivePermission(sessionID string) bool {
 	return false
 }
 
+// coversAsk reports whether an active plugin AskUserQuestion permission request already covers (sessionID, toolUseID).
+// This allows outsideAskCard to suppress duplicate clq_ cards only when the plugin genuinely owns that question,
+// preserving fallback clq_ cards for questions opened before the plugin's initial /poll authorization.
+func (r *ccPluginRegistry) coversAsk(sessionID, toolUseID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range r.perms {
+		if p.sessionID != sessionID || p.toolName != askTool {
+			continue
+		}
+		_, _, done := p.outcome()
+		if done {
+			continue
+		}
+		if p.toolUseID == "" || (toolUseID != "" && p.toolUseID == toolUseID) {
+			return true
+		}
+	}
+	return false
+}
+
 // ccPluginServesPermissions reports whether claude c should bridge interactive permissions through the
 // Persona plugin: it must be an outside session served by the plugin, not in an external tmux pane
 // (which uses screen cards), not an assistant session, and not managed by persona-hooks.
@@ -253,29 +292,32 @@ func (n *Node) claudeArgvHasPersonaHooks(pid int) bool {
 	if err != nil || len(args) == 0 {
 		return false
 	}
-	claudeHooksDir := n.hooksPlugin("claude")
-	assistantHooksDir := n.hooksPlugin("assistant")
-	claudeSettingsPath := filepath.Join(n.dir, "claude-settings.json")
-	assistantSettingsPath := filepath.Join(n.dir, "assistant-settings.json")
-	matchHooksDir := func(p string) bool {
-		if p == "" {
+	baseDir := n.dir
+	if baseDir == "" && n.home != "" {
+		baseDir = filepath.Join(n.home, ".persona")
+	}
+	if baseDir == "" {
+		return false
+	}
+	claudeHooksDir := filepath.Join(baseDir, "claude-hooks")
+	assistantHooksDir := filepath.Join(baseDir, "assistant-hooks")
+	claudeSettingsPath := filepath.Join(baseDir, "claude-settings.json")
+	assistantSettingsPath := filepath.Join(baseDir, "assistant-settings.json")
+	matchPath := func(got, want string) bool {
+		if got == "" || want == "" {
 			return false
 		}
-		base := filepath.Base(filepath.Clean(p))
-		if base == "claude-hooks" || base == "assistant-hooks" {
+		if sameDir(got, want) {
 			return true
 		}
-		return (n.dir != "" && (sameDir(p, claudeHooksDir) || sameDir(p, assistantHooksDir)))
+		return sameDir(filepath.Dir(filepath.Clean(got)), filepath.Dir(filepath.Clean(want))) &&
+			filepath.Base(filepath.Clean(got)) == filepath.Base(filepath.Clean(want))
+	}
+	matchHooksDir := func(p string) bool {
+		return matchPath(p, claudeHooksDir) || matchPath(p, assistantHooksDir)
 	}
 	matchSettings := func(p string) bool {
-		if p == "" {
-			return false
-		}
-		base := filepath.Base(filepath.Clean(p))
-		if base == "claude-settings.json" || base == "assistant-settings.json" {
-			return true
-		}
-		return n.dir != "" && (sameDir(p, claudeSettingsPath) || sameDir(p, assistantSettingsPath))
+		return matchPath(p, claudeSettingsPath) || matchPath(p, assistantSettingsPath)
 	}
 	for i, a := range args {
 		switch {
@@ -336,7 +378,7 @@ func validCCPluginReqID(id string) bool {
 }
 
 // ccPluginPermission handles POST /claude-plugin/v1/permission: idempotently starts one card ask per
-// req_id and holds the HTTP request up to wait_ms (<= 25 s), returning decide, passthrough, or renew.
+// (session_id, pid, req_id) and holds the HTTP request up to wait_ms (<= 25 s), returning decide, passthrough, or renew.
 func (n *Node) ccPluginPermission(ctx context.Context, pid int, claude claudeProc, body []byte) (int, any) {
 	var req ccPluginPermRequest
 	if json.Unmarshal(body, &req) != nil || !validID(req.SessionID) || !validCCPluginReqID(req.ReqID) || req.ToolName == "" {
@@ -374,10 +416,7 @@ func (n *Node) ccPluginPermission(ctx context.Context, pid int, claude claudePro
 	}
 	permKey := ccPluginPermKey(in)
 
-	entry, isNew, alreadyDone, errStatus := n.ccPlugins.getOrCreatePerm(req, pid, permKey)
-	if errStatus != 0 {
-		return errStatus, map[string]any{"error": "not_this_session"}
-	}
+	entry, isNew, alreadyDone := n.ccPlugins.getOrCreatePerm(req, pid, permKey)
 	if alreadyDone {
 		return http.StatusOK, map[string]any{"action": "passthrough"}
 	}
@@ -408,26 +447,28 @@ func (n *Node) ccPluginPermission(ctx context.Context, pid int, claude claudePro
 	}
 }
 
-func (r *ccPluginRegistry) getOrCreatePerm(req ccPluginPermRequest, pid int, permKey string) (entry *ccPluginPerm, isNew, alreadyDone bool, errStatus int) {
+func (r *ccPluginRegistry) getOrCreatePerm(req ccPluginPermRequest, pid int, permKey string) (entry *ccPluginPerm, isNew, alreadyDone bool) {
 	now := time.Now()
+	id := ccPluginPermID{sessionID: req.SessionID, pid: pid, reqID: req.ReqID}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.prunePermsLocked(now)
-	if existing, ok := r.perms[req.ReqID]; ok {
-		if existing.sessionID != req.SessionID || existing.pid != pid {
-			return nil, false, false, http.StatusForbidden
-		}
-		return existing, false, false, 0
+	if existing, ok := r.perms[id]; ok {
+		return existing, false, false
+	}
+	if at, ok := r.completedReqs[id]; ok && now.Sub(at) <= ccPluginPermDoneTTL {
+		return nil, false, true
 	}
 	if req.ToolUseID != "" {
 		if at, ok := r.completedTools[req.SessionID+"\x00"+req.ToolUseID]; ok && now.Sub(at) <= ccPluginPermDoneTTL {
-			return nil, false, true, 0
+			return nil, false, true
 		}
 	}
 	if r.perms == nil {
-		r.perms = map[string]*ccPluginPerm{}
+		r.perms = map[ccPluginPermID]*ccPluginPerm{}
 	}
 	entry = &ccPluginPerm{
+		id:        id,
 		reqID:     req.ReqID,
 		sessionID: req.SessionID,
 		pid:       pid,
@@ -436,10 +477,11 @@ func (r *ccPluginRegistry) getOrCreatePerm(req ccPluginPermRequest, pid int, per
 		agentID:   req.AgentID,
 		permKey:   permKey,
 		createdAt: now,
+		decided:   &terminalDecided{},
 		ready:     make(chan struct{}),
 	}
-	r.perms[req.ReqID] = entry
-	return entry, true, false, 0
+	r.perms[id] = entry
+	return entry, true, false
 }
 
 func (r *ccPluginRegistry) prunePermsLocked(now time.Time) {
@@ -449,6 +491,11 @@ func (r *ccPluginRegistry) prunePermsLocked(now time.Time) {
 		p.mu.Unlock()
 		if expired {
 			delete(r.perms, id)
+		}
+	}
+	for id, at := range r.completedReqs {
+		if now.Sub(at) > ccPluginPermDoneTTL {
+			delete(r.completedReqs, id)
 		}
 	}
 	for k, at := range r.completedTools {
@@ -468,7 +515,8 @@ func ccPluginPermKey(in hookInput) string {
 func (n *Node) runCCPluginPermission(entry *ccPluginPerm, claude claudeProc, in hookInput) {
 	defer n.hookFlights.enter(in.SessionID)()
 
-	askCtx, cancel := context.WithTimeout(context.Background(), ccPluginPermTTL)
+	baseCtx := context.WithValue(context.Background(), terminalDecidedKey{}, entry.decided)
+	askCtx, cancel := context.WithTimeout(baseCtx, ccPluginPermTTL)
 	defer cancel()
 	if !entry.attachCancel(cancel) {
 		return // already cancelled before goroutine started
@@ -651,16 +699,19 @@ type ccPluginPermDoneRequest struct {
 }
 
 // ccPluginPermissionDone handles POST /claude-plugin/v1/permission-done: cancels matching pending
-// plugin permission asks by req_id, tool_use_id, turn, or fallback tool input key so the phone card
-// withdraws immediately and any waiting renewal poll exits with passthrough.
+// plugin permission asks by (session_id, pid, req_id), tool_use_id, turn, or unambiguous tool input key
+// so the phone card withdraws immediately and any waiting renewal poll exits with passthrough.
+// Verified computer-side approvals (reason "post_tool_use") withdraw with interaction.dismiss so history
+// preserves answered_by: "terminal".
 func (n *Node) ccPluginPermissionDone(pid int, claude claudeProc, body []byte) (int, any) {
 	var req ccPluginPermDoneRequest
 	if json.Unmarshal(body, &req) != nil || !validID(req.SessionID) {
 		return http.StatusBadRequest, map[string]any{"error": "invalid"}
 	}
+	terminal := req.Reason == "post_tool_use"
 	cancelled := n.ccPlugins.completePerm(req, pid)
 	for _, p := range cancelled {
-		p.cancelAsPassthrough()
+		p.cancelWithReason(terminal)
 	}
 	return http.StatusOK, map[string]any{"ok": true}
 }
@@ -668,10 +719,10 @@ func (n *Node) ccPluginPermissionDone(pid int, claude claudeProc, body []byte) (
 func (r *ccPluginRegistry) completePerm(req ccPluginPermDoneRequest, pid int) []*ccPluginPerm {
 	now := time.Now()
 	var matched []*ccPluginPerm
-	seen := map[string]bool{}
+	seen := map[ccPluginPermID]bool{}
 	add := func(p *ccPluginPerm) {
-		if p != nil && !seen[p.reqID] {
-			seen[p.reqID] = true
+		if p != nil && !seen[p.id] {
+			seen[p.id] = true
 			matched = append(matched, p)
 		}
 	}
@@ -679,6 +730,21 @@ func (r *ccPluginRegistry) completePerm(req ccPluginPermDoneRequest, pid int) []
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.prunePermsLocked(now)
+	recordReq := func(rid string) {
+		if !validCCPluginReqID(rid) {
+			return
+		}
+		if r.completedReqs == nil {
+			r.completedReqs = map[ccPluginPermID]time.Time{}
+		}
+		r.completedReqs[ccPluginPermID{sessionID: req.SessionID, pid: pid, reqID: rid}] = now
+	}
+	if req.ReqID != "" {
+		recordReq(req.ReqID)
+	}
+	for _, rid := range req.ReqIDs {
+		recordReq(rid)
+	}
 	if req.ToolUseID != "" {
 		if r.completedTools == nil {
 			r.completedTools = map[string]time.Time{}
@@ -686,12 +752,12 @@ func (r *ccPluginRegistry) completePerm(req ccPluginPermDoneRequest, pid int) []
 		r.completedTools[req.SessionID+"\x00"+req.ToolUseID] = now
 	}
 	if req.ReqID != "" {
-		if p := r.perms[req.ReqID]; p != nil && p.sessionID == req.SessionID && p.pid == pid {
+		if p := r.perms[ccPluginPermID{sessionID: req.SessionID, pid: pid, reqID: req.ReqID}]; p != nil {
 			add(p)
 		}
 	}
 	for _, rid := range req.ReqIDs {
-		if p := r.perms[rid]; p != nil && p.sessionID == req.SessionID && p.pid == pid {
+		if p := r.perms[ccPluginPermID{sessionID: req.SessionID, pid: pid, reqID: rid}]; p != nil {
 			add(p)
 		}
 	}
@@ -716,16 +782,18 @@ func (r *ccPluginRegistry) completePerm(req ccPluginPermDoneRequest, pid int) []
 			ToolName:  req.ToolName,
 			ToolInput: req.ToolInput,
 		})
-		var oldest *ccPluginPerm
+		var unpaired []*ccPluginPerm
 		for _, p := range r.perms {
 			if p.sessionID == req.SessionID && p.pid == pid && p.toolUseID == "" && p.permKey == key {
 				_, _, done := p.outcome()
-				if !done && (oldest == nil || p.createdAt.Before(oldest.createdAt)) {
-					oldest = p
+				if !done {
+					unpaired = append(unpaired, p)
 				}
 			}
 		}
-		add(oldest)
+		if len(unpaired) == 1 {
+			add(unpaired[0])
+		}
 	}
 	slices.SortFunc(matched, func(a, b *ccPluginPerm) int { return a.createdAt.Compare(b.createdAt) })
 	return matched

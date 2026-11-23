@@ -171,7 +171,8 @@ type ccPluginRegistry struct {
 	sessions       map[string]*ccPluginSession
 	queued         map[string]ccPluginQueuedSettings
 	personaHooks   map[string]ccPluginPersonaHook
-	perms          map[string]*ccPluginPerm
+	perms          map[ccPluginPermID]*ccPluginPerm
+	completedReqs  map[ccPluginPermID]time.Time
 	completedTools map[string]time.Time
 }
 

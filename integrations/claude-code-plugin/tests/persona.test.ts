@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import {
   applyStepOverride,
   canonicalJson,
+  clearAgentPreTools,
   createPreToolCache,
   extractPreToolUse,
   hasPermissionDecision,
@@ -443,18 +444,18 @@ describe('persona plugin', () => {
     await $.session.start(start)
     await w.clock.settle()
 
-    // Two concurrent identical commands (Also waiting) paired in FIFO order.
-    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_first', command: 'echo hello', description: 'print greeting' } as never)
-    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_second', command: 'echo hello', description: 'print greeting' } as never)
+    // Two concurrent distinct commands (Also waiting) each pair their exact tool_use_id.
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_first', command: 'echo one', description: 'first' } as never)
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_second', command: 'echo two', description: 'second' } as never)
 
-    const p1 = $.classic.PermissionRequest(permEvent() as never)
-    const p2 = $.classic.PermissionRequest(permEvent() as never)
+    const p1 = $.classic.PermissionRequest(permEvent({ tool_input: { command: 'echo one', description: 'first' } }) as never)
+    const p2 = $.classic.PermissionRequest(permEvent({ tool_input: { command: 'echo two', description: 'second' } }) as never)
     await w.clock.settle()
     expect(pending.has('toolu_first')).toBe(true)
     expect(pending.has('toolu_second')).toBe(true)
 
     // Computer allows toolu_first -> PostToolUse cancels only toolu_first.
-    await $.classic.PostToolUse({ session_id: SESSION, tool_use_id: 'toolu_first', tool_name: 'Bash', tool_input: { command: 'echo hello', description: 'print greeting' } } as never)
+    await $.classic.PostToolUse({ session_id: SESSION, tool_use_id: 'toolu_first', tool_name: 'Bash', tool_input: { command: 'echo one', description: 'first' } } as never)
     expect(await p1).toEqual({})
     await w.clock.settle()
     const dones = w.requests.filter(r => r.url.endsWith('/permission-done'))
@@ -471,6 +472,159 @@ describe('persona plugin', () => {
     expect(await p2).toEqual({
       decision: { behavior: 'deny', message: 'denied from phone', interrupt: true },
     })
+  })
+
+  test('does not guess tool_use_id for ambiguous concurrent identical calls and isolates PreToolUse by agent_id', async ($, on) => {
+    const pending: { body: Record<string, unknown>; resolve: (ans: Answer) => void }[] = []
+    const w = world(
+      on,
+      [{ status: 200, body: { messages: [], permissions: true, retry_ms: 60_000 } }],
+      { HOME: '/home/me' },
+      {
+        onPermission: body =>
+          new Promise<Answer>(resolve => {
+            pending.push({ body, resolve })
+          }),
+      },
+    )
+    await $.session.start(start)
+    await w.clock.settle()
+
+    // Two overlapping identical calls on the same main agent -> ambiguous: leave tool_use_id unset rather than guessing.
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_dup_1', command: 'echo same' } as never)
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_dup_2', command: 'echo same' } as never)
+    // Identical command on a distinct subagent stays isolated and keeps its exact tool_use_id.
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_sub_same', agent_id: 'sub-a', command: 'echo same' } as never)
+
+    const p1 = $.classic.PermissionRequest(permEvent({ tool_input: { command: 'echo same' } }) as never)
+    const p2 = $.classic.PermissionRequest(permEvent({ tool_input: { command: 'echo same' } }) as never)
+    const pSub = $.classic.PermissionRequest(permEvent({ tool_input: { command: 'echo same' }, agent_id: 'sub-a' }) as never)
+    await w.clock.settle()
+
+    expect(pending.length).toBe(3)
+    expect(pending[0]?.body.tool_use_id).toBe(undefined)
+    expect(pending[1]?.body.tool_use_id).toBe(undefined)
+    expect(pending[2]?.body.tool_use_id).toBe('toolu_sub_same')
+
+    // Completing toolu_dup_1 must NOT withdraw either ambiguous main card via fallback guessing.
+    await $.classic.PostToolUse({ session_id: SESSION, tool_use_id: 'toolu_dup_1', tool_name: 'Bash', tool_input: { command: 'echo same' } } as never)
+    await w.clock.settle()
+    expect(w.requests.filter(r => r.url.endsWith('/permission-done'))).toEqual([])
+
+    // Completing toolu_sub_same cancels ONLY the subagent card.
+    await $.classic.PostToolUse({ session_id: SESSION, tool_use_id: 'toolu_sub_same', agent_id: 'sub-a', tool_name: 'Bash', tool_input: { command: 'echo same' } } as never)
+    expect(await pSub).toEqual({})
+    await w.clock.settle()
+    const dones = w.requests.filter(r => r.url.endsWith('/permission-done'))
+    expect(dones.length).toBe(1)
+    expect(dones[0]?.body.tool_use_id).toBe('toolu_sub_same')
+
+    pending[0]?.resolve({ status: 200, body: { action: 'decide', decision: { behavior: 'allow', updatedInput: { command: 'echo same' } } } })
+    pending[1]?.resolve({ status: 200, body: { action: 'decide', decision: { behavior: 'allow', updatedInput: { command: 'echo same' } } } })
+    pending[2]?.resolve({ status: 200, body: { action: 'passthrough' } })
+    expect(await p1).toEqual({ decision: { behavior: 'allow', updatedInput: { command: 'echo same' } } })
+    expect(await p2).toEqual({ decision: { behavior: 'allow', updatedInput: { command: 'echo same' } } })
+  })
+
+  test('retains a 2-minute reconnect window for already-registered requests during node restarts and keeps socket path for /permission-done', async ($, on) => {
+    let calls = 0
+    const w = world(
+      on,
+      [
+        { status: 200, body: { messages: [], permissions: true, retry_ms: 1_000 } },
+        // Second /poll fails -> clears permissionAuth while the card is active.
+        { fail: true },
+      ],
+      { HOME: '/home/me' },
+      {
+        onPermission: () => {
+          calls++
+          if (calls === 1) return { status: 200, body: { action: 'renew' } }
+          if (calls <= 12) return { fail: true } // 11 transient failures (~11 s node restart)
+          return { status: 200, body: { action: 'decide', decision: { behavior: 'allow', updatedInput: { command: 'echo survive' } } } }
+        },
+      },
+    )
+    await $.session.start(start)
+    await w.clock.settle()
+
+    const permP = $.classic.PermissionRequest(permEvent({ tool_input: { command: 'echo survive' } }) as never)
+    await w.clock.settle()
+    // Advance across 11 seconds of node restart (> initial 3-error limit, well under 2-minute reconnect window).
+    for (let i = 0; i < 12; i++) {
+      await w.clock.advance(1_000)
+      await w.clock.settle()
+    }
+    expect(await permP).toEqual({
+      decision: { behavior: 'allow', updatedInput: { command: 'echo survive' } },
+    })
+    expect(calls).toBe(13)
+  })
+
+  test('still delivers /permission-done using the request socket even after /poll fails and clears permissionAuth', async ($, on) => {
+    let releasePerm!: (ans: Answer) => void
+    const w = world(
+      on,
+      [
+        { status: 200, body: { messages: [], permissions: true, retry_ms: 100 } },
+        { fail: true }, // clears permissionAuth after 100 ms
+      ],
+      { HOME: '/home/me' },
+      {
+        onPermission: () =>
+          new Promise<Answer>(resolve => {
+            releasePerm = resolve
+          }),
+      },
+    )
+    await $.session.start(start)
+    await w.clock.settle()
+
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_offline_poll', command: 'echo hi' } as never)
+    const permP = $.classic.PermissionRequest(permEvent({ tool_input: { command: 'echo hi' } }) as never)
+    await w.clock.settle()
+
+    // Let the second /poll fail and clear permissionAuth.
+    await w.clock.advance(100)
+    await w.clock.settle()
+
+    // Computer answers -> PostToolUse must still send /permission-done to the request's captured socketPath.
+    await $.classic.PostToolUse({ session_id: SESSION, tool_use_id: 'toolu_offline_poll', tool_name: 'Bash', tool_input: { command: 'echo hi' } } as never)
+    expect(await permP).toEqual({})
+    releasePerm({ status: 200, body: { action: 'passthrough' } })
+    await w.clock.settle()
+
+    const dones = w.requests.filter(r => r.url.endsWith('/permission-done'))
+    expect(dones.length).toBe(1)
+    expect(dones[0]?.socketPath).toBe('/home/me/.persona/node.sock')
+    expect(dones[0]?.body.tool_use_id).toBe('toolu_offline_poll')
+  })
+
+  test('falls back to passthrough when a connected request stays disconnected for the full 2-minute reconnect window', async ($, on) => {
+    let calls = 0
+    const w = world(
+      on,
+      [{ status: 200, body: { messages: [], permissions: true, retry_ms: 60_000 } }],
+      { HOME: '/home/me' },
+      {
+        onPermission: () => {
+          calls++
+          if (calls === 1) return { status: 200, body: { action: 'renew' } }
+          return { fail: true }
+        },
+      },
+    )
+    await $.session.start(start)
+    await w.clock.settle()
+
+    const permP = $.classic.PermissionRequest(permEvent() as never)
+    await w.clock.settle()
+    for (let i = 0; i < 121; i++) {
+      await w.clock.advance(1_000)
+      await w.clock.settle()
+    }
+    expect(await permP).toEqual({})
+    expect(calls).toBeGreaterThanOrEqual(120)
   })
 
   test('cancels pending main-turn requests on turn.complete without cancelling an active subagent request', async ($, on) => {
@@ -490,12 +644,12 @@ describe('persona plugin', () => {
     await w.clock.settle()
 
     await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_main', command: 'echo main' } as never)
-    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_sub', command: 'echo sub' } as never)
+    await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_sub', agent_id: 'sub-1', command: 'echo sub' } as never)
     const pMain = $.classic.PermissionRequest(permEvent({ tool_input: { command: 'echo main' } }) as never)
     const pSub = $.classic.PermissionRequest(permEvent({ tool_input: { command: 'echo sub' }, agent_id: 'sub-1' }) as never)
     await w.clock.settle()
 
-    await $.turn.complete({ turnId: 'turn-1', text: 'done' } as never)
+    await $.turn.complete({ turnId: 'turn-1', answer: 'done' } as never)
     expect(await pMain).toEqual({})
     await w.clock.settle()
 
@@ -678,17 +832,29 @@ describe('protocol helpers', () => {
     expect(hasPermissionDecision({})).toBe(false)
     expect(canonicalJson({ b: 2, a: 1 })).toBe('{"a":1,"b":2}')
 
-    expect(extractPreToolUse({ tool: 'Bash', tool_use_id: 't1', command: 'ls' })).toEqual({
+    expect(extractPreToolUse({ tool: 'Bash', tool_use_id: 't1', agent_id: 'sub-1', command: 'ls' })).toEqual({
+      agentId: 'sub-1',
       toolName: 'Bash',
       toolUseId: 't1',
       toolInput: { command: 'ls' },
     })
     const cache = createPreToolCache()
+    // Sequential identical calls pair cleanly once the first completes.
     recordPreTool(cache, { tool: 'Bash', tool_use_id: 't1', command: 'ls' })
-    recordPreTool(cache, { tool: 'Bash', tool_use_id: 't2', command: 'ls' })
     expect(takePreTool(cache, 'Bash', { command: 'ls' })).toBe('t1')
-    markToolCompleted(cache, 't2')
-    expect(isToolCompleted(cache, 't2')).toBe(true)
-    expect(takePreTool(cache, 'Bash', { command: 'ls' })).toBe('')
+    markToolCompleted(cache, 't1')
+    expect(isToolCompleted(cache, 't1')).toBe(true)
+    recordPreTool(cache, { tool: 'Bash', tool_use_id: 't2', command: 'ls' })
+    expect(takePreTool(cache, 'Bash', { command: 'ls' })).toBe('t2')
+
+    // Concurrent identical calls on the same agent mark ambiguous and refuse to guess.
+    recordPreTool(cache, { tool: 'Bash', tool_use_id: 't3', command: 'pwd' })
+    recordPreTool(cache, { tool: 'Bash', tool_use_id: 't4', command: 'pwd' })
+    recordPreTool(cache, { tool: 'Bash', tool_use_id: 't_sub', agent_id: 'sub-1', command: 'pwd' })
+    expect(takePreTool(cache, 'Bash', { command: 'pwd' })).toBe('')
+    expect(takePreTool(cache, 'Bash', { command: 'pwd' }, 'sub-1')).toBe('t_sub')
+    clearAgentPreTools(cache, '')
+    recordPreTool(cache, { tool: 'Bash', tool_use_id: 't5', command: 'pwd' })
+    expect(takePreTool(cache, 'Bash', { command: 'pwd' })).toBe('t5')
   })
 })

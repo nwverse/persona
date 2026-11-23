@@ -35,9 +35,7 @@ func (n *Node) outsideAskCards() []proto.Interaction {
 	seen := map[string]bool{}
 	for _, c := range n.liveClaudes() {
 		// The status file first: every other check reads a file or the process, and almost no claude is waiting.
-		// A session with a permissions-capable Persona plugin receives AskUserQuestion cards through the plugin directly.
-		if c.Status != "waiting" || seen[c.SessionID] || n.outsideSource(c) == "" || outsidePane(c) != "" ||
-			n.ccPlugins.permissionsCapable(c.SessionID, c.pid) {
+		if c.Status != "waiting" || seen[c.SessionID] || n.outsideSource(c) == "" || outsidePane(c) != "" {
 			continue
 		}
 		if p, has := peerOf(c); !has || !peerReachable(p) {
@@ -177,11 +175,11 @@ func readPendingOutsideAskFile(f *transcript.File) (*proto.Item, error) {
 
 // outsideAskCard is the card of the question claude c waits on, ok false when its current turn's latest call is not an
 // AskUserQuestion still open (a permission prompt, a plan, a dialog of its own), when an active AskUserQuestion hook
-// already covers the same tool call, or when the call cannot be one card.
+// or plugin permission request already covers the same tool call, or when the call cannot be one card.
 func (n *Node) outsideAskCard(c claudeProc) (proto.Interaction, bool) {
 	id := c.SessionID
 	call := n.pendingOutsideAsk(c)
-	if call == nil || n.activeAsks.coversAsk(id, call.ToolUseID) {
+	if call == nil || n.activeAsks.coversAsk(id, call.ToolUseID) || n.ccPlugins.coversAsk(id, call.ToolUseID) {
 		return proto.Interaction{}, false
 	}
 	var ix proto.Interaction
