@@ -1,10 +1,10 @@
-package persona.feature.inbox
+package persona.core.inbox
 
 import kotlinx.serialization.json.*
 import persona.core.contracts.LarkFeatures
 import java.net.URI
 
-internal fun larkWebUrl(value: String): String? = runCatching {
+fun larkWebUrl(value: String): String? = runCatching {
     val uri = URI(value.trim())
     value.trim().takeIf { uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrBlank() && uri.rawUserInfo == null }
 }.getOrNull()
@@ -125,7 +125,7 @@ fun parseLarkDocumentDetails(info: JsonObject?, header: JsonObject?, summary: Js
 }
 
 /** An ISO time, or epoch seconds / milliseconds (the Lark gateway writes either). */
-internal fun larkInstant(value: JsonElement): java.time.Instant? {
+fun larkInstant(value: JsonElement): java.time.Instant? {
     val p = value as? JsonPrimitive ?: return null
     p.longOrNull?.let { return if (it > 100_000_000_000) java.time.Instant.ofEpochMilli(it) else java.time.Instant.ofEpochSecond(it) }
     return p.contentOrNull?.takeIf { p.isString && it.isNotBlank() }?.let { s ->

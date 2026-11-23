@@ -1,13 +1,10 @@
-package persona.feature.inbox
+package persona.core.inbox
 
 import persona.core.contracts.api.InboxAssistantTransport
-import persona.core.designsystem.LocalizedFormats
 import kotlinx.serialization.json.*
 import java.net.URLEncoder
-import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
-import java.util.Locale
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 
 internal fun JsonObject.text(key: String) = (get(key) as? JsonPrimitive)?.contentOrNull.orEmpty()
 internal fun JsonObject.number(key: String) = (get(key) as? JsonPrimitive)?.longOrNull
@@ -16,7 +13,7 @@ internal fun JsonObject.cursor(key: String) = text(key).takeIf { it.isNotBlank()
 internal fun JsonObject.messages() = (get("messages") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
 
 /** [manager]: the one the chat is read as (LarkContentSource); its pictures and threads are read and cached as its. */
-internal fun larkMessage(data: JsonObject, transport: InboxAssistantTransport, feed: String, manager: String? = null): LarkMessage {
+fun larkMessage(data: JsonObject, transport: InboxAssistantTransport, feed: String, manager: String? = null): LarkMessage {
     val source = LarkContentSource(transport, manager)
     fun image(ref: String, width: Int = 1, height: Int = 1) = source.image(ref, width = width, height = height)
     val id = data.text("id")
@@ -115,18 +112,12 @@ internal fun larkMessage(data: JsonObject, transport: InboxAssistantTransport, f
         canPin = data.flag("can_pin"), canUnpin = data.flag("can_unpin"))
 }
 
-internal fun larkDate(time: String): LocalDate? = runCatching {
-    Instant.parse(time).atZone(ZoneId.systemDefault()).toLocalDate()
-}.getOrNull()
+fun LarkMessage.listKey() = clientId?.let { "client:$it" } ?: "message:$id"
 
-/** A message's time in the language the app is in: 14:30 · 2:30 PM. */
-internal fun larkTime(time: String, locale: Locale, zone: ZoneId = ZoneId.systemDefault()): String = runCatching {
-    LocalizedFormats.format(Instant.parse(time), LocalizedFormats.TIME, locale, zone)
-}.getOrDefault(time)
+fun larkEditHistory(data: JsonObject): List<LarkEditVersion> =
+    (data["edit_history"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { v ->
+        val parts = (v["parts"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { it.text("text") }.filter { it.isNotBlank() }
+        LarkEditVersion(v.text("edited_at"), v.text("text").ifBlank { parts.joinToString("") })
+    }
 
-internal fun LarkMessage.listKey() = clientId?.let { "client:$it" } ?: "message:$id"
-
-/** Account-scoped retained recall and edit-history preferences. */
-internal fun larkMessageDisplay(data: JsonObject): LarkMessageDisplay =
-    LarkMessageDisplay(accountId = data.text("account_id"),
-        antiRecall = data.flag("anti_recall"), showEditHistory = data.flag("show_edit_history"))
+// MARK: Pins

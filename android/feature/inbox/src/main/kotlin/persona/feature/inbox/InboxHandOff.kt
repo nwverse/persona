@@ -6,6 +6,7 @@ import persona.core.contracts.Session
 import persona.core.contracts.contextBody
 import persona.core.domain.sort.canSend
 import java.time.Instant
+import persona.core.inbox.*
 
 /** What to ask for, as iOS and the old app offer it; an empty request means the first. */
 fun handoffPresets(res: Resources): List<String> = listOf(R.string.inbox_handoff_preset_summary, R.string.inbox_handoff_preset_background,
