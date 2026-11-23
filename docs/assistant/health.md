@@ -123,7 +123,7 @@ A track is of a kind (#13472): a config whose every field picks one of the optio
 - **Recordings in a track** (#13501): a recording upload with `space` (`PUT /api/v1/recordings/{id}`, `docs/protocol/protocol.md` "Recording sync") goes to that track instead of the knowledge base. The manager renders its transcript as `recordings/<day>-<id>.md` (front matter with the recording and the track's default categories, then one timed line per sentence) and has the assistant's machine write it there (`assistant.space_recording`, capability `track_recordings_v1`; `server/internal/node/assistant_space_recordings.go`); `assistant_space_recordings` keeps its revision and tombstone. Such a recording is never in the knowledge base (`kb_list`, `kb_search`, summaries, minutes): the track's conversations read the file. Once in a track a recording stays there, whatever a later upload names, and one the knowledge base holds stays in it (409 `recording_in_kb`); an all-day recording cannot go to a track (400). `recording_days` applies to it too: past it, or when deleted, its file is removed (later, when the computer was away) and a tombstone kept until the window ends (`server/internal/assistant/space_recordings.go`).
 - **Reading and writing SPACE.md**: the apps read a track's `SPACE.md` with `GET /api/v1/assistant/tracks/{slug}/space-md` and the user saves it with `PUT` (`content` and the `base_digest` it was read at; a stale one is refused, so two edits never overwrite each other). The user's write may change anything but the blocks between `persona:managed` markers and the markers themselves, compared byte for byte. The track's own conversations, and only they (`spaceTools` in `server/internal/assistant/track_space_md.go`; the main chat's and the health space's tool lists are unchanged), get the MCP tool `space_state_update {text}`, which replaces the text of the state block alone, at most 2048 bytes; the model never edits that block itself. Both go to the node on the assistant's computer (`assistant.space_md`, capability `track_space_md_v1`, `server/internal/node/assistant_space_md.go`), which reads the file without following a link, keeps the file it replaces in `.space/history/` (the latest 20) and writes atomically. After the user's write the track's `CLAUDE.md` and `AGENTS.md` are written again at once; after the state's, at the next refresh.
 - **Who changes them**: `GET` / `POST /api/v1/assistant/tracks`, `PUT /api/v1/assistant/tracks/{slug}`, `GET` / `POST /api/v1/assistant/track-kinds` and `PUT /api/v1/assistant/track-kinds/{slug}` are for full-access clients only; writes check that the caller is the user (403 otherwise), and a built-in track or kind is never changed (403). A change names the revision it was made against (409 when another came first), and a kind change that would leave one of its tracks invalid is refused (409).
-- **In the apps**: the web lists the tracks of the `spaces` sidebar group in a Spaces section, opens each at `/tracks/<slug>`, edits its `SPACE.md` and creates and archives spaces (`docs/web/web.md`, "Domain spaces"). Android does the same in the drawer's Spaces section (`docs/android/android.md`, "Domain spaces (#13500)"). The health space keeps its own entry and pages.
+- **In the apps**: the web lists the tracks of the `spaces` sidebar group in a Spaces section, opens each at `/tracks/<slug>`, edits its `SPACE.md` and creates and archives spaces (`docs/web/web.md`, "Domain spaces"); the iOS and iPadOS app does the same from its sidebar and drawer, and sets which personal information an extension may read on its page (`docs/apple/ios.md`, "Domain spaces"). Android does the same in the drawer's Spaces section (`docs/android/android.md`, "Domain spaces (#13500)"). The health space keeps its own entry and pages.
 
 ## Quick capture
 
@@ -453,6 +453,41 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   3. In the Health space, request today's intake, or call `phone_health_summary` with `{"metrics":["dietary_energy","protein","carbs","fat","resting_energy"],"days":1}`. Verify that the hub's advertised metric enum includes all five names and the returned `date` is today in the phone's time zone.
   4. Compare the four dietary values against the entries written to Health (kcal / g, rounded to one decimal). If other sources also wrote entries, compare with the relevant Health totals. `resting_energy` should match available basal-energy data; it may be absent when no source recorded it. A missing value stays absent, rather than becoming zero.
   5. Add another food entry in 薄荷健康, wait until it is visible in Health, and query again. The day's total should include both entries; no previous-day entry should enter today's total. This check verifies the source app → Health → Persona → hub path.
+
+## Syncing to Apple Health
+
+On iPhone, **Settings › Health › Sync to Apple Health** is off by default. It is hidden in demo mode and on other
+devices, and requires a hub with `health_intake`. Turning it on requests write access to water and protein, then
+backfills all records, including imported history, at their original times. Turning it off stops sync and keeps
+samples already written. This is one-way: Apple Health edits do not change Persona's intake records.
+
+Each record writes one sample with its record UUID as `HKMetadataKeySyncIdentifier`, sync version 1, and
+`HKMetadataKeyWasUserEntered`. Replaying history uses the same identifier and version. Undoing a record deletes the
+sample with that identifier; HealthKit permits deletion only of samples Persona itself saved. Other apps' samples
+are untouched. This opt-in sync is separate from the AI's `phone_health_write_sample` tool, which still requires
+confirmation for each sample and never writes water or protein or deletes data.
+
+The device stores a protected, backup-excluded cursor bound to the group and actual hub identity selected when sync was enabled. Another hub
+does not inherit consent or progress; explicitly enabling sync there starts from zero. A missing cursor also starts
+from zero. The client reads the full-device-only changes stream, including tombstones, in sequence order. It saves
+progress only after each HealthKit operation succeeds and stops on the first write, delete, network or checkpoint
+failure. The next trigger retries that entry. Settings shows the last completed sync, missing write permissions,
+or the last failure. After allowing write access in system settings, the next trigger continues from that cursor.
+
+Triggers are foreground entry, a successful local record or undo, `health_intake` broadcasts, and the existing hub
+wake for widgets. The phone must be unlocked before each operation. No new background task or delivery entitlement
+is added; a closed app without a widget catches up when next opened. Turning sync off does not remove past samples.
+
+Simulator verification establishes storage behavior, not physical-device lock, iCloud or background delivery.
+The iOS 27.2 simulator's Health app does not expose the nutrition views used for visual acceptance. As part of
+rollout, the user verifies visible water/protein entries, replay and undo in the Health app on their physical iPhone
+using the TestFlight build, before enabling sync on real records.
+
+`HealthIntakeSyncTests` uses a fake writer for cursor, failure and hub-scope cases. The opt-in
+`HealthIntakeHealthKitTests` integration suite (`TEST_RUNNER_PERSONA_HEALTH_LIVE=1`, after granting the system write
+sheet on a disposable simulator) checks both types against the real HealthKit store: same-version replay stays at
+one sample; deletion and repeated deletion of a missing identifier succeed and leave zero. With Xcode 27.2 and the
+iOS 27.2 simulator these checks pass; repeat them on a physical iPhone before release.
 
 ## Automatic workout reports (iOS)
 

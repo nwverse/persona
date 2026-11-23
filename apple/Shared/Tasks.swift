@@ -132,9 +132,12 @@ nonisolated struct TaskPlan: Codable, Hashable, Identifiable, Sendable {
     /// A standing rule the hub suggests on this open plan (#4929, #5802): the owner started this kind three times. Filled
     /// in where the plan is read, never stored with it; a hub from before sends none.
     var suggestion: RuleSuggestion?
+    /// The space of the conversation that made it ("health", a domain space's slug; nil: the assistant's own). Main's
+    /// Needs You lists every open plan but Health's, which stay in Health. A hub from before sends none.
+    var space: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, conversation, tasks, state, suggestion
+        case id, conversation, tasks, state, suggestion, space
         case createdAt = "created_at", updatedAt = "updated_at"
     }
 
@@ -914,9 +917,10 @@ extension QuietTasks {
 nonisolated enum WatchInteractions {
     /// A muted agent's or space's card stays off the watch entirely (#4360): no row and no buzz when it arrives,
     /// like the phone's Agents badge and inbox. The hub stamps `muted`; an older hub leaves it false. A question the
-    /// assistant is still looking at stays off too (#544): it buzzes once it is handed to the user.
+    /// assistant is still looking at stays off too (#544): it buzzes once it is handed to the user. So does a card its
+    /// task's supervisor holds (`Interaction.supervisorHeld`): the watch would answer it with a tap.
     static func leavingMuted(_ interactions: [Interaction]) -> [Interaction] {
-        interactions.filter { !$0.muted && !$0.isDelegating }
+        interactions.filter { !$0.muted && !$0.isDelegating && $0.answerableHere }
     }
 
     /// The cards the watch has not shown yet: only these are worth a buzz. Called after the muted ones are out, so a
