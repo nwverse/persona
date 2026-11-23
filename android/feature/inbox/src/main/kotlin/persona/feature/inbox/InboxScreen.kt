@@ -32,6 +32,7 @@ import persona.core.navigation.Navigator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import persona.core.inbox.*
 
 /** [onOpenCard]: the app opens a request card outside any session on Agents (#5610); without it, Agents opens. */
 @Composable

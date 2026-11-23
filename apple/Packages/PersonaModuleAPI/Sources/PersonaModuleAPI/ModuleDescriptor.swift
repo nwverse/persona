@@ -73,8 +73,8 @@ public enum ModuleSlot: String, CaseIterable, Sendable {
 /// What a module is: its id, the hub feature flag it depends on, and the slots it uses.
 public struct ModuleDescriptor: Hashable, Sendable {
     public let id: ModuleID
-    /// The wire feature flag (`hello.features`) the module needs from the hub; nil for a module that works without the
-    /// hub's help (glasses). Declared for the contract; the registry does not gate on it yet.
+    /// The wire feature flag (`hello.features`) through which the hub can turn the module off: `module.<id>`
+    /// (`hubFeature(for:)`), or nil for a module the hub never gates. `ModuleRegistry` enforces it with `HubModules`.
     public let feature: String?
     /// The slots the module registers into. Registering into a slot that is not listed here is refused.
     public let slots: Set<ModuleSlot>
@@ -84,4 +84,12 @@ public struct ModuleDescriptor: Hashable, Sendable {
         self.feature = feature
         self.slots = slots
     }
+
+    /// A module the hub can turn off: its feature is `module.<id>` (`HubModules`).
+    public init(id: ModuleID, hubGated: Bool, slots: Set<ModuleSlot>) {
+        self.init(id: id, feature: hubGated ? Self.hubFeature(for: id) : nil, slots: slots)
+    }
+
+    /// The hub feature flag of module `id`: `module.<id>`.
+    public static func hubFeature(for id: ModuleID) -> String { HubModules.prefix + id.rawValue }
 }

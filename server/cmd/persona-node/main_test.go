@@ -27,7 +27,7 @@ func TestPersonaNodeDoesNotLinkTheHubOrTheManager(t *testing.T) {
 	}
 	// The hub's and the manager's own packages, and their sources and channels (they run in the manager).
 	forbidden := []string{"internal/hub", "internal/hubedge", "internal/assistant", "internal/manager", "internal/devices",
-		"internal/extmgr", "internal/db", "internal/relay", "internal/modules/voice", "internal/mail", "internal/lark",
+		"internal/extmgr", "internal/db", "internal/relay", "internal/modules/voice", "internal/modules/mail", "internal/lark",
 		"internal/feishubot", "internal/apns", "internal/bus", "internal/workspaceboard",
 		"internal/usagesource", "internal/admin"}
 	// No database driver either, wherever it comes from.

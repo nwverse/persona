@@ -19,7 +19,6 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/proc"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
-	"github.com/nwverse/persona/server/internal/mail"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -201,7 +200,7 @@ func TestConnectorsEndpoint(t *testing.T) {
 // What GET /api/v1/connectors?all=1 says each built-in connector can do (the app goes by these names).
 func TestConnectorsListTheSameCapabilities(t *testing.T) {
 	h := newTestManager(t)
-	h.mail = (*mail.Service)(nil)
+	h.mail = testMail(t)
 	h.connectors = connector.NewRegistry(nil)
 	h.registerConnectors()
 	if err := h.addConnector(imessage.NewRemote(imessage.Config{Machine: "mac"}, "Mac", nil)); err != nil {

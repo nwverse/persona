@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // scripted is a Mac's node answering each method with fixed JSON, recording the params it was asked with.
@@ -118,7 +118,7 @@ func TestTheInboxSeesUnreadConversations(t *testing.T) {
 	ctx := context.Background()
 	c, n := personaRemote(t, map[string]string{"connector.chats": chatsPage(time.Now()), "connector.older": olderPage})
 	var scopes []string
-	changed := func(s connector.Scope) { scopes = append(scopes, string(s)) }
+	changed := func(s connectorwire.Scope) { scopes = append(scopes, string(s)) }
 	c.look(ctx, changed)
 	things, _ := c.Collect(ctx)
 	if len(things) != 4 || strings.Join(scopes, ",") != "chats,inbox" {
@@ -132,7 +132,7 @@ func TestTheInboxSeesUnreadConversations(t *testing.T) {
 	if group.Kind != "group" || group.Label != "群聊" || group.Tier != "fyi" || group.OpenURL != "" || group.Sender != "张三" {
 		t.Errorf("group = %+v", group)
 	}
-	if alice.Done != connector.DoneReplied || alice.Context != "" || !li.Read || li.Context != "" {
+	if alice.Done != connectorwire.DoneReplied || alice.Context != "" || !li.Read || li.Context != "" {
 		t.Errorf("answered / read = %+v / %+v", alice, li)
 	}
 	// Each unread conversation's last messages are read once for its newest message.
@@ -149,7 +149,7 @@ func TestTheInboxSeesUnreadConversations(t *testing.T) {
 	if things, _ := c.Collect(ctx); len(things) != 0 {
 		t.Errorf("off: %d things", len(things))
 	}
-	if err := c.Reply(ctx, connector.InboxReply{Thread: "imessage-000000000001", Text: "好"}); err == nil {
+	if err := c.Reply(ctx, connectorwire.InboxReply{Thread: "imessage-000000000001", Text: "好"}); err == nil {
 		t.Error("Persona sent a message")
 	}
 }

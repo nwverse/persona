@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // The account kept across restarts (#7832, account.go restore / keepAccount / keepSettled): a store that fails,
@@ -80,7 +80,7 @@ func (s *r2Store) counts() (loads, saves int) {
 
 // r2Connector is a manager started on store, reading a computer's gh login (token); it is not checked to be
 // signed in.
-func r2Connector(f *twoAccounts, store connector.Secrets, token string) *Connector {
+func r2Connector(f *twoAccounts, store connectorwire.Secrets, token string) *Connector {
 	c := New(Config{Auth: AuthConfig{FromMachine: "mac"}}, "Mac", (&machine{tokens: []string{token}}).fetch)
 	c.api = f.srv.URL
 	c.UseSecrets(store)
@@ -90,7 +90,7 @@ func r2Connector(f *twoAccounts, store connector.Secrets, token string) *Connect
 
 func r2SignedIn(t *testing.T, c *Connector, login string) {
 	t.Helper()
-	if st := c.Status(context.Background()); st.State != connector.StateOK || st.Account != login {
+	if st := c.Status(context.Background()); st.State != connectorwire.StateOK || st.Account != login {
 		t.Fatalf("not signed in as %s: %+v", login, st)
 	}
 }
@@ -146,7 +146,7 @@ func TestUnreadableStoreCanBeLeft(t *testing.T) {
 	ctx := context.Background()
 
 	c := r2Connector(f, s, tokenA)
-	if st := c.Status(ctx); st.State != connector.StateOK {
+	if st := c.Status(ctx); st.State != connectorwire.StateOK {
 		t.Errorf("a computer's gh login, which keeps nothing in the store: %s %q", st.State, st.Error)
 	}
 
@@ -241,7 +241,7 @@ func TestSteadyStateCost(t *testing.T) {
 		if _, err := c.Thread(ctx, r2Thread7, "", 10); err != nil {
 			t.Logf("thread page: %v", err)
 		}
-		if err := c.Reply(ctx, connector.InboxReply{Thread: a.Thread, Last: a.Last, Text: "看过了"}); err != nil {
+		if err := c.Reply(ctx, connectorwire.InboxReply{Thread: a.Thread, Last: a.Last, Text: "看过了"}); err != nil {
 			t.Fatal(err)
 		}
 		_ = c.Settle(ctx, []string{a.Thread})
@@ -279,7 +279,7 @@ func TestReplyAdmissionByMark(t *testing.T) {
 	b := collected(t, c)
 	ctx := context.Background()
 	for _, last := range []string{"", t1, t1 + "#0", t1 + "#", t1 + "#x", t1 + "#-1", t1 + "#18446744073709551616", t1 + "#1#0", "#", t1 + "#2", t1 + "#01x"} {
-		if err := c.Reply(ctx, connector.InboxReply{Thread: thread12, Last: last, Text: "x"}); err == nil {
+		if err := c.Reply(ctx, connectorwire.InboxReply{Thread: thread12, Last: last, Text: "x"}); err == nil {
 			t.Errorf("a reply to the move %q was sent as %s (epoch 1)", last, loginB)
 		}
 	}
@@ -287,7 +287,7 @@ func TestReplyAdmissionByMark(t *testing.T) {
 		t.Fatalf("posted %v", posted)
 	}
 	c2 := r2Connector(f, s, tokenB) // a restart as B: no thing is held
-	if err := c2.Reply(ctx, connector.InboxReply{Thread: thread12, Last: b.Last, Text: "看过了"}); err != nil {
+	if err := c2.Reply(ctx, connectorwire.InboxReply{Thread: thread12, Last: b.Last, Text: "看过了"}); err != nil {
 		t.Errorf("B's reply to its own item after a restart: %v", err)
 	}
 	if posted := f.posts(); len(posted) != 1 || !strings.HasPrefix(posted[0], tokenB+" ") {
@@ -341,7 +341,7 @@ func r2StoreUnderLoad(t *testing.T, reload bool) {
 	}
 	loop(func() {
 		if th, ok := things(t, c)[thread12]; ok {
-			_ = c.Reply(ctx, connector.InboxReply{Thread: thread12, Last: th.Last, Text: owner[th.Kind]})
+			_ = c.Reply(ctx, connectorwire.InboxReply{Thread: thread12, Last: th.Last, Text: owner[th.Kind]})
 		}
 	})
 	loop(func() {
