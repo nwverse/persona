@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -691,8 +691,8 @@ func effortPicker(screen string) string {
 // effortSessionKey: the 2.1.330+ slider's footer hint that "s" keeps the level to this session ("s to use this session
 // only", with or without the "to"). effortSaveKey: its Enter hint when Enter saves the level as the default.
 var (
-	effortSessionKey = regexp.MustCompile(`(?i)(?:^|[\s·(])s (?:to )?use this session only`)
-	effortSaveKey    = regexp.MustCompile(`(?i)\benter (?:to )?save\b`)
+	effortSessionKey = lazyre.New(`(?i)(?:^|[\s·(])s (?:to )?use this session only`)
+	effortSaveKey    = lazyre.New(`(?i)\benter (?:to )?save\b`)
 )
 
 // effortOutcome reads what Claude Code printed once the picker closed. An effort set in the environment
