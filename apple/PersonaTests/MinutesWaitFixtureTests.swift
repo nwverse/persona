@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// What the minutes line says while the minutes wait (#13461, docs/assistant/meeting-minutes.md「Gaps and the final
 /// pass」): every shared case in spec/fixtures/minutes-wait, which the hub and the web run too. `transcription` is
