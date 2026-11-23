@@ -154,8 +154,8 @@ assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/directions/{id}
 dispatch.guard       GET /api/v1/assistant/dispatch-guard
 assistant.dispatch_policy GET /api/v1/assistant/dispatch-policy
--                    GET /api/v1/assistant/extension-trust
 assistant.entries.read GET /api/v1/assistant/entries
+-                    GET /api/v1/assistant/extension-trust
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
 -                    GET /api/v1/assistant/history
