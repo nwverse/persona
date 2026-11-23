@@ -6731,6 +6731,12 @@ MEETING_TRANSCRIPTION = os.environ.get("MOCK_NO_MEETING_TRANSCRIPTION") != "1"
 TRANSCRIPTION_MODE = {"ready": os.environ.get("MOCK_MEETING_TRANSCRIPTION_READY") != "0", "upstream": "ok",
                       "fatal": "", "line_seconds": 4, "final_seconds": 2}
 TRANSCRIPTIONS = {}  # Protected by RECORDINGS_LOCK, including socket callbacks and final-pass timers.
+# The final pass's progress (#13461, docs/assistant/meeting-minutes.md "Gaps and the final pass"): while the mock's own
+# pass runs, transcription carries final_done (0: it replays in one step) and end. MOCK_MEETING_FINISHING=<done>,<end>
+# (recording seconds) shows every complete meeting recording with no transcription of its own as a hub-mode meeting whose
+# final pass has done <done> of <end>, for shots of the minutes line; its minutes stay as MOCK_RECORDING_MINUTES says.
+MEETING_FINISHING = tuple(float(x) for x in os.environ["MOCK_MEETING_FINISHING"].split(",")) \
+    if os.environ.get("MOCK_MEETING_FINISHING") else None
 TRANSCRIPTION_SCRIPT = ("我们先把 export cap 保持在 4 MB。", "Let's revisit pricing next week.",  # i18n-ignore: synthetic speech, never translated
                         "Alice 负责检查 export test。", "Bo will share the notes tomorrow.")  # i18n-ignore: synthetic speech
 
@@ -6875,11 +6881,19 @@ def transcription_gaps(t):
 
 def transcription_view(rid):
     t = TRANSCRIPTIONS.get(rid)
-    if not meeting_transcription_on() or not t: return None
+    if not meeting_transcription_on(): return None
+    if not t:
+        rec = RECORDINGS.get(rid)
+        if MEETING_FINISHING and isinstance(rec, dict) and rec.get("kind") == "meeting" and rec.get("complete"):
+            done, end = MEETING_FINISHING
+            return {"mode": "hub", "state": "finishing", "gaps": [], "final_done": min(done, end), "end": end}
+        return None
     if t["mode"] == "device": return {"mode": "device"}
     out = {"mode": "hub", "state": t["state"], "gaps": transcription_gaps(t) if rid not in RECORDINGS_TRIMMED else []}
     if t.get("problem"): out["problem"] = t["problem"]
     if t.get("fallback"): out["fallback"] = True
+    if t["state"] == "finishing" and t.get("final_started") and transcription_number(t.get("end")) and t["end"] > 0:
+        out["final_done"], out["end"] = min(t.get("final_done", 0), t["end"]), t["end"]
     return out
 
 
@@ -7100,11 +7114,13 @@ def transcription_finish_start(rid, force=False):
     if not t or t["mode"] != "hub" or t.get("final_started") or not t.get("complete_at"): return
     if not force and (t.get("socket") or transcription_gaps(t)): return
     t["final_started"] = True
+    t["final_done"] = 0
     t["final_gaps"] = transcription_gaps(t)
     if t.get("socket"): t["socket"]["fail"]("transcription_final")
     if not t["held"]:
         transcription_finish(rid, t)
         return
+    transcription_changed(rid)  # the pass's progress (final_done) from its start
     timer = threading.Timer(TRANSCRIPTION_MODE["final_seconds"], transcription_finish, args=(rid, t))
     timer.daemon = True; timer.start()
 
@@ -7134,7 +7150,9 @@ def transcription_finish(rid, expected):
 def transcription_configured():
     """What the switches make of the upstream now: the problem a job would have."""
     upstream = TRANSCRIPTION_MODE["upstream"]
+    # The kinds the hub passes on (#13446, spec/fixtures/meeting-transcription-problems): refused, busy, out of reach, failed.
     return ("upstream_unavailable" if not transcription_ready() or upstream == "unavailable" else
+            "upstream_forbidden" if upstream == "forbidden" else "upstream_busy" if upstream == "busy" else
             "upstream_failed" if upstream == "failed" else "no_interim" if upstream == "no_interim" else None)
 
 
@@ -7264,7 +7282,7 @@ def transcription_control(h, method):
         except ValueError: body = None
         if not isinstance(body, dict): return h.send_json({"code": "bad_request"}, 400) or True
         if any(k in body and type(body[k]) is not bool for k in ("on", "ready")) or \
-                ("upstream" in body and body["upstream"] not in ("ok", "unavailable", "failed", "no_interim")) or \
+                ("upstream" in body and body["upstream"] not in ("ok", "forbidden", "busy", "unavailable", "failed", "no_interim")) or \
                 ("fatal" in body and not isinstance(body["fatal"], str)) or \
                 any(k in body and (not transcription_number(body[k]) or body[k] < (1 / 16000 if k == "line_seconds" else 0)) for k in ("line_seconds", "final_seconds")):
             return h.send_json({"code": "bad_request"}, 400) or True
@@ -7371,7 +7389,7 @@ def transcription_socket(h, rid):
                     if end <= edge:
                         state["sentence"] = max(state["sentence"], edge)
                         continue
-                    if configured in ("upstream_unavailable", "upstream_failed"):
+                    if configured in ("upstream_forbidden", "upstream_busy", "upstream_unavailable", "upstream_failed"):
                         state["sentence"] = end
                         continue
                     if at < edge: state["sentence"] = max(state["sentence"], edge)
