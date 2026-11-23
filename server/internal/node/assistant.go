@@ -1239,19 +1239,24 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 // in the hub's database), else the assistant directory. A stored folder that is gone (the data directory moved,
 // docs/operations/persona-cutover.md) is the folder of the same name in the data directory when there is one (the assistant
 // directory, the health space, another manager's), else the assistant directory: it is never made again where it was,
-// which would start the conversation in an empty folder without its instructions and memory (#6299).
+// which would start the conversation in an empty folder without its instructions and memory (#6299). On a scoped
+// node the assistant directory is its own (assistantFallbackDir), and a stored built-in one goes back to it
+// (unlistedAssistantDir): resumed outside the scope, the conversation was never listed.
 func (n *Node) storedCwd(stored string) string {
+	if n.unlistedAssistantDir(stored) {
+		stored = ""
+	}
 	if stored != "" {
 		if dirExists(stored) {
 			return stored
 		}
 		if name := filepath.Base(stored); name != "." && name != string(filepath.Separator) {
-			if moved := filepath.Join(identity.DataDir(n.home), name); dirExists(moved) {
+			if moved := filepath.Join(identity.DataDir(n.home), name); dirExists(moved) && !n.unlistedAssistantDir(moved) {
 				return moved
 			}
 		}
 	}
-	return identity.AssistantDir(n.home)
+	return n.assistantFallbackDir()
 }
 
 // readAssistant turns the stream-json output into live deltas and turn-finished signals.

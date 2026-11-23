@@ -8,10 +8,10 @@ has already closed the connection, so over TLS the write returns a bare `net.Err
 connection"). Retrying the whole operation on a new login sends the search again, and the server ends that connection
 too: two QQ accounts' `mail_search` failed on every try with `fetch: use of closed network connection`, and nothing
 was logged. What a try already got (the search's UIDs) has to survive into the retry, so the retry only does what
-failed (`listOne` in `server/internal/mail/imap_list.go`). Tell a dead connection by `Client.State() ==
+failed (`listOne` in `server/internal/modules/mail/imap_list.go`). Tell a dead connection by `Client.State() ==
 ConnStateLogout`: the reader sets it before it fails the waiting commands, so a command that failed sees it already,
 and `Client.Close()` then returns the reader's own error, the reason to log. A proxy that closes after a chosen tagged
-answer reproduces it (`server/internal/mail/closed_conn_test.go`).
+answer reproduces it (`server/internal/modules/mail/closed_conn_test.go`).
 
 ## Under a full-tunnel VPN the default route's address is the tunnel's (#11125)
 

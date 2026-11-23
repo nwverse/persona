@@ -9,11 +9,12 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 )
 
 // sameRows says whether two lists of Inbox rows are the same field for field, as the Inbox reads them (their JSON).
-func sameRows(t *testing.T, what string, got, want []connector.InboxThing) {
+func sameRows(t *testing.T, what string, got, want []connectorwire.InboxThing) {
 	t.Helper()
 	g, _ := json.Marshal(got)
 	w, _ := json.Marshal(want)
@@ -33,14 +34,14 @@ func inboxThingsRecipe() subscriptions.Recipe {
 func TestInboxThingsAreCollectsRows(t *testing.T) {
 	ctx := context.Background()
 	c, _ := personaRemote(t, map[string]string{"connector.chats": chatsPage(time.Now()), "connector.older": olderPage})
-	c.look(ctx, func(connector.Scope) {})
+	c.look(ctx, func(connectorwire.Scope) {})
 	want, _ := c.Collect(ctx)
-	out, err := connector.CallCatalog(ctx, c, connector.CatalogQuery{Source: ID, Tool: inboxThings, Args: json.RawMessage(`{}`)})
+	out, err := connector.CallCatalog(ctx, c, connectorwire.CatalogQuery{Source: ID, Tool: inboxThings, Args: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got struct {
-		Things []connector.InboxThing `json:"things"`
+		Things []connectorwire.InboxThing `json:"things"`
 	}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatal(err)
@@ -71,7 +72,7 @@ func (o oneConnector) Find(_ context.Context, id string) (subscriptions.Connecto
 	if id != ID {
 		return subscriptions.ConnectorInfo{}, false
 	}
-	return subscriptions.ConnectorInfo{ID: ID, Conn: o.c, Enabled: true, Status: connector.StateOK}, true
+	return subscriptions.ConnectorInfo{ID: ID, Conn: o.c, Enabled: true, Status: connectorwire.StateOK}, true
 }
 
 func (o oneConnector) All(ctx context.Context) []subscriptions.ConnectorInfo {
@@ -84,7 +85,7 @@ func (o oneConnector) All(ctx context.Context) []subscriptions.ConnectorInfo {
 func TestTheSwitchedFeedHandsCollectsRows(t *testing.T) {
 	ctx := context.Background()
 	c, _ := personaRemote(t, map[string]string{"connector.chats": chatsPage(time.Now()), "connector.older": olderPage})
-	c.look(ctx, func(connector.Scope) {})
+	c.look(ctx, func(connectorwire.Scope) {})
 	want, _ := c.Collect(ctx)
 	svc := subscriptions.New(subscriptions.Options{Store: subscriptions.NewMemStore(), Connectors: oneConnector{c},
 		Location: func() *time.Location { return time.UTC }})
@@ -97,7 +98,7 @@ func TestTheSwitchedFeedHandsCollectsRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []connector.InboxThing
+	var got []connectorwire.InboxThing
 	for _, s := range srcs {
 		if s.ID != ID {
 			continue
@@ -130,13 +131,13 @@ func (c *stepClock) Sleep(ctx context.Context, d time.Duration) error {
 func (c *stepClock) step(d time.Duration) { c.mu.Lock(); c.t = c.t.Add(d); c.mu.Unlock() }
 
 // switchedRows are the rows the switched feed hands the Inbox under iMessage's id.
-func switchedRows(t *testing.T, svc *subscriptions.Service) []connector.InboxThing {
+func switchedRows(t *testing.T, svc *subscriptions.Service) []connectorwire.InboxThing {
 	t.Helper()
 	srcs, err := svc.InboxSources(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []connector.InboxThing
+	var got []connectorwire.InboxThing
 	for _, s := range srcs {
 		if s.ID != ID {
 			continue
@@ -156,7 +157,7 @@ func switchedRows(t *testing.T, svc *subscriptions.Service) []connector.InboxThi
 func TestTheKeptAnswerHandsWhatIMessagesFeedHandedBefore(t *testing.T) {
 	ctx := context.Background()
 	c, _ := personaRemote(t, map[string]string{"connector.chats": chatsPage(time.Now()), "connector.older": olderPage})
-	c.look(ctx, func(connector.Scope) {})
+	c.look(ctx, func(connectorwire.Scope) {})
 	store, clock := subscriptions.NewMemStore(), &stepClock{t: time.Date(2026, 11, 23, 9, 0, 0, 0, time.UTC)}
 	svc := subscriptions.New(subscriptions.Options{Store: store, Connectors: oneConnector{c}, Clock: clock,
 		Location: func() *time.Location { return time.UTC }})

@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -40,7 +40,7 @@ type Remote struct {
 	call    Caller
 
 	mu     sync.Mutex
-	status connector.Status
+	status connectorwire.Status
 	guide  []string
 	via    string
 	poke   chan struct{}
@@ -50,7 +50,7 @@ type Remote struct {
 
 	ai       atomic.Bool // "Hand to Persona" (persona.go)
 	inboxMu  sync.Mutex
-	things   []connector.InboxThing
+	things   []connectorwire.InboxThing
 	contexts map[string]string // conversation + newest message → its last messages as text
 	newest   time.Time         // the newest conversation Watch saw
 }
@@ -58,7 +58,7 @@ type Remote struct {
 // NewRemote is the connector reading the Messages of cfg.Machine (named machine) through call.
 func NewRemote(cfg Config, machine string, call Caller) *Remote {
 	c := &Remote{cfg: cfg, machine: machine, call: call, poke: make(chan struct{}, 1), contexts: map[string]string{},
-		status: connector.Status{State: connector.StateError, Error: "正在问 " + machine + "…"}}
+		status: connectorwire.Status{State: connectorwire.StateError, Error: "正在问 " + machine + "…"}}
 	c.ai.Store(true)
 	return c
 }
@@ -67,15 +67,15 @@ func (c *Remote) ID() string   { return ID }
 func (c *Remote) Name() string { return "信息" }
 
 // Manifest: it reads one Mac's Messages through the node; nothing is sent and nothing signed in to from the app.
-func (c *Remote) Manifest() connector.Manifest {
-	return connector.Manifest{
-		Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapEvents, connector.CapInbox,
-			connector.CapArchive, connector.CapMachines, connector.CapCatalog},
+func (c *Remote) Manifest() connectorwire.Manifest {
+	return connectorwire.Manifest{
+		Capabilities: []connectorwire.Capability{connectorwire.CapStatus, connectorwire.CapTools, connectorwire.CapEvents, connectorwire.CapInbox,
+			connectorwire.CapArchive, connectorwire.CapMachines, connectorwire.CapCatalog},
 		Kinds: []string{"dm", "group"},
 	}
 }
 
-func (c *Remote) Status(context.Context) connector.Status {
+func (c *Remote) Status(context.Context) connectorwire.Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st := c.status
@@ -132,7 +132,7 @@ func (c *Remote) Run(ctx context.Context) {
 	for {
 		c.Check(ctx)
 		wait := checkOK
-		if c.Status(ctx).State != connector.StateOK {
+		if c.Status(ctx).State != connectorwire.StateOK {
 			wait = checkRetry
 		}
 		select {
@@ -157,20 +157,20 @@ func (c *Remote) Check(ctx context.Context) {
 	defer c.mu.Unlock()
 	c.guide, c.via = nil, ""
 	if err != nil {
-		c.status.State, c.status.Error = connector.StateError, c.explain(err)
+		c.status.State, c.status.Error = connectorwire.StateError, c.explain(err)
 		return
 	}
 	for _, l := range list.Connectors {
 		if l.ID == ID {
-			c.status = connector.Status{State: l.State, Error: l.Error, LastSync: c.status.LastSync}
-			if l.State == connector.StateOK {
+			c.status = connectorwire.Status{State: l.State, Error: l.Error, LastSync: c.status.LastSync}
+			if l.State == connectorwire.StateOK {
 				c.status.LastSync = time.Now().UTC()
 			}
 			c.guide, c.via = l.Guide, l.Via
 			return
 		}
 	}
-	c.status = connector.Status{State: connector.StateNotConfigured, Error: c.machine + " 不是 Mac，或者上面没有「信息」的数据"}
+	c.status = connectorwire.Status{State: connectorwire.StateNotConfigured, Error: c.machine + " 不是 Mac，或者上面没有「信息」的数据"}
 }
 
 // explain is a failed call in words for the app.

@@ -137,6 +137,8 @@ enum RuntimeCLI {
             "appState": ["active", "inactive", "background"][min(2, UIApplication.shared.applicationState.rawValue)],
             "screen": [Double(window?.bounds.width ?? 0), Double(window?.bounds.height ?? 0)],
             "vncPiP": Array(VNCPiPLog.lines.suffix(20)), // the small window's steps (#1839)
+            // The modules on, and those the hub turned off (#13849, docs/apple/ios.md "Modules").
+            "modules": Modules.registry.active.map(\.id.rawValue), "modulesOffByHub": Modules.registry.offByHub.map(\.rawValue),
         ]
     }
 

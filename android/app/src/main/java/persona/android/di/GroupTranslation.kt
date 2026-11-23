@@ -7,7 +7,7 @@ import persona.feature.agents.AgentsDraftSource
 import persona.feature.agents.AgentsOperationsBindings
 import persona.feature.agents.AgentsWiringState
 import persona.feature.chat.ChatAppBindings
-import persona.feature.inbox.InboxSnapshot
+import persona.core.inbox.InboxSnapshot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.JsonElement

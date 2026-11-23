@@ -57,7 +57,7 @@ import { Icon } from "../../ui/icons";
 import { StoppedAgentLine } from "./StoppedAgentLine";
 const TakeoverAction = lazy(() => import("./TakeoverAction"));
 import { scrollBehavior } from "../../ui/stream/motion";
-import { segmentChanges, shiftAbove } from "./offscreen";
+import { segmentChanges, shiftAbove, type SizeChange } from "./offscreen";
 import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands, openPickerCommand } from "../../lib/composer-commands";
@@ -116,7 +116,8 @@ import { appArchiveDeps, offerSessionDelete, restoreAgent, useArchived } from ".
 import { UltracodeLostNote } from "./Ultracode";
 import { isUltracodeQueued, ultracodeQueueDone } from "../../lib/ultracode";
 import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions";
-import { QueueStrip } from "./QueueStrip";
+import { preloadQueuePanel, QueueStrip } from "./QueueStrip";
+import type { QueueCandidate, QueueSnapshot } from "./queue-entries";
 import type { LoadOutcome } from "./ChatSearch";
 import { forgetReveals, undoReveals } from "./search-reveal";
 import { openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
@@ -124,7 +125,6 @@ import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
 import { foldHolding, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
 import { chatFiles } from "../../lib/mentions";
-import { pairPhotoOnly, sameMessage } from "../../lib/queue";
 import { OutboxBubbles } from "./OutboxBubbles";
 import { MainRuntimeSlot } from "../assistant/MainRuntimeSlot";
 import { AssistantFace, CompactionStrip, useAssistantMenu } from "../assistant/AssistantChat";
@@ -135,11 +135,9 @@ import { useDirectionName } from "../../lib/direction-names";
 import { chatPlaceIn, dropChatPlace, firstLineInView, handoffFrom, leaveChat, type ChatPlace, type HandoffFrom } from "../../lib/handoff";
 import { externalOpening, openerOf } from "../../lib/conversation-origins";
 import { usePersona } from "../assistant/Persona";
-import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
 import { agentLabel } from "../../lib/mentions";
-import { useVoiceEntry, VoiceBar, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
 import { ChatTail, useChatBar, useComposerAction } from "../../core/ChatSlots";
-import type { ChatPageProps, ComposerAction } from "../../core/module-host";
+import type { ChatPageProps } from "../../core/module-host";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, knownAction, refreshReadiness, type CodedFailure } from "../../lib/readiness";
 import { FALLBACK_UNAVAILABLE, recoveryExhausted } from "../../lib/model-fallback";
@@ -191,6 +189,9 @@ const BackgroundActivity = lazyDialog(() => import("./BackgroundActivity").then(
 
 const NO_FEED: FeedItem[] = [];
 const NO_DISPLAY_LINES: DisplayLine[] = [];
+// Below this many exchanges the ordinary immediate mount is cheaper than observing rows. Past it, completed off-screen
+// bodies mount a viewport at a time (SegmentView); their sections, estimates and live / final-two rules stay as they were.
+const CHAT_WINDOW_MIN_SEGMENTS = 40;
 // A worker's card as its own conversation shows it (#5180): without the fold that makes it "From worker" on its lead's page.
 // One copy per card object, so a push that leaves the card alone leaves its copy alone too.
 const ownCopies = new WeakMap<Interaction, Interaction>();
@@ -239,9 +240,7 @@ function visibleHistoryFront(scroller: HTMLElement, live: number) {
   };
 }
 
-interface Pending {
-  /** The client_msg_id it went with. */
-  id: string;
+interface Pending extends QueueCandidate {
   msg: UserMessage;
   at: number;
   acceptedAt?: number;
@@ -249,6 +248,16 @@ interface Pending {
   waits?: boolean;
   /** Its POST has not been answered yet (it may be behind earlier ones): the bubble does not time out. */
   posting?: boolean;
+  /** The send was placed in the composer queue. */
+  queueing?: boolean;
+}
+
+function queuesWhileWorking(row?: Session): boolean {
+  return Boolean(row && stateOf(row) === "working" && !row.background_waiting && (
+    (row.queued?.length ?? 0) > (row.queued_relayed ?? 0) || row.capabilities?.queue_edit || row.capabilities?.queue_send_now ||
+    row.space_kind === "codex_app" ||
+    (row.source_kind !== "runtime" && (!row.agent || row.agent === "claude"))
+  ));
 }
 
 /** How many times a message held back for an ultracode change goes again before it is taken as not sent. */
@@ -449,66 +458,53 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const out = launch?.outgoing;
     if (!launch || !out || (!out.text && !out.images.length)) return [];
     const id = launch.messageId;
-    return [{ id, at: Date.now(), msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } }];
+    return [{ id, raw: out.text, images: out.images, before: [], at: Date.now(), msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } }];
   });
   const [draftRefusal, setDraftRefusal] = useState<{ id: string; draft: string; clearable?: string } | null>(null);
   // what other pages sent here ("Ask Persona", "Hand to AI"…): shown like this page's own sending bubbles (lib/outbox.ts)
   const outbox = useStore((s) => s.outbox[outboxKey(mid, sid)] ?? []);
   const online = useStore((s) => s.conn === "online");
-  const sendFeedback = useMessageFeedback(mid, sid);
-  // a message Claude queued shows in the queue strip, not as a sending bubble too (ChatView.swift chatScroll)
-  const queued = session?.queued ?? [];
-  // a photo-only one by its photos, as no words match it (#10871)
-  const photoOnly = useMemo(() => pairPhotoOnly(queued, pending.map((p) => ({ text: p.msg.text, images: p.msg.images?.length ?? 0,
-    carries: Boolean(p.msg.files?.length || p.msg.contexts?.length) }))), [queued, pending]);
-  const pairedPending = useMemo(() => new Set(photoOnly.values()), [photoOnly]);
-  const shownPending = queued.length ? pending.filter((p, i) => !pairedPending.has(i) && !queued.some((q) => sameMessage(q, p.msg.text))) : pending;
+  const state = session ? stateOf(session) : "unknown";
+  const canQueueSend = queuesWhileWorking(session);
+  useEffect(() => {
+    if (canQueueSend) void preloadQueuePanel().catch(() => {});
+  }, [canQueueSend]);
+  const cancelBeforePost = useRef(new Map<string, () => void>());
+  const cancelQueued = useCallback((id: string) => {
+    const cancel = cancelBeforePost.current.get(id);
+    if (!cancel) return false;
+    cancel();
+    return true;
+  }, []);
+  const queuedAccepted = useCallback((ids: string[]) => {
+    for (const id of ids) {
+      forgetOutgoing(outboxKey(mid, sid), id);
+      settleMessageEcho(mid, sid, id, true);
+    }
+    setPending((ps) => ps.filter((p) => !ids.includes(p.id)));
+  }, [mid, sid]);
+  const optimisticQueue = useMemo(() => pending.filter((p) =>
+    p.queueing && !p.waits && (p.posting || state === "working")), [pending, state]);
+  const inQueue = useMemo(() => optimisticQueue.length ? new Set(optimisticQueue.map((p) => p.id)) : undefined, [optimisticQueue]);
+  const shownPending = inQueue ? pending.filter((p) => !inQueue.has(p.id)) : pending;
+  const sendFeedback = useMessageFeedback(mid, sid, undefined, inQueue);
+  const queueMemory = useRef<QueueSnapshot>(undefined);
+  const hasQueue = Boolean(session?.queued?.length || optimisticQueue.length);
+  useLayoutEffect(() => {
+    if (!hasQueue) queueMemory.current = undefined;
+  }, [hasQueue]);
   // the owner's messages the assistant keeps after they could not go in, from the row: on every device (#10194)
   // (not one this page still draws as sending: the row can come before the send's answer)
   const keptUndelivered = shownUndelivered(session, tr.items, pending.map((p) => p.id));
-  // a queued message taken back or deleted (QueueStrip) is not on its way any more: its sending bubble goes with it,
-  // rather than showing again until the turn ends (#4342)
-  // the photos a Persona chat's queued message went with, when it was sent from here (its queue holds only the words),
-  // and local preview data URLs for any queued message sent from this page (#10871).
-  // Both stay the same while `pending` does: the queue is drawn in the memoized composer.
-  const queuedPhotos = useCallback((raw: string, index: number) => {
-    const paired = photoOnly.get(index);
-    return (raw === "" && paired !== undefined ? pending[paired] : pending.find((p) => sameMessage(raw, p.msg.text)))?.msg.images?.length ?? 0;
-  }, [pending, photoOnly]);
-  const queuedPhotoPreviews = useCallback((raw: string, index: number): string[] => {
-    const paired = photoOnly.get(index);
-    const match = paired !== undefined ? pending[paired] : pending.find((p) => sameMessage(raw, p.msg.text));
-    return (match?.msg.images ?? [])
-      .map((item) => (item.image?.data ? `data:${item.image.mime};base64,${item.image.data}` : ""))
-      .filter(Boolean);
-  }, [pending, photoOnly]);
-  const withdrawn = useCallback((text: string, index: number) => {
-    const paired = queued[index] === text ? photoOnly.get(index) : undefined;
-    const gone = pending.find((p) => !p.posting && sameMessage(text, p.msg.text)) ?? (paired !== undefined && !pending[paired]?.posting ? pending[paired] : undefined);
-    if (!gone) return;
-    forgetOutgoing(outboxKey(mid, sid), gone.id);
-    setPending((ps) => ps.filter((p) => p.id !== gone.id));
-  }, [pending, photoOnly, queued, mid, sid]);
   const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
-  const state = session ? stateOf(session) : "unknown";
-  // Voice chat (docs/web/web.md "Voice"): the call belongs to this page (the same chat may be open twice, a page and a
-  // side panel), and ends as the page leaves the conversation. ChatView learns only whether a call is on here.
-  const voiceId = useId();
-  const voiceOwner = useMemo(() => ({ mid, sid, owner: voiceId }), [mid, sid, voiceId]);
-  useEffect(() => () => voiceCalls.leave(voiceOwner), [voiceOwner]);
-  const voiceState = useVoiceState(voiceOwner);
-  const voiceCall = useVoiceCall(voiceOwner);
-  const voiceLabel = assistant ? persona.name : session ? agentLabel(session) : "Claude";
+  // what the chat slots are told (core/ChatSlots.tsx): this page's own id (the same chat may be open twice, a page and a
+  // side panel), and who answers here
+  const pageId = useId();
+  const answerer = assistant ? persona.name : session ? agentLabel(session) : "Claude";
   const itemsNow = useRef(tr.items);
   itemsNow.current = tr.items;
   const readItems = useCallback(() => itemsNow.current, []);
-  const voiceEntry = useVoiceEntry({ ...voiceOwner, session, items: readItems, label: voiceLabel, off: Boolean(offlineLine) || !sessionCan(session, "send") });
-  const voiceOffer = voiceEntry.offer;
-  const voiceAction = useMemo<ComposerAction | undefined>(
-    () => voiceOffer && { icon: "voice", name: t("voice.voice_chat"), label: voiceOffer.label, primary: voiceOffer.mode === "start", onClick: voiceOffer.onClick, attributes: { "data-testid": "composer-voice", "data-voice-mode": voiceOffer.mode } },
-    [voiceOffer],
-  );
   // the message is in, the hub has not said working yet (#3654): the live row covers that wait too
   const segs = useMemo(() => segments(tr.items), [tr.items]);
   const lastSeg = segs[segs.length - 1];
@@ -1105,39 +1101,49 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the view moves by as much, so what is on screen stays (offscreen.ts).
   const heights = useRef(new WeakMap<Element, number>());
   const resized = useRef<ResizeObserver | null>(null);
+  const compensate = useCallback((changes: SizeChange[]) => {
+    const sc = scroller.current;
+    if (!sc) return;
+    if (gliding.current) return;
+    const viewTop = sc.getBoundingClientRect().top;
+    const l = landing.current;
+    if (l && (l.row instanceof Range ? l.row.startContainer : l.row).isConnected) {
+      const off = l.row.getBoundingClientRect().top - viewTop - l.at;
+      if (Math.abs(off) >= 0.5) {
+        sc.scrollTop += off;
+        holdLanding(1200);
+      }
+      return;
+    }
+    const a = anchor.current;
+    if (a && a.el.isConnected) {
+      const r = a.el.getBoundingClientRect();
+      const next = anchoredScroll(a, {
+        scrollTop: sc.scrollTop, scrollHeight: sc.scrollHeight, clientHeight: sc.clientHeight,
+        viewTop: sc.getBoundingClientRect().top, edgeAt: r.top, elTop: r.top,
+      });
+      if (Math.abs(next.scrollTop - sc.scrollTop) >= 0.5) sc.scrollTop = next.scrollTop;
+      clearTimeout(a.quiet);
+      a.quiet = window.setTimeout(() => (anchor.current = null), 600);
+      return;
+    }
+    if (atEnd.current) sc.scrollTop = sc.scrollHeight;
+    else {
+      const shift = shiftAbove(changes, viewTop);
+      if (shift) sc.scrollTop += shift;
+    }
+  }, [holdLanding]);
   const sizes = useCallback(() => (resized.current ??= new ResizeObserver((entries) => {
-      const sc = scroller.current;
-      if (!sc) return;
-      const changes = segmentChanges(entries, heights.current);
-      if (gliding.current) return;
-      const viewTop = sc.getBoundingClientRect().top;
-      const l = landing.current;
-      if (l && (l.row instanceof Range ? l.row.startContainer : l.row).isConnected) {
-        const off = l.row.getBoundingClientRect().top - viewTop - l.at;
-        if (Math.abs(off) >= 0.5) {
-          sc.scrollTop += off;
-          holdLanding(1200);
-        }
-        return;
-      }
-      const a = anchor.current;
-      if (a && a.el.isConnected) {
-        const r = a.el.getBoundingClientRect();
-        const next = anchoredScroll(a, {
-          scrollTop: sc.scrollTop, scrollHeight: sc.scrollHeight, clientHeight: sc.clientHeight,
-          viewTop: sc.getBoundingClientRect().top, edgeAt: r.top, elTop: r.top,
-        });
-        if (Math.abs(next.scrollTop - sc.scrollTop) >= 0.5) sc.scrollTop = next.scrollTop;
-        clearTimeout(a.quiet);
-        a.quiet = window.setTimeout(() => (anchor.current = null), 600);
-        return;
-      }
-      if (atEnd.current) sc.scrollTop = sc.scrollHeight;
-      else {
-        const shift = shiftAbove(changes, viewTop);
-        if (shift) sc.scrollTop += shift;
-      }
-    })), [holdLanding]);
+      if (!scroller.current) return;
+      compensate(segmentChanges(entries, heights.current));
+    })), [compensate]);
+  // A windowed body mounts from IntersectionObserver, later in the frame than content-visibility's own layout. Give
+  // the same compensation its old and new heights now, and advance the observer's baseline so it cannot apply them twice.
+  const windowDrawn = useCallback((section: HTMLElement, was: number) => {
+    const rect = section.getBoundingClientRect();
+    heights.current.set(section, rect.height);
+    compensate([{ top: rect.top, was, now: rect.height }]);
+  }, [compensate]);
   useEffect(() => {
     const view = scroller.current;
     const el = view?.firstElementChild;
@@ -1275,29 +1281,45 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         recent.set(id, { text: out.text, images: out.images.map((img) => ({ mime: img.mime, data: img.data })) });
       }
       const flight = beginMessageSend(mid, sid, id, out.text);
-      // a sending bubble shows picked contexts as quote cards, like the transcript will (not the raw tags)
-      const p: Pending = { id, at: Date.now(), posting: true, msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } };
+      const queueing = queuesWhileWorking(row) && !out.sendNow && !out.edit &&
+        (out.images.length > 0 || !/^\/(compact|exit|quit)$/.test(out.text.trim()));
+      const p: Pending = { id, raw: out.text, images: out.images, at: Date.now(), posting: true, queueing,
+        msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } };
       // a new try: an earlier failure's card no longer applies (its bubble stays, with Retry)
       setSendFailure(null);
       noteWritten(id, p.at);
       setPending((ps) => [...ps.filter((x) => x.id !== id), p]);
       // Quote replies keep an earlier reader's place; at the end, every own message still follows (#10346).
-      if (!out.quoteReply || atEnd.current) follow(true);
+      if (!queueing && (!out.quoteReply || atEnd.current)) follow(true);
       const key = outboxKey(mid, sid);
       const launcher = assistant ? pickedLauncher(conversationKey(mid, sid)) : undefined;
       const model = assistant ? pickedModel(conversationKey(mid, sid)) : undefined;
       keepOutgoing(key, { id, text: out.text, images: out.images, at: p.at, launcher, model });
+      if (queueing) cancelBeforePost.current.set(id, () => {
+        cancelBeforePost.current.delete(id);
+        flight.finish("failed");
+        forgetOutgoing(key, id);
+        setPending((ps) => ps.filter((x) => x.id !== id));
+      });
       try {
-        // the bubble stays as sending while a gap (a hub restart) is waited out; the id is the op id too
-        const reply = await inSendOrder(key, () => apiOp<({ session?: Session; waits_on_computer?: boolean } & DeliveryReply & KeptReply) | undefined>(`${sessionPath(mid, sid)}/messages`, {
-          ...flight.request,
-          method: "POST",
-          opId: id,
-          // a switch to another launcher the user picked for this Agent goes with their own message from here, and only
-          // with it (#5035): the agent restarts there first
-          json: { text: out.text, images: out.images.length ? out.images : undefined, client_msg_id: id, clear_draft: clearDraft, launcher, model,
-            apply_switch: !assistant && row?.pending_switch ? true : undefined },
-        }));
+        const reply = await inSendOrder(key, () => {
+          cancelBeforePost.current.delete(id);
+          if (!flight.current()) return Promise.resolve(undefined);
+          const latest = getSession(mid, sid);
+          const queued = latest?.queued ?? [];
+          const before = latest?.queued_relayed ? queued.slice(0, -latest.queued_relayed) : queued;
+          setPending((ps) => ps.map((x) => x.id === id ? { ...x, before } : x));
+          // the id is the op id too, including while a hub restart is waited out
+          return apiOp<({ session?: Session; waits_on_computer?: boolean } & DeliveryReply & KeptReply) | undefined>(`${sessionPath(mid, sid)}/messages`, {
+            ...flight.request,
+            method: "POST",
+            opId: id,
+            // a switch to another launcher the user picked for this Agent goes with their own message from here, and only
+            // with it (#5035): the agent restarts there first
+            json: { text: out.text, images: out.images.length ? out.images : undefined, client_msg_id: id, clear_draft: clearDraft, launcher, model,
+              apply_switch: !assistant && row?.pending_switch ? true : undefined },
+          });
+        });
         if (!flight.current()) return true;
         assertDelivered(reply); // a bare operation receipt is no delivery: in doubt, with Check (#10194)
         if (isKept(reply)) {
@@ -1511,13 +1533,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // The chat slots modules fill (core/ChatSlots.tsx, core/module-host.ts ChatSlotComponents): what the page hands them.
   const canSendHere = !offlineLine && sessionCan(session, "send");
   const slotPage = useMemo<ChatPageProps>(
-    () => ({ mid, sid, owner: voiceId, session, assistant: Boolean(assistant), label: voiceLabel, persona: persona.name, canSend: canSendHere, items: readItems, cards: interactions, onStopAgent: sessionCan(session, "interrupt") ? interrupt : undefined }),
-    [mid, sid, voiceId, session, assistant, voiceLabel, persona.name, canSendHere, readItems, interactions, interrupt],
+    () => ({ mid, sid, owner: pageId, session, assistant: Boolean(assistant), label: answerer, persona: persona.name, canSend: canSendHere, items: readItems, cards: interactions, onStopAgent: interrupt }),
+    [mid, sid, pageId, session, assistant, answerer, persona.name, canSendHere, readItems, interactions, interrupt],
   );
   const composerAction = useComposerAction(slotPage);
   const chatBar = useChatBar(slotPage);
-  // a call (or a module's bar) in the composer's place: the composer and the Assistant's action rows give it their place
-  const takeover = voiceState === "live" || chatBar.taken;
+  // a module's bar in the composer's place (a live voice call): the composer and the Assistant's action rows give way
+  const takeover = chatBar.taken;
   // Ctrl/⌘+Enter in the box: the queue panel's Send now (QueuePanel.tsx), after the message is queued
   const sendQueueNow = useCallback(async () => {
     try {
@@ -1860,8 +1882,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // elapsed timer (and empty non-expandable live row) so only one Working… timer ticks on screen (#12380).
   const dockTurnClock = Boolean(session && dockBarShown && runningWorking && !backgroundOnly && !wait && !subtasks && !command);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, harness, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin, opened_by: openingBy, manager: openingManager } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded }),
-    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, harness, openingId, openingOrigin, openingBy, openingManager, closeoutSegment, places, embedded],
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, harness, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin, opened_by: openingBy, manager: openingManager } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded, windowHistory: segs.length >= CHAT_WINDOW_MIN_SEGMENTS, windowDrawn }),
+    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, harness, openingId, openingOrigin, openingBy, openingManager, closeoutSegment, places, embedded, segs.length, windowDrawn],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
   // rows that hold it open, search-reveal.ts), lit for HIT_MS, and "Back to where you were" ──
@@ -2158,10 +2180,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
-  const hasQueue = queued.length > 0;
   const queue = useMemo(
-    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} onWithdrawn={withdrawn} photosOf={assistant || session.capabilities?.queue_edit ? queuedPhotos : undefined} photoPreviewsOf={queuedPhotoPreviews} /> : null),
-    [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, withdrawn, queuedPhotos, queuedPhotoPreviews],
+    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} pending={pending} optimistic={optimisticQueue} memory={queueMemory} onAccepted={queuedAccepted} cancelQueued={cancelQueued} /> : null),
+    [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, pending, optimisticQueue, queuedAccepted, cancelQueued],
   );
   // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other); the pill keeps
   // one wrapper either way, so a flyout pinned open on it stays when the reader scrolls
@@ -2535,7 +2556,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                 {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : sendFeedback === "processing" || processing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
               </div>
             )}
-            {voiceState && <VoiceTail owner={voiceOwner} persona={persona.name} />}
             <ChatTail {...slotPage} />
           </div>
           <CommentMarks scroller={scroller} jump={landRow} />
@@ -2618,7 +2638,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             }}
           />
         )}
-        {voiceState === "ended" && <VoiceEnded owner={voiceOwner} />}
         {chatBar.bar("dock")}
         {/* the error the chat stopped on, right over the composer as cindy places it (#5313); keyed by the error, so a new
             one opens with its details folded */}
@@ -2642,13 +2661,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {/* the goal it works toward, right over the composer as cindy's goal indicator (#5421) */}
         {session?.goal && !assistant && <Suspense fallback={null}><GoalBar goal={session.goal} /></Suspense>}
         </div>
-        {voiceEntry.dialog}
         {composerAction.slot}
-        {voiceState === "live" && voiceCall && (
-          <div className="shrink-0">
-            <VoiceBar call={voiceCall} session={session} cards={interactions} label={voiceLabel} persona={persona.name} onStopAgent={interrupt} />
-          </div>
-        )}
         {chatBar.bar("composer")}
         {/* picking messages to forward (#3838): the bar in the composer's place, which stays with its draft */}
         {picker && pickParts.Bar && <pickParts.Bar pick={picker} chat={forwardFrom} onEnd={endPick} />}
@@ -2685,7 +2698,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           leading={leading}
           trailing={trailing}
           planMode={planMode}
-          action={composerAction.action ?? voiceAction}
+          action={composerAction.action}
           top={short ? undefined : queue}
         />
         )}
@@ -2777,7 +2790,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
 function NotLivePill({ onReload, lower, error }: { onReload: () => void; /** The search's return pill is at the same edge: under it. */ lower?: boolean; error?: string }) {
   return (
     <div role="status" data-testid="chat-not-live" className={lower ? "absolute top-14 left-1/2 z-10 -translate-x-1/2" : "absolute top-3 left-1/2 z-10 -translate-x-1/2"} style={{ animation: "fade-up 150ms ease-out both" }}>
-      <div className="flex h-8 items-center gap-2 rounded-full border border-line bg-surface px-3 text-[12px] leading-none whitespace-nowrap text-ink-2 shadow-raised">
+      <div className="flex h-8 items-center gap-2 rounded-full border border-line bg-surface px-3 text-label leading-none whitespace-nowrap text-ink-2 shadow-raised">
         <span title={error}>{t(error ? "chat-chatview.refresh_failed" : "chat-chatview.not_live")}</span>
         <button type="button" onClick={onReload} className="touch-hit font-medium text-accent-ink hover:underline">
           {t("chat-chatview.not_live_reload")}

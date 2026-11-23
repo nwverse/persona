@@ -210,7 +210,7 @@ func (i *Index) searchCandidates(o Options, f filters, allowed map[string]bool, 
 		}
 		row, rowID, side := item, id, ""
 		if fold := item.item.Fold; o.Roots && fold != nil && fold.SearchAs != "" && fold.Root != "" {
-			if f.NoPrivate && item.item.Private {
+			if (f.NoPrivate || f.AgentsOnly) && item.item.Private || f.AgentsOnly && item.item.Assistant {
 				continue
 			}
 			row, rowID, side = i.items[fold.SearchAs], fold.SearchAs, fold.SearchSession
