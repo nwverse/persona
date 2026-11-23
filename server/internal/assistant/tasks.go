@@ -884,12 +884,6 @@ func (s *Service) taskRoutes() {
 			ctx = scheduleGranting(ctx)
 		}
 		p, err := s.startPlan(ctx, r.PathValue("id"), in.Tasks, in.Remember)
-		// Start on a card already decided elsewhere: the plan as it is, as Don't start answers below
-		if errors.Is(err, errPlanNotOpen) {
-			if cur, lerr := s.loadPlan(r.Context(), r.PathValue("id")); lerr == nil && cur.State != planOpen {
-				p, err = cur, nil
-			}
-		}
 		if err != nil {
 			planErr(w, err)
 			return
