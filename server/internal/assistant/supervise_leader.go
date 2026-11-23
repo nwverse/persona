@@ -456,7 +456,10 @@ func (s *Service) setLeaders(ctx context.Context, v json.RawMessage) (*ownChange
 	if err := json.Unmarshal(v, &in); err != nil {
 		return nil, errors.New("value must be a list of conversation ids ([] for none)")
 	}
-	cfg := s.settings(ctx)
+	return s.leadersChange(ctx, s.settings(ctx), in)
+}
+
+func (s *Service) leadersChange(ctx context.Context, cfg Settings, in []string) (*ownChange, error) {
 	list, err := s.leaderList(ctx, cfg, in)
 	if err != nil {
 		return nil, err
