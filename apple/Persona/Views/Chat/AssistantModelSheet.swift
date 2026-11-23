@@ -141,7 +141,7 @@ nonisolated enum AssistantModelChoice {
         if agentID(sessionEngine(session)) != agentID(providerAgent(target.runtimeAgent, provider: target.name)) { return true }
         let extensionPrefix = "persona_ext_"
         if session.launcher?.hasPrefix(extensionPrefix) == true || target.name.hasPrefix(extensionPrefix) { return true }
-        let runtimeTarget = !["persona", "jarvis"].contains(target.source ?? "")
+        let runtimeTarget = !["persona", LegacyNames.product].contains(target.source ?? "")
             && !["", "zshrc", "path", "builtin"].contains(target.source ?? "")
         if session.sourceKind == "runtime" {
             return !runtimeTarget || session.sourceInstanceID != target.source
