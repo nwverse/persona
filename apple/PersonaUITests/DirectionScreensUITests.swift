@@ -383,6 +383,7 @@ final class DirectionScreensUITests: XCTestCase {
         XCTAssertTrue(more.waitForExistence(timeout: 15), "no ⋯ on the Agent's chat:\n\(app.debugDescription)")
         more.tap()
         sleep(1)
+        app.openAgentMenuMore() // Move To… is More's (#13396)
         XCTAssertTrue(moveTo.waitForExistence(timeout: 5), "no Move To… on the Agent:\n\(app.debugDescription)")
         shot("agent-menu")
         moveTo.tap()
@@ -666,6 +667,7 @@ final class DirectionScreensUITests: XCTestCase {
         if off == "missing" {
             // A launch is a new hello, which forgets the missing routes: one Move To… learns them again (main has none).
             more.tap()
+            app.openAgentMenuMore() // Move To… is More's (#13396)
             if moveTo.waitForExistence(timeout: 3) {
                 moveTo.tap()
                 if app.buttons["增长"].firstMatch.waitForExistence(timeout: 5) { app.buttons["增长"].firstMatch.tap() }
@@ -676,6 +678,7 @@ final class DirectionScreensUITests: XCTestCase {
         }
         more.tap()
         sleep(1)
+        app.openAgentMenuMore() // Copy Directory is More's (#13396)
         XCTAssertTrue(app.buttons[word("Copy Directory", "拷贝目录", "ディレクトリをコピー")].firstMatch.waitForExistence(timeout: 5),
                       "the Agent's menu did not open:\n\(app.debugDescription)")
         shot("off-agent-menu-\(off)")
