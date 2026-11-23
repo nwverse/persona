@@ -115,9 +115,51 @@ class BoundedCommandTests(unittest.TestCase):
             self.assertEqual(watch.bounded_file([sys.executable, "-c", "print('bounded')"], path), 0)
             self.assertEqual(path.read_text(), "bounded\n")
             path.unlink()
-            self.assertEqual(watch.bounded_file([sys.executable, "-c", "import signal; signal.pause()"],
-                                               path, timeout=0.05), 124)
+            command = "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.pause()"
+            self.assertEqual(watch.bounded_file([sys.executable, "-c", command], path, timeout=0.05), 124)
+            self.assertEqual(path.read_text(), "unavailable: command timed out\n")
             self.assertEqual(path.with_suffix(".txt.status.txt").read_text(), "124\n")
+
+    def test_bounded_command_shares_the_observer_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output.txt"
+            command = ("import os, signal; "
+                       "open(os.environ['WATCH_TEST_PID'], 'w').write(str(os.getpid()) + ' ' + str(os.getpgid(0))); "
+                       "signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.pause()")
+            pid_path = Path(directory) / "pid"
+            original = watch.subprocess.Popen
+            captured = {}
+            def record(*args, **kwargs):
+                process = original(*args, **kwargs)
+                captured["process"] = process
+                captured["kwargs"] = kwargs
+                return process
+            with mock.patch.dict(os.environ, {"WATCH_TEST_PID": str(pid_path)}), \
+                    mock.patch.object(watch.subprocess, "Popen", side_effect=record):
+                self.assertEqual(watch.bounded_file([sys.executable, "-c", command], path, timeout=0.1), 124)
+            process = captured["process"]
+            self.assertNotIn("start_new_session", captured["kwargs"])
+            self.assertEqual(process.wait(timeout=1), -9)
+            pid, pgid = map(int, pid_path.read_text().split())
+            self.assertEqual(pid, process.pid)
+            self.assertEqual(pgid, os.getpgid(0))
+            self.assertEqual(path.read_text(), "unavailable: command timed out\n")
+            self.assertEqual(path.with_suffix(".txt.status.txt").read_text(), "124\n")
+
+    def test_interrupted_collection_has_explicit_atomic_incomplete_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            destination = root / "live-readiness"
+            app = root / "Persona.app/Persona"
+            tests = root / "Persona.app/PlugIns/PersonaTests.xctest/PersonaTests"
+            with mock.patch.object(watch, "product_evidence", side_effect=KeyboardInterrupt), \
+                    mock.patch.object(watch, "sample_host", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    watch.observe(UDID, watch.launch.BUNDLE, app, tests, destination, 900, scope_root=root)
+            self.assertTrue((destination / "observer.status.txt").read_text().startswith("collection incomplete;"))
+            path = destination / "product-0-architecture.txt"
+            self.assertEqual(path.read_text(), "unavailable: product collection incomplete\n")
+            self.assertEqual(path.with_suffix(".txt.status.txt").read_text(), "incomplete\n")
 
 
 if __name__ == "__main__":

@@ -347,6 +347,10 @@ type tasksState struct {
 	// the task's agent link or failure is recorded.
 	workspaceMu     sync.Mutex
 	workspaceClaims map[string]string
+	// workspaceQueueMu serializes deterministic FIFO dequeues for occupied existing workspaces (task_workspace_queue.go).
+	workspaceQueueMu     sync.Mutex
+	workspaceDispatching map[string]bool
+	lastWorkspaceQueueAt time.Time
 	// turns: the turns completion handling took up, kept in the database (task_turns.go).
 	turns turnsState
 	// quiet: the verdicts on task Agents' turns with no output, and the agents Persona's Stop interrupted (silent_turns.go).
@@ -357,7 +361,8 @@ func newTasksState() tasksState {
 	return tasksState{recoverBefore: time.Now(), plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
 		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]*taskStart{},
 		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, taking: map[string]*taskStart{}, sendsOut: map[[2]string]*sendsOut{},
-		sendsRetryAfter: sendsRetryEvery,
+		workspaceDispatching: map[string]bool{},
+		sendsRetryAfter:      sendsRetryEvery,
 		turns: turnsState{again: map[string]bool{}, looked: map[turnRecoveryKey]turnLook{}, recovering: map[string]bool{}, tries: map[string]int{},
 			retry:   map[turnRecoveryKey]turnRetry{},
 			judging: map[string]int{}, closed: map[SessionRef]turnLook{}}}
@@ -878,6 +883,14 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		p, err := s.dismissPlan(r.Context(), r.PathValue("id"))
+		// Don't Start on a card already started, dismissed or withdrawn elsewhere (another device, the conversation's
+		// task_plan_withdraw) while no event reached this client: answer with the plan as it is, so the client's card
+		// shows what happened instead of a 409 the user can only tap again (an iOS app held such a card until restarted).
+		if errors.Is(err, errPlanNotOpen) {
+			if cur, lerr := s.loadPlan(r.Context(), r.PathValue("id")); lerr == nil && cur.State != planOpen {
+				p, err = cur, nil
+			}
+		}
 		if err != nil {
 			planErr(w, err)
 			return

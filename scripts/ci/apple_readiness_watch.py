@@ -21,26 +21,42 @@ MAX_SAMPLE_BYTES = 128 * 1024
 
 def bounded_file(command, path, timeout=COMMAND_TIMEOUT, limit=MAX_SAMPLE_BYTES):
     """Run one bounded read-only command; retain only its bounded diagnostic output."""
+    process = None
+    code = 127
     try:
+        launch.publish(path.with_suffix(path.suffix + ".status.txt"), "incomplete\n")
         temporary = path.with_suffix(path.suffix + ".command")
         with temporary.open("wb") as output:
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True,
+            # The shell owns the observer's group. A separate session would let
+            # this child escape the bounded cleanup while its parent is killed.
+            process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
                                        stdout=output, stderr=subprocess.STDOUT)
             try:
                 code = process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
+                # The command shares this process group; do not signal the
+                # observer itself when only this command reaches its deadline.
+                process.kill()
                 process.wait()
                 code = 124
+        if code == 124 and temporary.stat().st_size == 0:
+            temporary.write_text("unavailable: command timed out\n")
         temporary.replace(path)
-        path.with_suffix(path.suffix + ".status.txt").write_text(str(code) + "\n")
+        launch.publish(path.with_suffix(path.suffix + ".status.txt"), str(code) + "\n")
         if path.stat().st_size > limit:
             path.unlink()
-            path.with_suffix(path.suffix + ".status.txt").write_text("output-limit\n")
+            launch.publish_status(path.with_suffix(path.suffix + ".status.txt"), "output-limit\n")
         return code
     except (OSError, subprocess.SubprocessError) as error:
-        path.with_suffix(path.suffix + ".status.txt").write_text("unavailable: " + type(error).__name__ + "\n")
+        launch.publish_status(path.with_suffix(path.suffix + ".status.txt"),
+                              "unavailable: " + type(error).__name__ + "\n")
         return 127
+    finally:
+        if process is not None and process.poll() is None:
+            # Reap an interrupted child here; an outer SIGKILL remains bounded
+            # by the shell's kill of the whole observer process group.
+            process.kill()
+            process.wait()
 
 
 def host_pids(udid, runner=subprocess.run):
@@ -60,7 +76,7 @@ def host_pids(udid, runner=subprocess.run):
 def sample_host(udid, destination, label, runner=subprocess.run):
     pids = host_pids(udid, runner)
     destination.mkdir(parents=True, exist_ok=True)
-    (destination / (label + ".json")).write_text(json.dumps({
+    launch.publish(destination / (label + ".json"), json.dumps({
         "captured_at": datetime.now(timezone.utc).isoformat(), "host_pids": pids,
         "note": "Process presence is not test-bundle or readiness evidence."}, indent=2) + "\n")
     for pid in pids:
@@ -86,6 +102,21 @@ def observe(udid, bundle, app, test_bundle, destination, seconds, runner=subproc
     if app.name != "Persona" or app.parent.name != "Persona.app" or test_bundle.name != "PersonaTests":
         raise ValueError("unexpected CI product identity")
     destination.mkdir(parents=True, exist_ok=True)
+    # An interrupted collector must never expose a successful final status or
+    # claim unavailable evidence without an explicit terminal reason.
+    launch.publish(destination / "observer.status.txt",
+                   "collection incomplete; bounded unavailable evidence retained; no launch cause established\n")
+    launch.publish(destination / "host-final.json",
+                   json.dumps({"unavailable": "observer did not complete; no host-process verdict"}) + "\n")
+    for product in range(3):
+        for kind in ("architecture", "libraries"):
+            path = destination / f"product-{product}-{kind}.txt"
+            launch.publish(path, "unavailable: product collection incomplete\n")
+            launch.publish(path.with_suffix(path.suffix + ".status.txt"), "incomplete\n")
+    for product in range(2):
+        path = destination / f"product-{product}-bundle-signature.txt"
+        launch.publish(path, "unavailable: bundle signature collection incomplete\n")
+        launch.publish(path.with_suffix(path.suffix + ".status.txt"), "incomplete\n")
     sampled = False
     host_seen_at = None
     stopped = False
@@ -121,13 +152,13 @@ def observe(udid, bundle, app, test_bundle, destination, seconds, runner=subproc
                      destination / "runtimes-final.json", timeout=10, limit=1024 * 1024)
         now = datetime.now(timezone.utc)
         launch.collect(destination.parent, destination, now=now, scope_root=scope_root)
-        (destination / "observer.status.txt").write_text(
-            ("xcodebuild-finished" if stopped else "readiness-deadline") +
-            "; observation only; no launch cause established\n")
+        launch.publish(destination / "observer.status.txt",
+                       ("xcodebuild-finished" if stopped else "readiness-deadline") +
+                       "; observation only; no launch cause established\n")
     finally:
         if not (destination / "observer.status.txt").exists():
-            (destination / "observer.status.txt").write_text(
-                "final collection incomplete; bounded unavailable evidence retained; no launch cause established\n")
+            launch.publish(destination / "observer.status.txt",
+                           "final collection incomplete; bounded unavailable evidence retained; no launch cause established\n")
 
 
 def interrupted(signum, _frame):

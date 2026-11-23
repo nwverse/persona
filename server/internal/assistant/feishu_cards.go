@@ -56,7 +56,7 @@ func (s *Service) feishuInteraction(ix proto.Interaction) {
 }
 
 // feishuCardWanted: the bot posts a card for ix (feishuInteraction): it is on with the cards switch, and the chat
-// drives the conversation or "all cards" is on (not for a health conversation's).
+// drives the conversation or "all cards" is on (not for the cards of a space that redacts).
 func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bool {
 	f, ready := s.feishuFeatures(ctx)
 	if !ready || !f.Cards {
@@ -65,8 +65,8 @@ func (s *Service) feishuCardWanted(ctx context.Context, ix proto.Interaction) bo
 	if ix.Private {
 		return false // a Just me turn's card: never on Lark (meeting_justme.go)
 	}
-	// "All cards" does not take a health conversation's: only one the chat drives itself (health.go).
-	if drives := s.botDrives(ctx, ix.MachineID, ix.SessionID); !drives && (!f.AllCards || s.ixInHealth(ctx, ix)) {
+	// "All cards" does not take the cards of a space that redacts: only one the chat drives itself (health.go).
+	if drives := s.botDrives(ctx, ix.MachineID, ix.SessionID); !drives && (!f.AllCards || s.ixPolicy(ctx, ix).Redact) {
 		return false
 	}
 	return true

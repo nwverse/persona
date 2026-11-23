@@ -87,8 +87,8 @@ func (s *Service) toolUrgentCall(ctx context.Context, machine, self string, args
 	if s.justMeNow(machine, self) {
 		return justMeNotice(s.lang(ctx)), nil
 	}
-	if s.inHealth(ctx, self) { // the lock screen hears there is news, not what it is (health.go)
-		a.Title, a.Body = healthNotice(s.lang(ctx))
+	if s.selfPolicy(ctx, self).Redact { // the lock screen hears there is news, not what it is (health.go)
+		a.Title, a.Body = spaceNotice(s.lang(ctx))
 	}
 	a.Title = clipRunesTo(a.Title, urgentTitleMax)
 	st := s.urgentStore()

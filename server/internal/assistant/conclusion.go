@@ -75,6 +75,11 @@ func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 		return i18n.T(l, "assistant-reports.outside_answered_default")
 	case a.OutsideID != "":
 		return i18n.T(l, "assistant-reports.outside_answered")
+	case decideAsk(a) && a.Superseded:
+		if a.SupersededReason != "" {
+			return i18n.T(l, "assistant-reports.decision_superseded_reason", i18n.Args{"reason": a.SupersededReason})
+		}
+		return i18n.T(l, "assistant-reports.decision_superseded")
 	case decideAsk(a) && a.AgentReply != nil && a.AgentReply.Handled:
 		return i18n.T(l, "assistant-reports.decision_handled_in_agent")
 	case decideAsk(a) && a.ByDefault:
@@ -323,6 +328,14 @@ func (s *Service) conclusionLink(ctx context.Context, t Todo, in conclusionInput
 // dropDecision ends task id's decision still waiting, once its review moved on (rework, cancelled): it is no longer
 // listed, its button takes nothing, and a reply to its card is answered "already handled".
 func (s *Service) dropDecision(ctx context.Context, id string) {
+	s.supersedeDecision(ctx, id, "")
+}
+
+// supersedeDecision clears task id's open needs_user decision ask when supervision transitions the review via
+// task_review, recording the natural-language reason (never fabricating an owner selection), notifying clients so it
+// leaves "Needs you", and redrawing any Lark cards to remove buttons and display the supersession note (#13112).
+func (s *Service) supersedeDecision(ctx context.Context, id, reason string) {
+	reason = clip(oneLine(strings.TrimSpace(reason)), 300)
 	b := &s.accept
 	b.mu.Lock()
 	if !s.loadAcceptLocked(ctx) {
@@ -334,10 +347,20 @@ func (s *Service) dropDecision(ctx context.Context, id string) {
 		b.mu.Unlock()
 		return
 	}
-	a.AcceptedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	a.AcceptedAt = now
+	if !a.Deadline.IsZero() && a.DueAt.IsZero() {
+		a.DueAt = now
+	}
+	a.Superseded = true
+	a.SupersededReason = reason
 	s.saveAcceptLocked(ctx)
+	cp := *a
 	b.mu.Unlock()
 	s.askChanged(ctx)
+	if len(cp.Messages) > 0 {
+		s.updateAskCards(ctx, id, cp)
+	}
 }
 
 // askCopy is task id's ask as it is now (false: none, or a claim still going out).
