@@ -607,14 +607,14 @@ func TestSetupLinesAreLocalized(t *testing.T) {
 }
 
 // Retired ids keep accurate legacy copy: direct rendering cannot promise fewer main reviews or automatic closure.
-func TestRetiredSetupLinesKeepMainAcceptance(t *testing.T) {
+func TestSetupLinesDescribeCurrentSupervisorOwnership(t *testing.T) {
 	for _, tc := range []struct {
 		lang                  i18n.Lang
 		leaders, reviewSample string
 	}{
-		{i18n.En, "does not remove main-chat review rounds", "not closed automatically"},
-		{i18n.ZhHans, "不会减少主对话的验收轮次", "不会自动关闭"},
-		{i18n.Ja, "レビューラウンドは減りません", "自動ではクローズされず"},
+		{i18n.En, "supervises the tasks it plans or starts", "not closed automatically"},
+		{i18n.ZhHans, "督办自己派出的任务", "不会自动关闭"},
+		{i18n.Ja, "自分で計画・開始したタスク", "自動ではクローズされず"},
 	} {
 		leaders := setupWord(tc.lang, "", setupLeaders, setupNumber{}).Text
 		sample := setupWord(tc.lang, "", setupSample, setupNumber{}).Text
