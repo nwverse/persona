@@ -87,6 +87,8 @@ type packageResult struct {
 	// local is localStamp(k) as the lookup began: a lookup remembered under another one is not fresh, so a build
 	// put in place afterwards (deploy.sh, a person, a hub update) is taken at once, not packageFoundTTL later.
 	local string
+	// localRecent means that stamp included a file too new for size/mtime alone to identify a rapid replacement.
+	localRecent bool
 }
 
 // nodePackages remembers lookups, makes one lookup per platform and kind at a time (the others wait for it) and one
@@ -139,8 +141,8 @@ func (d *Devices) cachedPackage(k packageKey) (packageResult, bool) {
 // stands in for the site (stale) or says the site is away is looked up again after a minute; what the site said,
 // found or not, after ten.
 func (d *Devices) rememberedPackage(k packageKey) (r packageResult, fresh, ok bool) {
-	local := localStamp(k)
 	p := &d.packages
+	local, localRecent := p.localStamp(k)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	r, ok = p.results[k]
@@ -151,17 +153,17 @@ func (d *Devices) rememberedPackage(k packageKey) (r packageResult, fresh, ok bo
 	if r.pkg.stale || (r.err != nil && siteAway(r.err)) {
 		ttl = packageMissTTL
 	}
-	return r, p.clock().Sub(r.at) <= ttl && r.local == local, true
+	return r, p.clock().Sub(r.at) <= ttl && !localRecent && !r.localRecent && r.local == local, true
 }
 
-func (d *Devices) remember(k packageKey, pkg nodePackage, err error, local string) {
+func (d *Devices) remember(k packageKey, pkg nodePackage, err error, local string, localRecent bool) {
 	p := &d.packages
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.results == nil {
 		p.results = map[packageKey]packageResult{}
 	}
-	p.results[k] = packageResult{pkg: pkg, err: err, at: p.clock(), local: local}
+	p.results[k] = packageResult{pkg: pkg, err: err, at: p.clock(), local: local, localRecent: localRecent}
 }
 
 // standIn marks pkg as standing in for what the site would say (stale): remembered for a minute only.
@@ -213,9 +215,9 @@ func (d *Devices) lookupShared(ctx context.Context, k packageKey) (nodePackage, 
 	}
 	p.looking[k] = ch
 	p.mu.Unlock()
-	local := localStamp(k)
+	local, localRecent := p.localStamp(k)
 	pkg, err := d.lookupPackage(ctx, k)
-	d.remember(k, pkg, err, local)
+	d.remember(k, pkg, err, local, localRecent)
 	p.mu.Lock()
 	delete(p.looking, k)
 	close(ch)
@@ -444,23 +446,30 @@ func localNodeNames(program, plat string) []string {
 	return []string{name}
 }
 
+// localBuildRecent is the window in which equal-sized replacements may still share an mtime on a coarse filesystem
+// clock. Do not reuse a result captured in this window without reading the executable again once; future mtimes count
+// as recent too (#13298).
+const localBuildRecent = 2 * time.Second
+
 // localStamp is what the local builds k may be taken from look like now: each candidate and its version file, with
-// size and modification time ("" when there are none).
-func localStamp(k packageKey) string {
+// size and modification time ("" when there are none). recent says at least one file is inside localBuildRecent.
+func (p *nodePackages) localStamp(k packageKey) (stamp string, recent bool) {
 	if k.goos == "" || k.arch == "" {
-		return ""
+		return "", false
 	}
 	var b strings.Builder
+	now := p.clock()
 	for _, dir := range localNodeDirs() {
 		for _, name := range localNodeNames(k.program, k.goos+"-"+k.arch) {
 			for _, f := range []string{name, name + ".version"} {
 				if st, err := os.Stat(filepath.Join(dir, f)); err == nil {
 					fmt.Fprintf(&b, "%s|%d|%d\n", filepath.Join(dir, f), st.Size(), st.ModTime().UnixNano())
+					recent = recent || now.Sub(st.ModTime()) < localBuildRecent
 				}
 			}
 		}
 	}
-	return b.String()
+	return b.String(), recent
 }
 
 // versionScan is carriesVersion's answer for a file as it was then.
@@ -469,6 +478,7 @@ type versionScan struct {
 	mod     time.Time
 	version string
 	carries bool
+	recent  bool // the file was inside localBuildRecent when scanned: confirm it once after that window too
 }
 
 // carriesVersion: the build at path can be version. A node installs a build only when its node-update-check prints
@@ -487,7 +497,8 @@ func (p *nodePackages) carriesVersion(path, version string) (bool, error) {
 	p.mu.Lock()
 	scan, ok := p.scans[path]
 	p.mu.Unlock()
-	if ok && scan.size == st.Size() && scan.mod.Equal(st.ModTime()) && scan.version == version {
+	recent := p.clock().Sub(st.ModTime()) < localBuildRecent
+	if ok && !recent && !scan.recent && scan.size == st.Size() && scan.mod.Equal(st.ModTime()) && scan.version == version {
 		return scan.carries, nil
 	}
 	carries, err := fileContains(path, []byte(version))
@@ -498,7 +509,7 @@ func (p *nodePackages) carriesVersion(path, version string) (bool, error) {
 	if p.scans == nil {
 		p.scans = map[string]versionScan{}
 	}
-	p.scans[path] = versionScan{size: st.Size(), mod: st.ModTime(), version: version, carries: carries}
+	p.scans[path] = versionScan{size: st.Size(), mod: st.ModTime(), version: version, carries: carries, recent: recent}
 	p.mu.Unlock()
 	return carries, nil
 }
