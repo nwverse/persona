@@ -1,4 +1,4 @@
-package feishubot
+package botcard
 
 import (
 	"cmp"
@@ -82,7 +82,7 @@ type Mention struct {
 	Name string `json:"name"`
 }
 
-func (m *MessageEvent) At() time.Time { return msTime(m.Message.CreateTime) }
+func (m *MessageEvent) At() time.Time { return MsTime(m.Message.CreateTime) }
 
 // CardAction is card.action.trigger: a button pressed or a form submitted on a card the bot sent.
 type CardAction struct {
@@ -160,7 +160,8 @@ type P2PEntered struct {
 	OperatorID UserID `json:"operator_id"`
 }
 
-func msTime(s string) time.Time {
+// MsTime is a millisecond Unix timestamp as the open platform writes it; the zero time when it is not one.
+func MsTime(s string) time.Time {
 	n, err := strconv.ParseInt(s, 10, 64)
 	if err != nil || n <= 0 {
 		return time.Time{}

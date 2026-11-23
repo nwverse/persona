@@ -12,9 +12,9 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -391,7 +391,7 @@ func permanentReportError(err error) bool {
 	if errors.As(err, &re) && re.Code == CodeChatDenied {
 		return true
 	}
-	return !feishubot.Transient(err)
+	return !botcard.Transient(err)
 }
 
 // sourceAnswerPoll is how often a closed todo's answer is read again while it is awaited: often
@@ -455,7 +455,7 @@ func (s *Service) prepareSourceReport(ctx context.Context, t Todo, st FeishuStat
 		}
 		if fullReply {
 			preview := i18n.T(s.botLang(ctx), "assistant-feishu."+key+suffix, args)
-			if _, inline := feishubot.InlineAnswer(preview); !inline {
+			if _, inline := botcard.InlineAnswer(preview); !inline {
 				if !s.tellOwner(ctx, t, st, "source_report_file_notice"+suffix, i18n.Args{"minutes": minutes}, uuid+":file", false) {
 					return
 				}
@@ -602,7 +602,7 @@ func noReplyCommand(text string) bool {
 // threadNoReply answers "/noreply" said in the topic of open todo t: its outcome is not told where the request came
 // from. Decided by the text alone (noReplyCommand), recorded as a decision of the todo (the user's, from the topic) so
 // that its history shows it, and not passed to any Agent. A todo that has told its source already cannot take it back.
-func (s *Service) threadNoReply(ctx context.Context, ev feishubot.MessageEvent, t Todo, topic *feishuTopic) {
+func (s *Service) threadNoReply(ctx context.Context, ev botcard.MessageEvent, t Todo, topic *feishuTopic) {
 	s.stopReportOf(ctx, ev.Message.MessageID, t, topic.target(), "thread_question", db.DecisionThread)
 }
 
@@ -610,7 +610,7 @@ func (s *Service) threadNoReply(ctx context.Context, ev feishubot.MessageEvent, 
 // topic (TodoSource.Anchor), or to anything the bot said under it: the run's answer, the notice before the report. It
 // says whether it took the message; one that is no reply to such a message is nothing of its business and goes on as it
 // was. Recorded as a decision of the todo, not passed to any Agent, like the topic's.
-func (s *Service) chatNoReply(ctx context.Context, ev feishubot.MessageEvent) bool {
+func (s *Service) chatNoReply(ctx context.Context, ev botcard.MessageEvent) bool {
 	msg := ev.Message
 	if msg.RootID == "" && msg.ParentID == "" {
 		return false

@@ -117,6 +117,11 @@ missing quietly.
   ScheduledConfiguration, NorthStar, Accept, Later, Golden): the assistant's tests of the briefing itself skip
   (`needsBriefingModule`), and `TestBuildWithoutBriefingLoadsNone` checks the core without it. The whole package passes
   with both tags too (about 9 minutes each, too long for the lane).
+  `scripts/ci/core-only-smoke.py` (the lane's 'Core-only hub smoke') starts the core alone: it builds the programs
+  with `persona_core_only`, runs `persona-hub run` and its `persona-manager` against a disposable Postgres from a
+  temporary home, and checks health, the manager's `modules: loaded none`, and that every module's program
+  (`builtinext.AddProgram` in `internal/modules/all`), extension and extension route is absent; `--full` checks the
+  opposite on a default build.
 - **At run time**: the settings row `modules` (the `settings` table, as every other setting; no state file) holds
   `{"disabled": ["<id>", …]}`. The manager reads it once where it starts (`server/internal/assistant/main.go`,
   `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so a change takes effect at the next
@@ -227,6 +232,12 @@ Each client documents its side in its own platform doc; these are pointers only.
 
 - **Apple** (#13432): `PersonaHostApp` with `PersonaModuleAPI` and `PersonaModule<Name>` packages. See `docs/apple/` (written with #13432).
 - **Android** (#13433): `:core:moduleapi` and `:module:<id>`. See `docs/android/` (written with #13433).
-- **Web** (#13434): a module host (planned as web/src/core/module-host.ts) and `web/src/modules/<id>/`. See `docs/web/` (written with #13434).
+- **Web** (#13434, #13846): the module host `web/src/core/module-host.ts` and `web/src/modules/<id>/`, serving routes,
+  sidebar entries, chat slots, Settings categories and card renderers. See `docs/web/web.md` ("Modules").
+
+**Hub flags.** Every client switches modules on the hub's hello the same way (agreed on #13844): a module's `feature`
+is `module.<id>`; a hub that publishes module flags also announces the marker `modules`; a module with a `feature` is
+off only when the hello has `modules` and lacks the module's flag. No hello yet, or an older hub without `modules`,
+leaves it on.
 
 Every client reads the same manifest fields from `schema/module.schema.json`.
