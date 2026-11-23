@@ -988,6 +988,9 @@ synthetic placeholder only when the conversation resumes. Keep the latest verifi
 recovery claim, and check that input when the node lists the conversation again. Read the current transcript,
 since indexed history can predate the echo that identifies the app input. A guarded send that finds the same
 transcript but no process leaves a retry notice. A Stop or later owner input makes the earlier attempt obsolete.
+An accepted Assistant input supersedes an older explicit Stop or Exit. Clear only the mark captured before the send,
+since an interrupt can record its intent before it gets the typing lock. Session metadata saved during delivery must
+preserve that newer mark.
 
 ## A node's own session rows never carry the assistant mark (#13879)
 

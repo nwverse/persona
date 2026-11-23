@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,7 +18,11 @@ func TestAssistantAnswerAgainRequiresTheSameIdleTurn(t *testing.T) {
 	f := cliTest(t)
 	n := f.n
 	ctx := t.Context()
-	id, err := n.assistantSend(ctx, "", t.TempDir(), "claude", "Check today's usage.", nil, "", "")
+	cwd := filepath.Join(n.home, ".persona", "assistant")
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	id, err := n.assistantSend(ctx, "", cwd, "claude", "Check today's usage.", nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,9 +92,34 @@ func TestAssistantAnswerAgainRequiresTheSameIdleTurn(t *testing.T) {
 	}
 
 	last = items[len(items)-1].ID
-	n.state.stopped(id, proto.StopUser)
+	if _, err := nodeCall(t, n, "session.interrupt", map[string]any{"session_id": id}); err != nil {
+		t.Fatal(err)
+	}
 	assertChanged(send(last, "explicit-stop"))
-	n.state.stopped(id, proto.StopUnknown)
+
+	const question = "How many requests are left?"
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": id, "text": question, "client_msg_id": "owner-after-stop",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+	lines.user("u4", "a3", question).add(map[string]any{
+		"type": "assistant", "uuid": "a4", "parentUuid": "u4",
+		"message": map[string]any{"role": "assistant", "stop_reason": "end_turn", "content": []any{
+			map[string]any{"type": "text", "text": "No response requested."},
+		}},
+	}).write(t, path)
+	items = read(1)
+	last = items[len(items)-1].ID
+	if err := send(last, "after-stop"); err != nil {
+		t.Fatalf("a missing reply to the new input must allow a follow-up: %v", err)
+	}
+	cliWait(t, "the new turn's recovery prompt", func() bool {
+		return strings.Count(f.file("stdin.jsonl"), "persona-answer-again") == 2
+	})
+	f.idle(t, id)
+
 	n.stopAssistantProcess(id)
 	err = send(last, "process-gone")
 	var refused *rpc.Error
