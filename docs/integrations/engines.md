@@ -120,7 +120,10 @@ Windows: herdr has native Windows support since 0.9.5; except live terminal, cap
 
 Antigravity CLI panes can show chat history after the hook installed by `herdr integration install antigravity-cli`
 reports the pane's conversation ID. Persona reads that conversation's local `transcript.jsonl` from the node's Antigravity data
-directory and uses the reported ID to restore Persona-started panes with `agy --conversation`. Until herdr
+directory and uses the reported ID to restore Persona-started panes with `agy --conversation`. The pane's row is then
+titled after that conversation, as the Antigravity companion titles it: the companion's title, else agy's own (its
+`cache/conversation_metadata.json`), else the first message typed into it (#13639). agy sets no terminal title, so
+until one of these is known the row has the shell's title or herdr's tab name. Until herdr
 reports a usable ID, the pane remains accessible through the terminal and can still receive prompts.
 
 Orca's native Claude chats (structured, no terminal) connect through node's bridge: list, state, send text / images, interrupt, close,
