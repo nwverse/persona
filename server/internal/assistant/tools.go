@@ -154,6 +154,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	switch name {
 	case "decision_record", "decisions_query":
 		return s.toolEntries(ctx, machine, self, name, args)
+	case spaceStateTool: // a space track's conversations only (track_space_md.go)
+		return s.toolSpaceStateUpdate(ctx, machine, self, args)
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
 	case "repositories_list", "repository_get":

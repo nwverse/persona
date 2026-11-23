@@ -86,6 +86,17 @@ class HttpChatActions internal constructor(
         }
     }
 
+    override suspend fun continueStart(session: Session, choice: String): Session {
+        require(session.machineId.isNotBlank() && session.sessionId.isNotBlank())
+        val body = buildJsonObject { put("choice", choice) }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        // The hub may wait 20 seconds for the kept terminal; only a completed 2xx is an answer.
+        return slow(api("sessions", session.machineId, session.sessionId, "start", "continue"), "POST", body).use {
+            if (!it.isSuccessful) throw HubFailure.from(it)
+            val answer = JsonCodec.parseToJsonElement(it.body?.string().orEmpty()).jsonObject
+            JsonCodec.decodeFromJsonElement(answer["session"] ?: error("no session in the answer"))
+        }
+    }
+
     override suspend fun editQueue(session: Session, keep: List<Int>): QueueEdit {
         // An empty keep list is meaningful (delete the only queued message), so the body is written out explicitly.
         val body = buildJsonObject { put("keep", JsonArray(keep.map(::JsonPrimitive))) }

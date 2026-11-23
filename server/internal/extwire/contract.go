@@ -26,9 +26,12 @@ const (
 	// ScopeDecisionsRaise lets an explicitly authorized caller raise, poll and
 	// withdraw its own pending owner decisions. It never grants owner answers.
 	ScopeDecisionsRaise = "decisions.raise"
-	// ScopeLeadersRead: being told of the leader conversations (leader.changed) and what they report (leader.report),
-	// and listing them (GET /api/v1/assistant/leaders); #3484.
+	// ScopeLeadersRead: being told of directions (leader.changed) and what they report (leader.report), and listing
+	// them (GET /api/v1/assistant/leaders); #3484. A direction need not have a Persona conversation (#8236).
 	ScopeLeadersRead = "leaders.read"
+	// ScopeLeadersWrite: creating a conversationless direction and reporting any current direction's progress.
+	// It does not imply ScopeLeadersRead.
+	ScopeLeadersWrite = "leaders.write"
 	// ScopeAssistantDispatchPolicy: reading and writing the assistant's dispatch policy
 	// (GET/PUT /api/v1/assistant/dispatch-policy), the organization rule for which conversations may hand out work.
 	ScopeAssistantDispatchPolicy = "assistant.dispatch_policy"

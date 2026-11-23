@@ -45,6 +45,7 @@ func (s *Service) trackRoutes() {
 	s.handle("GET /api/v1/assistant/track-kinds", s.trackKindList)
 	s.handle("POST /api/v1/assistant/track-kinds", s.trackKindCreate)
 	s.handle("PUT /api/v1/assistant/track-kinds/{slug}", s.trackKindChange)
+	s.trackSpaceMDRoutes() // track_space_md.go
 }
 
 // wireTrack is e as the apps see it.

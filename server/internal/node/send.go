@@ -106,6 +106,9 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 		}
 		opts.ApplySwitch = true
 	}
+	if handled, err := n.sendCreatedCodexApp(ctx, id, text, images); handled {
+		return err
+	}
 	if n.externalCodex(id) {
 		if n.codexResumable(ctx, id) { // nothing runs it: a stopped agent takes no messages (stopped.go, #4754)
 			return n.stoppedRefusal(id)
@@ -214,8 +217,8 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 			return r
 		}
 		// A stopped agent takes no messages; its terminal page's Resume brings it back (stopped.go, #4754). Only a
-		// branch nothing has started yet (fork.go) is started by its first message, with the launcher it came from,
-		// and a session of Claude's desktop app the app could not take is resumed as before.
+		// branch nothing has started yet (fork.go) is started by its first message, with the launcher it came from.
+		// Desktop-owned sessions return through sendThroughDesktopApp above, including an import or opening failure.
 		if !n.freshFork(id) && !n.desktopSession(id) {
 			return n.stoppedRefusal(id)
 		}
