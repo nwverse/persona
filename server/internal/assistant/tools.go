@@ -193,10 +193,19 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {
 			var a struct {
-				Verdict string `json:"verdict"`
+				TodoID    string `json:"todo_id"`
+				Verdict   string `json:"verdict"`
+				UserCheck bool   `json:"user_check"`
 			}
-			if json.Unmarshal(args, &a) == nil && (a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser) {
-				s.promoteSupervision(self)
+			if json.Unmarshal(args, &a) == nil {
+				if a.Verdict == reviewAccepted && s.quietInternalAcceptedReview(ctx, a.TodoID, a.UserCheck) {
+					message := res + ` This internal accepted conclusion stays in Background activity. Finish this supervision wake-up with supervision_finish visibility="silent".`
+					body, marshalErr := json.Marshal(map[string]any{"background": true, "message": message})
+					return string(body), marshalErr
+				}
+				if a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser {
+					s.promoteSupervision(self)
+				}
 			}
 		}
 		return res, err
