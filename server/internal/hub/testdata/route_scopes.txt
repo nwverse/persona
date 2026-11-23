@@ -384,6 +384,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/task-trust
 todos.read           GET /api/v1/todos
 todos.read           GET /api/v1/todos/places
+-                    GET /api/v1/todos/revision
 todos.read           GET /api/v1/todos/{id}
 -                    GET /api/v1/todos/{id}/backend-workspace
 -                    GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}
