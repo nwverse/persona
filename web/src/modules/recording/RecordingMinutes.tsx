@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText } from "../../lib/api";
-import { citedPhoto, formatSpan, minutesKeptUntil, recordingClock, transcriptTarget, type KBDetail, type MinutesAction, type MinutesPoint, type RecordingView } from "../../lib/kb";
-import { minutesOverview, type OverviewCite } from "../../lib/minutes-overview";
-import { minutesWait } from "../../lib/minutes-wait";
+import { formatSpan, type KBDetail, type MinutesAction, type MinutesPoint } from "../../lib/kb";
+import { citedPhoto, minutesKeptUntil, recordingClock, transcriptTarget, type RecordingView } from "./recording-view";
+import { minutesOverview, type OverviewCite } from "./minutes-overview";
+import { minutesWait } from "./minutes-wait";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import { Button, copyText, cx, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { Card, SectionTitle, TonePill } from "./KBParts";
+import { Card, SectionTitle, TonePill } from "../../views/knowledge/KBParts";
 import { MinutesOverviewCard } from "./MinutesOverview";
 import { PhotoCite, type MeetingPhotos } from "./RecordingPhotos";
 
@@ -41,8 +42,8 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
   // While the hub checks the whole recording before writing them, the line says so, with how far it is (#13461).
   const wait = minutesWait(detail.meta?.transcription, state, !!minutes);
   const waitText = wait?.line === "checking"
-    ? wait.total === undefined ? t("knowledge-kbdetail.minutes_checking") : t("knowledge-kbdetail.minutes_checking_progress", { done: wait.done ?? 0, total: wait.total })
-    : t("knowledge-kbdetail.minutes_writing");
+    ? wait.total === undefined ? t("recording.minutes_checking") : t("recording.minutes_checking_progress", { done: wait.done ?? 0, total: wait.total })
+    : t("recording.minutes_writing");
 
   if (detail.meta?.kind !== "meeting" && rec.partial) return null;
   const disabled = busy || needsRefresh;
@@ -55,7 +56,7 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
   };
   // A summary-card line's source the same way; one whose time did not read shows none.
   const overviewCite = (item: OverviewCite) => item.photo ? <PhotoCite n={item.photo} at={item.at} rec={rec} photos={photos} onJump={onJump} /> : item.at === undefined ? null : time(item.at);
-  const actions = (level: 3 | 4) => <ActionItems level={level} title={t("knowledge-kbdetail.minutes_actions")} actions={minutes?.actions} disabled={disabled} time={(_at, action) => cite(action)} onAdd={(ids) => void run(ids)} />;
+  const actions = (level: 3 | 4) => <ActionItems level={level} title={t("recording.minutes_actions")} actions={minutes?.actions} disabled={disabled} time={(_at, action) => cite(action)} onAdd={(ids) => void run(ids)} />;
   const points = (title: string, items?: MinutesPoint[]) => items?.length ? (
     <div className="px-4 py-3.5">
       <h3 className="mb-2 text-[13px] font-semibold text-ink">{title}</h3>
@@ -65,23 +66,23 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
 
   return (
     <section aria-labelledby={heading} data-recording-minutes>
-      <SectionTitle title={<span id={heading}>{t("knowledge-kbdetail.minutes")}</span>} right={
+      <SectionTitle title={<span id={heading}>{t("recording.minutes")}</span>} right={
         <div className="flex shrink-0 items-center gap-1.5">
-          {minutes && <Button tone="quiet" disabled={busy} onClick={() => void copyText(minutes.markdown)}>{t("knowledge-kbdetail.minutes_copy")}</Button>}
+          {minutes && <Button tone="quiet" disabled={busy} onClick={() => void copyText(minutes.markdown)}>{t("recording.minutes_copy")}</Button>}
           {canGenerate && <Button tone="secondary" disabled={disabled || rec.partial || state === "pending"} onClick={() => void run()}>
-            {t(minutes || state === "failed" ? "knowledge-kbdetail.minutes_regenerate" : "knowledge-kbdetail.minutes_make")}
+            {t(minutes || state === "failed" ? "recording.minutes_regenerate" : "recording.minutes_make")}
           </Button>}
         </div>
       } />
       {rec.trimmedAt && <p data-minutes-kept className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">
-        {minutesDays === 0 ? t("knowledge-kbdetail.minutes_kept_forever") : keptUntil ? t("knowledge-kbdetail.minutes_kept_until", { date: keptUntil }) : t("knowledge-kbdetail.minutes_transcript_expired")}
+        {minutesDays === 0 ? t("recording.minutes_kept_forever") : keptUntil ? t("recording.minutes_kept_until", { date: keptUntil }) : t("recording.minutes_transcript_expired")}
       </p>}
       {!rec.trimmedAt && (state === "pending" || state === "failed") && <p role="status" className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">
-        {state === "failed" ? t("knowledge-kbdetail.minutes_failed") : minutes ? t("knowledge-kbdetail.minutes_updating") : waitText}
+        {state === "failed" ? t("recording.minutes_failed") : minutes ? t("recording.minutes_updating") : waitText}
       </p>}
-      {!minutes && !state && rec.partial && <p className="px-1 text-[12.5px] text-ink-3">{t("knowledge-kbdetail.minutes_waiting")}</p>}
+      {!minutes && !state && rec.partial && <p className="px-1 text-[12.5px] text-ink-3">{t("recording.minutes_waiting")}</p>}
       {needsRefresh && !busy && <div className="mb-2 px-1">
-        <Button tone="secondary" onClick={() => void run(undefined, true)}>{t("knowledge-kbdetail.minutes_retry_refresh")}</Button>
+        <Button tone="secondary" onClick={() => void run(undefined, true)}>{t("recording.minutes_retry_refresh")}</Button>
       </div>}
       {minutes && overview && <MinutesOverviewCard
         minutes={minutes}
@@ -95,15 +96,15 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
           <h3 className="break-words text-[14px] font-semibold leading-relaxed text-ink">{minutes.title}</h3>
           <div className="mt-1.5 space-y-1 break-words text-[12.5px] leading-relaxed text-ink-2">
             {(minutes.start || minutes.when) && <p data-minutes-when>{formatSpan(minutes.start, minutes.end, minutes.when)}</p>}
-            {minutes.where && <p>{t("knowledge-kbdetail.minutes_where", { where: minutes.where })}</p>}
-            {!!minutes.attendees?.length && <p>{t("knowledge-kbdetail.minutes_attendees", { attendees: minutes.attendees.join(" · ") })}</p>}
+            {minutes.where && <p>{t("recording.minutes_where", { where: minutes.where })}</p>}
+            {!!minutes.attendees?.length && <p>{t("recording.minutes_attendees", { attendees: minutes.attendees.join(" · ") })}</p>}
           </div>
-          {minutes.partial && <p className="mt-2 text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.minutes_partial")}</p>}
+          {minutes.partial && <p className="mt-2 text-[12.5px] leading-relaxed text-ink-3">{t("recording.minutes_partial")}</p>}
         </div>
-        {points(t("knowledge-kbdetail.minutes_points"), minutes.points)}
-        {points(t("knowledge-kbdetail.minutes_decisions"), minutes.decisions)}
+        {points(t("recording.minutes_points"), minutes.points)}
+        {points(t("recording.minutes_decisions"), minutes.decisions)}
         {actions(3)}
-        {points(t("knowledge-kbdetail.minutes_open"), minutes.open)}
+        {points(t("recording.minutes_open"), minutes.open)}
       </Card>}
     </section>
   );
@@ -176,7 +177,7 @@ export function useMinutesRequests({ id, version, pending, open = false, recap =
         onSaved();
       }
     } catch (err) {
-      if (valid()) toast(t(recap ? "knowledge-kbdetail.recap_refresh_failed" : "knowledge-kbdetail.minutes_refresh_failed", { error: errorText(err) }), "error");
+      if (valid()) toast(t(recap ? "recording.recap_refresh_failed" : "recording.minutes_refresh_failed", { error: errorText(err) }), "error");
     }
   };
 
@@ -201,7 +202,7 @@ export function useMinutesRequests({ id, version, pending, open = false, recap =
           } catch (err) {
             if (!valid()) return;
             if (!(err instanceof ApiError && err.status === 409 && err.code === "minutes_stale")) { failure = { err }; break; }
-            if (!stale) toast(t(recap ? "knowledge-kbdetail.recap_stale" : "knowledge-kbdetail.minutes_stale"), "error");
+            if (!stale) toast(t(recap ? "recording.recap_stale" : "recording.minutes_stale"), "error");
             stale = changed = true;
           }
         }
@@ -210,7 +211,7 @@ export function useMinutesRequests({ id, version, pending, open = false, recap =
         if (failure) throw failure.err;
       } else if (valid()) await readback();
     } catch (err) {
-      if (valid()) toast(t(recap ? "knowledge-kbdetail.recap_request_failed" : "knowledge-kbdetail.minutes_request_failed", { error: errorText(err) }), "error");
+      if (valid()) toast(t(recap ? "recording.recap_request_failed" : "recording.minutes_request_failed", { error: errorText(err) }), "error");
     } finally {
       if (valid()) { inFlight.current = false; setBusy(false); }
     }
@@ -243,7 +244,7 @@ export function TranscriptTime({ rec, at, onJump }: { rec: RecordingView; at: nu
   return (
     <button
       type="button"
-      aria-label={t("knowledge-kbdetail.minutes_jump", { time: clock })}
+      aria-label={t("recording.minutes_jump", { time: clock })}
       aria-controls={target}
       disabled={!target}
       onClick={() => { if (target) onJump(target); }}
@@ -289,15 +290,15 @@ export function ActionItems<A extends MinutesAction>({ title, actions, disabled,
     <div className="px-4 py-3.5">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <Heading className="text-[13px] font-semibold text-ink">{title}</Heading>
-        {remaining.length > 0 && <Button tone="quiet" disabled={disabled} onClick={() => onAdd(remaining.map((action) => action.id))}>{t("knowledge-kbdetail.minutes_add_all")}</Button>}
+        {remaining.length > 0 && <Button tone="quiet" disabled={disabled} onClick={() => onAdd(remaining.map((action) => action.id))}>{t("recording.minutes_add_all")}</Button>}
       </div>
       <ul className="divide-y divide-line">
         {actions.map((action) => <li key={action.id} className="py-2 first:pt-0 last:pb-0">
-          <p className="break-words text-[13px] leading-relaxed text-ink">{[action.who, action.what, action.by, action.due_date && t("knowledge-kbdetail.minutes_due", { date: action.due_date })].filter(Boolean).join(" · ")}</p>
+          <p className="break-words text-[13px] leading-relaxed text-ink">{[action.who, action.what, action.by, action.due_date && t("recording.minutes_due", { date: action.due_date })].filter(Boolean).join(" · ")}</p>
           <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
             {time(action.at, action)}
-            {action.todo_id ? <TonePill>{t("knowledge-kbdetail.minutes_added")}</TonePill> :
-              <Button tone="secondary" disabled={disabled} onClick={() => onAdd([action.id])}>{t("knowledge-kbdetail.minutes_add_todo")}</Button>}
+            {action.todo_id ? <TonePill>{t("recording.minutes_added")}</TonePill> :
+              <Button tone="secondary" disabled={disabled} onClick={() => onAdd([action.id])}>{t("recording.minutes_add_todo")}</Button>}
           </div>
         </li>)}
       </ul>

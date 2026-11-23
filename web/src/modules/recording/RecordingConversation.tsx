@@ -16,23 +16,8 @@ import { t } from "../../i18n";
 import { api, ApiError, enc, errorText, imageURL, sessionPath } from "../../lib/api";
 import { conversationPage } from "../../lib/conversation-page";
 import { uuid } from "../../lib/format";
-import {
-  countsAsMeeting,
-  meetingConversation,
-  meetingKind,
-  meetingMeta,
-  meetingRoom,
-  recordingPhotos,
-  type KBDetail,
-  type LiveLine,
-  type MeetingConversation,
-  type MeetingRoom,
-  type MeetingTopic,
-  type RecordingAsk,
-  type RecordingLive,
-  type RecordingPhoto,
-  type RecordingView,
-} from "../../lib/kb";
+import { type KBDetail, type LiveLine, type MeetingConversation, type MeetingRoom, type MeetingTopic, type RecordingAsk, type RecordingLive, type RecordingPhoto } from "../../lib/kb";
+import { countsAsMeeting, meetingConversation, meetingKind, meetingMeta, meetingRoom, recordingPhotos, type RecordingView } from "./recording-view";
 import { messageManager } from "../../lib/manager-choice";
 import {
   followupThread,
@@ -51,7 +36,7 @@ import {
   roomThread,
   type MeetingLine,
   type ThreadEntry,
-} from "../../lib/meeting-thread";
+} from "./meeting-thread";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { listenSession, onHubEvent, useStore } from "../../lib/store";
 import type { ItemsPage, Item } from "../../lib/types";
@@ -59,7 +44,7 @@ import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import { Button, Collapse, cx, Spinner, Switch } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { Card, SectionTitle } from "./KBParts";
+import { Card, SectionTitle } from "../../views/knowledge/KBParts";
 import { askFailure, AskRow } from "./RecordingAsks";
 import { PhotoThumb, usePhotoImages, type MeetingPhotos } from "./RecordingPhotos";
 
@@ -439,16 +424,16 @@ export function MeetingPrivate({ meeting }: { meeting: MeetingState }) {
         <div className="flex items-center gap-3 px-4 py-2.5">
           <Icon name="lock" size={14} className="shrink-0 text-ink-3" />
           <div className="min-w-0 flex-1">
-            <p id={label} className="text-[13px] text-ink">{t("knowledge-kbdetail.private_label")}</p>
+            <p id={label} className="text-[13px] text-ink">{t("recording.private_label")}</p>
             <p id={hint} className="mt-0.5 text-[11.5px] leading-relaxed text-ink-3">
-              {t(value === true ? "knowledge-kbdetail.private_on" : value === false ? "knowledge-kbdetail.private_off" : "knowledge-kbdetail.private_unset")}
+              {t(value === true ? "recording.private_on" : value === false ? "recording.private_off" : "recording.private_unset")}
             </p>
           </div>
           {busy && <Spinner />}
-          <Switch on={value !== false} disabled={busy} label={t("knowledge-kbdetail.private_label")} describedBy={hint} onChange={(next) => void change(next)} />
+          <Switch on={value !== false} disabled={busy} label={t("recording.private_label")} describedBy={hint} onChange={(next) => void change(next)} />
         </div>
       </Card>
-      {error && <p role="alert" className="mt-1.5 px-1 text-[11.5px] leading-relaxed break-words text-red">{t("knowledge-kbdetail.private_failed", { error })}</p>}
+      {error && <p role="alert" className="mt-1.5 px-1 text-[11.5px] leading-relaxed break-words text-red">{t("recording.private_failed", { error })}</p>}
     </section>
   );
 }
@@ -489,19 +474,19 @@ const ROOM_PROBLEMS = ["runtime_unsupported", "node_too_old", "machine_offline",
 function roomLine(room: MeetingRoom | undefined, role: RecordingView["attendance"], notesOnly: boolean, trimmed: boolean): { icon: IconName; text: string } | null {
   const state = roomState(room);
   switch (state) {
-    case "none": return { icon: "micOff", text: t("knowledge-kbdetail.room_none") };
-    case "starting": return { icon: "clock", text: t("knowledge-kbdetail.room_starting") };
+    case "none": return { icon: "micOff", text: t("recording.room_none") };
+    case "starting": return { icon: "clock", text: t("recording.room_starting") };
     case "ready": {
       // A notes room (#8851) is fed the meeting but Persona is not in it: not "not listening".
-      if (notesOnly) return { icon: "mic", text: t("knowledge-kbdetail.room_ready_notes") };
-      return { icon: "mic", text: t(role === "participant" ? "knowledge-kbdetail.room_ready_participant" : role === "listener" ? "knowledge-kbdetail.room_ready_listener" : "knowledge-kbdetail.room_ready_off") };
+      if (notesOnly) return { icon: "mic", text: t("recording.room_ready_notes") };
+      return { icon: "mic", text: t(role === "participant" ? "recording.room_ready_participant" : role === "listener" ? "recording.room_ready_listener" : "recording.room_ready_off") };
     }
     case "unavailable": {
       const p = room?.problem ?? "";
-      return { icon: "warning", text: t(ROOM_PROBLEMS.includes(p) ? `knowledge-kbdetail.room_problem_${p}` : "knowledge-kbdetail.room_problem_other") };
+      return { icon: "warning", text: t(ROOM_PROBLEMS.includes(p) ? `recording.room_problem_${p}` : "recording.room_problem_other") };
     }
-    case "ended": return { icon: "check", text: t(trimmed ? "knowledge-kbdetail.room_ended_copy" : "knowledge-kbdetail.room_ended") };
-    case "deleted": return { icon: "trash", text: t("knowledge-kbdetail.room_deleted") };
+    case "ended": return { icon: "check", text: t(trimmed ? "recording.room_ended_copy" : "recording.room_ended") };
+    case "deleted": return { icon: "trash", text: t("recording.room_deleted") };
   }
   return null;
 }
@@ -548,19 +533,19 @@ export function RecordingConversation({ detail, rec, meeting, auth, current, man
 
   return (
     <section aria-labelledby={heading} data-meeting-conversation>
-      <SectionTitle title={<span id={heading}>{t("knowledge-kbdetail.conversation_title")}</span>} />
+      <SectionTitle title={<span id={heading}>{t("recording.conversation_title")}</span>} />
       <Card>
         {status && (
           <div className="flex items-start gap-2 px-4 py-2.5 text-[12.5px] leading-relaxed text-ink-2">
             <Icon name={status.icon} size={13} className="mt-0.5 shrink-0 text-ink-3" />
             <p role="status" className="min-w-0 flex-1 break-words">{status.text}</p>
-            {roomRoute && <OpenLink route={roomRoute} title={t("knowledge-kbdetail.conversation_open_room")} />}
+            {roomRoute && <OpenLink route={roomRoute} title={t("recording.conversation_open_room")} />}
           </div>
         )}
         {(before || roomPart.error || loadingRoom || roomPart.more) && (
           <div className="py-1">
-            {roomPart.more && <p className="px-4 pt-2 text-[11.5px] text-ink-3">{t("knowledge-kbdetail.conversation_earlier")}</p>}
-            {roomPart.error && <p role="alert" className="px-4 py-2 text-[12.5px] break-words text-red">{t("knowledge-kbdetail.conversation_load_failed", { error: roomPart.error })}</p>}
+            {roomPart.more && <p className="px-4 pt-2 text-[11.5px] text-ink-3">{t("recording.conversation_earlier")}</p>}
+            {roomPart.error && <p role="alert" className="px-4 py-2 text-[12.5px] break-words text-red">{t("recording.conversation_load_failed", { error: roomPart.error })}</p>}
             {loadingRoom && <div className="flex justify-center py-3"><Spinner /></div>}
             {roomEntries.length > 0 && <Thread entries={roomEntries} conv={roomIds!} asks={askById} room photos={meeting.photos} />}
             {showAsks && (
@@ -575,12 +560,12 @@ export function RecordingConversation({ detail, rec, meeting, auth, current, man
             {before && <AfterTheMeeting route={followRoute!} />}
             {!before && followRoute && (
               <div className="flex items-center gap-2 px-4 pt-2.5 pb-1">
-                <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-ink-3">{t("knowledge-kbdetail.conversation_after")}</span>
-                <OpenLink route={followRoute} title={t("knowledge-kbdetail.conversation_open_followup")} />
+                <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-ink-3">{t("recording.conversation_after")}</span>
+                <OpenLink route={followRoute} title={t("recording.conversation_open_followup")} />
               </div>
             )}
-            {followPart.more && <p className="px-4 pt-2 text-[11.5px] text-ink-3">{t("knowledge-kbdetail.conversation_earlier")}</p>}
-            {followPart.error && <p role="alert" className="px-4 py-2 text-[12.5px] break-words text-red">{t("knowledge-kbdetail.conversation_load_failed", { error: followPart.error })}</p>}
+            {followPart.more && <p className="px-4 pt-2 text-[11.5px] text-ink-3">{t("recording.conversation_earlier")}</p>}
+            {followPart.error && <p role="alert" className="px-4 py-2 text-[12.5px] break-words text-red">{t("recording.conversation_load_failed", { error: followPart.error })}</p>}
             {loadingFollow && <div className="flex justify-center py-3"><Spinner /></div>}
             {followEntries.length > 0 && <Thread entries={followEntries} conv={followup} />}
           </div>
@@ -590,11 +575,11 @@ export function RecordingConversation({ detail, rec, meeting, auth, current, man
             <a href={href(followRoute)} onClick={(ev) => onLinkClick(ev, followRoute)}
               className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-control bg-surface px-3 text-[12.5px] font-medium text-ink shadow-btn transition-colors hover:bg-hover">
               <Icon name="chat" size={14} stroke={2.1} />
-              {t("knowledge-kbdetail.conversation_continue")}
+              {t("recording.conversation_continue")}
             </a>
           </div>
         ) : meeting.roomMeeting && running ? (
-          <p className="px-4 py-2.5 text-[11.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.conversation_read_only")}</p>
+          <p className="px-4 py-2.5 text-[11.5px] leading-relaxed text-ink-3">{t("recording.conversation_read_only")}</p>
         ) : (meeting.roomMeeting || meeting.talk) && (
           <FollowupComposer id={detail.id} auth={auth} current={current} manager={manager} onMade={meeting.madeFollowup} />
         )}
@@ -608,7 +593,7 @@ function OpenLink({ route, title }: { route: Route; title: string }) {
   return (
     <a href={href(route)} onClick={(ev) => onLinkClick(ev, route)} title={title} aria-label={title}
       className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] font-medium text-accent-ink hover:underline">
-      {t("knowledge-kbdetail.conversation_open")}
+      {t("recording.conversation_open")}
       <Icon name="chevronRight" size={11} stroke={2.2} />
     </a>
   );
@@ -617,11 +602,11 @@ function OpenLink({ route, title }: { route: Route; title: string }) {
 /** The divider between the room and the follow-up, opening the follow-up. */
 function AfterTheMeeting({ route }: { route: Route }) {
   return (
-    <div role="separator" aria-label={t("knowledge-kbdetail.conversation_after")} className="flex items-center gap-3 px-4 pt-2.5 pb-1">
+    <div role="separator" aria-label={t("recording.conversation_after")} className="flex items-center gap-3 px-4 pt-2.5 pb-1">
       <span aria-hidden className="h-px flex-1 bg-line" />
-      <span className="shrink-0 whitespace-nowrap text-[11.5px] font-medium text-ink-3">{t("knowledge-kbdetail.conversation_after")}</span>
+      <span className="shrink-0 whitespace-nowrap text-[11.5px] font-medium text-ink-3">{t("recording.conversation_after")}</span>
       <span aria-hidden className="h-px flex-1 bg-line" />
-      <OpenLink route={route} title={t("knowledge-kbdetail.conversation_open_followup")} />
+      <OpenLink route={route} title={t("recording.conversation_open_followup")} />
     </div>
   );
 }
@@ -652,7 +637,7 @@ function Thread({ entries, conv, asks, room = false, photos }: { entries: Thread
 /** Under a question asked in the room: that it is being answered, or why it was not; nothing once answered (the
  *  room's reply follows it). */
 function AskState({ ask }: { ask: RecordingAsk }) {
-  if (ask.state === "pending") return <p className="px-4 pb-1 pl-[39px] text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.ask_pending")}</p>;
+  if (ask.state === "pending") return <p className="px-4 pb-1 pl-[39px] text-[12.5px] leading-relaxed text-ink-3">{t("recording.ask_pending")}</p>;
   if (ask.state === "failed") return <p className="px-4 pb-1 pl-[39px] text-[12.5px] leading-relaxed text-red">{askFailure(ask)}</p>;
   return null;
 }
@@ -660,15 +645,15 @@ function AskState({ ask }: { ask: RecordingAsk }) {
 function Entry({ entry: e, conv, room, photos }: { entry: ThreadEntry; conv: MeetingConversation; room: boolean; photos?: MeetingPhotos }) {
   switch (e.kind) {
     case "lines":
-      return <Lines label={t("knowledge-kbdetail.thread_lines", { count: e.lines.length })} lines={e.lines} time={at(e.ts)} />;
+      return <Lines label={t("recording.thread_lines", { count: e.lines.length })} lines={e.lines} time={at(e.ts)} />;
     case "ended":
-      return <Muted icon="check" text={t("knowledge-kbdetail.thread_ended")} time={at(e.ts)} />;
+      return <Muted icon="check" text={t("recording.thread_ended")} time={at(e.ts)} />;
     case "heard":
-      return <Lines label={e.clock ? t("knowledge-kbdetail.thread_heard", { clock: e.clock }) : t("knowledge-kbdetail.ask_heard_empty")} lines={e.lines} time={at(e.ts)} heard />;
+      return <Lines label={e.clock ? t("recording.thread_heard", { clock: e.clock }) : t("recording.ask_heard_empty")} lines={e.lines} time={at(e.ts)} heard />;
     case "material":
-      return <Material title={e.seed ? t("knowledge-kbdetail.thread_material") : e.title || t("knowledge-kbdetail.thread_context")} text={e.text} />;
+      return <Material title={e.seed ? t("recording.thread_material") : e.title || t("recording.thread_context")} text={e.text} />;
     case "question": {
-      const label = t(`knowledge-kbdetail.thread_via_${e.via}`);
+      const label = t(`recording.thread_via_${e.via}`);
       return (
         <div className="flex items-start gap-2.5 px-4 pt-3 pb-0.5">
           <span title={label} className="mt-0.5 shrink-0 text-ink-3">
@@ -689,7 +674,7 @@ function Entry({ entry: e, conv, room, photos }: { entry: ThreadEntry; conv: Mee
     case "image":
       return (
         <div className="px-4 py-1 pl-[39px]">
-          <img src={imageURL(conv.machine_id, conv.session_id, e.id)} alt={t("knowledge-kbdetail.thread_image")} loading="lazy"
+          <img src={imageURL(conv.machine_id, conv.session_id, e.id)} alt={t("recording.thread_image")} loading="lazy"
             className="max-h-40 max-w-[240px] rounded-control bg-field object-cover" />
         </div>
       );
@@ -706,14 +691,14 @@ const THREAD_PHOTO = { height: 144, min: 96, max: 240 };
 function ThreadPhoto({ entry: e, photos }: { entry: Extract<ThreadEntry, { kind: "photo" }>; photos?: MeetingPhotos }) {
   const photo = photos?.on ? photos.list?.find((p) => p.id.toLowerCase() === e.photo) : undefined;
   const time = at(e.ts);
-  if (!photo && photos?.on && photos.list) return <Muted icon="image" text={t("knowledge-kbdetail.photo_removed")} time={time} />;
+  if (!photo && photos?.on && photos.list) return <Muted icon="image" text={t("recording.photo_removed")} time={time} />;
   const ratio = photo && photo.width > 0 && photo.height > 0 ? photo.width / photo.height : 4 / 3;
   const width = Math.round(Math.min(THREAD_PHOTO.max, Math.max(THREAD_PHOTO.min, THREAD_PHOTO.height * ratio)));
   return (
     <div className="px-4 pt-2.5 pb-1">
       <div className="flex items-center gap-2.5 text-[12px] text-ink-3">
         <Icon name="camera" size={13} className="shrink-0" />
-        <span className="min-w-0 flex-1 truncate">{photo ? t("knowledge-kbdetail.photo_label", { n: photo.n }) : t("knowledge-kbdetail.thread_image")}</span>
+        <span className="min-w-0 flex-1 truncate">{photo ? t("recording.photo_label", { n: photo.n }) : t("recording.thread_image")}</span>
         {time && <span className="shrink-0 whitespace-nowrap text-[11.5px] tabular-nums">{time}</span>}
       </div>
       {photo && photos && (
@@ -784,9 +769,9 @@ function Material({ title, text }: { title: string; text: string }) {
 
 /** Why a follow-up could not be made, in words: the meeting still running, nothing to talk about, or the hub's. */
 function followupError(err: unknown): string {
-  if (err instanceof ApiError && err.code === "meeting_running") return t("knowledge-kbdetail.followup_running");
-  if (err instanceof ApiError && err.code === "no_material") return t("knowledge-kbdetail.followup_no_material");
-  return t("knowledge-kbdetail.followup_failed", { error: errorText(err) });
+  if (err instanceof ApiError && err.code === "meeting_running") return t("recording.followup_running");
+  if (err instanceof ApiError && err.code === "no_material") return t("recording.followup_no_material");
+  return t("recording.followup_failed", { error: errorText(err) });
 }
 
 /** The follow-up's first message (`POST …/followup`): the owner's words, then that conversation opens. A retry after a
@@ -811,7 +796,7 @@ function FollowupComposer({ id, auth, current, manager, onMade }: { id: string; 
       if (!made) {
         // A 2xx without the follow-up (the hub's receipt: the first call is still running, or its answer is unknown):
         // not definite, so the next try sends the same id, which the receipt answers without sending twice.
-        if (current()) setError(t("knowledge-kbdetail.followup_unknown"));
+        if (current()) setError(t("recording.followup_unknown"));
         return;
       }
       op.current = "";
@@ -829,15 +814,15 @@ function FollowupComposer({ id, auth, current, manager, onMade }: { id: string; 
   };
   return (
     <form className="px-4 py-3" onSubmit={(ev) => { ev.preventDefault(); void send(); }}>
-      <label htmlFor={field} className="mb-1.5 block text-[12px] font-medium text-ink-2">{t("knowledge-kbdetail.followup_label")}</label>
-      <textarea id={field} value={text} rows={2} disabled={busy} placeholder={t("knowledge-kbdetail.followup_placeholder")}
+      <label htmlFor={field} className="mb-1.5 block text-[12px] font-medium text-ink-2">{t("recording.followup_label")}</label>
+      <textarea id={field} value={text} rows={2} disabled={busy} placeholder={t("recording.followup_placeholder")}
         onChange={(ev) => { setText(ev.target.value); op.current = ""; }}
         onKeyDown={(ev) => { if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && !ev.nativeEvent.isComposing) { ev.preventDefault(); void send(); } }}
         className="block w-full resize-y rounded-control bg-field px-3 py-2 text-[13px] leading-relaxed text-ink shadow-btn outline-none placeholder:text-ink-3 focus:ring-1 focus:ring-accent disabled:opacity-70" />
       {error && <p role="alert" className="mt-2 text-[12px] leading-relaxed break-words text-red">{error}</p>}
       <div className="mt-2 flex items-center justify-end gap-2">
-        <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3">{t("knowledge-kbdetail.followup_hint")}</span>
-        <Button type="submit" tone="accent" icon="send" busy={busy} disabled={!text.trim()}>{t("knowledge-kbdetail.followup_send")}</Button>
+        <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3">{t("recording.followup_hint")}</span>
+        <Button type="submit" tone="accent" icon="send" busy={busy} disabled={!text.trim()}>{t("recording.followup_send")}</Button>
       </div>
     </form>
   );

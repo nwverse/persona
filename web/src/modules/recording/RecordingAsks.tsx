@@ -4,12 +4,13 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText } from "../../lib/api";
-import { formatSpan, isKind, recordingClock, type KBDetail, type RecordingAsk, type RecordingLive, type RecordingView } from "../../lib/kb";
+import { formatSpan, isKind, type KBDetail, type RecordingAsk, type RecordingLive } from "../../lib/kb";
+import { recordingClock, type RecordingView } from "./recording-view";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { useStore } from "../../lib/store";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import { Icon } from "../../ui/icons";
-import { Card, KBIcon, KIND_ICON, SectionTitle } from "./KBParts";
+import { Card, KBIcon, KIND_ICON, SectionTitle } from "../../views/knowledge/KBParts";
 
 /** The hub attends meetings (protocol.md "Added by the hub"): only then can a meeting without a role still have asks. */
 export const MEETING_ATTENDANCE_FEATURE = "meeting_attendance";
@@ -65,7 +66,7 @@ export function RecordingAsks({ detail, rec, auth, current }: Props) {
 
   return (
     <section aria-labelledby={heading} data-recording-asks>
-      <SectionTitle title={<span id={heading}>{t("knowledge-kbdetail.asks_title")}</span>} count={asks.length || undefined} />
+      <SectionTitle title={<span id={heading}>{t("recording.asks_title")}</span>} count={asks.length || undefined} />
       <Card>
         {status && (
           <p role="status" className="flex items-start gap-2 px-4 py-2.5 text-[12.5px] leading-relaxed text-ink-2">
@@ -73,8 +74,8 @@ export function RecordingAsks({ detail, rec, auth, current }: Props) {
             <span className="min-w-0 flex-1 break-words">{status}</span>
           </p>
         )}
-        {!live && error && <p role="alert" className="px-4 py-2.5 text-[12.5px] leading-relaxed break-words text-red">{t("knowledge-kbdetail.asks_load_failed", { error })}</p>}
-        {live && !asks.length && <p className="px-4 py-2.5 text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.asks_empty")}</p>}
+        {!live && error && <p role="alert" className="px-4 py-2.5 text-[12.5px] leading-relaxed break-words text-red">{t("recording.asks_load_failed", { error })}</p>}
+        {live && !asks.length && <p className="px-4 py-2.5 text-[12.5px] leading-relaxed text-ink-3">{t("recording.asks_empty")}</p>}
         {asks.length > 0 && (
           <ol className="divide-y divide-line">
             {asks.map((ask) => <AskRow key={ask.id} ask={ask} startedAt={rec.startedAt} />)}
@@ -92,16 +93,16 @@ function liveStatus(live: RecordingLive, recording: boolean): string {
   if (!recording) {
     if (live.attendance === "off") return "";
     return live.fed < live.next
-      ? t("knowledge-kbdetail.live_attended_partial", { fed: live.fed, next: live.next })
-      : t("knowledge-kbdetail.live_attended", { count: live.fed });
+      ? t("recording.live_attended_partial", { fed: live.fed, next: live.next })
+      : t("recording.live_attended", { count: live.fed });
   }
   if (live.problem) {
     const known = ["attendee_unavailable", "attendee_not_allowed", "live_full"].includes(live.problem);
-    return t(known ? `knowledge-kbdetail.live_problem_${live.problem}` : "knowledge-kbdetail.live_problem_other");
+    return t(known ? `recording.live_problem_${live.problem}` : "recording.live_problem_other");
   }
-  if (live.attendance === "off") return t("knowledge-kbdetail.live_off");
-  if (live.fed < live.next) return t("knowledge-kbdetail.live_catching_up", { fed: live.fed, next: live.next });
-  return live.next ? t("knowledge-kbdetail.live_following", { count: live.next }) : t("knowledge-kbdetail.live_waiting");
+  if (live.attendance === "off") return t("recording.live_off");
+  if (live.fed < live.next) return t("recording.live_catching_up", { fed: live.fed, next: live.next });
+  return live.next ? t("recording.live_following", { count: live.next }) : t("recording.live_waiting");
 }
 
 // A room meeting's (#3862, "Asking the room") add no_answer and room_unavailable.
@@ -109,14 +110,14 @@ const ASK_ERRORS = ["model_unavailable", "model_error", "model_timeout", "interr
 
 /** Why a question was not answered, in words; an unknown reason generically. */
 export function askFailure(ask: RecordingAsk): string {
-  return t(ask.error && ASK_ERRORS.includes(ask.error) ? `knowledge-kbdetail.ask_failed_${ask.error}` : "knowledge-kbdetail.ask_failed");
+  return t(ask.error && ASK_ERRORS.includes(ask.error) ? `recording.ask_failed_${ask.error}` : "recording.ask_failed");
 }
 
 export function AskRow({ ask, startedAt }: { ask: RecordingAsk; startedAt?: string }) {
   const heard = ask.question_source === "heard";
   // Spoken: transcribed on the phone from what the owner said to Persona (#3862).
   const spoken = ask.question_source === "spoken";
-  const source = t(heard ? "knowledge-kbdetail.ask_heard" : spoken ? "knowledge-kbdetail.ask_spoken" : "knowledge-kbdetail.ask_typed");
+  const source = t(heard ? "recording.ask_heard" : spoken ? "recording.ask_spoken" : "recording.ask_typed");
   // At its place in the recording; a typed question sent without one at the clock time it was asked.
   const clock = typeof ask.at === "number" ? recordingClock(startedAt, ask.at) : Number.isFinite(Date.parse(ask.asked_at)) ? recordingClock(ask.asked_at, 0) : "";
   const sources = ask.state === "answered" ? ask.sources ?? [] : [];
@@ -127,7 +128,7 @@ export function AskRow({ ask, startedAt }: { ask: RecordingAsk; startedAt?: stri
           <Icon name={heard ? "mic" : spoken ? "voice" : "keyboard"} size={13} />
           <span className="sr-only">{source}</span>
         </span>
-        <p className="min-w-0 flex-1 break-words text-[13px] font-medium leading-relaxed text-ink">{ask.question.trim() || t("knowledge-kbdetail.ask_heard_empty")}</p>
+        <p className="min-w-0 flex-1 break-words text-[13px] font-medium leading-relaxed text-ink">{ask.question.trim() || t("recording.ask_heard_empty")}</p>
         {clock && <span className="shrink-0 whitespace-nowrap pt-px text-[11.5px] text-ink-3 tabular-nums">{clock}</span>}
       </div>
       <div className="mt-1 pl-[23px]">
@@ -135,20 +136,20 @@ export function AskRow({ ask, startedAt }: { ask: RecordingAsk; startedAt?: stri
           <div className="flex items-start gap-2">
             <p className="min-w-0 flex-1 break-words text-[13px] leading-relaxed text-ink-2 select-text">{ask.answer}</p>
             {ask.speak && (
-              <span title={t("knowledge-kbdetail.ask_speak")} className="mt-0.5 shrink-0 text-ink-3">
+              <span title={t("recording.ask_speak")} className="mt-0.5 shrink-0 text-ink-3">
                 <Icon name="volume" size={13} />
-                <span className="sr-only">{t("knowledge-kbdetail.ask_speak")}</span>
+                <span className="sr-only">{t("recording.ask_speak")}</span>
               </span>
             )}
           </div>
         ) : ask.state === "pending" ? (
-          <p className="text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.ask_pending")}</p>
+          <p className="text-[12.5px] leading-relaxed text-ink-3">{t("recording.ask_pending")}</p>
         ) : ask.state === "failed" ? (
           <p className="text-[12.5px] leading-relaxed text-red">{askFailure(ask)}</p>
         ) : null}
         {sources.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11.5px] leading-relaxed text-ink-3">
-            <span>{t("knowledge-kbdetail.ask_sources")}</span>
+            <span>{t("recording.ask_sources")}</span>
             {sources.map((s) => {
               const to: Route = { name: "kb", kind: s.kind, id: s.id };
               const when = formatSpan(s.start, s.end, s.when);

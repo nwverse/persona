@@ -3,11 +3,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, t } from "../../i18n";
+import { recording } from "./module";
 import { handleUnauthorized, setToken } from "../../lib/api";
-import { dayTitle, minutesKeptUntil, recordingClock, type KBDetailResponse } from "../../lib/kb";
+import { dayTitle, type KBDetailResponse } from "../../lib/kb";
+import { minutesKeptUntil, recordingClock } from "./recording-view";
 import { setRosterDefault } from "../../lib/manager-choice";
 import { toast } from "../../ui/atoms";
-import { EntryDetail } from "./KBDetail";
+import { EntryDetail } from "../../views/knowledge/KBDetail";
+import "./test-register";
 
 vi.mock("../../ui/atoms", async (original) => ({ ...await original<typeof import("../../ui/atoms")>(), toast: vi.fn() }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -68,7 +71,8 @@ const writes = () => requests.filter((r) => r.init.method === "POST");
 const headings = (tag: string) => [...section().querySelectorAll(tag)].map((h) => h.textContent);
 
 beforeEach(async () => {
-  await initI18n("en");
+  // this module's strings come with its code, not the client catalog (module.ts)
+  await initI18n("en", recording.locales!);
   localStorage.clear();
   setToken("synthetic-owner-a");
   setRosterDefault("assistant");
@@ -92,7 +96,7 @@ describe("an all-day recording's recap in Knowledge detail", () => {
   it("shows the summary, the timeline by part of the day in time order, and the suggested to-dos instead of minutes", async () => {
     await load();
     expect(host.querySelector("[data-recording-minutes]")).toBeNull();
-    expect(host.textContent).not.toContain(t("knowledge-kbdetail.minutes_make"));
+    expect(host.textContent).not.toContain(t("recording.minutes_make"));
     expect(headings("h3")).toEqual(["Morning", "Afternoon", "Evening", "Suggested to-dos"]);
     expect(headings("h4")).toEqual(["Design review", "Lunch with the platform team", "Evening sync"]);
     for (const text of ["09:00–09:55", "12:30–12:40", "18:16–18:26", "Ada · The export path drops entries over 4 MB.", "Bo · Look at the flaky upload test. · tomorrow · Due 2026-11-12"]) expect(section().textContent).toContain(text);
@@ -158,8 +162,8 @@ describe("an all-day recording's recap in Knowledge detail", () => {
   it("says it is an all-day recording, with its day and part", async () => {
     const data = fixture(); data.detail.meta!.part = 2;
     await load(data);
-    expect(host.textContent).toContain(t("knowledge-kbdetail.recording_all_day"));
-    expect(host.textContent).toContain(t("knowledge-kbdetail.recording_day_part", { date: dayTitle("2026-11-11"), part: 2 }));
+    expect(host.textContent).toContain(t("recording.recording_all_day"));
+    expect(host.textContent).toContain(t("recording.recording_day_part", { date: dayTitle("2026-11-11"), part: 2 }));
   });
 
   it("copies the exact stored markdown", async () => {
@@ -195,7 +199,7 @@ describe("an all-day recording's recap in Knowledge detail", () => {
   it("refetches a stale recap without resubmitting the chosen to-dos", async () => {
     await load(); click("Add to to-dos");
     await reply(writes()[0], { code: "minutes_stale", error: "Changed" }, 409);
-    expect(toast).toHaveBeenCalledWith(t("knowledge-kbdetail.recap_stale"), "error");
+    expect(toast).toHaveBeenCalledWith(t("recording.recap_stale"), "error");
     expect(requests.at(-1)!.url).toBe(detailPath);
     const next = fixture(); next.detail.recap!.version = 4; next.detail.recap!.actions![0].what = "Fix the flaky upload test.";
     await reply(requests.at(-1)!, next);
@@ -258,7 +262,7 @@ describe("an all-day recording's recap in Knowledge detail", () => {
   it("offers nothing to write without a transcript", async () => {
     const data = fixture(); delete data.detail.recap; delete data.detail.meta!.recap_state; data.detail.segments = [];
     await load(data);
-    expect(section().textContent).toContain(t("knowledge-kbdetail.recap_no_text"));
+    expect(section().textContent).toContain(t("recording.recap_no_text"));
     expect(section().querySelectorAll("button")).toHaveLength(0);
   });
 
@@ -279,7 +283,7 @@ describe("an all-day recording's recap in Knowledge detail", () => {
   it("warns when the day was too long to read in full", async () => {
     const data = fixture(); data.detail.recap!.partial = true;
     await load(data);
-    expect(section().textContent).toContain(t("knowledge-kbdetail.recap_partial"));
+    expect(section().textContent).toContain(t("recording.recap_partial"));
   });
 
   it("shows a recap with only its summary, and one whose summary was withdrawn", async () => {
@@ -304,9 +308,9 @@ describe("an all-day recording's recap in Knowledge detail", () => {
     data.detail.meta!.trimmed_at = "2026-11-25T02:00:00Z"; delete data.detail.segments; delete data.detail.summary;
     await load(data);
     const ask = requests.find((r) => r.url === "/api/v1/assistant")!;
-    expect(section().textContent).toContain(t("knowledge-kbdetail.recap_transcript_expired"));
+    expect(section().textContent).toContain(t("recording.recap_transcript_expired"));
     await reply(ask, { manager: "assistant", recording_days: 14, minutes_days: 365 });
-    expect(section().textContent).toContain(t("knowledge-kbdetail.recap_kept_until", { date: minutesKeptUntil(started, 365)! }));
+    expect(section().textContent).toContain(t("recording.recap_kept_until", { date: minutesKeptUntil(started, 365)! }));
     expect(section().textContent).toContain("Design review");
     expect(button("Update")).toBeUndefined();
     expect(button("Copy")).toBeDefined();
@@ -319,7 +323,7 @@ describe("an all-day recording's recap in Knowledge detail", () => {
     const data = fixture(); data.detail.meta!.trimmed_at = "2026-11-25T02:00:00Z"; delete data.detail.segments;
     await load(data);
     await reply(requests.find((r) => r.url === "/api/v1/assistant")!, { manager: "assistant", minutes_days: 0 });
-    expect(section().textContent).toContain(t("knowledge-kbdetail.recap_kept_forever"));
+    expect(section().textContent).toContain(t("recording.recap_kept_forever"));
   });
 
   it("ignores a late write after the route changed", async () => {
@@ -683,7 +687,7 @@ describe("an open day's recap", () => {
     const empty = fixture(); delete empty.detail.recap; delete empty.detail.meta!.recap_state; empty.detail.segments = []; delete empty.detail.summary;
     await load(empty);
     await unlisted();
-    expect(section().textContent).toContain(t("knowledge-kbdetail.recap_no_text"));
+    expect(section().textContent).toContain(t("recording.recap_no_text"));
     let count = requests.length;
     act(() => vi.advanceTimersByTime(59_000));
     expect(requests).toHaveLength(count);

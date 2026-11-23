@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
+import { recording } from "./module";
 import { setToken } from "../../lib/api";
 import { namedBy, RecordingRenameDialog } from "./RecordingRename";
 
@@ -28,7 +29,8 @@ const reply = async (value: unknown, status = 200) => act(async () => {
 });
 
 beforeEach(async () => {
-  await initI18n("en");
+  // this module's strings come with its code, not the client catalog (module.ts)
+  await initI18n("en", recording.locales!);
   setToken("synthetic-owner-a");
   closed.mockClear();
   done.mockClear();

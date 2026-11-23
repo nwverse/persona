@@ -8,11 +8,12 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import { t } from "../../i18n";
 import { apiBlob, enc } from "../../lib/api";
-import { recordingClock, type RecordingPhoto, type RecordingView } from "../../lib/kb";
+import { type RecordingPhoto } from "../../lib/kb";
+import { recordingClock, type RecordingView } from "./recording-view";
 import { Collapse, cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { ImageViewer } from "../chat/ImageViewer";
-import { Card, SectionTitle, TonePill } from "./KBParts";
+import { ImageViewer } from "../../views/chat/ImageViewer";
+import { Card, SectionTitle, TonePill } from "../../views/knowledge/KBParts";
 
 type Auth = { token: string; tokenOwner: string; headers: Record<string, string> };
 
@@ -159,8 +160,8 @@ export function RecordingPhotos({ rec, photos, highlighted }: { rec: RecordingVi
   const url = open ? photos.images.url(open.n) : undefined;
   return (
     <section aria-labelledby={heading} data-recording-photos>
-      <SectionTitle title={<span id={heading}>{t("knowledge-kbdetail.photos_title")}</span>} count={list.length} />
-      {rec.trimmedAt && <p className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.photos_trimmed")}</p>}
+      <SectionTitle title={<span id={heading}>{t("recording.photos_title")}</span>} count={list.length} />
+      {rec.trimmedAt && <p className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">{t("recording.photos_trimmed")}</p>}
       <Card>
         <ol className="divide-y divide-line">
           {list.map((p) => <PhotoRow key={p.n} photo={p} rec={rec} images={photos.images} highlighted={highlighted === photoAnchor(p.n)} onOpen={() => setOpen(p)} />)}
@@ -168,7 +169,7 @@ export function RecordingPhotos({ rec, photos, highlighted }: { rec: RecordingVi
       </Card>
       {open && url && (
         <ImageViewer
-          images={[{ id: open.id, src: url, mime: open.mime, label: t("knowledge-kbdetail.photo_label", { n: open.n }), name: `photo-${open.n}.${open.mime === "image/png" ? "png" : "jpg"}` }]}
+          images={[{ id: open.id, src: url, mime: open.mime, label: t("recording.photo_label", { n: open.n }), name: `photo-${open.n}.${open.mime === "image/png" ? "png" : "jpg"}` }]}
           start={0}
           onClose={() => setOpen(null)}
         />
@@ -178,12 +179,12 @@ export function RecordingPhotos({ rec, photos, highlighted }: { rec: RecordingVi
 }
 
 function PhotoRow({ photo: p, rec, images, highlighted, onOpen }: { photo: RecordingPhoto; rec: RecordingView; images: PhotoImages; highlighted: boolean; onOpen: () => void }) {
-  const label = t("knowledge-kbdetail.photo_label", { n: p.n });
+  const label = t("recording.photo_label", { n: p.n });
   const clock = photoClock(rec, p);
   const loaded = !!images.url(p.n);
   return (
     <li id={photoAnchor(p.n)} tabIndex={-1} data-photo={p.n} className={cx("flex items-start gap-3 px-4 py-3 outline-none transition-colors", highlighted && "bg-accent-tint")}>
-      <button type="button" disabled={!loaded} onClick={onOpen} aria-label={t("knowledge-kbdetail.photo_open", { n: p.n })}
+      <button type="button" disabled={!loaded} onClick={onOpen} aria-label={t("recording.photo_open", { n: p.n })}
         className="shrink-0 rounded-control enabled:cursor-zoom-in">
         <PhotoThumb photo={p} images={images} className="size-16 rounded-control" />
       </button>
@@ -191,13 +192,13 @@ function PhotoRow({ photo: p, rec, images, highlighted, onOpen }: { photo: Recor
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-[13px] font-medium text-ink">{label}</span>
           <span className="text-[11.5px] text-ink-3 tabular-nums">{clock}</span>
-          {p.cited && <TonePill tone="accent">{t("knowledge-kbdetail.photo_cited")}</TonePill>}
+          {p.cited && <TonePill tone="accent">{t("recording.photo_cited")}</TonePill>}
         </div>
         {p.caption && <p className="mt-1 text-[13px] leading-relaxed break-words text-ink select-text">{p.caption}</p>}
         {p.note && (
           <p className="mt-1 flex gap-1.5 text-[12.5px] leading-relaxed text-ink-2">
             <Icon name="spark" size={12} className="mt-[3px] shrink-0 text-ink-3" />
-            <span className="min-w-0 flex-1 break-words select-text"><span className="sr-only">{t("knowledge-kbdetail.photo_note")} </span>{p.note}</span>
+            <span className="min-w-0 flex-1 break-words select-text"><span className="sr-only">{t("recording.photo_note")} </span>{p.note}</span>
           </p>
         )}
         {p.text && <Recognized text={p.text} />}
@@ -215,7 +216,7 @@ function Recognized({ text }: { text: string }) {
       <button type="button" aria-expanded={open} aria-controls={body} onClick={() => setOpen((x) => !x)}
         className="touch-hit flex min-w-0 items-center gap-1.5 rounded-control py-0.5 text-left text-[12px] text-ink-3 hover:text-ink">
         <Icon name="read" size={12} className="shrink-0" />
-        <span className="min-w-0 truncate">{t("knowledge-kbdetail.photo_text")}</span>
+        <span className="min-w-0 truncate">{t("recording.photo_text")}</span>
         <Icon name="chevron" size={12} stroke={2.2} className={cx("shrink-0 transition-transform duration-200", open && "rotate-180")} />
       </button>
       <Collapse open={open} lazy>
@@ -234,7 +235,7 @@ export function PhotoCite({ n, at, rec, photos, onJump }: { n: number; at: numbe
   const clock = seconds === undefined ? "" : recordingClock(rec.startedAt, seconds);
   if (photo && photos) {
     return (
-      <button type="button" aria-label={t("knowledge-kbdetail.minutes_photo_jump", { n, time: clock })} aria-controls={photoAnchor(n)} onClick={() => onJump(photoAnchor(n))}
+      <button type="button" aria-label={t("recording.minutes_photo_jump", { n, time: clock })} aria-controls={photoAnchor(n)} onClick={() => onJump(photoAnchor(n))}
         data-minutes-photo={n} className="touch-hit inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-control text-[11.5px] text-accent-ink tabular-nums hover:bg-hover">
         <PhotoThumb photo={photo} images={photos.images} className="size-7 rounded-chip" />
         {clock}
@@ -244,13 +245,13 @@ export function PhotoCite({ n, at, rec, photos, onJump }: { n: number; at: numbe
   if (photos?.on && photos.list) {
     return (
       <span data-minutes-photo={n} data-removed className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11.5px] text-ink-3">
-        <Icon name="image" size={12} />{t("knowledge-kbdetail.photo_removed")}
+        <Icon name="image" size={12} />{t("recording.photo_removed")}
       </span>
     );
   }
   return (
     <span data-minutes-photo={n} className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11.5px] text-ink-3 tabular-nums">
-      <Icon name="image" size={12} />{clock ? t("knowledge-kbdetail.minutes_photo", { n, time: clock }) : t("knowledge-kbdetail.photo_label", { n })}
+      <Icon name="image" size={12} />{clock ? t("recording.minutes_photo", { n, time: clock }) : t("recording.photo_label", { n })}
     </span>
   );
 }

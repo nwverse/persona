@@ -4,9 +4,9 @@
 // question shows as "What was just said (m:ss)", a photo forwarded into the room (phase 3: its image and its text, both
 // `photo-<id>`) is one entry, and the follow-up's first message holds the meeting's material in a context block before
 // the owner's words. Pure: no DOM, no requests.
-import type { KBDetail, LiveLine, MeetingRoom, MeetingTopic, RecordingAsk } from "./kb";
-import { parseUserText } from "./turns";
-import type { Item } from "./types";
+import type { KBDetail, LiveLine, MeetingRoom, MeetingTopic, RecordingAsk } from "../../lib/kb";
+import { parseUserText } from "../../lib/turns";
+import type { Item } from "../../lib/types";
 
 /** The hub takes the meeting conversation's phase 1 (protocol.md "Added by the hub"). */
 export const MEETING_CONVERSATION_FEATURE = "meeting_conversation";

@@ -7,28 +7,12 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { formatList, t } from "../../i18n";
 import { tRich } from "../../i18n/rich";
 import { api, ApiError, enc } from "../../lib/api";
-import {
-  dayClock,
-  entryFromDetail,
-  isKind,
-  minutesKeptUntil,
-  recapGaps,
-  recapGroups,
-  recordingClock,
-  recordingView,
-  type DayPart,
-  type DayRecapEntry,
-  type DayRecapGap,
-  type KBDetail,
-  type KBDetailResponse,
-  type KBEntry,
-  type MinutesAction,
-  type RecordingView,
-} from "../../lib/kb";
+import { entryFromDetail, isKind, type DayRecapEntry, type DayRecapGap, type KBDetail, type KBDetailResponse, type KBEntry, type MinutesAction } from "../../lib/kb";
+import { dayClock, minutesKeptUntil, recapGaps, recapGroups, recordingClock, recordingView, type DayPart, type RecordingView } from "./recording-view";
 import { href } from "../../lib/router";
 import { Button, copyText, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { Card, KBIcon, KIND_ICON, onPlainClick, SectionTitle, TonePill } from "./KBParts";
+import { Card, KBIcon, KIND_ICON, onPlainClick, SectionTitle, TonePill } from "../../views/knowledge/KBParts";
 import { ActionItems, PointList, TranscriptTime, useMinutesDays, useMinutesRequests, type ConfirmedActions, type RecordingAuth } from "./RecordingMinutes";
 
 type Props = {
@@ -46,19 +30,19 @@ type Props = {
 const GAPS_SHOWN = 5;
 
 const PART_TITLE: Record<DayPart, string> = {
-  morning: "knowledge-kbdetail.recap_morning",
-  afternoon: "knowledge-kbdetail.recap_afternoon",
-  evening: "knowledge-kbdetail.recap_evening",
+  morning: "recording.recap_morning",
+  afternoon: "recording.recap_afternoon",
+  evening: "recording.recap_evening",
 };
 
 // The reasons the contract names; any other is shown without one.
 const GAP_REASON: Record<string, string> = {
-  paused: "knowledge-kbdetail.recap_gap_paused",
-  interrupted: "knowledge-kbdetail.recap_gap_interrupted",
-  stopped: "knowledge-kbdetail.recap_gap_stopped",
-  pending: "knowledge-kbdetail.recap_gap_pending",
-  lost: "knowledge-kbdetail.recap_gap_lost",
-  erased: "knowledge-kbdetail.recap_gap_erased",
+  paused: "recording.recap_gap_paused",
+  interrupted: "recording.recap_gap_interrupted",
+  stopped: "recording.recap_gap_stopped",
+  pending: "recording.recap_gap_pending",
+  lost: "recording.recap_gap_lost",
+  erased: "recording.recap_gap_erased",
 };
 
 /** One part of the day ("Parts" in the contract): its recording (`own`: the one this page shows), its number, and its
@@ -91,14 +75,14 @@ export function RecordingDayRecap({ detail, rec, auth, current, refresh, onSaved
   const disabled = busy || needsRefresh;
   const spoken = rec.lines.some((line) => !line.bookmark);
   const clock = (at: number) => dayClock(rec.startedAt, at, rec.tz);
-  const range = (from: number, to: number) => clock(from) === clock(to) ? clock(from) : t("knowledge-kbdetail.recap_range", { from: clock(from), to: clock(to) });
+  const range = (from: number, to: number) => clock(from) === clock(to) ? clock(from) : t("recording.recap_range", { from: clock(from), to: clock(to) });
   // This part's times jump into the transcript below; another part's open that part's page, which has its transcript.
   const time = (p: DayPartView) => (at: number) => p.own ? <TranscriptTime rec={rec} at={at} onJump={onJump} /> : <PartTime part={p} at={at} onOpen={onOpen} />;
   // What asking now does: retry a failed one, bring one up to what has arrived, or write the first before the evening.
   const ask = rec.trimmedAt || (!recap && state === "pending") || (!spoken && state !== "failed") ? null
-    : state === "failed" ? "knowledge-kbdetail.recap_retry"
-      : recap ? (recap.final ? "knowledge-kbdetail.recap_regenerate" : "knowledge-kbdetail.recap_update")
-        : "knowledge-kbdetail.recap_write_now";
+    : state === "failed" ? "recording.recap_retry"
+      : recap ? (recap.final ? "recording.recap_regenerate" : "recording.recap_update")
+        : "recording.recap_write_now";
 
   // The day's parts merged by time; a single part is shown as it is.
   const multi = parts.length > 1;
@@ -121,46 +105,46 @@ export function RecordingDayRecap({ detail, rec, auth, current, refresh, onSaved
     }
     void confirm([...writes.values()]);
   };
-  const covers = !multi && !recap?.final ? t("knowledge-kbdetail.recap_so_far", { time: clock(recap?.covers?.to ?? 0) })
+  const covers = !multi && !recap?.final ? t("recording.recap_so_far", { time: clock(recap?.covers?.to ?? 0) })
     // The day's recap is final only once its parts are found and every part's is; until then each part says how far
     // it is.
     : found && written.length === parts.length && written.every((p) => p.detail.recap!.final)
-      ? t(written.some((p) => p.detail.recap!.final_reason === "cutoff") ? "knowledge-kbdetail.recap_final_cutoff" : "knowledge-kbdetail.recap_final")
+      ? t(written.some((p) => p.detail.recap!.final_reason === "cutoff") ? "recording.recap_final_cutoff" : "recording.recap_final")
       : parts.map((p, i) => {
         const r = p.detail.recap;
-        const label = !r ? t("knowledge-kbdetail.recap_part_none", { part: p.part })
-          : r.final ? t("knowledge-kbdetail.recap_part_final", { part: p.part })
-            : t("knowledge-kbdetail.recap_part_so_far", { part: p.part, time: clock(r.covers?.to ?? 0) });
+        const label = !r ? t("recording.recap_part_none", { part: p.part })
+          : r.final ? t("recording.recap_part_final", { part: p.part })
+            : t("recording.recap_part_so_far", { part: p.part, time: clock(r.covers?.to ?? 0) });
         return <span key={p.detail.id}>{i > 0 && " · "}<span className="whitespace-nowrap">{label}</span></span>;
       });
 
   return (
     <section aria-labelledby={heading} data-recording-recap>
-      <SectionTitle title={<span id={heading}>{t("knowledge-kbdetail.recap")}</span>} right={
+      <SectionTitle title={<span id={heading}>{t("recording.recap")}</span>} right={
         <div className="flex shrink-0 items-center gap-1.5">
-          {written.length > 0 && <Button tone="quiet" disabled={busy} onClick={() => void copyText(markdown)}>{t("knowledge-kbdetail.minutes_copy")}</Button>}
+          {written.length > 0 && <Button tone="quiet" disabled={busy} onClick={() => void copyText(markdown)}>{t("recording.minutes_copy")}</Button>}
           {ask && <Button tone="secondary" disabled={disabled || state === "pending"} onClick={() => void run()}>{t(ask)}</Button>}
         </div>
       } />
       {rec.trimmedAt && <p data-recap-kept className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">
-        {minutesDays === 0 ? t("knowledge-kbdetail.recap_kept_forever") : keptUntil ? t("knowledge-kbdetail.recap_kept_until", { date: keptUntil }) : t("knowledge-kbdetail.recap_transcript_expired")}
+        {minutesDays === 0 ? t("recording.recap_kept_forever") : keptUntil ? t("recording.recap_kept_until", { date: keptUntil }) : t("recording.recap_transcript_expired")}
       </p>}
       {!rec.trimmedAt && state === "pending" && <p role="status" className="mb-2 flex items-center gap-2 px-1 text-[12.5px] leading-relaxed text-ink-3">
-        <Spinner />{t(recap ? "knowledge-kbdetail.recap_updating" : "knowledge-kbdetail.recap_writing")}
+        <Spinner />{t(recap ? "recording.recap_updating" : "recording.recap_writing")}
       </p>}
-      {!rec.trimmedAt && state === "failed" && <p role="status" className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.recap_failed")}</p>}
+      {!rec.trimmedAt && state === "failed" && <p role="status" className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">{t("recording.recap_failed")}</p>}
       {failed && <p role="status" data-recap-parts-failed className="mb-2 flex flex-wrap items-baseline gap-x-1.5 px-1 text-[12.5px] leading-relaxed text-ink-3">
-        {t("knowledge-kbdetail.recap_parts_failed")}
+        {t("recording.recap_parts_failed")}
         <span aria-hidden>·</span>
         <button type="button" disabled={busy} onClick={pollNow} className="rounded-control font-medium text-accent-ink hover:underline disabled:text-ink-3 disabled:no-underline">
-          {t("knowledge-kbdetail.recap_retry")}
+          {t("recording.recap_retry")}
         </button>
       </p>}
       {!written.length && !state && !rec.trimmedAt && <p className="px-1 text-[12.5px] leading-relaxed text-ink-3">
-        {t(spoken ? "knowledge-kbdetail.recap_absent" : "knowledge-kbdetail.recap_no_text")}
+        {t(spoken ? "recording.recap_absent" : "recording.recap_no_text")}
       </p>}
       {needsRefresh && !busy && <div className="mb-2 px-1">
-        <Button tone="secondary" onClick={() => void run(undefined, true)}>{t("knowledge-kbdetail.minutes_retry_refresh")}</Button>
+        <Button tone="secondary" onClick={() => void run(undefined, true)}>{t("recording.minutes_retry_refresh")}</Button>
       </div>}
       {written.length > 0 && <Card>
         <div className="px-4 py-3.5">
@@ -170,19 +154,19 @@ export function RecordingDayRecap({ detail, rec, auth, current, refresh, onSaved
           <div className={summaries.length ? "mt-1.5 space-y-1 text-[12.5px] leading-relaxed" : "space-y-1 text-[12.5px] leading-relaxed"}>
             <p data-recap-covers className="text-ink-2">{covers}</p>
             <Gaps gaps={gaps} rec={rec} />
-            {written.some((p) => p.detail.recap!.partial) && <p className="text-ink-3">{t("knowledge-kbdetail.recap_partial")}</p>}
+            {written.some((p) => p.detail.recap!.partial) && <p className="text-ink-3">{t("recording.recap_partial")}</p>}
           </div>
         </div>
         {recapGroups(entries, rec.startedAt, rec.tz).map((group, i) => (
           <div key={i} className="px-4 py-3.5">
             {/* A quiet label: the part of the day divides the entries, which are the content. */}
-            <h3 className="mb-1.5 text-[12px] font-medium text-ink-3">{t(group.part ? PART_TITLE[group.part] : "knowledge-kbdetail.recap_timeline")}</h3>
+            <h3 className="mb-1.5 text-[12px] font-medium text-ink-3">{t(group.part ? PART_TITLE[group.part] : "recording.recap_timeline")}</h3>
             <ol className="divide-y divide-line">
               {group.entries.map((entry, j) => <Entry key={j} entry={entry} range={range(entry.from, entry.to)} time={time(entry.source)} onOpen={onOpen} />)}
             </ol>
           </div>
         ))}
-        <ActionItems title={t("knowledge-kbdetail.recap_actions")} actions={actions} disabled={disabled} time={(at, action) => time(action.source)(at)} onAdd={add} />
+        <ActionItems title={t("recording.recap_actions")} actions={actions} disabled={disabled} time={(at, action) => time(action.source)(at)} onAdd={add} />
       </Card>}
     </section>
   );
@@ -278,12 +262,12 @@ function PartTime({ part, at, onOpen }: { part: DayPartView; at: number; onOpen:
   return (
     <a
       href={href({ name: "kb", kind: "recordings", id: detail.id })}
-      aria-label={t("knowledge-kbdetail.recap_part_jump", { time: clock, part: part.part })}
+      aria-label={t("recording.recap_part_jump", { time: clock, part: part.part })}
       onClick={(ev) => onPlainClick(ev, () => onOpen(entryFromDetail(undefined, detail)))}
       className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-control text-[11.5px] text-accent-ink tabular-nums hover:bg-hover"
     >
       <Icon name="clock" size={12} />{clock}
-      <span className="text-ink-3">· {t("knowledge-kbdetail.recap_part", { part: part.part })}</span>
+      <span className="text-ink-3">· {t("recording.recap_part", { part: part.part })}</span>
     </a>
   );
 }
@@ -311,7 +295,7 @@ function Entry({ entry, range, time, onOpen }: { entry: DayRecapEntry; range: st
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <h4 className="min-w-0 break-words text-[13px] font-semibold leading-relaxed text-ink">{entry.title}</h4>
-          {meeting && <TonePill tone="accent">{t("knowledge-kbdetail.recap_meeting")}</TonePill>}
+          {meeting && <TonePill tone="accent">{t("recording.recap_meeting")}</TonePill>}
         </div>
         <span className="shrink-0 whitespace-nowrap text-[11.5px] text-ink-3 tabular-nums">{range}</span>
       </div>
@@ -336,14 +320,14 @@ function Gaps({ gaps, rec }: { gaps?: DayRecapGap[] | null; rec: RecordingView }
   const shown = recapGaps(gaps, rec.startedAt, rec.tz);
   if (!shown.length) return null;
   const items = shown.slice(0, GAPS_SHOWN).map((g) => {
-    const range = g.from === g.to ? g.from : t("knowledge-kbdetail.recap_range", { from: g.from, to: g.to });
-    return Object.hasOwn(GAP_REASON, g.reason) ? t("knowledge-kbdetail.recap_gap", { range, reason: t(GAP_REASON[g.reason]) }) : range;
+    const range = g.from === g.to ? g.from : t("recording.recap_range", { from: g.from, to: g.to });
+    return Object.hasOwn(GAP_REASON, g.reason) ? t("recording.recap_gap", { range, reason: t(GAP_REASON[g.reason]) }) : range;
   });
-  if (shown.length > GAPS_SHOWN) items.push(t("knowledge-kbdetail.recap_gaps_more", { count: shown.length - GAPS_SHOWN }));
+  if (shown.length > GAPS_SHOWN) items.push(t("recording.recap_gaps_more", { count: shown.length - GAPS_SHOWN }));
   // Joined the language's way, each item kept on one line ("13:40–14:30" never splits at the dash).
   const list = formatList(items.map((_, i) => `{${i}}`)).split(/(\{\d+\})/g).map((piece, i) => {
     const m = /^\{(\d+)\}$/.exec(piece);
     return m ? <span key={i} className="whitespace-nowrap">{items[Number(m[1])]}</span> : piece;
   });
-  return <p data-recap-gaps className="break-words text-ink-3">{tRich("knowledge-kbdetail.recap_gaps", { gaps: list })}</p>;
+  return <p data-recap-gaps className="break-words text-ink-3">{tRich("recording.recap_gaps", { gaps: list })}</p>;
 }

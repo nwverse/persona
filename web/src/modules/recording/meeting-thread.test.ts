@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { RecordingAsk } from "./kb";
-import { meetingMeta } from "./kb";
+import type { RecordingAsk } from "../../lib/kb";
+import { meetingMeta } from "./recording-view";
 import {
   followupThread, fromMeeting, hasMaterial, linesFrom, liveLines, liveLinesEnd, meetingClock, meetingLines, meetingRunning, meetingTopics,
   mergeLiveLines, newerParts, offersTalk, photoOf, roomState, roomThread,
 } from "./meeting-thread";
-import type { Item } from "./types";
+import type { Item } from "../../lib/types";
 
 const rid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const askID = "11111111-1111-4111-8111-111111111111";

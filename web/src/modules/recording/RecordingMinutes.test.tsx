@@ -3,12 +3,15 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, t } from "../../i18n";
+import { recording } from "./module";
 import { setToken } from "../../lib/api";
-import { formatAt, formatSpan, minutesKeptUntil, type KBDetailResponse } from "../../lib/kb";
+import { formatAt, formatSpan, type KBDetailResponse } from "../../lib/kb";
+import { minutesKeptUntil } from "./recording-view";
 import { setRosterDefault } from "../../lib/manager-choice";
 import { toast } from "../../ui/atoms";
 import overviewCases from "../../../../spec/fixtures/minutes-overview/cases.json";
-import { EntryDetail } from "./KBDetail";
+import { EntryDetail } from "../../views/knowledge/KBDetail";
+import "./test-register";
 
 vi.mock("../../ui/atoms", async (original) => ({ ...await original<typeof import("../../ui/atoms")>(), toast: vi.fn() }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -45,7 +48,8 @@ const click = (text: string) => act(() => button(text).click());
 const writes = () => requests.filter((r) => r.init.method === "POST");
 
 beforeEach(async () => {
-  await initI18n("en");
+  // this module's strings come with its code, not the client catalog (module.ts)
+  await initI18n("en", recording.locales!);
   localStorage.clear();
   setToken("synthetic-owner-a");
   setRosterDefault("assistant");
@@ -280,18 +284,18 @@ describe("recording minutes in Knowledge detail", () => {
     const data = trimmed();
     await load(data);
     expect(new Headers(assistantAsk().init.headers).get("X-Persona-Manager")).toBe("assistant");
-    expect(section().textContent).toContain(t("knowledge-kbdetail.minutes_transcript_expired"));
+    expect(section().textContent).toContain(t("recording.minutes_transcript_expired"));
     await reply(assistantAsk(), { manager: "assistant", recording_days: 14, minutes_days: 365 });
     const until = minutesKeptUntil(data.detail.meta!.started_at as string, 365)!;
     expect(until).toContain("2027");
-    expect(section().textContent).toContain(t("knowledge-kbdetail.minutes_kept_until", { date: until }));
+    expect(section().textContent).toContain(t("recording.minutes_kept_until", { date: until }));
     expect(section().textContent).toContain("Keep the cap");
     expect(button("Regenerate")).toBeUndefined();
     expect(button("Make minutes")).toBeUndefined();
     expect(button("Copy")).toBeDefined();
     expect(section().querySelector<HTMLButtonElement>('[aria-label="Go to transcript at 14:00:12"]')!.disabled).toBe(true);
-    expect(host.textContent).toContain(t("knowledge-kbdetail.transcript_expired"));
-    expect(host.textContent).not.toContain(t("knowledge-kbdetail.transcript_empty"));
+    expect(host.textContent).toContain(t("recording.transcript_expired"));
+    expect(host.textContent).not.toContain(t("recording.transcript_empty"));
     click("Add to to-dos");
     expect(writes().map((w) => w.url)).toEqual([`${minutesPath}/todos`]);
   });
@@ -299,7 +303,7 @@ describe("recording minutes in Knowledge detail", () => {
   it("says minutes are kept until deleted when retention is forever", async () => {
     await load(trimmed());
     await reply(assistantAsk(), { manager: "assistant", recording_days: 14, minutes_days: 0 });
-    expect(section().textContent).toContain(t("knowledge-kbdetail.minutes_kept_forever"));
+    expect(section().textContent).toContain(t("recording.minutes_kept_forever"));
     expect(section().textContent).not.toContain("1970");
     expect(button("Regenerate")).toBeUndefined();
   });
@@ -310,7 +314,7 @@ describe("recording minutes in Knowledge detail", () => {
   ])("says only that the transcript expired when the assistant %s", async (_, body, status) => {
     await load(trimmed());
     await reply(assistantAsk(), body, status);
-    expect(section().textContent).toContain(t("knowledge-kbdetail.minutes_transcript_expired"));
+    expect(section().textContent).toContain(t("recording.minutes_transcript_expired"));
     expect(toast).not.toHaveBeenCalled();
   });
 

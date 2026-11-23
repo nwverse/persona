@@ -5,10 +5,11 @@
 // and again on `meeting_live` or its 5-second poll. Read-only; the transcript keeps every line once uploaded.
 import { useId, useLayoutEffect, useRef } from "react";
 import { t } from "../../i18n";
-import { recordingClock, type LiveLine, type MeetingTopic, type RecordingView } from "../../lib/kb";
+import { type LiveLine, type MeetingTopic } from "../../lib/kb";
+import { recordingClock, type RecordingView } from "./recording-view";
 import { cx, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { Card, SectionTitle } from "./KBParts";
+import { Card, SectionTitle } from "../../views/knowledge/KBParts";
 import type { MeetingState } from "./RecordingConversation";
 
 /** How close to the end of the Live box still counts as following it (new lines then scroll into view). */
@@ -26,9 +27,9 @@ export function RecordingLiveView({ rec, meeting }: { rec: RecordingView; meetin
 }
 
 const STATE_LABEL: Record<MeetingTopic["state"], string> = {
-  done: "knowledge-kbdetail.live_topic_done",
-  current: "knowledge-kbdetail.live_topic_current",
-  open: "knowledge-kbdetail.live_topic_open",
+  done: "recording.live_topic_done",
+  current: "recording.live_topic_current",
+  open: "recording.live_topic_open",
 };
 
 /** **Topics**, once the room set any (a room started before it had the tool never does): one chip per topic in the
@@ -38,12 +39,12 @@ const STATE_LABEL: Record<MeetingTopic["state"], string> = {
 function LiveTopics({ topics, rec }: { topics?: MeetingTopic[]; rec: RecordingView }) {
   const heading = useId();
   if (!topics?.length) return null;
-  const since = (topic: MeetingTopic) => typeof topic.at === "number" ? t("knowledge-kbdetail.live_topic_since", { time: recordingClock(rec.startedAt, topic.at, rec.tz) }) : "";
+  const since = (topic: MeetingTopic) => typeof topic.at === "number" ? t("recording.live_topic_since", { time: recordingClock(rec.startedAt, topic.at, rec.tz) }) : "";
   const now = topics.find((topic) => topic.state === "current");
   const nowDetail = now ? [since(now), now.note].filter(Boolean).join(" · ") : "";
   return (
     <section aria-labelledby={heading} data-live-topics>
-      <SectionTitle title={<span id={heading}>{t("knowledge-kbdetail.live_topics_title")}</span>} />
+      <SectionTitle title={<span id={heading}>{t("recording.live_topics_title")}</span>} />
       <Card>
         <div className="px-4 py-2.5">
           <ol className="flex flex-wrap gap-1.5">
@@ -83,17 +84,17 @@ function LiveLines({ lines, cut, rec }: { lines?: LiveLine[]; cut: boolean; rec:
   }, [newest]);
   return (
     <section aria-labelledby={heading} data-live-lines>
-      <SectionTitle title={<span id={heading}>{t("knowledge-kbdetail.live_title")}</span>} />
+      <SectionTitle title={<span id={heading}>{t("recording.live_title")}</span>} />
       <Card>
         {!lines ? (
           <div className="flex justify-center py-3"><Spinner /></div>
         ) : !lines.length ? (
-          <p className="px-4 py-2.5 text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.live_empty")}</p>
+          <p className="px-4 py-2.5 text-[12.5px] leading-relaxed text-ink-3">{t("recording.live_empty")}</p>
         ) : (
           <div ref={box} role="log" aria-labelledby={heading} tabIndex={0}
             className="max-h-72 overflow-y-auto rounded-card px-4 py-1.5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
             onScroll={(ev) => { const el = ev.currentTarget; following.current = el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_PX; }}>
-            {cut && <p data-live-earlier className="py-1 text-[11.5px] text-ink-3">{t("knowledge-kbdetail.live_earlier")}</p>}
+            {cut && <p data-live-earlier className="py-1 text-[11.5px] text-ink-3">{t("recording.live_earlier")}</p>}
             <ol>
               {lines.map((l) => (
                 <li key={l.n} data-live-line={l.n} className="flex gap-3 py-1 text-[13px] leading-relaxed">

@@ -4,10 +4,10 @@
 import { useId, useState } from "react";
 import { t } from "../../i18n";
 import { formatSpan, type RecordingMinutes } from "../../lib/kb";
-import { boldParts, TOPIC_BULLETS_SHOWN, TOPIC_GLYPH, TOPIC_TINTS, type MinutesOverview, type OverviewBullet, type OverviewCite, type OverviewLine, type OverviewTopic } from "../../lib/minutes-overview";
+import { boldParts, TOPIC_BULLETS_SHOWN, TOPIC_GLYPH, TOPIC_TINTS, type MinutesOverview, type OverviewBullet, type OverviewCite, type OverviewLine, type OverviewTopic } from "./minutes-overview";
 import { Button, cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { Card } from "./KBParts";
+import { Card } from "../../views/knowledge/KBParts";
 // Its tokens and own rules (the tints, the grid, sizes in em) load with this page, not with every first screen.
 import "./minutes-overview.css";
 
@@ -36,10 +36,10 @@ export function MinutesOverviewCard({ minutes, overview, cite, actions, open }: 
         {facts.length > 0 && <p className="mt-1 break-words text-label leading-relaxed text-ink-2">
           {facts.flatMap((fact, i) => i ? [` · `, fact] : [fact])}
         </p>}
-        {minutes.partial && <p className="mt-2 text-label leading-relaxed text-ink-3">{t("knowledge-kbdetail.minutes_partial")}</p>}
+        {minutes.partial && <p className="mt-2 text-label leading-relaxed text-ink-3">{t("recording.minutes_partial")}</p>}
         {overview.conclusions.length > 0 && <div data-minutes-conclusions className="mt-3 rounded-card bg-ai-tint px-3.5 py-3">
           <h4 id={`${base}-conclusions`} className="flex items-center gap-1.5 text-meta font-semibold leading-snug text-ink">
-            <Icon name="light" size={15} stroke={2} className="minutes-glyph shrink-0 text-ai" />{t("knowledge-kbdetail.minutes_conclusions")}
+            <Icon name="light" size={15} stroke={2} className="minutes-glyph shrink-0 text-ai" />{t("recording.minutes_conclusions")}
           </h4>
           <ul aria-labelledby={`${base}-conclusions`} className="mt-2 space-y-1.5">
             {overview.conclusions.map((c, i) => <li key={i} data-minutes-conclusion className={cx("flex flex-wrap gap-x-3 gap-y-0.5 text-meta leading-relaxed", c.photo ? "items-center" : "items-baseline")}>
@@ -70,12 +70,12 @@ export function MinutesOverviewCard({ minutes, overview, cite, actions, open }: 
       </div>
       {actions}
       {open && <div className="px-4 py-3.5">
-        <h4 className="mb-2 text-meta font-semibold text-ink">{t("knowledge-kbdetail.minutes_open")}</h4>
+        <h4 className="mb-2 text-meta font-semibold text-ink">{t("recording.minutes_open")}</h4>
         {open}
       </div>}
       <div data-minutes-ai-note className="flex gap-1.5 px-4 py-3 text-label leading-relaxed text-ink-3">
         <span aria-hidden className="flex h-[1lh] shrink-0 items-center"><Icon name="sparkles" size={13} className="minutes-glyph text-ai" /></span>
-        <p className="min-w-0 break-words">{t("knowledge-kbdetail.minutes_ai_note")}</p>
+        <p className="min-w-0 break-words">{t("recording.minutes_ai_note")}</p>
       </div>
     </Card>
   );
@@ -100,8 +100,8 @@ function TopicCard({ id, topic, level, cite }: { id: string; topic: OverviewTopi
       </ul>
       {/* Its name says which topic it opens (the visible words first), so the buttons of several topics differ. */}
       {more > 0 && <Button tone="quiet" size="sm" expanded={open} aria-controls={`${id}-bullets`} className="mt-1 ml-2" onClick={() => setOpen((o) => !o)}
-        aria-label={open ? t("knowledge-kbdetail.minutes_show_less_in", { topic: topic.title }) : t("knowledge-kbdetail.minutes_show_more_in", { count: more, topic: topic.title })}>
-        {open ? t("knowledge-kbdetail.minutes_show_less") : t("knowledge-kbdetail.minutes_show_more", { count: more })}
+        aria-label={open ? t("recording.minutes_show_less_in", { topic: topic.title }) : t("recording.minutes_show_more_in", { count: more, topic: topic.title })}>
+        {open ? t("recording.minutes_show_less") : t("recording.minutes_show_more", { count: more })}
       </Button>}
     </article>
   );
@@ -110,7 +110,7 @@ function TopicCard({ id, topic, level, cite }: { id: string; topic: OverviewTopi
 /** A point (a dot, and who said it when known) or a decision (the flag and the word Decision), with its source. */
 function Bullet({ bullet, cite }: { bullet: OverviewBullet; cite: Cite }) {
   const source = cite(bullet);
-  const label = bullet.decision ? t("knowledge-kbdetail.minutes_decision") : bullet.who;
+  const label = bullet.decision ? t("recording.minutes_decision") : bullet.who;
   return (
     <li data-minutes-bullet={bullet.decision ? "decision" : "point"} className="flex gap-2 text-meta leading-relaxed">
       <span aria-hidden className="minutes-mark flex h-[1lh] shrink-0 items-center justify-center">
