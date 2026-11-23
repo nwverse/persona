@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -221,11 +224,15 @@ type stopWatcherHub struct {
 	watching chan struct{}
 	release  chan struct{}
 	once     sync.Once
+	hold     bool
 }
 
 func (h *stopWatcherHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
 	if p.Device == DeviceAll && p.Method == DeviceDevicesList && h.sent.Load() {
 		h.once.Do(func() { close(h.watching) })
+		if h.hold {
+			<-h.release
+		}
 		select {
 		case <-h.release:
 		case <-ctx.Done():
@@ -243,32 +250,48 @@ func (h *stopWatcherHub) DeviceCall(ctx context.Context, p DeviceCall) (json.Raw
 // ordering: the unregistered card cannot interrupt; after registration the same current card acts once. Production's
 // progress tick already requires the watcher, so this preserves its ownership guard rather than adding a bypass.
 func TestFeishuStopBeforeTheRunWatcher(t *testing.T) {
+	delivered := make(chan struct{})
+	testFeishuStopBeforeTheRunWatcher(t, delivered, nil)
+	<-delivered
+}
+
+// holdDelivery is non-nil only for the early-failure regression: delivery waits
+// before calling the real e.deliver, so only cleanup can release it.
+func testFeishuStopBeforeTheRunWatcher(t *testing.T, delivered chan struct{}, holdDelivery chan struct{}) {
 	e := newThreadEnv(t, nil)
-	h := &stopWatcherHub{fakeHub: e.f, watching: make(chan struct{}), release: make(chan struct{})}
+	h := &stopWatcherHub{fakeHub: e.f, watching: make(chan struct{}), release: make(chan struct{}), hold: holdDelivery != nil}
 	setHub(e.s, h)
 	e.topicTodo("发版")
-	delivered := make(chan struct{})
 	go func() {
 		defer close(delivered)
+		if holdDelivery != nil {
+			<-holdDelivery
+		}
 		e.deliver(topicEvent("om_watched", "开始"))
 	}()
-	select {
-	case <-h.watching:
-	case <-time.After(5 * time.Second):
-		t.Fatal("run watcher did not start its initial devices.list")
-	}
 	defer func() {
 		select {
 		case <-h.release:
 		default:
 			close(h.release)
 		}
+		if holdDelivery != nil {
+			close(holdDelivery)
+		}
 		select {
 		case <-delivered:
+			if holdDelivery != nil {
+				fmt.Fprintln(os.Stderr, "STOP_WATCHER_DELIVERY_RELEASED")
+			}
 		case <-time.After(5 * time.Second):
 			t.Error("topic delivery did not finish after the watcher was released")
 		}
 	}()
+	select {
+	case <-h.watching:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run watcher did not start its initial devices.list")
+	}
 	ctx := context.Background()
 	runs := e.s.channelRuns(channel.Feishu)
 	if len(runs) != 1 {
@@ -298,6 +321,33 @@ func TestFeishuStopBeforeTheRunWatcher(t *testing.T) {
 	out = e.s.botCardAction(ctx, a, "")
 	if out.Toast == nil || out.Toast.Type != "success" || len(e.f.interrupted()) != 1 {
 		t.Fatalf("watched current card did not interrupt once: %+v / %v", out.Toast, e.f.interrupted())
+	}
+}
+
+// The failing subtest has its own process. Cleanup writes a completion marker
+// only after releasing and joining the real delivery; the old cleanup order never
+// runs, so a matching timeout without that marker fails this regression.
+func TestFeishuStopWatcherTimeoutReleasesDelivery(t *testing.T) {
+	const childEnv = "PERSONA_TEST_STOP_WATCHER_TIMEOUT"
+	if os.Getenv(childEnv) == "1" {
+		testFeishuStopBeforeTheRunWatcher(t, make(chan struct{}), make(chan struct{}))
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestFeishuStopWatcherTimeoutReleasesDelivery$", "-test.count=1", "-test.timeout=30s")
+	cmd.Env = append(os.Environ(), childEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("watcher-start timeout did not fail: %s", output)
+	}
+	for _, want := range []string{"run watcher did not start its initial devices.list", "--- FAIL: TestFeishuStopWatcherTimeoutReleasesDelivery", "STOP_WATCHER_DELIVERY_RELEASED"} {
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("child output missing %q: %s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"topic delivery did not finish", "goroutine after test has completed", "test timed out"} {
+		if strings.Contains(string(output), unwanted) {
+			t.Fatalf("delivery was not released by the early-timeout cleanup: %s", output)
+		}
 	}
 }
 
