@@ -3274,3 +3274,16 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
   its first row to the foot of what is in sight (`anchor: .bottom`): the list cannot go that far up and stops at its top.
 - **Under an inline title, iOS 18's search drawer starts hidden** until a pull (the placement `pageSearchable` picks),
   so a calm list showed no way to search. `.navigationBarDrawer(displayMode: .always)` keeps it shown.
+
+## Deleting a never-compiled branch moves the source-reading tests (2026-11-23, #13399)
+
+- The tests and scripts that read Swift source as text count lines inside every `#if` branch, compiled or not:
+  `TokenRatchetTests` (literal design values), `ContinuousMotionTests` (its loop registry) and the perf and isolation
+  baselines. So deleting dead `os(macOS)` branches lowered a file's `rawSymbol` count and left a registry entry whose
+  only loop was the Mac's: both tests fail until the baseline or registry is lowered in the same PR. `SheetCloseTests`
+  is the one that already skipped Mac-only branches (`iPhoneSource`).
+- A mechanical deletion can still leave a compiler warning behind: a `var` that only the removed branch mutated
+  (`ExtensionPageView.updateVisibility`). Read the build's warnings for the changed files, not only its errors.
+- `scripts/test/test_apple_no_macos_branches.py` keeps new `os(macOS)` branches out of the app targets, `Shared/` and
+  the tests. Packages whose `Package.swift` declares a macOS platform are left out: the Persona Link helper builds
+  `PersonaScreenCore` for macOS, so a branch there is live.

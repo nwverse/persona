@@ -72,6 +72,55 @@ nonisolated enum MeetingTranscriptionWords {
             : String(localized: "The hub isn't transcribing right now. Showing this iPhone's transcript.")
     }
 
+    /// What stopped the hub's transcription, by the `problem` code it sent (#13446, an open set:
+    /// spec/fixtures/meeting-transcription-problems): the speech service refused, is busy, can't be reached, or anything
+    /// else; nil for a code with no reason of its own (`no_interim`, one from a newer hub).
+    nonisolated enum UpstreamKind: String, Sendable {
+        case refused, busy, unreachable, failed
+    }
+
+    static func upstreamKind(_ problem: String?) -> UpstreamKind? {
+        switch problem {
+        case "upstream_forbidden": .refused
+        case "upstream_busy": .busy
+        case "upstream_unavailable": .unreachable
+        case "upstream_failed": .failed
+        default: nil
+        }
+    }
+
+    /// The fallback notice's lines (#13385, #13446): why the hub isn't transcribing and, when it knows the kind, what to
+    /// do; then what this iPhone shows, or why it can't (`phoneCannot`). `service`: the speech service chosen on the hub,
+    /// by name (nil: the built-in one). Never the service's own error, a log id or account details: the hub sends only
+    /// the kind.
+    struct Notice: Equatable, Sendable {
+        var words: String
+        var phone: String?
+    }
+
+    static func fallbackNotice(_ meeting: MeetingTranscription.Meeting, service: String?, phoneCannot: String?) -> Notice {
+        guard meeting.socket != .waitingForWiFi, meeting.stopped == nil, let kind = upstreamKind(meeting.problem) else {
+            return Notice(words: fallback(meeting, phoneCannot: phoneCannot != nil), phone: phoneCannot)
+        }
+        return Notice(words: upstream(kind, service: service),
+                      phone: phoneCannot ?? String(localized: "Showing this iPhone's transcript."))
+    }
+
+    /// Why the hub isn't transcribing, for each kind, and what to do.
+    static func upstream(_ kind: UpstreamKind, service: String?) -> String {
+        let name = service ?? String(localized: "the speech service [Meeting Transcription]")
+        switch kind {
+        case .refused:
+            return String(localized: "The hub isn't transcribing right now: \(name) refused the requests, maybe because speech recognition isn't turned on for the account, or its quota ran out or expired. The hub tries again by itself; if this goes on, check in its console.")
+        case .busy:
+            return String(localized: "The hub isn't transcribing right now: \(name) is busy, maybe because too many sessions are running at once or its quota is used up. The hub tries again by itself; if this goes on, check what's left in its console.")
+        case .unreachable:
+            return String(localized: "The hub isn't transcribing right now: it can't reach \(name). It tries again by itself; if this goes on, check the hub machine's network.")
+        case .failed:
+            return String(localized: "The hub isn't transcribing right now: \(name) had an error. The hub tries again by itself.")
+        }
+    }
+
     /// Why this iPhone shows no lines of its own for a meeting it can't transcribe (`RecordingTranscription.cannot`,
     /// #13385): which language and what happens next. `locale`: the meeting's language (`RecordingEntry.locale`), the one
     /// it is transcribed in or not at all; `fellBack`: a hub-mode meeting whose hub isn't transcribing either, whose
@@ -352,10 +401,11 @@ struct MeetingTranscriptionFallbackRow: View {
     var body: some View {
         // Whether it fell back doesn't hang on the role (only which lines show does).
         if transcription.shown(id, role: .off).fellBack {
-            let cannot = phone.cannot[id]
-            MeetingTranscriptionFallbackNotice(
-                words: MeetingTranscriptionWords.fallback(transcription.meeting(id), phoneCannot: cannot != nil),
-                phone: cannot.map { MeetingTranscriptionWords.phoneCannot($0, locale: RecordingLibrary.shared.entry(id)?.locale ?? RecordingDefaults.locale, fellBack: true) })
+            let cannot = phone.cannot[id].map {
+                MeetingTranscriptionWords.phoneCannot($0, locale: RecordingLibrary.shared.entry(id)?.locale ?? RecordingDefaults.locale, fellBack: true)
+            }
+            let notice = MeetingTranscriptionWords.fallbackNotice(transcription.meeting(id), service: transcription.service, phoneCannot: cannot)
+            MeetingTranscriptionFallbackNotice(words: notice.words, phone: notice.phone)
         }
     }
 }

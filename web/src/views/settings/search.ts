@@ -42,6 +42,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.reply_motion"), anchor: "reply-motion" },
   { tab: "general", group: t("ui-look.recent_chats"), anchor: "recent-chats" },
   { tab: "general", group: t("ui-look.sidebar_icons"), hint: words(t("ui-look.sidebar_icons_monochrome"), t("ui-look.sidebar_icons_colored")), anchor: "sidebar-icons" },
+  { tab: "general", group: t("ui-look.sidebar_usage"), anchor: "sidebar-usage" },
   { tab: "general", group: t("settings.start_page"), anchor: "start-page" },
   { tab: "general", group: t("settings.start_page_open_on"), hint: t("settings.start_page_main"), anchor: "open-on" },
   { tab: "general", group: t("settings.sidebar_pages"), anchor: "sidebar-pages" },
