@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import fixture from "../../../spec/fixtures/minutes-overview/cases.json";
-import { supportsIcon } from "../ui/icons";
+import fixture from "../../../../spec/fixtures/minutes-overview/cases.json";
+import { supportsIcon } from "../../ui/icons";
 import { boldParts, minutesOverview, TOPIC_GLYPH, TOPIC_ICONS } from "./minutes-overview";
 
 // docs/assistant/meeting-minutes.md "Summary card (#6563)", "Clients": the page shows the summary card only when a

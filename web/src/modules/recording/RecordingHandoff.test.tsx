@@ -18,6 +18,7 @@ vi.mock("../../lib/router", async (orig) => ({ ...(await orig<typeof import("../
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 
 import { initI18n } from "../../i18n";
+import { recording } from "./module";
 import { setToken } from "../../lib/api";
 import { navigate } from "../../lib/router";
 import type { Machine, Session } from "../../lib/types";
@@ -51,7 +52,8 @@ const handoff = (extra: Partial<MeetingHandoff> = {}): MeetingHandoff =>
   ({ id: "h1", at: "2026-11-15T11:00:00Z", machine_id: "mac", session_id: "site", title: "Website redesign", state: "sent", ...extra });
 
 beforeEach(async () => {
-  await initI18n("en");
+  // this module's strings come with its code, not the client catalog (module.ts)
+  await initI18n("en", recording.locales!);
   setToken("synthetic-owner-a");
   closed.mockClear();
   done.mockClear();

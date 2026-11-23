@@ -6,7 +6,7 @@ import { t } from "../../i18n";
 import { api, enc, errorText } from "../../lib/api";
 import { composing } from "../../lib/send-history";
 import { Button, Dialog, toast } from "../../ui/atoms";
-import { inputClass } from "../assistant/parts";
+import { inputClass } from "../../views/assistant/parts";
 
 /** The most of a name the hub takes. */
 const TITLE_MAX = 200;
@@ -46,11 +46,11 @@ export function RecordingRenameDialog({
     setBusy(true);
     try {
       await api(`/recordings/${enc(id)}/title`, { method: "PUT", json: { title: trimmed }, ...auth });
-      toast(trimmed ? t("knowledge-kbdetail.renamed") : t("knowledge-kbdetail.rename_cleared"), "ok");
+      toast(trimmed ? t("recording.renamed") : t("recording.rename_cleared"), "ok");
       onDone();
       onClose();
     } catch (e) {
-      toast(t("knowledge-kbdetail.rename_failed", { error: errorText(e) }), "error");
+      toast(t("recording.rename_failed", { error: errorText(e) }), "error");
       setBusy(false);
     }
   };
@@ -58,7 +58,7 @@ export function RecordingRenameDialog({
     <Dialog
       open
       onClose={() => !busy && onClose()}
-      title={t("knowledge-kbdetail.rename_title")}
+      title={t("recording.rename_title")}
       width={420}
       footer={
         <>
@@ -75,10 +75,10 @@ export function RecordingRenameDialog({
         onFocus={(e) => e.currentTarget.select()}
         onChange={(e) => setTitle(e.target.value.replace(/[\r\n]+/g, " "))}
         onKeyDown={(e) => e.key === "Enter" && !composing(e.nativeEvent) && void save()}
-        placeholder={t("knowledge-kbdetail.rename_placeholder")}
-        aria-label={t("knowledge-kbdetail.rename_title")}
+        placeholder={t("recording.rename_placeholder")}
+        aria-label={t("recording.rename_title")}
       />
-      <p className="mt-1.5 text-submeta leading-relaxed text-ink-3">{t("knowledge-kbdetail.rename_hint")}</p>
+      <p className="mt-1.5 text-submeta leading-relaxed text-ink-3">{t("recording.rename_hint")}</p>
     </Dialog>
   );
 }

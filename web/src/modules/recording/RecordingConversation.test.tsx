@@ -6,12 +6,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
+import { recording } from "./module";
 import { setToken } from "../../lib/api";
 import type { KBDetailResponse, KBSegment, RecordingAsk, RecordingLive, RecordingMinutes } from "../../lib/kb";
 import { setRosterDefault } from "../../lib/manager-choice";
 import { getState } from "../../lib/store";
 import type { Item } from "../../lib/types";
-import { EntryDetail } from "./KBDetail";
+import { EntryDetail } from "../../views/knowledge/KBDetail";
+import "./test-register";
 
 const hub = vi.hoisted(() => ({ listeners: new Map<string, Set<(msg: Record<string, unknown>) => void>>() }));
 vi.mock("../../lib/store", async (original) => ({
@@ -88,7 +90,8 @@ const submit = async () => act(async () => { section()!.querySelector("form")!.r
 const fresh = () => { act(() => root.render(null)); host.replaceChildren(); requests = []; };
 
 beforeEach(async () => {
-  await initI18n("en");
+  // this module's strings come with its code, not the client catalog (module.ts)
+  await initI18n("en", recording.locales!);
   localStorage.clear();
   setToken("synthetic-owner-a");
   setRosterDefault("assistant");

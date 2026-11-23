@@ -4,13 +4,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
+import { recording } from "./module";
 import { setToken } from "../../lib/api";
 import { formatSpan, type KBDetailResponse, type RecordingAsk, type RecordingLive } from "../../lib/kb";
 import { setRosterDefault } from "../../lib/manager-choice";
 import { getState } from "../../lib/store";
 import type { AssistantInfo, Session } from "../../lib/types";
 import { Icon, type IconName } from "../../ui/icons";
-import { EntryDetail } from "./KBDetail";
+import { EntryDetail } from "../../views/knowledge/KBDetail";
+import "./test-register";
 
 vi.mock("../../ui/atoms", async (original) => ({ ...await original<typeof import("../../ui/atoms")>(), toast: vi.fn() }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -56,7 +58,8 @@ const statusIcon = () => section()!.querySelector("[role=status] svg")!.innerHTM
 const factRow = (label: string) => [...host.querySelectorAll("div")].find((row) => row.firstElementChild?.textContent === label && row.children.length === 2);
 
 beforeEach(async () => {
-  await initI18n("en");
+  // this module's strings come with its code, not the client catalog (module.ts)
+  await initI18n("en", recording.locales!);
   localStorage.clear();
   setToken("synthetic-owner-a");
   setRosterDefault("assistant");

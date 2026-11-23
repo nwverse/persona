@@ -15,8 +15,8 @@ import type { Machine, Session } from "../../lib/types";
 import { Button, Dialog } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
-import { handOffAgents, Target } from "../inbox/HandOffTargets";
-import { Card } from "./KBParts";
+import { handOffAgents, Target } from "../../views/inbox/HandOffTargets";
+import { Card } from "../../views/knowledge/KBParts";
 
 /** The most of the owner's line the hub takes (its maxMeetingTextRunes). */
 const TEXT_MAX = 8000;
@@ -59,21 +59,21 @@ export function lastHandoff(meta: Record<string, unknown> | null | undefined): M
 /** Why a hand-off didn't go, in the owner's words. */
 export function handoffProblem(problem: string | undefined): string {
   switch (problem) {
-    case "not_agent": return t("knowledge-handoff.problem_not_agent");
-    case "not_allowed": return t("knowledge-handoff.problem_not_allowed");
-    case "unavailable": return t("knowledge-handoff.problem_unavailable");
-    default: return t("knowledge-handoff.problem_send_failed");
+    case "not_agent": return t("recording-handoff.problem_not_agent");
+    case "not_allowed": return t("recording-handoff.problem_not_allowed");
+    case "unavailable": return t("recording-handoff.problem_unavailable");
+    default: return t("recording-handoff.problem_send_failed");
   }
 }
 
 /** Why the hub took no hand-off at all: the meeting still running, nothing to hand, or its own words. */
 function callError(err: unknown): string {
-  if (err instanceof ApiError && err.code === "meeting_running") return t("knowledge-handoff.running");
-  if (err instanceof ApiError && err.code === "no_material") return t("knowledge-handoff.no_material");
+  if (err instanceof ApiError && err.code === "meeting_running") return t("recording-handoff.running");
+  if (err instanceof ApiError && err.code === "no_material") return t("recording-handoff.no_material");
   return errorText(err);
 }
 
-const agentName = (h: Pick<MeetingHandoff, "title">) => h.title?.trim() || t("knowledge-handoff.agent");
+const agentName = (h: Pick<MeetingHandoff, "title">) => h.title?.trim() || t("recording-handoff.agent");
 
 /** Picks an Agent, an optional line and whether the transcript goes too, then hands the meeting over. Opened again from
  *  a failed hand-off's Try again: its Agent and transcript choice come back picked. */
@@ -138,7 +138,7 @@ export function RecordingHandoffDialog({
     <Dialog
       open
       onClose={() => !busy && onClose()}
-      title={t("knowledge-handoff.title")}
+      title={t("recording-handoff.title")}
       width={460}
       footer={
         <>
@@ -147,18 +147,18 @@ export function RecordingHandoffDialog({
           {hasTranscript && (
             <label className="mr-auto flex cursor-pointer items-center gap-2 text-label whitespace-nowrap text-ink-2">
               <input type="checkbox" checked={transcript} onChange={(e) => setTranscript(e.target.checked)} className="size-3.5 accent-[var(--accent)]" data-testid="handoff-transcript" />
-              {t("knowledge-handoff.transcript")}
+              {t("recording-handoff.transcript")}
             </label>
           )}
           <Button tone="quiet" disabled={busy} onClick={onClose}>{t("common.cancel")}</Button>
           <Button tone="accent" icon="send" busy={busy} disabled={!target} onClick={() => void send()} testId="handoff-send">
-            {t("knowledge-handoff.send")}
+            {t("recording-handoff.send")}
           </Button>
         </>
       }
     >
-      <p className="mb-1.5 text-label font-medium text-ink-2">{t("knowledge-handoff.pick")}</p>
-      <div role="radiogroup" aria-label={t("knowledge-handoff.pick")} className="max-h-[300px] divide-y divide-line overflow-y-auto rounded-card bg-surface shadow-card">
+      <p className="mb-1.5 text-label font-medium text-ink-2">{t("recording-handoff.pick")}</p>
+      <div role="radiogroup" aria-label={t("recording-handoff.pick")} className="max-h-[300px] divide-y divide-line overflow-y-auto rounded-card bg-surface shadow-card">
         {agents.map((s) => (
           <Target
             key={`${s.machine_id}/${s.session_id}`}
@@ -182,11 +182,11 @@ export function RecordingHandoffDialog({
           }
         }}
         rows={2}
-        placeholder={t("knowledge-handoff.ask_placeholder")}
-        aria-label={t("knowledge-handoff.ask_label")}
+        placeholder={t("recording-handoff.ask_placeholder")}
+        aria-label={t("recording-handoff.ask_label")}
         className="mt-3 block w-full resize-none rounded-control bg-field px-3 py-2 text-meta leading-relaxed text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)]"
       />
-      <p className="mt-2 text-submeta leading-relaxed text-ink-3">{t("knowledge-handoff.gets")}</p>
+      <p className="mt-2 text-submeta leading-relaxed text-ink-3">{t("recording-handoff.gets")}</p>
       {error && <p role="alert" className="mt-2 text-label text-red">{error}</p>}
     </Dialog>
   );
@@ -204,15 +204,15 @@ export function RecordingHandoffRow({ handoff, onRetry }: { handoff: MeetingHand
           <Icon name={failed ? "warning" : "send"} size={14} className={failed ? "shrink-0 text-red" : "shrink-0 text-ink-3"} />
           <span className="min-w-0 flex-1">
             <span className="block truncate font-medium text-ink">
-              {failed ? t("knowledge-handoff.row_failed", { name }) : t("knowledge-handoff.row_sent", { name })}
+              {failed ? t("recording-handoff.row_failed", { name }) : t("recording-handoff.row_sent", { name })}
             </span>
             {failed && <span className="block truncate text-label text-ink-3">{handoffProblem(handoff.problem)}</span>}
           </span>
           {failed ? (
-            onRetry && <Button tone="secondary" onClick={onRetry}>{t("knowledge-handoff.retry")}</Button>
+            onRetry && <Button tone="secondary" onClick={onRetry}>{t("recording-handoff.retry")}</Button>
           ) : (
             <Button tone="secondary" onClick={() => openFromPage({ name: "session", mid: handoff.machine_id, sid: handoff.session_id })}>
-              {t("knowledge-handoff.open")}
+              {t("recording-handoff.open")}
             </Button>
           )}
         </div>

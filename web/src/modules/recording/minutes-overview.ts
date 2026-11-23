@@ -2,7 +2,7 @@
 // on its own, apart from the legacy lists, and cleaned as the contract's "Clients" says. The page shows the summary card
 // only when a bullet is left; anything else (no overview, a broken one) shows the minutes as before. The mock hub, the
 // iPhone and this page check the same cases (spec/fixtures/minutes-overview/cases.json).
-import type { IconName } from "../ui/icons";
+import type { IconName } from "../../ui/icons";
 
 /** The topic icons the hub writes; any other value reads as `general`, so the list can grow. */
 export const TOPIC_ICONS = ["progress", "schedule", "release", "performance", "metrics", "tooling", "quality", "design", "people", "customer", "budget", "risk", "general"] as const;

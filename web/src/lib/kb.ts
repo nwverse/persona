@@ -151,7 +151,7 @@ export interface RecordingMinutes {
   actions?: MinutesAction[];
   open?: MinutesPoint[];
   /** The summary card (#6563): the headline, the core conclusions and the points and decisions grouped by topic. Read
-   *  defensively on its own (lib/minutes-overview.ts `minutesOverview`), so a broken one never costs the fields above. */
+   *  defensively on its own (modules/recording/minutes-overview.ts `minutesOverview`), so a broken one never costs the fields above. */
   overview?: unknown;
   partial?: boolean;
   /** The same minutes as Markdown, what Copy sends; it follows the summary card when there is one. */
@@ -274,7 +274,7 @@ export interface RecordingLive {
   revs?: Record<string, number>;
   /** Phase 2 (`meeting_live_view`, "Phase 2: live view"): the live log from `?from=` (no `lines` without it), at most
    *  500, `more` when there are more; the room's topics (always present) and when they last changed. Read through
-   *  `liveLines` / `meetingTopics` (lib/meeting-thread.ts, off the first screen). */
+   *  `liveLines` / `meetingTopics` (modules/recording/meeting-thread.ts, off the first screen). */
   lines?: unknown;
   more?: boolean;
   topics?: unknown;

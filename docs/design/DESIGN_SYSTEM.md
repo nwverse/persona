@@ -3743,9 +3743,9 @@ summary card (contract: `docs/assistant/meeting-minutes.md` "Summary card (#6563
 pixel for pixel. Reason: where the meeting landed and each workstream's state are what a reader looks for first, and
 the flat Key points / Decisions lists made them read every line (principle 2).
 
-- **Where.** `web/src/lib/minutes-overview.ts` reads the overview on its own (`minutesOverview`, the contract's
+- **Where.** `web/src/modules/recording/minutes-overview.ts` reads the overview on its own (`minutesOverview`, the contract's
   "Clients" cleaning) and finds the bold places (`boldParts`); `RecordingMinutes.tsx` chooses the layout once, when the
-  minutes change (a bullet left after cleaning), never while drawing; `web/src/views/knowledge/MinutesOverview.tsx` draws it.
+  minutes change (a bullet left after cleaning), never while drawing; `web/src/modules/recording/MinutesOverview.tsx` draws it.
 - **Card.** Still one `Card` in the recording page's column. Its first child holds the headline (or the minutes' title)
   as the h3 in `text-card-title`, when · where · attendees on one line in `text-label` `--ink-2` (the dots are read out
   too, so a screen reader keeps the facts apart), the partial note,
@@ -3776,7 +3776,7 @@ the flat Key points / Decisions lists made them read every line (principle 2).
   an empty cell. The reading order runs row by row.
 - **Text size.** Every size is a named one (`text-card-title`, `text-meta`, `text-label`); the card's own marks, tiles
   and icons are sized in `em` and `--minutes-card-min` follows `--text-scale`, so they grow with the page's text.
-- **Tokens** in `web/src/views/knowledge/minutes-overview.css`, which loads with the Knowledge page: as Tailwind
+- **Tokens** in `web/src/modules/recording/minutes-overview.css`, which loads with the recording module (web/src/modules/recording) when a recording opens: as Tailwind
   utilities in `web/src/styles.css` they added 325 B to every language's first screen (`FIRST_SCREEN_BUDGET`) for a page
   most visits never open, so the card's tokens and its few own rules (the tints by `data-minutes-tint`, the grid, the em
   sizes) live there, as `web/src/ui/share-tokens.css` does for sharing; everything else is the usual utilities. Checked in
@@ -3802,7 +3802,7 @@ the flat Key points / Decisions lists made them read every line (principle 2).
   `send`, performance `gauge`, metrics `chart`, tooling `tool`, quality `shield`, design `layers`, people `users`,
   customer `person`, budget `money`, risk `shieldAlert`, general `list`.
 - **Copy** sends the hub's `markdown`, as it always did.
-- Checks: `web/src/lib/minutes-overview.test.ts` (the cleaning, `boldParts` and the shared
+- Checks: `web/src/modules/recording/minutes-overview.test.ts` (the cleaning, `boldParts` and the shared
   `spec/fixtures/minutes-overview/cases.json`), `RecordingMinutes.test.tsx` (order, heading levels, fallback, the fold,
   to-dos, Copy, the trim), `RecordingPhotos.test.tsx` (a cited photo after the trim) and `web/e2e/recording-minutes.mjs`
   (en, zh-Hans and ja at 1440 and 390, light and dark; the Large text size and a 1440 window at 200% zoom; a card

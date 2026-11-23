@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import fixture from "../../../spec/fixtures/minutes-wait/cases.json";
+import fixture from "../../../../spec/fixtures/minutes-wait/cases.json";
 import { minutesWait } from "./minutes-wait";
 
 // The shared cases (spec/fixtures/minutes-wait, #13461), which the hub and the iPhone run too.
