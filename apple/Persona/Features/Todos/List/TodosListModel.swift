@@ -491,11 +491,11 @@ final class TodosListModel {
     var draft: TodoOutbox.Draft? { deps.outbox.draft }
     func tookDraft() { deps.outbox.tookDraft() }
 
-    /// Where a new to-do the hub turned down starts again (its toast's Edit): due when it was due, wherever the list
-    /// is now (`TodoOutbox.refusal`).
+    /// Where a new to-do the hub turned down starts again (its toast's Edit): due when it was due and in its project,
+    /// unless the project is what the hub turned down, wherever the list is now (`TodoOutbox.refusal`).
     func capture(_ draft: TodoOutbox.Draft) -> TodoCapture {
         let due = TodoItem(id: "", title: draft.title, dueAt: draft.dueAt, dueDate: draft.dueDate)
-        return TodoCapture(day: TodosPlaces.dueDay(due, deps.calendar()), at: draft.dueAt)
+        return TodoCapture(day: TodosPlaces.dueDay(due, deps.calendar()), at: draft.dueAt, project: draft.project)
     }
 
     /// The list's line while the hub is out of reach, with when the hub last answered a read of it.

@@ -1017,8 +1017,9 @@ The web Agent conversation header's **Session overview** list button toggles a p
   - **New To-Do** is the foot toolbar's +. Its sheet
     (a title, notes with the mic, Add) closes at once: the new to-do is first in To do, its line "Saving…", until the
     hub has it, with "Added · Undo". One the hub turns down is said in a toast whose **Edit** opens the sheet again
-    with what was typed and when it was due; one turned down for its project (gone meanwhile) comes back without it,
-    the toast saying so. In a place other than All To-dos the sheet starts the to-do there (3.5, "To-dos places").
+    with what was typed, when it was due and its project; one turned down for its project (gone meanwhile) comes back
+    without it, the toast saying so. In a place other than All To-dos the sheet starts the to-do there (3.5,
+    "To-dos places").
   - **Writes wait on the device** (`TodoOutbox`): kept on disk with their op id from the tap, sent when their window ends
     (a reopen, Remove from Someday and a new to-do at once; Remove from Someday inside Someday's own window takes it
     back and sends nothing), every one at once when the app leaves the foreground, and again after the hub answers a

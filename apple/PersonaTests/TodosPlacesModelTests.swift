@@ -483,10 +483,12 @@ struct TodosPlacesModelTests {
         #expect(list.capture(on: friday, at: ten) == TodoCapture(day: friday, at: ten), "an hour on its calendar")
         list.place = .project("kyoto")
         #expect(list.capture() == TodoCapture(project: "kyoto"))
-        // One the hub turned down starts again due when it was due, wherever the list is now (its toast's Edit).
+        // One the hub turned down starts again due when it was due and in its project (unless the hub turned that
+        // down), wherever the list is now (its toast's Edit).
         #expect(list.capture(TodoOutbox.Draft(title: "Visa", dueAt: ten)) == TodoCapture(day: friday, at: ten))
         #expect(list.capture(TodoOutbox.Draft(title: "Visa", dueDate: Self.day(2))) == TodoCapture(day: friday))
         #expect(list.capture(TodoOutbox.Draft(title: "Visa")) == TodoCapture())
+        #expect(list.capture(TodoOutbox.Draft(title: "Visa", project: "weather")) == TodoCapture(project: "weather"))
     }
 
     /// A to-do made in Today or in a project is listed there at once ("Saving…"), sent with its due date or its project

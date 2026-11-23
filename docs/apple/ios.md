@@ -2300,18 +2300,19 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   (an hour starts with All Day off), which goes in the outbox's one create (`TodoOutbox.Write.create`'s due date or
   moment and project; an entry kept on disk before these reads as none), so the row the list draws while it is saved is
   in the place and counted there (`TodoCountsSource.applying` files it with its project, `TodosPlaces.holds` sees its
-  due date). One the hub turns down comes back in the sheet due as it was (`TodoOutbox.refusal`, `Draft`); one made in
-  a project comes back without it, since the hub takes the title and date as sent and so turned down the project, the
-  toast saying so. Today's empty state leads to Upcoming with `EmptyStateView`'s link look, so the foot's + stays the
-  one prominent action. A pick in the sidebar opens To-dos on the place at its root (`TodoWorkspace.open`, taken once by
-  `AssistantView.show` as `fresh`). The To-dos row itself (`TodoWorkspace.pickRow`) is All To-dos where To-dos is the
-  place in front and otherwise reopens it as it was left: the host decides, from its own state
-  (`TodoWorkspace.opening(inFront:)`: the shell's `ShellPlaces.current`, the Sidebar layout's root, the classic page),
-  not from whether the list is on screen. A pick in the title menu, Show All and "3 coming up this week" change the
-  list in place. Upcoming's ⋯ › Show as Calendar (`todos.v1.upcomingCalendar`) draws Upcoming's own to-dos on the
-  to-dos calendar, coloured by each row's view (`TodoCalendarView`'s `state`; today's page keeps its session reader
-  and its own slot sheet), with the guard line above it and no Show Done (`TodosModeBar(options:)`); words in the
-  search field show the list instead. DEBUG `-openTodoPlace all|today|upcoming|project:<slug>` opens To-dos on a place.
+  due date). One the hub turns down comes back in the sheet due as it was and in its project (`TodoOutbox.refusal`,
+  `Draft`); one whose project a 400 turned down (the hub takes the title and date as sent; `Sent.refused`'s `project`)
+  comes back without it, the toast saying so, and any other refusal says what the hub said. Today's empty state leads
+  to Upcoming with `EmptyStateView`'s link look, so the foot's + stays the one prominent action. A pick in the sidebar
+  opens To-dos on the place at its root (`TodoWorkspace.open`, taken once by `AssistantView.show` as `fresh`). The
+  To-dos row itself (`TodoWorkspace.pickRow`) is All To-dos where To-dos is the place in front and otherwise reopens it
+  as it was left: the host decides, from its own state (`TodoWorkspace.opening(inFront:)`: the shell's
+  `ShellPlaces.current`, the Sidebar layout's root, the classic page), not from whether the list is on screen. A pick
+  in the title menu, Show All and "3 coming up this week" change the list in place. Upcoming's ⋯ › Show as Calendar
+  (`todos.v1.upcomingCalendar`) draws Upcoming's own to-dos on the to-dos calendar, coloured by each row's view
+  (`TodoCalendarView`'s `state`; today's page keeps its session reader and its own slot sheet), with the guard line
+  above it and no Show Done (`TodosModeBar(options:)`); words in the search field show the list instead. DEBUG
+  `-openTodoPlace all|today|upcoming|project:<slug>` opens To-dos on a place.
 - **Send receipts** (`apple/Shared/SendReceipts.swift`; `docs/protocol/protocol.md` "Message feedback (#5258)" and its
   "To-do writes"). The socket decodes `message_send_state` and `todo_send_state` (`ServerEvent.sendReceipt`) and passes
   one on only while its own authenticated hello carries that kind's top-level version, `message_send_state: 1` or

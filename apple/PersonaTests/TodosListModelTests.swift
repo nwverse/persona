@@ -48,7 +48,7 @@ struct TodosListModelTests {
     static func outbox(_ store: TodoStore, hub: FakeHub, refused: @escaping @MainActor (String) -> Void = { _ in }) -> TodoOutbox {
         TodoOutbox(deps: .init(load: { [] }, save: { _, _ in Task {} }, hub: { "g" },
                                send: { entry, answered in await store.send(entry, answered: answered, api: hub.client) },
-                               refused: { _, message in refused(message) },
+                               refused: { _, message, _ in refused(message) },
                                standing: { id in
                                    store.byID[id].map { .init(title: $0.title, updatedAt: $0.updatedAt, done: $0.isDone, someday: false) }
                                },

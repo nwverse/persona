@@ -52,6 +52,12 @@ final class TodoOutbox {
         var edits: Bool {
             if case .create = self { false } else { true }
         }
+
+        /// A new to-do made in a knowledge-base project.
+        var inProject: Bool {
+            guard case .create(_, _, _, _, let project?) = self else { return false }
+            return !project.isEmpty
+        }
     }
 
     nonisolated struct Entry: Codable, Equatable, Identifiable, Sendable {
@@ -105,8 +111,9 @@ final class TodoOutbox {
         case notSent
         /// It may have reached it: nobody knows whether it was done.
         case unknown
-        /// The hub turned it down: dropped, and said.
-        case refused(String)
+        /// The hub turned it down: dropped, and said. `project`: what it turned down is the project a new to-do was made
+        /// in (a 400 to one that carried one: the hub takes the title and date as the app sends them).
+        case refused(String, project: Bool = false)
     }
 
     /// A to-do as the list last read it: what a write sent again is checked against.
@@ -142,8 +149,9 @@ final class TodoOutbox {
         var hub: @MainActor () -> String?
         /// Sends it; `answered` is told as the hub answers, before the list is read again.
         var send: @MainActor (_ entry: Entry, _ answered: @escaping @MainActor (Answer) -> Void) async -> Sent
-        /// A write the hub turned down, or that could not be saved: said where the owner is.
-        var refused: @MainActor (Entry, String) -> Void
+        /// A write the hub turned down, or that could not be saved: said where the owner is. `project`: the hub turned
+        /// down the project a new to-do was made in (`Sent.refused`).
+        var refused: @MainActor (_ entry: Entry, _ message: String, _ project: Bool) -> Void
         /// A to-do as the list has it now; nil when the list has none (gone from the hub).
         var standing: @MainActor (String) -> Standing? = { _ in nil }
         /// The shown hub's to-dos, for a new to-do nobody knew the hub made.
@@ -157,10 +165,10 @@ final class TodoOutbox {
                  save: { entries, number in Task(priority: .utility) { await TodoOutboxFile.shared.save(entries, number: number) } },
                  hub: { AppModel.shared.hub?.group },
                  send: { entry, answered in await TodoStore.shared.send(entry, answered: answered) },
-                 refused: { entry, message in
+                 refused: { entry, message, project in
                      Haptics.error()
                      // A new to-do the hub turned down: what was typed comes back in its sheet (Edit).
-                     let said = TodoOutbox.refusal(entry.write, message: message)
+                     let said = TodoOutbox.refusal(entry.write, message: message, project: project)
                      let edit = said.draft.map { draft in
                          Toast.Action(title: String(localized: "Edit")) { TodoOutbox.shared.edit(draft) }
                      }
@@ -184,23 +192,26 @@ final class TodoOutbox {
     /// Taken back while being sent: drawn as taken back at once; once the hub has it, its reverse goes.
     private(set) var takenBack: Set<UUID> = []
     /// What a new to-do the hub turned down said: back in New To-Do's sheet (the toast's Edit), due when it was due (a
-    /// day, or a moment), wherever the list is now (#10465).
+    /// day, or a moment) and in its project, unless the project is what the hub turned down (#10465).
     nonisolated struct Draft: Equatable, Sendable {
         var title: String
         var notes: String?
         var dueAt: Date?
         var dueDate: String?
+        var project: String?
     }
 
     /// What the owner is told of a write the hub turned down and, for a new to-do, what its sheet opens with again (the
-    /// toast's Edit). The hub takes the title and date of a new to-do as the app sends them, so one made in a project
-    /// that it turns down was turned down for the project (gone or renamed meanwhile): its sheet opens without it, and
-    /// the toast says so, or every Add would be turned down the same way. Its project can be set again from its row.
-    nonisolated static func refusal(_ write: Write, message: String) -> (message: String, draft: Draft?) {
+    /// toast's Edit). One whose project the hub turned down (`project`: gone or renamed meanwhile) opens without it, and
+    /// the toast says so, or every Add would be turned down the same way; its project can be set again from its row.
+    /// Any other refusal (a role that may not add to-dos, say) keeps the project and says what the hub said.
+    nonisolated static func refusal(_ write: Write, message: String, project refused: Bool = false) -> (message: String, draft: Draft?) {
         guard case .create(let title, let notes, let dueAt, let dueDate, let project) = write else { return (message, nil) }
-        let draft = Draft(title: title, notes: notes, dueAt: dueAt, dueDate: dueDate)
-        guard project != nil else { return (message, draft) }
-        return (String(localized: "Couldn't put “\(title)” in its project. Edit adds it without one. [To-dos Toast]"), draft)
+        guard refused, project != nil else {
+            return (message, Draft(title: title, notes: notes, dueAt: dueAt, dueDate: dueDate, project: project))
+        }
+        return (String(localized: "Couldn't put “\(title)” in its project. Edit adds it without one. [To-dos Toast]"),
+                Draft(title: title, notes: notes, dueAt: dueAt, dueDate: dueDate))
     }
 
     /// A new to-do the hub turned down, whose words go back into New To-Do (the toast's Edit).
@@ -492,7 +503,8 @@ final class TodoOutbox {
         guard let base = entry.base, let at = now.updatedAt, at > base else { return true }
         drop(entry.id)
         if !now.has(entry.write) {
-            deps.refused(entry, String(localized: "“\(now.title)” changed in the meantime, so your change wasn't saved. [To-dos Toast]"))
+            deps.refused(entry, String(localized: "“\(now.title)” changed in the meantime, so your change wasn't saved. [To-dos Toast]"),
+                         false)
         }
         return false
     }
@@ -551,16 +563,17 @@ final class TodoOutbox {
                 if let reverse = taken.write.reverse() { add(reverse, todo: taken.todo, manager: taken.manager, hub: taken.hub) }
             } else if entries[i].unknown + 1 >= Self.tries {
                 let given = entries.remove(at: i)
-                deps.refused(given, String(localized: "Couldn't save your change to “\(deps.standing(given.todo)?.title ?? "")”. [To-dos Toast]"))
+                deps.refused(given, String(localized: "Couldn't save your change to “\(deps.standing(given.todo)?.title ?? "")”. [To-dos Toast]"),
+                             false)
             } else {
                 entries[i].unknown += 1
                 entries[i].waits = true
             }
             save()
-        case .refused(let message):
+        case .refused(let message, let project):
             entries.remove(at: i)
             save()
-            if !back { deps.refused(entry, message) }
+            if !back { deps.refused(entry, message, project) }
         }
     }
 
@@ -710,7 +723,7 @@ final class TodoOutbox {
         let api = error as? APIError
         if let api, write.edits, TodoNotThere.deleted(api) { return .done(created: nil) }
         if reachedNothing(error) { return .notSent }
-        if let api, (400..<500).contains(api.status) { return .refused(api.message) }
+        if let api, (400..<500).contains(api.status) { return .refused(api.message, project: api.status == 400 && write.inProject) }
         return .unknown
     }
 
