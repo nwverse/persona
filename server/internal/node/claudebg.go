@@ -386,7 +386,7 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 	if path := n.transcriptPath(id); path != "" {
 		if st, err := os.Stat(path); err == nil {
 			offset = st.Size()
-			if forced == "" && n.pendingOutsideAsk(c, true) != nil {
+			if forced == "" && n.pendingOutsideAsk(c) != nil {
 				priority = peerNow
 			}
 		}
@@ -533,10 +533,10 @@ func withComputerWait(ctx context.Context) (context.Context, *bool) {
 // askTool is Claude Code's question tool.
 const askTool = "AskUserQuestion"
 
-// askingOutside reports whether outside claude c waits on an open AskUserQuestion in its transcript (claudeoutside_ask.go),
-// not on a permission prompt, a plan to approve, or another dialog only the computer answers.
+// askingOutside reports whether outside claude c waits on an open AskUserQuestion in its current turn
+// (claudeoutside_ask.go), not on a permission prompt, a plan to approve, or another dialog only the computer answers.
 func (n *Node) askingOutside(c claudeProc) bool {
-	return n.pendingOutsideAsk(c, false) != nil
+	return n.pendingOutsideAsk(c) != nil
 }
 
 func (n *Node) setOutsideListed(listed map[string]bool) {
@@ -555,13 +555,25 @@ func (n *Node) isOutsideListed(id string) bool {
 	return n.outsideListed[id]
 }
 
-// pokeOutsideSessions triggers an immediate session list publish when an outside Claude session's approval capability
-// changes (a clq_ card or fallback hook ask starts or ends), eliminating the 1s poll skew between card and session lists.
-func (n *Node) pokeOutsideSessions() <-chan struct{} {
+// pokeOutsideSessionsAsync wakes the session watcher and schedules a serialized sessions.changed flush without waiting.
+func (n *Node) pokeOutsideSessionsAsync() <-chan struct{} {
 	if n.events != nil {
 		n.events.poke(true)
 	}
-	return n.publishSessionsSoon()
+	if n.peer == nil || n.botmuxPending() {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	// notifySessionsSoon runs notifySessions → sendSessions under n.sent.mu (never skipped by a stale or in-flight
+	// n.lastList update from pollAgents), guaranteeing the updated list is actually written to the wire.
+	return n.notifySessionsSoon()
+}
+
+// flushOutsideSessions pokes the watcher and waits until sessions.changed reflecting the latest outside approval state
+// has been written to the wire (bounded by ctx and listPushWait).
+func (n *Node) flushOutsideSessions(ctx context.Context) {
+	n.awaitOutsideSessionPush(ctx, n.pokeOutsideSessionsAsync())
 }
 
 func (n *Node) awaitOutsideSessionPush(ctx context.Context, done <-chan struct{}) {

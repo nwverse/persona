@@ -68,16 +68,17 @@ type codexCard struct {
 }
 
 type codexCards struct {
-	mu          sync.Mutex
-	tails       map[string]*codexTail     // session id → its rollout
-	sent        string                    // the card ids last listed to the hub
-	held        map[string]time.Time      // card id → answered from the phone: not listed again until then
-	heldIn      map[string]string         // card id → the session of a held card
-	dismissed   map[string]dismissedCard  // card id → handed back to the computer from the phone
-	approvals   map[string]bool           // session id → last screen scan saw a Codex approval dialog
-	outsideAsks map[string]string         // session id → card id of the active clq_ card last listed to the hub
-	pagerAt     map[string]time.Time      // pane → when its transcript pager was last closed to show a dialog
-	joins       map[string]codexJoinState // session id → joining it on its app-server (codex_daemon.go)
+	mu              sync.Mutex
+	tails           map[string]*codexTail           // session id → its rollout
+	sent            string                          // the card ids last listed to the hub
+	held            map[string]time.Time            // card id → answered from the phone: not listed again until then
+	heldIn          map[string]string               // card id → the session of a held card
+	dismissed       map[string]dismissedCard        // card id → handed back to the computer from the phone
+	approvals       map[string]bool                 // session id → last screen scan saw a Codex approval dialog
+	outsideAsks     map[string]string               // session id → card id of the active clq_ card last listed to the hub
+	outsideAskCache map[string]outsideAskCacheEntry // session id → stat-cached bounded read-only pending AskUserQuestion
+	pagerAt         map[string]time.Time            // pane → when its transcript pager was last closed to show a dialog
+	joins           map[string]codexJoinState       // session id → joining it on its app-server (codex_daemon.go)
 }
 
 // watchCodexCards lists the open Codex questions and approvals to the hub whenever they change.
@@ -158,23 +159,27 @@ func (n *Node) syncCodexCards(ctx context.Context) {
 	}
 	n.cx.mu.Unlock()
 	if outsideAskAdded {
-		// Push sessions.changed (Approve = true) before codex.interactions so clients do not lock the new card.
-		n.awaitOutsideSessionPush(ctx, n.pokeOutsideSessions())
+		// Flush sessions.changed (Approve = true) onto the wire before codex.interactions so clients never see a new
+		// clq_ card before Approve = true has actually been written, even if pollAgents already updated lastList.
+		n.outsideListGen.Add(1)
+		n.flushOutsideSessions(ctx)
 	}
-	if changed && n.peer != nil {
+	if changed && n.peer != nil && ctx.Err() == nil {
 		if list == nil {
 			list = []proto.Interaction{}
 		}
 		_ = n.peer.Notify("codex.interactions", map[string]any{"interactions": list})
 	}
 	if outsideAskRemoved {
-		// Clear removed sessions only after codex.interactions withdrew their cards, then push Approve = false.
+		// Clear removed sessions only after codex.interactions withdrew their cards, then flush Approve = false.
 		n.cx.mu.Lock()
 		n.cx.outsideAsks = outsideAsks
 		n.cx.mu.Unlock()
-		n.awaitOutsideSessionPush(ctx, n.pokeOutsideSessions())
+		n.outsideListGen.Add(1)
+		n.flushOutsideSessions(ctx)
 	} else if outsideAskChanged && !outsideAskAdded {
-		n.awaitOutsideSessionPush(ctx, n.pokeOutsideSessions())
+		n.outsideListGen.Add(1)
+		n.flushOutsideSessions(ctx)
 	}
 }
 

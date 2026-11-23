@@ -541,14 +541,30 @@ func TestFallbackHookSessionKeepsApproveWhileHookActive(t *testing.T) {
 		return false
 	})
 
-	// Even if an inbox is present alongside an AskUserQuestion in the transcript, activeAsks suppresses duplicate clq_.
+	// An unrelated Bash permission hook on the same session must NOT hide an open AskUserQuestion clq_ card.
 	writeOutsideClaude(t, home, sidA, "cli", "waiting", inbox, nil)
-	if cards := n.outsideAskCards(); len(cards) != 0 {
-		t.Fatalf("active hook session emitted duplicate clq_ cards: %+v", cards)
+	if cards := n.outsideAskCards(); len(cards) != 1 || cards[0].ToolUseID != "toolu_hook_ask" {
+		t.Fatalf("unrelated Bash hook hid open AskUserQuestion clq_ card: %+v", cards)
 	}
 	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || !s.Capabilities.Approve || s.AttentionReason != "" {
 		t.Fatalf("while hook active: row=%+v caps=%+v", s, s.Capabilities)
 	}
+
+	// Only an active AskUserQuestion hook covering the same tool_use_id suppresses the duplicate clq_ card, while a
+	// different tool_use_id stays visible.
+	_, leaveOtherAsk := n.activeAsks.enter(proto.Interaction{SessionID: sidA, Kind: proto.IxQuestion, ToolName: askTool, ToolUseID: "toolu_other_ask"})
+	if cards := n.outsideAskCards(); len(cards) != 1 || cards[0].ToolUseID != "toolu_hook_ask" {
+		leaveOtherAsk()
+		t.Fatalf("AskUserQuestion hook for a different tool_use_id hid clq_ card: %+v", cards)
+	}
+	leaveOtherAsk()
+
+	_, leaveSameAsk := n.activeAsks.enter(proto.Interaction{SessionID: sidA, Kind: proto.IxQuestion, ToolName: askTool, ToolUseID: "toolu_hook_ask"})
+	if cards := n.outsideAskCards(); len(cards) != 0 {
+		leaveSameAsk()
+		t.Fatalf("AskUserQuestion hook for the same tool_use_id emitted duplicate clq_ card: %+v", cards)
+	}
+	leaveSameAsk()
 
 	// Switch back to no-inbox before releasing so post-hook state cleanly reverts to Approve=false + computer-only.
 	writeOutsideClaude(t, home, sidA, "cli", "waiting", nil, nil)
@@ -667,4 +683,152 @@ func TestHookSessionFallingBackMidHookKeepsApproveUntilAllAsksFinish(t *testing.
 		}
 		return false
 	})
+}
+
+// An unanswered AskUserQuestion from an earlier turn must NOT survive into a newer turn started by a user prompt:
+// otherwise a waiting dialog in the new turn would emit a stale clq_ card and send ordinary replies at peerNow
+// (declining the dialog on the computer). A queued user message in the same turn keeps the open question intact.
+func TestOutsideAskResetsOnNewUserTurnButSurvivesQueuedInput(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 3*time.Second)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"first turn"}}`,
+		askCall(sidA, "toolu_old_turn", `{"questions":[{"question":"Pick?","header":"Old","options":[{"label":"A"},{"label":"B"}],"multiSelect":false}]}`),
+		`{"type":"queue-operation","operation":"enqueue","timestamp":"2026-11-04T09:00:12Z","sessionId":"`+sidA+`","content":"queued note while asking"}`)
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+
+	// Queued input does not end the current turn: the question stays open.
+	if cards := n.outsideAskCards(); len(cards) != 1 || cards[0].ToolUseID != "toolu_old_turn" {
+		t.Fatalf("queued message cleared open question: %+v", cards)
+	}
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || !s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudeAnswer {
+		t.Fatalf("with queued note: row=%+v caps=%+v", s, s.Capabilities)
+	}
+
+	// A new user prompt starts a fresh turn without writing a tool_result for the earlier turn's AskUserQuestion.
+	appendLines(t, p, `{"type":"user","uuid":"u2","timestamp":"2026-11-04T09:01:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"start a different task"}}`)
+	if cards := n.outsideAskCards(); len(cards) != 0 {
+		t.Fatalf("stale previous-turn AskUserQuestion produced card in new turn: %+v", cards)
+	}
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudeComputer {
+		t.Fatalf("new turn waiting on another dialog: row=%+v caps=%+v", s, s.Capabilities)
+	}
+	res, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "hold on", "client_msg_id": "m-new-turn"})
+	if err != nil {
+		t.Fatalf("send in new turn: %v", err)
+	}
+	if pr, _ := inboxPriority(t, inbox, 0); pr != peerNext || res["waits_on_computer"] != true {
+		t.Fatalf("reply in new turn went at %q (res=%v), want %q with waits_on_computer=true", pr, res, peerNext)
+	}
+}
+
+// pendingOutsideAsk must read the transcript directly (bounded read-only) without acquiring subscriber pushLock or
+// triggering watch pushes, so slow-link watch catch-ups never stall outsideAskCards, listSessions, outsideAnswer, or
+// sendOutside.
+func TestOutsideAskDoesNotBlockOnSubscriberPushLock(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 3*time.Second)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"choose"}}`,
+		askCall(sidA, "toolu_nolock", `{"questions":[{"question":"Proceed?","header":"Check","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}`))
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+
+	// Simulate an active watch holding pushLock(sidA) during a slow-link catch-up.
+	n.mu.Lock()
+	n.watches[sidA] = &watch{}
+	n.mu.Unlock()
+	pushMu := n.pushLock(sidA)
+	pushMu.Lock()
+	defer pushMu.Unlock()
+
+	errCh := make(chan string, 1)
+	go func() {
+		cards := n.outsideAskCards()
+		if len(cards) != 1 || cards[0].ToolUseID != "toolu_nolock" {
+			errCh <- "outsideAskCards missed toolu_nolock"
+			return
+		}
+		if s := byID(n.sessionList(context.Background(), false))[sidA]; s.Capabilities == nil || !s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudeAnswer {
+			errCh <- "sessionList lost Approve or AttentionClaudeAnswer while pushLock held"
+			return
+		}
+		if handled, err := n.sendOutside(context.Background(), sidA, "Yes", nil); !handled || err != nil {
+			errCh <- "sendOutside failed while pushLock held"
+			return
+		}
+		if err := n.outsideAnswer(context.Background(), sidA, cards[0].ID, proto.Resolution{Answers: map[string]string{"Proceed?": "Yes"}}); err != nil {
+			errCh <- "outsideAnswer failed while pushLock held"
+			return
+		}
+		errCh <- ""
+	}()
+	select {
+	case msg := <-errCh:
+		if msg != "" {
+			t.Fatal(msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("outside ask paths blocked on subscriber pushLock")
+	}
+	if pr, _ := inboxPriority(t, inbox, 0); pr != peerNow {
+		t.Fatalf("sendOutside priority = %q, want %q", pr, peerNow)
+	}
+	if pr, _ := inboxPriority(t, inbox, 1); pr != peerNow {
+		t.Fatalf("outsideAnswer priority = %q, want %q", pr, peerNow)
+	}
+}
+
+// Even when pollAgents has already updated n.lastList before writing sessions.changed to the wire, syncCodexCards must
+// still flush sessions.changed (Approve=true) onto the wire strictly before codex.interactions, and a stale pollAgents
+// snapshot captured before outsideListGen advanced must not overwrite the flushed Approve=true list.
+func TestOutsideAskFlushesApproveEvenWhenLastListPreUpdated(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	n.events = newHerdrEvents()
+	rec := wireOutsideHub(t, n, nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"work"}}`,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-11-04T09:00:05Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}`)
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "busy", inbox, nil)
+
+	// Capture a stale pollAgents snapshot (Approve=false) before the question appears, and publish baseline.
+	staleGen := n.outsideListGen.Load()
+	staleList := n.sessionList(context.Background(), false)
+	n.publish(staleList)
+	waitFor(t, "baseline list", func() bool { return len(rec.snapshot()) >= 1 })
+	rec.clear()
+
+	// Append AskUserQuestion and simulate pollAgents updating n.lastList with Approve=true BEFORE writing to the wire.
+	appendLines(t, p, askCall(sidA, "toolu_wireorder", `{"questions":[{"question":"Go?","header":"Run","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}`))
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+	preList := n.sessionList(context.Background(), false)
+	n.mu.Lock()
+	n.lastList = listKey(preList)
+	n.mu.Unlock()
+
+	n.syncCodexCards(context.Background())
+
+	waitFor(t, "ordered add events on wire", func() bool { return len(rec.snapshot()) >= 2 })
+	evs := rec.snapshot()
+	if evs[0].kind != "sessions.changed" || evs[1].kind != "codex.interactions" {
+		t.Fatalf("wire order with pre-updated lastList = [%s, %s], want [sessions.changed, codex.interactions]", evs[0].kind, evs[1].kind)
+	}
+	if s := byID(evs[0].sessions)[sidA]; s.Capabilities == nil || !s.Capabilities.Approve {
+		t.Fatalf("flushed sessions.changed missing Approve=true: %+v", s.Capabilities)
+	}
+
+	// A stale pollAgents snapshot captured at staleGen must be dropped rather than overwriting Approve=true.
+	rec.clear()
+	n.publishGen(staleList, staleGen)
+	if len(rec.snapshot()) != 0 {
+		t.Fatalf("stale pollAgents snapshot overwrote flushed list: %+v", rec.snapshot())
+	}
 }

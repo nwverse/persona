@@ -635,9 +635,15 @@ func (n *Node) pollAgents(ctx context.Context) {
 				backoff.record(h.Kind(), failed[h.Kind()], now)
 			}
 		}
+		gen := n.outsideListGen.Load()
 		list := n.sessionList(ctx, false)
 		listed = time.Now()
-		if revs := n.publish(list); len(revs) > 0 {
+		if n.outsideListGen.Load() != gen {
+			gen = n.outsideListGen.Load()
+			list = n.sessionList(ctx, false)
+			listed = time.Now()
+		}
+		if revs := n.publishGen(list, gen); len(revs) > 0 {
 			n.kickPorts() // a tool call ran: it may have started (or stopped) a server (ports.go)
 		}
 	}
@@ -649,7 +655,20 @@ func (n *Node) pollAgents(ctx context.Context) {
 // has yet to say whether botmux's sessions are listed (botmuxPending), nor a list the manager holds already, byte for
 // byte (sessions_sent.go).
 func (n *Node) publish(list []proto.Session) map[string]int64 {
+	return n.publishChecked(list, false, 0)
+}
+
+// publishGen is publish that drops a pollAgents snapshot if outsideListGen advanced while the list was being built or
+// before it reached the wire, preventing a stale Approve=false snapshot from overwriting a freshly flushed list.
+func (n *Node) publishGen(list []proto.Session, gen uint64) map[string]int64 {
+	return n.publishChecked(list, true, gen)
+}
+
+func (n *Node) publishChecked(list []proto.Session, checkGen bool, gen uint64) map[string]int64 {
 	if n.botmuxPending() {
+		return nil
+	}
+	if checkGen && n.outsideListGen.Load() != gen {
 		return nil
 	}
 	n.mu.Lock()
@@ -657,6 +676,10 @@ func (n *Node) publish(list []proto.Session) map[string]int64 {
 	n.mu.Unlock()
 	key := listKeySized(list, size)
 	n.mu.Lock()
+	if checkGen && n.outsideListGen.Load() != gen {
+		n.mu.Unlock()
+		return nil
+	}
 	changed := key != n.lastList
 	n.lastList = key
 	revs := n.revsChanged(list)
@@ -665,7 +688,7 @@ func (n *Node) publish(list []proto.Session) map[string]int64 {
 		return revs
 	}
 	if changed {
-		n.sendSessions(list)
+		n.sendSessionsChecked(list, checkGen, gen)
 	} else if len(revs) > 0 {
 		n.sendRevs(revs)
 	}
