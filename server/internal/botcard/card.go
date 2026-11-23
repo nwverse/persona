@@ -1,4 +1,4 @@
-package feishubot
+package botcard
 
 import (
 	"bytes"
@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/sdk/go/wire"
-	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/mdsplit"
 )
 
 // Card is a message card (card JSON 2.0: Markdown with headings, tables and code blocks; Feishu 7.20 and later).
@@ -586,8 +586,8 @@ func Code(s string) string {
 	return "`" + s + "`"
 }
 
-// Split cuts long Markdown into pieces of at most n runes (channel.Split).
-func Split(s string, n int) []string { return channel.Split(s, n) }
+// Split cuts long Markdown into pieces of at most n runes (mdsplit.Split).
+func Split(s string, n int) []string { return mdsplit.Split(s, n) }
 
 // PostMarkdown is a rich-text message whose one paragraph is Markdown: what is sent when a card is refused.
 func PostMarkdown(md string) string {
