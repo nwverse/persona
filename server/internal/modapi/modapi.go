@@ -6,7 +6,9 @@
 package modapi
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"time"
 )
 
@@ -40,7 +42,8 @@ type Info struct {
 	// when they are, through the kernel only: a wanted module may be left out of the build.
 	Needs []string `json:"needs,omitempty"`
 	Wants []string `json:"wants,omitempty"`
-	// Feature is the wire feature flag announced while the module is loaded ("" for none).
+	// Feature is the wire feature flag module.<id> announced while the module is loaded ("" for none). A publishing
+	// manager also announces the reserved modules marker, including when every module is absent.
 	Feature string `json:"feature,omitempty"`
 
 	HubRoutes       []string `json:"hub_routes,omitempty"`       // "METHOD /api/v1/…" patterns
@@ -84,6 +87,26 @@ type Host interface {
 	AddSetting(Setting) error
 	// AddScheduleFacts serves Info.Schedules' ScheduleFactsName entry.
 	AddScheduleFacts(ScheduleFacts) error
+	// AddHubRoute serves one declared "METHOD /api/v1/…" route while the module is loaded.
+	AddHubRoute(pattern string, handler http.HandlerFunc) error
+	// AddMCPTool serves one declared assistant tool while the module is loaded.
+	AddMCPTool(name, description string, schema json.RawMessage, run func(context.Context, string, string, json.RawMessage) (string, error)) error
+	// AddBackgroundJob runs one declared loop under the Service Run context while the module is loaded.
+	AddBackgroundJob(name string, run func(context.Context) error) error
+}
+
+// BackgroundJob is a module-owned loop. Run inherits Service.Run's cancellation; an off module never starts it.
+type BackgroundJob struct {
+	Name string
+	Run  func(context.Context) error
+}
+
+// MCPTool is a module's assistant tool definition and handler. Run receives the calling machine, conversation and JSON arguments.
+type MCPTool struct {
+	Name        string
+	Description string
+	InputSchema json.RawMessage
+	Run         func(context.Context, string, string, json.RawMessage) (string, error)
 }
 
 // Setting is a module's value in persona_settings. The core keeps the stored value (also while the module is off,
