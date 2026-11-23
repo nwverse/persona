@@ -370,3 +370,26 @@ func TestRemedyIsNotEndedByAnotherConversationsTurn(t *testing.T) {
 		t.Fatalf("not ended by the turn that saw it: %+v", got)
 	}
 }
+
+// A supervised task whose agent stopped on a dialog the computer did not know, and whose start cannot be remedied (no
+// tab kept), fails for good: the supervisor's message still shows the agent's screen as its rows, every choice of the
+// dialog on its own line, not only the one clipped line of the reason; with no retries offered for a tab that is gone.
+func TestAStalledStartThatFailsForGoodShowsItsScreen(t *testing.T) {
+	s, f := newQuietService(t)
+	shown := " Make auto mode your default permission mode?\n ❯ 1. Yes, make auto mode my default\n   2. Something new\n Enter to confirm · Esc to cancel"
+	data, _ := json.Marshal(map[string]any{"screen": shown})
+	failure := &rpc.Error{Code: proto.CodeAgentStartStalled, Data: data,
+		Message: "an unrecognized dialog blocks the start: \"Make auto mode your default permission mode?\"\n" + shown}
+	todo, _ := remedyingTask(t, s, f, failure)
+	waitFor(t, "the failure", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+	waitFor(t, "the supervision message", func() bool { return len(f.notices()) == 1 })
+	n := f.notices()[0]
+	for _, want := range []string{"启动标签最后几行", "   |  ❯ 1. Yes, make auto mode my default\n   |    2. Something new\n", "signal=failed"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("message lacks %q:\n%s", want, n)
+		}
+	}
+	if strings.Contains(n, "还能重试") {
+		t.Errorf("retries offered for a start that failed for good:\n%s", n)
+	}
+}
