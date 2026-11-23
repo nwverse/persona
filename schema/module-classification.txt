@@ -267,6 +267,7 @@ apple apple/AboutVersionAccessibilityUITests core
 apple apple/IslandPeer core
 apple apple/LiveActivity core
 apple apple/Modules core
+apple apple/Modules/Health health
 apple apple/Modules/ScreenShare screen-share
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
@@ -300,7 +301,6 @@ apple apple/Persona/Resources core
 apple apple/Persona/Views core
 apple apple/Persona/Voice voice
 apple apple/Persona/Views/Feishu lark
-apple apple/Persona/Views/Health health
 apple apple/Persona/Views/Knowledge knowledge-ui
 apple apple/Persona/Views/Mail mail
 apple apple/Persona/Views/Voice voice
