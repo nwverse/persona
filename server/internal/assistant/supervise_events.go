@@ -375,6 +375,7 @@ func (s *Service) notifyTaskNeedsUser(ctx context.Context, t Todo, work time.Tim
 		Subtitle: "Persona", DeviceID: here, SessionID: conversation, Title: title, Body: body,
 		// Only the owner can take this action: it interrupts low-distraction mode, once per stretch of work (#5732).
 		Level: assistantwire.LevelP0, RelatedKey: "todo:" + t.ID + "@" + work.UTC().Format(time.RFC3339Nano)}
+	s.noteCard(ctx, cardLeaderNeedsUser, n)
 	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 		s.logf("task %s: needs-user push: %v", t.ID, err)
 		return false
@@ -449,7 +450,7 @@ func (s *Service) notifyTaskFailed(ctx context.Context, t Todo, machine, reason 
 	if sub == "" {
 		sub = "Persona"
 	}
-	s.push(ctx, Notification{
+	s.push(withCard(ctx, cardTaskFailed), Notification{
 		Subtitle:  sub,
 		DeviceID:  here,
 		SessionID: t.Origin,

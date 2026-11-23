@@ -129,6 +129,7 @@
   "expand": "Expand sidebar",
   "nav_health": "Health",
   "nav_health_short": "Health",
+  "nav_health_hint": "A separate space for health questions, checkup reports and what the assistant remembers about your health.",
   "fold_all": "Collapse all",
   "open_all": "Expand all",
   "launching_count_one": "{count} agent starting",

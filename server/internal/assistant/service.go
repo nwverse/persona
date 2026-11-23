@@ -300,6 +300,8 @@ type Service struct {
 	room       roomState         // meeting_room_tools.go: the meetings' rooms, their asks and sources
 	meetLive   meetingLiveEvents // meeting_events.go: the meeting_live events, at most one a second per recording
 	justMe     justMeBook        // meeting_justme.go: the Just me turns
+	cards      cardLedger        // card_layers.go: the cards pushed to the owner, counted by day, source and which of the six kinds
+	cardAsks   sync.Map          // card_layers.go: the source of each card ask has up (interaction id → source)
 	meetLocks  meetingLocks      // meeting_followup.go: one creation at a time per recording
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
@@ -876,6 +878,7 @@ func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult,
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}
+	s.noteCard(ctx, "", n) // its source is on ctx (withCard; card_layers.go)
 	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
 	if err != nil {
 		s.logf("assistant: push: %v", err)
@@ -1065,12 +1068,13 @@ func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
 	if s.meetingTurnStarted(r.MachineID, r.SessionID, true) {
 		return // a meeting's batch started it: a side exchange (meeting_turns.go)
 	}
-	s.turnStartedObserved(ctx, r, true)
+	s.turnStartedObserved(ctx, r, true, startRow{})
 }
 
-func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn bool) {
+// turnStartedObserved: session r started a turn; row is the list's row that showed it (zero: the hub's own word).
+func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn bool, row startRow) {
 	s.quietTurnOver(r.MachineID, r.SessionID) // a turn with no output before this one is over (silent_turns.go)
-	s.taskWorking(ctx, r.MachineID, r.SessionID)
+	s.taskWorking(ctx, r.MachineID, r.SessionID, row)
 	s.workStartedObserved(ctx, r.MachineID, r.SessionID, time.Now(), newTurn)
 	s.availTurnStarted(r.MachineID, r.SessionID, newTurn, time.Now())
 }

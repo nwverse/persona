@@ -283,9 +283,10 @@ func (s *Service) allOwnSettings() []ownSetting {
 		{Setting: Setting{Key: "assistant.close_ended_terminals", Title: "Close an Agent's terminal when it ends", Actions: getSet,
 			About: "off (the default): an Agent's terminal tab stays open after it stops, with the shell it ran in, until the user " +
 				"closes it. on: when an Agent Persona started ends, Persona closes the tab it opened for it, the way Archive and " +
-				"close does: when its task is done or cancelled (an idle Agent), and when it quits by itself or is told to (/exit). " +
+				"close does: when its task is done or cancelled (an idle Agent), when it is stopped for being idle (idle_close_hours), " +
+				"and when it quits by itself or is told to (/exit). " +
 				"Never closed: a busy Agent (working, waiting for an answer, background work, subagents or workflows running, a " +
-				"/loop, queued messages, a server it runs), one the user stopped with Stop or that was stopped for being idle, and " +
+				"/loop, queued messages, a server it runs), one the user stopped with Stop, and " +
 				"terminals Persona did not open. The conversation is kept and can be resumed in a new tab. Applies from the next " +
 				"Agent that ends",
 			Value: "true or false"},
