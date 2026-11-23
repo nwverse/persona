@@ -6368,16 +6368,16 @@ in-flight command remains unknown until its execution can be established; it is 
 
 ## Agents display settings
 
-The default manager keeps the paired hub's `agents.show_botmux` and
-`agents.use_herdr_tab_name` booleans in its
+The default manager keeps the paired hub's `agents.show_botmux`,
+`agents.use_herdr_tab_name`, `agents.sort_by_activity` and `agents.show_filter` booleans in its
 existing settings store, following the Agents triage route's ownership and role
 checks. These are authenticated routes relayed by the hub; clients do not select
 another manager for this shared preference.
 
 | Method | Path | Response / request |
 | --- | --- | --- |
-| GET | `/api/v1/agents/display-settings` | Defaults to `{show_botmux: true, configured: false, use_herdr_tab_name: false}`. `configured` reports whether `show_botmux` was saved. Authenticated answer-only devices may read. |
-| PUT | `/api/v1/agents/display-settings` | Full access only (403 otherwise). Send one of `{show_botmux: boolean}` or `{use_herdr_tab_name: boolean}`. For `show_botmux`, optional `only_if_unset: true` uses an atomic insert without updating an existing key. Returns the current settings, including when another writer won. |
+| GET | `/api/v1/agents/display-settings` | Defaults to `{show_botmux: true, configured: false, use_herdr_tab_name: false, sort_by_activity: false, show_filter: false}`. `configured` reports whether `show_botmux` was saved. `sort_by_activity` and `show_filter` are the effective values: the saved choice (either way), else `agents.sort_by_activity` / `agents.show_filter` in the manager's `manager.json` (see [config.md](../operations/config.md)), else `false`; an older hub omits them and a client then hides the switches. Authenticated answer-only devices may read. |
+| PUT | `/api/v1/agents/display-settings` | Full access only (403 otherwise). Send exactly one of `{show_botmux: boolean}`, `{use_herdr_tab_name: boolean}`, `{sort_by_activity: boolean}` or `{show_filter: boolean}`. For `show_botmux`, optional `only_if_unset: true` uses an atomic insert without updating an existing key. Returns the current settings, including when another writer won. |
 
 Invalid or missing booleans return 400; unavailable storage or failed reads/writes
 return 503, never a default presented as a successful save. The conditional
@@ -6388,6 +6388,8 @@ Web paged lists use `exclude_pane_source=feishu`, complete
 lists exclude botmux hosts before grouping/counting. Inventory and `seeBotmux`
 to-do attribution are unchanged. The per-computer inventory switch is independent
 ([engines.md](../integrations/engines.md), “Botmux display preference”).
+
+`sort_by_activity` turns on the web Agents list's opt-in activity order (rows by time, sections by their latest agent, held still while the pointer or focus is in the sidebar; off keeps the stable order of #11801) and `show_filter` shows the Agents list's Filter button and chips on the complete and the paged list; a paged list can send only the words (`q`) and one computer (`machine_id`) to the hub and falls back to the complete list for any other filter choice ([web.md](../web/web.md)). The iOS, Mac and Android clients do not read them yet.
 
 For an Agent with a named herdr or Herdr App tab, Web and Feishu use `slot_name`
 as the primary name when `use_herdr_tab_name` is true. They also use it when

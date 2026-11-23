@@ -42,6 +42,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/netshape"
+	"github.com/nwverse/persona/server/internal/osproc"
 )
 
 type options struct {
@@ -130,7 +131,8 @@ type report struct {
 }
 
 func say(format string, args ...any) {
-	fmt.Printf("%s slowlinksoak: %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
+	// In UTC: the machine's time zone is not read (internal/tzguard).
+	fmt.Printf("%sZ slowlinksoak: %s\n", time.Now().UTC().Format("15:04:05"), fmt.Sprintf(format, args...))
 }
 
 func run(ctx context.Context, o *options) (*report, error) {
@@ -387,7 +389,9 @@ func stopProcess(c *exec.Cmd) {
 var proxyConns, proxyUp atomic.Int64
 
 func proxy(ctx context.Context, listen, target string, cfg netshape.Config) (func(), error) {
-	ln, err := net.Listen("tcp", listen)
+	// Through osproc: this tool starts hub and node processes while the proxy accepts, and a connection accepted with
+	// plain net would be inherited by them on macOS (#7765).
+	ln, err := osproc.Listen("tcp", listen)
 	if err != nil {
 		return nil, err
 	}
