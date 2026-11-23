@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/screenlink"
+	"github.com/nwverse/persona/server/internal/modules/screen-share/screenlink"
 	"github.com/nwverse/persona/server/internal/streams"
 )
 

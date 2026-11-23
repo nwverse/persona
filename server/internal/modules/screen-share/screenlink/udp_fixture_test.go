@@ -17,7 +17,7 @@ import (
 // ends seal, number, cut and rebuild alike. PERSONA_WRITE_UDP_FIXTURES=1 writes the file from the cases below; the
 // test then checks the file against the code either way.
 
-const udpFixturePath = "../../../spec/fixtures/screen-udp/cases.json"
+const udpFixturePath = "../../../../../spec/fixtures/screen-udp/cases.json"
 
 type udpFixture struct {
 	Version  int `json:"version"`
