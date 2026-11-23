@@ -6,20 +6,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botport"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
 // Obtain status, then change the actual routing snapshot before AppCall: the assistant-side status check alone
 // cannot authorize a send to the new recipient. No real provider or account is contacted.
 func TestFeishuReminderBindingAtActualRoute(t *testing.T) {
+	needsLarkModule(t)
 	for _, change := range []string{"none", "owner", "generation", "pushes off", "explicit chat"} {
 		t.Run(change, func(t *testing.T) {
 			api := newFakeOpenAPI(t)
 			h := newTestManager(t)
 			h.bots.loaded = true
-			h.bots.api = feishubot.New("cli_test", "synthetic", api.srv.URL)
+			h.bots.api = botport.New("cli_test", "synthetic", api.srv.URL)
 			h.bots.set = FeishuBotSettings{Enabled: true, Owner: &BotOwner{OpenID: "ou_a", ChatID: "oc_a", At: time.Unix(100, 0)}, Features: BotFeatures{Pushes: true}}
 			status, err := h.feishuCall(context.Background(), assistantwire.FeishuStatusGet, nil)
 			if err != nil {

@@ -399,7 +399,7 @@ func register(mux interface{ HandleFunc(string, any) }) {
 func TestHubDoesNotImportTheManager(t *testing.T) {
 	forbidden := []string{ // anywhere in the hub's dependencies
 		"internal/agents", "internal/ai", "internal/assistant", "internal/assistantskills", "internal/connector",
-		"internal/devices", "internal/extmgr", "internal/extension/host", "internal/feishubot", "internal/kb",
+		"internal/devices", "internal/extmgr", "internal/extension/host", "internal/botport", "internal/kb",
 		"internal/lark", "internal/mcpserver", "internal/modules", "internal/node", "internal/office",
 		"plugins",
 		"internal/tunnel", // tailcat: the manager dials the computers, with its own key (files_guard_test.go)

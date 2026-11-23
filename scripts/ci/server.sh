@@ -27,10 +27,19 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # out, the binaries build without their subcommands and the extension host registers no such extension. The modules'
   # own tests do not depend on the tags: they run in the shards.
   ci_run 'Builds without the speech modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_volc persona_without_voice; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/builtinext/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=6m -run "Volc|Voice|Transcription" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TranscriptionEndToEnd" ./internal/assistant/ || exit 1; done'
+  # The Feishu / Lark module (#13404, docs/architecture/core-and-modules.md "Provider seams"): left out, the binaries
+  # build, the extension host has no bot client (internal/botport) and the bot's tests skip; the rest of the extension
+  # host and the assistant's Feishu paths still pass.
+  ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_core_only persona_without_lark; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
   # Mail (docs/architecture/core-and-modules.md "Provider seams"): the extension manager reaches it through its port, so
   # the core without it builds and the manager's mail, inbox, connector and settings tests pass (those of mail itself
   # skip; TestManagerWithoutMail checks it is absent).
   ci_run 'Builds without the mail module' 900 bash -c 'cd server && for t in persona_core_only persona_without_mail; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/mailwire/... && go test -tags "$t" -count=1 -timeout=6m -run "Mail|Inbox|Connector|SelfSettings|Sent|Recall|Golden|SourceMove" ./internal/extmgr/ || exit 1; done'
+  # The connector modules (docs/architecture/core-and-modules.md "Provider seams"): GitHub reaches the extension manager
+  # through its port, so the core without it builds, the manager registers no built-in GitHub connector (the GitHub,
+  # connector, inbox, sent and golden tests pass; those that need the module skip) and the assistant's CI checks still
+  # run on githubwire.
+  ci_run 'Builds without the connector modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_github; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/githubwire/... ./internal/connector/... && go test -tags "$t" -count=1 -timeout=6m -run "GitHub|Connector|Inbox|Sent|Recall|Golden|Subscription|Market|Audit" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TestCI" ./internal/assistant/ || exit 1; done'
   # The core alone runs (#13978): a persona_core_only hub and manager start against a disposable Postgres, the manager
   # loads no module, every module's program, extension and route is absent, and both stop cleanly.
   ci_run 'Core-only hub smoke' 900 python3 scripts/ci/core-only-smoke.py
@@ -67,7 +76,9 @@ if [ "$lane" = all ] || [ "$lane" = node ] || [ "$lane" = core-node ]; then
 fi
 for shard in node managers other; do
   if [ "$lane" = all ] || [ "$lane" = "$shard" ]; then
-    ci_run "Server $shard tests with Postgres" 600 python3 scripts/ci/server-shards.py "$shard" --database-file "$fixture/database.json"
+    shard_budget=600
+    if [ "$shard" = managers ]; then shard_budget=900; fi
+    ci_run "Server $shard tests with Postgres" "$shard_budget" python3 scripts/ci/server-shards.py "$shard" --database-file "$fixture/database.json"
   fi
   # Persona Core alone (#13978): the same shard's every package with every module left out (persona_core_only); tests
   # of a module's own behaviour skip without it (needsBriefingModule, needsVoiceModule, needsVolcModule).

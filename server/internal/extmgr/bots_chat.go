@@ -14,10 +14,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/botport"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -41,13 +42,13 @@ func (h *Manager) botEvent(ctx context.Context, payload []byte) (any, error) {
 // Each production connection keeps its source even if its callback runs after
 // restartBot replaces it. A new connection for the same app can still use the
 // stable message references reserved by its predecessor.
-func (h *Manager) botEventHandler(api *feishubot.Client) feishubot.Handler {
+func (h *Manager) botEventHandler(api botport.Client) botcard.Handler {
 	return func(ctx context.Context, payload []byte) (any, error) {
 		return h.botEventFrom(ctx, payload, api)
 	}
 }
 
-func (h *Manager) botEventFrom(ctx context.Context, payload []byte, api *feishubot.Client) (any, error) {
+func (h *Manager) botEventFrom(ctx context.Context, payload []byte, api botport.Client) (any, error) {
 	env, err := botcard.ParseEnvelope(payload)
 	if err != nil {
 		return nil, nil // something else (a 1.0 event, the url check): nothing to do
@@ -118,7 +119,7 @@ func (h *Manager) botEventFrom(ctx context.Context, payload []byte, api *feishub
 // botRecalled cancels a queued owner message locally, or tells the assistant
 // about a recall after handoff has begun. Group recalls require an exact known
 // owner message because the recall event does not identify its sender.
-func (h *Manager) botRecalled(ev botcard.Recalled, api *feishubot.Client, appID string) {
+func (h *Manager) botRecalled(ev botcard.Recalled, api botport.Client, appID string) {
 	if ev.MessageID == "" || ev.RecallType != "" && ev.RecallType != "message_owner" {
 		return
 	}
@@ -232,7 +233,7 @@ func feishuSendUUID() string {
 
 // botTell refuses a non-owner, at most every 10 minutes per person: a stranger's client must not spam the owner's
 // bot. The pairing path has its own short window (botPairTellFor), so a legitimate retry is never swallowed.
-func (h *Manager) botTell(api *feishubot.Client, openID, chatID, text string) {
+func (h *Manager) botTell(api botport.Client, openID, chatID, text string) {
 	b := &h.bots
 	h.botNoteThrottled(api, openID, chatID, text, &b.told, 10*time.Minute)
 }
@@ -243,13 +244,13 @@ const botPairTellFor = 30 * time.Second
 
 // botPairTell answers the pairing welcome hint at most every botPairTellFor per person. Wrong-code and expired-code
 // notes are not throttled here: botPair marks its own per-text redelivery key, then sends them via botSendNote.
-func (h *Manager) botPairTell(api *feishubot.Client, openID, chatID, text string) {
+func (h *Manager) botPairTell(api botport.Client, openID, chatID, text string) {
 	b := &h.bots
 	h.botNoteThrottled(api, openID, chatID, text, &b.pairTold, botPairTellFor)
 }
 
 // botNoteThrottled sends one text note per openID per window, remembering when in the *told map (held under b.mu).
-func (h *Manager) botNoteThrottled(api *feishubot.Client, openID, chatID, text string, told *map[string]time.Time, window time.Duration) {
+func (h *Manager) botNoteThrottled(api botport.Client, openID, chatID, text string, told *map[string]time.Time, window time.Duration) {
 	b := &h.bots
 	b.mu.Lock()
 	if *told == nil {
@@ -265,10 +266,10 @@ func (h *Manager) botNoteThrottled(api *feishubot.Client, openID, chatID, text s
 }
 
 // botSendNote sends one text note into a chat without any throttling.
-func (h *Manager) botSendNote(api *feishubot.Client, chatID, text string) {
+func (h *Manager) botSendNote(api botport.Client, chatID, text string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := api.Send(ctx, "chat_id", chatID, feishubot.TypeText, botcard.TextContent(text), feishuSendUUID()); err != nil {
+	if _, err := api.Send(ctx, "chat_id", chatID, botcard.TypeText, botcard.TextContent(text), feishuSendUUID()); err != nil {
 		h.logf("bots: tell: %v", err)
 	}
 }
@@ -375,7 +376,7 @@ func (h *Manager) botMessage(ev botcard.MessageEvent, raw json.RawMessage, since
 // sent (in the topic, for a message that came in one). pass releases the next message's wait once this one is handed
 // over, whatever came of it. from is FeishuMessage.From: assistantwire.FeishuFromElsewhere for the owner's "/ai" from a
 // group that is not opted in, whose note goes under that message and nowhere else.
-func (h *Manager) handToAssistant(api *feishubot.Client, ev botcard.MessageEvent, raw json.RawMessage, action, from string, since time.Time, pass func(), inThread bool) {
+func (h *Manager) handToAssistant(api botport.Client, ev botcard.MessageEvent, raw json.RawMessage, action, from string, since time.Time, pass func(), inThread bool) {
 	msg := ev.Message
 	if !h.beginBotHandoff(api, ev, inThread) {
 		return
@@ -395,7 +396,7 @@ func (h *Manager) handToAssistant(api *feishubot.Client, ev botcard.MessageEvent
 		// Under the owner's "/ai" message, and only there: were it gone, the note is lost rather than written into a
 		// group that is not the bot's to write in (replyOrSendOpt, no_detour).
 		content := botcard.TextContent(text)
-		if _, _, err := h.replyOrSendOpt(ctx, api, msg.ChatID, msg.MessageID, feishubot.TypeText, content, feishuReplyUUIDIn(msg.MessageID, "n", text, false), false, true); err != nil {
+		if _, _, err := h.replyOrSendOpt(ctx, api, msg.ChatID, msg.MessageID, botcard.TypeText, content, feishuReplyUUIDIn(msg.MessageID, "n", text, false), false, true); err != nil {
 			h.logf("bots: note: %v", err)
 		}
 		return
@@ -447,7 +448,7 @@ func (h *Manager) botCardAction(ctx context.Context, a *botcard.CardAction, raw 
 // cardChat is the chat of the message a card press names when the callback does not say: what the hub remembers of the
 // message, else the Open Platform's answer, asked within the time Feishu leaves for the callback. "" when it cannot be
 // told. Only a chat the bot may use is remembered, as in checkReplyParent.
-func (h *Manager) cardChat(ctx context.Context, api *feishubot.Client, messageID string) string {
+func (h *Manager) cardChat(ctx context.Context, api botport.Client, messageID string) string {
 	if messageID == "" || api == nil {
 		return ""
 	}
@@ -478,7 +479,7 @@ func toast(kind, text string) *botcard.CardResponse {
 
 // botPair: the message is the code shown in the app, or the sender is told how to pair. Paired, the assistant is told
 // (it starts the chat afresh and says hello); while it is not connected the hub says hello itself.
-func (h *Manager) botPair(api *feishubot.Client, openID, chatID, text string) {
+func (h *Manager) botPair(api botport.Client, openID, chatID, text string) {
 	b := &h.bots
 	b.mu.Lock()
 	// Feishu can redeliver the very same message; claimBotMessageLocked drops a repeated id, but a short per-text window
@@ -580,7 +581,7 @@ func (h *Manager) botFeatures() BotFeatures {
 }
 
 // botName is a user's name (the contact API; the app may not have that permission, then the hub's owner name).
-func (h *Manager) botName(ctx context.Context, api *feishubot.Client, openID string) string {
+func (h *Manager) botName(ctx context.Context, api botport.Client, openID string) string {
 	b := &h.bots
 	b.mu.Lock()
 	if n, ok := b.names[openID]; ok {
@@ -633,14 +634,14 @@ func cutUTF8(s string, n int) string {
 // send with a fresh one-shot key and rerouted=true; transport or other failures come back untouched, so one blip
 // never becomes two messages. inThread puts a reply in the parent's thread (reply_in_thread); it means nothing for a
 // send into the chat, so a rerouted send ignores it too.
-func (h *Manager) replyOrSend(ctx context.Context, api *feishubot.Client, chatID, replyTo, msgType, content, replyUUID string, inThread bool) (id string, rerouted bool, err error) {
+func (h *Manager) replyOrSend(ctx context.Context, api botport.Client, chatID, replyTo, msgType, content, replyUUID string, inThread bool) (id string, rerouted bool, err error) {
 	return h.replyOrSendOpt(ctx, api, chatID, replyTo, msgType, content, replyUUID, inThread, false)
 }
 
 // replyOrSendOpt is replyOrSend that, with noDetour, does not reroute a reply whose parent is gone: the error comes
 // back (botcard.MessageGone tells it). For a caller whose line belongs under that parent or nowhere (a to-do's line
 // into its topic): in the chat it would be a stray message.
-func (h *Manager) replyOrSendOpt(ctx context.Context, api *feishubot.Client, chatID, replyTo, msgType, content, replyUUID string, inThread, noDetour bool) (id string, rerouted bool, err error) {
+func (h *Manager) replyOrSendOpt(ctx context.Context, api botport.Client, chatID, replyTo, msgType, content, replyUUID string, inThread, noDetour bool) (id string, rerouted bool, err error) {
 	if replyTo == "" {
 		id, err = api.Send(ctx, "chat_id", chatID, msgType, content, feishuSendUUID())
 		return
@@ -710,20 +711,20 @@ func botSendChat(set FeishuBotSettings, chatID string) (string, error) {
 
 // botNoteIn replies to a message with a line of text; a parent withdrawn meanwhile gets the note in the chat instead.
 // inThread: it may go into the parent's thread, for a message that came in a topic.
-func (h *Manager) botNoteIn(ctx context.Context, api *feishubot.Client, chatID, messageID, text string, inThread bool) {
+func (h *Manager) botNoteIn(ctx context.Context, api botport.Client, chatID, messageID, text string, inThread bool) {
 	content := botcard.TextContent(text)
-	if _, _, err := h.replyOrSend(ctx, api, chatID, messageID, feishubot.TypeText, content, feishuReplyUUIDIn(messageID, "n", text, inThread), inThread); err != nil {
+	if _, _, err := h.replyOrSend(ctx, api, chatID, messageID, botcard.TypeText, content, feishuReplyUUIDIn(messageID, "n", text, inThread), inThread); err != nil {
 		h.logf("bots: note: %v", err)
 	}
 }
 
 // botPost sends a card: as a reply to replyTo, else into the chat. A card Feishu refuses goes again as rich text
 // (fallback, else the card's own Markdown is lost: then a line saying so).
-func (h *Manager) botPost(ctx context.Context, api *feishubot.Client, chatID, replyTo string, card *botcard.Card, fallback string) (string, error) {
+func (h *Manager) botPost(ctx context.Context, api botport.Client, chatID, replyTo string, card *botcard.Card, fallback string) (string, error) {
 	return h.botPostJSON(ctx, api, chatID, replyTo, card.JSON(), fallback)
 }
 
-func (h *Manager) botPostJSON(ctx context.Context, api *feishubot.Client, chatID, replyTo, card, fallback string) (string, error) {
+func (h *Manager) botPostJSON(ctx context.Context, api botport.Client, chatID, replyTo, card, fallback string) (string, error) {
 	return h.botPostJSONKeyed(ctx, api, chatID, replyTo, card, fallback, "", false)
 }
 
@@ -731,12 +732,12 @@ func (h *Manager) botPostJSON(ctx context.Context, api *feishubot.Client, chatID
 // however often the send is made again, and two sends under different keys are two messages even with the same words
 // under one parent. "" is a fresh one-shot key for a send into the chat, the parent-and-content key for a reply.
 // inThread puts a reply (and its rich-text fallback) in the parent's thread.
-func (h *Manager) botPostJSONKeyed(ctx context.Context, api *feishubot.Client, chatID, replyTo, card, fallback, key string, inThread bool) (string, error) {
+func (h *Manager) botPostJSONKeyed(ctx context.Context, api botport.Client, chatID, replyTo, card, fallback, key string, inThread bool) (string, error) {
 	return h.botPostJSONKeyedOpt(ctx, api, chatID, replyTo, card, fallback, key, inThread, false)
 }
 
 // botPostJSONKeyedOpt is botPostJSONKeyed with noDetour (replyOrSendOpt).
-func (h *Manager) botPostJSONKeyedOpt(ctx context.Context, api *feishubot.Client, chatID, replyTo, card, fallback, key string, inThread, noDetour bool) (string, error) {
+func (h *Manager) botPostJSONKeyedOpt(ctx context.Context, api botport.Client, chatID, replyTo, card, fallback, key string, inThread, noDetour bool) (string, error) {
 	key = cutUTF8(key, feishuMaxUUID-4)
 	cardUUID := feishuSendUUID()
 	switch {
@@ -755,7 +756,7 @@ func (h *Manager) botPostJSONKeyedOpt(ctx context.Context, api *feishubot.Client
 		}
 		return id, err
 	}
-	id, err := send(feishubot.TypeInteractive, card, cardUUID)
+	id, err := send(botcard.TypeInteractive, card, cardUUID)
 	if err != nil && botcard.CardRejected(err) {
 		h.logf("bots: card refused (%v); sending it as rich text", err)
 		if fallback == "" {
@@ -768,7 +769,7 @@ func (h *Manager) botPostJSONKeyedOpt(ctx context.Context, api *feishubot.Client
 		case replyTo != "":
 			fallbackUUID = feishuReplyUUIDIn(replyTo, "f", fallback, inThread)
 		}
-		return send(feishubot.TypePost, botcard.PostMarkdown(fallback), fallbackUUID)
+		return send(botcard.TypePost, botcard.PostMarkdown(fallback), fallbackUUID)
 	}
 	return id, err
 }
