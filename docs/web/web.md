@@ -2829,6 +2829,14 @@ and Android follow in #5117.
   ultracode feature for the switch): `node web/e2e/new-agent-model.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`
   (wide / 390 × light / dark in Chinese, and wide light in English).
 
+## Health Today (#13176)
+
+The Health home (`web/src/views/health/Health.tsx`) opens with **Today** when the hub's hello lists `health_intake`: a water ring and a protein ring with today's amount and the goal under each, **Drank a glass** and **Other amount** under water and **Log grams** under protein (`HealthToday.tsx`, state in `useHealthIntake.ts`, requests in `intake.ts`). Without the feature the block is not drawn and nothing is asked. The requests are `GET` and `POST /api/v1/assistant/health/intake` and `DELETE …/intake/{id}`, always with `space=health` and never the shown manager's header: the health space stays the default manager's whichever assistant the Persona page shows (`lib/manager-choice.ts` `managerHeaderFor`; `intake.manager.test.ts` keeps it).
+
+A press adds its amount to the ring at once and the hub's answer, which carries today's totals, replaces the local sum; a refusal takes the amount back out and says why, with Retry sending the same record number (`crypto.randomUUID()` per record, so a retry is logged once). A logged record's toast has **Undo**, which calls the DELETE route. Writes go one at a time, in the order they were made; a read (the hub's `health_intake` message, a hello, the page coming back to the front) waits for the writes in flight and is run once they are done, so an older read cannot undo a newer answer.
+
+A ring links to its page: the hub's declarative water or protein page, drawn by the extension pages' renderer under the reserved id `-health-intake` (`lib/health-intake-ui.ts`), the way the subscription pages are, over HTTP only. `lib/extension-ui.ts` maps the reserved ids to their paths (`/subscriptions/-/ui`, `/assistant/health/intake/ui?space=health`), and `HealthIntakePage.tsx` is a full page at `/extension/-health-intake/pages?state={"kind":"water"}` (or `"protein"`), the route the renderer already opens pushed pages on ([deep-links.md](../protocol/deep-links.md) "Route table"), so it adds no route. The page draws again on the same `health_intake` message, so a record logged or undone there, or a goal saved, shows on Today at once. The ring colors and their reasons are in `docs/design/DESIGN_SYSTEM.md`.
+
 ## Sources (#9132)
 
 For everyone, Assistant first: a finished reply that looked something up on the web says where it came from, as ChatGPT,
