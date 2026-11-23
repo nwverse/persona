@@ -168,7 +168,7 @@ func (s *Service) a2aProcess(ctx context.Context, st a2aStore, cfg assistantwire
 		}
 		// Start the bounded delivery wait only when the task is active, not
 		// while it is behind another task in the recipient's FIFO.
-		if e.Delivery == a2aQueued && e.WaitingSince.IsZero() {
+		if e.Kind == "message" && e.Delivery == a2aQueued && e.WaitingSince.IsZero() {
 			t.Events[i].WaitingSince = time.Now().UTC()
 			if err := s.a2aSave(ctx, st, t); err != nil {
 				return err
@@ -222,6 +222,9 @@ func (s *Service) a2aExpireDelivery(ctx context.Context, st a2aStore, t *a2aTask
 	e := &t.Events[i]
 	since := e.Attempted
 	if e.Delivery == a2aQueued {
+		if e.Kind != "message" {
+			return false, nil
+		}
 		since = e.WaitingSince
 	}
 	if since.IsZero() || time.Since(since) < a2aConfirmFor {

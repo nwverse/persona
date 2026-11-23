@@ -154,3 +154,34 @@ func TestA2AQueuedDeliveryTimesOutWhileRecipientRemainsBusy(t *testing.T) {
 		t.Fatalf("busy recipient left a queued task stuck forever: %+v", task)
 	}
 }
+
+func TestA2AQueuedResultStillWaitsForOfflineSender(t *testing.T) {
+	s, h, st, cfg, parent, child := a2aFixture(t)
+	task, err := s.a2aStart(t.Context(), st, cfg, parent, child, "request", "", "Work.", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task = a2aProcessOne(t, s, st, cfg, task.ID)
+	task, err = s.a2aMutate(t.Context(), st, cfg, a2aSessionCaller(child), task.ID, func(task *a2aTask) (bool, error) {
+		return a2aReport(task, child, "done", a2aComplete, "Result must survive the sender being away.")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := len(task.Events) - 1
+	task.Events[i].At = time.Now().Add(-time.Hour)
+	task.Events[i].WaitingSince = task.Events[i].At
+	if err := s.a2aSave(t.Context(), st, task); err != nil {
+		t.Fatal(err)
+	}
+	setStatus(h.fakeHub, parent.Ref.Machine, parent.Ref.Session, proto.StatusOffline)
+	task = a2aProcessOne(t, s, st, cfg, task.ID)
+	if task.Events[i].Delivery != a2aQueued || len(h.sentCalls()) != 1 {
+		t.Fatalf("inbound timeout discarded a queued result: %+v", task)
+	}
+	setStatus(h.fakeHub, parent.Ref.Machine, parent.Ref.Session, proto.StatusDone)
+	task = a2aProcessOne(t, s, st, cfg, task.ID)
+	if task.Events[i].Delivery != a2aDelivered || len(h.sentCalls()) != 2 {
+		t.Fatalf("old queued result did not reach the recovered sender: %+v", task)
+	}
+}
