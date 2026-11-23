@@ -40,9 +40,6 @@ enum TextSize: String, CaseIterable, Identifiable {
     /// The Mac's fonts at this size (`Theme.Font.scale`: body 12 / 13 / 14); the Mac has no system text size under it,
     /// so it applies to `.large` as `macLook` does. Nothing on the iPhone, where the text styles follow Dynamic Type.
     func applyToMacFonts() {
-        #if os(macOS)
-        Theme.Font.scale = Theme.textScale(applied(to: .large))
-        #endif
     }
 }
 
