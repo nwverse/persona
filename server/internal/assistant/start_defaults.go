@@ -471,7 +471,7 @@ func (s *Service) taskSupervisorOf(t *PlanTask) string {
 }
 
 // taskDirectionOf is the conversation whose direction notes accompany the task's first prompt. Direction notes are
-// prompt context, not acceptance authority: new work remains main-supervised (#5732). A leader's own plan takes its
+// prompt context; acceptance follows the current supervisor. A leader's own plan takes its
 // origin; a worker takes the legacy direction label from its parent task's saved plan (#10623).
 func (s *Service) taskDirectionOf(ctx context.Context, t *PlanTask) string {
 	if t.Supervisor != "" {

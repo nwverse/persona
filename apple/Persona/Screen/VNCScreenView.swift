@@ -697,28 +697,4 @@ enum VNCKeys {
     static let escape: UInt32 = 0xff1b, tab: UInt32 = 0xff09, enter: UInt32 = 0xff0d, backspace: UInt32 = 0xff08
     static let left: UInt32 = 0xff51, up: UInt32 = 0xff52, right: UInt32 = 0xff53, down: UInt32 = 0xff54
 
-    #if os(macOS)
-    static func keysym(macKeyCode code: UInt16) -> UInt32? {
-        switch code {
-        case 53: escape
-        case 48: tab
-        case 36, 76: enter
-        case 51: backspace
-        case 123: left
-        case 124: right
-        case 125: down
-        case 126: up
-        default: nil
-        }
-    }
-
-    static func modifiers(_ f: NSEvent.ModifierFlags) -> [UInt32] {
-        var out: [UInt32] = []
-        if f.contains(.command) { out.append(RFBSession.command) }
-        if f.contains(.option) { out.append(RFBSession.option) }
-        if f.contains(.control) { out.append(RFBSession.control) }
-        if f.contains(.shift) { out.append(RFBSession.shift) }
-        return out
-    }
-    #endif
 }
