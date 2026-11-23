@@ -129,8 +129,12 @@ import SwiftUI
         else { intake?.protein.today += draft.amount ?? 0 }
         do {
             let result = try await api.recordHealthIntake(draft)
+            deps.intakeChanged()
             guard isCurrent(api) else { return }
             intake?.align(result)
+            #if os(iOS)
+            HomeWidgetData.shared.intakeChanged(on: api, confirmed: intake)
+            #endif
             intakeError = nil
             if result.entry?.deletedAt != nil {
                 deps.toast(Toast(String(localized: "Intake undone"), style: .success))
@@ -162,8 +166,12 @@ import SwiftUI
         intakeRead += 1
         do {
             let result = try await api.undoHealthIntake(id)
+            deps.intakeChanged()
             guard isCurrent(api) else { return }
             intake?.align(result)
+            #if os(iOS)
+            HomeWidgetData.shared.intakeChanged(on: api, confirmed: intake)
+            #endif
             deps.toast(Toast(String(localized: "Intake undone"), style: .success))
         } catch {
             guard isCurrent(api) else { return }
@@ -322,7 +330,12 @@ struct HealthView: View {
     private func sections(_ list: [Session]) -> some View {
         ScrollViewReader { proxy in
             List {
-                Section { HealthTodaySection(page: page) { intakeDetail = .init(kind: $0) } } header: { Text("Today") }
+                Section {
+                    HealthTodaySection(page: page) { intakeDetail = .init(kind: $0) }
+                    #if os(iOS)
+                    HealthIntakeSyncLink()
+                    #endif
+                } header: { Text("Today") }
                 #if os(iOS)
                 if UIDevice.current.userInterfaceIdiom == .phone {
                     #if DEBUG
@@ -414,7 +427,7 @@ struct HealthView: View {
                 }
                 Section {
                     source(Theme.Brand.iosHealth, String(localized: "Apple Health"), String(localized: "Reads summaries of steps, sleep, heart rate, weight and more through your iPhone. Persona needs to be open on the phone with access granted."))
-                    source(Theme.Icon.edit, String(localized: "Log Data"), String(localized: "Say “I drank 300 ml of water”, or take a photo of a meal in the field below, to log it in Health."))
+                    source(Theme.Icon.edit, String(localized: "Log Data"), String(localized: "Say “I drank 300 ml of water”, or take a photo of a meal in the field below, to log it in Health. When sync is on, it is also written to Apple Health."))
                     source(Theme.Icon.document, String(localized: "Checkup Reports and Lab Results"), String(localized: "Choose Upload a checkup report and pick a PDF or a photo: each item is read out and the ones outside the reference range are marked. The original and its record stay in Health, so years can be compared."))
                 } header: {
                     Text("Data Sources")
@@ -443,11 +456,19 @@ struct HealthView: View {
         }
     }
 
-    private static let privacy = [
-        String(localized: "Health chats stay here: Persona's other chats can't see or read them."),
-        String(localized: "Chats and memory stay on the hub machine and never go into Knowledge."),
-        String(localized: "This offers explanations and suggestions, not a substitute for a doctor's diagnosis or treatment."),
-    ]
+    private static let privacy: [String] = {
+        var lines = [
+            String(localized: "Health chats stay here: Persona's other chats can't see or read them."),
+            String(localized: "Chats and memory stay on the hub machine and never go into Knowledge."),
+        ]
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            lines.append(String(localized: "When sync is on, water and protein records are written to Apple Health on this iPhone."))
+        }
+        #endif
+        lines.append(String(localized: "This offers explanations and suggestions, not a substitute for a doctor's diagnosis or treatment."))
+        return lines
+    }()
 
     /// Apple Health, by its name and the Health app's icon (`PhoneDataSource.health`'s): what Health reads and saves.
     private var appleHealth: some View {

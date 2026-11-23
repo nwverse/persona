@@ -53,6 +53,7 @@ import Observation
         do {
             try await deps.request()
             await load()
+            HomeWidgetData.shared.refresh(force: true)
         } catch {
             if !Task.isCancelled { state = .failed }
         }
