@@ -185,6 +185,142 @@ export function topAccounts(accounts: UsageAccount[], n = 2): UsageAccount[] {
     .slice(0, n);
 }
 
+/** Browser-local storage key for user-pinned sidebar usage account IDs (#12418, display-only). */
+export const PINNED_USAGE_ACCOUNTS_KEY = "persona.usage.pinnedAccounts";
+
+const emptyPinned: readonly string[] = [];
+let pinnedRaw: string | null | undefined;
+let pinnedCache: readonly string[] = emptyPinned;
+const pinnedListeners = new Set<() => void>();
+let stopPinnedSync: (() => void) | undefined;
+
+function normalizePinnedIds(ids: readonly unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of ids) {
+    if (typeof v !== "string") continue;
+    const id = v.trim();
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+/** Parse a stored pinned-account ID list, returning [] on missing or malformed values. */
+export function parsePinnedUsageAccounts(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? normalizePinnedIds(parsed) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readPinnedRaw(): string | null {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function getPinnedSnapshot(): readonly string[] {
+  const raw = readPinnedRaw();
+  if (raw === pinnedRaw) return pinnedCache;
+  pinnedRaw = raw;
+  const parsed = parsePinnedUsageAccounts(raw);
+  pinnedCache = parsed.length ? parsed : emptyPinned;
+  return pinnedCache;
+}
+
+function notifyPinned(): void {
+  for (const l of pinnedListeners) l();
+}
+
+/** Persist the user's chosen sidebar usage account IDs in this browser (display-only). */
+export function setPinnedUsageAccounts(ids: readonly string[]): readonly string[] {
+  const next = normalizePinnedIds(ids);
+  const raw = next.length ? JSON.stringify(next) : null;
+  let persisted = false;
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (raw) localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, raw);
+      else localStorage.removeItem(PINNED_USAGE_ACCOUNTS_KEY);
+      persisted = true;
+    }
+  } catch {
+    // storage unavailable: keep in-memory state for this tab
+  }
+  pinnedRaw = persisted ? raw : readPinnedRaw();
+  pinnedCache = next.length ? next : emptyPinned;
+  notifyPinned();
+  return pinnedCache;
+}
+
+export function togglePinnedUsageAccount(id: string): readonly string[] {
+  const cur = getPinnedSnapshot();
+  return setPinnedUsageAccounts(cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]);
+}
+
+export function resetPinnedUsageAccounts(): readonly string[] {
+  return setPinnedUsageAccounts([]);
+}
+
+function subscribePinned(listener: () => void) {
+  pinnedListeners.add(listener);
+  if (!stopPinnedSync && typeof addEventListener === "function") {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === null || e.key === PINNED_USAGE_ACCOUNTS_KEY) notifyPinned();
+    };
+    addEventListener("storage", onStorage);
+    stopPinnedSync = () => removeEventListener("storage", onStorage);
+  }
+  return () => {
+    pinnedListeners.delete(listener);
+    if (pinnedListeners.size === 0) {
+      stopPinnedSync?.();
+      stopPinnedSync = undefined;
+    }
+  };
+}
+
+/** Browser-local pinned account IDs for the collapsed sidebar usage strip. */
+export function usePinnedUsageAccounts(): readonly string[] {
+  return useSyncExternalStore(subscribePinned, getPinnedSnapshot, getPinnedSnapshot);
+}
+
+/** Choose which live accounts appear in the collapsed sidebar strip:
+ *  when pinned IDs match at least one live account, show those matched accounts in pinned order;
+ *  otherwise fall back to the default automatic ranking (`topAccounts(live)` and live balance accounts). */
+export function selectSidebarUsageAccounts(
+  live: UsageAccount[],
+  pinnedIds: readonly string[],
+): { bars: UsageAccount[]; balances: UsageAccount[]; custom: boolean } {
+  if (pinnedIds.length > 0) {
+    const byId = new Map(live.map((a) => [a.id, a]));
+    const matched: UsageAccount[] = [];
+    for (const id of pinnedIds) {
+      const a = byId.get(id);
+      if (a) matched.push(a);
+    }
+    if (matched.length > 0) {
+      return {
+        bars: matched.filter((a) => !isBalanceAccount(a)),
+        balances: matched.filter(isBalanceAccount),
+        custom: true,
+      };
+    }
+  }
+  return {
+    bars: topAccounts(live),
+    balances: live.filter(isBalanceAccount),
+    custom: false,
+  };
+}
+
 /** The longest stretch the reset timeline shows: windows resetting later are drawn to its end. */
 export const TIMELINE_CAP_MS = 7 * 24 * 3600_000;
 
