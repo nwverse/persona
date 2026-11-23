@@ -229,7 +229,16 @@ export function Repositories({ manager, owner }: { manager: string; owner: strin
       </div>
     </div>}
     <Dialog open={!!draft} onClose={() => { if (!busy) { setDraft(null); setError(""); } }} title={t(draft?.id ? "settings-repositories.edit_title" : "settings-repositories.bind")}
-      footer={<><Button disabled={!!busy} onClick={() => { setDraft(null); setError(""); }}>{t("common.cancel")}</Button><Button tone="primary" busy={busy === "save"} disabled={!!busy || !identity} onClick={() => void save()}>{t(draft?.id ? "settings-repositories.save" : "settings-repositories.check_save")}</Button></>}>
+      footer={<div className="w-full space-y-2">
+        {draft && error && <div className="space-y-2">
+          <p role="alert" className="text-xs text-red">{error}</p>
+          {connectAction}
+        </div>}
+        <div className="flex justify-end gap-2">
+          <Button disabled={!!busy} onClick={() => { setDraft(null); setError(""); }}>{t("common.cancel")}</Button>
+          <Button tone="primary" busy={busy === "save"} disabled={!!busy || !identity} onClick={() => void save()}>{t(draft?.id ? "settings-repositories.save" : "settings-repositories.check_save")}</Button>
+        </div>
+      </div>}>
       {draft && <div className="space-y-3">
         {field("url", t("settings-repositories.url"), 2048)}
         <label className="block text-xs text-ink-2">{t("settings-repositories.provider")}
@@ -282,10 +291,6 @@ export function Repositories({ manager, owner }: { manager: string; owner: strin
         </Disclosure>
         <p className="text-xs leading-relaxed text-ink-3">{extensionId ? t("settings-repositories.check_hint_extension", { provider: extensionName }) : t("settings-repositories.check_hint")}</p>
         {busy === "save" && <Loading label={t(needsCheck ? "settings-repositories.checking" : "settings-repositories.saving")} />}
-        {error && <div className="space-y-2">
-          <p role="alert" className="text-xs text-red">{error}</p>
-          {connectAction}
-        </div>}
       </div>}
     </Dialog>
     <Dialog open={!!removing} onClose={() => { if (!busy) { setRemoving(null); setError(""); } }} title={t("settings-repositories.unbind_title")}
