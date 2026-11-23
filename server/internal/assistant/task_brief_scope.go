@@ -102,7 +102,14 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 	if brief.Request != nil {
 		known += "\n" + brief.Request.Text
 	}
-	risk := scopeRisk(c.Change+"\n"+strings.Join(added, "\n"), known)
+	kind := briefEventScope
+	var risk []string
+	if expect > 0 && c.DoneWhen == nil {
+		// Estimate explanations are audit data and never extend the authorized work.
+		kind = briefEventEstimate
+	} else {
+		risk = scopeRisk(c.Change+"\n"+strings.Join(added, "\n"), known)
+	}
 	if words := risk; len(words) > 0 && c.Approval == nil {
 		return TaskBrief{}, fmt.Errorf("this change adds a step only the owner may allow (%s): it was not applied. Ask the owner "+
 			"(ask_user, or task_review needs_user with what you recommend), and call task_scope again in the turn their answer starts",
@@ -110,7 +117,7 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 	}
 	scopes := 0
 	for _, e := range brief.Log {
-		if e.Kind == briefEventScope {
+		if e.Kind == briefEventScope || e.Kind == briefEventEstimate {
 			scopes++
 		}
 	}
@@ -121,7 +128,7 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 	if expect > 0 && brief.EstimateSourceNow != "" {
 		estimateSource = briefEstimateOverride
 	}
-	ev := BriefEvent{At: time.Now().UTC(), Kind: briefEventScope, Todo: t.ID, By: c.By, Change: clip(oneLine(c.Change), 300),
+	ev := BriefEvent{At: time.Now().UTC(), Kind: kind, Todo: t.ID, By: c.By, Change: clip(oneLine(c.Change), 300),
 		Why: clip(oneLine(c.Why), 300), Added: added, Dropped: dropped, ExpectMinutes: expect, EstimateSource: estimateSource, eventID: c.eventID}
 	if len(added)+len(dropped) > 0 {
 		ev.DoneWhen = next
@@ -267,7 +274,7 @@ func (s *Service) toolTaskScope(ctx context.Context, self string, args json.RawM
 	var b strings.Builder
 	fmt.Fprintf(&b, "Logged on task %s's brief (the owner sees it in the next digest). Scope revision: %s. "+
 		"Original brief goal: %q. Original criteria: %s. Effective criteria: %s. Dropped criteria: ",
-		t.ID, brief.ClockAt.Format(time.RFC3339Nano), brief.Goal, criteriaWords(brief.DoneWhen, nil), criteriaWords(brief.Criteria, nil))
+		t.ID, brief.scopeRevision().Format(time.RFC3339Nano), brief.Goal, criteriaWords(brief.DoneWhen, nil), criteriaWords(brief.Criteria, nil))
 	dropped := (&taskBrief{rec: brief.briefRecord, st: briefState{Log: brief.Log}}).dropped()
 	for i, criterion := range dropped {
 		if i > 0 {

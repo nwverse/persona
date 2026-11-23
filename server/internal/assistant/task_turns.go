@@ -144,6 +144,7 @@ type turnSignal struct {
 	Key     string     `json:"key"`
 	Machine string     `json:"machine,omitempty"`
 	Detail  string     `json:"detail,omitempty"`
+	Handoff bool       `json:"handoff,omitempty"`
 	Told    *time.Time `json:"told,omitempty"`
 }
 
@@ -164,7 +165,7 @@ func (s *Service) replayTurnSignal(todo string, expected taskTurn) {
 	}
 	// Keep the ledger lock until queued, so an obsolete replay cannot replace a newer pending signal.
 	// The digest releases its mutex before consulting or marking the turn ledger.
-	s.queueSignal(superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Detail: sig.Detail})
+	s.queueSignal(superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Detail: sig.Detail, Handoff: sig.Handoff})
 }
 
 // settled: nothing is left to do for the turn: it is judged (or has nothing to judge) and what it raised was told.
@@ -601,8 +602,8 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 		}
 		return true
 	}
-	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key {
-		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail}
+	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key || sig.Handoff != g.Handoff {
+		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail, Handoff: g.Handoff}
 		b.doc.Turns[g.Todo] = e
 		s.saveTurnsLocked(ctx)
 	}
@@ -667,6 +668,34 @@ func (s *Service) turnsToldLocked(ctx context.Context, list []superviseSignal) b
 		b.doc.Turns[id] = e
 	}
 	return false
+}
+
+// turnsUntold releases the ledger reservation for a signal whose durable queued copy was removed before delivery.
+// Matching kind and key prevents an old queued copy from clearing a newer turn's receipt.
+func (s *Service) turnsUntold(ctx context.Context, list []superviseSignal) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.loaded {
+		return
+	}
+	changed := false
+	for _, g := range list {
+		if !turnSignalKind(g) {
+			continue
+		}
+		e, ok := b.doc.Turns[g.Todo]
+		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told != nil {
+			next := *sig
+			next.Told = nil
+			e.Signal = &next
+			b.doc.Turns[g.Todo] = e
+			changed = true
+		}
+	}
+	if changed {
+		s.saveTurnsLocked(ctx)
+	}
 }
 
 // turnAgain: task t's stretch of work since since ended with turn e, which was taken up before. It gets no second

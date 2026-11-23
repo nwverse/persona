@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -30,6 +31,14 @@ import (
 // its method; without it no client claims the request and the bus answers "no-client-found".
 
 const codexDesktopTimeout = 60 * time.Second
+
+const codexDesktopUnavailableKey = "codex-desktop.control_unavailable"
+
+// This refusal is safe to retry: no turn or settings request reached the App. Keep transport diagnostics out of
+// the user-facing message, including the stale socket's path after an App update removes the bus.
+func codexDesktopUnavailable(ctx context.Context) error {
+	return refusal("codex_read_only", i18n.T(i18n.From(ctx), codexDesktopUnavailableKey), nil)
+}
 
 // codexDesktopLoadWait: how long a thread the App has not loaded (one a thread just created, one not opened since the
 // App started) is given to load after the App is asked to open it.
@@ -139,6 +148,10 @@ func (c *codexDesktop) request(method string, params any, target string) (codexD
 
 // sendCodexDesktop runs a turn in a thread the Codex App has loaded.
 func (n *Node) sendCodexDesktop(ctx context.Context, src codexSource, text string, images []proto.Image) error {
+	// Refuse before saving attachments or holding a message behind a running turn on an unavailable App.
+	if !codexDesktopAvailable(src.home) {
+		return codexDesktopUnavailable(ctx)
+	}
 	paths, err := n.saveImages(images)
 	if err != nil {
 		return refusal("bad_image", err.Error(), nil)
@@ -154,7 +167,7 @@ func (n *Node) startCodexDesktopTurn(ctx context.Context, src codexSource, input
 	defer cancel()
 	c, err := dialCodexDesktop(ctx, src.home)
 	if err != nil {
-		return refusal("codex_read_only", "连不上电脑上的 Codex App："+err.Error(), nil)
+		return codexDesktopUnavailable(ctx)
 	}
 	defer c.close()
 	owner, err := c.loadedOwner(ctx, src.thread)
@@ -184,7 +197,7 @@ func (n *Node) interruptCodexDesktop(ctx context.Context, src codexSource) error
 	defer cancel()
 	c, err := dialCodexDesktop(ctx, src.home)
 	if err != nil {
-		return refusal("codex_read_only", "连不上电脑上的 Codex App："+err.Error(), nil)
+		return codexDesktopUnavailable(ctx)
 	}
 	defer c.close()
 	owner, err := c.owner(src.thread)
@@ -435,7 +448,7 @@ func (n *Node) placeCodexDesktopIn(s *proto.Session, src codexSource, group stri
 	if s.Status == proto.StatusDone && (subagent || app == nil || !app.unread[src.thread]) {
 		s.Status = proto.StatusIdle // looked at in the App
 	}
-	if s.Status == proto.StatusWorking && !subagent && s.Capabilities != nil {
+	if s.Status == proto.StatusWorking && !subagent && s.Capabilities != nil && s.Capabilities.Send {
 		// Stopped from the phone as with the App's stop button (interruptCodexDesktop); a subagent stops with its chat.
 		s.Capabilities.Interrupt = true
 	}
@@ -624,14 +637,12 @@ func codexThreadOrigin(src codexSource) codexOrigin {
 	return readCodexOrigin(src.path)
 }
 
-// codexDesktopChat: a chat of the Codex App running on this machine (not a CLI thread, not a subagent of one).
+// codexDesktopChat identifies an App chat independently of whether the App still exposes its control bus.
+// An unavailable bus must not turn an App chat into a CLI session or invite a second writer.
 func codexDesktopChat(src codexSource) bool { return codexDesktopChatIn(src, nil) }
 
-// codexDesktopChatIn is codexDesktopChat with the App's presence looked up once per home in a list pass (codexListPass).
+// codexDesktopChatIn is codexDesktopChat with sidebar state read once per home in a list pass (codexListPass).
 func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
-	if !pass.desktopAvailable(src.home) {
-		return false
-	}
 	if src.path == "" { // its rollout is gone: one the App's sidebar lists and its database has (codex_appdb.go), not a subagent
 		t, ok := codexAppThreadOf(src)
 		return ok && !t.origin().sub

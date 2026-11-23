@@ -395,3 +395,10 @@ A view that fetches once per id cannot recover when the store puts the same id b
 - Keep the request as a user-role turn boundary with explicit scheduled provenance and its existing item id. Show the
   instructions in a constrained preview. The quiet decision is an answer with no updates, not protocol text or a signal
   to close a turn early; `task_complete` still determines completion and recorded duration.
+
+## Late Codex completions are not new turns
+
+Codex can append a command completion after `task_complete`. It remains visible in the transcript but must not
+advance `LastActivity` or `updated_at`: doing so makes a finished, seen turn look newly completed. If a bounded
+read starts after the turn closed, recover its state from the previous read or bounded lookback before using the
+command's timestamp.

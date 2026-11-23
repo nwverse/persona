@@ -75,6 +75,12 @@ API (read-only, not usable with extension tokens, `testdata/route_scopes.txt`):
 }], "checked_at": "2026-11-05T09:08:20Z"}
 ```
 
+A window from a usage extension may also carry the gateway's protection line:
+
+```json
+{"label": "7d", "window_minutes": 10080, "used_percent": 55.0, "resets_at": "2026-11-27T09:00:00Z", "protect_percent": 99.0}
+```
+
 `local` says the numbers were read on one of the computers. `machines` names those computers (their names in hub.json now, #1907), and `sources` names the account-pool gateways that reported it (below).
 
 With no data, `accounts` is `[]`; old hubs lack this route (404), and the web treats that as no data.
@@ -105,7 +111,9 @@ A gateway whose answer fits none of the three adapters is read by an extension t
 {"id": "src-3a4b5c6d", "name": "Pool", "type": "extension", "extension": "example-usage", "launcher": "pool"}
 ```
 
-It is written in `manager.json` (the admin page lists it and can rename, switch and remove it, not create it). Its rows are shown as the extension sent them and are never merged with the computers' accounts. Besides the usual fields a window may carry `group`, `title` and `note`, and an account `headline` and `notice` (plain text in the user's language): windows next to each other with the same `group` belong together, an account with a `notice` and no window says why there is nothing to draw. All are optional; without them a client draws the flat windows as before.
+It is written in `manager.json` (the admin page lists it and can rename, switch and remove it, not create it). Its rows are shown as the extension sent them and are never merged with the computers' accounts. Besides the usual fields a window may carry `group`, `title` and `note`, and `protect_percent` (below), and an account `headline` and `notice` (plain text in the user's language): windows next to each other with the same `group` belong together, an account with a `notice` and no window says why there is nothing to draw. All are optional; without them a client draws the flat windows as before.
+
+`protect_percent` (0 to 100, #13173) is the used percentage at which the gateway stops sending work to that account for that window (its quota protection line). It can differ per account and per window, so an extension sends the value that applies to each window it lists. A number outside 0 to 100, or one that is not a number, is dropped (never clamped into a value); a window without it simply has no line. The hub carries it unchanged in `GET /api/v1/usage/windows` as `protect_percent` on the window, only for rows an extension sent; windows read by the computers or by the built-in gateway adapters never have it. Clients draw a marker on the window's bar at that percentage and ignore the field when it is absent.
 
 ### Configuration
 
@@ -268,12 +276,25 @@ User decision: the hub is only a communication center, and computers belong to t
 - **Providers without data**: an active launcher with no account gets a row that says why in plain words, with **Set up with assistant** handing a prompt to the main chat. Claude Code's and the other built-in subscriptions (Codex, Antigravity) "haven't been read yet"; any other launcher, a provider run through Claude Code included, is one Persona "can't read by itself" unless its relay reports usage. Engineering terms (status line, gateway source) stay in the prompt, not the row (#12411).
 - Refreshes once a minute; no requests while the page is not in the foreground. A failed refresh keeps the last answer (iOS / Mac and Android do the same), which turns out of date at its `stale_at`; only a 404 (an older hub) hides the block.
 
+## Provider cards and the reset timeline (#13173)
+
+One rule on every client; web first (`web/src/lib/usage-windows.ts`: `groupByProvider`, `sortForCard`, `sortedWindows`, `timeline`; view `web/src/views/UsagePopover.tsx`). It is computed on the client from data already loaded: no new request, and the hub's answer is unchanged.
+
+- **Cards**: the accounts are grouped by provider (account type) in the order the hub listed them. A card has the provider's name, its account count and the newest sample age. **Every account is listed** (no "two fullest" folding in the details view; the collapsed sidebar strip is unchanged).
+- **Order inside a card**: by the plan's 7d window reset, soonest first; accounts without a 7d window or reset time last, then by name.
+- **Rows**: per account the 5h window, then 7d, then other plan windows by length, then per-model allowances; each with the bar, used percent, pace tick (`pace`) and reset countdown as before. Out-of-date accounts stay faded and have no pace.
+- **Reset timeline**: one chart per card, always drawn when any account in it has a reset time. A shared axis (now, 6h, 12h, 1d, 3d, 5d, 7d; the first 24 hours take 45% of the width, 1 to 7 days the other 55%, `timelinePosition`), one row per account in the card's quota order, and in each row a teal capsule for the 5h window over a blue one for the 7d window, from the now line to the window's reset, with a hollow end dot and the time left (the label sits inside the capsule, in white, when the end is past about 80% of the width). Windows without a reset time, ended ones and per-model allowances are left out; an account with none has no row. A row's accessible label lists each window's reset ("5h · Resets in 4h").
+- **Protection line**: a window may carry `protect_percent` (0-100; it can differ per account and per window): the use at which scheduling stops using the account. When present, its bar shows a thin warning-colour notch at that percent, a small "protect N%" flag, and a hatched zone from the line to 100%; the bar's accessible label includes the value. When absent (an older hub, or no such rule) nothing is drawn. The hub side of the field is a separate change; clients only read it.
+- **Switches**: one switch per provider on **Admin › Usage sources › Providers in the usage bars**, writing `usage.hidden_providers` (display only, #11767). No new setting.
+
 ## UI (iOS / Mac, #2889)
 
 Same rules as the web (pure functions in `apple/Packages/PersonaWire/Sources/PersonaWire/UsageWindows.swift`, unit tests `UsageWindowsTests` share the web's cases; views in `Persona/Views/Machines/UsageWindowsViews.swift`):
 
 - **iOS**: on the Machines page (**Machines** in the drawer / Settings / Agents menu), a **Subscription Usage** section below the cards lists every window of every account directly (no hover on a phone, so no two layers of thin bar + popover).
-  The sample time sits right of the account title, the next line gives the plan and sources, and there is a one-line explanation when the gateway cannot read; one row per window: length, used, ahead / behind pace, reset countdown, with a bar carrying the pace tick below. With no data the whole section is not drawn.
+  One card per account type (#13173): the type's name, how many accounts, when the newest was read; every account of it is listed (no folding), soonest 7-day reset first (accounts without a 7-day window or reset time last, then by name; `UsageWindows.sortedByWeekReset`, `UsageCardsTests`).
+  The sample time sits right of the account title, the next line gives the plan and sources, and there is a one-line explanation when the gateway cannot read; one row per window, the 5h window then the 7d window then any other: length, used, ahead / behind pace, reset countdown, with a bar carrying the pace tick below. Under the rows an always-shown reset timeline: a strip from now to the farthest reset (at most seven days) with a segment per window ending at its reset (`UsageWindows.timeline`). With no data the whole section is not drawn.
+  A menu in the section header switches each account type off or on. The hub's `usage.hidden_providers` is written only from the admin console (a phone's credentials do not open it), so the phone's switches are a filter kept on the device: they can hide more, never show what the hub left out.
   It asks once a minute while the page and the App are in the foreground (`tabActiveTask`), and also on pull to refresh. DEBUG: `-tab dev -openMonitor all`.
 - **Mac**: at the bottom of the section column, above the connection status, one thin bar each for the two fullest accounts (`MacUsageFooter`), warning color at ≥ 80%, out-of-date ones faded, hover tooltip shows the source; clicking opens the same detail popover (Esc or clicking elsewhere closes it).
   It asks once a minute while the App is in the foreground; the Machines page does not draw it again.

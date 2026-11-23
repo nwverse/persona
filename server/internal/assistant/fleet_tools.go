@@ -35,6 +35,9 @@ func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
 	}
 	tools := append(s.phoneTools(ctx), agents...)
 	if !assistant {
+		tools = append(tools, toolsNamed(resourceToolNames)...)
+	}
+	if !assistant {
 		tools = append(tools, s.knowledgeFolderTools(ctx)...)
 		tools = append(tools, s.AgentTools()...)       // report_to_supervisor, todo_decisions, todo_decision_add, todo_bind_thread (agentToolNames)
 		tools = append(tools, s.dispatchTools(ctx)...) // dispatch_start, dispatch_read, when agents.dispatch is on (dispatch.go)
@@ -215,6 +218,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
 		return res
 	}
+	if slices.Contains(resourceToolNames, name) {
+		return s.resourceTool(ctx, machine, session, name, args)
+	}
 	if name == "secret_store" {
 		return s.toolSecretStore(ctx, machine, session, args)
 	}
@@ -260,15 +266,20 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 			// notify_user's: nothing goes out, the text stays in the conversation, which the meeting page shows.
 			return proto.TextResult(justMeNotice(s.lang(ctx)), false)
 		}
-		if name == "phone_notify" && s.inHealth(ctx, session) {
+		if name == "phone_notify" {
+			// Local phone notifications follow the same privacy rule as notify_user: what they say decides.
 			var a map[string]any
-			if err := json.Unmarshal(args, &a); err != nil {
-				return proto.TextResult(err.Error(), true)
-			}
-			if a != nil {
-				// Local phone notifications follow the same privacy rule as notify_user.
-				a["title"], a["body"] = healthNotice(s.lang(ctx))
-				args, _ = json.Marshal(a)
+			decodeErr := json.Unmarshal(args, &a)
+			title, _ := a["title"].(string)
+			body, _ := a["body"].(string)
+			if space, _ := s.selfSpace(ctx, session); s.exitPolicy(ctx, title+"\n"+body, session, space).Redact {
+				if decodeErr != nil {
+					return proto.TextResult(decodeErr.Error(), true)
+				}
+				if a != nil {
+					a["title"], a["body"] = s.redactedNotice(ctx, s.lang(ctx), space)
+					args, _ = json.Marshal(a)
+				}
 			}
 		}
 		var res proto.ToolResult

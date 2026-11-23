@@ -102,6 +102,8 @@ tests, rather than inferring runtime from `Sleep` inside fake-clock tests, and e
 PR watcher's report, still says what failed (`scripts/ci/server-shards.py`). The full scripts suite splits complete sorted discovery
 across two independently isolated jobs, scheduled one at a time; each has its own synthetic HOME and mock ports.
 
+The Web suite's default file-worker count is `min(8, max(availableParallelism() - 1, 1))` (`web/test-scheduling.ts`, #12458). Vitest otherwise starts one fork per host CPU; under a CPU quota that can leave dozens of processes initializing isolated module graphs at once. On main `c866b5a377`, Node 24.22.3 under a four-CPU quota and 8 GiB memory limit, the complete suite took 79.06 seconds with two concurrency-sensitive assertion failures at the default 63 workers, 448.08 seconds with three workers, and 175.31 seconds with eight workers. Eight preserved all 1,542 files / 17,295 assertions (one skip in each count) and reduced CPU time from 2,301.7 to 1,660.4 seconds. The cap does not remove or reuse isolated test environments, and explicit project or command-line `maxWorkers` settings still override it for diagnosis. Measure wall time, test counts and failures together when changing it; the 600-second Web test deadline stays unchanged.
+
 **Why tests stay uncached.** check-fast, the CI shards, `scripts/test/test-server.sh` and the bounded runner's
 commands below all pass `-count=1`, so no Go test result comes from Go's test cache; the build cache still serves
 compilation. The test cache reuses a result while the test binary, its flags and the environment variables and files
@@ -129,7 +131,7 @@ setting; the 4 GB Gradle daemon and non-heap allocations are separate.
 | --- | --- | --- | --- | --- |
 | Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, the programs and tunnel tests with `server/build-tags.txt`, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
 | Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest, production build and privacy | ubuntu-latest | 2–4 / 4–7 min |
-| Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion checker tests, translations/literals, token and motion ratchets, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056) |
+| Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token/motion checker tests, translations/literals, token and motion ratchets, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056); each shard's job timeout is 90 minutes, while individual checks retain their own timeout and final verdict |
 | Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | PersonaKit/iOS/Watch/HTML and Mac build/unit tests, and in the iOS lane the isolation lint with its own tests (`scripts/test/isolation-lint.sh`; `docs/apple/performance.md`, "Isolation lint") and the no-CallKit check of the device and simulator apps (`scripts/release/check_no_callkit.py`; `docs/operations/release.md`, "No CallKit"); synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | queue and execution measured separately |
 | iOS 18.6 compatibility / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios18` | offline `PersonaTests` at the deployment floor, with iPhone 16 Pro and iPad layout coverage, separate HTML batches and a test-host restart check | macos-15 (arm64), Xcode 26.3 | one runner for up to 150 minutes per manual dispatch, about 8.86 GB to download a missing runtime |
 | Scripts/docs / `.github/workflows/scripts-tests.yml` | `scripts/ci/scripts.sh` | every Python script test, doc/code paths and index, layout/shell/Python compatibility, privacy-rule regression, catalog/translation/token checks, actionlint, issue-link logic, website worker | ubuntu-latest | 2–4 / 4–7 min |
@@ -406,6 +408,15 @@ example configs and services) and both watcher skills under `.claude/skills/`. T
   share-sheet and performance tests) clears it first, whatever the shell exported; `scripts/test/test_apple_dev_build.py`
   finds them by searching. After `sim.sh`, the project Xcode opens is the lean one until the next `xcodegen generate`,
   and its Rust core has the simulator slice only (the last item).
+- **The offline hosted test host has its own graph, not the development switch.** `scripts/ci/apple.sh` first generates
+  the unchanged whole `Persona.xcodeproj` for package resolution and the unsigned device build, which still covers the
+  embedded Watch app, Watch widgets and Share extension. Before `build-for-testing`, it resolves that whole spec once
+  with `xcodegen dump`, and `scripts/ci/apple_offline_project.py` creates a separate `PersonaOfflineUnitTests.xcodeproj`
+  in the disposable snapshot. Only this project omits targets the unit-test host cannot reach: Watch/Share, Vision,
+  UI tests and the separate About accessibility host. It retains the real `Persona` host, Widgets, Notify, all package
+  dependencies, `PersonaTests`, and the exact `TEST_HOST` / `BUNDLE_LOADER`. It does not set `PERSONA_LEAN_DEV_BUILD`,
+  change a test selector or alter the default, UI-test or About schemes. `scripts/test/test_apple_offline_project.py`
+  generates and inspects this project when `xcodegen` is installed; the ordinary project still embeds all four targets.
 - **A lean build says when it skipped what the branch changed.** The watch app compiles all of `apple/Shared/` and the
   `PersonaWire` package (`apple/Packages/PersonaWire/`) for watchOS 10, the share extension compiles them as an app
   extension, and no hosted CI runs on a PR, so with lean builds alone a change that breaks either would first fail on
@@ -574,6 +585,15 @@ The versioned JSON snapshot contains file and line totals and counts by record k
 sample paths and message bodies. The comparison marks kinds and versions as added (`+`), missing (`-`) or changed
 (`~`). An added kind is newly observed in the selected transcripts. Check its local sample before deciding whether
 the parser needs a new fixture or handling. Pass transcript directories to either command to limit the scan.
+
+To compare scans saved on different machines or review them later, create both snapshots with `--json`. Compare the
+saved counts without copying the transcripts or passing transcript directories:
+
+```sh
+python3 scripts/diag/transcript_stats.py --compare before-upgrade.json --against after-upgrade.json
+```
+
+The offline command validates both snapshots, leaves them unchanged and reads no transcript directories.
 
 API smoke tests: `curl -H "Authorization: Bearer $TOKEN" …/api/v1/machines`, `…/api/v1/sessions?machine_id=<machine>`.
 
