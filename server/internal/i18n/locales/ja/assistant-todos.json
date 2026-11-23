@@ -13,5 +13,10 @@
   "not_found": "このToDoはもうありません",
   "round_not_found": "ToDoの会話のこの部分はもうありません",
   "agent_not_listed": "このエージェントはまだコンピュータに表示されていません。少し待ってからもう一度お試しください。",
-  "images_forbidden": "このデバイスではToDoの画像を読み込めません"
+  "images_forbidden": "このデバイスではToDoの画像を読み込めません",
+  "sort_reason_direction": "担当のスーパーバイザーが「{name}」を受け持っています",
+  "sort_reason_dirs": "Agent が「{name}」のフォルダ {dir} で作業しています",
+  "sort_reason_title": "タイトルに「{name}」とあります",
+  "sort_batch_missing": "取り消せる変更がありません",
+  "sort_batch_undone": "この変更はすでに取り消されています"
 }

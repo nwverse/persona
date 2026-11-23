@@ -1,6 +1,6 @@
 {
   "name": "schedule_followup",
-  "description": "Wake yourself later with `prompt`; `new_conversation: true` uses its own chat. Wakes reset the message hop chain at most once per 10 minutes. `at` accepts RFC3339 or relative 30m/2h/1d. For repeats set `every` (5m-7d) once; never chain runs. Or use `cron` instead of at/every: 5 fields in the user's zone, at least 5m apart; @hourly/@daily/@weekly/@monthly/@yearly work. Day 0/7 is Sunday; restricted day fields match either. Inspect the reply's next runs. `until` cannot be a bare clock time.\n\nRuns inherit Main chat's launcher/model/effort; overrides require an own conversation, and permission mode stays the user's choice. `inbox` is only for requested Inbox results. `fresh_each_run: true` starts a new chat each run with its state note. See field descriptions for push and end-time edit rules.\n\nFor approved recurring work advancing a supervised to-do, pass its explicit `todo_id`; do not guess from a title. Omission keeps an association; \"\" clears it; one-shots refuse it. From the second run, progress is new Agent answers or tool calls (not waits or repeats), criterion changes or progress reports; a long stall asks Change approach / Keep waiting, even with `push: asked`. Get owner consent before creating or changing recurring work.",
+  "description": "Wake yourself later with `prompt`; `new_conversation: true` uses its own chat. Wakes reset the message hop chain at most once per 10 minutes. `at` accepts RFC3339 or relative 30m/2h/1d. For repeats set `every` (5m-7d) once; never chain runs. Or `cron` instead of at/every (5 fields in the user's zone, at least 5m apart, 0/7 = Sunday, restricted day fields match either; check the reply's next runs). `until` cannot be a bare clock time.\n\nRuns inherit Main chat's launcher/model/effort; overrides need an own conversation; permission mode stays the user's. `fresh_each_run: true` starts a new chat each run with its state note.\n\nFor approved recurring work advancing a supervised to-do, pass its explicit `todo_id`, never guessed from a title (omit keeps, \"\" clears, one-shots refuse it). From the second run progress is new Agent answers or tool calls (not waits or repeats), criterion changes or reports; a long stall asks Change approach / Keep waiting, even with `push: asked`. Get owner consent before creating or changing recurring work.",
   "input_schema": {
     "type": "object",
     "required": [
@@ -44,7 +44,7 @@
           "every",
           "asked"
         ],
-        "description": "every (default for a new task): each run's answer is pushed to the user; asked: only what a run sends with notify_user, for a task that watches something or a standing loop (a patrol, a daily round). Continuing this conversation, a run's answer is then not pushed or sent to channels; from Main chat it runs in its own conversation instead. Omit to keep an existing task's"
+        "description": "every (default): each run's answer is pushed; asked: only what a run sends with notify_user, for watching something or a standing loop (patrol, daily round). Continuing this conversation, answers are then not pushed or sent to channels; from Main chat it runs in its own conversation. Omit to keep"
       },
       "inbox": {
         "type": "string",
@@ -53,22 +53,22 @@
           "worthy",
           "every"
         ],
-        "description": "what of a run goes into the user's Inbox, independent of push: off (default for a new task), worthy (a run puts a row there with inbox_post only when it finds something worth a look), every (every run ends with a row made by Persona). Set it only when the user asked for it. Omit to keep an existing task's"
+        "description": "Inbox rows, independent of push: off (default), worthy (the run uses inbox_post only for something worth a look), every (Persona adds a row after each run). Only when the user asked. Omit to keep"
       },
       "until": {
         "type": [
           "string",
           "null"
         ],
-        "description": "optional end time (RFC 3339 or 30m / 2h / 1d). After it, Persona turns the task off and records a skipped run instead of running. Omit to keep an existing task's end time; null clears it. Ignored for a one-off."
+        "description": "optional end time (RFC 3339 or 30m / 2h / 1d); then Persona turns it off and records a skipped run. Omit keeps; null clears; ignored for a one-off"
       },
       "launcher": {
         "type": "string",
-        "description": "this task's own launcher, instead of Main chat's (a name on the computer where its runs start). Needs new_conversation: true: a follow-up that continues this conversation runs on that conversation's launcher. Empty clears the override and follows Main chat again. Omit to keep an existing task's"
+        "description": "own launcher instead of Main chat's (a name on the run's computer); needs new_conversation: true, since continuing this conversation keeps its launcher. Empty follows Main chat. Omit to keep"
       },
       "model": {
         "type": "string",
-        "description": "model id for the launcher above; without a launcher it pins the launcher the task runs on now. Empty uses the launcher's default. Omit to keep an existing task's"
+        "description": "model id for that launcher (without one, pins the current launcher); empty: its default. Omit to keep"
       },
       "effort": {
         "type": "string",
@@ -79,7 +79,7 @@
           "xhigh",
           "max"
         ],
-        "description": "thinking effort for Claude launchers; without a launcher it pins the launcher the task runs on now. Omit to keep an existing task's; empty clears it"
+        "description": "Claude thinking effort (without a launcher, pins the current one). Omit keeps; empty clears"
       }
     }
   }

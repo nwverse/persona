@@ -1,0 +1,12 @@
+{
+  "name": "watch_list",
+  "description": "List watch cards (drafts too) in Overview order, with ids and latest values.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "project": {
+        "type": "string"
+      }
+    }
+  }
+}

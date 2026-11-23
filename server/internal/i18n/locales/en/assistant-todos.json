@@ -13,5 +13,10 @@
   "not_found": "This to-do no longer exists",
   "round_not_found": "That part of the to-do's conversation is no longer there",
   "agent_not_listed": "This Agent isn't listed on its computer yet. Try again in a moment.",
-  "images_forbidden": "This device can’t read to-do images"
+  "images_forbidden": "This device can’t read to-do images",
+  "sort_reason_direction": "Its supervisor works on {name}",
+  "sort_reason_dirs": "Its Agent works in {dir}, a folder of {name}",
+  "sort_reason_title": "Its title names {name}",
+  "sort_batch_missing": "There's no such change to undo",
+  "sort_batch_undone": "That change was undone already"
 }

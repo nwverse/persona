@@ -58,7 +58,9 @@ type Task struct {
 	// runGrantBasis belongs only to the model/task snapshot consumed by this run, never the stored task.
 	runGrantBasis string
 
-	WorkoutID        string `json:"workout_id,omitempty"`
+	WorkoutID string `json:"workout_id,omitempty"`
+	// WatchID is the watch card this task refreshes (watch.go); its title, prompt, schedule and switch follow the card.
+	WatchID          string `json:"watch_id,omitempty"`
 	ID               string `json:"id"`
 	Title            string `json:"title"`
 	Prompt           string `json:"prompt"`

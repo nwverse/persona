@@ -1,5 +1,5 @@
 // Overview: what needs you, what is running, what just finished — Beautiful UI's Task Rows — and the computers.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { SESSIONS_HIERARCHY_FEATURE } from "../lib/child-sessions";
 import { homeKey } from "../lib/folded-rows";
 import { ago, backgroundWaiting, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, stateOf, tabLabel } from "../lib/format";
@@ -50,7 +50,14 @@ import { OverviewArrangeButton } from "./extensions/ExtensionSlots";
 import { OverviewBody, type OverviewSections } from "./OverviewBody";
 import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
+import { useClassicOverview } from "../lib/overview-layout";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
+
+// The watch wall (views/watch/WatchWall.tsx, #13020) is a chunk of its own: Overview's first screen carries only this.
+const WatchWall = lazy(() => import("./watch/WatchWall"));
+// Overview by project (views/overview/ProjectOverview.tsx, #13019), the default unless Settings › General › Overview's
+// Classic layout is on (lib/overview-layout.ts): a chunk of its own as well.
+const ProjectOverview = lazy(() => import("./overview/ProjectOverview"));
 
 function greeting() {
   const h = new Date().getHours();
@@ -130,6 +137,8 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   useScrollMemory(scroller, "/overview");
   // Overview being arranged (#9745, #10905): the order of its cards and sections, which are hidden, how wide a card is
   const [arranging, setArranging] = useState(false);
+  // the classic sections in columns (#13019): off unless turned on; by default the projects take their place
+  const classic = useClassicOverview();
 
   // Overview's own sections, above the cards by default (#11147), each what it draws (nothing while it has no rows): the user may move them,
   // and hide the ones whose rows don't need them (#10905, views/OverviewBody.tsx)
@@ -308,13 +317,26 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
               number of cards pushes those off the first screen (#11147). Before the first snapshot the socket streams the
               machines' agents and cards in one by one, each moving the groups already painted, and "Loading" then went
               from over them: until it is in only "Loading" (where the sections begin), then all at once. */}
-          <OverviewBody editing={arranging} onDone={() => setArranging(false)} sections={sections} start={!loaded && <Loading label={t("common.loading")} />} after={{ unread: quietCard }} />
+          {/* the owner's watch cards first, above the sections and the extensions' cards (docs/assistant/watch-cards.md) */}
+          {/* by default (#13019) what waits on the owner stays first, as it always shows (lib/overview-cards.ts
+              ALWAYS_SHOWN); the activity sections in columns are the classic layout's */}
+          {!classic && !arranging && sections.needs_you}
+          {!classic && !arranging && sections.waiting_on_computer}
+          {!arranging && <Suspense fallback={null}><WatchWall /></Suspense>}
+          {/* then By project, Temporary and Unsorted, and the question summary; the extensions' cards after them, still
+              arranged as the user put them, with Overview's own sections left out */}
+          {!classic && !arranging && <Suspense fallback={null}><ProjectOverview /></Suspense>}
+          <OverviewBody editing={arranging} onDone={() => setArranging(false)} sections={classic ? sections : NO_SECTIONS} start={classic && !loaded && <Loading label={t("common.loading")} />} after={classic ? { unread: quietCard } : undefined} />
         </div>
       </div>
       <MarkSeenDialog list={confirmSeen} onClose={() => setConfirmSeen(null)} />
     </div>
   );
 }
+
+/** Overview's own sections drawn as none where the cards are (#13019): Needs you and Waiting on your computer are
+ *  drawn above the watch cards, the project view takes the activity sections' place. */
+const NO_SECTIONS: OverviewSections = { needs_you: null, waiting_on_computer: null, in_progress: null, working: null, unread: null, computers: null };
 
 /** The line under the greeting: how many agents need you, work, only wait in the background (counted apart from the
  *  working ones, #10938) and finished unseen. With none of them, the cards that wait (a Persona conversation's, whose

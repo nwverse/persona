@@ -768,10 +768,47 @@ A project can be deleted from the knowledge list on the web (#4412) and on the i
 - The chats, people and items that named it stop naming it. `.trash/<id>/trash.json` records which ones (`unlinked`, as `<kind>/<id>`), with the slug, the name and `deleted_at`.
 - Restoring moves the directory back, re-adds the project to the recorded entities that still exist, reindexes it and removes the trash entry. A project created with the same slug since then blocks the restore (`409`); nothing is overwritten.
 - Projects merged into it go with it (`.trash/<id>/merged/<slug>`, listed in `merged`) and come back with it, so their unmerge record still points at a project that exists.
+- Projects under it move up to its parent and are listed in `children`; a restore moves back those still there ("Project parents and milestones").
 - The trash is never searched, and compression running while a project is deleted doesn't link it again. Documents linked only from a project in the trash are kept by document retention, so a restore finds them.
 - Forgetting a source (`ForgetSource`) removes for good every trash entry that holds something the source brought in (its chats, people, items or posts, or timeline lines it wrote), so a restore can't bring forgotten data back.
 - Merged projects can't be deleted (`404`), and a read-only knowledge base refuses both (`403 kb_read_only`). Nothing else empties the trash yet; entries stay until restored or removed by hand. Entry ids are a timestamp; the slug and name are in `trash.json`.
 - The routes are for full credentials only: an extension's token opens none of them (`extwire.RouteScopes`).
+
+## Project parents and milestones (#12927)
+
+Projects are clustered automatically and flat; people think of them as a tree: an initiative with sub-projects
+under it. A project can sit under another (its **parent**) and carry **milestone flags**. Both are the user's: set in
+the web knowledge map ("Project tree" view: drag, or Move to… in a node's menu), over `PUT /api/v1/kb/projects/{id}`,
+or by the assistant's `kb_update` at the user's word (so a voice or chat request can move a project or flag it). The
+code is `kb/project_tree.go`.
+
+- **Stored** in `projects/<slug>/meta.json`: `"parent": "<slug>"` (absent at the top level) and `"milestones":
+  [{"id", "title", "target": "YYYY-MM-DD", "state": "open" | "accepted" | "not_accepted"}]` (at most 30, a title
+  of 1 to 200 characters, the target optional).
+- **Locked**: setting or clearing either adds `parent` / `milestones` to `locked_fields`, so a pipeline write with an
+  older copy keeps the file's value, and automatic organizing never changes it. Dedupe never asks about, nor merges,
+  a project with a parent (it is locked) or one with projects under it, so a parent is not merged with its children
+  and siblings are not merged with each other.
+- **Depth is not limited**. The hub refuses only: the project itself (`parent_self`), a project below it
+  (`parent_cycle`), a parent that is missing, merged or marked not a project (`parent_not_found`), and a parent or
+  milestone change in the same call as `merge_into` / `unmerge` (`parent_with_merge`); a bad milestone is
+  `milestone_invalid`, an unknown id `milestone_not_found`. Each is a `400` with that `code` and a localized
+  `error`. Past three levels the apps show a soft hint and `kb_update` says so; nothing is refused for depth.
+- **Reading**: a parent that was merged is followed to the project kept; one that is missing, deleted or not a project
+  leaves the child at the top level without changing the file, so it comes back when the parent does. Files edited by
+  hand into a cycle are read with the cycle broken at its smallest slug.
+- **Merge**: the projects under the merged-away one move under the kept one (beside it, under the merged one's own
+  parent, when the kept one is itself below them); the merge record lists them (`merge.children`) and an unmerge moves
+  back those still where the merge put them. These moves keep each child's lock as it was.
+- **Delete**: the projects under a deleted one move up to its parent (the top level when it had none), listed in the
+  trash entry's `children`; a restore moves back those still there. A child that was moved again meanwhile stays.
+- **Undo**: a `PUT` that changes the parent or milestones answers `undo` (the update that puts them back:
+  `{"parent": "<before>"}`, `{"milestones": [...before]}`) and the project's new `tree`; `kb_update` ends with
+  "To undo, if the user asks: kb_update {…}".
+- **Not inherited**: a child's yesterday notes and its other fields are its own; nothing is copied from its parent.
+
+Read only for extensions in this version: `kb.get` returns the fields in `meta`; `kb.update` does not take them. The
+iOS and Android apps decode the new fields and ignore them for now; moving projects is on the web.
 
 ## Topics (#3783)
 
@@ -980,7 +1017,7 @@ Every write path (`kb.update`, HTTP `PUT`, the assistant's `kb_update`) takes on
 
 | Kind | Also takes |
 | --- | --- |
-| projects | `name`, `project_kind`, `status`, `goal`, `my_role`, `note`, `summary`, `log` (with `source`), `aliases` / `remove_aliases`, `chats` / `remove_chats`, `people` / `remove_people`, `dirs`, `merge_into` |
+| projects | `name`, `project_kind`, `status`, `goal`, `my_role`, `note`, `summary`, `log` (with `source`), `aliases` / `remove_aliases`, `chats` / `remove_chats`, `people` / `remove_people`, `dirs`, `merge_into`; on the user's paths also `parent`, `milestone`, `milestones` ("Project parents and milestones") |
 | chats | `name`, `summary`, `projects` / `remove_projects`, `remove_people` |
 | people | `note`, `status`, `profile`, `projects` / `remove_projects`, `remove_chats` |
 | docs, meetings, events | `note`, `projects` / `remove_projects` |
@@ -1064,9 +1101,9 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count; docs, meetings and events: `extra` is the link and `source` the connector that supplied it, #8872) |
-| `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`, the links the user removed as `removed`); projects also include `agents` |
-| `PUT /api/v1/kb/{kind}/{id}` | Edit (fields as in `kb_update`); create a project if absent |
+| `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); a project row also has `parent` (the parent it shows under; absent at the top level) and `milestones`; kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count; docs, meetings and events: `extra` is the link and `source` the connector that supplied it, #8872) |
+| `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`, the links the user removed as `removed`); projects also include `agents` and `tree` (`parent`, `ancestors`, `children`: `{id, name, status, one_line, updated, children, milestones}`, `milestones`, `parent_locked`, `depth`; "Project parents and milestones") |
+| `PUT /api/v1/kb/{kind}/{id}` | Edit (fields as in `kb_update`); create a project if absent. A project's `parent` / `milestone` / `milestones` change answers `undo` and `tree` too |
 | `DELETE /api/v1/kb/projects/{id}` | Soft-delete a project ("Deleting a project" above); returns its trash entry (`id`, `kind`, `slug`, `name`, `deleted_at`, `unlinked`); 404 for unknown or merged projects |
 | `GET /api/v1/kb-trash` | Deleted projects, newest first (`items`: trash entries) |
 | `POST /api/v1/kb-trash/{id}/restore` | Put a deleted project and its links back; returns the entry; 404 if there is no such entry, 409 if a project with its slug exists again |

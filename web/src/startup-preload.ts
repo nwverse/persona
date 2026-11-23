@@ -552,7 +552,13 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // deferred. The budget moves by the same 200 B, keeping the 58 B of room main had. Merged with #13846, the measured
 // first screens are ja 485,259 B, en 482,600 B and zh-Hans 483,235 B; the budget keeps #13846's 46 B of room rather
 // than adding the whole separate allowance again.
-export const FIRST_SCREEN_BUDGET = 485_305;
+// #13019 (stacked on #13784, #13796, #13882 and #13745): that tree, main 315b89af2b with the four merged, measured ja
+// 485,482 B (en 482,841 B, zh-Hans 483,467 B) before Overview by project, 991 B over main's ceiling, most of it the
+// question rail's marks on the main chat's first screen (#13745). Overview by project adds 20 B in each language (the
+// lazy import of views/overview/ProjectOverview.tsx and the Classic layout switch, lib/overview-layout.ts): ja 485,502 B.
+// 10 B of room on top.
+// Merged, the budget adds both branches' allowances to their shared 484,491 B ceiling and keeps the PR's 10 B of room.
+export const FIRST_SCREEN_BUDGET = 486_326;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -788,7 +794,10 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // And 26 B for the stalled-background hint (#13744): the idle sidebar rows (SidebarRows.tsx) draw "Background commands
 // quiet for N h" under a Working row whose background work has stalled (ui/BackgroundStallHint.tsx). Main 7b023aa70 with
 // #13842 sends 46,091 B at idle, 16 B over; 10 B of room on top.
-export const IDLE_TIER_BUDGET = 46_101;
+// And 29 B for the watch wall (#13020): Overview (idle) gains the lazy import of views/watch/WatchWall.tsx and its
+// Suspense; the wall itself loads as a chunk of its own. This tree measured 46,104 B against 46,075 B. 11 B of room on top. Merged with the stalled-background hint's 46,101 B
+// (#13744) above: 46,101 + 29 = 46,130 B.
+export const IDLE_TIER_BUDGET = 46_130;
 
 const gzip = promisify(gzipCompress);
 

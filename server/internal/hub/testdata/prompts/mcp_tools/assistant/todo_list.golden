@@ -1,6 +1,6 @@
 {
   "name": "todo_list",
-  "description": "List Persona to-dos (not Feishu tasks): open/failed starts by default, due first and undated last. Returns id, title/state, priority/project, due/reminder, agents and first note line; times use the user's time zone. Filter by the schema fields. Find an id here before edits; use todo_get for details.",
+  "description": "List Persona to-dos (not Feishu tasks): open/failed starts by default, due first. Returns id, title/state, priority/project, due/reminder, agents and first note line; times use the user's time zone. Find an id here before edits; use todo_get for details.",
   "input_schema": {
     "type": "object",
     "properties": {

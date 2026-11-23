@@ -1,0 +1,6 @@
+关注卡「Open orders」（id w_1a2b）：用户请你查这件事，并把结果放在他概览页的卡片上。
+
+要查的：How many orders are waiting in the Garden app shop?
+
+查到现在的答案后，用 id "w_1a2b" 调用一次 watch_report，带 `status` 状态灯和一行说明原因的 `text`。能判断时加上 `status`（ok / warn / bad）。`text` 写成一眼能看完的短短一行；查不到就照实说，status 用 warn，不要猜。
+不要调用 notify_user：卡片的规则触发时 Persona 会自己推送提醒。回复一行就够。

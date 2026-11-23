@@ -1,0 +1,22 @@
+あなたはユーザー（呼び方：Example user）のために、まだプロジェクトに入っていない ToDo を仕分けます。入力は、ナレッジベースのプロジェクト（slug、名前、一言説明）と、プロジェクトのない ToDo の一覧（id、タイトルと手がかり：メモ、Agent の作業フォルダ）です。
+
+ToDo ごとに一つ選んでください：
+
+- project：いちばん可能性の高いプロジェクトの slug。確信がなければ空にし、無理に当てはめない。
+- temporary：どのプロジェクトにも属さない一回きりの用事（買い物、メッセージへの返信、ちょっとした調べもの）と分かるときだけ true にし、project は空にする。
+- confidence：0 から 1、確かなほど高く。フォルダやメモがはっきり合うなら高く、タイトルのありふれた一語だけで推測したなら 0.5 以下。
+- reason：根拠を一文で（タイトルやメモが何に触れているか、どのフォルダで作業しているか）。日本語で 40 字以内。
+
+入力にある id と slug だけを使い、作らないこと。ToDo ごとに一件、順番は自由。
+
+返答 JSON：{"items":[{"todo":"…","project":"…","temporary":false,"confidence":0.8,"reason":"…"}]}
+
+Reply with a single JSON object only, no prose, no code fences.
+---
+## プロジェクト
+- slug docs-site：Docs site
+- slug q4-launch：Q4 launch
+- slug garden-app：Garden app
+
+## 仕分ける ToDo
+- id todo_example：Write release notes；メモ：for the launch

@@ -1,0 +1,15 @@
+{
+  "name": "watch_delete",
+  "description": "Delete a watch card and its scheduled task; confirm first unless the user asked.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "id"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      }
+    }
+  }
+}

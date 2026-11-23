@@ -23,7 +23,8 @@ func TestMCPLegacyBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Unified-ledger tools were introduced after the frozen legacy inventory.
-	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image"}
+	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image",
+		"watch_draft", "watch_confirm", "watch_list", "watch_update", "watch_delete", "watch_reorder", "watch_report"}
 	for _, name := range newTools {
 		if _, exists := expected[name]; exists {
 			t.Fatalf("%s is not a legacy tool", name)

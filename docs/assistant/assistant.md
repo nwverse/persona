@@ -1222,6 +1222,8 @@ Before a turn is allowed to finish, node's bounded transient recovery may keep i
 (`Retried`, no further push on repeat failure). Retry uses the task **then** in the table, not the startup copy (before #2313, users followed failure push and disabled / deleted it,
 yet it silently reran the old prompt 3 minutes later): deleted tasks don't retry, disabled repeating tasks don't retry, once follow-ups disabled on due still retry, edited prompts use new text.
 
+**Watch cards** (#13020): a task with `watch_id` belongs to a watch card and follows it (title, prompt, rule, on / off); its runs record their answer with `watch_report` and push only when the card's alert rule trips ([watch-cards.md](watch-cards.md)).
+
 ### Task execution context
 
 The web task editor's **Execution options**, before the prompt, is an advanced group for people who need a task to use
