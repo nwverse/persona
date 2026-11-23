@@ -24,6 +24,10 @@ type Profile struct {
 	// Keep are the conversations their machines list however long they are quiet: the main one, the main ones it
 	// replaced, scheduled tasks' own (node.configure keep_sessions: a busy machine's newest transcripts crowd them out).
 	Keep []SessionRef `json:"keep"`
+	// ExtensionOwners are the extensions the user marked as their own (#13246, trust owner, such as their memory
+	// extension): the hub does not hide the tracks' conversations and cards from them. Any other extension is a third
+	// party's, from which the hub hides every track; an older manager names none.
+	ExtensionOwners []string `json:"extension_owners,omitempty"`
 }
 
 // MainRouteMachine keeps legacy profiles usable while preferring the confirmed main binding.
