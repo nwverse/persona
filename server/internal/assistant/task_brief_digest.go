@@ -184,7 +184,9 @@ func (s *Service) briefDigest(ctx context.Context, now, since time.Time, loc *ti
 			task.Overdue, rank = true, min(rank, 1)
 		}
 		for _, e := range brief.Log {
-			if e.Kind == briefEventScope && e.At.After(since) && len(task.Scope) < 3 {
+			// A scope change, or an estimate change with its sentence for the owner (task_scope's change): task_scope
+			// tells the supervisor the owner sees either in the next digest.
+			if (e.Kind == briefEventScope || e.Kind == briefEventEstimate && e.Change != "") && e.At.After(since) && len(task.Scope) < 3 {
 				task.Scope = append(task.Scope, clip(e.Change, 80))
 				rank = min(rank, 2)
 			}

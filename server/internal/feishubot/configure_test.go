@@ -38,6 +38,10 @@ func configureSrv(t *testing.T, config, publish configAnswer) (*Client, *atomic.
 		okJSON(w, out)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/" { // a local node's port probe (node/ports.go), not a client call
+			http.NotFound(w, r)
+			return
+		}
 		switch r.URL.Path {
 		case "/open-apis/auth/v3/tenant_access_token/internal":
 			okJSON(w, map[string]any{"code": 0, "tenant_access_token": "tok", "expire": 7200})
@@ -64,6 +68,25 @@ func configureSrv(t *testing.T, config, publish configAnswer) (*Client, *atomic.
 }
 
 func ok0(map[string]any) (int, string) { return 0, "" }
+
+// A Persona node on the machine running these tests probes the fake's port (GET /, node/ports.go): it is answered
+// 404 and is neither a config or publish call nor an unexpected one.
+func TestConfigureSrvIgnoresPortProbes(t *testing.T) {
+	c, configHits, publishHits := configureSrv(t, ok0, ok0)
+	req, err := http.NewRequest(http.MethodGet, c.Domain()+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("User-Agent", "persona-ports") // node.portProbeAgent
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusNotFound || configHits.Load() != 0 || publishHits.Load() != 0 {
+		t.Fatalf("a port probe: HTTP %d, config %d, publish %d", res.StatusCode, configHits.Load(), publishHits.Load())
+	}
+}
 
 func TestAutoConfigureSetsScopesEventsAndLongConnection(t *testing.T) {
 	noBackoff(t)

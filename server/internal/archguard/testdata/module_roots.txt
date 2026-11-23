@@ -3,3 +3,6 @@
 # outside internal/modules imports a module (TestCoreImportsNoModule).
 internal/manager
 internal/managercli
+# The binaries that run the built-in modules' extension programs as subcommands (`personad volc`, internal/builtinext).
+cmd/personad
+cmd/persona-manager

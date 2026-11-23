@@ -156,6 +156,9 @@ struct RootView: View {
             // Which inbox sources a plugin draws (placement inbox_item): known before an item is opened.
             await InboxItemSlots.shared.reload(for: hub)
         }
+        // The assistant's domain spaces, for the sidebar's Spaces section (#13500): read on every hello, cleared for
+        // another hub.
+        .task(id: "\(model.hub?.group ?? "")|\(model.hubHellos)") { await SpaceStore.shared.load(hub: model.hub?.group) }
         .extensionThemes()
         .extensionSystemPresentation()
         // A new style, Theme Color or persona rebuilds the whole tree (tokens are static); the open tab and chat are remembered.
