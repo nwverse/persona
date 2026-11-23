@@ -646,6 +646,11 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.node_outdated")}
 		}
 	}
+	if method == "assistant.space_md" && !nodeHas(info, nodeproto.TrackSpaceMD) {
+		// A track's SPACE.md (#13472): an older node does not know the method. The manager asks only a node it saw
+		// announce it; this holds when the node changed since.
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.node_outdated")}
+	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.ResumeOutsideHealth) {
 		raw, _ := json.Marshal(params)
 		var fields struct {
