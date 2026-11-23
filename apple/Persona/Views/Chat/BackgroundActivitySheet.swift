@@ -12,11 +12,7 @@ struct BackgroundActivitySheet: View {
             ChatView(key: key, style: .assistant, backgroundActivity: true)
                 .toolbar { SheetClose { dismiss() } }
         }
-        #if os(macOS)
-        .macSheet()
-        #else
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        #endif
     }
 }

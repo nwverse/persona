@@ -1588,6 +1588,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.sourceReportLoop(ctx)             // the reports back to where a todo was asked (todo_source.go)
 	go s.remindLoop(ctx)                   // the todos' reminders (todo_plan.go)
 	go s.urgentLoop(ctx)                   // urgent calls' retries and reminders (urgent_call_loop.go)
+	go s.attentionLoop(ctx)                // the attention mode's end (attention.go)
 	go s.channelLoop(ctx)                  // the channels' runs that lost their watcher (channels.go)
 	go s.kbLoop(ctx)                       // the knowledge base (kb.go)
 	go s.kbHistoryLoop(ctx)                // importing chats' older history into it, off by default (kbhistory/history.go)

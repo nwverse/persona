@@ -1561,7 +1561,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, err
 		}
 		if p.ResumeSessionID == "" {
-			p.TaskInstructions = agentPlatformInstructions(runtime.GOOS, p.TaskInstructions)
+			p.TaskInstructions = agentPlatformInstructions(agentGOOS, p.TaskInstructions)
 		}
 		speed, err := n.prepareSessionStartSpeed(ctx, p.Speed, p.Launcher, p.Host, p.ResumeSessionID)
 		if err != nil {
