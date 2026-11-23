@@ -33,6 +33,7 @@ type scriptHub struct {
 	decisions      []map[string]any
 	decisionAnswer assistantwire.OutsideDecisionReply
 	larkSent       []proto.LarkSent // what the node's gate proxy told of (lark.sent)
+	lark           proto.AssistantLark
 }
 
 func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Interaction) (any, error), notify func() (any, error)) *scriptHub {
@@ -71,6 +72,11 @@ func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Intera
 			answer := h.decisionAnswer
 			h.mu.Unlock()
 			return answer, nil
+		case "assistant.lark":
+			h.mu.Lock()
+			cfg := h.lark
+			h.mu.Unlock()
+			return cfg, nil
 		case proto.MethodLarkSent:
 			var s proto.LarkSent
 			_ = json.Unmarshal(params, &s)

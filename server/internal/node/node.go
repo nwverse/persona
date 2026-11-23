@@ -362,9 +362,10 @@ type Node struct {
 	useTick uint64
 
 	// The Feishu gate for the assistant (larkgate.go): the hub's config, cached, and the writes "Always allow in this session" lets through.
-	larkCfg     proto.AssistantLark
-	larkCfgAt   time.Time
-	larkAllowed map[string]bool
+	larkCfg      proto.AssistantLark
+	larkCfgAt    time.Time
+	larkCfgTryAt time.Time // the last attempt to refresh it, kept even when that failed
+	larkAllowed  map[string]bool
 	// editedAnswers carries an editable card's answer from askOnce to larkGateWithEdit, keyed by interaction id.
 	editedAnswers sync.Map
 	// secrets is a test's own hand-offs; nil: the process's, shared by every connection (secretenv.go handoffs).
