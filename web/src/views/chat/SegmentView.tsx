@@ -348,7 +348,8 @@ export const SegmentView = memo(function SegmentView({
   // A long chat creates every section and its estimate up front, but not every rich body. Once drawn (including while it
   // was live or among the final two) an exchange stays mounted: scrolling cannot throw away a menu, focus or selection.
   const defer = offscreen && windowHistory && typeof IntersectionObserver !== "undefined";
-  const revealed = useReveal(scope, segmentItemIds(seg), () => {});
+  const revealIds = useMemo(() => segmentItemIds(seg), [seg]);
+  const revealed = useReveal(scope, revealIds, () => {});
   const [near, setNear] = useState(false);
   const kept = useRef(!defer);
   if (!defer || revealed) kept.current = true;
@@ -434,10 +435,11 @@ export const SegmentView = memo(function SegmentView({
   // mounts their rich representation. In-chat search uses `revealed` above and goes straight to the exact item instead.
   // The placeholder holds the section's estimate too: otherwise Chrome caches its shorter raw-text height in
   // `contain-intrinsic-block-size: auto`, and the later rich mount starts from a different height than the old body did.
-  const placeholder = mounted ? "" : [
-    ...(trace && seg.user?.rawInput ? seg.user.rawInput.map((i) => i.text) : [seg.user?.text, ...(seg.user?.contexts.map((c) => c.text) ?? [])]),
-    ...own.flatMap((s) => s.kind === "tool" ? [toolChip(s.use), s.result?.text] : [s.item.text]),
-  ].filter(Boolean).join("\n");
+  const placeholder = useMemo(() => {
+    if (mounted) return "";
+    const user = trace && seg.user?.rawInput ? seg.user.rawInput.map((i) => i.text) : [seg.user?.text, ...(seg.user?.contexts.map((c) => c.text) ?? [])];
+    return [...user, ...own.flatMap((s) => s.kind === "tool" ? [toolChip(s.use), s.result?.text] : [s.item.text])].filter(Boolean).join("\n");
+  }, [mounted, own, seg.user, trace]);
   return (
     <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3.5" : "flex flex-col gap-3.5"} style={guess} data-segment>
       {mounted ? <Fragment>
