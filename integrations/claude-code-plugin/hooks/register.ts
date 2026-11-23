@@ -59,7 +59,7 @@ export const register: Register = on => {
       const session = await $.session.id().catch(() => '')
       activeTurn = { session, turnId: e.turnId }
     }
-    const session = activeTurn.session
+    const session = override === undefined ? activeTurn.session : await $.session.id().catch(() => '')
     let step = e
     if (override !== undefined) {
       const sessionModel = override.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
