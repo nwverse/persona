@@ -158,6 +158,8 @@ type TaskReview struct {
 	WaitingOn string    `json:"waiting_on,omitempty"`
 	Parks     int       `json:"parks,omitempty"`
 	DueAt     time.Time `json:"due_at,omitzero"`
+	// DueResends: how many times its parked_due was told again because no task_review followed the reminder.
+	DueResends int `json:"due_resends,omitempty"`
 	// ParkEndedAt is recorded when this wait is replaced or resolved, so its time is excluded from stalled checks.
 	ParkEndedAt time.Time `json:"park_ended_at,omitzero"`
 	// Evidence is absent on legacy parks. A new park records its external wait, inspected source receipt and
