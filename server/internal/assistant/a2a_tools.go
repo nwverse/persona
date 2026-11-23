@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -53,18 +54,38 @@ type a2aToolArgs struct {
 }
 
 type a2aTaskView struct {
-	ID           string     `json:"task_id"`
-	Context      string     `json:"context_id"`
-	Source       a2aRef     `json:"source"`
-	Target       a2aRef     `json:"target"`
-	State        string     `json:"state"`
-	Queued       bool       `json:"queued,omitempty"`
-	Events       []a2aEvent `json:"events"`
-	Disconnected bool       `json:"target_disconnected,omitempty"`
+	ID             string     `json:"task_id"`
+	Context        string     `json:"context_id"`
+	Source         a2aRef     `json:"source"`
+	Target         a2aRef     `json:"target"`
+	State          string     `json:"state"`
+	Queued         bool       `json:"queued,omitempty"`
+	Events         []a2aEvent `json:"events"`
+	Disconnected   bool       `json:"target_disconnected,omitempty"`
+	WaitingSince   time.Time  `json:"waiting_since,omitzero"`
+	WaitingSeconds int64      `json:"waiting_seconds,omitempty"`
+	WaitingReason  string     `json:"waiting_reason,omitempty"`
 }
 
 func (t *a2aTask) view() a2aTaskView {
-	return a2aTaskView{ID: t.ID, Context: t.Context, Source: t.source(), Target: t.target(), State: t.State, Queued: t.State == a2aQueued, Events: t.Events, Disconnected: t.Disconnected}
+	out := a2aTaskView{ID: t.ID, Context: t.Context, Source: t.source(), Target: t.target(), State: t.State, Queued: t.State == a2aQueued, Events: t.Events, Disconnected: t.Disconnected}
+	if !a2aTerminal(t.State) {
+		for i := len(t.Events) - 1; i >= 0; i-- {
+			e := t.Events[i]
+			if e.Kind != "message" {
+				continue
+			}
+			if e.Delivery == a2aQueued {
+				out.WaitingSince, out.WaitingReason = e.At, a2aWaitingReason(e)
+				if t.State == a2aQueued {
+					out.WaitingReason = "Waiting behind an earlier task in the receiving session's FIFO."
+				}
+				out.WaitingSeconds = max(0, int64(time.Since(e.At).Seconds()))
+			}
+			break
+		}
+	}
+	return out
 }
 
 func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwire.A2AConfig, c a2aCaller, name string, args json.RawMessage) (any, error) {
@@ -208,8 +229,12 @@ func a2aReport(t *a2aTask, sender a2aRef, id, state, text string) (bool, error) 
 			if e.Delivery == a2aSending || e.Delivery == a2aUncertain {
 				e.Delivery = a2aDelivered
 			}
-			if e.Delivery != a2aDelivered {
-				return false, errA2AConflict
+			if e.Delivery == a2aQueued && a2aTerminal(state) {
+				// A verified recipient may clear undelivered work. Do not
+				// fabricate a receipt or leave its input eligible for delivery.
+				e.Delivery = a2aDiscarded
+			} else if e.Delivery != a2aDelivered {
+				return false, fmt.Errorf("%w: request is still queued; report failed or completed to clear it", errA2AInvalid)
 			}
 			if t.State == a2aSubmitted && kind == "progress" {
 				t.append(a2aEvent{ID: randomHex(16), Kind: "status", State: a2aWorking})

@@ -42,9 +42,9 @@
    - 验证：{{.}}{{end}}{{with .Missing}}
    - 还缺：{{.}}{{end}}{{end}}{{with $e.Last}}
    Agent 最后说的：
-{{chomp (indent "   " .)}}{{end}}{{if $e.KeptUntil}}{{with $e.Screen}}
+{{chomp (indent "   " .)}}{{end}}{{with $e.Screen}}
    启动标签最后几行：
-{{chomp (indent "   | " .)}}{{end}}
+{{chomp (indent "   | " .)}}{{end}}{{if $e.KeptUntil}}
    还能重试 {{$e.RetriesLeft}} 次。{{end}}{{with $e.Review}}
    独立评审（评审员只看了任务要求和改动，看不到 Agent 的推理）：{{if eq .State "failed"}}没评审成（{{.Error}}）{{else if eq .State "clean"}}没有阻断问题{{with .Count}}，{{.}} 条非阻断发现{{end}}{{else}}返工轮数用完了，还剩 {{.Blocking}} 条阻断问题{{end}}{{with .Findings}}
 {{chomp (indent "   " .)}}{{end}}{{end}}

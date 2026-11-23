@@ -137,7 +137,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `auth_relay` (version 1, #5644) | `auth_relay.` | `id`, `name?`, `hosts` (exact lowercase host names, 1–16), `paths` (exact paths, 1–16; a trailing `/` is ignored) | Process speaks the protocol, permission `auth_relay`; **starts off** at install and when an upgrade adds it, whatever `off_by_default` says | Authorization links the user's Agents stop at, on these hosts and paths and printed by the Agent's own command, handed to the program as `auth_relay.complete` to complete with the account it is signed in with; see [auth-relay.md](../operations/auth-relay.md) |
 | `secret_providers` (version 1, #3962) | `secrets.` | `id`, `name` (1–80 characters: the settings say "From <name>"), `schemes` (1–4 of `^[a-z][a-z0-9+.-]{0,15}$`, not `http`, `https`, `file`, `data`, `persona`, `about`, `javascript`) | Process speaks the protocol; a scheme another installed extension claims fails the install | Values for references of its schemes (`op://vault/item/field`), asked by the manager only (`secrets.describe`, `secrets.resolve`, the event `secrets.used`), each resolution recorded on it; see [secret-providers.md](secret-providers.md) |
 | `repository_providers` (version 1, #10330) | `repo.` | `id`, `name` (1–80 characters: what the catalog and a to-do's repositories call the source), `hosts` (1–16 exact lowercase host names, no IP address; not `github.com`, `gitlab.com` or the other hosts the built-in providers read), `link_kinds?` (`[{kind: issue / pull_request, label}]`, each kind once, a label of 1–24 characters; only relabels), `capabilities?` (`["pr_status"]`: it answers `repo.pr_status`, #11584) | Process speaks the protocol; a host another installed extension claims (even one that is off), or one host in two items, fails the install | A code-hosting source for **Settings › Repositories** and a to-do's repositories and links on its hosts, asked by the manager only (`repo.parse`, `repo.check`, `repo.link`, the optional `repo.describe` and `repo.pr_status`; `schema/extension/repository.schema.json`), each answer re-checked; the install page lists its hosts, and they are in the permission digest |
-| `memory_sources` (version 1, #13532; defined, not registered yet) | `memory.` | `id`, `name` (1–80 characters: what settings call the source); one per extension | Process speaks the protocol | Not wired yet: the hub lists the point as unknown and never calls it. Once registered, the manager reads the entries with `memory.entries` (`schema/extension/memory.schema.json`) and grades them by scene itself; see "Memory sources" below |
+| `memory_sources` (version 1, #13532, #13586) | `memory.` | `id`, `name` (1–80 characters, not only spaces, no control characters: what settings call the source); one per extension | Process speaks the protocol | The extension's memory, entry by entry: the manager reads it with `memory.entries` (`schema/extension/memory.schema.json`) and grades each entry by scene itself, and stops delivering the extension's own text outlets directly; the install page says so, the permission digest does not change; see "Memory sources" below |
 
 Extension points the hub doesn't know: the extension still installs (it may be written for a newer hub), that item has no effect, and the preview and list show a warning. When adding extension points later (knowledge base sources, link recognition…), add a row to this table.
 
@@ -798,11 +798,11 @@ reach which scene (a conversation's standing channel, a recall, a dispatched tas
 extension offers one read-only call that answers its entries one by one, with what the hub's assembler needs to grade
 them; the hub filters. Design and decision: #13532.
 
-**Status: protocol defined, not wired.** The contribution is not registered yet: until a later change registers it, a
-manifest that declares it installs with the unknown-extension-point warning, the hub never calls it, and nothing an
-extension delivers changes. The wire types are generated from `schema/extension/memory.schema.json`
-(`wire.MemoryEntriesParams`, `wire.MemoryEntriesResult`, `wire.MemoryEntry`); the manager's mapping to its assembler
-is `memoryExtensionBatchOf` in `server/internal/assistant/memory_extension_wire.go`.
+**Status: registered and wired (#13586).** The wire types are generated from `schema/extension/memory.schema.json`
+(`wire.MemoryEntriesParams`, `wire.MemoryEntriesResult`, `wire.MemoryEntry`) and the item from `manifest.schema.json`
+(`wire.MemorySourceItem`). The extensions' manager reads the contributions (`server/internal/extmgr/memory_sources.go`),
+the assistant maps each one's pages with `memoryExtensionBatchOf` (`server/internal/assistant/memory_extension_wire.go`)
+and keeps the result for its assemblies (`server/internal/assistant/memory_extension_source.go`).
 
 The contribution (extension point `memory_sources`, version 1, namespace `memory.`; the program speaks the protocol):
 
@@ -810,8 +810,14 @@ The contribution (extension point `memory_sources`, version 1, namespace `memory
 "contributes": {"memory_sources": [{"id": "memory", "name": "My memory"}]}
 ```
 
-- `id` is the usual contribution id, `name` (1 to 80 characters) what settings call the source. One contribution per extension.
+- `id` is the usual contribution id, `name` (1 to 80 characters, not only spaces, no control characters) what settings
+  call the source. One contribution per extension: a manifest with two fails to parse.
 - Declaring it is how the hub knows the extension offers `memory.entries`; there is no separate capability flag.
+- The install page shows it ("Give Persona its memory"); like a recall, it is not in the permission digest, in what an
+  upgrade adds or in `MorePermissions`: the hub reads from the program, the program is handed nothing, so an upgrade that
+  adds it installs without a new consent.
+- It can be switched off like any contribution (`memory_sources/<id>`): the hub then reads nothing from it, and its
+  text outlets stay withheld (below), since it still declares the point.
 
 | Method | Parameters → answer | Notes |
 | --- | --- | --- |
@@ -841,15 +847,61 @@ Each entry (`MemoryEntry`):
   included) is dropped alone, never repaired, and an id seen before is dropped too; the rest of the page is kept.
 - **Errors**: the base error codes, or `not_ready` (the entries are not loaded yet) and `failed` with a one-line
   message. A timeout, an answer that is too large, a page whose own fields (`entries` as an array, `tagged`, `has_more`,
-  `after`) do not hold to the schema, and every error mean the assembly uses
-  none of the extension's entries this time and logs why. It never falls back to the extension's text.
+  `after`) do not hold to the schema, a program that does not run, and every error mean the assemblies use
+  none of the extension's entries until the next read and log why. It never falls back to the extension's text.
 - **Who calls**: the manager only, for the owner's personal assemblies; no other extension, device or token can.
+- **How often**: every contribution that is on is read in one go, page by page, and the merged result is kept for a
+  minute (`memoryExtensionFresh`), so a burst of messages, triaged Inbox items and started Agents asks each extension
+  once. Any change to an extension (install, upgrade, removal, a switch, its settings) reads again at the next assembly;
+  a read in which a source failed (or the extensions had not started) is kept 10 seconds only (`memoryExtensionRetry`),
+  so `not_ready` is asked again soon without each message of a burst waiting out a source that does not answer. One
+  read runs at a time, in the background: once the result is older than that, an assembly still uses it and the read
+  for the next one starts; only an assembly with no result of the current extensions (the first read, or right after
+  a change) waits, for at most 3 seconds (`memoryExtensionWait`), and goes without the extension's entries after that;
+  a read that ends after yet another change is followed by one of the current extensions within the same 3 seconds.
+  The standing context of an owner's message never waits (`CachedMemoryExtensionEntries`): it takes the result it has
+  for the current extensions, or none, and the read that starts serves the next message, so a message's context is
+  never held up by a memory source. Several memory extensions are merged: an untagged
+  one's entries are in no track (the strictest rule), a tagged one's keep theirs, and an id another one gave first is
+  dropped.
 
-**Transition.** Until an extension declares `memory_sources`, its four text outlets reach the assistant exactly as
-today: its `instructions` prompt, its `project_context` for new Agents, its `inbox_context` for the Inbox, and its own
-recall tool. Once the hub registers the point and the extension declares it, a later change makes the hub read the
-entries through `memory.entries` and stops delivering those four outlets of that extension directly, so no entry
-reaches a scene around the filter. Extensions that do not declare it keep the text outlets unchanged.
+Where the entries go (`docs/assistant/health.md` "Memory by scene" has the rules):
+
+| Path | What it takes of the extension's entries |
+| --- | --- |
+| A main-space conversation's standing context | Only its `standing` entries that the standing rule lets through (its own track's, general ones from elsewhere; never a sensitive entry from elsewhere), as one section of the per-message snapshot (`- 记忆…：` / `- Memory …:`), sent again only when it changes. Only for the owner's own assistant computer, never a guest's conversation or a work computer. Track conversations (spaces, health) take none, as they took none of the extension's instructions. |
+| A dispatched Agent's first message | A planned task: the hand-off rule (`handOffMemory`: general entries its words bear on, sensitive ones only after the owner's Start on a plan confirmed for their categories), noted in the to-do's brief. An Agent the assistant starts or a to-do handed to a new Agent: general entries its words bear on, never a sensitive one. Only on the owner's own computer. |
+| The Inbox's helper (triage and drafts) | General entries the item bears on, never a sensitive one, at most 1 KB, as a background block under the extension's name. |
+| A recall | `decisions_query`'s first page adds `memory: [{id, text}]` beside the ledger's `entries` (the cursor stays the ledger's): its own track's entries, general ones from elsewhere, sensitive ones only when the conversation carries every one of their categories; with `tag`, only entries whose subjects or text name it; at most 3 KB, the most important first. A filter the entries have no field for (`by`, `trust`, a `status` other than `active`) leaves them out. |
+
+**Text outlets.** An extension that does not declare `memory_sources` keeps its text outlets unchanged. Once an
+installed extension declares it (on or switched off, whether or not its entries can be read now), the hub stops
+delivering six of them directly, so no entry reaches a scene around the filter:
+
+- its assistant instructions (package and data-directory `instructions`, and `assistant[].instructions`) are left out
+  of the assistant's CLAUDE.md (`extensionInstructions`);
+- its `project_context` files are left out of new Agents' project background (`projectContext`);
+- its `inbox_context` text is left out of Inbox triage and drafts (`inboxContext`); its `never_quote` sentences still
+  stop a draft that repeats one;
+- its connectors' read tools (its recall tool among them) are not listed in the assistant's conversations, and a call
+  to one there is refused with a pointer to `decisions_query` (`memoryWithheld`). A connector is judged by the
+  extension that runs it, so a connector id another extension also names decides nothing;
+- its own `mcp_servers` are not given to the assistant (`assistantMCPServers`), as they could recall its entries
+  around the filter;
+- the skills in its data directory are not sent (`extensionSkills`); the skills in its package are.
+
+Its connectors' writes are unchanged, and so are the read tools coding Agents get through `agent_tools`: a known
+exception. A coding Agent is not in an assistant conversation, and what such a tool answers is the extension's own
+output, under its own rules, as before it declared the point; an extension that must keep sensitive entries from
+Agents leaves its recall tool out of `agent_tools`.
+
+What it writes to its data directory stays adopted and shown in its details as before; only the delivery stops. Its
+package skills, quick prompts and every other contribution are unchanged.
+
+A standing entry goes only to a standing channel among the standing contexts, but it is still an entry: a recall, a
+hand-off or the Inbox may carry it when it bears on what they are about, under their own rules, as they carry any
+other. A track conversation (a space, health) has no standing channel yet, so a recall is how it reaches its own
+track's standing entries.
 
 ### Unified entries ledger
 
