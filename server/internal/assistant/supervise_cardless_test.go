@@ -135,6 +135,10 @@ func TestReviewCardlessWaitSurvivesRestart(t *testing.T) {
 	setSuperviseTimings(s, shortSuperviseTimings) // the claim goes out now, at the test's usual pace, before the restart
 	releaseDigest(s)
 	forgetSignals(t, s)
+	// forgetSignals sees the pending signals gone once a digest takes them; the restart waits until that digest has
+	// ended, the claim's delivery acknowledged in the outbox.
+	s.supervise.digestMu.Lock()
+	s.supervise.digestMu.Unlock() //nolint:staticcheck // an empty critical section: it waits for the digest under way
 	again, _ := restartedOn(t, database)
 	quietDigest(again)
 	holdDigest(again)
@@ -191,16 +195,29 @@ func setSuperviseTimings(s *Service, p superviseTimings) {
 	s.superviseTimes = p
 }
 
-// pendingCardlessSignal reads the pending claim with the digest's lock, in sendDigest's order: a digest under way has
-// taken it out of what is pending, and one whose claim fails puts it back when it ends (#13877).
+// pendingCardlessSignal reads the pending claim. On a service with a store it reads the outbox (the relay state's
+// supervise_pending, which is what is persisted), as supervisePendingDurably does: a digest takes what it delivers out
+// of the in-memory pending signals until it ends, while the outbox keeps the claim until its delivery is acknowledged,
+// and the claim's digest timer stays on in some of these tests (#13877). A service with no store has no outbox; its
+// tests here keep the digest quiet (quietDigest), so what is pending in memory is read.
 func pendingCardlessSignal(t *testing.T, s *Service, id string) superviseSignal {
 	t.Helper()
-	s.supervise.digestMu.Lock()
-	defer s.supervise.digestMu.Unlock()
-	b := &s.supervise
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	g, ok := b.pending[id+"|"+sigCardlessWait]
+	key := id + "|" + sigCardlessWait
+	var g superviseSignal
+	var ok bool
+	if s.store() != nil {
+		r := &s.relays
+		r.mu.Lock()
+		if s.relayLocked(context.Background()) {
+			g, ok = r.st.SupervisePending[key]
+		}
+		r.mu.Unlock()
+	} else {
+		b := &s.supervise
+		b.mu.Lock()
+		g, ok = b.pending[key]
+		b.mu.Unlock()
+	}
 	if !ok {
 		t.Fatalf("no pending cardless signal for %s", id)
 	}
