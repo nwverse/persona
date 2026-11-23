@@ -44,6 +44,8 @@
   "persona_conversation_unarchive": "取消归档",
   "persona_conversation_new": "新开对话",
   "persona_conversation_send": "发到对话",
+  "persona_hub_list": "查看协作 hub",
+  "persona_hub_send": "发给协作 hub",
   "persona_computer_state": "看电脑",
   "persona_computer_run": "操控电脑",
   "persona_browser_run": "用浏览器",

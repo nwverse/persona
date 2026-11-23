@@ -64,6 +64,7 @@ var hubMessageTypes = map[string]bool{
 	"fleet": true, "liveactivity": true, "look": true, "personas": true, "managers": true, "hub_update": true,
 	"hub_restarting":      true,
 	"extension_ui_stream": true, // reserved targeted transport; never a manager broadcast
+	"partner_hubs":        true, // the partner hubs changed: reload GET /api/v1/partner-hubs (partner.go)
 }
 
 // checkedKeys are the keys the hub reads to place a message: a key that differs from one only by case is refused, at

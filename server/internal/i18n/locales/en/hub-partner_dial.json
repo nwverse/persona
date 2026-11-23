@@ -1,0 +1,14 @@
+{
+  "proxy_invalid": "partners.proxy in hub.json doesn’t read (http://, https://, socks5:// or socks5h://, a host and a port), so partner hubs aren’t dialed",
+  "proxy_none": "Partner hubs are dialed only through a proxy (partners.proxy_always), but no proxy applies to the partner hub’s addresses",
+  "socks_refused": "The SOCKS proxy refused: {reason}",
+  "socks_unreachable": "Can’t reach the SOCKS proxy",
+  "direct_failed": "{address}: {err}",
+  "proxy_failed": "{address} through the proxy: {err}",
+  "credentials_unreadable": "Can’t read the partner hub’s credentials: {err}",
+  "refused": "The partner hub doesn’t accept this hub’s credentials (it may have unpaired). Pair again",
+  "partner_off": "The partner hub has partner hubs turned off",
+  "partner_member": "The partner hub is now a member of a linked-hubs group, so it has no partner hubs",
+  "unpaired": "The partner hub unpaired",
+  "no_tls_address": "No secure address or key for the partner hub: this hub waits for it to connect"
+}

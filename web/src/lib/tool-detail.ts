@@ -155,14 +155,15 @@ export function withoutCutMark(text: string): string {
 
 /** One thing a permission card names, under a small label: the command it runs, the file, the address, the search. */
 export interface PermissionField {
-  label: "command" | "file" | "url" | "query" | "pattern" | "path";
+  label: "command" | "file" | "url" | "query" | "pattern" | "path" | "hub" | "message";
   value: string;
 }
 
 /** What a permission card says the tool will do, field by field (Android permissionSummary): the agent's own sentence
  *  (`description`, WebFetch's `prompt`) as plain text, then what it acts on. null for a tool it does not know, or one
- *  whose input lacks the field it acts on: the card shows the hub's summary or the raw input then. */
-export function permissionDetail(tool: string | undefined, input: Record<string, unknown> | undefined): { note?: string; fields: PermissionField[] } | null {
+ *  whose input lacks the field it acts on: the card shows the hub's summary or the raw input then. `whole`: the fields
+ *  say everything the hub's summary does, which is then not shown again. */
+export function permissionDetail(tool: string | undefined, input: Record<string, unknown> | undefined): { note?: string; fields: PermissionField[]; whole?: boolean } | null {
   const inp = input ?? {};
   const note = s(inp.description) || undefined;
   switch (tool) {
@@ -191,6 +192,15 @@ export function permissionDetail(tool: string | undefined, input: Record<string,
       const fields: PermissionField[] = [{ label: "pattern", value: s(inp.pattern) }];
       if (s(inp.path)) fields.push({ label: "path", value: s(inp.path) });
       return { fields };
+    }
+    // the assistant's message to a partner hub (docs/server/partner-hubs.md): which hub, and the text exactly as it is
+    // sent; the manager's summary is the same question and text. The hub is named with the start of its hub_id too: its
+    // name is the partner's own choice, so a look-alike name must not pass for another partner.
+    case "hub_send": {
+      const id = s(inp.hub_id);
+      const hub = s(inp.hub) && id ? `${s(inp.hub)} (${id.slice(0, 8)})` : s(inp.hub) || id;
+      const text = typeof inp.text === "string" ? inp.text : "";
+      return hub && text.trim() ? { fields: [{ label: "hub", value: hub }, { label: "message", value: text }], whole: true } : null;
     }
   }
   return null;

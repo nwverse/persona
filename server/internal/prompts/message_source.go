@@ -173,6 +173,13 @@ func ItemSource(it proto.Item) *proto.MessageSource {
 	return proto.SourceFromInjected(ParseInjected(it.Text))
 }
 
+// fromPartnerHub: text was delivered from a partner hub (its leading provenance names kind hub). Its words are the
+// other hub's, never one of Persona's own notes.
+func fromPartnerHub(text string) bool {
+	source, _ := sourceMetadata(text)
+	return source != nil && source.Kind == proto.SourceHub
+}
+
 // UserAuthoredContext marks a protected user message for other legacy classifiers.
 func UserAuthoredContext(text string) bool {
 	source, found := sourceMetadata(text)

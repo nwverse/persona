@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -321,6 +322,14 @@ func recentTurns(items []proto.Item, after int) []HandoffTurn {
 	for _, it := range items {
 		if it.Seq <= after || it.Kind != proto.KindText || (it.Role != "user" && it.Role != "assistant") {
 			continue
+		}
+		// A partner hub's message or reply is another hub's request (docs/server/partner-hubs.md "Receiving"): carried
+		// on as a user line it would read as the user's own words in the new main chat, without the framing that said
+		// otherwise. The new chat can read it with conversation_read.
+		if it.Role == "user" {
+			if src := prompts.ItemSource(it); src != nil && src.Kind == proto.SourceHub {
+				continue
+			}
 		}
 		text := strings.TrimSpace(anyContextRe.ReplaceAllString(it.Text, ""))
 		if text == "" {

@@ -93,6 +93,12 @@ describe("permissionDetail", () => {
     expect(permissionDetail("WebFetch", { url: "https://example.com", prompt: "读标题" })).toEqual({ note: "读标题", fields: [{ label: "url", value: "https://example.com" }] });
     expect(permissionDetail("Grep", { pattern: "foo", path: "src" })?.fields.map((f) => f.label)).toEqual(["pattern", "path"]);
   });
+  it("names the partner hub (with the start of its hub_id) and the message exactly as it is sent", () => {
+    const input = { hub: "家里", hub_id: "9d0c2b1a-0000-4000-8000-00000000000d", message_id: `pm_${"0".repeat(32)}`, text: "周六下午有空吗？\n  想约你一起去看展。" };
+    expect(permissionDetail("hub_send", input)).toEqual({ fields: [{ label: "hub", value: "家里 (9d0c2b1a)" }, { label: "message", value: input.text }], whole: true });
+    expect(permissionDetail("hub_send", { ...input, hub: "" })?.fields[0]).toEqual({ label: "hub", value: input.hub_id });
+    expect(permissionDetail("hub_send", { ...input, text: " " })).toBeNull();
+  });
   it("gives up on a tool it does not know or an input without its field", () => {
     expect(permissionDetail("mail_send", { to: "me@example.com" })).toBeNull();
     expect(permissionDetail("Bash", {})).toBeNull();

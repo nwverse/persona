@@ -180,6 +180,10 @@ func (h *Hub) lookupToken(ctx context.Context, tok string) (principal, bool, err
 		p, ok := h.peerPairPrincipal(ctx, tok)
 		return p, ok, nil
 	}
+	if strings.HasPrefix(tok, "jh_") { // a code pairing a partner hub (partner_pair.go)
+		p, ok := h.partnerPairPrincipal(ctx, tok)
+		return p, ok, nil
+	}
 	hash := hashToken(tok)
 	if strings.HasPrefix(tok, "jp_") {
 		pt, err := h.store.PairTokenByHash(ctx, hash)
@@ -317,6 +321,10 @@ func allowed(p principal, method, path string) bool {
 		return method == http.MethodGet && path == peerPath
 	case rolePeerPair:
 		return method == http.MethodPost && path == peerPairPath
+	case rolePartner:
+		return method == http.MethodGet && path == partnerLinkPath
+	case rolePartnerPair:
+		return method == http.MethodPost && path == partnerPairPath
 	case roleAnswer:
 		if method == http.MethodGet || method == http.MethodHead {
 			return answerReads.MatchString(path)
@@ -591,6 +599,17 @@ func (h *Hub) revoked(id string) {
 				h.logf("mesh: unpair after revoking %s: %v", id, err)
 			}
 		}()
+	}
+	// A partner hub's: that pairing ends, the partner told over the link first (unpairPartner closes it); a link with
+	// an older credential of its closes now.
+	if hub := h.partnerForCredential(id); hub != "" {
+		go func() {
+			if _, err := h.unpairPartner(context.Background(), hub, true); err != nil {
+				h.logf("partners: unpair after revoking %s: %v", id, err)
+			}
+		}()
+	} else {
+		links += h.closePartnerLinksOf(id)
 	}
 	h.live.endCredential(id) // finish the end pushes while their devices are still registered
 	h.push.signedOut(id)     // nil-safe; forgets the devices this credential registered (push.go)

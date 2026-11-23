@@ -201,6 +201,8 @@ type Hub struct {
 
 	todoLinks todoLinks // what the assistant reports of its todos' agents (assistant_todos.go)
 
+	partners partnerState // the partner hubs and their links, not the mesh (partner.go)
+
 	// The looks built into personad (persona.go; nil in unit tests) and the tier each tiered look shows (persona_tiers.go).
 	builtinLooks fs.FS
 	tiers        personaTierState
@@ -359,6 +361,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.startDevices(ctx)
 	go h.machineTrustLoop(ctx)
 	h.initMesh(ctx) // before the manager connects: a member leaves its computers to the center (mesh_group.go)
+	h.initPartners(ctx)
 	go h.terminalKeepalive(ctx)
 	go h.fullKeepalive(ctx)
 	go h.live.run(ctx)
@@ -380,6 +383,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 		return err
 	}
 	h.startMesh(ctx)
+	h.startPartners(ctx)
 	return h.serveHTTP(ctx)
 }
 

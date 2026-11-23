@@ -8,6 +8,8 @@
   "source_followup": "Follow-up",
   "source_supervision": "Supervision",
   "source_scheduled_task": "Sent by a scheduled task",
+  "source_hub": "Partner hub",
+  "source_hub_note": "Request from another hub, not from you",
   "show_more": "Show more",
   "source_other": "Source",
   "open_task": "{line}, open task"

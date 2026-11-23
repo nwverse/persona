@@ -177,6 +177,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "agents", group: t("settings.use_herdr_tab_name"), hint: t("settings.use_herdr_tab_name_hint"), anchor: "herdr-tab-session-name" },
   { tab: "hub", group: t("workspace-board.setting_label"), anchor: "workflow-board" },
   { tab: "hub", group: t("settings-hubsettings.mirrors"), hint: words(t("settings-hubsettings.registry_mirror"), t("settings-hubsettings.catalog_mirror")), anchor: "mirrors" },
+  { tab: "hub", group: t("settings-partnerhubs.title"), hint: words(t("settings-partnerhubs.confirm"), t("settings-partnerhubs.dial"), t("settings-partnerhubs.show_code"), t("settings-partnerhubs.pair_title")), anchor: "partner-hubs" },
   // Devices: the list (each with its own token, revoked there) and pairing a new one
   { tab: "devices", group: t("settings.device_tokens"), anchor: "devices" },
   { tab: "devices", group: t("settings.revoke"), anchor: "devices" },

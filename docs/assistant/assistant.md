@@ -2260,6 +2260,7 @@ Assistant MCP tools (`assistant/conversations.go`, descriptions `prompts/mcp/ass
 | `conversation_archive` / `conversation_unarchive` | Archive / unarchive, below |
 | `conversation_new` | Start a chat with an opening message, return id immediately without waiting; normal auto-title after first turn, excluding opening source context; optional `tags` apply the same limits and are saved with the new chat before the answer, an invalid set refusing the whole call |
 | `conversation_send` | Send to another chat, not itself |
+| `hub_list` / `hub_send` | Listed only while a partner hub is paired: the partner hubs, and a message to (or `reply_to` an answer for) another hub's assistant, which waits for the owner's OK on the phone unless they turned that off for the hub; returns at once ([partner-hubs.md](../server/partner-hubs.md)) |
 
 - **Archive only hides**: hub settings `assistant.archived` (session id → machine, time, actor), session list `archived: true`;
   `GET /api/v1/assistant` excludes by default, includes with `?archived=1`. No transcript deletion / hard delete. Main chat can't archive (API 400, tool error); replace through "New main chat" ("Compaction" above).

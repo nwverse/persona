@@ -259,6 +259,7 @@ func (s *Service) fleetStart(ctx context.Context) {
 	}
 	s.fleet.started.Do(func() {
 		s.restoreInteractions(ctx)
+		s.partnerFleetRestored() // the partner messages' cards may go up again now (partner_loop.go)
 		go s.expireLoop(ctx)
 		go s.liveLoop(ctx)
 	})

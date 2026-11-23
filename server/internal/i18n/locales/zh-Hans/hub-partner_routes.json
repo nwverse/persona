@@ -1,0 +1,4 @@
+{
+  "not_paired": "这台 hub 没有和那台 hub 配对为协作 hub",
+  "bad_dial": "dial 只能是 auto 或 never"
+}

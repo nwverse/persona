@@ -151,7 +151,7 @@ type briefRecord struct {
 	CreatedAt time.Time `json:"created_at"`
 	// Request: the owner's message, nil when the work was not started on one (StartedBy says by whom) or it could not
 	// be read. Trigger is what the turn that handed the work out followed instead (supervision, followup, routine,
-	// conversation, notice, meeting, wake), TriggerTitle its one line; Reason is why, as whoever started it said.
+	// conversation, notice, meeting, hub, wake), TriggerTitle its one line; Reason is why, as whoever started it said.
 	Request          *BriefRequest         `json:"request,omitempty"`
 	StartedBy        string                `json:"started_by"`
 	Trigger          string                `json:"trigger,omitempty"`
@@ -1115,6 +1115,8 @@ func (s *Service) briefOrigin(ctx context.Context, machine, conversation string)
 			}
 		case src.Kind == proto.SourceMeeting:
 			rec.Trigger, rec.TriggerTitle = "meeting", src.Title
+		case src.Kind == proto.SourceHub: // a partner hub's assistant asked (partner_receive.go)
+			rec.Trigger, rec.TriggerTitle = "hub", src.Title
 		default:
 			rec.Trigger, rec.TriggerTitle = "notice", src.Title
 		}

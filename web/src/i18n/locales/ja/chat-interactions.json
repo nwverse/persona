@@ -55,6 +55,8 @@
   "field_query": "検索",
   "field_pattern": "パターン",
   "field_path": "場所",
+  "field_hub": "パートナーハブ",
+  "field_message": "メッセージ",
   "field_changes": "変更",
   "field_content": "内容",
   "show_input": "元の引数を見る",

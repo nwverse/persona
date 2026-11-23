@@ -749,7 +749,7 @@ func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStor
 	size := 0
 	for i := len(page.Items) - 1; i >= 0; i-- {
 		item := page.Items[i]
-		if item.Kind != proto.KindText || (item.Role != "user" && item.Role != "assistant") {
+		if item.Kind != proto.KindText || (item.Role != "user" && item.Role != "assistant") || partnerLine(item) {
 			continue
 		}
 		if item.Stored != nil && !item.Stored.Complete {

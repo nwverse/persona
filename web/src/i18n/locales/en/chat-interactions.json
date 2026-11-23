@@ -55,6 +55,8 @@
   "field_query": "Search",
   "field_pattern": "Pattern",
   "field_path": "Where",
+  "field_hub": "Partner hub",
+  "field_message": "Message",
   "field_changes": "Changes",
   "field_content": "Content",
   "show_input": "Show raw input",

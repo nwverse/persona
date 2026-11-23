@@ -273,7 +273,8 @@ func (h *Hub) meshForwardTo(w http.ResponseWriter, r *http.Request, to string) b
 // and pairing codes made on its machine (an app's comes from the center: pairing.go).
 func (h *Hub) servedByMember(r *http.Request) bool {
 	switch r.URL.Path {
-	case "/api/v1/health", link.Path, link.StreamPath, peerPath, peerPairPath, "/api/v1/auth/pair-codes":
+	// A member answers a partner hub itself: with member_hub (partner_link.go, partner_pair.go), never its center's.
+	case "/api/v1/health", link.Path, link.StreamPath, peerPath, peerPairPath, partnerLinkPath, partnerPairPath, "/api/v1/auth/pair-codes":
 		return true
 	case "/api/v1/auth/tokens":
 		// A persona-link trading this hub's code for its credential (a code made for one of its link machines).

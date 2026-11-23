@@ -55,6 +55,8 @@
   "field_query": "搜索",
   "field_pattern": "查找",
   "field_path": "位置",
+  "field_hub": "协作 hub",
+  "field_message": "消息",
   "field_changes": "改动",
   "field_content": "内容",
   "show_input": "查看原始参数",

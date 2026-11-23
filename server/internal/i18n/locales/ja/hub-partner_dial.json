@@ -1,0 +1,14 @@
+{
+  "proxy_invalid": "hub.json の partners.proxy を読み取れません（http://、https://、socks5:// または socks5h:// とホスト、ポート）。パートナーハブには接続しません",
+  "proxy_none": "パートナーハブにはプロキシ経由でのみ接続します（partners.proxy_always）が、相手のハブのアドレスにはどのプロキシも使われません",
+  "socks_refused": "SOCKS プロキシに拒否されました：{reason}",
+  "socks_unreachable": "SOCKS プロキシに接続できません",
+  "direct_failed": "{address}：{err}",
+  "proxy_failed": "{address}（プロキシ経由）：{err}",
+  "credentials_unreadable": "パートナーハブの資格情報を読み取れません：{err}",
+  "refused": "相手のハブがこのハブの資格情報を受け付けません（ペアリングが解除された可能性があります）。もう一度ペアリングしてください",
+  "partner_off": "相手のハブではパートナーハブがオフになっています",
+  "partner_member": "相手のハブはハブ連携グループのメンバーになったため、パートナーハブを持てません",
+  "unpaired": "相手のハブがペアリングを解除しました",
+  "no_tls_address": "相手のハブの暗号化されたアドレスや公開鍵がありません。このハブは相手からの接続を待ちます"
+}

@@ -230,6 +230,7 @@ func (h *Hub) builtinManager(id string) bool {
 func (h *Hub) managersChanged() {
 	h.ownersChanged() // the default may be another one now (ownership.go)
 	h.tellManagers()
+	h.partnersRecheck() // the partner hubs are the default manager's: a new one gets the list (partner.go)
 }
 
 // tellManagers is managersChanged's push alone: what the roster says of a manager moved (its inbox's "Needs you"

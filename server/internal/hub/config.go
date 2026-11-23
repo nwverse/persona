@@ -207,6 +207,8 @@ type Config struct {
 	Update UpdateConfig `json:"update,omitzero"`
 	// Mesh tunes the links to other hubs (docs/server/mesh.md, config_mesh.go).
 	Mesh MeshConfig `json:"mesh,omitempty"`
+	// Partners tunes the links to partner hubs (docs/server/partner-hubs.md, config_partners.go).
+	Partners PartnersConfig `json:"partners,omitzero"`
 	// Link tunes the heartbeat with the computers' Persona Links (config_link.go, docs/operations/link.md "Heartbeat").
 	Link LinkConfig `json:"link,omitzero"`
 	// Personas tunes the looks: whose level a tiered look shows (persona_tiers.go, docs/apple/persona.md).

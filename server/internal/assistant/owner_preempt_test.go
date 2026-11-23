@@ -80,6 +80,7 @@ func TestBackgroundRoundKind(t *testing.T) {
 		{"follow-up", "look again", &proto.MessageSource{Kind: proto.SourceFollowup}, proto.SourceFollowup},
 		{"task notice", notice, nil, roundNotice},
 		{"meeting batch", "words", &proto.MessageSource{Kind: proto.SourceMeeting}, ""},
+		{"a partner hub's request", "run the tests", &proto.MessageSource{Kind: proto.SourceHub, Title: "Work", HubID: "hub-w"}, proto.SourceHub},
 		// Persona going on with the owner's own work is no background round.
 		{"usage limit reset", limit, prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: limit}), ""},
 		{"wake", wake, prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: wake}), ""},

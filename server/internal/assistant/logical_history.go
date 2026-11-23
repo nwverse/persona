@@ -69,7 +69,7 @@ func (s *Service) logicalHistoryCall(ctx context.Context, st logicalConversation
 			}
 		}
 		for _, it := range page.Items {
-			if it.Kind != proto.KindText || (it.Role != "user" && it.Role != "assistant") {
+			if it.Kind != proto.KindText || (it.Role != "user" && it.Role != "assistant") || partnerLine(it) {
 				continue
 			}
 			if it.Stored != nil && !it.Stored.Complete {

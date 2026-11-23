@@ -5,6 +5,9 @@ forward App requests unchanged to the primary, and hand the node streams of thei
 a computer reachable through several paths appears only once and uses the best path. The proposal is in [plan-hub-center.md](../archive/operations/plan-hub-center.md) (overview #293, this track's issue #435).
 This document covers the implementation: protocol, tradeoffs, and verification.
 
+> Two independent hubs that only exchange assistant messages, each keeping its own state and computers, are
+> [partner hubs](partner-hubs.md), not a mesh: no primary, no forwarding, no shared records.
+
 > The recommended deployment is **one hub only**, with node services on all other computers ([plan-hub-center.md](../archive/operations/plan-hub-center.md) section 0). Linked hubs are for a few cases:
 > always-on machines in two locations that cannot reach each other, or several existing hubs you want to combine. "Linked hubs" is under "Advanced" in the admin UI.
 

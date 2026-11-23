@@ -28,6 +28,13 @@ type meshStore struct {
 	usedCodes  map[string]bool
 	group      *meshGroup
 	connectors map[string]db.ConnectorCredential
+	// The partner hubs (partnerStore), made on first use.
+	partners         map[string]db.PartnerHub
+	partnerCodes     map[string]time.Time // hash -> expiry
+	usedPartnerCodes map[string]bool
+	partnerLoadFails int // PartnerHubs fails this many times more (a database that is not answering yet)
+	// The manager's partner messages and prefs (partner_e2e_store_test.go), made on first use.
+	partnerMsgs *memPartnerMessages
 }
 
 func newMeshStore() *meshStore {
@@ -614,3 +621,147 @@ func (s *meshStore) FindQueuedPhoneWrite(context.Context, string, json.RawMessag
 }
 
 func (s *meshStore) QueuedPhoneWrites(context.Context) ([]db.PhoneWrite, error) { return nil, nil }
+
+var _ partnerStore = (*meshStore)(nil)
+
+func (s *meshStore) partnerMaps() {
+	if s.partners == nil {
+		s.partners, s.partnerCodes, s.usedPartnerCodes = map[string]db.PartnerHub{}, map[string]time.Time{}, map[string]bool{}
+	}
+}
+
+func (s *meshStore) PartnerHubs(context.Context) ([]db.PartnerHub, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.partnerLoadFails > 0 {
+		s.partnerLoadFails--
+		return nil, errors.New("the database is not answering")
+	}
+	var out []db.PartnerHub
+	for _, p := range s.partners {
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// partnerRowOf and partnerCount read the partners under the lock (the hub writes them from its goroutines).
+func (s *meshStore) partnerRowOf(hubID string) (db.PartnerHub, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.partners[hubID]
+	return p, ok
+}
+
+func (s *meshStore) partnerCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.partners)
+}
+
+// isRevoked: the device token id was revoked.
+func (s *meshStore) isRevoked(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revoked[id]
+}
+
+// newPartnerRow is a new pairing as Postgres keeps it (db.SavePartnerHub): never over one there is.
+func (s *meshStore) newPartnerRow(p db.PartnerHub) error {
+	if _, had := s.partners[p.HubID]; had {
+		return db.ErrPartnerPaired
+	}
+	if p.Dial == "" {
+		p.Dial = "auto"
+	}
+	if p.CreatedAt.IsZero() {
+		p.CreatedAt = time.Now()
+	}
+	p.CreatedAt = p.CreatedAt.UTC().Truncate(time.Microsecond)
+	s.partners[p.HubID] = p
+	return nil
+}
+
+func (s *meshStore) SavePartnerHub(_ context.Context, p db.PartnerHub) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.partnerMaps()
+	return s.newPartnerRow(p)
+}
+
+func (s *meshStore) SetPartnerDial(_ context.Context, hubID, dial string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.partners[hubID]
+	if ok {
+		p.Dial = dial
+		s.partners[hubID] = p
+	}
+	return ok, nil
+}
+
+func (s *meshStore) UpdatePartnerSeen(_ context.Context, seen db.PartnerHub) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.partners[seen.HubID]; ok && p.CredentialID == seen.CredentialID {
+		now := time.Now().UTC()
+		p.Name, p.FP, p.Endpoints, p.SeenAt = seen.Name, seen.FP, seen.Endpoints, &now
+		s.partners[seen.HubID] = p
+	}
+	return nil
+}
+
+func (s *meshStore) DeletePartnerHub(_ context.Context, hubID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.partners[hubID]
+	delete(s.partners, hubID)
+	return ok, nil
+}
+
+func (s *meshStore) CreatePartnerCode(_ context.Context, hash string, expires time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.partnerMaps()
+	s.partnerCodes[hash] = expires
+	return nil
+}
+
+func (s *meshStore) PartnerCodeValid(_ context.Context, hash string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exp, ok := s.partnerCodes[hash]
+	return ok && !s.usedPartnerCodes[hash] && time.Now().Before(exp), nil
+}
+
+func (s *meshStore) RedeemPartnerCode(_ context.Context, codeHash string, p db.PartnerHub, cred db.DeviceToken, credHash string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.partnerMaps()
+	exp, ok := s.partnerCodes[codeHash]
+	if !ok || s.usedPartnerCodes[codeHash] || !time.Now().Before(exp) {
+		return false, nil
+	}
+	if err := s.newPartnerRow(p); err != nil {
+		return false, err // nothing changed, the code still good
+	}
+	s.usedPartnerCodes[codeHash] = true
+	for _, t := range s.tokens {
+		if t.Kind == "partner" && t.MachineID == p.HubID {
+			s.revoked[t.ID] = true
+		}
+	}
+	cred.CreatedAt = time.Now()
+	s.tokens[credHash] = cred
+	return true, nil
+}
+
+func (s *meshStore) PrunePartnerCodes(_ context.Context, before time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, exp := range s.partnerCodes {
+		if exp.Before(before) {
+			delete(s.partnerCodes, k)
+		}
+	}
+	return nil
+}

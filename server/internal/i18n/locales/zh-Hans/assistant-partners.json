@@ -1,0 +1,8 @@
+{
+  "confirm": "要把这条消息发给协作 hub「{hub}」（{id}）吗？",
+  "always": "发给「{hub}」（{id}）的消息以后不再询问",
+  "store": "协作 hub 的消息读不到或存不上，请重试。",
+  "read_only": "这台设备不能查看或修改协作 hub 的消息。",
+  "invalid": "这不是有效的协作 hub 设置。",
+  "not_found": "这个 hub 没有和本 hub 配对。"
+}

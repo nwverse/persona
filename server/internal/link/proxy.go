@@ -228,6 +228,13 @@ func proxyDial(p *url.URL, onConn func(net.Conn)) func(context.Context, string, 
 	}
 }
 
+// DialThrough is proxyDial for another program of Persona's: a DialContext reaching addr through the CONNECT proxy p
+// (an http:// or https:// URL, ParseProxy's), for a hub dialing its partner hubs (internal/hub partner_proxy.go). The
+// caller's own TLS, with its own check, runs inside the tunnel; errors never name the proxy or its credentials.
+func DialThrough(p *url.URL) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return proxyDial(p, nil)
+}
+
 // connectThrough asks the proxy on raw for a tunnel to addr: TLS to the proxy first (secure) when it is an https
 // one. Ending ctx closes raw (proxyDial), so the deadline only bounds a proxy that never answers.
 func connectThrough(ctx context.Context, raw net.Conn, p *url.URL, secure *tls.Config, addr string) (net.Conn, error) {

@@ -7,6 +7,8 @@
   "source_followup": "跟进",
   "source_supervision": "督办巡检",
   "source_scheduled_task": "由已安排任务发送",
+  "source_hub": "协作 hub",
+  "source_hub_note": "来自另一个 hub 的请求，不是你发的",
   "show_more": "显示更多",
   "source_other": "来源",
   "open_task": "{line}，打开任务"

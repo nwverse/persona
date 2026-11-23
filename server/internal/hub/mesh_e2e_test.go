@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/streams"
@@ -57,6 +58,10 @@ type meshNode struct {
 	// failWatch: the next session.watch calls of a session that fail (a node still starting).
 	pushWatchedOnly bool
 	failWatch       map[string]int
+	// assistantSends are the assistant.send calls it took, their params as sent (partner_e2e_test.go); caps, when set,
+	// is the protocol handshake node.info says (a current node's capabilities), else none (a node from before it).
+	assistantSends []map[string]any
+	caps           []string
 }
 
 type whoAt struct {
@@ -209,7 +214,11 @@ func (f *meshNode) handle(method string, params json.RawMessage) (any, error) {
 	defer f.mu.Unlock()
 	switch method {
 	case "node.info":
-		return proto.NodeInfo{Hostname: f.host, OS: "linux", Arch: "arm64", Home: "/home/user", Version: "test", MachineUID: f.uid}, nil
+		info := proto.NodeInfo{Hostname: f.host, OS: "linux", Arch: "arm64", Home: "/home/user", Version: "test", MachineUID: f.uid}
+		if f.caps != nil {
+			info.Protocol, info.ProtocolMin, info.Capabilities = nodeproto.Version, nodeproto.MinManagerVersion, f.caps
+		}
+		return info, nil
 	case "sessions.list":
 		return map[string]any{"sessions": f.sessions}, nil
 	case "session.items":
@@ -226,6 +235,11 @@ func (f *meshNode) handle(method string, params json.RawMessage) (any, error) {
 	case "session.send":
 		f.sent = append(f.sent, p.Text)
 		return map[string]any{"delivered": "yes"}, nil
+	case "assistant.send": // into a conversation it has (resume_only), as the node answers it
+		var a map[string]any
+		_ = json.Unmarshal(params, &a)
+		f.assistantSends = append(f.assistantSends, a)
+		return map[string]any{"session_id": p.SessionID}, nil
 	case "session.a2a.send":
 		f.sent = append(f.sent, p.Text)
 		items := f.items[p.SessionID]

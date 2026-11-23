@@ -117,6 +117,7 @@ func (h *Hub) routes() http.Handler {
 	h.publicRoutes(api)
 	h.androidAppRoutes(api)
 	h.peerRoutes(api)
+	h.partnerRoutes(api) // partner hubs: the link and pairing between hubs, the apps' list (partner_routes.go)
 	h.runtimeCLIRoutes(api)
 	// What the center serves: its own apps' requests and those the members pass on (peer_http.go), whose source the
 	// member judged (no gate here for them). A member passes everything but its own few routes on (memberForward).
@@ -325,6 +326,8 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 				msg = "a Persona Link credential only opens its machine's link"
 			} else if p.Role == rolePeer || p.Role == rolePeerPair {
 				msg = "a peer credential only opens the mesh link"
+			} else if p.Role == rolePartner || p.Role == rolePartnerPair {
+				msg = "a partner hub's credential only opens the partner link"
 			}
 			writeErr(w, http.StatusForbidden, errors.New(msg))
 			return

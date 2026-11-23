@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { chatLines, isOwnMessage, segments } from "./turns";
+import { backgroundSource, chatLines, isOwnMessage, segments } from "./turns";
 import { navRailTicks } from "./nav-rail";
-import { sourceKey, sourceOf } from "./message-source";
+import { sourceKey, sourceLabel, sourceOf } from "./message-source";
 import type { Item } from "./types";
 import { isEcho } from "./echo";
 
@@ -104,5 +104,20 @@ describe("message provenance", () => {
     const msg = segments([item(1, { source, text: '<persona-context kind="message-source" title="">{"kind":"conversation"}</persona-context>\nReport ready' })])[0].user!;
     expect(msg.contexts).toEqual([]);
     expect(msg.text).toBe("Report ready");
+  });
+
+  it("keeps a partner hub's id from the durable metadata, and tells two hubs of one name apart", () => {
+    const text = '<persona-context kind="message-source" title="">{"kind":"hub","title":"Home hub","hub_id":"hub-b"}</persona-context>\nAre you free on Saturday?';
+    const msg = segments([item(1, { text })])[0].user!;
+    expect(msg.source).toEqual({ kind: "hub", title: "Home hub", hub_id: "hub-b" });
+    expect(msg.text).toBe("Are you free on Saturday?");
+    expect(isOwnMessage(msg)).toBe(false);
+    expect(sourceKey(msg.source!)).not.toBe(sourceKey({ ...msg.source!, hub_id: "hub-c" }));
+    expect(sourceLabel({ kind: "hub" })).toBe("协作 hub");
+  });
+
+  it("never folds another hub's request away as a background round", () => {
+    expect(backgroundSource(item(1, { source: { kind: "hub", title: "Home hub", hub_id: "hub-b" } }))).toBeUndefined();
+    expect(backgroundSource(item(1, { source }))).toEqual(source);
   });
 });

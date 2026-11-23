@@ -45,6 +45,8 @@
   "persona_conversation_unarchive": "Unarchive chat",
   "persona_conversation_new": "New chat",
   "persona_conversation_send": "Send to chat",
+  "persona_hub_list": "List partner hubs",
+  "persona_hub_send": "Send to partner hub",
   "persona_computer_state": "Look at computer",
   "persona_computer_run": "Use computer",
   "persona_browser_run": "Use browser",

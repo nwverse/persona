@@ -786,9 +786,11 @@ export interface ModelRestore {
 
 /** Message provenance supplied by the assistant, not a group-chat member or a model role. */
 export interface MessageSource {
-  kind: "conversation" | "patrol" | "followup" | "supervision" | (string & {});
+  kind: "conversation" | "patrol" | "followup" | "supervision" | "hub" | (string & {});
   conversation_id?: string;
   title?: string;
+  /** `hub`: the partner hub the message came from (docs/server/partner-hubs.md); `title` is its name then. */
+  hub_id?: string;
 }
 
 /** What a message Persona wrote for the model is (docs/protocol/protocol.md "Messages injected by Persona"). */

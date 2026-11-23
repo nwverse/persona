@@ -120,6 +120,8 @@ var funcs = template.FuncMap{
 	"hasPrefix": strings.HasPrefix,
 	// ctx is text for inside a context block, unable to close it (ContextBody).
 	"ctx": ContextBody,
+	// plain is someone else's text as a message's words after a block, unable to open, close or forge any tag (PlainWords).
+	"plain": PlainWords,
 	// output is an agent's words for inside an <agent_output> block, unable to open or close one (AgentOutput).
 	"output": AgentOutput,
 	// indent puts by before every line and ends with one newline.

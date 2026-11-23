@@ -1,0 +1,19 @@
+{
+  "code_hint_one": "This is this hub’s partner hub code, valid once for {count} minute.\nOn the other hub, paste it under Settings › This hub › Partner hubs › Pair, or run {command} '<code>' on that machine.",
+  "code_hint_other": "This is this hub’s partner hub code, valid once for {count} minutes.\nOn the other hub, paste it under Settings › This hub › Partner hubs › Pair, or run {command} '<code>' on that machine.",
+  "added": "Paired with partner hub “{name}” ({id}): {state}",
+  "member": "This hub is a member of a linked-hubs group: partner hubs are paired on the group’s primary hub.",
+  "off": "Partner hubs are turned off on this hub (partners.enabled in hub.json).",
+  "empty": "No partner hubs yet.",
+  "line": "{id}  {name}  {dial}  {state}",
+  "dial_set": "“{name}”: {dial}",
+  "dial_auto": "this hub connects to it",
+  "dial_never": "waits for it to connect",
+  "removed": "Unpaired, and its credentials revoked.",
+  "state_connected": "connected",
+  "state_connecting": "connecting",
+  "state_offline": "not connected",
+  "state_refused": "the other hub refuses this hub’s credentials",
+  "state_rtt": " ({ms} ms)",
+  "state_error": ": {error}"
+}

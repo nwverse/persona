@@ -25,6 +25,7 @@ function sourceMetadata(raw: string): { found: boolean; source?: MessageSource }
         kind: meta.kind,
         ...(typeof meta.conversation_id === "string" ? { conversation_id: meta.conversation_id } : {}),
         ...(typeof meta.title === "string" ? { title: meta.title } : {}),
+        ...(typeof meta.hub_id === "string" ? { hub_id: meta.hub_id } : {}),
       } };
     } catch { return { found: true }; }
   }
@@ -69,10 +70,10 @@ export function sourceOf(item: Item, injected: Injected | null): MessageSource |
 }
 
 export function sourceLabel(source: MessageSource): string {
-  return source.title?.trim() || t(`chat-messages.source_${["conversation", "patrol", "followup", "supervision", "scheduled_task"].includes(source.kind) ? source.kind : "other"}`);
+  return source.title?.trim() || t(`chat-messages.source_${["conversation", "patrol", "followup", "supervision", "scheduled_task", "hub"].includes(source.kind) ? source.kind : "other"}`);
 }
 
-/** Equal titles alone must not merge different originating conversations. */
+/** Equal titles alone must not merge different originating conversations, nor two partner hubs of the same name. */
 export function sourceKey(source: MessageSource): string {
-  return JSON.stringify([source.kind, source.conversation_id ?? "", source.title ?? ""]);
+  return JSON.stringify([source.kind, source.conversation_id ?? "", source.title ?? "", source.hub_id ?? ""]);
 }

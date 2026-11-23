@@ -29,6 +29,7 @@ const PAGES = [
   "./HubSettings.tsx",
   "./AgentGroup.tsx",
   "./ExtensionDownloadMirrors.tsx",
+  "./PartnerHubs.tsx",
   "./KnowledgeTopics.tsx",
   "./KnowledgeSelection.tsx",
 ];

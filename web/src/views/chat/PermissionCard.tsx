@@ -106,7 +106,7 @@ export function PermissionBody({ ix }: { ix: Interaction }) {
   const detail = permissionDetail(ix.tool_name, input);
   const diffs = detail && DIFF_TOOLS.has(ix.tool_name ?? "") ? editDiffs({ id: ix.id, seq: 0, role: "assistant", kind: "tool_use", tool_name: ix.tool_name, tool_input: input }) : null;
   const reason = permissionReason(ix.agent, ix.reason);
-  const extra = detail ? summaryExtra(ix.summary, detail.fields) : "";
+  const extra = detail && !detail.whole ? summaryExtra(ix.summary, detail.fields) : "";
   const extraShown = extra && extra !== detail?.note && extra !== reason && !detail?.fields.some((f) => f.value === extra);
   const lead = detail ? undefined : ix.summary?.trim();
   const [showInput, setShowInput] = useState(!detail && !lead);

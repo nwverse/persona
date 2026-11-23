@@ -103,6 +103,7 @@ func (h *Hub) stopWebSockets(ctx context.Context) error {
 	}
 	links := h.stopLinks() // their streams end now; persona-link comes back to the next hub on the 1001
 	h.stopPeerLinks()      // the other hubs of the mesh group hear a 1001 too (peer_link.go)
+	h.stopPartnerLinks()   // and the partner hubs: an accepted link holds a WebSocket handler (partner.go)
 	buses := h.stopBus()   // the services reconnect to the next hub on the 1001 (bus.go)
 
 	var closes sync.WaitGroup

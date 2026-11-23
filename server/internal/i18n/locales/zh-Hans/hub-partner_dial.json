@@ -1,0 +1,14 @@
+{
+  "proxy_invalid": "hub.json 的 partners.proxy 读不懂（要 http://、https://、socks5:// 或 socks5h://，加主机和端口），所以不连协作 hub",
+  "proxy_none": "协作 hub 只走代理（partners.proxy_always），但对方 hub 的地址都不走代理",
+  "socks_refused": "SOCKS 代理拒绝了：{reason}",
+  "socks_unreachable": "连不上 SOCKS 代理",
+  "direct_failed": "{address}：{err}",
+  "proxy_failed": "{address}（经代理）：{err}",
+  "credentials_unreadable": "读不出协作 hub 的凭据：{err}",
+  "refused": "对方 hub 不认这台 hub 的凭据（可能已在对方解除配对）：重新配对",
+  "partner_off": "对方 hub 关掉了协作 hub",
+  "partner_member": "对方 hub 现在是互联组的成员，没有协作 hub 了",
+  "unpaired": "对方 hub 解除了配对",
+  "no_tls_address": "没有对方 hub 的加密地址或公钥：这台 hub 等对方连过来"
+}

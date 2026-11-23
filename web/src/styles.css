@@ -226,6 +226,11 @@
     @apply max-w-full truncate font-medium text-accent-ink;
     font-size: var(--chat-secondary);
   }
+  /* A quiet line under a source's label: what kind of message it is (another hub's request, not the user's). */
+  .chat-source-note {
+    @apply text-ink-3;
+    font-size: var(--chat-secondary);
+  }
   .chat-source-body {
     @apply min-w-0 w-full;
     font-size: var(--chat-secondary);

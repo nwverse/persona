@@ -1,0 +1,8 @@
+{
+  "confirm": "Send this message to the partner hub \"{hub}\" ({id})?",
+  "always": "Don't ask again for messages to \"{hub}\" ({id})",
+  "store": "Couldn't read or save the partner hub messages. Try again.",
+  "read_only": "This device can't see or change partner hub messages.",
+  "invalid": "That isn't a partner hub setting.",
+  "not_found": "That hub isn't paired with this one."
+}

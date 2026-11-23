@@ -71,6 +71,7 @@ func (s *Service) relayArrived(machine, to string, msg relayMsg) (bool, error) {
 		return false, err
 	}
 	fromConversation := msg.Tool == "conversation_send" || msg.Tool == "conversation_new"
+	fromHub := msg.Tool == partnerMessageTool || msg.Tool == partnerReplyTool
 	var onceID string
 	if want == "" {
 		onceID = relayMsgID(to, msg)
@@ -84,6 +85,11 @@ func (s *Service) relayArrived(machine, to string, msg relayMsg) (bool, error) {
 		}
 		if fromConversation {
 			if src := prompts.ItemSource(it); src == nil || src.Kind != proto.SourceConversation || src.ConversationID != msg.From {
+				continue
+			}
+		}
+		if fromHub {
+			if src := prompts.ItemSource(it); src == nil || src.Kind != proto.SourceHub || partnerFrom+src.HubID != msg.From {
 				continue
 			}
 		}

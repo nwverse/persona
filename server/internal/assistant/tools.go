@@ -58,6 +58,9 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.urgentOn(ctx) {
 		tools = append(tools, toolsNamed([]string{"urgent_call"})...)
 	}
+	if s.partnersPaired() { // only while a partner hub is paired (partner.go)
+		tools = append(tools, toolsNamed([]string{"hub_list", "hub_send"})...)
+	}
 	return localizedMCPTools(append(tools, s.knowledgeFolderTools(ctx)...), s.toolLanguage(ctx))
 }
 
@@ -297,6 +300,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return notifyAnswerText(s.lang(ctx), res, copies.wait(notifyCopyWait)), nil
 	case "urgent_call":
 		return s.toolUrgentCall(ctx, machine, self, args) // urgent_call_tool.go
+	case "hub_list":
+		return s.toolHubList(ctx, machine, self) // partner_tools.go
+	case "hub_send":
+		return s.toolHubSend(ctx, machine, self, args)
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
 	case "conversation_read":

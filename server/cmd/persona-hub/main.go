@@ -48,6 +48,8 @@ const usage = `usage:
   persona-hub pair [--legacy | --android] | --machine <id> [--add [--name <name>]] | --peer
                            pairing codes for phones, a computer's persona-link, another hub
   persona-hub peer add|list|remove|center …    linked hubs (docs/server/mesh.md)
+  persona-hub partner code|add|list|dial|remove …
+                           partner hubs: independent hubs whose assistants message each other (docs/server/partner-hubs.md)
   persona-hub doctor        check the hub's configuration, network and certificates (read only)
   persona-hub admin …       the admin UI on this machine (docs/operations/admin.md)
   persona-hub manager-mode [child|service]

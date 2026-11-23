@@ -80,9 +80,11 @@ var noticeStates = map[string]string{"做完了": "done", "在等用户": "needs
 var noticeLines = map[string]string{"done": "做完了", "needs": "在等你", "interrupted": "被打断了", "failed": "没开起来"}
 
 // ParseInjected says what text is when it is one of the messages Persona writes for the model; nil for anything
-// else (what the user wrote stays theirs: only the templates' exact shapes are taken).
+// else (what the user wrote stays theirs: only the templates' exact shapes are taken). A partner hub's message or
+// reply is never one, whatever its words begin with: they follow Persona's blocks as the message itself, and the apps
+// must show them (docs/server/partner-hubs.md).
 func ParseInjected(text string) *proto.Injected {
-	if UserAuthoredContext(text) {
+	if UserAuthoredContext(text) || fromPartnerHub(text) {
 		return nil
 	}
 	for {

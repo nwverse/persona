@@ -529,7 +529,7 @@ func (s *Service) historyHandoff(ctx context.Context, st conversationHistoryStor
 				return nil, false
 			}
 		}
-		if !row.Complete || it.Seq <= afterCompact || it.Kind != proto.KindText || (it.Role != "user" && it.Role != "assistant") {
+		if !row.Complete || it.Seq <= afterCompact || it.Kind != proto.KindText || (it.Role != "user" && it.Role != "assistant") || partnerLine(it) {
 			continue
 		}
 		text := strings.TrimSpace(transcript.StripInjected(it.Text))

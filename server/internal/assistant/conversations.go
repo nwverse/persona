@@ -278,6 +278,12 @@ type relayMsg struct {
 	// as before, its hand-over stays queued until it expires, and the one it answers stays delivered.
 	Handover string `json:"handover,omitempty"`
 	Answers  string `json:"answers,omitempty"`
+	// Partner: the message_id of the partner hub's envelope this is (partner_message / partner_reply, partner_receive.go),
+	// and PartnerText what goes into the conversation: Text (the other assistant's words, which the queue's label shows)
+	// in its frame, rendered once so every try says the same. A version that does not know them drops them on its next
+	// save: the message then goes in as a message from another conversation.
+	Partner     string `json:"partner,omitempty"`
+	PartnerText string `json:"partner_text,omitempty"`
 }
 
 type relayHop struct {
@@ -841,7 +847,8 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 	}
 	for id, q := range b.st.Queue {
 		for _, msg := range q {
-			if msg.Tool == noticeTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool { // a quiet task's notice (quiet.go), a question's answer (ask_todo.go): its title is enough
+			if msg.Tool == noticeTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool ||
+				msg.Tool == partnerNoticeTool { // a quiet task's notice (quiet.go), a question's answer (ask_todo.go): its title is enough
 				out[id] = append(out[id], msg.FromTitle+"的通知")
 				continue
 			}
@@ -851,6 +858,11 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 			}
 			if msg.Tool == chatReplyTool { // a chat's new messages (chat_reply.go): their words stay out of the label
 				out[id] = append(out[id], msg.FromTitle+"的新消息") // i18n-ignore: the queue's label, as the task notices'
+				continue
+			}
+			if msg.Tool == partnerMessageTool || msg.Tool == partnerReplyTool { // a partner hub's (partner_receive.go): its
+				// words stay out of the label, which no client reads as another chat's or parses for blocks
+				out[id] = append(out[id], "协作 hub「"+msg.FromTitle+"」的消息") // i18n-ignore: the queue's label, as the others'
 				continue
 			}
 			out[id] = append(out[id], "来自「"+msg.FromTitle+"」："+msg.Text)
@@ -865,6 +877,8 @@ func (msg relayMsg) source() *proto.MessageSource {
 		return &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: msg.From, Title: msg.FromTitle}
 	case superviseTool:
 		return &proto.MessageSource{Kind: proto.SourceSupervision}
+	case partnerMessageTool, partnerReplyTool: // another hub's assistant: never the owner's words (partner_receive.go)
+		return &proto.MessageSource{Kind: proto.SourceHub, Title: msg.FromTitle, HubID: strings.TrimPrefix(msg.From, partnerFrom)}
 	default:
 		return nil
 	}
@@ -944,8 +958,11 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 // are their own text; a message from another conversation says where it comes from.
 func relayDeliveryText(msg relayMsg) string {
 	if msg.Tool == noticeTool || msg.Tool == superviseTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == prFollowupTool ||
-		msg.Tool == chatReplyTool || msg.Tool == relayRefusedTool {
+		msg.Tool == chatReplyTool || msg.Tool == relayRefusedTool || msg.Tool == partnerNoticeTool {
 		return msg.Text
+	}
+	if (msg.Tool == partnerMessageTool || msg.Tool == partnerReplyTool) && msg.PartnerText != "" {
+		return msg.PartnerText // a partner hub's words in their frame (prompts/assistant/partner_message.md, partner_reply.md)
 	}
 	return relayText(msg)
 }
@@ -957,7 +974,7 @@ func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 		s.askRelayDelivered(to, msg)
 		return
 	}
-	if msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool {
+	if msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool || msg.Tool == partnerNoticeTool {
 		return // a record for the conversation that planned the task (or a closed task's PR follow-up): no hop of any chain, no push of its own
 	}
 	if msg.Tool == chatReplyTool {
@@ -1124,6 +1141,16 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			// reported blocked (#4332): ask the task once more right before it would interrupt. A node that cannot
 			// be reached is not an answer, so its notice stays queued for a later drain.
 			stale, keep := msg.Withdrawn, false
+			var hold time.Duration
+			if !stale && s.partnerRelayStale(ctx, msg) {
+				stale = true // a partner hub's envelope of a pairing that ended goes in nowhere (partner_receive.go)
+			}
+			if !stale && msg.Tool == partnerMessageTool {
+				// A partner hub's message goes to the main conversation as it is now, not one put away since it queued
+				// (partner_receive.go).
+				stale, hold = s.partnerMainNow(ctx, id, msg)
+				keep = hold > 0
+			}
 			if !stale && msg.Tool == noticeTool && msg.State == "needs" {
 				// The loading read covers a hub restart whose first drain runs before the todos were read in:
 				// an unreadable todo is unknown, so the notice is delivered as without the recheck.
@@ -1136,7 +1163,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				}
 			}
 			var err error
-			var retry time.Duration
+			retry := hold
 			landed := false
 			if !stale && !keep && !msg.TriedAt.IsZero() {
 				landed = s.lookForRelay(machine, id, &msg)
@@ -1175,6 +1202,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			if leaves && err != nil && failure == relayFailedGone {
 				// Dropped: a hand-over it carried will not be tried again, marked before the queue without it is saved.
 				s.handoverEnded(msg.Handover, handoverGone)
+				s.partnerRelayGone(id, msg) // and a partner hub's message is told it did not go in (partner_receive.go)
 			}
 			b.mu.Lock()
 			delete(b.draining, id)

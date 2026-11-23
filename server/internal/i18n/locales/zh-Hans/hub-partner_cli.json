@@ -1,0 +1,19 @@
+{
+  "code_hint_one": "这是这台 hub 的协作 hub 配对码，{count} 分钟内有效，只能用一次。\n在另一台 hub 上：设置 › 这台 hub › 协作 hub › 配对 里贴上它；或者在那台机器上运行 {command} '<配对码>'。",
+  "code_hint_other": "这是这台 hub 的协作 hub 配对码，{count} 分钟内有效，只能用一次。\n在另一台 hub 上：设置 › 这台 hub › 协作 hub › 配对 里贴上它；或者在那台机器上运行 {command} '<配对码>'。",
+  "added": "已和协作 hub「{name}」（{id}）配对：{state}",
+  "member": "这台 hub 是互联组里的成员：协作 hub 在组里的主 hub 上配对。",
+  "off": "这台 hub 关掉了协作 hub（hub.json 的 partners.enabled）。",
+  "empty": "还没有协作 hub。",
+  "line": "{id}  {name}  {dial}  {state}",
+  "dial_set": "「{name}」：{dial}",
+  "dial_auto": "这台 hub 去连它",
+  "dial_never": "等它连过来",
+  "removed": "已解除配对，并撤销了它的凭据。",
+  "state_connected": "已连接",
+  "state_connecting": "连接中",
+  "state_offline": "未连接",
+  "state_refused": "对方不认这台的凭据",
+  "state_rtt": "（{ms} ms）",
+  "state_error": "：{error}"
+}

@@ -16,6 +16,11 @@ import (
 // binary is the assistant's process (TestAssistantProcessIsSupervised), and as the processes of the listening-socket
 // tests (listenHelpers, listen_unix_test.go) with theirs.
 func TestMain(m *testing.M) {
+	// A developer's own proxy must not carry the tests' dials (partner hubs read these, partner_proxy.go): tests set
+	// what they need.
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
+		_ = os.Unsetenv(k)
+	}
 	listenHelpers()
 	if os.Getenv("PERSONA_TEST_ASSISTANT") == "1" {
 		if err := assistant.Main(context.Background(), update.Build{Version: "test"}, os.Stdin); err != nil {

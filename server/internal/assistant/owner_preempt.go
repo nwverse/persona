@@ -69,8 +69,8 @@ func backgroundRoundKind(text string, source *proto.MessageSource) string {
 		return ""
 	}
 	switch source.Kind {
-	case proto.SourceSupervision, proto.SourceConversation, proto.SourcePatrol:
-		return source.Kind
+	case proto.SourceSupervision, proto.SourceConversation, proto.SourcePatrol, proto.SourceHub:
+		return source.Kind // a partner hub's request too: the owner's own message comes first (docs/server/partner-hubs.md)
 	case proto.SourceFollowup:
 		if in := prompts.ParseInjected(text); in != nil && (in.State == "limit_continue" || in.State == "wake") {
 			return ""

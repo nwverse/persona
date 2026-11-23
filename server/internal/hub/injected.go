@@ -20,6 +20,9 @@ func (h *Hub) withInjected(items []proto.Item) []proto.Item {
 		if it.Source != nil && it.Source.Kind == proto.SourceScheduledTask {
 			continue // already classified by the runtime; its visible instructions are not a Persona envelope
 		}
+		if it.Source != nil && it.Source.Kind == proto.SourceHub {
+			continue // a partner hub's words, whatever they begin with: the apps show them (docs/server/partner-hubs.md)
+		}
 		if it.Role != "user" || it.Kind != proto.KindText || it.ClientMsgID != "" || it.From != "" || it.Injected != nil || prompts.UserAuthoredContext(it.Text) {
 			continue
 		}

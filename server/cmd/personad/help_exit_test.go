@@ -12,7 +12,8 @@ import (
 
 // TestHelpExitsZero runs main in a child process (this test binary, re-executed): -h, --help and help print the usage
 // on stdout and exit 0, as persona-hub, persona-manager and persona-link do, and so do `hub -h` (the hub's commands,
-// as `persona-hub hub -h`) and `hub peer -h`, without writing anything in HOME; the usage names every command, tool too.
+// as `persona-hub hub -h`), `hub peer -h` and `hub partner -h`, without writing anything in HOME; the usage names every
+// command, tool too.
 func TestHelpExitsZero(t *testing.T) {
 	if args := os.Getenv("PERSONAD_TEST_TOP_HELP_ARGS"); args != "" {
 		os.Args = append([]string{"personad"}, strings.Split(args, "\x1f")...)
@@ -21,6 +22,7 @@ func TestHelpExitsZero(t *testing.T) {
 	}
 	home := t.TempDir()
 	hubHelp, peerHelp := named("usage:\n"+hubcli.Usage)+"\n", "usage: personad hub peer add <code>|- | list | remove <hub_id> | center [<hub_id>] [--confirm]\n"
+	partnerHelp := "usage: personad hub partner code | add <code>|- | list | dial <hub_id> auto|never | remove <hub_id>\n"
 	for _, tc := range []struct {
 		args []string
 		want string
@@ -34,6 +36,9 @@ func TestHelpExitsZero(t *testing.T) {
 		{[]string{"hub", "peer", "-h"}, peerHelp},
 		{[]string{"hub", "peer", "--help"}, peerHelp},
 		{[]string{"hub", "peer", "help"}, peerHelp},
+		{[]string{"hub", "partner", "-h"}, partnerHelp},
+		{[]string{"hub", "partner", "dial", "--help"}, partnerHelp},
+		{[]string{"hub", "partner", "help"}, partnerHelp},
 	} {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestHelpExitsZero$")
 		cmd.Env = append(os.Environ(), "PERSONAD_TEST_TOP_HELP_ARGS="+strings.Join(tc.args, "\x1f"), "HOME="+home,

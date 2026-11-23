@@ -557,3 +557,19 @@ the gateway's 用量 (none named) neutral, that the open page keeps `--ink`, tha
 and that every colored icon reads at 3:1 on the sidebar and on the hover fill, as the browser resolves them.
 `--monochrome-only` takes only the Monochrome part, to set its screenshots beside another build's. Screenshots and
 `results.json` go to the artifact directory; a five-minute watchdog ends the run, and the last line is the verdict.
+
+## Partner hubs in Settings › This hub (#13248)
+
+```sh
+MOCK_PARTNER_HUBS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/partner-hubs.mjs <loopback-web-origin> --hub http://127.0.0.1:<port> --shots <artifact-directory> [--lang zh-Hans|en|ja]
+```
+
+Against an exclusively owned mock-backed web server, light and dark, at 1280 and 390 px wide. The mock lists two made-up
+partners (one connected, one offline that this hub does not dial; `scripts/mock/partner_hubs_mock.py`). The run checks
+each row's state and switches, that "Ask me before sending" shows the value the mock saved, that Unpair asks in the row,
+Show my code (the code and its fingerprint) and Pair… with a pasted code (the hub's name and fingerprint before Pair), and
+that nothing overflows sideways or logs an error. It saves the group and both dialogs, puts the mock's list back
+(`GET /mock/partner_hubs?reset=1`) and ends with a verdict line; a two-minute watchdog ends a stuck run. The chat's label
+for another hub's message is in `web/e2e/message-sources.mjs`.

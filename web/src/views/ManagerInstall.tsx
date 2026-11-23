@@ -128,7 +128,8 @@ export function CodeDialog({ shown, onClose, onCode }: { shown: ShownCode | null
   );
 }
 
-function CopyLine({ text, big }: { text: string; big?: boolean }) {
+/** A code or command with its copy button (Settings › This hub › Partner hubs shows its pairing code in one too). */
+export function CopyLine({ text, big }: { text: string; big?: boolean }) {
   return (
     <div className="flex items-center gap-2 rounded-control bg-inset px-2.5 py-1.5 shadow-hairline">
       {/* a command wraps so all of it can be read before it is pasted; the code is one short line */}

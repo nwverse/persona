@@ -415,6 +415,8 @@ type MessageSource struct {
 	Push string `json:"push,omitempty"`
 	// ScheduleRunID correlates a reference-only prompt with the run that sent it.
 	ScheduleRunID string `json:"schedule_run_id,omitempty"`
+	// HubID is the partner hub a SourceHub message came from (docs/server/partner-hubs.md); Title is its name then.
+	HubID string `json:"hub_id,omitempty"`
 }
 
 const (
@@ -427,6 +429,9 @@ const (
 	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
 	// the attending session"): other people's words, never the user's; Title is the meeting's name.
 	SourceMeeting = "meeting"
+	// SourceHub is a message or reply another hub's assistant sent (docs/server/partner-hubs.md): a request from
+	// another assistant, never the user's words; Title is that hub's name and HubID its hub_id.
+	SourceHub = "hub"
 )
 
 // SourceFromInjected upgrades existing metadata without guessing from ordinary text.

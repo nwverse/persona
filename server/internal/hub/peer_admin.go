@@ -201,6 +201,7 @@ func (h *Hub) inGroup(hub string) bool {
 func (h *Hub) peerCLIRoutes(open *http.ServeMux) {
 	peers := http.NewServeMux()
 	h.registerPeerAdmin(peers)
+	h.partnerCLIRoutes(peers) // `personad hub partner …` (partner_cli.go)
 	open.Handle("/api/v1/admin/cli/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !remoteIP(r).IsLoopback() || tok == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(h.cfg.Token)) != 1 {

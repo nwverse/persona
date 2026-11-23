@@ -40,6 +40,14 @@ const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.js
   personad hub peer remove <hub_id>
                            unpair a hub (its credential is revoked on both sides)
   personad hub peer center [<hub_id>] [--confirm]   make that hub (this one by default) the group's center
+  personad hub partner code        print a one-time code another hub pairs with this one by as a partner hub
+                           (independent hubs whose assistants message each other, docs/server/partner-hubs.md)
+  personad hub partner add <code>|-   pair with the hub whose partner code it is
+  personad hub partner list        the partner hubs and their links
+  personad hub partner dial <hub_id> auto|never
+                           whether this hub connects to that partner hub, or waits for it to connect
+  personad hub partner remove <hub_id>
+                           unpair a partner hub (its credentials are revoked on both sides)
   personad hub doctor       check the hub's configuration, network and certificates (read only)
   personad hub admin …      the admin UI on this machine: access <scope>, reset-password, setup-code (docs/operations/admin.md)
   personad hub manager-mode [child|service]
@@ -110,6 +118,8 @@ func Hub(ctx context.Context, build update.Build, args []string) error {
 		return hub.AdminCommand(ctx, rest, os.Stdin, os.Stdout, os.Stderr)
 	case "peer":
 		return hub.PeerCommand(ctx, rest, os.Stdin, os.Stdout)
+	case "partner":
+		return hub.PartnerCommand(ctx, rest, os.Stdin, os.Stdout)
 	case "manager-mode": // the built-in manager: started by the hub (child) or a service of its own (service)
 		return hub.ManagerMode(rest, os.Stdout)
 	case "manager-code": // a one-time code that binds the built-in manager's own service (persona-manager join --builtin)

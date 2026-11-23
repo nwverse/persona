@@ -3,7 +3,7 @@ import { t } from "../i18n";
 import type { Todo } from "./todos";
 import type { Injected, Item } from "./types";
 import { timeMs } from "./times";
-import { userSourceSentinel } from "./message-source";
+import { sourceOf, userSourceSentinel } from "./message-source";
 
 // Messages Persona types into a conversation for the model (a task's notice, a scheduled run, a wake-up, the
 // background tasks a node restart stopped): one line instead of a user bubble, never the instructions inside
@@ -75,9 +75,11 @@ function followupDetail(rest: string): string {
 }
 
 /** The item as one of Persona's messages for the model: the hub's mark, else read off the text. A line sent from an
- *  app (client_msg_id) or by another session is never one. */
+ *  app (client_msg_id) or by another session is never one, nor a partner hub's message whatever its words begin with
+ *  (docs/server/partner-hubs.md): the chat shows its words. */
 export function injectedOf(it: Item): Injected | null {
   if (it.role !== "user" || it.kind !== "text") return null;
+  if (sourceOf(it, null)?.kind === "hub") return null;
   if (it.injected) {
     const n = it.injected;
     return n.state === "supervise" && n.level === undefined ? { ...n, level: parseInjected(it.text ?? "")?.level ?? "triage" } : n;

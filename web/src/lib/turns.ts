@@ -692,6 +692,9 @@ const PERSONA_VERB_KEY: Record<string, string> = {
   conversation_unarchive: "persona_conversation_unarchive",
   conversation_new: "persona_conversation_new",
   conversation_send: "persona_conversation_send",
+  // partner hubs' assistants (docs/server/partner-hubs.md)
+  hub_list: "persona_hub_list",
+  hub_send: "persona_hub_send",
   // a Mac through Cua Driver (docs/extensions/computer-use.md)
   computer_state: "persona_computer_state",
   computer_run: "persona_computer_run",

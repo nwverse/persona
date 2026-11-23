@@ -121,6 +121,17 @@ func hubConnOf(ctx context.Context) uint64 {
 
 var _ Hub = (*BusHub)(nil)
 
+// managerCapabilities are what manager.hello names: the hub keeps at most 32 (hub capabilityList) and drops the rest
+// without a word, so TestManagerCapabilitiesFit holds the list to that.
+var managerCapabilities = []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
+	assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
+	assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
+	assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
+	assistantwire.CapabilityTaskInput, assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityAssistantSegments, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
+	assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
+	assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability,
+	assistantwire.CapabilityPartnerHubs}
+
 // NewBusHub is the hub as the assistant reaches it over the bus; Run connects it.
 func NewBusHub(o BusOptions) *BusHub {
 	if o.Logf == nil {
@@ -148,13 +159,7 @@ func NewBusHub(o BusOptions) *BusHub {
 		HelloMethod:  assistantwire.MethodHello,
 		HelloParams: func() any {
 			return map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
-				"deploy": o.Deploy, "version": o.Version, "capabilities": []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
-					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
-					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
-					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
-					assistantwire.CapabilityTaskInput, assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityAssistantSegments, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
-					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
-					assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability}}
+				"deploy": o.Deploy, "version": o.Version, "capabilities": managerCapabilities}
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).
@@ -693,6 +698,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	if out, ok, err := s.conversationsRequest(ctx, method, params); ok { // extensions' assistant.read (conversations_rpc.go)
 		return out, err
 	}
+	if out, ok, err := s.partnerRequest(ctx, method, params); ok { // a partner hub's envelope (partner_receive.go)
+		return out, err
+	}
 	if out, ok, err := inboxRequest(ctx, s, method, decode); ok { // the inbox's (inbox_bus.go)
 		return out, err
 	}
@@ -1023,6 +1031,12 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 			return err
 		}
 		s.ChannelNoted(ctx, p)
+	case assistantwire.EventPartnerHubs: // the paired hubs or their links changed (partner.go)
+		var p assistantwire.PartnerHubs
+		if err := decode(&p); err != nil {
+			return err
+		}
+		s.partnersChanged(p)
 	case "managers": // the bus's roster: nothing the assistant needs
 	default:
 		if s.FleetEvent(ctx, ev.name, ev.params) { // the hub's fleet.* (fleet_events.go)

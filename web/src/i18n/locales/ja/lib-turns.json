@@ -44,6 +44,8 @@
   "persona_conversation_unarchive": "アーカイブを解除",
   "persona_conversation_new": "新しい会話",
   "persona_conversation_send": "会話に送る",
+  "persona_hub_list": "パートナーハブを一覧",
+  "persona_hub_send": "パートナーハブに送る",
   "persona_computer_state": "コンピューターを見る",
   "persona_computer_run": "コンピューターを操作",
   "persona_browser_run": "ブラウザを使う",

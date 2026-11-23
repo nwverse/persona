@@ -210,6 +210,12 @@ func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (sta
 		what = "its sender is told"
 		s.handoverEnded(msg.Handover, code) // a hand-over of the owner's words it carried (relay_handover.go)
 		return false, func(ctx context.Context) { s.tellRelayRefused(ctx, machine, to, msg, code) }
+	case msg.Tool == partnerMessageTool || msg.Tool == partnerReplyTool:
+		// The partner hub hears it was not delivered; a reply the asking conversation refused goes to the main one
+		// instead (partner_receive.go).
+		var then func(context.Context)
+		what, then = s.partnerRelayRefused(to, msg)
+		return false, then
 	case msg.Tool == noticeTool && (msg.State == "needs" || msg.State == "failed"):
 		what = "the push it stood for goes out"
 		return false, func(ctx context.Context) { s.quietNoticeRefused(ctx, msg) }

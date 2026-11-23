@@ -202,6 +202,7 @@ type Service struct {
 	origins          originBook            // origins.go
 	guests           guestBook             // guest.go
 	relays           relayBook             // conversations.go
+	partners         partnerBook           // partner.go: the paired hubs, the cards, the loop's wake-up
 	chatReplies      chatReplyBook         // chat_reply.go: what conversations that wrote as the user were told of the chats
 	undelivered      undeliveredBook       // undelivered.go: the owner's messages that could not go in
 	quotes           quoteBook             // relay_quote.go: the owner's messages relays carried, verified
@@ -442,6 +443,7 @@ func New(o Options) *Service {
 	s.launcherImportRoutes()
 	s.launcherHealthRoutes()
 	s.remoteImageRoutes()
+	s.partnerRoutes() // partner_routes.go
 	return s
 }
 

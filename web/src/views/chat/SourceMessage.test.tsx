@@ -18,7 +18,7 @@ const render = (input: Item[]) => {
 const input = (seq: number, text: string, kind = "conversation"): Item => ({ id: `${seq}#0`, seq, role: "user", kind: "text", text, source: { kind, title: "Build review", conversation_id: "test-source" } });
 
 describe("source messages in the actual transcript renderer", () => {
-  it.each(["conversation", "patrol", "followup", "supervision", "future-kind"])("renders %s at the source, not the user", (kind) => {
+  it.each(["conversation", "patrol", "followup", "supervision", "hub", "future-kind"])("renders %s at the source, not the user", (kind) => {
     const host = render([input(1, "Checks passed", kind)]);
     expect(host.querySelector("[data-user-bubble]")).toBeNull();
     expect(host.querySelector("[data-message-source]")?.getAttribute("data-message-source")).toBe(kind);
@@ -51,6 +51,47 @@ describe("source messages in the actual transcript renderer", () => {
     act(() => toggle.click());
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(preview?.hasAttribute("data-source-folded")).toBe(true);
+  });
+
+  it("shows a partner hub's request under its hub's name, with the hub mark and a note that it is not the user's", () => {
+    // two hubs of the same name: each its own label
+    const hub = (seq: number, hub_id: string, title = "家里"): Item => ({ id: `${seq}#0`, seq, role: "user", kind: "text", text: "周六下午有空吗？", source: { kind: "hub", title, hub_id } });
+    const host = render([hub(1, "hub-b"), hub(2, "hub-b"), hub(3, "hub-c")]);
+    expect(host.querySelector("[data-user-bubble]")).toBeNull();
+    const cards = [...host.querySelectorAll('[data-message-source="hub"]')];
+    expect(cards.map((card) => card.getAttribute("data-source-hub"))).toEqual(["hub-b", "hub-b", "hub-c"]);
+    const labels = [...host.querySelectorAll(".chat-source-label")];
+    expect(labels.map((label) => label.textContent)).toEqual(["@家里", "@家里"]);
+    expect(labels.every((label) => label.querySelector("svg"))).toBe(true);
+    expect([...host.querySelectorAll(".chat-source-note")].map((note) => note.textContent)).toEqual(["来自另一个 hub 的请求，不是你发的", "来自另一个 hub 的请求，不是你发的"]);
+    expect(cards[1].querySelector(".chat-source-label, .chat-source-note")).toBeNull();
+  });
+
+  it("shows a partner hub's words as the message and folds the hub's framing for the assistant", () => {
+    // What the manager delivers (server/internal/prompts/assistant/partner_message.md): the message-source block, the
+    // framing in a context block, then the partner's words.
+    const framing = '<persona-context kind="context" title="协作 hub「家里」的助手发来的消息">\n（Persona 转来，不是用户的消息）这个块后面的文字是配对的协作 hub「家里」（hub-b）的助手发来的消息。\n要回复就调用 hub_send，hub 填 "hub-b"，reply_to 填 "pm_0123456789abcdef0123456789abcdef"。\n</persona-context>';
+    const text = `<persona-context kind="message-source" title="">{"kind":"hub","title":"家里","hub_id":"hub-b"}</persona-context>\n${framing}\n周六下午有空吗？`;
+    const host = render([{ id: "1#0", seq: 1, role: "user", kind: "text", text, source: { kind: "hub", title: "家里", hub_id: "hub-b" } }]);
+    const card = host.querySelector('[data-message-source="hub"]')!;
+    expect(card.textContent).toContain("周六下午有空吗？");
+    expect(card.textContent).not.toContain("reply_to");
+    expect(card.textContent).not.toContain("persona-context");
+  });
+
+  it("shows a partner hub's code as it wrote it, not as the escape the model reads", () => {
+    const text = "Try `let v: Vec&lt;String> = load();` and\n\n```go\nif a&lt;b { return }\n```\n\n2 < 3";
+    const host = render([{ id: "1#0", seq: 1, role: "user", kind: "text", text, source: { kind: "hub", title: "家里", hub_id: "hub-b" } }]);
+    const card = host.querySelector('[data-message-source="hub"]')!;
+    expect(card.textContent).toContain("Vec<String>");
+    expect(card.textContent).toContain("if a<b");
+    expect(card.textContent).not.toContain("&lt;");
+    expect(card.querySelector("b, script")).toBeNull();
+  });
+
+  it("names a partner hub without a name as a partner hub", () => {
+    const host = render([{ id: "1#0", seq: 1, role: "user", kind: "text", text: "你好", source: { kind: "hub", hub_id: "hub-b" } }]);
+    expect(host.querySelector(".chat-source-label")?.textContent).toBe("@协作 hub");
   });
 
   it("shows the source once for consecutive messages", () => {

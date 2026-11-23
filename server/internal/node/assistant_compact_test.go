@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -184,6 +185,15 @@ func TestHandoffReadsTheLastSummaryAndWhatCameAfter(t *testing.T) {
 	if len(got) != 2 || got[0] != (HandoffTurn{Role: "user", Text: "之后的问题"}) || got[1].Role != "assistant" ||
 		len([]rune(got[1].Text)) != handoffTurnMax+1 {
 		t.Fatalf("recent: %+v", got)
+	}
+	// A partner hub's message is not carried on as the user's words, whether its source is set or only in its block.
+	partner := []proto.Item{
+		{Seq: 10, Role: "user", Kind: proto.KindText, Text: "Please run the tests.", Source: &proto.MessageSource{Kind: proto.SourceHub, Title: "Work", HubID: "hub-w"}},
+		{Seq: 11, Role: "user", Kind: proto.KindText, Text: prompts.MessageSourceText("Saturday works.", &proto.MessageSource{Kind: proto.SourceHub, Title: "Work", HubID: "hub-w"})},
+		{Seq: 12, Role: "user", Kind: proto.KindText, Text: "我自己的问题"},
+	}
+	if got := recentTurns(partner, 0); len(got) != 1 || got[0].Text != "我自己的问题" {
+		t.Fatalf("partner lines carried on: %+v", got)
 	}
 	var many []proto.Item
 	for i := range 40 {
