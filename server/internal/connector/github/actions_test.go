@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 func fakeWrites(t *testing.T) (*Connector, *[]string) {
@@ -119,7 +119,7 @@ func TestWritesSayWhichMessageTheyMade(t *testing.T) {
 		{"an answer without an id", "github_comment", `{"repo":"example-org/example-repo","number":13,"body":"ok"}`, "",
 			"Commented on example-org/example-repo#13: https://github.com/example-org/example-repo/issues/13#issuecomment-1"},
 	} {
-		done, err := connector.Write(ctx, c, tc.tool, json.RawMessage(tc.args))
+		done, err := connectorwire.Write(ctx, c, tc.tool, json.RawMessage(tc.args))
 		if err != nil || done.MessageRef != tc.ref || done.Text != tc.text {
 			t.Errorf("%s: %+v %v, want ref %q and text %q", tc.name, done, err, tc.ref, tc.text)
 		}
@@ -132,7 +132,7 @@ func TestWritesSayWhichMessageTheyMade(t *testing.T) {
 		{"arguments it cannot use", "github_comment", `{"repo":"../x","number":12,"body":"ok"}`},
 		{"a tool it has not", "github_merge", `{"repo":"example-org/example-repo","number":12}`},
 	} {
-		if done, err := connector.Write(ctx, c, tc.tool, json.RawMessage(tc.args)); err == nil || done != (connector.DoResult{}) {
+		if done, err := connectorwire.Write(ctx, c, tc.tool, json.RawMessage(tc.args)); err == nil || done != (connectorwire.DoResult{}) {
 			t.Errorf("%s: %+v %v", tc.name, done, err)
 		}
 	}
@@ -181,7 +181,7 @@ func TestAnUnreadableIDNeverFailsAPost(t *testing.T) {
 		mu.Lock()
 		id, posts = tc.id, 0
 		mu.Unlock()
-		done, err := connector.Write(ctx, c, "github_comment", args)
+		done, err := connectorwire.Write(ctx, c, "github_comment", args)
 		if err != nil || done.Text != text || done.MessageRef != tc.ref {
 			t.Errorf("%s: %+v %v, want the usual text and ref %q", tc.name, done, err, tc.ref)
 		}

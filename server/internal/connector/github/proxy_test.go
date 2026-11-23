@@ -9,7 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+	"github.com/nwverse/persona/server/internal/netproxy"
 )
 
 // With github.proxy set, the device flow (code and polling) and the REST API all go to the proxy, addressed to
@@ -105,14 +106,14 @@ func TestBadProxy(t *testing.T) {
 		t.Errorf("went direct: %s", r.URL)
 	}))
 	t.Cleanup(gh.Close)
-	c := New(Config{Egress: connector.Egress{Proxy: "socks5://user:s3cret@127.0.0.1:1080"}}, "", nil)
+	c := New(Config{Egress: netproxy.Egress{Proxy: "socks5://user:s3cret@127.0.0.1:1080"}}, "", nil)
 	c.web, c.api = gh.URL, gh.URL
 	c.UseSecrets(&memSecrets{data: []byte(`{"token":"gho_example"}`)})
 	if _, err := c.LoginStep(ctx, "", nil); err == nil || !strings.Contains(err.Error(), "github.proxy") || strings.Contains(err.Error(), "s3cret") {
 		t.Fatalf("sign-in: %v", err)
 	}
 	c.check(ctx)
-	if st := c.Status(ctx); st.State != connector.StateNotConfigured || !strings.Contains(st.Error, "github.proxy") {
+	if st := c.Status(ctx); st.State != connectorwire.StateNotConfigured || !strings.Contains(st.Error, "github.proxy") {
 		t.Fatalf("status: %+v", st)
 	}
 }
