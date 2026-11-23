@@ -11,36 +11,37 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Thread preserves the source's message boundaries. Inbox context is a legacy
 // text projection and cannot supply identity, direction or pagination for this page.
-func (c *Connector) Thread(ctx context.Context, thread, before string, limit int) (connector.ThreadPage, error) {
+func (c *Connector) Thread(ctx context.Context, thread, before string, limit int) (connectorwire.ThreadPage, error) {
 	chatID, topic, err := conversationIDs(thread)
 	if err != nil {
-		return connector.ThreadPage{}, conversationError(err)
+		return connectorwire.ThreadPage{}, conversationError(err)
 	}
-	if limit <= 0 || limit > connector.ThreadMost {
-		limit = connector.ThreadMost
+	if limit <= 0 || limit > connectorwire.ThreadMost {
+		limit = connectorwire.ThreadMost
 	}
 	auth, err := c.runner.AuthStatus(ctx)
 	if err != nil {
-		return connector.ThreadPage{}, conversationError(err)
+		return connectorwire.ThreadPage{}, conversationError(err)
 	}
 	if !auth.LoggedIn || auth.Expired {
-		return connector.ThreadPage{}, conversationError(&adapter.Error{Kind: adapter.KindNotLoggedIn})
+		return connectorwire.ThreadPage{}, conversationError(&adapter.Error{Kind: adapter.KindNotLoggedIn})
 	}
 	// The chat's own record is read beside the messages: a first open waits for one of the two reads, not both.
 	record := make(chan chatRecord, 1)
 	go func() { record <- c.conversationChat(ctx, chatID) }()
 	source, err := c.runner.ListMessages(ctx, chatID, topic, before, limit)
 	if err != nil {
-		return connector.ThreadPage{}, conversationError(err)
+		return connectorwire.ThreadPage{}, conversationError(err)
 	}
-	page := connector.ThreadPage{Chat: connector.ThreadChat{ID: thread, Kind: ""}, Messages: []connector.ThreadMessage{}}
+	page := connectorwire.ThreadPage{Chat: connectorwire.ThreadChat{ID: thread, Kind: ""}, Messages: []connectorwire.ThreadMessage{}}
 	seen := make(map[string]bool, len(source.Messages))
 	for _, m := range source.Messages {
 		if m.MessageID == "" || seen[m.MessageID] {
@@ -68,7 +69,7 @@ func (c *Connector) Thread(ctx context.Context, thread, before string, limit int
 		if m.MsgType == "post" || m.MsgType == "interactive" {
 			format = "markdown"
 		}
-		out := connector.ThreadMessage{ID: m.MessageID, At: conversationTime(m.CreateTime), Sender: connector.ThreadPerson{ID: m.Sender.ID, Name: m.Sender.Name}, Mine: mine, Text: text, Format: format, Edited: m.Updated}
+		out := connectorwire.ThreadMessage{ID: m.MessageID, At: conversationTime(m.CreateTime), Sender: connectorwire.ThreadPerson{ID: m.Sender.ID, Name: m.Sender.Name}, Mine: mine, Text: text, Format: format, Edited: m.Updated}
 		// Existing Inbox items may predate stored AppLinks. Their loaded original
 		// message can still supply its source link without recollecting history.
 		link, linkErr := url.Parse(m.MessageAppLink)
@@ -83,7 +84,7 @@ func (c *Connector) Thread(ctx context.Context, thread, before string, limit int
 			out.Event = true
 		}
 		if m.ParentID != "" {
-			out.ReplyTo = &connector.ThreadQuote{ID: m.ParentID}
+			out.ReplyTo = &connectorwire.ThreadQuote{ID: m.ParentID}
 		}
 		page.Messages = append(page.Messages, out)
 	}
@@ -156,8 +157,8 @@ func (c *Connector) conversationChat(ctx context.Context, chatID string) chatRec
 
 // Media is deliberately unavailable until the CLI attachment contract is wired.
 // No media references are advertised by these text/card pages.
-func (c *Connector) Media(context.Context, string) (connector.Media, error) {
-	return connector.Media{}, errors.New("lark-cli conversation attachments are not available")
+func (c *Connector) Media(context.Context, string) (connectorwire.Media, error) {
+	return connectorwire.Media{}, errors.New("lark-cli conversation attachments are not available")
 }
 
 func conversationIDs(thread string) (chat, topic string, err error) {

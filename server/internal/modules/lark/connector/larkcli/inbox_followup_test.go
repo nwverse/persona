@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/connector"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -85,7 +86,7 @@ func TestInboxOwnReplyOnlySettlesEarlierIncoming(t *testing.T) {
 				Sender: adapter.Sender{ID: "ou_example_peer"}, Content: json.RawMessage(`"Request"`)}
 			reply := request
 			reply.MessageID, reply.MessagePosition, reply.Sender.ID = "om_z_reply", "11", "ou_example_user"
-			want := connector.DoneReplied
+			want := connectorwire.DoneReplied
 			if !positioned {
 				request.MessagePosition, reply.MessagePosition = "", ""
 				want = "" // Unknown order must not automatically hide an unanswered request.

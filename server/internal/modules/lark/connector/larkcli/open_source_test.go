@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"testing"
 
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 )
 
 func TestInboxSourceAppLink(t *testing.T) {

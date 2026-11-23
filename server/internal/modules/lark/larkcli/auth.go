@@ -122,3 +122,5 @@ func uniqueStrings(values []string) []string {
 	}
 	return out
 }
+
+func splitScopes(s string) []string { return strings.Fields(s) }

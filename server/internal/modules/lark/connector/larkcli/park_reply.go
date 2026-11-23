@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connectorwire"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 )
 
 const parkReplyPages = 4

@@ -1,8 +1,7 @@
-package larkcli
+package cliwire
 
 import (
 	"encoding/json"
-	"strings"
 	"time"
 )
 
@@ -245,7 +244,8 @@ type WikiNodeList struct {
 	PageToken string     `json:"page_token,omitempty"`
 }
 
-func (o SearchOptions) normalizedLimit() int {
+// NormalizedLimit is the search page size: 20 when unset, at most 50.
+func (o SearchOptions) NormalizedLimit() int {
 	if o.Limit <= 0 {
 		return 20
 	}
@@ -254,5 +254,3 @@ func (o SearchOptions) normalizedLimit() int {
 	}
 	return o.Limit
 }
-
-func splitScopes(s string) []string { return strings.Fields(s) }

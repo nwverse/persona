@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -41,7 +42,7 @@ func TestConversationPageUsesSourceIdentityAndCursor(t *testing.T) {
 	if !strings.Contains(string(data), "+chat-messages-list --chat-id oc_example_group --order desc --page-size 50 --no-reactions --page-token older-cursor") {
 		t.Fatalf("calls = %s", data)
 	}
-	if _, ok := any(c).(connector.Threads); !ok {
+	if _, ok := any(c).(connectorwire.Threads); !ok {
 		t.Fatal("threads capability missing")
 	}
 }

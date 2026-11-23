@@ -14,9 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+
 	"github.com/nwverse/persona/server/internal/i18n"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 )
 
 const (
@@ -180,7 +181,7 @@ type watchedDocument struct {
 	Type       string
 	Cursor     string
 	Seen       map[string]string
-	Things     map[string]connector.InboxThing
+	Things     map[string]connectorwire.InboxThing
 	Unreadable bool
 	// Token is the underlying document's token (a wiki link unwrapped); Owner its owner's open_id, read once when
 	// OwnedAllComments is on.
@@ -198,7 +199,7 @@ type documentInbox struct {
 	mu        sync.Mutex
 	options   DocumentOptions
 	docs      map[string]*watchedDocument
-	things    map[string]connector.InboxThing
+	things    map[string]connectorwire.InboxThing
 	warnings  map[string]string
 	rateUntil time.Time
 	// owned are the user's own documents owned_all_comments covers, listed at ownedAt.
@@ -212,7 +213,7 @@ type documentInbox struct {
 }
 
 func newDocumentInbox() *documentInbox {
-	return &documentInbox{docs: map[string]*watchedDocument{}, things: map[string]connector.InboxThing{}, warnings: map[string]string{}}
+	return &documentInbox{docs: map[string]*watchedDocument{}, things: map[string]connectorwire.InboxThing{}, warnings: map[string]string{}}
 }
 
 func (d *documentInbox) setOptions(o DocumentOptions) {
@@ -232,9 +233,9 @@ func (d *documentInbox) setOptions(o DocumentOptions) {
 	}
 	// A changed watch list starts a new source window. Existing Inbox rows are
 	// retained by the hub, but this connector must not resubmit a removed link.
-	d.things = map[string]connector.InboxThing{}
+	d.things = map[string]connectorwire.InboxThing{}
 	for _, doc := range d.docs {
-		doc.Things = map[string]connector.InboxThing{}
+		doc.Things = map[string]connectorwire.InboxThing{}
 	}
 }
 
@@ -264,7 +265,7 @@ func (d *documentInbox) markUnreadable(link, title string, now time.Time) {
 	}
 	doc := d.docs[link]
 	if doc == nil {
-		doc = &watchedDocument{URL: link, Title: title, Seen: map[string]string{}, Things: map[string]connector.InboxThing{}}
+		doc = &watchedDocument{URL: link, Title: title, Seen: map[string]string{}, Things: map[string]connectorwire.InboxThing{}}
 		d.docs[link] = doc
 	}
 	doc.Unreadable = true
@@ -351,9 +352,9 @@ func (c *Connector) clearDocumentThings() {
 		return
 	}
 	c.docs.mu.Lock()
-	c.docs.things = map[string]connector.InboxThing{}
+	c.docs.things = map[string]connectorwire.InboxThing{}
 	for _, doc := range c.docs.docs {
-		doc.Things = map[string]connector.InboxThing{}
+		doc.Things = map[string]connectorwire.InboxThing{}
 	}
 	c.docs.mu.Unlock()
 }
@@ -449,7 +450,7 @@ func (c *Connector) syncWatched(resolved map[string]watchedDocument) {
 	for link, metadata := range resolved {
 		old := c.docs.docs[link]
 		if old == nil {
-			old = &watchedDocument{URL: link, Seen: map[string]string{}, Things: map[string]connector.InboxThing{}}
+			old = &watchedDocument{URL: link, Seen: map[string]string{}, Things: map[string]connectorwire.InboxThing{}}
 			c.docs.docs[link] = old
 		}
 		if metadata.Auto && old.NextPoll.IsZero() {
@@ -466,7 +467,7 @@ func (c *Connector) syncWatched(resolved map[string]watchedDocument) {
 			old.Seen = map[string]string{}
 		}
 		if old.Things == nil {
-			old.Things = map[string]connector.InboxThing{}
+			old.Things = map[string]connectorwire.InboxThing{}
 		}
 	}
 }
@@ -812,7 +813,7 @@ func (c *Connector) consumeComment(doc *watchedDocument, comment adapter.Comment
 	return true, latest
 }
 
-func (c *Connector) documentThing(doc *watchedDocument, comment adapter.Comment, event commentEvent, me, thread string, lang i18n.Lang) connector.InboxThing {
+func (c *Connector) documentThing(doc *watchedDocument, comment adapter.Comment, event commentEvent, me, thread string, lang i18n.Lang) connectorwire.InboxThing {
 	at := event.At
 	if at.IsZero() {
 		at = time.Now()
@@ -841,15 +842,15 @@ func (c *Connector) documentThing(doc *watchedDocument, comment adapter.Comment,
 		contextText += "\nAuthor: " + event.UserID
 	}
 	last := event.ID + "@" + eventRevision(event)
-	thing := connector.InboxThing{
+	thing := connectorwire.InboxThing{
 		Thread: thread, Kind: "doc", Label: i18n.T(lang, "hub-connectors.doc_comment_label"), Title: documentFirstNonEmpty(doc.Title, doc.URL), Sender: event.UserID,
 		Preview: preview, Context: contextText, At: at, Last: last, URL: commentURL,
-		Extra: &connector.ThingExtra{Count: 1, Doc: docBlock}, Rules: c.rules(),
+		Extra: &connectorwire.ThingExtra{Count: 1, Doc: docBlock}, Rules: c.rules(),
 	}
 	if event.Mention {
 		// A comment that mentions the user asks for them; replies and comments on documents they own are left to the
 		// Inbox's triage, like lark-cli's chat items.
-		thing.Tier, thing.Why = connector.TierAction, i18n.T(lang, "hub-connectors.doc_comment_rule")
+		thing.Tier, thing.Why = connectorwire.TierAction, i18n.T(lang, "hub-connectors.doc_comment_rule")
 	}
 	return thing
 }

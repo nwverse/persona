@@ -10,9 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+
+	"github.com/nwverse/persona/server/internal/cliwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -47,23 +49,18 @@ const (
 	contextNewRunes     = 2000
 )
 
-// StateStore is the small part of the manager's Postgres-backed settings store
-// needed by lark-cli Inbox state. It intentionally has the same method set as
-// extmgr.Store, so the connector never writes a file under ~/.persona.
-type StateStore interface {
-	Setting(context.Context, string, any) (bool, error)
-	PutSetting(context.Context, string, any) error
-}
+// StateStore is the settings store the Inbox state is kept in (cliwire.StateStore).
+type StateStore = cliwire.StateStore
 
 const inboxStateKey = "connector.larkcli.inbox"
 
 type persistedInboxState struct {
-	Cursor       string                          `json:"cursor,omitempty"`
-	PageToken    string                          `json:"page_token,omitempty"`
-	Topics       []string                        `json:"topics,omitempty"`
-	Seen         []string                        `json:"seen,omitempty"`
-	TopicsSeeded bool                            `json:"topics_seeded,omitempty"`
-	Things       map[string]connector.InboxThing `json:"things,omitempty"`
+	Cursor       string                              `json:"cursor,omitempty"`
+	PageToken    string                              `json:"page_token,omitempty"`
+	Topics       []string                            `json:"topics,omitempty"`
+	Seen         []string                            `json:"seen,omitempty"`
+	TopicsSeeded bool                                `json:"topics_seeded,omitempty"`
+	Things       map[string]connectorwire.InboxThing `json:"things,omitempty"`
 }
 
 type inboxGroup struct {
@@ -120,7 +117,7 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 	}
 	if !c.inboxShouldCollect(ctx) {
 		c.inboxMu.Lock()
-		c.inboxThings = map[string]connector.InboxThing{}
+		c.inboxThings = map[string]connectorwire.InboxThing{}
 		c.inboxCollecting = false
 		c.inboxMu.Unlock()
 		c.clearDocumentThings()
@@ -355,11 +352,11 @@ func directPartner(chat adapter.Chat) json.RawMessage {
 
 // Watch owns the background poll and emits the protocol's inbox change event
 // only when either poller produced a new or updated item.
-func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) error {
+func (c *Connector) Watch(ctx context.Context, changed func(connectorwire.Scope)) error {
 	for {
 		moved, err := c.Poll(ctx)
 		if moved && changed != nil {
-			changed(connector.ScopeInbox)
+			changed(connectorwire.ScopeInbox)
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -387,9 +384,9 @@ func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) er
 
 // Collect is memory-only. Polling and persistence happen in Watch/Poll; this
 // method never invokes lark-cli, matching inbox.collect's protocol semantics.
-func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
+func (c *Connector) Collect(context.Context) ([]connectorwire.InboxThing, error) {
 	c.inboxMu.Lock()
-	out := make([]connector.InboxThing, 0, len(c.inboxThings))
+	out := make([]connectorwire.InboxThing, 0, len(c.inboxThings))
 	if c.inboxCollecting {
 		for _, thing := range c.inboxThings {
 			out = append(out, thing)
@@ -417,16 +414,16 @@ func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 // and the CLI write itself is explicitly made as the bot identity decided in
 // the L4 plan. A message id lets us preserve a topic reply; a chat-only thing
 // falls back to messages-send.
-func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
+func (c *Connector) Reply(ctx context.Context, r connectorwire.InboxReply) error {
 	if strings.HasPrefix(r.Thread, "doc:") {
-		return fmt.Errorf("%w: lark-cli document comments are read-only", connector.ErrCannotReply)
+		return fmt.Errorf("%w: lark-cli document comments are read-only", connectorwire.ErrCannotReply)
 	}
 	if c == nil || c.runner == nil {
 		return &adapter.Error{Kind: adapter.KindNotInstalled}
 	}
 	chatID, ok := chatIDFromThread(r.Thread)
 	if !ok {
-		return fmt.Errorf("%w: the thread names no chat", connector.ErrCannotReply) // never the thread: it is a private id
+		return fmt.Errorf("%w: the thread names no chat", connectorwire.ErrCannotReply) // never the thread: it is a private id
 	}
 	var err error
 	if strings.TrimSpace(r.Last) != "" && strings.Contains(r.Thread, ":thread:") {
@@ -440,7 +437,7 @@ func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
 	c.inboxMu.Lock()
 	if c.inboxThings != nil {
 		if thing, exists := c.inboxThings[r.Thread]; exists {
-			thing.Done = connector.DoneReplied
+			thing.Done = connectorwire.DoneReplied
 			c.inboxThings[r.Thread] = thing
 		}
 	}
@@ -477,7 +474,7 @@ func (c *Connector) loadInboxStateLocked(ctx context.Context) error {
 	}
 	c.inboxStateLoaded = true
 	if c.inboxThings == nil {
-		c.inboxThings = map[string]connector.InboxThing{}
+		c.inboxThings = map[string]connectorwire.InboxThing{}
 	}
 	if c.inboxSeen == nil {
 		c.inboxSeen = map[string]struct{}{}
@@ -521,7 +518,7 @@ func (c *Connector) saveInboxStateLocked(ctx context.Context) error {
 		return nil
 	}
 	state := persistedInboxState{Cursor: c.inboxState.Cursor, PageToken: c.inboxState.PageToken, TopicsSeeded: c.inboxState.TopicsSeeded,
-		Things: make(map[string]connector.InboxThing, len(c.inboxThings))}
+		Things: make(map[string]connectorwire.InboxThing, len(c.inboxThings))}
 	for thread, thing := range c.inboxThings {
 		state.Things[thread] = thing
 	}
@@ -695,9 +692,9 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 	return out
 }
 
-func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me string) connector.InboxThing {
+func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me string) connectorwire.InboxThing {
 	if group == nil || len(group.messages) == 0 {
-		return connector.InboxThing{}
+		return connectorwire.InboxThing{}
 	}
 	latest := group.latest
 	contextMessages := append([]adapter.Message(nil), group.messages...)
@@ -782,7 +779,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		title = p2pTitle(group, contextMessages, me)
 		name = p2pName(group, contextMessages, me)
 	}
-	tags := []connector.Tag{{Key: connector.TagChat, Value: latest.ChatID, Name: title}}
+	tags := []connectorwire.Tag{{Key: connectorwire.TagChat, Value: latest.ChatID, Name: title}}
 	if senderTag, ok := latestSenderTag(contextMessages, me); ok {
 		tags = append(tags, senderTag)
 	}
@@ -800,7 +797,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	sort.SliceStable(currentMessages, func(i, j int) bool {
 		return messageLess(currentMessages[i], currentMessages[j])
 	})
-	thing := connector.InboxThing{
+	thing := connectorwire.InboxThing{
 		Thread:   thread,
 		Kind:     kind,
 		Label:    label,
@@ -833,7 +830,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		thing.At = time.Now().UTC()
 	}
 	if group.replied {
-		thing.Done = connector.DoneReplied
+		thing.Done = connectorwire.DoneReplied
 	}
 	return thing
 }
@@ -965,7 +962,7 @@ func p2pIsBot(group *inboxGroup, contextMessages []adapter.Message, me string) b
 	return false
 }
 
-func latestSenderTag(messages []adapter.Message, me string) (connector.Tag, bool) {
+func latestSenderTag(messages []adapter.Message, me string) (connectorwire.Tag, bool) {
 	messages = mergeMessages(nil, messages)
 	for i := len(messages) - 1; i >= 0; i-- {
 		message := messages[i]
@@ -979,9 +976,9 @@ func latestSenderTag(messages []adapter.Message, me string) (connector.Tag, bool
 		if value == "" {
 			continue
 		}
-		return connector.Tag{Key: connector.TagSender, Value: value, Name: firstNonEmpty(message.Sender.Name, value)}, true
+		return connectorwire.Tag{Key: connectorwire.TagSender, Value: value, Name: firstNonEmpty(message.Sender.Name, value)}, true
 	}
-	return connector.Tag{}, false
+	return connectorwire.Tag{}, false
 }
 
 func isBoundAppMessage(message adapter.Message, appID string) bool {
@@ -1335,5 +1332,5 @@ func minInt(a, b int) int {
 	return b
 }
 
-var _ connector.Inbox = (*Connector)(nil)
-var _ connector.Events = (*Connector)(nil)
+var _ connectorwire.Inbox = (*Connector)(nil)
+var _ connectorwire.Events = (*Connector)(nil)

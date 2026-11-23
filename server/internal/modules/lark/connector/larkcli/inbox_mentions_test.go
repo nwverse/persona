@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 

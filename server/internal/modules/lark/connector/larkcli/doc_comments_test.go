@@ -10,8 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 )
 
 func docTestConnector(t *testing.T, scenario string) *Connector {
@@ -109,7 +110,7 @@ func TestUnreadableDocumentIsProbedAgainLater(t *testing.T) {
 		t.Fatal("unreadable document produced an item")
 	}
 	st := c.Status(context.Background())
-	if st.State != connector.StateOK || !strings.Contains(st.Error, "Example design document") {
+	if st.State != connectorwire.StateOK || !strings.Contains(st.Error, "Example design document") {
 		t.Fatalf("settings warning = %+v", st)
 	}
 	// Within the retry interval the document is not probed again.

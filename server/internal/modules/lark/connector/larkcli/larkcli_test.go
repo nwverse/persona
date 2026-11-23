@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+
 	"github.com/nwverse/persona/server/internal/i18n"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 )
 
 func testConnector(t *testing.T, scenario string) *Connector {
@@ -35,10 +36,7 @@ func testConnectorWithProfile(t *testing.T, scenario, profile string) *Connector
 }
 
 func TestManifestAndTools(t *testing.T) {
-	c := testConnector(t, "success")
-	if err := connector.Check(c); err != nil {
-		t.Fatal(err)
-	}
+	c := testConnector(t, "success") // connector.Check of it: TestLarkCLIConnectorPassesTheFrameworkCheck (internal/extmgr)
 	if c.ID() != "larkcli" || c.Name() != "Lark via lark-cli" {
 		t.Fatalf("identity = %s / %s", c.ID(), c.Name())
 	}
@@ -57,7 +55,7 @@ func TestManifestAndTools(t *testing.T) {
 func TestLoginDeviceFlow(t *testing.T) {
 	c := testConnector(t, "success")
 	p, err := c.LoginStep(context.Background(), "", nil)
-	if err != nil || p.Kind != connector.PromptDeviceCode || p.Step != "device" || p.UserCode != "ABCD-1234" ||
+	if err != nil || p.Kind != connectorwire.PromptDeviceCode || p.Step != "device" || p.UserCode != "ABCD-1234" ||
 		!strings.Contains(p.URL, "accounts.feishu.cn") {
 		t.Fatalf("start prompt = %+v, err = %v", p, err)
 	}
@@ -95,7 +93,7 @@ func TestLoginPendingFailureAndRestartCancel(t *testing.T) {
 	}
 }
 
-func waitForLogin(t *testing.T, c *Connector) connector.Prompt {
+func waitForLogin(t *testing.T, c *Connector) connectorwire.Prompt {
 	t.Helper()
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
@@ -120,7 +118,7 @@ func waitForLogin(t *testing.T, c *Connector) connector.Prompt {
 func TestStatusSuccessAndExpiryReminder(t *testing.T) {
 	c := testConnector(t, "rolling")
 	st := c.Status(context.Background())
-	if st.State != connector.StateOK || st.Account != "Example User" || st.Via != "lark-cli" {
+	if st.State != connectorwire.StateOK || st.Account != "Example User" || st.Via != "lark-cli" {
 		t.Fatalf("status = %+v", st)
 	}
 	if st.Error != "" {
@@ -129,7 +127,7 @@ func TestStatusSuccessAndExpiryReminder(t *testing.T) {
 
 	c = testConnector(t, "refresh_expiring")
 	st = c.Status(context.Background())
-	if st.State != connector.StateOK || !strings.Contains(st.Error, "1 天") ||
+	if st.State != connectorwire.StateOK || !strings.Contains(st.Error, "1 天") ||
 		!strings.Contains(st.Error, "lark-cli --profile example auth login --scope") {
 		t.Fatalf("expiry status = %+v", st)
 	}
@@ -143,9 +141,9 @@ func TestStatusRefreshWindowLifecycle(t *testing.T) {
 		wantError string
 		wantGuide bool
 	}{
-		{name: "healthy rolling login", scenario: "rolling", state: connector.StateOK},
-		{name: "refresh window nearly used", scenario: "refresh_expiring", state: connector.StateOK, wantError: "1 天"},
-		{name: "expired login", scenario: "expired", state: connector.StateNotSignedIn, wantError: "过期", wantGuide: true},
+		{name: "healthy rolling login", scenario: "rolling", state: connectorwire.StateOK},
+		{name: "refresh window nearly used", scenario: "refresh_expiring", state: connectorwire.StateOK, wantError: "1 天"},
+		{name: "expired login", scenario: "expired", state: connectorwire.StateNotSignedIn, wantError: "过期", wantGuide: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := testConnectorWithProfile(t, tc.scenario, "").Status(context.Background())
@@ -190,9 +188,9 @@ func TestStatusCategories(t *testing.T) {
 		scenario string
 		state    string
 	}{
-		{"not signed in", "not_logged_in", connector.StateNotSignedIn},
-		{"expired", "expired", connector.StateNotSignedIn},
-		{"old version", "old", connector.StateError},
+		{"not signed in", "not_logged_in", connectorwire.StateNotSignedIn},
+		{"expired", "expired", connectorwire.StateNotSignedIn},
+		{"old version", "old", connectorwire.StateError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := testConnector(t, tc.scenario).Status(context.Background())
@@ -214,7 +212,7 @@ func TestStatusCategories(t *testing.T) {
 	}
 	c = testConnector(t, "auth_missing_scope")
 	st := c.Status(context.Background())
-	if st.State != connector.StateNoPermission || !strings.Contains(st.Error, "search:message") || len(st.Guide) != 1 ||
+	if st.State != connectorwire.StateNoPermission || !strings.Contains(st.Error, "search:message") || len(st.Guide) != 1 ||
 		len(st.MissingScopes) == 0 || st.MissingScopes[0] != "search:message" ||
 		!strings.Contains(st.Guide[0], "lark-cli --profile example auth login --scope") ||
 		st.GuideURL != "https://"+strings.Join([]string{"open", "larksuite", "com"}, ".")+"/app/cli_example/auth" {
@@ -225,7 +223,7 @@ func TestStatusCategories(t *testing.T) {
 func TestStatusUsesRefreshExpiryAndReportsFeatureScopes(t *testing.T) {
 	for _, scenario := range []string{"needs_refresh", "ready"} {
 		st := testConnector(t, scenario).Status(context.Background())
-		if st.State != connector.StateNoPermission || strings.Contains(st.Error, "not signed") || len(st.Guide) != 1 ||
+		if st.State != connectorwire.StateNoPermission || strings.Contains(st.Error, "not signed") || len(st.Guide) != 1 ||
 			!strings.Contains(st.Error, "im:chat:read") || !strings.Contains(st.Guide[0], "lark-cli --profile example auth login --scope") {
 			t.Fatalf("%s status = %+v", scenario, st)
 		}
@@ -233,12 +231,12 @@ func TestStatusUsesRefreshExpiryAndReportsFeatureScopes(t *testing.T) {
 }
 
 func TestStatusAcceptsExactlyReadAsMeScopesAndNamesOneGap(t *testing.T) {
-	if st := testConnector(t, "success").Status(context.Background()); st.State != connector.StateOK {
+	if st := testConnector(t, "success").Status(context.Background()); st.State != connectorwire.StateOK {
 		t.Fatalf("all connector scopes should be enough: %+v", st)
 	}
 	c := testConnector(t, "auth_read_scope_missing")
 	st := c.Status(context.Background())
-	if st.State != connector.StateNoPermission || len(st.MissingScopes) != 1 || st.MissingScopes[0] != "wiki:node:retrieve" {
+	if st.State != connectorwire.StateNoPermission || len(st.MissingScopes) != 1 || st.MissingScopes[0] != "wiki:node:retrieve" {
 		t.Fatalf("one missing connector scope = %+v", st)
 	}
 }
@@ -267,13 +265,13 @@ func inboxTestConnector(t *testing.T, scenario string) *Connector {
 	return c
 }
 
-func inboxThings(t *testing.T, c *Connector) map[string]connector.InboxThing {
+func inboxThings(t *testing.T, c *Connector) map[string]connectorwire.InboxThing {
 	t.Helper()
 	items, err := c.Collect(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := map[string]connector.InboxThing{}
+	out := map[string]connectorwire.InboxThing{}
 	for _, item := range items {
 		out[item.Thread] = item
 	}
@@ -291,15 +289,15 @@ func TestInboxPollKeepsRulesGroupsAndDetectsOwnReply(t *testing.T) {
 		t.Fatalf("items = %#v", items)
 	}
 	group := items["larkcli:chat:oc_example_group:thread:omt_topic_one"]
-	if group.Thread == "" || !strings.Contains(group.Context, "A second line") || group.Done != connector.DoneReplied {
+	if group.Thread == "" || !strings.Contains(group.Context, "A second line") || group.Done != connectorwire.DoneReplied {
 		t.Fatalf("group item = %+v", group)
 	}
 	if dm := items["larkcli:chat:oc_example_dm"]; dm.Tier != "" || dm.Done != "" { // the Inbox triage tiers it
 		t.Fatalf("direct item = %+v", dm)
 	}
 	if group.Kind != "mention" || group.Title != "Example Group" || len(group.Tags) != 2 ||
-		group.Tags[0].Key != connector.TagChat || group.Tags[0].Name != "Example Group" ||
-		group.Tags[1].Key != connector.TagSender || group.Tags[1].Value != "ou_example_peer" || group.Tags[1].Name != "Example Peer" {
+		group.Tags[0].Key != connectorwire.TagChat || group.Tags[0].Name != "Example Group" ||
+		group.Tags[1].Key != connectorwire.TagSender || group.Tags[1].Value != "ou_example_peer" || group.Tags[1].Name != "Example Peer" {
 		t.Fatalf("group title/tag changed = %+v", group)
 	}
 	// ReplyTo says where the reply goes, not which message it answers (Last does that)
@@ -325,13 +323,13 @@ func TestInboxP2PTitleUsesOtherSender(t *testing.T) {
 		t.Fatalf("direct item missing: %#v", items)
 	}
 	if dm.Kind != "dm" || dm.Title != "Example Peer" || len(dm.Tags) != 2 || dm.Tags[0].Name != "Example Peer" ||
-		dm.Tags[1].Key != connector.TagSender || dm.Tags[1].Value != "ou_example_peer" || dm.Tags[1].Name != "Example Peer" {
+		dm.Tags[1].Key != connectorwire.TagSender || dm.Tags[1].Value != "ou_example_peer" || dm.Tags[1].Name != "Example Peer" {
 		t.Fatalf("direct title/tag = %+v", dm)
 	}
 	if dm.ReplyTo != "由机器人（不是你本人）发到「Example Peer」，会话里的人都能看到" {
 		t.Fatalf("direct reply_to = %q", dm.ReplyTo)
 	}
-	if dm.Done != connector.DoneReplied {
+	if dm.Done != connectorwire.DoneReplied {
 		t.Fatalf("own reply was not observed = %+v", dm)
 	}
 }
@@ -350,7 +348,7 @@ func TestInboxDropsBoundAppMessagesButKeepsOtherBots(t *testing.T) {
 	if !ok || bot.Kind != "bot" || bot.Tier != "" { // triage decides, not a fixed tier
 		t.Fatalf("other app bot = %+v", bot)
 	}
-	if bot.Tags[1].Key != connector.TagSender || bot.Tags[1].Value != "cli_other" {
+	if bot.Tags[1].Key != connectorwire.TagSender || bot.Tags[1].Value != "cli_other" {
 		t.Fatalf("other app sender tag = %+v", bot.Tags)
 	}
 	c.inboxMu.Lock()
@@ -509,7 +507,7 @@ func TestInboxReplyUsesBot(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "args.log")
 	t.Setenv("LARKCLI_FAKE_LOG", logPath)
 	c := inboxTestConnector(t, "inbox")
-	if err := c.Reply(context.Background(), connector.InboxReply{Thread: "larkcli:chat:oc_example_group:thread:omt_topic_one", Last: "om_example_mention_one", Text: "Received", ClientID: "reply-1"}); err != nil {
+	if err := c.Reply(context.Background(), connectorwire.InboxReply{Thread: "larkcli:chat:oc_example_group:thread:omt_topic_one", Last: "om_example_mention_one", Text: "Received", ClientID: "reply-1"}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(logPath)
@@ -556,12 +554,12 @@ func TestInboxWatchSignalsChanged(t *testing.T) {
 	c := inboxTestConnector(t, "inbox")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var scope connector.Scope
-	err := c.Watch(ctx, func(got connector.Scope) {
+	var scope connectorwire.Scope
+	err := c.Watch(ctx, func(got connectorwire.Scope) {
 		scope = got
 		cancel()
 	})
-	if err != nil || scope != connector.ScopeInbox {
+	if err != nil || scope != connectorwire.ScopeInbox {
 		t.Fatalf("watch = scope=%q err=%v", scope, err)
 	}
 }
@@ -600,19 +598,6 @@ func TestInboxCursorAndTopicsPersistInStore(t *testing.T) {
 	loaded := c2.inboxStateForTests()
 	if loaded.Cursor == "" || len(loaded.Topics) == 0 || !loaded.TopicsSeeded {
 		t.Fatalf("state was not restored: %+v", loaded)
-	}
-}
-
-func TestDisplayNameFollowsLanguage(t *testing.T) {
-	c := New(adapter.Config{Bin: "lark-cli"})
-	if got := connector.DisplayName(i18n.With(context.Background(), i18n.ZhHans), c); got != "飞书 · 我的消息" { // i18n-ignore: the zh-Hans catalog entry under test
-		t.Fatalf("zh-Hans name = %q", got)
-	}
-	if got := connector.DisplayName(i18n.With(context.Background(), "en"), c); got != "Lark · my messages" {
-		t.Fatalf("en name = %q", got)
-	}
-	if c.Name() != Name {
-		t.Fatalf("stable name changed: %q", c.Name())
 	}
 }
 

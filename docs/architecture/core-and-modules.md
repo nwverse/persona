@@ -218,9 +218,12 @@ The `lark` module (#13404) is of the same kind as mail: code the manager runs in
 drives. The core declares what it needs of the Feishu / Lark bot's client in `server/internal/botport` (the client's REST calls,
 the long connection, the device-code registration, as interfaces over the pure types of `server/internal/botcard`, a
 leaf library the core's cards are built with), and `server/internal/modules/all/lark.go` provides it from
-`server/internal/modules/lark/feishubot`. Without the module `botport.Available()` is false: the bot cannot be bound,
-registered or started (the setting answers that it is not part of this build), and the extension host's tests of the
-bot skip (`needsLarkModule`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
+`server/internal/modules/lark/feishubot`. The lark-cli adapter and its connector (`server/internal/modules/lark/larkcli`,
+`server/internal/modules/lark/connector/larkcli`) are reached the same way through `server/internal/cliport`, with their
+values in the contract `server/internal/cliwire`; the connector builds on the connector SPI (`connectorwire`). Without the
+module `botport.Available()` and `cliport.Available()` are false: the bot cannot be bound, registered or started (the
+setting answers that it is not part of this build), `lark.cli` is not read (a warning at start), and the extension
+host's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
 `persona_without_lark`.
 
 ### Guards

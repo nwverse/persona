@@ -1,7 +1,4 @@
-// Package larkcli is the small, subprocess-only adapter for the official lark-cli.
-// Credentials remain owned by lark-cli; this package only starts commands and decodes
-// their JSON output (docs/plans/plan-lark-cli.md).
-package larkcli
+package cliwire
 
 import (
 	"errors"
@@ -89,4 +86,5 @@ func KindOf(err error) ErrorKind {
 	return KindOther
 }
 
-func cliError(kind ErrorKind, cause error) *Error { return &Error{Kind: kind, cause: cause} }
+// NewError is an error of kind with its cause.
+func NewError(kind ErrorKind, cause error) *Error { return &Error{Kind: kind, cause: cause} }

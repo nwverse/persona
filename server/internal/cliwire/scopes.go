@@ -1,4 +1,4 @@
-package larkcli
+package cliwire
 
 // ReadAsMeScopes is the least-privilege user grant used by the built-in
 // connector. Keep each entry next to the command that needs it so a new read

@@ -10,15 +10,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+
+	"github.com/nwverse/persona/server/internal/cliwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const (
-	ID   = "larkcli"
+	ID   = cliwire.ConnectorID
 	Name = "Lark via lark-cli"
 )
 
@@ -31,7 +33,7 @@ type Connector struct {
 	profile string
 
 	inboxMu       sync.Mutex
-	inboxThings   map[string]connector.InboxThing
+	inboxThings   map[string]connectorwire.InboxThing
 	inboxSeen     map[string]struct{}
 	inboxTopics   map[string]struct{}
 	inboxAllChats map[string]struct{}
@@ -102,8 +104,8 @@ func (c *Connector) Profile() string {
 	return ""
 }
 
-func (c *Connector) Manifest() connector.Manifest {
-	return connector.Manifest{Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapEvents, connector.CapInbox, connector.CapOptions, connector.CapLogin, connector.CapThreads}, Kinds: []string{"dm", "bot", "mention", "group", "doc"}}
+func (c *Connector) Manifest() connectorwire.Manifest {
+	return connectorwire.Manifest{Capabilities: []connectorwire.Capability{connectorwire.CapStatus, connectorwire.CapTools, connectorwire.CapEvents, connectorwire.CapInbox, connectorwire.CapOptions, connectorwire.CapLogin, connectorwire.CapThreads}, Kinds: []string{"dm", "bot", "mention", "group", "doc"}}
 }
 
 func (c *Connector) Tools() []proto.Tool {
@@ -118,8 +120,8 @@ func tool(name string) proto.Tool {
 // Status reads the CLI version and auth status. It never includes raw command
 // output, message bodies, or account tokens; the configured profile appears
 // only in the localized login command shown when the user must sign in.
-func (c *Connector) Status(ctx context.Context) connector.Status {
-	st := connector.Status{State: connector.StateError, Via: "lark-cli"}
+func (c *Connector) Status(ctx context.Context) connectorwire.Status {
+	st := connectorwire.Status{State: connectorwire.StateError, Via: "lark-cli"}
 	if c == nil || c.runner == nil {
 		return c.statusError(ctx, st, nil, adapter.KindNotInstalled)
 	}
@@ -148,7 +150,7 @@ func (c *Connector) Status(ctx context.Context) connector.Status {
 	if missing = uniqueScopes(missing); len(missing) > 0 {
 		return c.statusMissingScopes(ctx, st, missing, auth.AppID, auth.Brand)
 	}
-	st.State = connector.StateOK
+	st.State = connectorwire.StateOK
 	now := c.currentTime()
 	if auth.RefreshWindowNeedsReminder(now) {
 		st.Error = i18n.T(c.lang(ctx), "hub-connectors.expiry_reminder", i18n.Args{
@@ -264,11 +266,11 @@ func (c *Connector) currentTime() time.Time {
 
 func (c *Connector) lang(ctx context.Context) i18n.Lang { return i18n.From(ctx).Or(i18n.Default) }
 
-func (c *Connector) statusForError(ctx context.Context, st connector.Status, err error) connector.Status {
+func (c *Connector) statusForError(ctx context.Context, st connectorwire.Status, err error) connectorwire.Status {
 	return c.statusError(ctx, st, err, adapter.KindOf(err))
 }
 
-func (c *Connector) statusError(ctx context.Context, st connector.Status, err error, kind adapter.ErrorKind) connector.Status {
+func (c *Connector) statusError(ctx context.Context, st connectorwire.Status, err error, kind adapter.ErrorKind) connectorwire.Status {
 	if e, ok := err.(*adapter.Error); ok {
 		switch kind {
 		case adapter.KindMissingPermission:
@@ -279,7 +281,7 @@ func (c *Connector) statusError(ctx context.Context, st connector.Status, err er
 			return c.statusExpired(ctx, st)
 		}
 	}
-	st.State = connector.StateError
+	st.State = connectorwire.StateError
 	switch kind {
 	case adapter.KindNotInstalled:
 		st.Error = i18n.T(c.lang(ctx), "hub-connectors.not_installed")
@@ -291,7 +293,7 @@ func (c *Connector) statusError(ctx context.Context, st connector.Status, err er
 			st.Error = i18n.T(c.lang(ctx), "hub-connectors.old_version", i18n.Args{"got": "", "want": adapter.MinimumVersion})
 		}
 	case adapter.KindRateLimited:
-		st.State = connector.StateRateLimited
+		st.State = connectorwire.StateRateLimited
 		st.Error = i18n.T(c.lang(ctx), "hub-connectors.rate_limited")
 	default:
 		st.Error = i18n.T(c.lang(ctx), "hub-connectors.error")
@@ -299,22 +301,22 @@ func (c *Connector) statusError(ctx context.Context, st connector.Status, err er
 	return st
 }
 
-func (c *Connector) statusNotSignedIn(ctx context.Context, st connector.Status) connector.Status {
-	st.State = connector.StateNotSignedIn
+func (c *Connector) statusNotSignedIn(ctx context.Context, st connectorwire.Status) connectorwire.Status {
+	st.State = connectorwire.StateNotSignedIn
 	st.Error = i18n.T(c.lang(ctx), "hub-connectors.not_signed_in")
 	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.login_guide", i18n.Args{"command": c.loginCommand()})}
 	return st
 }
 
-func (c *Connector) statusExpired(ctx context.Context, st connector.Status) connector.Status {
-	st.State = connector.StateNotSignedIn
+func (c *Connector) statusExpired(ctx context.Context, st connectorwire.Status) connectorwire.Status {
+	st.State = connectorwire.StateNotSignedIn
 	st.Error = i18n.T(c.lang(ctx), "hub-connectors.expired")
 	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.login_guide", i18n.Args{"command": c.loginCommand()})}
 	return st
 }
 
-func (c *Connector) statusMissingScopes(ctx context.Context, st connector.Status, scopes []string, appID, brand string) connector.Status {
-	st.State = connector.StateNoPermission
+func (c *Connector) statusMissingScopes(ctx context.Context, st connectorwire.Status, scopes []string, appID, brand string) connectorwire.Status {
+	st.State = connectorwire.StateNoPermission
 	st.MissingScopes = uniqueScopes(scopes)
 	args := i18n.Args{"scope": strings.Join(st.MissingScopes, ", ")}
 	st.Error = i18n.T(c.lang(ctx), "hub-connectors.missing_permission", args)
@@ -337,25 +339,25 @@ func permissionURL(appID, brand string) string {
 // LoginStep starts and polls lark-cli's blocking device login. The process is
 // kept independently of the HTTP request so the app can poll after the start
 // response has returned.
-func (c *Connector) LoginStep(ctx context.Context, step string, _ map[string]string) (connector.Prompt, error) {
+func (c *Connector) LoginStep(ctx context.Context, step string, _ map[string]string) (connectorwire.Prompt, error) {
 	switch step {
 	case "":
 		return c.startLogin(ctx)
 	case "device":
 		return c.pollLogin(ctx)
 	default:
-		return connector.Prompt{}, fmt.Errorf("unknown step %q", step)
+		return connectorwire.Prompt{}, fmt.Errorf("unknown step %q", step)
 	}
 }
 
-func (c *Connector) startLogin(ctx context.Context) (connector.Prompt, error) {
+func (c *Connector) startLogin(ctx context.Context) (connectorwire.Prompt, error) {
 	if c == nil || c.runner == nil {
-		return connector.Prompt{}, &adapter.Error{Kind: adapter.KindNotInstalled}
+		return connectorwire.Prompt{}, &adapter.Error{Kind: adapter.KindNotInstalled}
 	}
 	c.cancelPending()
 	p, err := c.runner.StartLogin(ctx)
 	if err != nil {
-		return connector.Prompt{}, err
+		return connectorwire.Prompt{}, err
 	}
 	c.mu.Lock()
 	c.pending = p
@@ -363,12 +365,12 @@ func (c *Connector) startLogin(ctx context.Context) (connector.Prompt, error) {
 	return c.loginPrompt(p.Info(), ""), nil
 }
 
-func (c *Connector) pollLogin(ctx context.Context) (connector.Prompt, error) {
+func (c *Connector) pollLogin(ctx context.Context) (connectorwire.Prompt, error) {
 	c.mu.Lock()
 	p := c.pending
 	c.mu.Unlock()
 	if p == nil {
-		return connector.Prompt{Step: "device", Error: i18n.T(c.lang(ctx), "hub-connectors.login_restart")}, nil
+		return connectorwire.Prompt{Step: "device", Error: i18n.T(c.lang(ctx), "hub-connectors.login_restart")}, nil
 	}
 	done, err := p.Poll()
 	if !done {
@@ -395,11 +397,11 @@ func (c *Connector) pollLogin(ctx context.Context) (connector.Prompt, error) {
 	if account == "" {
 		account = auth.OpenID
 	}
-	return connector.Prompt{Done: true, Account: account}, nil
+	return connectorwire.Prompt{Done: true, Account: account}, nil
 }
 
-func (c *Connector) loginPrompt(info adapter.LoginInfo, err string) connector.Prompt {
-	return connector.Prompt{Step: "device", Kind: connector.PromptDeviceCode, URL: info.URL, UserCode: info.UserCode, Interval: 2, Error: err}
+func (c *Connector) loginPrompt(info adapter.LoginInfo, err string) connectorwire.Prompt {
+	return connectorwire.Prompt{Step: "device", Kind: connectorwire.PromptDeviceCode, URL: info.URL, UserCode: info.UserCode, Interval: 2, Error: err}
 }
 
 func (c *Connector) loginError(ctx context.Context, err error) string {

@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
+
 	"github.com/nwverse/persona/server/internal/i18n"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 )
 
 func TestInboxIgnoresNonConversationActivity(t *testing.T) {
@@ -69,14 +70,14 @@ func TestInboxIgnoresNonConversationActivity(t *testing.T) {
 
 func TestInboxSystemActivityDoesNotWakeExistingThing(t *testing.T) {
 	const thread = "larkcli:chat:oc_example"
-	for _, done := range []string{"", connector.DoneReplied} {
+	for _, done := range []string{"", connectorwire.DoneReplied} {
 		t.Run("done="+done, func(t *testing.T) {
 			system := adapter.Message{MessageID: "om_system", ChatID: "oc_example", ChatType: "p2p",
 				MsgType: "system", CreateTime: "2030-01-01T00:00:00Z"}
 			c := followupConnector(t, []adapter.Message{system}, []adapter.Message{system})
-			previous := connector.InboxThing{Thread: thread, Kind: "dm", Last: "om_old_request",
+			previous := connectorwire.InboxThing{Thread: thread, Kind: "dm", Last: "om_old_request",
 				At: time.Date(2029, 7, 1, 0, 0, 0, 0, time.UTC), Context: "Previously processed request", Done: done}
-			c.inboxThings = map[string]connector.InboxThing{thread: previous}
+			c.inboxThings = map[string]connectorwire.InboxThing{thread: previous}
 			if moved, err := c.Poll(context.Background()); err != nil || moved {
 				t.Fatalf("system activity woke existing thing: moved=%v err=%v", moved, err)
 			}

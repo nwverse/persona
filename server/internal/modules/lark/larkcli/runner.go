@@ -1,3 +1,6 @@
+// Package larkcli is the small, subprocess-only adapter for the official lark-cli.
+// Credentials remain owned by lark-cli; this package only starts commands and decodes
+// their JSON output (docs/plans/plan-lark-cli.md).
 package larkcli
 
 import (
@@ -23,23 +26,6 @@ import (
 const defaultTimeout = 15 * time.Second
 
 const loginTimeout = 10 * time.Minute
-
-// Config controls the executable and profile. It contains no credentials.
-type Config struct {
-	Bin     string
-	Profile string
-	Timeout time.Duration
-	// InboxPoll and InboxPageLimit are consumed by the built-in larkcli
-	// connector. Keeping them here lets tests and embedders construct the
-	// adapter and connector together without another configuration object.
-	InboxPoll      time.Duration
-	InboxPageLimit int
-	// Now is injectable for expiry tests; production uses time.Now.
-	Now func() time.Time
-	// ResolveProfile gates execution until the host knows the saved identity. It is
-	// evaluated for every invocation, including a runner retained across recovery.
-	ResolveProfile func(context.Context) (string, error)
-}
 
 // Runner executes lark-cli with a bounded context and decodes only JSON output.
 // It never logs stdout or stderr. The latter is captured solely to classify a
@@ -143,14 +129,6 @@ func (r *Runner) AuthStatus(ctx context.Context) (AuthStatus, error) {
 		return AuthStatus{}, cliError(KindOther, errors.New("invalid auth status JSON"))
 	}
 	return raw.result(r.now()), nil
-}
-
-// ConfigInfo is the public, non-secret part of one lark-cli profile. The CLI
-// has emitted both JSON and key/value output across its releases, so callers
-// should use AppID and ignore the original presentation.
-type ConfigInfo struct {
-	AppID string
-	Brand string
 }
 
 // ConfigShow reads the selected profile's app binding. It never returns the
@@ -585,7 +563,7 @@ func (r *Runner) SearchMessages(ctx context.Context, query string, opts SearchOp
 	if opts.AtMe {
 		args = append(args, "--is-at-me")
 	}
-	args = append(args, "--page-size", fmt.Sprint(opts.normalizedLimit()), "--no-reactions")
+	args = append(args, "--page-size", fmt.Sprint(opts.NormalizedLimit()), "--no-reactions")
 	if opts.PageToken != "" {
 		args = append(args, "--page-token", opts.PageToken)
 	}
@@ -1077,7 +1055,7 @@ func (r *Runner) executeInputProfile(ctx context.Context, args []string, mode ou
 	err = cmd.Run()
 	result := commandResult{stdout: stdout.Bytes(), stderr: stderr.Bytes()}
 	if cctx.Err() != nil {
-		return nil, &Error{Kind: KindTimeout, cause: cctx.Err()}
+		return nil, cliError(KindTimeout, cctx.Err())
 	}
 	if err != nil {
 		if classified := classifyFailure(result); classified != nil {
