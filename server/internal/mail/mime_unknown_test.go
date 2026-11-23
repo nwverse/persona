@@ -165,3 +165,64 @@ func TestParseMessageStopsAtOtherErrors(t *testing.T) {
 		t.Fatalf("text = %q, attachments = %+v, want the text before the malformed part and nothing after it", msg.Text, msg.Attachments)
 	}
 }
+
+func TestMixedCaseTextContentTypeWithUnparseableParams(t *testing.T) {
+	pdf := unknownMIMEAttachment{1, "report.pdf", "application/pdf", "abc"}
+	cases := []unknownMIMECase{
+		{
+			name: "mixed-case Text/Plain with unquoted RFC 2047 parameter",
+			parts: "--outer\r\nContent-Type: Text/Plain; charset=utf-8; x-label==?UTF-8?B?dGVhbQ==?=\r\n\r\nplain body\r\n" +
+				unknownPDF + "--outer--\r\n",
+			text: "plain body", snippet: "plain body", attachments: []unknownMIMEAttachment{pdf},
+		},
+		{
+			name: "mixed-case Text/Plain with unquoted space parameter",
+			parts: "--outer\r\nContent-Type: Text/Plain; charset=utf-8; x-label=team update\r\n\r\nplain body\r\n" +
+				unknownPDF + "--outer--\r\n",
+			text: "plain body", snippet: "plain body", attachments: []unknownMIMEAttachment{pdf},
+		},
+		{
+			name: "uppercase TEXT/HTML with unquoted RFC 2047 parameter",
+			parts: "--outer\r\nContent-Type: TEXT/HTML; charset=utf-8; x-label==?UTF-8?B?dGVhbQ==?=\r\n\r\n<p>html body</p>\r\n" +
+				unknownPDF + "--outer--\r\n",
+			text: "html body ", html: "<p>html body</p>", snippet: "html body", attachments: []unknownMIMEAttachment{pdf},
+		},
+	}
+
+	srv := newTestIMAP(t)
+	service := newServiceWithAccount(t, srv)
+	ctx := context.Background()
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			raw := unknownMIMERaw(c)
+			header, body, _ := strings.Cut(raw, "\r\n\r\n")
+			if got := snippetOf(listSections(header+"\r\n\r\n", body)); got != c.snippet {
+				t.Fatalf("snippetOf = %q, want %q", got, c.snippet)
+			}
+
+			uid := uint32(srv.appendMessage(t, "INBOX", raw))
+			msg, err := service.GetMessage(ctx, "acc_test", uid, "INBOX")
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkUnknownMIME(t, c, msg)
+			if msg.Snippet != c.snippet || !msg.HasAttach {
+				t.Fatalf("summary = %+v", msg.MailSummary)
+			}
+
+			path := "/api/v1/mail/messages/acc_test/" + itoa(uid) + "/attachments/"
+			for i, a := range msg.Attachments {
+				response := httptest.NewRecorder()
+				service.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path+a.ID, nil))
+				if response.Code != http.StatusOK || response.Body.String() != c.attachments[i].data ||
+					response.Header().Get("ETag") != `"`+a.ID+`"` {
+					t.Fatalf("download %s: %d %q %v", a.ID, response.Code, response.Body.String(), response.Header())
+				}
+				metadata, data, err := service.FetchAttachment(ctx, "acc_test", uid, "INBOX", a.ID, MaxSavedAttachment)
+				if err != nil || string(data) != c.attachments[i].data || metadata != a {
+					t.Fatalf("save handoff %s: %+v %q %v", a.ID, metadata, data, err)
+				}
+			}
+		})
+	}
+}

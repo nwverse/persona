@@ -135,7 +135,7 @@ func textFromEntity(e *gomessage.Entity, depth int, cut bool) string {
 			}
 		}
 	}
-	mt, _, _ := e.Header.ContentType()
+	mt := contentMediaType(e.Header)
 	if !strings.HasPrefix(mt, "text/") {
 		return ""
 	}

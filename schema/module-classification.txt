@@ -82,6 +82,7 @@ go server/internal/assistant/todo/projection core
 go server/internal/assistant/todo/timeline core
 go server/internal/assistantskills core
 go server/internal/assistantwire core
+go server/internal/botcard core
 go server/internal/buildtags core
 go server/internal/buildtags/printtags core
 go server/internal/builtinext core

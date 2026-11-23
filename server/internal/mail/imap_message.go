@@ -275,7 +275,7 @@ func (w *bodyWalk) entity(e *gomessage.Entity, depth int) mailBody {
 		}
 	}
 	contentType, disposition := e.Header.Get("Content-Type"), e.Header.Get("Content-Disposition")
-	mediaType, _, _ := e.Header.ContentType()
+	mediaType := contentMediaType(e.Header)
 	isText, isHTML := strings.HasPrefix(mediaType, "text/plain"), strings.HasPrefix(mediaType, "text/html")
 	// Only text is body; text marked attachment is a file, as in fileAsAttachment.
 	if (!isText && !isHTML) || headerToken(disposition) == "attachment" {

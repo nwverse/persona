@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -286,11 +287,11 @@ func (h *Manager) finishFeishuRegistration(ctx context.Context, reg botRegistrat
 	}
 	l := h.userLang()
 	body := i18n.T(l, "hub-bots_chat.paired_body")
-	card := feishubot.NewCard(i18n.T(l, "hub-bots_chat.paired"), feishubot.Green, i18n.T(l, "hub-bots_chat.paired")).Markdown(body)
+	card := botcard.NewCard(i18n.T(l, "hub-bots_chat.paired"), botcard.Green, i18n.T(l, "hub-bots_chat.paired")).Markdown(body)
 	key := "registered-" + reg.AppID // the greeting lands once however often a failed finish is tried again
 	msgID, chatID, err := api.SendUser(ctx, reg.OpenID, "interactive", card.JSON(), cutUTF8(key+":c", feishuMaxUUID))
-	if feishubot.CardRejected(err) {
-		msgID, chatID, err = api.SendUser(ctx, reg.OpenID, "text", feishubot.TextContent(body), cutUTF8(key+":t", feishuMaxUUID))
+	if botcard.CardRejected(err) {
+		msgID, chatID, err = api.SendUser(ctx, reg.OpenID, "text", botcard.TextContent(body), cutUTF8(key+":t", feishuMaxUUID))
 	}
 	if err != nil {
 		return "", err
