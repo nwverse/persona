@@ -163,8 +163,11 @@ fun MessageItem(
                 val followed = meta != null
                 val prioritizeTitle = followed || heading != null
                 val titleText = if (followed) heading ?: title else heading ?: group ?: sender
+                // The system's chosen scale decides, not the capped interface one: above the cap the title and time
+                // still share too little width, so the row stacks exactly where it did before the cap (#7321).
+                val chosenScale = (LocalReadingDensity.current ?: LocalDensity.current).fontScale
                 val stackTitleTime = (prioritizeTitle || stackTitleTimeAtLargeText) && time != null &&
-                    LocalDensity.current.fontScale >= STACK_TITLE_TIME_AT_FONT_SCALE
+                    chosenScale >= STACK_TITLE_TIME_AT_FONT_SCALE
                 if (stackTitleTime) {
                     Column {
                         Row(verticalAlignment = Alignment.Top) {

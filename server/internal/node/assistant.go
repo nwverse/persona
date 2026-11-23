@@ -1362,6 +1362,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			if p.commandLifecycle(ev.Command, ev.State) {
 				n.notifySessionsSoon() // the queue strip shows it, or no longer
 			}
+		case "rate_limit_event":
+			// the account's subscription windows after a reply (#12855, usagewindows_claudestream.go)
+			n.claudeStreamUsage(p.launcher, p.model.ConfigDir, line, time.Now())
 		case "stream_event":
 			if ev.ParentToolUseID != nil && *ev.ParentToolUseID != "" {
 				// A subagent's stream (#4495): its words are not the conversation's live text, its start does not clear

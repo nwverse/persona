@@ -204,9 +204,13 @@ func (n *Node) holdResume(ctx context.Context, launch host.Launcher, pane, id st
 		return
 	}
 	spec.ID = id
+	var agyConv string
+	if spec.Agent == agyAgent {
+		agyConv = n.agyConversation(id, pane)
+	}
 	n.mu.Lock()
 	if spec.Agent == agyAgent {
-		spec.AgyConversation = n.agyConversationLocked(id, pane)
+		spec.AgyConversation = agyConv
 	}
 	if n.launches == nil {
 		n.launches = map[string]claudeLaunch{}
@@ -229,20 +233,22 @@ func (n *Node) reportResume(ctx context.Context, h *herdrHost, pane string, spec
 	if cur, ok := n.launches[pane]; ok {
 		spec = cur
 	}
+	n.mu.Unlock()
 	reportID := spec.ID
 	if spec.Agent == agyAgent {
-		spec.AgyConversation = n.agyConversationLocked(spec.ID, pane)
+		spec.AgyConversation = n.agyConversation(spec.ID, pane)
 		if spec.AgyConversation != "" {
 			reportID = spec.AgyConversation
 		}
+		n.mu.Lock()
 		if cur, ok := n.launches[pane]; ok && cur.ID == spec.ID {
 			// What is reported is what the pane resumes: kept, so the server is recorded below and backfill does not
 			// report the same conversation again.
 			cur.AgyConversation = spec.AgyConversation
 			n.launches[pane] = cur
 		}
+		n.mu.Unlock()
 	}
-	n.mu.Unlock()
 	argv, ok := n.agentResumeArgv(spec, spec.ID)
 	if !ok {
 		if spec.Agent == ompAgent && n.ompKnownFile(spec.ID) == "" {
@@ -327,6 +333,12 @@ func (n *Node) backfillResume(agents []host.Agent) {
 	var work []todo
 	var recheck []held
 	var reports []string
+	agyByPane := map[string]string{}
+	for _, a := range agents {
+		if a.Agent == agyAgent && a.PaneID != "" && host.ParsePane(a.PaneID).Kind == host.Herdr {
+			agyByPane[a.PaneID] = n.agyConversation(otherSession(a), a.PaneID)
+		}
+	}
 	n.mu.Lock()
 	for _, a := range agents {
 		if a.PaneID == "" || host.ParsePane(a.PaneID).Kind != host.Herdr {
@@ -339,7 +351,7 @@ func (n *Node) backfillResume(agents []host.Agent) {
 		var agy string
 		if a.Agent == agyAgent {
 			id = otherSession(a)
-			agy = n.agyConversationLocked(id, a.PaneID)
+			agy = agyByPane[a.PaneID]
 		} else if !validID(id) {
 			continue
 		}

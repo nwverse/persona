@@ -13,11 +13,11 @@ import (
 )
 
 // The legacy background supervisor (#4927, docs/assistant/unified-entry.md "Background supervisor"). Since #5732 the
-// main conversation supervises every new assistant-dispatched task. An already configured background conversation may
-// finish notices explicitly queued for it, but no new task signal is routed away from main and no replacement is needed.
+// planning lead or main supervises newly dispatched work. An already configured background conversation may
+// finish notices explicitly queued for it, but is never a default owner for new work and needs no replacement.
 // Pending and queued legacy notices are regathered or moved to main intact rather than dropped.
 //
-// The ledger therefore keeps main as supervisor and the dispatch chat as origin. Task cards, receipts, the direction
+// The ledger keeps its assigned supervisor and the dispatch chat as origin. Task cards, receipts, the direction
 // tree and review permissions keep one stable owner; the background conversation is only a compatibility endpoint for
 // old work (isBackground, backgroundSupervises, backgroundLost). Each of its rounds starts from its first turn, with
 // only that round's facts and tools (#7315, supervise_round.go), unless background_supervisor_keeps_context is on.

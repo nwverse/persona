@@ -106,6 +106,8 @@ type Service struct {
 	mcpChanges mcpToolChanges
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
+	// extOwners keeps the extensions the user marked as their own for the profile (extension_trust.go).
+	extOwners extensionOwnerCache
 	// startDefaultsFor answers a task start's defaults from the extension layer (start_defaults.go); nil: no defaults.
 	startDefaultsFor func(ctx context.Context, facts StartFacts) (StartDefaults, bool, error)
 	// startCandidates lists the presets a start-defaults rule can pick on a machine (start_candidates.go); nil: the
@@ -127,6 +129,12 @@ type Service struct {
 	hub         Hub
 	store       func() Store
 	entriesDial func(context.Context, any) ([]byte, error)
+	// memoryEntries is where the memory assembler reads the ledger in tests; nil reads the manager database
+	// (memory_assemble_entry.go).
+	memoryEntries memoryEntrySource
+	// memoryExtension hands the assembler the memory extension's entries, its second source; nil hands none
+	// (memory_assemble_entry.go).
+	memoryExtension memoryExtensionSource
 	// trustSrc is Options.Trust.
 	trustSrc MachineTrust
 	logf     func(format string, args ...any)
@@ -164,6 +172,8 @@ type Service struct {
 	rules ruleSuggestState
 	// setupMu serializes the reads and the one write of the weekly setup block's book (setup_suggest.go).
 	setupMu sync.Mutex
+	// intakeMu serializes intake settings, reminder state and local intake mutations.
+	intakeMu sync.Mutex
 
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
@@ -216,8 +226,10 @@ type Service struct {
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	convSpaces           convSpaceBook          // conversation_space.go
 	trackReg             trackRegistry          // track_registry.go
+	spaceRecs            spaceRecordingBook     // space_recordings.go
 	infoTags             infoTagCache           // info_tag.go
 	infoTagWaiting       infoTagPending         // info_use.go
+	captures             captureWork            // capture_sort.go: wakes the loop that sorts quick captures
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
 	conversationWrites   sync.RWMutex
@@ -245,6 +257,7 @@ type Service struct {
 	placeBook      placeBook         // places.go
 	accept         acceptBook        // acceptance.go
 	pushQuiet      quietSwitch       // push_quiet.go: the hub's low-distraction switch as last read
+	attention      attentionClock    // attention.go: the attention mode as last read, and its end
 	deploy         deployProbe       // deploy_check.go: is the work in the running hub
 	prEventRoute   prEventRouteBook  // pr_status_route.go: opt-in direct PR-event routing dedupe
 	parkReplies    parkReplyBook     // park_reply.go: bounded source reads for explicitly bound person replies
@@ -305,12 +318,13 @@ type Service struct {
 	mcpWaitMu     sync.Mutex
 	mcpWaits      map[string]*mcpWaitReporter // live opted-in mcp.call requests, by their validated call id
 	agentArchives agentArchiveBook
-	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
-	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
-	switchQ       switchQueue     // agents_switch's switches waiting for their agents' turns to end (agents_switch.go)
-	fleet         fleetBook       // what comes from the nodes (fleet.go)
-	nextSug       nextSuggestBook // suggest_next.go: the hub-made next-message suggestions
-	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu
+	orphans       orphanBook                // tasks_orphan.go: the open to-dos nobody works on
+	agentNative   agentNativeBook           // the tools' own archives (agent_archive_native.go)
+	switchQ       switchQueue               // agents_switch's switches waiting for their agents' turns to end (agents_switch.go)
+	fleet         fleetBook                 // what comes from the nodes (fleet.go)
+	convAttention conversationAttentionBook // the main conversation's silent-round unread cache
+	nextSug       nextSuggestBook           // suggest_next.go: the hub-made next-message suggestions
+	askUp         escalationBook            // cards that reached the user through an escalation (ask_route.go), under fleet.mu
 	// delegateHook stands in for Delegate in tests (fleet_delegate.go).
 	delegateHook func(context.Context, DelegateParams) (DelegateResult, error)
 	// fleetEnded, when set, sees every card's end the channels are told (tests).
@@ -381,13 +395,17 @@ func New(o Options) *Service {
 	s.agentNamingRoutes() // agent_naming_request.go
 	s.alwaysRoutes()
 	s.infoAccessRoutes()
+	s.trackRoutes()
+	s.captureRoutes() // captures.go: quick capture
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
 	s.urgentCallRoutes() // urgent_call.go
+	s.attentionRoutes()  // attention.go
 	s.reporterRoutes()
 	s.directionRoutes()
+	s.directionOutsideRoutes()
 	s.dispatchPolicyRoutes() // dispatch_policy_routes.go
 	s.dispatchGuardRoutes()  // dispatch_guard.go
 	s.startPresetRoutes()
@@ -407,6 +425,7 @@ func New(o Options) *Service {
 	s.startRoutes()
 	s.skillRoutes()
 	s.workoutRoutes()
+	s.intakeRoutes()
 	s.scheduleRoutes()
 	s.scheduleGrantRoutes()
 	s.placeRoutes()
@@ -840,6 +859,8 @@ func (s *Service) push(ctx context.Context, n Notification) {
 // alerting the phone (notify_user shows that to the model).
 func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult, error) {
 	n.ID, n.Kind = "ntf_"+randomHex(8), NotifyPush
+	// A track's push_cap holds the level (track_attention.go).
+	s.capTrackPush(ctx, &n)
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}
@@ -942,6 +963,9 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 		// identity on every client. Keep its stored ordinary title for when it ends.
 		names := s.directionSessionNames(ctx, cfg, titles)
 		for id, name := range names {
+			if d := s.directionOf(id); d != nil && d.Outside != nil {
+				continue // this is a direction, not a conversation to decorate
+			}
 			if name != "" {
 				view(id, leadersAt).Title = name
 			}
@@ -1075,6 +1099,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 		s.afterSettle(context.WithoutCancel(ctx), s.infoTagTurnSettled, r.MachineID, r.SessionID)
 	}
 	if !meeting {
+		s.spawnPinAfterTurn(ctx, r.MachineID, r.SessionID)
 		s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
 	}
 }

@@ -49,7 +49,8 @@ struct SettingsView: View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("SettingsView")
         #endif
-        // By value, every page: in the split (iPhone Duo open) they open beside the list, not inside its column.
+        // By value, every page: in the split (the iPad's sheet) they open beside the list, not inside its column, through
+        // `settingsPath` (`SettingsListLink`, #12035).
         SplitNavigation(path: Bindable(model).settingsPath, destinations: SettingsDestinations()) {
             List {
                 if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -59,7 +60,7 @@ struct SettingsView: View {
                 } else {
                     Section {
                         ForEach(searchResults) { entry in
-                            NavigationLink(value: entry.page) {
+                            SettingsListLink(value: entry.page) {
                                 SettingsRow(title: entry.title, symbol: entry.symbol, tint: Theme.accent)
                             }
                             .settingsListRow(entry.page)
@@ -72,19 +73,8 @@ struct SettingsView: View {
                 }
             }
             .accessibilityIdentifier("settings-list")
-            #if os(macOS)
-            // Below the section's title in the title bar's row, not scrolling through it (#1243); inside the page's
-            // background, which still reaches up behind the title.
-            .modifier(MacBelowTitleRow())
-            // The page open beside the list, for its row's selection (`settingsListRow`).
-            .environment(\.macSettingsOpen, model.settingsPath.firstPageOnly)
-            #endif
             .themedPage()
-            #if os(macOS)
-            .pageSearchable(text: $search, prompt: String(localized: "Search Settings"))
-            #else
             .pageSearchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: String(localized: "Search Settings"))
-            #endif
             .onChange(of: search) { searchResults = SettingsCatalog.search(search) }
             .onChange(of: model.assistantManagerID) {
                 model.settingsPath = NavigationPath()
@@ -122,20 +112,14 @@ struct SettingsView: View {
                 Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
-            #if os(iOS) || os(visionOS)
             .pluginLinks($pluginLink)
             .extensionPushes(ExtensionSlots.shared.cardPages)
-            #endif
-            #if os(macOS) && DEBUG
-            // `-tab settings -openPairSheet YES` (Demo Mode, or paired: Pair Again): the Connect Hub sheet, for screenshots
-            // (scripts/app/sim.sh; with `-openPairSSH YES` its SSH Tunnel sheet over it).
-            .onAppear { if UserDefaults.standard.bool(forKey: "openPairSheet") { showPair = true } }
-            #endif
         } empty: {
             SplitPlaceholder(symbol: Theme.Icon.settings, title: String(localized: "Settings"), message: String(localized: "Choose an item on the left."))
-                #if os(macOS)
-                // As System Settings: the window opens on the first page, not on an empty pane.
-                .onAppear { if model.settingsPath.isEmpty && search.isEmpty { model.settingsPath.append(SettingsPage.appearance) } }
+                #if os(iOS)
+                // Under the pages the list opens (#12035): they keep their large titles, as on the phone, unless a page
+                // asks for an inline one.
+                .navigationBarTitleDisplayMode(.large)
                 #endif
         }
     }
@@ -164,7 +148,7 @@ struct SettingsView: View {
                              value: MeetingAttendees.offered(model) ? MeetingAttendees.defaultRole(model).title : "")
                 #endif
                 settingsLink(.agents, "Agent", Theme.Icon.options, id: "settings-agents")
-                NavigationLink(value: MachineListRoute()) { MachinesSettingsRow() }
+                SettingsListLink(value: MachineListRoute()) { MachinesSettingsRow() }
                     .settingsListRow(MachineListRoute())
                     .accessibilityIdentifier("settings-machines")
             }
@@ -183,9 +167,7 @@ struct SettingsView: View {
             if model.showsPage(of: api) {
                 plugins = loaded.map { ManagerRoster.settingsItems($0, roster: model.managerRoster, manager: context.managerID, stamped: { $0.manager }) }
             }
-            #if os(iOS) || os(visionOS)
             await ExtensionSlots.shared.reload()
-            #endif
         }
     }
 
@@ -206,7 +188,7 @@ struct SettingsView: View {
                 if AlarmsAccess.isSupported {
                     settingsLink(.alarms, "Alarms and Timers", Theme.Icon.alarmClock, id: "settings-alarms")
                 }
-                NavigationLink(value: SettingsPage.phoneData) {
+                SettingsListLink(value: SettingsPage.phoneData) {
                     SettingsRow(title: ConnectorText.device, symbol: Theme.Icon.thisDevice, tint: Theme.accent)
                 }
                 .settingsListRow(SettingsPage.phoneData)
@@ -252,7 +234,7 @@ struct SettingsView: View {
     }
 
     private func settingsLink(_ page: SettingsPage, _ title: LocalizedStringResource, _ symbol: String, id: String, value: String = "") -> some View {
-        NavigationLink(value: page) {
+        SettingsListLink(value: page) {
             SettingsRow(title: String(localized: title), symbol: symbol, tint: Theme.accent, value: value, look: .oneLine)
         }
         .settingsListRow(page)
@@ -567,11 +549,7 @@ private struct SettingsDestinations: ViewModifier {
         case .navigation: EmptyView()
         case .knowledgeSelection: EmptyView()
         #endif
-        #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()
-        #else
-        case .colorScheme: EmptyView()
-        #endif
         case .assistant: AssistantProfileView()
         case .claude: ClaudeSettingsView()
         case .codex: ClaudeSettingsView(agent: .codex)
@@ -641,20 +619,6 @@ private struct DemoSection: View {
     var body: some View {
         Section {
             Group {
-                #if os(macOS)
-                // Rows like the list's other rows on the Mac (#1224 B4): as buttons they were two small gray capsules
-                // at the list's leading edge, the sidebar-style list's own button look.
-                Button(action: pair) {
-                    SettingsRow(title: String(localized: "Connect My Hub…"), symbol: Theme.Icon.scanCode, tint: Theme.accent)
-                }
-                .modifier(SettingsButtonLook())
-                Button(role: .destructive) { model.unpair() } label: {
-                    SettingsRow(title: String(localized: "Exit Demo Mode"), symbol: "rectangle.portrait.and.arrow.right", tint: Theme.danger)
-                        .foregroundStyle(Theme.danger)
-                }
-                .modifier(SettingsButtonLook())
-                .accessibilityIdentifier("settings.leaveDemo")
-                #else
                 Button(action: pair) {
                     if AppStyle.current.usesBeautifulUI {
                         SettingsRow(title: String(localized: "Connect My Hub"), symbol: Theme.Icon.scanCode, tint: Theme.accent)
@@ -672,7 +636,6 @@ private struct DemoSection: View {
                 }
                 .modifier(SettingsButtonLook())
                 .accessibilityIdentifier("settings.leaveDemo")
-                #endif
             }
             .bareListRow()
         } header: {
@@ -932,11 +895,7 @@ struct AppGlyph: View {
 
     /// Under Match System the page's look (read here so the glyph redraws when the system's changes); else the screen's.
     private var systemLook: ColorScheme {
-        #if os(iOS) || os(visionOS)
         model.colorScheme == .system ? pageLook : AppIconChoice.systemLook
-        #else
-        pageLook
-        #endif
     }
 
     private struct GlyphFrame: ViewModifier {
@@ -957,15 +916,9 @@ struct WelcomeView: View {
     @State private var pair: PairView.Start?
     @State private var guide: LinkTarget?
     @State private var showHelp = false
-    #if os(macOS)
-    private static let pairTitle = String(localized: "Paste Pairing Link")
-    private static let pairIcon = Theme.Icon.paste
-    private static let pairHint = String(localized: "Setting up the hub gives you a pairing link; or, on a device that's already connected, open Settings › Devices › Connect a new device and copy the link there")
-    #else
     private static let pairTitle = String(localized: "Scan to connect a hub")
     private static let pairIcon = Theme.Icon.scanCode
     private static let pairHint = String(localized: "Setting up the hub shows a QR code; or, on a device that's already connected, open Settings › Devices › Connect a new device")
-    #endif
 
     var body: some View {
         GeometryReader { bounds in
@@ -1064,9 +1017,6 @@ struct PairView: View {
     @State private var accessID = ""
     @State private var accessSecret = ""
     @State private var showAccess = false
-    #if os(macOS)
-    @State private var editingSSH = false
-    #endif
     @State private var connecting = false
     @State private var passwordMode: Bool
     @State private var error: String?
@@ -1109,14 +1059,12 @@ struct PairView: View {
                     Section {
                         Label("This code has expired or was already used; get a new one", systemImage: Theme.Icon.error)
                             .font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger)
-                        #if os(iOS) || os(visionOS)
                         Button {
                             expired = false
                             error = nil
                             scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable
                         } label: { Label("Scan again", systemImage: Theme.Icon.scanCode).lineLimit(1) }
                         .accessibilityIdentifier("pair.rescan")
-                        #endif
                     } footer: {
                         Text("Get a new code on the screen from setting up the hub, or on a connected device in Settings › Devices › Connect a new device.")
                     }
@@ -1124,17 +1072,11 @@ struct PairView: View {
                 if !passwordMode && scanning && !other {
                     Section {
                         QRScanner { code in accept(code) }
-                        #if os(iOS) || os(visionOS)
                         .scaledFrame(height: Theme.Size.box280)
                         .clipShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
                         .listRowInsets(EdgeInsets())
-                        #endif
                     } footer: {
-                        #if os(iOS) || os(visionOS)
                         Text("Scan the QR code shown when the hub was set up, or the one from Settings › Devices › Connect a new device on a connected device.")
-                        #else
-                        Text("Copy the pairing link (given when the hub was set up, or from Settings › Devices › Connect a new device on a connected device), then click Paste pairing link.")
-                        #endif
                     }
                 }
                 #if os(iOS)
@@ -1185,17 +1127,6 @@ struct PairView: View {
                 }
             }
             #endif
-            #if os(macOS)
-            .sheet(isPresented: $editingSSH) {
-                NavigationStack {
-                    SSHTunnelForm(saved: ssh, dismissOnSave: true) { ssh = $0 }.navigationTitle("SSH Tunnel")
-                }
-            }
-            #if DEBUG
-            // `-openPairSheet other -openPairSSH YES`: this sheet's SSH Tunnel sheet, for screenshots.
-            .onAppear { if UserDefaults.standard.bool(forKey: "openPairSSH") { editingSSH = true } }
-            #endif
-            #endif
             .modifier(PairSheetChrome(url: $url, token: $token, passwordMode: $passwordMode, connecting: connecting, connect: { await connect() }))
         }
     }
@@ -1203,33 +1134,12 @@ struct PairView: View {
     /// Other ways: the address and the one-time code typed in, an SSH tunnel, and how the hub prints a code on its machine.
     @ViewBuilder private var otherWays: some View {
                 Section("Enter Manually") {
-                    #if os(macOS)
-                    // A grouped form puts the label on the left and the field on the right with no box: the prompt
-                    // shows where to type.
-                    TextField(String(localized: "Server Address"), text: $url, prompt: Text(verbatim: "http://hub.example.com:18660")).autocorrectionDisabled()
-                    SecureField(String(localized: "Pairing code"), text: $token, prompt: Text("The code in the pairing link"))
-                    #else
                     TextField(String(localized: "Server Address"), text: $url).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     // A one-time credential, not a password: beside the address it looks like a login form, and iOS
                     // would offer to save it as one ("Save Password?") once the sheet goes (#1598).
                     SecretField(String(localized: "Pairing code"), filled: String(localized: "Filled in. Tap Connect."), text: $token, identifier: "pair.token")
-                    #endif
                 }
                 Section {
-                    #if os(macOS)
-                    // A sheet of its own over this one, with its own Cancel / Save, not a page pushed inside the sheet: a
-                    // pushed page got an iPhone's round back button, and the sheet shrank to the page's minimum width
-                    // while the form kept its own, cut off on the right (#1170).
-                    LabeledContent {
-                        HStack(spacing: Theme.Space.s) {
-                            if let ssh { Text(ssh.label).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
-                            Button(ssh == nil ? String(localized: "Set Up…") : String(localized: "Edit…")) { editingSSH = true }
-                                .accessibilityIdentifier("pair.ssh")
-                        }
-                    } label: {
-                        Label("Connect via SSH Tunnel", systemImage: Theme.Icon.sshTunnel).lineLimit(1)
-                    }
-                    #else
                     NavigationLink {
                         SSHTunnelForm(saved: ssh, dismissOnSave: true) { ssh = $0 }.navigationTitle("SSH Tunnel")
                     } label: {
@@ -1237,7 +1147,6 @@ struct PairView: View {
                                     value: ssh.map { $0.label } ?? "", look: .oneLine)
                     }
                     .accessibilityIdentifier("pair.ssh")
-                    #endif
                 } footer: {
                     Text(ssh == nil ? String(localized: "If this device can't reach the hub's address (different network, no VPN), you can go through an SSH server that can reach the hub.")
                                     : ssh!.always ? String(localized: "Always connect to this hub through the SSH tunnel.") : String(localized: "Connect to this address directly first, and use the SSH tunnel if that fails."))
@@ -1278,20 +1187,6 @@ private struct PairSheetChrome: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            #if os(macOS)
-            // A window sheet does not take the main window's grouped forms: without this the Mac laid the fields out
-            // in two columns, the labels flush against the sheet's left edge (2026-11-02).
-            .macSheet()
-            // ⌘V lands in the focused field (the address field has it when the sheet opens), not on the paste button:
-            // a pairing link pasted there pairs as the button does; an address stays an address.
-            .onChange(of: url) { _, typed in
-                guard let cfg = ServerConfig(pairURL: typed) else { return }
-                url = cfg.url.absoluteString
-                token = cfg.token
-                passwordMode = false
-                Task { await connect() }
-            }
-            #endif
             .navigationTitle("Connect Hub")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1387,11 +1282,7 @@ extension PairView {
             } else if ssh != nil {
                 if !error.isCancellation { self.error = String(localized: "Couldn't connect: \(error.localizedDescription)") }
             } else {
-            #if os(macOS)
-            if !error.isCancellation { self.error = String(localized: "Couldn't connect: \(error.localizedDescription). Make sure this Mac can reach the address (for example, on the same network or VPN), or connect through an SSH tunnel.") }
-            #else
             if !error.isCancellation { self.error = String(localized: "Couldn't connect: \(error.localizedDescription). Make sure your phone can reach the address (for example, on the same network or VPN), or connect through an SSH tunnel.") }
-            #endif
             }
             if !expired { scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable } // scan again
             Haptics.error()
@@ -1403,11 +1294,7 @@ extension PairView {
         error = nil
         defer { connecting = false }
         do {
-            #if os(macOS)
-            let kind = "desktop"
-            #else
             let kind = "phone"
-            #endif
             let flow = try PasswordLoginRequest(address: url, name: UIDevice.current.name, kind: kind)
             let callback = try await webAuth.authenticate(using: flow.page, callback: .customScheme("persona"),
                 preferredBrowserSession: .ephemeral, additionalHeaderFields: [:])
@@ -1470,7 +1357,6 @@ nonisolated enum PairingPhoto {
 }
 #endif
 
-#if os(iOS) || os(visionOS)
 struct QRScanner: UIViewControllerRepresentable {
     var onCode: (String) -> Void
 
@@ -1501,7 +1387,6 @@ struct QRScanner: UIViewControllerRepresentable {
         }
     }
 }
-#endif
 
 /// Settings' Machines row: N / M online. Its own view: the page read `model.machines` for it, and a machine's heartbeat (on every
 /// push of a busy hub) drew the whole page and its list again (#1495); now only this row.
@@ -1556,14 +1441,7 @@ struct SettingsRow: View {
                 Label(title, systemImage: symbol)
             }
         } else {
-            #if os(macOS)
-            // The settings list is a sidebar-style list on the Mac (SplitNavigation), which draws a row that is only a
-            // Label as a source list's vibrant label: off its material it came out gray, as if disabled, beside the
-            // rows with a value (#1170). Laid out as those rows are, it is drawn as they are.
-            LabeledContent { EmptyView() } label: { Label(title, systemImage: symbol) }
-            #else
             Label(title, systemImage: symbol)
-            #endif
         }
     }
 }
@@ -1630,10 +1508,40 @@ extension View {
     /// A row of Settings' list that opens `value`: on the Mac it stays selected while that page is open beside the list
     /// (`MacSettingsRowSelection`, #2318). Nothing elsewhere.
     @ViewBuilder func settingsListRow(_ value: some Hashable) -> some View {
-        #if os(macOS)
-        modifier(MacSettingsRowSelection(value: value))
-        #else
         self
+    }
+}
+
+/// A row of Settings' own list that opens the page `value` (#12035). In one stack (an iPhone, an iPad window at compact
+/// width) a `NavigationLink(value:)`, which pushes the page. In the split (the iPad's Settings sheet), where the list is a
+/// column beside the page, a button that opens the page through `settingsPath` (`splitOpen`), as the Agents list's rows
+/// do: a value link there showed its page by the split's own selection, outside the path, and no row on that page
+/// opened anything; a `List(selection:)` instead cleared the paths links and launch switches set.
+struct SettingsListLink<Value: Hashable, Label: View>: View {
+    #if os(iOS)
+    @Environment(\.splitOpen) private var splitOpen
+    #endif
+    let value: Value
+    let label: Label
+
+    init(value: Value, @ViewBuilder label: () -> Label) {
+        self.value = value
+        self.label = label()
+    }
+
+    var body: some View {
+        #if os(iOS)
+        if let splitOpen {
+            // The label as a link draws it, and the whole width of the row to tap.
+            Button { splitOpen.open(value) } label: {
+                label.frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: value) { label }
+        }
+        #else
+        NavigationLink(value: value) { label }
         #endif
     }
 }
@@ -1651,12 +1559,7 @@ struct SettingsHeading: View {
 /// Settings' buttons that are rows: the list's tinted button; in the BeautifulUI style a plain row (its tile carries the color).
 struct SettingsButtonLook: ViewModifier {
     func body(content: Content) -> some View {
-        #if os(macOS)
-        // A row like the settings list's other rows on the Mac (#1224 B4), not the sidebar list's small gray capsule.
-        content.buttonStyle(.plain)
-        #else
         if AppStyle.current.usesBeautifulUI { content.buttonStyle(.plain) } else { content }
-        #endif
     }
 }
 
