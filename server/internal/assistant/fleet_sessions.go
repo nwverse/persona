@@ -76,8 +76,8 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			s.suggestDrop(machine, sess.SessionID) // a new turn: the last one's suggestion goes, a call on its way is cancelled
 			s.turnsBook().working(key, now)
 			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
-			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
-			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn) }) // after the items that came before it
+			ref, row := SessionRef{MachineID: machine, SessionID: sess.SessionID}, startRow{Rev: sess.Rev, At: sess.UpdatedAt}
+			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn, row) }) // after the items that came before it
 		case prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle) && reconnected:
 			unsure = append(unsure, sess) // reconnectedTurnEnd, once the list is kept
 		case prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle):
@@ -604,6 +604,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		list[i].State, list[i].BackgroundWorking = stateWithBackground(agentState(list[i], list[i].SeenAt), list[i])
 		list[i].BackgroundWaiting = backgroundWaiting(list[i])
+		if !list[i].BackgroundWorking || backgroundIsWork(list[i]) {
+			list[i].BackgroundStalledSince = 0 // only background commands that are all there is to the work can have stalled
+		}
 		list[i].TurnError, list[i].TurnErrorKind = turnError(list[i])
 		// A task Agent's turn with no output: interrupted or stopped, not done (silent_turns.go, #10187).
 		putQuietTurn(&list[i], quiet, lang)

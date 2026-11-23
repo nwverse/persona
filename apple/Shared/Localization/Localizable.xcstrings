@@ -25812,6 +25812,29 @@
         }
       }
     },
+    "Amount (ml)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amount (ml)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毫升"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "量（ml）"
+          }
+        }
+      }
+    },
     "An Agent [To-dos Line]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -27298,6 +27321,29 @@
         }
       }
     },
+    "Appearance, language, storage, devices and more." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appearance, language, storage, devices and more."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "外観、言語、ストレージ、デバイスなどの設定。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "外观、语言、存储空间、设备等更多设置。"
+          }
+        }
+      }
+    },
     "Apple Health" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -27317,6 +27363,98 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Apple 健康"
+          }
+        }
+      }
+    },
+    "Apple Health hasn't allowed writing protein." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Health hasn't allowed writing protein."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appleヘルスケアでたんぱく質の書き込みが許可されていません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 健康没有允许写入蛋白质。"
+          }
+        }
+      }
+    },
+    "Apple Health hasn't allowed writing this intake type." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Health hasn't allowed writing this intake type."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appleヘルスケアでこの種類の記録の書き込みが許可されていません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 健康没有允许写入这类记录。"
+          }
+        }
+      }
+    },
+    "Apple Health hasn't allowed writing water or protein." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Health hasn't allowed writing water or protein."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appleヘルスケアで水分とたんぱく質の書き込みが許可されていません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 健康没有允许写入饮水或蛋白质。"
+          }
+        }
+      }
+    },
+    "Apple Health hasn't allowed writing water." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Health hasn't allowed writing water."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appleヘルスケアで水分の書き込みが許可されていません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 健康没有允许写入饮水。"
           }
         }
       }
@@ -27489,6 +27627,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下一轮生效"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Applies to new conversations without an explicit choice. Existing conversations keep their current permission mode." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Applies to new conversations without an explicit choice. Existing conversations keep their current permission mode."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "個別に権限を選択していない新しいチャットに適用されます。既存のチャットは現在の権限モードを維持します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "适用于未单独选择权限的新对话。现有对话保持当前权限模式。"
           }
         }
       },
@@ -52910,6 +53071,29 @@
         }
       }
     },
+    "Couldn't connect. Try again later." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't connect. Try again later."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続できませんでした。後でもう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接，请稍后再试。"
+          }
+        }
+      }
+    },
     "Couldn't connect: %@" : {
       "localizations" : {
         "en" : {
@@ -55404,6 +55588,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "读取导入链接失败：%@"
+          }
+        }
+      }
+    },
+    "Couldn't read the intake changes. Try again later." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the intake changes. Try again later."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記録の変更を読み込めませんでした。後でもう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取记录的变化，请稍后再试。"
           }
         }
       }
@@ -60331,6 +60538,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "默认模型"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Default Permissions" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default Permissions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルト権限"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认权限"
           }
         }
       },
@@ -70584,6 +70814,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Enter an amount from 1 to 3000 ml." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter an amount from 1 to 3000 ml."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入 1 到 3000 毫升。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1〜3000 ml の量を入力してください。"
+          }
+        }
+      }
     },
     "Enter password (not saved)" : {
       "localizations" : {
@@ -85313,6 +85566,29 @@
       },
       "extractionState" : "manual"
     },
+    "Inbox Permissions" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inbox Permissions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "受信トレイの権限"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收件箱权限"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Inbox Sources" : {
       "localizations" : {
         "en" : {
@@ -92569,6 +92845,29 @@
       },
       "extractionState" : "manual"
     },
+    "Last write failed: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last write failed: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前回の書き込みに失敗：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次写入失败：%@"
+          }
+        }
+      }
+    },
     "Lasts [Standing Authorization]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -92614,6 +92913,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Later" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Later"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等会儿"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あとで"
+          }
+        }
+      }
     },
     "Later [Readiness Card 9d2055]" : {
       "localizations" : {
@@ -96513,6 +96835,29 @@
         }
       }
     },
+    "Log Another Amount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Log Another Amount"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记别的量"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の量を記録"
+          }
+        }
+      }
+    },
     "Log Data" : {
       "localizations" : {
         "en" : {
@@ -96555,6 +96900,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "记克数"
+          }
+        }
+      }
+    },
+    "Log Water" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Log Water"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记一杯水"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "水分を記録"
           }
         }
       }
@@ -96604,6 +96972,75 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Log water" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Log water"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记一杯水"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "水分を記録"
+          }
+        }
+      }
+    },
+    "Log water in Persona. Leave the amount empty to record one glass." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Log water in Persona. Leave the amount empty to record one glass."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Persona 里记水量。不填毫升就记一杯。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona に水分量を記録します。量を空欄にすると1杯分を記録します。"
+          }
+        }
+      }
+    },
+    "Logged %lld ml, today %lld / %lld ml" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Logged %1$lld ml, today %2$lld / %3$lld ml"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已记 %1$lld 毫升，今天 %2$lld / %3$lld 毫升"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld ml を記録しました。今日は %2$lld / %3$lld ml"
+          }
+        }
+      }
     },
     "Logged mood" : {
       "extractionState" : "manual",
@@ -101615,6 +102052,29 @@
       },
       "extractionState" : "manual"
     },
+    "Millilitres, for example 300" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Millilitres, for example 300"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毫升，比如 300"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ミリリットル、例：300"
+          }
+        }
+      }
+    },
     "Mindnote" : {
       "localizations" : {
         "en" : {
@@ -106607,6 +107067,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新开对话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "New Conversation Permissions" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Conversation Permissions"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいチャットの権限"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新对话权限"
           }
         }
       },
@@ -120312,6 +120795,29 @@
         }
       }
     },
+    "Off by default. When enabled, all your water and protein records, including earlier records, are written to Apple Health on this iPhone. Undoing a record removes its sample. Turning this off keeps samples already written." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off by default. When enabled, all your water and protein records, including earlier records, are written to Apple Health on this iPhone. Undoing a record removes its sample. Turning this off keeps samples already written."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "初期設定はオフです。オンにすると、過去の記録を含む水分とたんぱく質の全記録が、このiPhoneのAppleヘルスケアに書き込まれます。記録を取り消すと対応するデータも削除されます。オフにしても書き込み済みのデータは残ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认关闭。打开后，全部饮水和蛋白质记录（包括历史记录）会写入这台 iPhone 的 Apple 健康。撤销记录时会删除对应的数据。关闭后保留已写入的数据。"
+          }
+        }
+      }
+    },
     "Off by default. When on, you can send this phone's clipboard to this computer and get the computer's here. Nothing is kept on the hub." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -123653,6 +124159,29 @@
         }
       }
     },
+    "Only the AI twin's own choice applies. Default permissions asks before edits or commands. New chats and stopped chats use the choice when they resume; a running chat keeps its current mode." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only the AI twin's own choice applies. Default permissions asks before edits or commands. New chats and stopped chats use the choice when they resume; a running chat keeps its current mode."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AIツイン自体に保存された選択だけが適用されます。デフォルト権限では、ファイルの編集やコマンドの実行前に確認します。新しいチャットと、停止後に再開するチャットにこの選択を使用し、実行中のチャットは現在のモードを維持します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅 AI 分身自己保存的选择生效。默认权限会在编辑文件或运行命令前询问。新对话以及已停止后恢复的对话使用此选择；正在运行的对话保持当前模式。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Only the computers ticked below. The others don't see it at all." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -125044,6 +125573,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Personaを開くとこの日の予定が表示されます"
+          }
+        }
+      }
+    },
+    "Open Persona to select and sync a hub before logging water." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Persona to select and sync a hub before logging water."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先打开 Persona，选择并同步 hub，再记水量。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona を開いてハブを選び、同期してから水分を記録してください。"
           }
         }
       }
@@ -152575,6 +153127,29 @@
         }
       }
     },
+    "Say “I drank 300 ml of water”, or take a photo of a meal in the field below, to log it in Health. When sync is on, it is also written to Apple Health." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Say “I drank 300 ml of water”, or take a photo of a meal in the field below, to log it in Health. When sync is on, it is also written to Apple Health."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「水を300 ml飲んだ」と伝えるか、下の入力欄で食事を撮影すると健康に記録できます。同期をオンにするとAppleヘルスケアにも書き込まれます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说「喝了 300 毫升水」，或在下面的输入框拍一张饭，就记进健康；打开同步后也会写进 Apple 健康。"
+          }
+        }
+      }
+    },
     "Say “Talk to Persona” to talk again" : {
       "localizations" : {
         "en" : {
@@ -171375,6 +171950,29 @@
       },
       "extractionState" : "manual"
     },
+    "Sync to Apple Health" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sync to Apple Health"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appleヘルスケアに同期"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步到 Apple 健康"
+          }
+        }
+      }
+    },
     "Sync to Apple Watch" : {
       "localizations" : {
         "en" : {
@@ -179137,6 +179735,29 @@
         }
       }
     },
+    "The hub did not confirm the new-conversation permission." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub did not confirm the new-conversation permission."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サーバーが新しいチャットの権限を確認しませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器未确认新对话权限设置。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "The hub did not confirm these approval phrases." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -180327,6 +180948,29 @@
         }
       }
     },
+    "The hub returned no water record." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The hub returned no water record."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 没有返回喝水记录。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブから水分の記録が返されませんでした。"
+          }
+        }
+      }
+    },
     "The hub runs this assistant itself. It can't be deleted or installed elsewhere" : {
       "localizations" : {
         "en" : {
@@ -180930,6 +181574,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "安装码已过期"
+          }
+        }
+      }
+    },
+    "The intake record has an invalid amount or time." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The intake record has an invalid amount or time."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記録の量または時刻が無効です。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条记录的数量或时间无效。"
           }
         }
       }
@@ -190322,6 +190989,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This hub doesn't support logging water yet. Update the hub first." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub doesn't support logging water yet. Update the hub first."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先更新 hub，再记水量。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先にハブをアップデートしてから水分を記録してください。"
+          }
+        }
+      }
     },
     "This hub doesn't support model configuration by category yet. Update the server first." : {
       "localizations" : {
@@ -212192,6 +212882,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "等不了的事，Persona 会像来电一样打这台 iPhone，和你在电话里说清楚。"
+          }
+        }
+      }
+    },
+    "When sync is on, water and protein records are written to Apple Health on this iPhone." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When sync is on, water and protein records are written to Apple Health on this iPhone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同期をオンにすると、水分とたんぱく質の記録がこのiPhoneのAppleヘルスケアに書き込まれます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开同步后，喝水和蛋白质会写进这台 iPhone 的 Apple 健康。"
           }
         }
       }

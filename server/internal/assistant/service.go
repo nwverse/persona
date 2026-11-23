@@ -71,8 +71,10 @@ type Options struct {
 // Service is the assistant. It implements Handler.
 type Service struct {
 	// modules are the feature modules loaded (modules.go); nil, none.
-	modules          *kernel.Kernel
-	compactRecovery  compactRecoveryCache
+	modules         *kernel.Kernel
+	compactRecovery compactRecoveryCache
+	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).
+	sendFanout       sendFanout
 	logical          logicalDeviceState
 	a2aWake          chan struct{}
 	a2aLogicalWrites chan struct{}
@@ -165,6 +167,9 @@ type Service struct {
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
 	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings
+	// noReportHold: a report goes out without waiting for its Agent's stop (reportStopHold). Tests about what a report
+	// says set it; supervise_slim_test.go's turn it off again.
+	noReportHold bool
 	// todoAskAfter is how long a linked to-do goes without progress before its recurring check asks the owner (0:
 	// scheduleAskAfter's floor; tests shorten it, schedule_todo_evidence.go).
 	todoAskAfter time.Duration
@@ -300,6 +305,8 @@ type Service struct {
 	room       roomState         // meeting_room_tools.go: the meetings' rooms, their asks and sources
 	meetLive   meetingLiveEvents // meeting_events.go: the meeting_live events, at most one a second per recording
 	justMe     justMeBook        // meeting_justme.go: the Just me turns
+	cards      cardLedger        // card_layers.go: the cards pushed to the owner, counted by day, source and which of the six kinds
+	cardAsks   sync.Map          // card_layers.go: the source of each card ask has up (interaction id → source)
 	meetLocks  meetingLocks      // meeting_followup.go: one creation at a time per recording
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
@@ -312,6 +319,7 @@ type Service struct {
 	tpush      todosPush         // todos.go: the {"type":"todos"} waiting for the rest of its write
 	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
 	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
+	outbound   outboundOnce      // outbound_once.go: one card per hand-off the owner is asked about, none again once allowed
 	dtree      directionTreeBook // direction_tree.go: the direction tree the apps were last told of
 	tview      todoViewBook      // todo_view_push.go: what the apps were told each to-do is filed under
 	offers     routeBook         // route.go: the directions offered for New chats
@@ -871,11 +879,15 @@ func (s *Service) push(ctx context.Context, n Notification) {
 // alerting the phone (notify_user shows that to the model).
 func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult, error) {
 	n.ID, n.Kind = "ntf_"+randomHex(8), NotifyPush
+	if n.CardID != "" {
+		n.ID = "card:" + n.CardID // a card's push asked for again replaces the one the phone shows (managerPushCollapseID)
+	}
 	// A track's push_cap holds the level (track_attention.go).
 	s.capTrackPush(ctx, &n)
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}
+	s.noteCard(ctx, "", n) // its source is on ctx (withCard; card_layers.go)
 	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
 	if err != nil {
 		s.logf("assistant: push: %v", err)
@@ -1065,12 +1077,13 @@ func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
 	if s.meetingTurnStarted(r.MachineID, r.SessionID, true) {
 		return // a meeting's batch started it: a side exchange (meeting_turns.go)
 	}
-	s.turnStartedObserved(ctx, r, true)
+	s.turnStartedObserved(ctx, r, true, startRow{})
 }
 
-func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn bool) {
+// turnStartedObserved: session r started a turn; row is the list's row that showed it (zero: the hub's own word).
+func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn bool, row startRow) {
 	s.quietTurnOver(r.MachineID, r.SessionID) // a turn with no output before this one is over (silent_turns.go)
-	s.taskWorking(ctx, r.MachineID, r.SessionID)
+	s.taskWorking(ctx, r.MachineID, r.SessionID, row)
 	s.workStartedObserved(ctx, r.MachineID, r.SessionID, time.Now(), newTurn)
 	s.availTurnStarted(r.MachineID, r.SessionID, newTurn, time.Now())
 }

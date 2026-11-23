@@ -846,7 +846,9 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
 			Value: "a string", Actions: []string{"get", "set"}}}})
 	case AppSettings + " " + AppTool:
-		return json.Marshal(proto.TextResult("the hub's: "+string(p.Params), false))
+		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
+			return json.Marshal(proto.TextResult("the hub's: "+string(p.Params), false))
+		}
 	case AppPlugins + " " + assistantwire.PluginsPresets:
 		return json.Marshal(map[string]any{"presets": f.presets})
 	case AppPlugins + " " + assistantwire.PluginsVoice:
@@ -1376,6 +1378,8 @@ func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	// And about what a supervisor does with its tasks, told to the main conversation: the background supervisor that
 	// takes them by default is supervise_background_test.go's, which turns this off.
 	s.noBackground = true
+	// And with each report told at once, not held for its Agent's stop (reportStopHold): supervise_slim_test.go's.
+	s.noReportHold = true
 	// And with no information tagging (info_tag.go), as before it: its tests turn it on (f.infoTagModel).
 	s.noInfoTag = !f.infoTagModel
 	if f.settings != nil {
