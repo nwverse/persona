@@ -101,7 +101,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 		private = reminder != nil && reminder.private
 		if !private && todo.Origin != "" {
 			space, known := s.selfSpace(ctx, todo.Origin)
-			private = !known || space == SpaceHealth
+			private = !known || s.trackPolicy(ctx, space).Redact
 		}
 		if reminder != nil {
 			reminder.private = private // once hidden, a missing source can never restore the notes
@@ -110,11 +110,11 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 	if private {
 		if reminder != nil {
 			if reminder.noticeTitle == "" {
-				reminder.noticeTitle, reminder.noticeBody = healthNotice(s.botLang(ctx))
+				reminder.noticeTitle, reminder.noticeBody = spaceNotice(s.botLang(ctx))
 			}
 			title, body = reminder.noticeTitle, reminder.noticeBody
 		} else {
-			title, body = healthNotice(s.botLang(ctx))
+			title, body = spaceNotice(s.botLang(ctx))
 		}
 	}
 	st, err := s.feishuStatus(ctx)
@@ -158,7 +158,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 			}
 			ac.card.Tag(i18n.T(l, kind), feishubot.Neutral)
 		}
-		// A generic health notice must not identify the private to-do through its navigation metadata.
+		// A generic space notice must not identify the private to-do through its navigation metadata.
 		if i == len(cards)-1 && session != "" && !private {
 			if todo != nil {
 				web := todoLink(strings.TrimRight(st.PublicURL, "/"), todo.ID)
@@ -241,7 +241,7 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 		return // its notify_user already went to Feishu
 	}
 	sess, ok := s.session(ctx, machine, session)
-	if !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth { // a health task's runs stay off Feishu (health.go)
+	if !ok || sess.WokeByTask && !main || s.trackPolicy(ctx, spaceOf(sess)).Redact { // the runs of a space that redacts stay off Feishu (health.go)
 		return
 	}
 	if s.transientRetryTurn(ctx, sess) {
@@ -465,7 +465,7 @@ func leadAndRest(md string, n int) (lead, rest string) {
 // seen, muted, a recent notify_user, a turn asked from the bot, an inbox agent's, a quiet task's, a supervision turn's
 // and the turn of a supervised task's Agent (#8270) are all dropped before this is called. The sender still leaves out
 // the conversations that have their own Feishu path: the main conversation (the sync mirror), a scheduled task's own
-// conversation (its pushes mirror) and health, and posts nothing without the pushes switch.
+// conversation (its pushes mirror) and a space that redacts, and posts nothing without the pushes switch.
 func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text, place string) {
 	ctx, cancel := context.WithTimeout(feishuSendAs(context.Background(), "agent_done", machine, sess.SessionID), 30*time.Second)
 	defer cancel()
@@ -475,7 +475,7 @@ func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text
 	}
 	session := sess.SessionID
 	if sess.Assistant || s.mainSessionRep(machine, session) || s.taskSessionRep(machine, session) ||
-		spaceOf(sess) == SpaceHealth {
+		s.trackPolicy(ctx, spaceOf(sess)).Redact {
 		return
 	}
 	l := s.botLang(ctx)

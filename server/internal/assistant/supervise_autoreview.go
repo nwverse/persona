@@ -520,7 +520,7 @@ func (s *Service) endAutoReview(ctx context.Context, todoID, id string, e review
 		} else if _, err := s.sendToTask(ctx, t, text); err != nil {
 			// The agent did not get it: the supervisor hears the task stopped short, with why.
 			s.logf("task %s: review rework: %v", todoID, err)
-			s.signal(superviseSignal{Todo: todoID, Kind: sigIdle, Key: "review@" + id,
+			s.signal(superviseSignal{Todo: todoID, Kind: sigIdle, Key: "review@" + id, Handoff: true,
 				Detail: whyReworkUnsent + err.Error()})
 		}
 	case pending:

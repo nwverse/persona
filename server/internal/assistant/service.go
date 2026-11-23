@@ -62,6 +62,7 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	compactRecovery  compactRecoveryCache
 	logical          logicalDeviceState
 	a2aWake          chan struct{}
 	a2aLogicalWrites chan struct{}
@@ -122,8 +123,9 @@ type Service struct {
 	humanSent      humanSends
 	storeApprovals storeApprovals
 
-	hub   Hub
-	store func() Store
+	hub         Hub
+	store       func() Store
+	entriesDial func(context.Context, any) ([]byte, error)
 	// trustSrc is Options.Trust.
 	trustSrc MachineTrust
 	logf     func(format string, args ...any)
@@ -212,6 +214,8 @@ type Service struct {
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	convSpaces           convSpaceBook          // conversation_space.go
+	trackReg             trackRegistry          // track_registry.go
+	infoTags             infoTagCache           // info_tag.go
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
 	conversationWrites   sync.RWMutex
@@ -389,6 +393,7 @@ func New(o Options) *Service {
 	s.directionNotesRoutes()
 	s.originRoutes()
 	s.profileRoutes()
+	s.entriesRoutes()
 	s.skillImportRoutes()
 	s.readinessRoutes()
 	s.availabilityRoutes()
@@ -552,6 +557,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			if origin != "" {
 				p["origin"] = origin
 			}
+			if err := s.putInboxPermissionMode(ctx, device, id, p, origin, originKnown); err != nil {
+				return beforeNodeWrite(method, err)
+			}
 			if !originKnown || (origin != "" && origin != OriginTask) || p["is_main"] == true {
 				delete(p, devicewire.LegacyTaskExecution)
 			}
@@ -675,7 +683,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: nodeMethod(method, params), Params: raw}
-	res, err := s.callDevice(ctx, p)
+	cctx, cancel, bounded := toolNodeContext(ctx, method) // a model's tool waits for a silent node only so long (tool_node_wait.go)
+	res, err := s.callDevice(cctx, p)
+	if bounded && err != nil && ctx.Err() == nil && errors.Is(context.Cause(cctx), errNodeSilent) {
+		err = s.nodeSilent(device, method, err)
+	}
+	cancel()
 	// Not taken: refused before anything was typed, or it never reached the computer (relay_refusal.go).
 	taken = err == nil || !sendNotTaken(err)
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {
@@ -1041,6 +1054,8 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 		// An assistant turn that failed is logged; a conversation conversation_new opened tells its parent (spawned.go).
 		s.afterSettle(context.WithoutCancel(ctx), s.assistantTurnSettled, r.MachineID, r.SessionID)
 		s.afterSettle(context.WithoutCancel(ctx), s.inboxAgentTurnSettled, r.MachineID, r.SessionID)
+		// What the turn said is tagged with its information categories (info_tag.go).
+		s.afterSettle(context.WithoutCancel(ctx), s.infoTagTurnSettled, r.MachineID, r.SessionID)
 	}
 	if !meeting {
 		s.titleAfterTurn(ctx, r.MachineID, r.SessionID)

@@ -24,6 +24,8 @@ interface AgentOperations {
     suspend fun interruptSession(key: SessionKey): Unit = throw UnsupportedOperationException("Interrupt unavailable")
     /** "Delete conversation" (DELETE /sessions/{mid}/{sid}): out of every app's list, the transcript stays; only for [persona.core.contracts.Session.canDelete]. */
     suspend fun deleteSession(key: SessionKey): Unit = throw UnsupportedOperationException("Delete session unavailable")
+    /** "Branch to new chat" (POST /sessions/{mid}/{sid}/fork with empty at_item_id): copies the session into a new one and returns its id. */
+    suspend fun forkSession(key: SessionKey): String = throw UnsupportedOperationException("Fork session unavailable")
 }
 
 /** An ambiguous write must be verified before repeating a one-shot action. */

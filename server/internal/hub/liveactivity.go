@@ -46,6 +46,9 @@ const (
 	fleetDoneLinger = 5 * time.Minute // only finished agents left: keep showing them this long
 	fleetMaxItems   = 3
 	fleetMaxAge     = 8 * time.Hour // the system ends an activity after about this long; past it, start a new one
+	// fleetRetireBefore: an activity this close to fleetMaxAge is ended by the hub, while its token still reaches it, so the
+	// one that replaces it never sits beside a card iOS ended but left on the Lock Screen (#12982).
+	fleetRetireBefore = 20 * time.Minute
 )
 
 // forDevice is what one device gets: its settings and persona, and of the assistant and the numbers only what it
@@ -55,6 +58,16 @@ func forDevice(s FleetState, p NotifyPrefs, stats FleetStats) FleetState {
 	d.Details = p.LockDetails
 	d.Look = p.Look
 	d.Left, d.Right = p.Island.sides()
+	if !p.LockDetails {
+		// Without names on the Lock Screen a request reads "A permission request is waiting": nobody can tell who asks
+		// or what approving does, so it gets no Allow / Deny there, only a tap into the app (#12982).
+		d.Items = slices.Clone(s.Items)
+		for i := range d.Items {
+			if k := d.Items[i].Kind; k == "permission" || k == "plan" { // the kinds with buttons; others keep naming their card
+				d.Items[i].Interaction = ""
+			}
+		}
+	}
 	shows := func(slot string) bool { return d.Left == slot || d.Right == slot }
 	if !shows(SlotAssistant) {
 		d.Assistant = false
@@ -398,6 +411,7 @@ func (la *liveActivities) tick() {
 	}
 	la.wakeWidgets(la.snapshot()) // a change held back for widgetGap, the heartbeat
 	now := la.now()
+	la.retire(now)
 	la.mu.Lock()
 	over := !la.emptyAt.IsZero() && now.Sub(la.emptyAt) >= fleetEndAfter
 	doneLong := la.last.Phase == "done" && !la.doneSince.IsZero() && now.Sub(la.doneSince) >= fleetDoneLinger
@@ -1103,6 +1117,54 @@ func fleetSentence(l i18n.Lang, st FleetState) string {
 	return strings.Join(parts, " · ")
 }
 
+// retire ends each activity about to reach fleetMaxAge while its token still reaches it, and forgets that it was
+// started this episode, so the next flush may start a fresh one instead of leaving a card iOS ended (and keeps on the
+// Lock Screen for hours, stale) beside the new one (#12982). An open app's activity is the app's to replace.
+func (la *liveActivities) retire(now time.Time) {
+	la.mu.Lock()
+	var old []db.LiveActivity
+	for _, r := range la.rows {
+		if r.PushToken != "" && !r.StartedAt.IsZero() && now.Sub(r.StartedAt) >= fleetMaxAge-fleetRetireBefore {
+			old = append(old, r)
+		}
+	}
+	la.mu.Unlock()
+	for _, r := range old {
+		if la.h.phoneOpen(r.DeviceID) {
+			continue
+		}
+		la.endToken(r.DeviceID, r.PushToken, now)
+		la.mu.Lock()
+		delete(la.sent, r.DeviceID)
+		delete(la.sentAt, r.DeviceID)
+		delete(la.started, r.DeviceID)
+		la.mu.Unlock()
+		la.update(r.DeviceID, func(v *db.LiveActivity) {
+			if v.PushToken == r.PushToken {
+				v.PushToken, v.ActivityID = "", ""
+			}
+		})
+	}
+}
+
+// endToken ends (and takes off the Lock Screen at once) the activity behind token on device: one being retired, or one
+// another activity of the same phone replaced (#12982). Best effort: an activity iOS already ended stays until iOS
+// removes it.
+func (la *liveActivities) endToken(device, token string, now time.Time) {
+	if token == "" || la.h.push == nil {
+		return
+	}
+	d, ok := la.h.push.device(device)
+	if !ok {
+		return
+	}
+	la.mu.Lock()
+	last := la.last
+	la.mu.Unlock()
+	la.h.logf("live activity: ending a replaced or retiring activity on %s", d.Name)
+	la.h.push.sendLiveActivity(d, token, liveActivityPayload("end", last, now), "10", func() {})
+}
+
 func (la *liveActivities) send(d Device, r db.LiveActivity, payload map[string]any, urgent bool) {
 	prio := "5"
 	if urgent {
@@ -1358,6 +1420,7 @@ func (la *liveActivities) routes(api *http.ServeMux) {
 			writeBodyErr(w, err, err)
 			return
 		}
+		var replaced string // the token of the activity this report's activity takes over from (#12982)
 		err := la.updateContext(r.Context(), r.PathValue("id"), func(v *db.LiveActivity) {
 			if body.PushToStartToken != "" {
 				v.PushToStartToken = body.PushToStartToken
@@ -1370,6 +1433,9 @@ func (la *liveActivities) routes(api *http.ServeMux) {
 			case body.PushToken != "":
 				if body.ActivityID != v.ActivityID {
 					v.StartedAt = time.Now().UTC()
+					if v.ActivityID != "" && v.PushToken != "" && v.PushToken != body.PushToken {
+						replaced = v.PushToken
+					}
 				}
 				v.ActivityID, v.PushToken = body.ActivityID, body.PushToken
 			}
@@ -1381,6 +1447,11 @@ func (la *liveActivities) routes(api *http.ServeMux) {
 		if err != nil {
 			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
 			return
+		}
+		if replaced != "" {
+			// One card per phone: the hub updates only the newest activity, so the one before it would sit frozen
+			// beside it, "Waiting for hub update…", until iOS removed it hours later.
+			la.endToken(r.PathValue("id"), replaced, la.now())
 		}
 		writeJSON(w, map[string]any{"ok": true})
 	})

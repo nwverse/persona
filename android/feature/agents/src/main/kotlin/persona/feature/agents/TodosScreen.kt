@@ -834,6 +834,7 @@ internal fun TodoHoldLine(hold: TodoHold, modifier: Modifier = Modifier) {
         HoldUnblock.User -> stringResource(R.string.agents_todo_hold_user)
         HoldUnblock.Agent -> stringResource(R.string.agents_todo_hold_agent)
         HoldUnblock.Other -> stringResource(R.string.agents_todo_hold_other)
+        HoldUnblock.Supervisor -> stringResource(R.string.agents_todo_hold_supervisor)
         null -> null
     }
     Text(

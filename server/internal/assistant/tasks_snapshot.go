@@ -130,6 +130,8 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 	asks := s.todoAsks(ctx)
 	lists := machineSessions{} // each machine listed once for all the tasks
 	for _, t := range list {
+		// The hold as the apps read it (currentDelivery): a parked wait or a supervisor's unreviewed hold is not the owner's.
+		t.Delivery = currentDelivery(t)
 		agents := s.taskAgentsIn(ctx, t, lists)
 		st := taskState(t, agents)
 		if t.DoneAt == nil {

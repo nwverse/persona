@@ -1042,6 +1042,7 @@ data class Item(
     val usage: List<TokenUsage> = emptyList(),
     val narration: Boolean? = null,
     @SerialName("codex_heartbeat_quiet") val codexHeartbeatQuiet: Boolean? = null,
+    @SerialName("source_fingerprint") val sourceFingerprint: String? = null,
 )
 
 /**

@@ -829,6 +829,12 @@ nonisolated struct TodoDelivery: Codable, Hashable, Sendable {
         unblock == "user" && (state == "pr" || state == "merged" || state == "off")
     }
 
+    /// An owner hold its Agent reported on a supervised task that the supervisor has not read yet (`unblock`
+    /// `supervisor`, #13191): the supervisor's to turn into a decision, park or send on, never the owner's Needs You.
+    var heldForSupervisor: Bool {
+        unblock == "supervisor" && (state == "pr" || state == "merged" || state == "off")
+    }
+
     enum CodingKeys: String, CodingKey { case state, gate, unblock, at }
 
     init(state: String, gate: String? = nil, unblock: String? = nil, at: Date? = nil) {

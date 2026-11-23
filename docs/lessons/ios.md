@@ -553,6 +553,16 @@ or is not visible yet: retry that same commit and build number. An already visib
 never uploaded a second time. A locked login screen can leave extension `codesign` waiting indefinitely for keychain
 authorization; that is not archive success or a TestFlight upload.
 
+## App Review wants HealthKit named Apple Health where it is used (2026-11-22, #13118)
+
+Guideline 2.5.1 rejected 1.0.0: "The app uses the HealthKit or CareKit APIs but does not clearly identify the HealthKit
+and CareKit functionality in the app's user interface." The app called the source only "Health" in Settings › Connectors
+› This iPhone and said "Apple Health" in Health's Data Sources, below the chats and memory; the reviewer, on an iPad in
+Demo Mode, found neither. Name it **Apple Health** with the Health app's icon (`Theme.Brand.iosHealth`) wherever the
+data is read or saved, near the top of the page that uses it, and tell App Review in the review notes where to look (the
+Health page's Works with Apple Health row, then the switch it opens). The rejection itself is readable only in App Store
+Connect's Resolution Center (the web, or `asc web review show` with a web session), not through the API key.
+
 ## Device names in Siri intent descriptions (#3113)
 
 App Store Connect can commit an upload but reject it before the build appears in TestFlight. Validation code 90626 rejected a meeting-recording App Intent description containing `iPhone`, even though archive, export, purpose strings and entitlements passed. Keep the intent description device-neutral in Swift and in every catalog translation; changing a permission purpose string does not fix Siri metadata. If a committed upload never appears, inspect the upload's state and errors instead of re-uploading the same package or treating the wait timeout as success.
@@ -3231,3 +3241,36 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
   Cancel the loser by its owner, so a late completion cannot install a route or close the next recovery's tunnel.
 - Test a server that accepts TCP but never sends its SSH greeting, and use controlled route continuations. Killing
   an established test sshd session alone does not exercise pending-dial cancellation or foreground request ordering.
+
+## The To-dos foot toolbar and its list (2026-11-22, #10465)
+
+- **A list row's traits belong on its outermost view.** The To-dos rows set `listRowInsets` inside their cell view,
+  under `.swipeActions` and `.contextMenu`, with `.onAppear`, `.onGeometryChange` and `.id` added outside it by the list.
+  The list never read them: every row kept the system's margins on every side, 20 to 30 pt taller than drawn on paper
+  and, on iOS 18 and 27, 20 pt inside the card instead of 16 (iOS 26.3's own 16 hid it sideways). Set last, after the
+  `.id`, the rows came out at the spec's height (a two-line row 101 → 71 pt). The fold line, a `Button` with the
+  modifier on it directly, had honored it all along, which is how the difference showed: measure a row against a
+  line whose insets are known. `TodosV1ListTests.testTheRowsAreCompact` checks the cell's height against its words.
+- **A bottom-bar item whose label changes kind can draw empty.** One `ToolbarItem(placement: .bottomBar)` whose label
+  switched from a `Label` (the Filter at rest) to an `HStack` of the glyph and a `Text` (a choice on) was drawn empty on
+  iOS 26.3. Two items, one per form, chosen on the view, draw both.
+- **A list row does not say it went under a bar.** `onScrollVisibilityChange` never reported the guard line as gone
+  while the navigation bar covered it. Compare the row's `frame(in: .scrollView)` with the list's top inset from
+  `onScrollGeometryChange` instead; a reused cell reports nothing more once off screen, so the last value stands.
+- **Menus on iOS 26 and later carry no accessibility identifiers on their items.** A UI test finds an item of a menu
+  with a fixed order (`.menuOrder(.fixed)`) by its place in the menu's collection view, its identifier first where the
+  OS keeps it.
+- **iOS 18 sets a row's insets only all four at once** (`listRowInsets(.horizontal, …)` is iOS 26):
+  `SystemCompat.listRowHorizontalInsets` leaves iOS 18's headers at the system's.
+- **Back from a page without the foot toolbar, a list at its very end sat lower** (iOS 27.2, 52 pt in the UI test):
+  while the pushed page is in front the list's foot inset loses the toolbar, the list is held to that shorter end, and
+  the toolbar's inset comes back without moving it up again. `TodoListView.backToTheEnd` scrolls a list that rested at
+  its end to its last row's top for a second after the pop, which the list cannot reach, so it stops at its end;
+  `testTheListStaysWhereItRested` swipes to the end and fails without it. Where the list rested is read when a scroll
+  phase ends; a move the page makes itself (`scrollTo`, a search narrowing the list) ends none, so it clears the value
+  (`TodoListSight.moved`), or Back would pull a list the page had moved to its end.
+- **A section header's id scrolls its rows to the top, not the header.** `ScrollViewProxy.scrollTo(<header id>,
+  anchor: .top)` in an inset grouped `List` left the header under the navigation bar. To put a list at its top, scroll
+  its first row to the foot of what is in sight (`anchor: .bottom`): the list cannot go that far up and stops at its top.
+- **Under an inline title, iOS 18's search drawer starts hidden** until a pull (the placement `pageSearchable` picks),
+  so a calm list showed no way to search. `.navigationBarDrawer(displayMode: .always)` keeps it shown.
