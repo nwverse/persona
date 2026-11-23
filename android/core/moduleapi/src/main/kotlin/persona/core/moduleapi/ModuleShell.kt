@@ -2,6 +2,7 @@ package persona.core.moduleapi
 
 import persona.core.contracts.api.AssistantConversations
 import persona.core.contracts.api.KnowledgeConnection
+import persona.core.contracts.api.MainConversationSender
 import persona.core.contracts.api.MessageSender
 import persona.core.contracts.api.SessionsRepository
 
@@ -16,6 +17,8 @@ interface ModuleShell {
     val knowledgeNamespace: String?
     val assistant: AssistantConversations
     val sender: MessageSender
+    /** The main conversation's sender, the app's one for every pairing. */
+    fun mainConversationSender(): MainConversationSender
     val sessions: SessionsRepository
 
     /** Opens [url] in the app's reader, never an outside app. */

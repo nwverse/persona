@@ -730,6 +730,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 }
         }
     }
+    val appContext = LocalContext.current.applicationContext
     val moduleSettingsPages = remember(hubFeatures) { persona.android.Modules.carried.settingsPages(hubFeatures) }
     val modulePlaces = remember(modules) { modules.flatMap { it.places }.toSet() }
     CompositionLocalProvider(persona.core.moduleapi.LocalModuleActions provides moduleActions,
@@ -1219,6 +1220,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     override val sender = session.sender
                     override val sessions = session.sessions
                     override fun openLink(url: String) = uriHandler.openUri(url)
+                    override fun mainConversationSender() = dagger.hilt.android.EntryPointAccessors.fromApplication(
+                        appContext, persona.feature.assistant.AssistantEntryPoint::class.java).mainConversationSender()
                 }
             }
             moduleEntries(modules) { module ->

@@ -31,7 +31,7 @@ object KnowledgeModule : PersonaModule {
             entries.entry<KnowledgeMapRoute> { context.unavailable(stringResource(R.string.knowledge_demo_unavailable)) }
             entries.entry<KnowledgeDetailRoute> { context.unavailable(stringResource(R.string.knowledge_demo_unavailable)) }
         } else {
-            entries.knowledgeEntries(context.navigator, shell.knowledge, shell.assistant, shell.sender, shell.sessions,
+            entries.knowledgeEntries(context.navigator, shell.knowledge, shell.assistant, shell.sender, shell::mainConversationSender, shell.sessions,
                 shell.knowledgeNamespace, shell::openLink,
                 onNewAgent = { start -> context.navigator.navigate(NewAgentRoute(start.machineId, start.cwd, start.prompt)) })
         }

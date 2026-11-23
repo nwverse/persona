@@ -5,7 +5,6 @@ plugins {
     // Its tests expect CoreText in Simplified Chinese (CoreTextFallback).
     id("persona.coretext.zh")
     id("persona.compose")
-    id("persona.hilt")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
