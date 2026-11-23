@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -47,13 +48,13 @@ func (h *Manager) botEventHandler(api *feishubot.Client) feishubot.Handler {
 }
 
 func (h *Manager) botEventFrom(ctx context.Context, payload []byte, api *feishubot.Client) (any, error) {
-	env, err := feishubot.ParseEnvelope(payload)
+	env, err := botcard.ParseEnvelope(payload)
 	if err != nil {
 		return nil, nil // something else (a 1.0 event, the url check): nothing to do
 	}
 	switch env.Header.EventType {
-	case feishubot.EventMessage:
-		var ev feishubot.MessageEvent
+	case botcard.EventMessage:
+		var ev botcard.MessageEvent
 		if err := json.Unmarshal(env.Event, &ev); err != nil {
 			return nil, err
 		}
@@ -82,31 +83,31 @@ func (h *Manager) botEventFrom(ctx context.Context, payload []byte, api *feishub
 		b.line = done
 		b.mu.Unlock()
 		go h.botMessage(ev, env.Event, time.Now(), prev, done, queued)
-	case feishubot.EventCardAction:
+	case botcard.EventCardAction:
 		h.bots.mu.Lock()
 		current := h.bots.acceptBotEventLocked(api, env.Header.AppID)
 		h.bots.mu.Unlock()
 		if !current {
 			return nil, nil
 		}
-		var a feishubot.CardAction
+		var a botcard.CardAction
 		if err := json.Unmarshal(env.Event, &a); err != nil {
 			return nil, err
 		}
 		return h.botCardAction(ctx, &a, env.Event), nil
-	case feishubot.EventRecalled:
-		var ev feishubot.Recalled
+	case botcard.EventRecalled:
+		var ev botcard.Recalled
 		if json.Unmarshal(env.Event, &ev) == nil {
 			h.botRecalled(ev, api, env.Header.AppID)
 		}
-	case feishubot.EventP2PEntered:
+	case botcard.EventP2PEntered:
 		h.bots.mu.Lock()
 		current := h.bots.acceptBotEventLocked(api, env.Header.AppID)
 		h.bots.mu.Unlock()
 		if !current {
 			return nil, nil
 		}
-		var ev feishubot.P2PEntered
+		var ev botcard.P2PEntered
 		if json.Unmarshal(env.Event, &ev) == nil {
 			go h.botWelcome(ev.OperatorID.OpenID, ev.ChatID)
 		}
@@ -117,7 +118,7 @@ func (h *Manager) botEventFrom(ctx context.Context, payload []byte, api *feishub
 // botRecalled cancels a queued owner message locally, or tells the assistant
 // about a recall after handoff has begun. Group recalls require an exact known
 // owner message because the recall event does not identify its sender.
-func (h *Manager) botRecalled(ev feishubot.Recalled, api *feishubot.Client, appID string) {
+func (h *Manager) botRecalled(ev botcard.Recalled, api *feishubot.Client, appID string) {
 	if ev.MessageID == "" || ev.RecallType != "" && ev.RecallType != "message_owner" {
 		return
 	}
@@ -166,7 +167,7 @@ const botSeenKeep = 300
 // claimBotMessageLocked dedupes and reserves pending ownership in the same
 // critical section as the message's queue position. Recent history can evict
 // an id, but cannot make a second handler for the same pending reference.
-func (b *botHub) claimBotMessageLocked(ev feishubot.MessageEvent) (*botQueuedMessage, bool) {
+func (b *botHub) claimBotMessageLocked(ev botcard.MessageEvent) (*botQueuedMessage, bool) {
 	id := ev.Message.MessageID
 	ref := botMessageReference(b.api, ev.Sender.SenderID.OpenID, ev.Message.ChatID, id)
 	if b.queuedMessages[ref] != nil || b.recentMessages[ref] == botMessageCanceled {
@@ -267,7 +268,7 @@ func (h *Manager) botNoteThrottled(api *feishubot.Client, openID, chatID, text s
 func (h *Manager) botSendNote(api *feishubot.Client, chatID, text string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if _, err := api.Send(ctx, "chat_id", chatID, feishubot.TypeText, feishubot.TextContent(text), feishuSendUUID()); err != nil {
+	if _, err := api.Send(ctx, "chat_id", chatID, feishubot.TypeText, botcard.TextContent(text), feishuSendUUID()); err != nil {
 		h.logf("bots: tell: %v", err)
 	}
 }
@@ -292,7 +293,7 @@ func botTurnWait() time.Duration { return inboundWait + 25*time.Second }
 
 // botMessage handles one message to the bot, which came at since: the owner's go to the assistant, after the one
 // before it (prev; nil for none) is handed over. done is closed once this one is, whatever became of it.
-func (h *Manager) botMessage(ev feishubot.MessageEvent, raw json.RawMessage, since time.Time, prev, done chan struct{}, queued *botQueuedMessage) {
+func (h *Manager) botMessage(ev botcard.MessageEvent, raw json.RawMessage, since time.Time, prev, done chan struct{}, queued *botQueuedMessage) {
 	if queued != nil {
 		defer func() {
 			h.bots.mu.Lock()
@@ -343,7 +344,7 @@ func (h *Manager) botMessage(ev feishubot.MessageEvent, raw json.RawMessage, sin
 		return
 	}
 	if set.Owner == nil {
-		content := feishubot.ParseContent(msg.MessageType, msg.Content, msg.Mentions)
+		content := botcard.ParseContent(msg.MessageType, msg.Content, msg.Mentions)
 		h.botPair(api, sender, msg.ChatID, strings.TrimSpace(content.Text))
 		return
 	}
@@ -363,7 +364,7 @@ func (h *Manager) botMessage(ev feishubot.MessageEvent, raw json.RawMessage, sin
 	// question-only answer capability and a separate, exact direct-parent proof
 	// for server-owned permission proposals. It never broadens legacy typed
 	// answers to plans, permissions or terminal dialogs.
-	content := feishubot.ParseContent(msg.MessageType, msg.Content, msg.Mentions)
+	content := botcard.ParseContent(msg.MessageType, msg.Content, msg.Mentions)
 	action := h.issueOwnerReplyAction(channel.Feishu, assistantwire.OwnerApprovalProof{
 		MessageID: msg.MessageID, ParentID: msg.ParentID, ChatID: msg.ChatID, Text: content.Text,
 	})
@@ -374,7 +375,7 @@ func (h *Manager) botMessage(ev feishubot.MessageEvent, raw json.RawMessage, sin
 // sent (in the topic, for a message that came in one). pass releases the next message's wait once this one is handed
 // over, whatever came of it. from is FeishuMessage.From: assistantwire.FeishuFromElsewhere for the owner's "/ai" from a
 // group that is not opted in, whose note goes under that message and nowhere else.
-func (h *Manager) handToAssistant(api *feishubot.Client, ev feishubot.MessageEvent, raw json.RawMessage, action, from string, since time.Time, pass func(), inThread bool) {
+func (h *Manager) handToAssistant(api *feishubot.Client, ev botcard.MessageEvent, raw json.RawMessage, action, from string, since time.Time, pass func(), inThread bool) {
 	msg := ev.Message
 	if !h.beginBotHandoff(api, ev, inThread) {
 		return
@@ -393,7 +394,7 @@ func (h *Manager) handToAssistant(api *feishubot.Client, ev feishubot.MessageEve
 	if from != "" {
 		// Under the owner's "/ai" message, and only there: were it gone, the note is lost rather than written into a
 		// group that is not the bot's to write in (replyOrSendOpt, no_detour).
-		content := feishubot.TextContent(text)
+		content := botcard.TextContent(text)
 		if _, _, err := h.replyOrSendOpt(ctx, api, msg.ChatID, msg.MessageID, feishubot.TypeText, content, feishuReplyUUIDIn(msg.MessageID, "n", text, false), false, true); err != nil {
 			h.logf("bots: note: %v", err)
 		}
@@ -403,7 +404,7 @@ func (h *Manager) handToAssistant(api *feishubot.Client, ev feishubot.MessageEve
 }
 
 // botCardAction answers a press on one of the bot's cards: only the owner's count, and the assistant answers them.
-func (h *Manager) botCardAction(ctx context.Context, a *feishubot.CardAction, raw json.RawMessage) any {
+func (h *Manager) botCardAction(ctx context.Context, a *botcard.CardAction, raw json.RawMessage) any {
 	api, set := h.botAPI()
 	if set.Owner == nil || a.Operator.OpenID != set.Owner.OpenID {
 		return toast("error", i18n.T(h.userLang(), "hub-bots_chat.owner_only_action"))
@@ -471,8 +472,8 @@ func (h *Manager) cardChat(ctx context.Context, api *feishubot.Client, messageID
 	return ""
 }
 
-func toast(kind, text string) *feishubot.CardResponse {
-	return &feishubot.CardResponse{Toast: &feishubot.Toast{Type: kind, Content: text}}
+func toast(kind, text string) *botcard.CardResponse {
+	return &botcard.CardResponse{Toast: &botcard.Toast{Type: kind, Content: text}}
 }
 
 // botPair: the message is the code shown in the app, or the sender is told how to pair. Paired, the assistant is told
@@ -566,7 +567,7 @@ func (h *Manager) botPair(api *feishubot.Client, openID, chatID, text string) {
 	}
 	l := h.userLang()
 	body := i18n.T(l, "hub-bots_chat.paired_body")
-	card := feishubot.NewCard(i18n.T(l, "hub-bots_chat.paired"), feishubot.Green, i18n.T(l, "hub-bots_chat.paired")).Markdown(body)
+	card := botcard.NewCard(i18n.T(l, "hub-bots_chat.paired"), botcard.Green, i18n.T(l, "hub-bots_chat.paired")).Markdown(body)
 	if _, err := h.botPost(ctx, api, chatID, "", card, body); err != nil {
 		h.logf("bots: paired note: %v", err)
 	}
@@ -637,7 +638,7 @@ func (h *Manager) replyOrSend(ctx context.Context, api *feishubot.Client, chatID
 }
 
 // replyOrSendOpt is replyOrSend that, with noDetour, does not reroute a reply whose parent is gone: the error comes
-// back (feishubot.MessageGone tells it). For a caller whose line belongs under that parent or nowhere (a to-do's line
+// back (botcard.MessageGone tells it). For a caller whose line belongs under that parent or nowhere (a to-do's line
 // into its topic): in the chat it would be a stray message.
 func (h *Manager) replyOrSendOpt(ctx context.Context, api *feishubot.Client, chatID, replyTo, msgType, content, replyUUID string, inThread, noDetour bool) (id string, rerouted bool, err error) {
 	if replyTo == "" {
@@ -645,7 +646,7 @@ func (h *Manager) replyOrSendOpt(ctx context.Context, api *feishubot.Client, cha
 		return
 	}
 	id, err = api.Reply(ctx, replyTo, msgType, content, replyUUID, inThread)
-	if !feishubot.MessageGone(err) {
+	if !botcard.MessageGone(err) {
 		return
 	}
 	if noDetour {
@@ -710,7 +711,7 @@ func botSendChat(set FeishuBotSettings, chatID string) (string, error) {
 // botNoteIn replies to a message with a line of text; a parent withdrawn meanwhile gets the note in the chat instead.
 // inThread: it may go into the parent's thread, for a message that came in a topic.
 func (h *Manager) botNoteIn(ctx context.Context, api *feishubot.Client, chatID, messageID, text string, inThread bool) {
-	content := feishubot.TextContent(text)
+	content := botcard.TextContent(text)
 	if _, _, err := h.replyOrSend(ctx, api, chatID, messageID, feishubot.TypeText, content, feishuReplyUUIDIn(messageID, "n", text, inThread), inThread); err != nil {
 		h.logf("bots: note: %v", err)
 	}
@@ -718,7 +719,7 @@ func (h *Manager) botNoteIn(ctx context.Context, api *feishubot.Client, chatID, 
 
 // botPost sends a card: as a reply to replyTo, else into the chat. A card Feishu refuses goes again as rich text
 // (fallback, else the card's own Markdown is lost: then a line saying so).
-func (h *Manager) botPost(ctx context.Context, api *feishubot.Client, chatID, replyTo string, card *feishubot.Card, fallback string) (string, error) {
+func (h *Manager) botPost(ctx context.Context, api *feishubot.Client, chatID, replyTo string, card *botcard.Card, fallback string) (string, error) {
 	return h.botPostJSON(ctx, api, chatID, replyTo, card.JSON(), fallback)
 }
 
@@ -755,7 +756,7 @@ func (h *Manager) botPostJSONKeyedOpt(ctx context.Context, api *feishubot.Client
 		return id, err
 	}
 	id, err := send(feishubot.TypeInteractive, card, cardUUID)
-	if err != nil && feishubot.CardRejected(err) {
+	if err != nil && botcard.CardRejected(err) {
 		h.logf("bots: card refused (%v); sending it as rich text", err)
 		if fallback == "" {
 			fallback = i18n.T(h.botLang(ctx), "hub-bots_chat.card_refused")
@@ -767,7 +768,7 @@ func (h *Manager) botPostJSONKeyedOpt(ctx context.Context, api *feishubot.Client
 		case replyTo != "":
 			fallbackUUID = feishuReplyUUIDIn(replyTo, "f", fallback, inThread)
 		}
-		return send(feishubot.TypePost, feishubot.PostMarkdown(fallback), fallbackUUID)
+		return send(feishubot.TypePost, botcard.PostMarkdown(fallback), fallbackUUID)
 	}
 	return id, err
 }

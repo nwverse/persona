@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
@@ -131,6 +132,10 @@ func TestTokenWaitLeaderRecovery(t *testing.T) {
 			unblock := func() { once.Do(func() { close(release) }) }
 			var fetches, active, peak, calls atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/" { // a local node's port probe (node/ports.go)
+					http.NotFound(w, r)
+					return
+				}
 				if r.URL.Path == tokenPath {
 					n := fetches.Add(1)
 					current := active.Add(1)
@@ -198,7 +203,7 @@ func TestTokenWaitLeaderRecovery(t *testing.T) {
 				if mode == "success" && err != nil {
 					t.Fatal(err)
 				}
-				var apiErr *feishubot.APIError
+				var apiErr *botcard.APIError
 				if mode == "failure" && (!errors.As(err, &apiErr) || apiErr.Code != 10001) {
 					t.Fatalf("leader error = %v", err)
 				}

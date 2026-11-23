@@ -89,6 +89,11 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if t.Readonly {
 			asked = ""
 		}
+		callerPermission := asked
+		t.CallerPermission = &callerPermission
+		t.LauncherDefaultModel = false // the hub's: a tool call cannot import another start's native-default choice
+		t.StartPermission = ""
+		t.RetryFromAgent, t.RetryFromAllowAll = "", false // a new plan cannot import another retry's provenance
 		t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
@@ -497,8 +502,9 @@ func applyPlanEdit(t *PlanTask, e PlanTask) {
 	if s := strings.TrimSpace(e.Speed); s != "" {
 		t.Speed = s
 	}
-	if s := strings.TrimSpace(e.Permission); s != "" {
+	if s := strings.TrimSpace(e.Permission); s != "" && s != strings.TrimSpace(t.Permission) {
 		t.Permission = s
+		t.CallerPermission = &s
 	}
 	if e.Ultracode != nil {
 		t.Ultracode = e.Ultracode

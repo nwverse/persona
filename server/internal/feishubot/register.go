@@ -2,6 +2,7 @@ package feishubot
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/base64"
@@ -105,7 +106,7 @@ func (r *Registrar) Begin(ctx context.Context, region, name string) (RegisterCha
 		return RegisterChallenge{}, err
 	}
 	if out.Error != "" {
-		return RegisterChallenge{}, fmt.Errorf("registration: %s", firstOf(out.ErrorDescription, out.Error))
+		return RegisterChallenge{}, fmt.Errorf("registration: %s", cmp.Or(out.ErrorDescription, out.Error))
 	}
 	raw := strings.TrimSpace(out.VerificationURIComplete)
 	if raw == "" && out.VerificationURI != "" && out.UserCode != "" {
@@ -158,7 +159,7 @@ func (r *Registrar) Poll(ctx context.Context, region, deviceCode string) (Regist
 		t.Status = RegisterDenied
 	default:
 		t.Status = RegisterFailed
-		t.ErrorText = firstOf(out.ErrorDescription, out.Error)
+		t.ErrorText = cmp.Or(out.ErrorDescription, out.Error)
 	}
 	return t, nil
 }
