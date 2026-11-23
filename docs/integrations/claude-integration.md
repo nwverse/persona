@@ -787,6 +787,9 @@ installs and updates it.
   For 3 minutes after the node starts, a session whose claude can have the plugin (it is installed in that claude's
   config directory) and has not polled yet gets up to 10 s for its first poll before the message is relayed as
   `no_plugin`: a node that restarted (an update) knows no plugin until each polls again, a few seconds later.
+  The 250 ms settle window only frees the plugin's poll loop for interrupts and more prompts; it sends no final ack.
+  The submit continuation reports the actual outcome later, so a delayed rejection or `drop` cannot be preceded by a
+  timer-generated success. While it is pending, the transcript's queue/prompt line can confirm it as above.
   `session.send` answers `delivered_as: "user_input"` or `"relayed"` with `relay_reason` (`no_plugin`, `busy`,
   `plugin_outdated`, `plugin_unavailable`, `plugin_refused`, `plugin_unconfirmed`), only for messages that carried
   `owner_input` to such a session; a relayed message that ends in an error (`peer_unconfirmed`, `peer_held`) carries

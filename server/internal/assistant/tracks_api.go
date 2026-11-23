@@ -190,6 +190,7 @@ func (s *Service) trackCreate(w http.ResponseWriter, r *http.Request) {
 		trackWriteError(w, err)
 		return
 	}
+	s.prepareTrackSoon(in.Slug)
 	s.answerTrack(ctx, w, in.Slug, http.StatusCreated)
 }
 
