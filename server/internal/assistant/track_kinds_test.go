@@ -225,7 +225,7 @@ func trackKindService(t *testing.T) (*Service, *trackKindMemStore) {
 	return newServiceOn(t, newFakeHub(), st), st
 }
 
-func decodeBody[T any](t *testing.T, b []byte) T {
+func decodeTrackJSON[T any](t *testing.T, b []byte) T {
 	t.Helper()
 	var v T
 	if err := json.Unmarshal(b, &v); err != nil {
@@ -244,13 +244,13 @@ func TestTracksAPI(t *testing.T) {
 	policyBefore := s.trackPolicy(ctx, SpaceHealth)
 
 	w := serve(s, http.MethodGet, "/api/v1/assistant/track-kinds", "")
-	kinds := decodeBody[assistantwire.TrackKinds](t, w.Body.Bytes())
+	kinds := decodeTrackJSON[assistantwire.TrackKinds](t, w.Body.Bytes())
 	if w.Code != http.StatusOK || len(kinds.Kinds) != 2 || kinds.Kinds[0].Slug != trackKindOrchestration || kinds.Kinds[1].Slug != trackKindSpace ||
 		!kinds.Kinds[0].Builtin || !slices.Equal(kinds.Kinds[0].Warnings, []string{trackWarnSupervisionLeaders}) {
 		t.Fatalf("built-in kinds: %d %s", w.Code, w.Body)
 	}
 	w = serve(s, http.MethodGet, "/api/v1/assistant/tracks", "")
-	tracks := decodeBody[assistantwire.Tracks](t, w.Body.Bytes())
+	tracks := decodeTrackJSON[assistantwire.Tracks](t, w.Body.Bytes())
 	if w.Code != http.StatusOK || len(tracks.Tracks) != 1 || tracks.Tracks[0].Slug != SpaceHealth || !tracks.Tracks[0].Builtin ||
 		tracks.Tracks[0].Config.Template != trackTemplateHealth || !slices.Equal(tracks.Tracks[0].Config.DefaultCategories, []string{categoryHealth}) {
 		t.Fatalf("tracks: %d %s", w.Code, w.Body)
@@ -272,7 +272,7 @@ func TestTracksAPI(t *testing.T) {
 
 	// A track of a built-in kind takes the kind's template and categories.
 	w = serve(s, http.MethodPost, "/api/v1/assistant/tracks", `{"slug":"qa-plain","kind":"space","title":"QA plain","icon":"leaf"}`)
-	plain := decodeBody[assistantwire.Track](t, w.Body.Bytes())
+	plain := decodeTrackJSON[assistantwire.Track](t, w.Body.Bytes())
 	if w.Code != http.StatusCreated || plain.Template != trackTemplateSpace || len(plain.DefaultCategories) != 0 || plain.Revision != 1 ||
 		plain.Config.UserInstructions != "space_md" || !plain.Config.CaptureTarget {
 		t.Fatalf("create qa-plain: %d %s", w.Code, w.Body)
@@ -311,7 +311,7 @@ func TestTracksAPI(t *testing.T) {
 		t.Errorf("change an unknown track: %d, want 404", w.Code)
 	}
 	w = serve(s, http.MethodPut, "/api/v1/assistant/tracks/qa-plain", `{"revision":1,"title":"QA plain renamed","archived":true}`)
-	plain = decodeBody[assistantwire.Track](t, w.Body.Bytes())
+	plain = decodeTrackJSON[assistantwire.Track](t, w.Body.Bytes())
 	if w.Code != http.StatusOK || plain.Title != "QA plain renamed" || !plain.Archived || plain.Revision != 2 {
 		t.Fatalf("change qa-plain: %d %s", w.Code, w.Body)
 	}
@@ -349,7 +349,7 @@ func TestTracksAPI(t *testing.T) {
 		}
 	}
 	w = serve(s, http.MethodPost, "/api/v1/assistant/tracks", `{"slug":"qa-finance","kind":"qa-kind","title":"QA finance"}`)
-	fin := decodeBody[assistantwire.Track](t, w.Body.Bytes())
+	fin := decodeTrackJSON[assistantwire.Track](t, w.Body.Bytes())
 	if w.Code != http.StatusCreated || !slices.Equal(fin.DefaultCategories, []string{categoryFinance}) || len(fin.Config.Rhythms) != 1 ||
 		fin.Template != trackTemplateSpace {
 		t.Fatalf("create qa-finance: %d %s", w.Code, w.Body)
@@ -376,7 +376,7 @@ func TestTracksAPI(t *testing.T) {
 	st.kmu.Unlock()
 	s.tracksChanged()
 	w = serve(s, http.MethodGet, "/api/v1/assistant/track-kinds", "")
-	kinds = decodeBody[assistantwire.TrackKinds](t, w.Body.Bytes())
+	kinds = decodeTrackJSON[assistantwire.TrackKinds](t, w.Body.Bytes())
 	if k := kinds.Kinds[len(kinds.Kinds)-1]; k.Slug != "qa-later" || k.Disabled != kindDisabledSchema {
 		t.Errorf("the newer kind: %+v", k)
 	}

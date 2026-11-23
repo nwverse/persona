@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Track kinds (#13472, docs/assistant/health.md "Tracks and kinds"). A kind is what its tracks do: a config whose every
@@ -84,7 +84,7 @@ const (
 )
 
 // trackIconPattern is a design-system icon token's name: never an SF Symbol's (they have dots) or a color.
-var trackIconPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9_]{0,63}$`)
+var trackIconPattern = lazyre.New(`^[a-z][a-zA-Z0-9_]{0,63}$`)
 
 // validTrackIcon: icon is empty or a token name.
 func validTrackIcon(icon string) bool { return icon == "" || trackIconPattern.MatchString(icon) }
