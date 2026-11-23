@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
@@ -131,12 +131,12 @@ func (r *Reader) sqlite() string {
 
 // Status checks that chat.db is there and readable.
 func (r *Reader) Status(ctx context.Context) Status {
-	st := Status{State: connector.StateOK, Via: r.Via}
+	st := Status{State: connectorwire.StateOK, Via: r.Via}
 	if _, err := os.Stat(r.chatDB()); err != nil {
 		if errors.Is(err, fs.ErrPermission) {
 			return r.denied(st)
 		}
-		st.State, st.Error = connector.StateNotConfigured, "这台电脑上没有「信息」的数据"
+		st.State, st.Error = connectorwire.StateNotConfigured, "这台电脑上没有「信息」的数据"
 		return st
 	}
 	var rows []struct{ N int }
@@ -144,13 +144,13 @@ func (r *Reader) Status(ctx context.Context) Status {
 		if errors.Is(err, ErrNoPermission) {
 			return r.denied(st)
 		}
-		st.State, st.Error = connector.StateError, "读不了「信息」的数据："+err.Error()
+		st.State, st.Error = connectorwire.StateError, "读不了「信息」的数据："+err.Error()
 	}
 	return st
 }
 
 func (r *Reader) denied(st Status) Status {
-	st.State = connector.StateNoPermission
+	st.State = connectorwire.StateNoPermission
 	st.Error = "macOS 不让 Persona 读这台 Mac 上的「信息」：要给它「完全磁盘访问权限」"
 	if r.Via == "launchd" {
 		exe := r.Executable

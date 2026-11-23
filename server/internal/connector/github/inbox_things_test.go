@@ -8,13 +8,13 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 )
 
 // sameRows stops the test unless two non-empty lists of Inbox rows are the same field for field, as the Inbox reads
 // them (their JSON).
-func sameRows(t *testing.T, what string, got, want []connector.InboxThing) {
+func sameRows(t *testing.T, what string, got, want []connectorwire.InboxThing) {
 	t.Helper()
 	g, _ := json.Marshal(got)
 	w, _ := json.Marshal(want)
@@ -30,7 +30,7 @@ func (o oneConnector) Find(_ context.Context, id string) (subscriptions.Connecto
 	if id != o.c.ID() {
 		return subscriptions.ConnectorInfo{}, false
 	}
-	return subscriptions.ConnectorInfo{ID: id, Conn: o.c, Enabled: true, Status: connector.StateOK}, true
+	return subscriptions.ConnectorInfo{ID: id, Conn: o.c, Enabled: true, Status: connectorwire.StateOK}, true
 }
 
 func (o oneConnector) All(ctx context.Context) []subscriptions.ConnectorInfo {
@@ -64,7 +64,7 @@ func TestTheSwitchedFeedHandsCollectsRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []connector.InboxThing
+	var got []connectorwire.InboxThing
 	for _, s := range srcs {
 		if s.ID != c.ID() {
 			continue
@@ -94,13 +94,13 @@ func (c *stepClock) Sleep(ctx context.Context, d time.Duration) error {
 func (c *stepClock) step(d time.Duration) { c.mu.Lock(); c.t = c.t.Add(d); c.mu.Unlock() }
 
 // switchedRows are the rows the switched feed hands the Inbox under source id.
-func switchedRows(t *testing.T, svc *subscriptions.Service, id string) []connector.InboxThing {
+func switchedRows(t *testing.T, svc *subscriptions.Service, id string) []connectorwire.InboxThing {
 	t.Helper()
 	srcs, err := svc.InboxSources(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []connector.InboxThing
+	var got []connectorwire.InboxThing
 	for _, s := range srcs {
 		if s.ID != id {
 			continue
