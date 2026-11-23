@@ -538,6 +538,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	// A manager that knows lanes asks for them after node.info (docs/protocol/protocol.md "Lanes"): pongs and answers
 	// then pass file chunks and updates on the way.
 	n.peer.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
+	n.peer.CreditReplies(nodeproto.NodeCreditReplies...)
 	if n.resumeWindow > 0 { // a resident node's: the connection outlives a transport that ends (attach_resume.go)
 		n.peer.EnableResume(n.resumeWindow)
 		n.peer.OnLost = func(err error) {
@@ -2410,8 +2411,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if err := n.refreshExport(p.SessionID, f); err != nil {
 				return nil, err
 			}
-		} else if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
-			return nil, err
+		} else if p.UserInputs {
+			if err := n.refresh(p.SessionID, f); err != nil {
+				return nil, err
+			}
+		} else {
+			_ = n.refreshForPage(p.SessionID, f) // not behind a catch-up's pushes (#13677)
 		}
 		if p.UserInputs {
 			return f.UserInputs(ctx)
