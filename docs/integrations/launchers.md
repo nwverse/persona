@@ -780,11 +780,12 @@ Persona checks the effective Base URL/provider address, never the launcher name.
 | Header | Value |
 | --- | --- |
 | `X-Persona-Role` | `main` for interactive main/side chats; `leader` for direction conversations; `routine` for scheduled runs and their conversations; `task_agent` for work Agents; `background` for sorting, knowledge helpers, supervision and model health probes |
-| `X-Persona-Todo` | Linked to-do ID, when known |
+| `X-Persona-Todo` | Linked to-do ID, when known at process start (an `agent_start` makes its to-do before the start, so its Agent names it) |
 | `X-Persona-Routine` | Scheduled-task ID, when known |
 | `X-Persona-Session` | Persona session ID, when known at process start/resume |
 
-Only role enums and validated IDs enter these fields. A routine delivered into an interactive conversation has the
+Persona's own gateway reads for extensions (quota and usage through the hub or a node) and provider tests and model
+lists are `background`. Only role enums and validated IDs enter these fields. A routine delivered into an interactive conversation has the
 routine's accounting role for that run; the next interactive message restores the conversation's role. Manager-owned
 records supply the metadata on starts, sends and autonomous resumes. Source changes participate in process reuse,
 and node state preserves attribution through the manager's database boundary.
@@ -799,6 +800,8 @@ Codex uses a final CLI helper after normal shell launcher expansion, or after a 
 per-invocation `-c` overrides for the selected custom provider's `env_http_headers`. Existing literal headers are carried
 in environment bindings too, so credentials never enter the new arguments. Authentication, provider URL and unrelated
 headers stay intact. These local configuration overrides keep attribution on that process rather than a shared daemon.
+A terminal's shell has its engine's environment, not the node's, so the node hands its allowlist to that helper in the
+start file (`codex-start`) or in its answer to `personad launch`; the shell need not export `PERSONA_MODEL_SOURCE_HOSTS`.
 Some Codex traffic cannot carry the fields: the built-in `openai` provider ignores ordinary provider header overrides;
 explicit remote/desktop app-servers and external runtimes own their own HTTP transport; project-level provider choices
 are skipped because only Codex knows whether it trusts that project configuration. Unknown/unreadable provider
