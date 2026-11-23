@@ -156,6 +156,14 @@ func (n *Node) supervisorResumeAllowed(id, mode, launcher string) error {
 	if _, live := n.agent(id); live {
 		return refusal("resume_not_allowed", "The session is running again; refresh it before sending.", nil)
 	}
+	if cause == proto.StopUnknown {
+		// A Codex thread archived in Codex itself was put away there, likely by the user: as an Agent archived in
+		// Persona (the hub's resumeAllowed), only a recorded non-user stop lets the assistant restore and resume it.
+		if home, _, ok := n.codexThread(id); ok && codexArchived(home, n.codexPath(id)) {
+			return refusal("resume_not_allowed", "Supervisor resume of an archived Codex session needs a recorded "+
+				"non-user stop; stop cause is unknown. Use the owner's Resume.", nil)
+		}
+	}
 	if cause == proto.StopUnknown && n.uncertainResumes.settling(id, time.Now()) {
 		// An earlier start of it ended uncertain (a line typed into a shell, a stalled Agent, an unanswered call): it may
 		// still come up, and a second resume must not start it twice (#8214).
