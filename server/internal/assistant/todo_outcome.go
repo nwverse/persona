@@ -115,7 +115,11 @@ func (s *Service) recordTaskOutcome(t Todo, doneAt time.Time) {
 	}
 	agents := s.outcomeAgents(rctx, t)
 	if len(agents) == 0 {
-		s.logf("task %s: outcome: no agent reply to read", t.ID)
+		if panes := s.agyUnlinkedPanes(rctx, t); len(panes) > 0 {
+			s.logf("task %s: outcome: no agent reply to read: %s", t.ID, agyUnlinkedLog(panes))
+		} else {
+			s.logf("task %s: outcome: no agent reply to read", t.ID)
+		}
 		return
 	}
 	mctx, mcancel := context.WithTimeout(context.Background(), outcomeModelTimeout)

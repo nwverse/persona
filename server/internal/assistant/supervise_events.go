@@ -195,6 +195,9 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 		detail += "：" + c.Reason
 	}
 	if c.Verdict == verdictUnsure { // no word on it either way: not "stopped short" (#3111)
+		if c.Detail != "" {
+			detail = c.Detail // which pane could not be read, and which conversations may hold its reply (#13456)
+		}
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: detail})
 		return
 	}

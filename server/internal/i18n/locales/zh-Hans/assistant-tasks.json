@@ -51,6 +51,7 @@
   "stopped": "随对话一起停下了",
   "stopped_turn": "随对话一起停下了，这一轮还没有任何输出",
   "check_no_reply": "没读到 Agent 的回复",
+  "check_agy_unlinked": "读不到 agy 窗格：它没连上自己的对话",
   "check_side_turn": "最后的回复没交代这个任务",
   "done": "完成了",
   "route_no_task": "这段对话里没有这个任务",

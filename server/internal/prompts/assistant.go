@@ -1083,6 +1083,27 @@ type EstimateDue struct {
 
 func RenderEstimateDue(p EstimateDue) string { return render("assistant/estimate_due", p) }
 
+// AgyUnlinked is the supervisor's word on a task whose agy Agents run in herdr panes not linked to their agy
+// conversations, so their replies could not be read (#13456): each pane, and the agy conversations on its computer
+// that may hold its reply, newest first.
+type AgyUnlinked struct {
+	Language string
+	Panes    []AgyUnlinkedPane
+}
+
+// AgyUnlinkedPane is one such pane (its machine's name and session id) and the candidate conversations.
+type AgyUnlinkedPane struct {
+	Machine, Session string
+	Candidates       []AgyUnlinkedCandidate
+}
+
+// AgyUnlinkedCandidate is a conversation that may hold a pane's reply: its machine's name, session id and title.
+type AgyUnlinkedCandidate struct {
+	Machine, Session, Title string
+}
+
+func RenderAgyUnlinked(p AgyUnlinked) string { return render("assistant/agy_unlinked", p) }
+
 // SuperviseReviewed is the independent review of a task waiting for review: State clean (nothing blocking), blocking
 // (blocking findings left once the rework rounds ran out) or failed (Error says why), its counts and report.
 type SuperviseReviewed struct {

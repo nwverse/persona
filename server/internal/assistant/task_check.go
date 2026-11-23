@@ -27,10 +27,15 @@ type TodoCheck struct {
 // on the check is in the user's language, while the judgment's own Reason stays as the supervisor reads it.
 const (
 	checkReasonNoReply     = "assistant-tasks.check_no_reply"
+	checkReasonAgyUnlinked = "assistant-tasks.check_agy_unlinked" // agy_unlinked.go
 	checkReasonSideTurn    = "assistant-tasks.check_side_turn"
 	checkReasonInterrupted = "assistant-tasks.interrupted"
 	doneReasonFallback     = "assistant-tasks.done" // a done verdict with no reason
 )
+
+// reasonAgyUnlinked is the judgment's reason when an agy pane's conversation could not be read (agy_unlinked.go); the
+// supervisor reads the judgment's Detail, the owner the check's reason in their language.
+const reasonAgyUnlinked = "agy_unlinked"
 
 // checkOf is judgment c of the work since work, as the todo keeps it, in l.
 func checkOf(l i18n.Lang, c taskDoneCheck, work, at time.Time) TodoCheck {

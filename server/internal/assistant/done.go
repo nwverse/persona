@@ -889,6 +889,9 @@ type taskDoneCheck struct {
 	// AutoCheck: the judge's own check of a supervised task's done_when, when asked (taskDoneInput.Checks,
 	// supervise_sample.go).
 	AutoCheck *taskAutoCheck `json:"auto_check,omitempty"`
+	// Detail: what the supervisor is told in place of the verdict's words and reason, in the owner's language, when the
+	// hub can say more than either (an agy pane not linked to its conversation, agy_unlinked.go); "" otherwise.
+	Detail string `json:"detail,omitempty"`
 	// reasonKey: the i18n key of the hub's own reason, when it decided without the model (the todo's check says it in
 	// the user's language, task_check.go); "" for the judge's.
 	reasonKey string
@@ -1106,6 +1109,13 @@ func clipMiddle(s string, n int) string {
 // judgeTaskDone asks the judge model whether t's work is finished. An error: no model, or no answer to go by.
 func (s *Service) judgeTaskDone(ctx context.Context, t Todo) (taskDoneCheck, error) {
 	replies, sideTurnBlocked := s.taskReplies(ctx, t)
+	if len(replies) == 0 && !sideTurnBlocked {
+		// Nothing to read because an agy pane is not linked to its conversation: say so, and where its reply may be
+		// (#13456), rather than only that there was no reply.
+		if detail := s.agyUnlinked(ctx, t); detail != "" {
+			return taskDoneCheck{Verdict: verdictUnsure, Reason: reasonAgyUnlinked, reasonKey: checkReasonAgyUnlinked, Detail: detail}, nil
+		}
+	}
 	if c, ok := taskDoneWithoutModel(replies, sideTurnBlocked); ok {
 		if sideTurnBlocked {
 			s.logf("task %s: side-conversation reply without current task completion evidence: left open", t.ID)
