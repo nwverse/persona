@@ -48,3 +48,16 @@ describe("an address that is no page (web usability audit item 42)", () => {
     }
   });
 });
+
+describe("the core's addresses (core/module-host.ts CORE_PATHS)", () => {
+  it("lists every first segment parse routes, so no module can take one", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { CORE_PATHS } = await import("../core/module-host");
+    const source = readFileSync(new URL("./router.ts", import.meta.url), "utf8");
+    const parse = source.slice(source.indexOf("export function parse("), source.indexOf("export function routeAt("));
+    const segments = [...parse.matchAll(/p\[0\] === "([^"]+)"/g)].map((m) => m[1]!);
+    expect(segments.length).toBeGreaterThan(20);
+    expect(segments.filter((x) => !CORE_PATHS.has(x))).toEqual([]);
+    for (const x of ["persona", "j"]) expect(CORE_PATHS.has(x)).toBe(true); // assistantPath
+  });
+});

@@ -38,8 +38,9 @@ class CountTests(unittest.TestCase):
             "/* eslint-disable */",
             "// eslint-disable-next-line react-hooks/exhaustive-deps",
             "// eslint-disable-next-line no-unreachable -- mentions no-restricted-imports only in the reason",
+            "// eslint-disable-next-line persona-modules/boundary",
         ])
-        self.assertEqual(ratchet.count_disables(text), 4)
+        self.assertEqual(ratchet.count_disables(text), 5)
 
 
 class CheckTests(unittest.TestCase):

@@ -9,12 +9,15 @@
 // is absent: no sidebar entry, its addresses resolve as unknown ones, and neither its code chunk nor its strings are
 // requested. Its code and its strings load on first use (loadModule), never at start.
 //
-// Field names follow the module contract of #13430 section 4 (`id`, `feature`, `needs`, `shell_places`, `settings`,
-// `chat_card_kinds`, `composer_actions`, `chat_accessories`, `i18n_namespaces`), in this codebase's camelCase:
-//   id → id · feature → feature · needs → needs · shell_places → routes + navItems · settings → settingsTabs
-//   chat_card_kinds → cardRenderers · composer_actions + chat_accessories → chatSlots · i18n_namespaces → i18nNamespaces
-// Served today: id, feature, needs, routes, navItems, i18nNamespaces / locales. Declared but not yet served (the shell
-// does not read them; #13431 wires the chat slots): settingsTabs, chatSlots, cardRenderers.
+// Field names follow the module contract of #13430 section 4 (`id`, `api`, `needs`, `wants`, `feature`, `shell_places`,
+// `settings`, `chat_card_kinds`, `composer_actions`, `chat_accessories`, `i18n_namespaces`), in this codebase's camelCase:
+//   id → id · api → api · needs → needs · wants → wants · feature → feature · shell_places → routes + navItems
+//   settings → settingsTabs · chat_card_kinds → cardRenderers · composer_actions + chat_accessories → chatSlots
+//   i18n_namespaces → i18nNamespaces (+ locales)
+// Served today: id, api (checked against MODULE_API), needs (the ESLint boundary), feature, routes, navItems,
+// i18nNamespaces / locales. Declared but not yet served: wants, settingsTabs, chatSlots (#13431 wires them),
+// cardRenderers. registerModule refuses a descriptor that fills one of those, so nothing is silently dropped.
+// The other contract fields (hub_routes, mcp_tools, prompt_sections, background_jobs, …) belong to the server.
 import type { ComponentType } from "react";
 import { useSyncExternalStore } from "react";
 import { addCatalogs, type CatalogLoaders } from "../i18n";
@@ -80,8 +83,12 @@ export interface ModuleDescriptor {
   id: string;
   /** The hub feature flag it needs in hello `features`; none for a module the hub has always served. */
   feature?: string;
-  /** Other modules it may import (ESLint holds it to this list: eslint.config.mjs). */
+  /** The module API it is written against (#13430 `api`); MODULE_API when absent. Another version is refused. */
+  api?: number;
+  /** Other modules it may import (ESLint holds it to this list: eslint.modules.config.mjs). */
   needs?: readonly string[];
+  /** Declared, not yet served: modules it uses when they are there (#13430 `wants`). */
+  wants?: readonly string[];
   /** Its name and one line on what it does, for the switch in Settings › Labs › Features (shell namespaces). */
   title: () => string;
   description: () => string;
@@ -122,6 +129,26 @@ export function connectModuleHub(get: () => HubState, subscribe: (l: () => void)
 const getState = () => hubState();
 
 const MODULE_ID = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+
+/** The module API this shell serves (#13430 `api`). */
+export const MODULE_API = 1;
+
+/** Descriptor fields declared but not served yet: a module that fills one is refused rather than silently ignored. */
+const UNSERVED = ["wants", "settingsTabs", "chatSlots", "cardRenderers"] as const;
+
+/** The first segments of the core's own addresses (lib/router.ts parse, and what the hub serves beside the app): a
+ *  module's base may not be one. lib/router.test.ts keeps it in step with parse. */
+export const CORE_PATHS: ReadonlySet<string> = new Set([
+  "s", "t", "persona", "j", "workspace-board", "requests", "overview", "history", "tracks", "assistant", "inbox", "messages",
+  "starred", "routines", "kb", "space", "machines", "terminal", "a", "agents", "compare", "settings", "subscriptions",
+  "extension", "plugin", "todos", "api", "login", "screen", "share", "admin", "assets",
+]);
+/** Core addresses whose deeper paths a module may take as an alias: `/tracks/<slug>` of a space it has its own page for. */
+const ALIASABLE: ReadonlySet<string> = new Set(["tracks"]);
+
+const routePaths = (r: ModuleRoute): (readonly string[])[] => [[r.base], ...(r.aliases ?? [])];
+/** Whether two paths would route the same address: one is a prefix of the other. */
+const overlaps = (a: readonly string[], b: readonly string[]) => a.slice(0, Math.min(a.length, b.length)).every((x, i) => x === b[i]);
 const registry = new Map<string, ModuleDescriptor>();
 const listeners = new Set<() => void>();
 let revision = 0;
@@ -135,9 +162,18 @@ const changed = () => {
 export function registerModule(d: ModuleDescriptor): void {
   if (!MODULE_ID.test(d.id)) throw new Error(`module id "${d.id}" is not lower-case and hyphenated`);
   if (registry.has(d.id)) throw new Error(`module "${d.id}" is registered twice`);
+  if ((d.api ?? MODULE_API) !== MODULE_API) throw new Error(`module "${d.id}" is written for module API ${d.api}; this shell serves ${MODULE_API}`);
+  const unserved = UNSERVED.filter((k) => (d[k]?.length ?? 0) > 0);
+  if (unserved.length) throw new Error(`module "${d.id}" contributes ${unserved.join(", ")}, which the web shell does not serve yet`);
   for (const r of d.routes ?? []) {
-    const other = [...registry.values()].find((m) => m.routes?.some((o) => o.base === r.base));
-    if (other) throw new Error(`module "${d.id}" claims /${r.base}, which "${other.id}" has`);
+    for (const path of routePaths(r)) {
+      if (path.length === 1 && CORE_PATHS.has(path[0]!)) throw new Error(`module "${d.id}" claims /${path[0]}, a core address`);
+      if (path.length > 1 && CORE_PATHS.has(path[0]!) && !ALIASABLE.has(path[0]!)) throw new Error(`module "${d.id}" claims /${path.join("/")}, under the core address /${path[0]}`);
+      for (const other of registry.values()) {
+        const taken = (other.routes ?? []).flatMap(routePaths).find((o) => overlaps(o, path));
+        if (taken) throw new Error(`module "${d.id}" claims /${path.join("/")}, which "${other.id}" has (/${taken.join("/")})`);
+      }
+    }
   }
   registry.set(d.id, d);
   changed();

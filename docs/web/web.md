@@ -2314,13 +2314,22 @@ code. Its fields use the names of the module contract in #13430 section 4, in ca
 | #13430 field | Descriptor field | Served by the web shell |
 | --- | --- | --- |
 | `id` | `id` (lower-case, hyphenated; the directory name) | yes |
+| `api` | `api` (the module API it is written for; `MODULE_API`, 1, when absent) | yes: another version is refused |
 | `feature` | `feature` (a hello feature flag; none for a module every hub has served) | yes |
 | `needs` | `needs` (other modules it may import; ESLint holds it to them) | yes (guard) |
+| `wants` | `wants` (modules it uses when they are there) | declared, not yet served |
 | `shell_places` | `routes` (a page: a base segment, its aliases, its title) and `navItems` (a sidebar entry and the page it follows) | yes |
 | `i18n_namespaces` | `i18nNamespaces` and `locales` (its catalog loaders) | yes |
 | `settings` | `settingsTabs` | declared, not yet served |
 | `chat_card_kinds` | `cardRenderers` | declared, not yet served |
 | `composer_actions`, `chat_accessories` | `chatSlots`: `composer.trailingAction`, `chat.tail`, `chat.bar`, `interaction.asked` | declared, not yet served (#13431 wires them) |
+
+`registerModule` refuses a descriptor that fills a field the shell does not serve yet (`wants`, `settingsTabs`,
+`cardRenderers`, `chatSlots`) rather than dropping it silently, and refuses a route that collides: a base that is one of
+the core's first segments (`CORE_PATHS`, kept in step with `lib/router.ts` parse by its test), an alias that is a core
+page or lies under a core address other than `/tracks/<slug>` (a space the module has its own page for), and a base or
+alias that another module's base or alias starts, or that starts one of theirs. The rest of the contract (`hub_routes`,
+`mcp_tools`, `prompt_sections`, `background_jobs`, …) belongs to the server.
 
 **The module list** (`web/src/modules/index.ts`) imports each module's descriptor (`modules/<id>/module.ts`) and
 registers it. It is the only place module ids appear outside their own directories. `App.tsx` imports it first, so the
@@ -2335,7 +2344,9 @@ its sidebar entry does not show. Otherwise it is *off*, and an off module is abs
 - neither its code chunk nor its catalog is requested. `loadModule` refuses an off module, and its page is a
   `lazyPage(…, { listed: false })`, which `loadPages` never preloads.
 
-An on module's page loads on its first render: its strings first (`i18n` `addCatalogs`; its code may call `t()` at module
+An on module's page is warmed as the built-in pages are (`core/ModulePage.tsx`, `lib/lazy-page.ts`): when the pointer,
+the focus or a finger reaches a link to it (its sidebar entry), and with the idle tier once the browser is idle after
+start; neither with Data Saver on, and never for an off or pending module. Otherwise it loads on its first render: its strings first (`i18n` `addCatalogs`; its code may call `t()` at module
 scope), then its code. A module's namespaces (`<id>.json`, `<id>-*.json` under `src/i18n/locales/<lang>/`) stay beside the
 others, so every catalog check covers them, but the build leaves them out of `client-startup` and `client-rest` and makes
 them the module's own catalog (`?catalog=module-<id>`, `web/i18n-catalogs.ts`). A module's sidebar label, page title and Labs description
@@ -2349,9 +2360,12 @@ another device. A module the hub does not offer shows read-only, saying so. Labs
 advanced, per-browser choice: the everyday sidebar and Settings stay as they were (principles 1 and 2).
 
 **The guard.** `npm run lint` runs a second pass over all of `src` with `web/eslint.modules.config.mjs`:
-`no-restricted-imports` and `no-restricted-syntax` (for `import()`) keep files outside `src/modules` from importing a
+`no-restricted-imports` and `no-restricted-syntax` (for `import()`) catch the spelled paths, and the config's own
+`persona-modules/boundary` rule resolves every relative import, export and `import()` (a template literal by its static
+start, refused when it could still reach `src/modules`) to where it lands. Together they keep files outside `src/modules` from importing a
 module's files (the list is the way in; tests may reach a module's files to test them), keep `src/core` from importing
-even the list, and keep a module from importing another one its `module.ts` does not name in `needs`. Disables of
+even the list, and keep a module from importing the list (`../`, `../../modules`, …) or another module its `module.ts` does not name in
+`needs`. `web/eslint.modules.config.test.ts` holds the cases. Disables of
 those rules are counted by `scripts/ci/web_module_boundary_ratchet.py` (`scripts/ci/guards.sh`); the baseline,
 `scripts/ci/web_module_boundary_baseline.json`, started empty and can only shrink. `web/src/modules/module-names.test.ts`
 fails when a module's id, route base or sidebar key appears in the `Route` union, the sidebar's built-in pages, their

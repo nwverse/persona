@@ -13,7 +13,8 @@ vi.hoisted(() => {
 // the page as a mark: what matters here is whether its chunk is requested, and what it is given
 vi.mock("./Health", () => ({ HealthPage: ({ path }: { path: readonly string[] }) => <div data-testid="health-page">{path.join("/")}</div> }));
 import { connectModuleHub, registerModule, resetModulesForTest, type ModuleDescriptor } from "../../core/module-host";
-import { ModulePage } from "../../core/ModulePage";
+import { ModulePage, preloadEnabledModules } from "../../core/ModulePage";
+import { preloadPages } from "../../lib/lazy-page";
 import { forgetModuleSwitches, setModuleSwitchedOff } from "../../core/module-switch";
 import { t } from "../../i18n";
 import { setSidebarCollapsed } from "../../lib/layout";
@@ -130,6 +131,54 @@ describe("the health module", () => {
       expect(host.querySelector('[data-testid="health-page"]')).not.toBeNull();
     }, { timeout: 4000 });
     expect(chunk).toHaveBeenCalledTimes(1);
+  });
+
+  describe("warming its page before it is opened (as the built-in pages are)", () => {
+    /** A link to /health reached by the pointer, and the idle tier run, through lib/lazy-page.ts preloadPages. */
+    async function warm() {
+      let idle: (() => void) | undefined;
+      const stop = preloadPages({ document, requestIdleCallback: (run) => ((idle = run), 1), cancelIdleCallback: () => {} });
+      const link = document.createElement("a");
+      link.href = "/health";
+      document.body.append(link);
+      link.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      // the strings, then the code: let both arrive (nothing comes for a module that is not on)
+      for (let i = 0; i < 40 && chunk.mock.calls.length === 0; i++) await flush();
+      const hovered = { chunk: chunk.mock.calls.length, catalog: catalog.mock.calls.length };
+      idle?.();
+      await flush();
+      stop();
+      link.remove();
+      return hovered;
+    }
+
+    it("on: a link's hover loads its strings and chunk, and the idle tier does too", async () => {
+      registerModule(counted());
+      expect(await warm()).toEqual({ chunk: 1, catalog: 1 });
+      expect(chunk).toHaveBeenCalledTimes(1); // once: the idle tier finds it in
+      resetModulesForTest();
+      chunk.mockClear();
+      catalog.mockClear();
+      registerModule(counted());
+      await preloadEnabledModules();
+      expect(chunk).toHaveBeenCalledTimes(1);
+      expect(catalog).toHaveBeenCalledTimes(1);
+    });
+
+    it("off, or behind a flag the hub lacks: neither hover nor idle requests anything", async () => {
+      setModuleSwitchedOff("health", true);
+      registerModule(counted());
+      expect(await warm()).toEqual({ chunk: 0, catalog: 0 });
+      await preloadEnabledModules();
+      resetModulesForTest();
+      setModuleSwitchedOff("health", false);
+      registerModule(counted({ feature: "synthetic_health_flag" }));
+      Object.assign(getState(), { loaded: true, features: ["other"] });
+      expect(await warm()).toEqual({ chunk: 0, catalog: 0 });
+      await preloadEnabledModules();
+      expect(chunk).not.toHaveBeenCalled();
+      expect(catalog).not.toHaveBeenCalled();
+    });
   });
 
   it("declares what it contributes and nothing it does not serve yet", () => {

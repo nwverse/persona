@@ -2,7 +2,8 @@
 """Fail when web/src gains a disable of the feature-module boundary rules.
 
 web/eslint.modules.config.mjs keeps Persona Core out of the feature modules (#13434, #13430 section 6;
-docs/web/web.md "Modules") with ESLint's no-restricted-imports and no-restricted-syntax. A line that turns either off
+docs/web/web.md "Modules") with ESLint's no-restricted-imports, no-restricted-syntax and its own
+persona-modules/boundary rule. A line that turns one of them off
 (`eslint-disable…` naming one of them, or a bare `eslint-disable…` that turns every rule off) is a hole in that
 boundary. This counts them per file under web/src, tests included. The committed counts
 (scripts/ci/web_module_boundary_baseline.json) may stay or go down, never up, and a file with no entry starts at zero,
@@ -37,7 +38,7 @@ ROOT = _source_root()
 SOURCE = "web/src"
 BASELINE_REL = "scripts/ci/web_module_boundary_baseline.json"
 SUFFIXES = (".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs")
-RULES = ("no-restricted-imports", "no-restricted-syntax")
+RULES = ("no-restricted-imports", "no-restricted-syntax", "persona-modules/boundary")
 # `eslint-disable`, `eslint-disable-line`, `eslint-disable-next-line`, and what follows on the line (the rules named)
 DIRECTIVE = re.compile(r"eslint-disable(?:-next-line|-line)?\b([^\n]*)")
 

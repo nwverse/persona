@@ -7,7 +7,7 @@ import { parse } from "../lib/router";
 import { getState, reset, subscribe } from "../lib/store";
 
 const setState = (patch: Partial<ReturnType<typeof getState>>) => Object.assign(getState(), patch);
-import { connectModuleHub, enabledNavItems, loadModule, moduleNavKey, moduleRouteAt, moduleState, moduleTitle, registeredModules, registerModule, resetModulesForTest, subscribeModules, type ModuleDescriptor } from "./module-host";
+import { connectModuleHub, MODULE_API, enabledNavItems, loadModule, moduleNavKey, moduleRouteAt, moduleState, moduleTitle, registeredModules, registerModule, resetModulesForTest, subscribeModules, type ModuleDescriptor } from "./module-host";
 import { forgetModuleSwitches, moduleSwitchedOff, setModuleSwitchedOff } from "./module-switch";
 
 const code = vi.fn(async () => ({ Page: () => null }));
@@ -53,6 +53,34 @@ describe("registering", () => {
     expect(() => registerModule(garden({ id: "yard" }))).toThrow(/claims \/garden/);
     registerModule(garden({ id: "yard-two", routes: [{ base: "yard", title: () => "Yard" }] }));
     expect(registeredModules().map((d) => d.id)).toEqual(["garden", "yard-two"]);
+  });
+
+  it("refuses a route that would take a core address or another module's base or alias", () => {
+    for (const base of ["inbox", "settings", "tracks", "s", "persona", "api"]) {
+      expect(() => registerModule(garden({ routes: [{ base, title: () => "x" }] })), base).toThrow(/core address/);
+    }
+    // a whole core page as an alias, or a path under a core address that takes none
+    expect(() => registerModule(garden({ routes: [{ base: "garden", aliases: [["inbox"]], title: () => "x" }] }))).toThrow(/core address/);
+    expect(() => registerModule(garden({ routes: [{ base: "garden", aliases: [["settings", "garden"]], title: () => "x" }] }))).toThrow(/under the core address/);
+    // a space's address (/tracks/<slug>) may be a module's alias
+    registerModule(garden({ routes: [{ base: "garden", aliases: [["tracks", "garden"]], title: () => "x" }] }));
+    // another module: its base, its alias, or a path either one starts
+    expect(() => registerModule(garden({ id: "yard", routes: [{ base: "yard", aliases: [["tracks", "garden"]], title: () => "x" }] }))).toThrow(/"garden" has/);
+    expect(() => registerModule(garden({ id: "yard", routes: [{ base: "yard", aliases: [["garden", "old"]], title: () => "x" }] }))).toThrow(/"garden" has/);
+    expect(() => registerModule(garden({ id: "yard", routes: [{ base: "yard", aliases: [["tracks"]], title: () => "x" }] }))).toThrow(/core address/);
+    expect(registeredModules().map((d) => d.id)).toEqual(["garden"]);
+  });
+
+  it("refuses what the shell does not serve yet, and another module API, rather than dropping it", () => {
+    expect(() => registerModule(garden({ chatSlots: ["chat.tail"] }))).toThrow(/chatSlots.*does not serve yet/);
+    expect(() => registerModule(garden({ settingsTabs: [{ key: "garden", label: () => "Garden" }] }))).toThrow(/settingsTabs/);
+    expect(() => registerModule(garden({ cardRenderers: ["garden-card"] }))).toThrow(/cardRenderers/);
+    expect(() => registerModule(garden({ wants: ["yard"] }))).toThrow(/wants/);
+    expect(() => registerModule(garden({ api: 2 }))).toThrow(/module API 2/);
+    expect(registeredModules()).toEqual([]);
+    // empty lists and the current API are fine
+    registerModule(garden({ chatSlots: [], wants: [], api: MODULE_API }));
+    expect(registeredModules().map((d) => d.id)).toEqual(["garden"]);
   });
 
   it("tells subscribers about a registration", () => {
