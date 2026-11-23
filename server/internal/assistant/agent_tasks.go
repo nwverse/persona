@@ -7,14 +7,14 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Assistant-dispatched Agents belong to main-supervised tasks (#5732). The older assistant.agent_tasks switch still
+// Assistant-dispatched Agents belong to tasks supervised by their planning lead, or by main for other conversations. The older assistant.agent_tasks switch still
 // covers manually linked user to-dos and reporting agents. agent_start from any assistant conversation makes its to-do
 // at once (prepareAgentTask) independently of this switch; a session opened manually on the Agents page is not adopted.
 //
 //   - a todo the user made by hand gets a supervisor when an agent is linked to it (superviseLinkedTodo), and any open
 //     todo's agent that reports gets one then (superviseOpenTodoOf), so report_to_supervisor has a receiver.
 //
-// The supervisor is the main conversation except for the explicit manual-leader and task-leader-worker topologies.
+// Task-leader workers and explicitly transferred work retain their assigned supervisor.
 // Agents the user starts by hand in a terminal are not Persona's and are left alone.
 
 // agentTasks: assistant.agent_tasks is on (off by default).

@@ -10,11 +10,7 @@ import PersonaWire
 enum ScreenViewer {
     @MainActor static func url(_ model: AppModel, _ ref: MachineRef, unlock: Bool = false) -> URL? {
         guard let api = model.api(ref.group) else { return nil }
-        #if os(macOS)
-        let keep = "mac"
-        #else
         let keep = "phone"
-        #endif
         return url(api.url("/screen/\(ref.id)"), token: api.config.token, name: model.machine(ref)?.name, keep: keep, unlock: unlock)
     }
 

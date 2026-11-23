@@ -30,9 +30,6 @@ struct SecretField: View {
     var identifier: String?
     var onSubmitAction: (() -> Void)?
     var onFocusAction: ((Bool) -> Void)?
-    #if os(macOS)
-    @FocusState private var focused: Bool
-    #endif
 
     init(_ placeholder: String, filled: String = String(localized: "Filled in"), text: Binding<String>, identifier: String? = nil) {
         self.placeholder = placeholder
