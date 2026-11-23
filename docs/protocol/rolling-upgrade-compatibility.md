@@ -164,10 +164,11 @@ public client API or the Inbox/guest policy.
 
 | Pair or state | What happens |
 | --- | --- |
-| New manager, new node | A new or stopped process uses the explicit conversation mode first, then the current manager default, then legacy state/transcript evidence. A live process keeps its current mode. |
+| New manager, new node | A new or stopped Claude Code process uses the explicit conversation mode first, then the current manager default, then legacy state/transcript evidence. A live process keeps its current mode. |
 | New manager, older node | The older node ignores both fields and retains its legacy resume behavior until updated. Initial starts still receive the ordinary `permission_mode`. |
 | Older manager, new node | Both fields are absent, so the node retains the legacy `AppMode` / in-memory / transcript precedence and built-in `bypassPermissions` fallback. |
-| Legacy state without `app_mode_explicit` | Its `AppMode` is treated as inherited when a current manager supplies a default. An explicit choice made after the upgrade persists with the marker and wins thereafter. |
+| Non-Claude launcher | The manager omits the resume default and the node keeps legacy `AppMode` / in-memory / transcript precedence, even when the declared mode list contains that default. An explicit generic `permission_mode` follows its existing path. |
+| Legacy Claude state without `app_mode_explicit` | Its `AppMode` is treated as inherited when a current manager supplies a default. An explicit choice made after the upgrade persists with the marker and wins thereafter. |
 
 ### Node connection lanes (#10660)
 

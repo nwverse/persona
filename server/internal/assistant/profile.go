@@ -49,8 +49,8 @@ type Settings struct {
 	WorkspaceRules workspacenaming.Rules `json:"workspace_rules,omitempty"`
 	MachineID      string                `json:"machine_id"`
 	Launcher       string                `json:"launcher"`
-	// DefaultPermissionMode applies to new non-guest conversations and stopped-process resumes without an explicit mode.
-	// Empty selects the built-in bypassPermissions default; a live process and an explicit conversation choice are unchanged.
+	// DefaultPermissionMode applies to new non-guest conversations and stopped Claude Code resumes without an explicit mode.
+	// Empty selects the built-in bypassPermissions default; other agents keep legacy resume precedence, and live/explicit modes are unchanged.
 	DefaultPermissionMode string `json:"default_permission_mode,omitempty"`
 	// Timezone is the phone's (IANA name): routines and the snapshot read times in it, and the hub its own.
 	Timezone string `json:"timezone,omitempty"`
