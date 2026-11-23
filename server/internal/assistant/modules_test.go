@@ -98,6 +98,9 @@ func TestBriefingModuleIsLoadedByDefault(t *testing.T) {
 	if !slices.Contains(ownSettingKeys(s), "assistant.briefing_waits") {
 		t.Fatal("persona_settings does not list assistant.briefing_waits with the module on")
 	}
+	if !slices.Contains(s.moduleFeatures(), "module.briefing") {
+		t.Fatalf("the briefing module feature is not announced: %v", s.moduleFeatures())
+	}
 }
 
 // The modules row (read when the manager starts) switches a module off: it is not loaded, its setting is hidden from persona_settings
