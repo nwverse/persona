@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -300,7 +301,7 @@ func (in *fakeInbox) answer(ctx context.Context, p AppCall) (json.RawMessage, bo
 		if !ok {
 			return nil, true, errors.New("this item cannot be replied to")
 		}
-		out, err = in.sendOnce(a.SendID, func() error { return inb.Reply(connector.WithSendIdentity(ctx, a.SenderIdentity), a.Reply) })
+		out, err = in.sendOnce(a.SendID, func() error { return inb.Reply(connectorwire.WithSendIdentity(ctx, a.SenderIdentity), a.Reply) })
 	case assistantwire.InboxMessagePolicy:
 		out = map[string]bool{"sender_identity": true}
 	case assistantwire.InboxSettle:

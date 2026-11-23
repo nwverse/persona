@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -107,7 +108,7 @@ func (c *outboundConnector) Reply(ctx context.Context, reply connector.InboxRepl
 	if c.beforeReply != nil {
 		c.beforeReply()
 	}
-	c.identities = append(c.identities, connector.SendIdentity(ctx))
+	c.identities = append(c.identities, connectorwire.SendIdentity(ctx))
 	if c.fail != nil {
 		return c.fail
 	}
@@ -437,7 +438,7 @@ func TestOutboundInboxDuplicateSettlesSentAndFollowUp(t *testing.T) {
 	// The extension kept the delivered ID, but the assistant lost its audit
 	// claim and Inbox bookkeeping before receiving the transport's answer.
 	if _, err := h.in.sendOnce(sendID, func() error {
-		return c.Reply(connector.WithSendIdentity(ctx, "bot"), reply)
+		return c.Reply(connectorwire.WithSendIdentity(ctx, "bot"), reply)
 	}); err != nil {
 		t.Fatal(err)
 	}

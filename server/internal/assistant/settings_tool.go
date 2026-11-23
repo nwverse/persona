@@ -103,6 +103,10 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: `"bot" or "user"; only supported identity-aware transports use this setting`},
 			get: s.outboundIdentity, set: s.setOutboundIdentity},
 		s.hiddenDirSetting(),
+		{Setting: Setting{Key: modulesKey, Title: "Built-in modules", Actions: getSet,
+			About: "built-in feature modules switched off; a change applies when the manager next starts, not to the running process",
+			Value: `{"disabled": ["<module id>", …]}; null or an empty list restores every compiled-in module`},
+			get: s.getModuleSwitch, set: s.setModuleSwitch},
 		{Setting: Setting{Key: standingAuthorizationsKey, Title: "Standing authorizations", Actions: getSet,
 			About: "user-confirmed computer/directory actions or exact outward-message scopes; only the main conversation may set them, and every change requires the user’s own permission approval",
 			Value: "{revision, authorizations: [{id?, machine_id, directory, actions, conditions, quote, source, reversible, messages?}]}; messages: {channel: larkcli, target: exact oc_ chat or empty for all chats, scenario: inbox_reply or assistant_message, identity: bot or user}; message grants require actions [send], reversible true, empty conditions/computer/directory. Get first; retain existing entries unchanged or remove them; omit id for new grants; granted_at is set by the server"},
@@ -640,7 +644,7 @@ func orNone(s string) string {
 
 // settingTitles are the settings' titles for the card the user approves on, in this file's namespace (Title stays
 // what the assistant reads).
-var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
+var settingTitles = map[string]string{modulesKey: "title_modules", standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
 	"assistant.idle_auto_compact": "title_idle_auto_compact", "assistant.idle_auto_compact_minutes": "title_idle_auto_compact_minutes", "assistant.idle_auto_compact_tokens": "title_idle_auto_compact_tokens",
 	"assistant.idle_release_minutes":      "title_idle_release_minutes",
 	readonlyModeKey:                       "title_readonly_mode",

@@ -12,8 +12,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/mail"
 )
 
 // ---- the routes: the manager's ----
@@ -159,7 +159,7 @@ func (h *Manager) inboxAppCall(ctx context.Context, p assistantwire.AppCall) (js
 				return nil, true, errors.New("this source does not support the selected sender identity")
 			}
 			sent.Already, err = h.sendInboxOnce(ctx, a.SendID, a.Source, func(ctx context.Context) error {
-				return in.Reply(connector.WithSendIdentity(ctx, a.SenderIdentity), a.Reply)
+				return in.Reply(connectorwire.WithSendIdentity(ctx, a.SenderIdentity), a.Reply)
 			})
 			out = sent
 		}
@@ -344,9 +344,9 @@ func (h *Manager) inboxMailBody(ctx context.Context, ref assistantwire.InboxMail
 	switch {
 	case text != "":
 	case ref.Readable:
-		text = strings.TrimSpace(mail.ReadableText(m.HTML))
+		text = strings.TrimSpace(h.mail.ReadableText(m.HTML))
 	default:
-		text = strings.TrimSpace(mail.PlainText(m.HTML))
+		text = strings.TrimSpace(h.mail.PlainText(m.HTML))
 	}
 	return assistantwire.InboxMailMessage{From: mailAddress(m.From), To: mailAddresses(m.To), Cc: mailAddresses(m.Cc), Date: m.Date,
 		Subject: m.Subject, Text: text}, nil

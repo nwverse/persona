@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -143,6 +143,7 @@ func TestAcceptanceReminderNextMorning(t *testing.T) {
 	s.accept.mu.Unlock()
 	now := time.Now().In(loc)
 	morning := time.Date(now.Year(), now.Month(), now.Day(), 10, 0, 0, 0, loc)
+	waitReportQueue(t, s) // report cards go out on their own timer: count only after them (#14138)
 	n := len(posts())
 	s.remindAcceptance(morning)
 	s.remindAcceptance(morning.Add(time.Hour))
@@ -183,6 +184,7 @@ func TestUnacceptedInTheMorningBriefing(t *testing.T) {
 	s.accept.asks[todo.ID].AskedAt = time.Now().Add(-30 * time.Hour)
 	s.accept.mu.Unlock()
 	now := time.Now().In(loc)
+	waitReportQueue(t, s) // report cards go out on their own timer: count only after them (#14138)
 	n := len(posts())
 	s.remindAcceptance(time.Date(now.Year(), now.Month(), now.Day(), 8, 20, 0, 0, loc))
 	if len(posts()) != n {
@@ -324,6 +326,7 @@ func TestAcceptanceAskEndedElsewhere(t *testing.T) {
 			s.accept.asks[id].AskedAt = time.Now().Add(-30 * time.Hour)
 			s.accept.mu.Unlock()
 			now := time.Now().In(s.location(ctx))
+			waitReportQueue(t, s) // report cards go out on their own timer: count only after them (#14138)
 			n := len(posts())
 			s.remindAcceptance(time.Date(now.Year(), now.Month(), now.Day(), 10, 0, 0, 0, s.location(ctx)))
 			got := posts()[n:]
@@ -468,8 +471,8 @@ func TestAcceptanceReopenRound(t *testing.T) {
 		agentTurn(s, f, proto.StatusWorking, "", 0)
 		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
 		waitFor(t, "the second round's card", func() bool { a := askOf(s, id); return a != nil && a.MessageID == "om_round2" })
-		press := func(mid string) *feishubot.CardAction {
-			var a feishubot.CardAction
+		press := func(mid string) *botcard.CardAction {
+			var a botcard.CardAction
 			a.Action.Value = map[string]any{"a": "accept", "id": id}
 			a.Context.MessageID = mid
 			return &a
@@ -532,6 +535,7 @@ func TestAcceptanceReopenRound(t *testing.T) {
 			s.accept.asks[id].AskedAt = time.Now().Add(-30 * time.Hour)
 			s.accept.mu.Unlock()
 			now := time.Now().In(s.location(ctx))
+			waitReportQueue(t, s) // report cards go out on their own timer: count only after them (#14138)
 			n := len(posts())
 			s.remindAcceptance(time.Date(now.Year(), now.Month(), now.Day(), 10, 0, 0, 0, s.location(ctx)))
 			if got := posts()[n:]; len(got) != 0 || askOf(s, id) != nil {

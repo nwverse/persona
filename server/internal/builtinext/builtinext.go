@@ -1,6 +1,7 @@
 // Package builtinext is where a built-in module hands the core what the core needs of it to run the module's
 // built-in extension (docs/architecture/core-and-modules.md "Provider seams"): the program a subcommand of personad
-// and persona-manager runs (`personad volc`), and what the extension host (internal/extmgr) shows of the extension.
+// and persona-manager runs (`personad volc`, `personad voice`), and what the extension host (internal/extmgr) shows
+// of the extension.
 //
 // The core declares here what it needs, never a module's types; the composition root (internal/modules/all) provides
 // it in the init of the module's file, under the module's build constraint. With the module left out of the build
@@ -12,7 +13,10 @@ package builtinext
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
+	"net/http"
 	"slices"
 	"strings"
 )
@@ -77,4 +81,45 @@ func VolcSpeech() (Volc, bool) {
 		return Volc{}, false
 	}
 	return *volc, true
+}
+
+// Voice is what the extension host needs of the built-in voice extension (internal/modules/voice, `personad voice`,
+// docs/assistant/voice.md): the id of its transcription contribution, the meeting transcription a hub without a
+// chosen one uses, and how its settings merge, which the host reads to say what the extension lacks.
+type Voice struct {
+	// TranscriptionContribution is the id of its transcription contribution.
+	TranscriptionContribution string
+	// GatewayProvider is the upstream a quota gateway extension's settings give the extension (config, its name and
+	// API key), serialized as the extension reads PERSONA_VOICE_GATEWAY_CONFIG; false when they give none.
+	GatewayProvider func(config json.RawMessage, name, key string) (json.RawMessage, bool)
+	// State is what the extension lacks before a conversation can start ("" nothing) and the settings it does not
+	// take, merged as the extension merges them; an error when they do not merge (the extension says why itself).
+	State func(VoiceSources) (setup string, warnings []string, err error)
+	// FormURL is the address in the settings form config ("" none).
+	FormURL func(config json.RawMessage) string
+	// Handler serves the extension's HTTP side in this process on a configuration as hub.json gives it, reaching
+	// the hub at hubURL with hubToken: the manager's end-to-end tests of meeting transcription run it so.
+	Handler func(config json.RawMessage, hubURL, hubToken string, logger *log.Logger) (http.Handler, error)
+}
+
+// VoiceSources are where the voice extension's settings come from (the extension's own Sources).
+type VoiceSources struct {
+	// Form is the settings form, Key its secret key ("set" when only whether it is set is known).
+	Form json.RawMessage
+	Key  string
+	// HubJSON is the config of the hub.json entry the extension took over; Gateway the upstream a quota gateway gives.
+	HubJSON, Gateway json.RawMessage
+}
+
+var voice *Voice
+
+// ProvideVoice provides the voice extension (init only).
+func ProvideVoice(v Voice) { voice = &v }
+
+// VoiceExtension is the voice extension, if its module is in this build.
+func VoiceExtension() (Voice, bool) {
+	if voice == nil {
+		return Voice{}, false
+	}
+	return *voice, true
 }
