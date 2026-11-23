@@ -87,7 +87,7 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if then != "" {
 		summary += "\n\n" + then
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, "agent_interrupt", summary, args); err != nil {
+	if ok, err := s.confirmOutbound(ctx, machine, self, "agent_interrupt", then, summary, args); err != nil {
 		return "", err
 	} else if !ok {
 		return "The user declined on the phone: the agent goes on as it was.", nil

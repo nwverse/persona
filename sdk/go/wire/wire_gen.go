@@ -5593,6 +5593,9 @@ type AssistantMemoryEntry struct {
 	Content string `json:"content,omitempty"`
 	// content was cut or left out for its size.
 	Truncated bool `json:"truncated,omitempty"`
+	// The track whose memory it is; absent for the main track's. Another track's is shown only to an extension that may
+	// read what comes from it: the user's own, or one granted every default category of the track.
+	Track string `json:"track,omitempty"`
 }
 
 // AssistantMemoryResult: an assistant without memory (none written yet, or the feature off) has no entries.

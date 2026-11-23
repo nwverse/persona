@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -342,8 +343,20 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 		return
 	}
 	place := s.pushPlace(machine, sess)
-	redact := s.trackPolicy(context.Background(), spaceOf(sess)).Redact
-	head, text := doneAlertIn(s.lang(context.Background()), sess, redact)
+	// Decided once on the words the push would carry (exitPolicy), for the push and its Feishu card alike.
+	bg, l, space := context.Background(), s.lang(context.Background()), spaceOf(sess)
+	head, text := doneAlertIn(l, sess, false)
+	if report && strings.HasPrefix(head, "⚠️") && s.briefOf(id) != nil && !s.trackPolicy(bg, space).Redact {
+		return // the scheduled-run watcher sends the one fixed-facts fallback, not this model error
+	}
+	redact := s.exitPolicy(bg, head+"\n"+text, id, space).Redact
+	if redact {
+		if floor, _ := s.trackFloor(bg, space); slices.Contains(floor, categoryHealth) {
+			head, text = doneAlertIn(l, sess, true) // as the health space always said
+		} else {
+			head, text = s.redactedNotice(bg, l, space)
+		}
+	}
 	if report && strings.HasPrefix(head, "⚠️") && s.briefOf(id) != nil {
 		return // the scheduled-run watcher sends the one fixed-facts fallback, not this model error
 	}
@@ -358,7 +371,7 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 		Body: text, TookMS: took.Milliseconds(), LongMS: long.Milliseconds()})
 	// The same finished turn's one Feishu card (#4674); the sender re-checks the pushes switch and the conversations
 	// with their own Feishu path (main, scheduled task, health).
-	go s.feishuAgentDone(machine, sess, head, text, place)
+	go s.feishuAgentDone(machine, sess, head, text, place, redact)
 	// And the topic of the todo this agent works on, if it has one (the same decision again, not a second one).
 	s.threadAgentDone(machine, sess)
 }

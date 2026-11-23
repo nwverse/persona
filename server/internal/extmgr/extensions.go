@@ -596,6 +596,11 @@ func (ps *extensions) changed(c extension.Change) {
 			}
 		}
 		ps.forgetAssistantData(ctx, c.ID) // what the assistant read of its data directory goes with it
+		// What the user let it read of the assistant's sensitive information goes too (#13246): installed again, it
+		// starts as a third party's with no grant.
+		if err := ps.h.callAssistant(ctx, assistantwire.MethodExtensionTrustForget, assistantwire.ExtensionTrustForget{Extension: c.ID}, nil); err != nil {
+			ps.logf("plugin %s removed: its trust was not forgotten: %v", c.ID, err)
+		}
 		if n, err := ps.h.removeHandoffRules(ctx, c.ID, ""); err != nil {
 			ps.logf("plugin %s removed: its hand-off rules were not: %v", c.ID, err)
 		} else if n > 0 {

@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/remoteimage"
@@ -216,6 +217,7 @@ type Service struct {
 	convSpaces           convSpaceBook          // conversation_space.go
 	trackReg             trackRegistry          // track_registry.go
 	infoTags             infoTagCache           // info_tag.go
+	infoTagWaiting       infoTagPending         // info_use.go
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
 	conversationWrites   sync.RWMutex
@@ -227,6 +229,10 @@ type Service struct {
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
 	briefsOptional bool
+	// noInfoTag: nothing is tagged with information categories whatever model info.tag has (infoTagConfigured), as
+	// with none set up. Tests turn tagging off unless they are about it: a model's socket inside a synctest bubble
+	// never counts as blocked.
+	noInfoTag      bool
 	background     backgroundBook    // supervise_background.go
 	autoRuns       autoReviewBook    // supervise_autoreview.go
 	sessionReviews sessionReviewBook // agents_session_review.go
@@ -374,6 +380,7 @@ func New(o Options) *Service {
 	s.agentArchiveRoutes()
 	s.agentNamingRoutes() // agent_naming_request.go
 	s.alwaysRoutes()
+	s.infoAccessRoutes()
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
@@ -451,7 +458,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apierr.Call(w, err)
 		return
 	}
-	s.mux.ServeHTTP(w, r)
+	s.mux.ServeHTTP(w, s.extensionReaderRequest(r))
 }
 
 // fullRole: the request came from a device that may do everything (RoleHeader; none: a test's own request).
@@ -532,6 +539,13 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || sessionSend ||
 		method == assistantwire.DeviceAssistantAnswerAgain) {
 		id, _ := p["session_id"].(string)
+		if id != "" {
+			if _, trusted := p["model_source"].(modelhttp.Source); !trusted {
+				p["model_source"] = s.conversationModelSource(ctx, device, id)
+			}
+		} else if method == DeviceAssistantWarm {
+			p["model_source"] = modelhttp.Source{Role: "main"}
+		}
 		pctx, carry := withNotesCarry(ctx)
 		// Settled however this returns: a send refused before it left was not taken (direction_notes.go).
 		defer func() { s.notesSendOutcome(ctx, carry, taken) }()
@@ -795,6 +809,7 @@ func (s *Service) device(ctx context.Context, id string) (Device, bool) {
 
 // startParams are what a new conversation starts with.
 type startParams struct {
+	modelSource         modelhttp.Source
 	TaskModel           *ModelBinding
 	MachineID           string
 	Cwd                 string
@@ -1039,6 +1054,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
 	s.afterSettle(context.WithoutCancel(ctx), s.registerInlineTurnSettled, r.MachineID, r.SessionID)
 	if !meeting {
+		s.infoTagTurnEnded(ctx, r.SessionID) // its categories are not known until it is tagged (info_use.go)
 		s.backgroundRoundTurnEnded(ctx, r.SessionID, time.Now())
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)

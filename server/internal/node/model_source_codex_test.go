@@ -1,0 +1,205 @@
+package node
+
+import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/nwverse/persona/server/internal/modelhttp"
+)
+
+func sourceCodexFixture(t *testing.T, config string) (string, string, []string) {
+	t.Helper()
+	home, cwd := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(home, ".codex", "config.toml"), config)
+	if err := os.Mkdir(filepath.Join(cwd, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	env := modelSourceEnvironment(modelhttp.Source{Role: "task_agent", Todo: "todo_123"}, "/example/personad")
+	return home, cwd, env
+}
+
+const sourceCodexProvider = `model_provider = "custom"
+[model_providers.custom]
+name = "Example"
+base_url = "https://gw.example.com/v1"
+wire_api = "responses"
+http_headers = { "Authorization" = "example-credential", "X-Team" = "blue", "x-persona-todo" = "todo_old" }
+env_http_headers = { "X-Extra" = "EXAMPLE_EXTRA", "x-persona-routine" = "OLD_ROUTINE" }
+`
+
+func TestCodexModelSourcePreservesHeadersWithoutExposingValues(t *testing.T) {
+	t.Setenv(modelhttp.SourceHostsEnv, "*.example.com")
+	home, cwd, env := sourceCodexFixture(t, sourceCodexProvider)
+	env = append(env, "EXAMPLE_EXTRA=existing-value", "OLD_ROUTINE=old")
+	for _, role := range []string{"main", "leader", "routine", "task_agent", "background"} {
+		source := modelhttp.Source{Role: role, Todo: "todo_123", Session: "session_456"}
+		raw, _ := json.Marshal(source)
+		inputEnv := append(withoutEnv(env, []string{modelSourceEnv}), modelSourceEnv+"="+string(raw))
+		argv, outEnv := codexModelSource([]string{"codex", "--model", "model", "--", "prompt"}, inputEnv, cwd, home)
+		if strings.Contains(strings.Join(argv, " "), "example-credential") || strings.Contains(strings.Join(argv, " "), "existing-value") {
+			t.Fatal("credential exposed in argv")
+		}
+		if argv[len(argv)-2] != "--" || argv[len(argv)-1] != "prompt" {
+			t.Fatal("prompt moved into config arguments")
+		}
+		cfg, err := codexSourceConfig(argv, outEnv, cwd, home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		provider := cfg["model_providers"].(map[string]any)["custom"].(map[string]any)
+		bindings := provider["env_http_headers"].(map[string]any)
+		want := map[string]string{"Authorization": "example-credential", "X-Team": "blue", "X-Extra": "existing-value", modelhttp.RoleHeader: role, modelhttp.TodoHeader: "todo_123", modelhttp.SessionHeader: "session_456"}
+		if len(bindings) != len(want) {
+			t.Fatalf("bindings=%v", bindings)
+		}
+		for name, value := range want {
+			variable, _ := bindings[name].(string)
+			if envValue(outEnv, variable) != value {
+				t.Fatalf("lost header %s", name)
+			}
+		}
+		if provider["base_url"] != "https://gw.example.com/v1" || provider["wire_api"] != "responses" {
+			t.Fatal("provider routing changed")
+		}
+	}
+	before, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if string(before) != sourceCodexProvider {
+		t.Fatal("user provider config changed")
+	}
+}
+
+func TestModelSourceLaunchKeepsCodexGuard(t *testing.T) {
+	const childEnv = "PERSONA_TEST_SOURCE_LAUNCH_GUARD"
+	if os.Getenv(childEnv) == "1" {
+		err := ModelSourceLaunch([]string{"codex", "--sandbox", "workspace-write"})
+		if rpcCode(err) != "codex_writable_symlink" {
+			t.Fatalf("source wrapper lost the native launch guard: %v", err)
+		}
+		return
+	}
+	home, cwd, sourceEnv := sourceCodexFixture(t, sourceCodexProvider)
+	if err := os.Symlink(t.TempDir(), filepath.Join(cwd, ".aws")); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(home, "bin")
+	fake := filepath.Join(bin, "codex")
+	writeFile(t, fake, "#!/bin/sh\nexit 73\n")
+	if err := os.Chmod(fake, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestModelSourceLaunchKeepsCodexGuard$")
+	cmd.Dir = cwd
+	cmd.Env = append(withoutEnv(os.Environ(), []string{"HOME", "USERPROFILE", "CODEX_HOME", "PATH", childEnv, modelhttp.SourceHostsEnv, modelSourceEnv, modelSourceBinEnv}),
+		"HOME="+home, "USERPROFILE="+home, "CODEX_HOME="+filepath.Join(home, ".codex"), "PATH="+bin,
+		childEnv+"=1", modelhttp.SourceHostsEnv+"=*.example.com")
+	cmd.Env = append(cmd.Env, sourceEnv...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("source launch guard: %v: %s", err, out)
+	}
+}
+
+func TestCodexModelSourceUsesEffectiveDestination(t *testing.T) {
+	for _, tc := range []struct {
+		name, hosts, config string
+		args                []string
+		inject              bool
+	}{
+		{"empty allowlist", "", sourceCodexProvider, nil, false},
+		{"custom provider", "*.example.com", sourceCodexProvider, nil, true},
+		{"official provider URL", "*.example.com", strings.ReplaceAll(sourceCodexProvider, "https://gw.example.com/v1", "https://api.openai.com/v1"), nil, false},
+		{"CLI overrides to official", "*.example.com", sourceCodexProvider, []string{"-c", `model_providers.custom.base_url="https://api.openai.com/v1"`}, false},
+		{"CLI overrides to gateway", "*.example.com", strings.ReplaceAll(sourceCodexProvider, "https://gw.example.com/v1", "https://api.openai.com/v1"), []string{"-c", `model_providers.custom.base_url="https://gw.example.com/v1"`}, true},
+		{"compact config override", "*.example.com", sourceCodexProvider, []string{`-cmodel_providers.custom.base_url="https://api.openai.com/v1"`}, false},
+		{"compact profile option", "*.example.com", sourceCodexProvider, []string{"-pother"}, false},
+		{"built-in provider", "*.example.com", `model_provider="openai"`, nil, false},
+		{"remote app-server", "*.example.com", sourceCodexProvider, []string{"--remote", "ws://localhost:1234"}, false},
+		{"profile selects official", "*.example.com", sourceCodexProvider + "\n[profiles.official]\nmodel_provider='openai'\n", []string{"--profile", "official"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(modelhttp.SourceHostsEnv, tc.hosts)
+			home, cwd, env := sourceCodexFixture(t, tc.config)
+			input := append([]string{"codex"}, tc.args...)
+			out, _ := codexModelSource(input, env, cwd, home)
+			if (!reflect.DeepEqual(input, out)) != tc.inject {
+				t.Fatalf("injected=%v, want %v", !reflect.DeepEqual(input, out), tc.inject)
+			}
+		})
+	}
+}
+
+func TestCodexModelSourceDoesNotGuessProjectTrust(t *testing.T) {
+	t.Setenv(modelhttp.SourceHostsEnv, "*.example.com")
+	home, cwd, env := sourceCodexFixture(t, sourceCodexProvider)
+	writeFile(t, filepath.Join(cwd, ".codex", "config.toml"), "model_provider='openai'\n")
+	in := []string{"codex", "app-server"}
+	if got, _ := codexModelSource(in, env, cwd, home); !reflect.DeepEqual(got, in) {
+		t.Fatal("injected with unknown project trust")
+	}
+}
+
+func TestCodexSourceOverrideReplacesInlineTables(t *testing.T) {
+	config := map[string]any{}
+	for _, override := range []string{`model_providers."provider.name"={base_url="https://gw.example.com",http_headers={"X-Team"="blue"}}`, `model_providers."provider.name".http_headers={}`} {
+		if err := setSourceOverride(config, override); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := config["model_providers"].(map[string]any)["provider.name"].(map[string]any)
+	if len(provider["http_headers"].(map[string]any)) != 0 || provider["base_url"] != "https://gw.example.com" {
+		t.Fatal("inline override did not replace the selected leaf")
+	}
+}
+
+func TestCodexSourceShellRunsAfterLauncherEnvironment(t *testing.T) {
+	shell, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh is not installed")
+	}
+	home := t.TempDir()
+	out := filepath.Join(home, "seen")
+	helper := filepath.Join(home, "helper")
+	writeFile(t, helper, "#!/bin/sh\nprintf '%s\\n' \"$OPENAI_BASE_URL\" \"$@\" > \"$SOURCE_OUT\"\n")
+	if err := os.Chmod(helper, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(home, ".zshrc"), "provider() { OPENAI_BASE_URL=https://gw.example.com command codex -c 'model_provider=custom' \"$@\"; }\n")
+	cmd := exec.Command(shell, "-ic", codexShell("provider"), "persona", "-c", "features.apps=false")
+	cmd.Env = []string{"HOME=" + home, "ZDOTDIR=" + home, "PATH=/usr/bin:/bin", "SOURCE_OUT=" + out, modelhttp.SourceHostsEnv + "=*.example.com", modelSourceBinEnv + "=" + helper}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("shell failed: %v: %s", err, output)
+	}
+	seen, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(seen) != "https://gw.example.com\nmodel-source\ncodex\n-c\nmodel_provider=custom\napp-server\n-c\nfeatures.apps=false\n" {
+		t.Fatalf("final helper arguments=%s", seen)
+	}
+}
+
+func TestCodexSourceResolvesLauncherHomeAndWorkingDirectory(t *testing.T) {
+	t.Setenv(modelhttp.SourceHostsEnv, "*.example.com")
+	home, cwd, env := sourceCodexFixture(t, sourceCodexProvider)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, ".codex", "config.toml"), strings.ReplaceAll(sourceCodexProvider, "https://gw.example.com/v1", "https://api.openai.com/v1"))
+	input := []string{"codex", "app-server"}
+	if got, _ := codexModelSource(input, append(env, "HOME="+other), cwd, home); !reflect.DeepEqual(got, input) {
+		t.Fatal("used the node home instead of the launcher home")
+	}
+	if got, _ := codexModelSource(input, append(env, "HOME="+home, "HOME="+other), cwd, home); !reflect.DeepEqual(got, input) {
+		t.Fatal("injected with an ambiguous provider home")
+	}
+	project := t.TempDir()
+	writeFile(t, filepath.Join(project, ".codex", "config.toml"), "model_provider='openai'\n")
+	for _, args := range [][]string{{"-C", project}, {"--cd=" + project}, {"-C" + project}} {
+		input := append([]string{"codex"}, args...)
+		if got, _ := codexModelSource(input, env, cwd, home); !reflect.DeepEqual(got, input) {
+			t.Fatal("ignored the launcher's working directory")
+		}
+	}
+}

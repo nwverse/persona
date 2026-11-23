@@ -268,7 +268,12 @@ class ConnectorInboxAvatarTest {
                 }
             }
         }
-        rule.waitUntil(5_000) { refs.toSet().size == 2 }
+        rule.waitUntil(5_000) {
+            // The image read is on Dispatchers.IO; pump the Android main looper while its request is being scheduled.
+            // Do not wait for only the first picture before checking both rows' exact URLs and decode sizes.
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            refs.toSet().size == 2
+        }
         rule.waitUntil(5_000) {
             rule.onAllNodesWithText("N", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() &&
                 rule.onAllNodesWithText("A", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()

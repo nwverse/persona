@@ -6,16 +6,20 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // modelExecution is non-secret per-turn execution metadata supplied by the hub.
 type modelExecution struct {
+	Source modelhttp.Source `json:"ModelSource,omitzero"`
+
 	Strict           bool   `json:",omitempty"` // scheduled execution never substitutes another model or agent
 	TaskInstructions string `json:"-"`
 	TaskAttachments  string `json:"-"`
@@ -199,7 +203,11 @@ func assistantOriginToolPolicy(origin string) string {
 // included): another process, resumed on the same conversation.
 func (n *Node) executionFingerprint(launcher string, m modelExecution) string {
 	m.Origin = assistantOriginToolPolicy(m.Origin)
+	m.Source.Session = "" // assigned once by the runtime; it cannot change the process role
 	raw, _ := json.Marshal(m)
+	if hosts := os.Getenv(modelhttp.SourceHostsEnv); hosts != "" {
+		raw = append(raw, []byte(hosts)...)
+	}
 	if l, ok := n.managedCatalog(launcher); ok { // as named: the same before and after a withheld one's pull (its Rev)
 		v, _ := json.Marshal(l)
 		raw = append(raw, v...)
@@ -235,6 +243,7 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 // hub and an unavailable answer all leave a pre-upgrade record unknown and must not start it with ordinary tools.
 func (n *Node) assistantModelDecision(ctx context.Context, id string) (string, modelExecution, bool) {
 	var res struct {
+		Source                  modelhttp.Source              `json:"model_source"`
 		Launcher                string                        `json:"launcher"`
 		Model                   string                        `json:"model"`
 		Effort                  string                        `json:"effort"`
@@ -253,7 +262,7 @@ func (n *Node) assistantModelDecision(ctx context.Context, id string) (string, m
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}, false
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, CacheKeepalive: res.CacheKeepalive, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, InboxPermissionMode: res.InboxPermissionMode, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
+	return res.Launcher, (modelExecution{Source: res.Source, Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, CacheKeepalive: res.CacheKeepalive, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, InboxPermissionMode: res.InboxPermissionMode, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
 }
 
 // strictProtectedExecution identifies owner-facing conversations without changing worker/task retry policy.
