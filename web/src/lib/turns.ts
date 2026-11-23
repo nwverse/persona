@@ -812,8 +812,8 @@ function hasBackgroundReply(items: Item[]): boolean {
 }
 
 /** Message sources whose rounds fold in the main conversation while `assistant.main_background_folded` is on
- *  (docs/assistant/assistant.md "Background rounds"): another conversation's message, a scheduled task, a follow-up. */
-const BACKGROUND_SOURCES: ReadonlySet<string> = new Set(["conversation", "followup", "patrol"]);
+ *  (docs/assistant/assistant.md "Background rounds"). */
+const BACKGROUND_SOURCES: ReadonlySet<string> = new Set(["conversation", "followup", "patrol", "notice"]);
 
 /** The input's source when it starts a background round. A `followup` is one only as a scheduled follow-up (the hub
  *  titles those): Persona continuing the user's own work after a usage limit reset (`limit_continue`) or waking the chat

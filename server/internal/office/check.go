@@ -159,7 +159,7 @@ func checkSheet(files map[string]*zip.File, name string, shared []string) (map[s
 	var first []string
 	var ref, typ string
 	var val, inline strings.Builder
-	in := ""
+	in, rPh := "", 0
 	for {
 		tok, err := d.Token()
 		if errors.Is(err, io.EOF) {
@@ -172,13 +172,19 @@ func checkSheet(files map[string]*zip.File, name string, shared []string) (map[s
 		case xml.StartElement:
 			switch t.Name.Local {
 			case "c":
-				ref, typ = attr(t, "r"), attr(t, "t")
+				ref, typ, rPh = attr(t, "r"), attr(t, "t"), 0
 				val.Reset()
 				inline.Reset()
 			case "f":
 				formulas++
-			case "v", "t":
-				in = t.Name.Local
+			case "rPh":
+				rPh++
+			case "v":
+				in = "v"
+			case "t":
+				if rPh == 0 {
+					in = "t"
+				}
 			}
 		case xml.CharData:
 			switch in {
@@ -189,6 +195,10 @@ func checkSheet(files map[string]*zip.File, name string, shared []string) (map[s
 			}
 		case xml.EndElement:
 			switch t.Name.Local {
+			case "rPh":
+				if rPh > 0 {
+					rPh--
+				}
 			case "v", "t":
 				in = ""
 			case "c":
@@ -251,7 +261,7 @@ func sharedStrings(files map[string]*zip.File) ([]string, error) {
 	defer done()
 	var out []string
 	var cur strings.Builder
-	inT := false
+	inT, rPh := false, 0
 	for {
 		tok, err := d.Token()
 		if errors.Is(err, io.EOF) {
@@ -262,17 +272,26 @@ func sharedStrings(files map[string]*zip.File) ([]string, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			if t.Name.Local == "si" {
+			switch t.Name.Local {
+			case "si":
 				cur.Reset()
+				rPh = 0
+			case "rPh":
+				rPh++
 			}
-			inT = t.Name.Local == "t"
+			inT = t.Name.Local == "t" && rPh == 0
 		case xml.CharData:
 			if inT {
 				cur.Write(t)
 			}
 		case xml.EndElement:
 			inT = false
-			if t.Name.Local == "si" {
+			switch t.Name.Local {
+			case "rPh":
+				if rPh > 0 {
+					rPh--
+				}
+			case "si":
 				out = append(out, cur.String())
 			}
 		}
