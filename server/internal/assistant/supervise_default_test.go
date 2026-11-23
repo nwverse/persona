@@ -124,17 +124,21 @@ func TestBackfillReturnsLegacyLeadPlansToTheirLead(t *testing.T) {
 	putTodo(s, Todo{ID: "legacy-no-plan", Origin: "lead1", PlanID: "gone-plan", Supervision: &Supervision{Supervisor: "conv1"}})
 	done := time.Now()
 	putTodo(s, Todo{ID: "closed-lead-plan", Origin: "lead1", PlanID: "gone-plan", DoneAt: &done, Supervision: &Supervision{Supervisor: "conv1"}})
+	// handed out by the lead without a plan (agent_start, todo_create): the origin names the lead
+	putTodo(s, Todo{ID: "lead-no-plan", Origin: "lead1", Supervision: &Supervision{Supervisor: "conv1"}})
+	// another conversation's, without a plan: kept
+	putTodo(s, Todo{ID: "side-no-plan", Origin: "side1", Supervision: &Supervision{Supervisor: "conv1"}})
 
 	s.backfillPlanSupervisors(ctx)
 	if got := todoNow(s, todo.ID).Supervision; got.Supervisor != "conv1" || got.SupervisorSource != "" || len(got.DoneWhen) != 2 || got.ExpectMinutes != 30 {
 		t.Fatalf("main's own task changed: %+v", got)
 	}
-	for id, want := range map[string]string{"explicit-leader": "lead1", "leader-worker": "box/leader-agent", "closed-lead-plan": "conv1"} {
+	for id, want := range map[string]string{"explicit-leader": "lead1", "leader-worker": "box/leader-agent", "side-no-plan": "conv1"} {
 		if got := todoNow(s, id).Supervision; got.Supervisor != want || got.SupervisorSource != "" {
 			t.Fatalf("%s changed to %+v, want %q kept", id, got, want)
 		}
 	}
-	for _, id := range []string{"legacy-leader-plan", "legacy-default-leader-plan", "legacy-no-plan"} {
+	for _, id := range []string{"legacy-leader-plan", "legacy-default-leader-plan", "legacy-no-plan", "closed-lead-plan", "lead-no-plan"} {
 		if got := todoNow(s, id).Supervision; got.Supervisor != "lead1" || got.SupervisorSource != "plan" {
 			t.Fatalf("%s was not backfilled to its planning lead: %+v", id, got)
 		}
