@@ -83,9 +83,10 @@ func (o oneSource) All(ctx context.Context) []subscriptions.ConnectorInfo {
 }
 
 // An extension's chat source switched to its default subscription hands the Inbox, under the source's own id, exactly
-// the rows its Collect does (M3 of the Inbox Sources migration, G1): every field, a document's parent, two accounts,
-// and a group chat's batch with its events' state under one thread. Through the extension protocol and the real
-// subscription service, with the generic inbox_things answering Collect.
+// the rows its Collect does (Lark's, M3 of the Inbox Sources migration, G1, #13672): every field, a document's parent,
+// two accounts, and a group chat's batch with its events' state under one thread (#13637). Through the extension
+// protocol and the real subscription service, with the generic inbox_things answering Collect and Lark's default
+// recipe (extmgr's migrations["lark"], which TestABuiltinSwitchesToItsDefaultSubscription pins to this one).
 func TestASwitchedChatSourceHandsCollectsRows(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
