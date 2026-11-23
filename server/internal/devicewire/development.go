@@ -39,17 +39,14 @@ func ValidDevelopmentCommit(commit string) bool {
 }
 
 func (t DevelopmentTarget) Valid() bool {
-	return validBuildNumber(t.Build) && ValidDevelopmentCommit(t.Commit) && t.Version == fmt.Sprintf("web-dev-%s-%d", t.Commit[:12], t.Build) &&
+	return validBuild(t.Build) && ValidDevelopmentCommit(t.Commit) && t.Version == fmt.Sprintf("web-dev-%s-%d", t.Commit[:12], t.Build) &&
 		t == DevelopmentBuild(t.Commit, t.Version, t.Build)
 }
 
-// validBuildNumber is update.ParseNumber's rule (YYYYMMDDHHMM, a real time), kept here: a contract package imports no
-// business package (docs/server/architecture.md "Contract packages"); TestValidBuildNumberMatchesUpdate holds them equal.
-func validBuildNumber(n int64) bool {
-	s := strconv.FormatInt(n, 10)
-	if len(s) != 12 {
-		return false
-	}
+// validBuild is a build number as update.ParseNumber reads one, YYYYMMDDHHMM, checked here: a contract package
+// imports no business package (internal/archguard).
+func validBuild(build int64) bool {
+	s := strconv.FormatInt(build, 10)
 	_, err := time.Parse("200601021504", s)
-	return err == nil
+	return len(s) == 12 && err == nil
 }

@@ -29,6 +29,16 @@ This table only points the way. Values and rules live in the sections it names, 
 | A new setting | Settings, showing its current value | principles 2 and 3 |
 | Any UI change | the UI change self-check | 1.4 |
 
+## Apple Health intake sync (#13291)
+
+Audience: people who want their Persona water and protein records in Apple Health. Reuse Settings › Health's
+`SettingsForm`, `SettingsSwitchRow`, secondary status text and caution color. The iPhone-only switch is off by default
+and hidden in demo mode. Its footer explains historical backfill, undo and keeping already written samples on
+disable. Status shows the last complete sync time, denied write types or the last failure. The Health home's final
+Today row uses the existing `NavigationLink` to this same page and disappears while sync is enabled for this hub.
+No new visual token, component style, polling loop or background task is introduced. All text ships in English,
+Simplified Chinese and Japanese; use Apple Health / Apple 健康 consistently.
+
 ## Product design principles
 
 The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
@@ -1922,6 +1932,12 @@ place. Only the latest selection can move the transcript. If it fails, keep the 
 The web Changes panel's secondary file tree (#10477) reuses the existing `ResizeHandle` separator from the sidebar and side panel: pointer drag, arrow keys, Home/End, and double-click/Enter to reset. Column dimensions live in `web/src/lib/layout.ts` (`CHANGES_TREE_DEFAULT`, `CHANGES_TREE_MIN`, `CHANGES_TREE_MAX`, `CHANGES_DIFF_MIN`). Its default remains 192 px; the browser remembers a user resize and temporarily fits it to the panel while keeping space for the diff. At narrow widths the tree stays above the diff. File names and indentation may truncate, while each row's unchanged addition/deletion counts remain whole and the full path remains on hover.
 
 ### 4.3 Feedback and haptics
+
+Settings › Hub uses the update group's status row for Web development progress. Pair the
+phase title with the localized step. Use a thin accent bar on the inset track when the
+step supplies a percentage, and the shared spinner while its total is unknown. Use
+`text-meta` for the phase and `text-label` for the step and measurements. Announce
+step changes through the live status label and let the measurements wrap at narrow widths.
 
 Message feedback (#5258, principle 7, super rule 5) reuses the chat's status line and pending bubble, not a new card or
 style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait
@@ -4130,3 +4146,11 @@ through Configure runners, and saving an empty list disables polling.
 ## First-run pairing
 
 Center the Persona mark and title above the primary control. A phone opens its scanner. A browser takes a pairing link and submits it with the arrow inside the field group. Place the secondary actions in one centered row of icons with short labels. Keep the action and its label in a single tap target. Allow wrapping or stacking at larger text sizes. Help explains where to get a code or link. A warning about replacing an existing pairing stays beside the action.
+
+## Removable chips (#13500)
+
+A chip the user may take away (a space conversation's categories on iOS) is a `Chip` with the close mark whose tap opens
+a menu with one destructive Remove, never a bare x that removes on touch: a chip is small, and a slip should cost
+nothing. iOS draws the close mark before the words, where every `Chip` draws its symbol (#6578; the web puts its
+button after them), and the menu's label is a finger's height (`tapTargetHeight`). A chip the user may not take away carries the lock mark and is read as set by its owner. What was removed comes
+back from a + menu at the end of the row. The change shows at once and rolls back with a toast when the hub refuses it.

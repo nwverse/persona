@@ -1,9 +1,11 @@
 """Execute the CI preparation block with owned fake devices and real result validation."""
 import json
 import os
+import shlex
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import textwrap
 import time
 import unittest
@@ -12,6 +14,10 @@ import yaml
 
 import test_sim_boot
 from test_sim_boot import FAKE_XCRUN, NEW, PHONE, ROOT, WATCH
+
+# The fakes run the real CI scripts with the interpreter running these tests: the system's /usr/bin/python3 can be older
+# than the scripts need (Debian 11 ships 3.7), and on a Mac it is Xcode's stub (test_apple_ci.py does the same).
+PYTHON = sys.executable
 
 REGULAR_UDID = "44444444-4444-4444-4444-444444444444"
 REGULAR_SUITE = "AboutVersionRegularVisualTests"
@@ -169,7 +175,7 @@ FAKE_OTOOL = textwrap.dedent('''\
     ''')
 
 
-FAKE_PRODUCT_FILE = ("file", '''#!/usr/bin/env /usr/bin/python3
+FAKE_PRODUCT_FILE = ("file", '#!' + PYTHON + '''
 import json, os, signal, subprocess, sys, time
 from pathlib import Path
 root = Path(os.environ["FAKE"])
@@ -234,8 +240,7 @@ class AppleReadinessTests(unittest.TestCase):
         self.watcher_pids = self.root / "watcher-pids"
         self.watcher_pids.write_text("")
         python = self.fixture.bin / "python3"
-        python.write_text(textwrap.dedent('''\
-            #!/usr/bin/env /usr/bin/python3
+        python.write_text('#!' + PYTHON + '\n' + textwrap.dedent('''\
             import json, os, runpy, sys
             from pathlib import Path
             watcher = next((index for index, arg in enumerate(sys.argv)
@@ -251,7 +256,7 @@ class AppleReadinessTests(unittest.TestCase):
                 sys.argv = arguments
                 sys.path.insert(0, str(Path(sys.argv[0]).parent))
                 runpy.run_path(sys.argv[0], run_name="__main__")
-            os.execv("/usr/bin/python3", ["/usr/bin/python3", *sys.argv[1:]])
+            os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
         '''))
         python.chmod(0o755)
         for name, body in (("xcodebuild", FAKE_XCODE), ("xcrun", FAKE_XCRUN_WRAPPER),
@@ -583,7 +588,7 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         ''')
         for name, body in (("xcodebuild", probe), ("xcrun", result_reader),
                            ("bash", "#!/bin/sh\nexec /bin/bash \"$@\"\n"),
-                           ("python3", "#!/bin/sh\nexec /usr/bin/python3 \"$@\"\n"),
+                           ("python3", "#!/bin/sh\nexec %s \"$@\"\n" % shlex.quote(PYTHON)),
                            ("tee", "#!/bin/sh\n/bin/cat >> \"$1\"\n")):
             path = self.fixture.bin / name
             path.write_text(body)
@@ -594,7 +599,7 @@ ci_run() {
   local label="$1" budget="$2"
   printf '%s|%s\\n' "$label" "$budget" >> "$READINESS_FIXTURE/budgets"
   shift 2
-  /usr/bin/python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$budget" -- "$@"
+  "$READINESS_PYTHON" "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$budget" -- "$@"
 }
 CI_ROOT="$READINESS_CI_ROOT"
 OUTPUT="$READINESS_OUTPUT"
@@ -608,7 +613,7 @@ IOS_TESTS=(xcodebuild -destination "platform=iOS Simulator,id=$SIM" -destination
         env = {"PATH": str(self.fixture.bin) + os.pathsep + os.defpath,
                "FAKE": str(self.root), "READINESS_FIXTURE": str(self.root),
                "READINESS_CI_ROOT": str(self.root / "ci-root"),
-               "READINESS_OUTPUT": str(output),
+               "READINESS_OUTPUT": str(output), "READINESS_PYTHON": PYTHON,
                "PYTHONDONTWRITEBYTECODE": "1"}
         shell_source = self.root / "extracted-readiness.sh"
         shell_source.write_text(shell)
@@ -617,7 +622,7 @@ IOS_TESTS=(xcodebuild -destination "platform=iOS Simulator,id=$SIM" -destination
         self.assertEqual(syntax.returncode, 0, syntax.stdout + syntax.stderr)
         # The outer deadline owns the extracted shell's whole process group,
         # including the observer and its children if an assertion regresses.
-        result = subprocess.run(["/usr/bin/python3", str(ROOT / "scripts/ci/run.py"),
+        result = subprocess.run([PYTHON, str(ROOT / "scripts/ci/run.py"),
                                  "--label", "readiness shell input regression", "--timeout", "30",
                                  "--", "/bin/bash", str(shell_source)], cwd=self.root, env=env,
                                 capture_output=True, text=True, timeout=45)

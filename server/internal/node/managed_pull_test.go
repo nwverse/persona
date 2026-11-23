@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -188,17 +189,32 @@ func TestOnDemandAgyProviderIsPulledForTheCompanion(t *testing.T) {
 	withPullHub(t, n, h)
 	entry := proto.ManagedLauncher{Name: "agy-gw", Agent: "agy", BaseURL: "https://gw.example.com", Model: "m1", Delivery: proto.DeliveryOnDemand, Rev: "r1"}
 	n.setCatalog([]proto.ManagedLauncher{entry.Public()})
-	waitFor(t, "an on-demand agy provider to reach the companion's env", func() bool {
-		return strings.Contains(strings.Join(n.agyProviderEnv(), "\n"), "GEMINI_API_KEY=agy-pulled-key")
-	})
-	// A Claude provider on demand still waits for a start.
+	pulledAgy := func(n *Node) func() bool {
+		return func() bool {
+			return strings.Contains(strings.Join(n.agyProviderEnv(), "\n"), "GEMINI_API_KEY=agy-pulled-key")
+		}
+	}
+	waitWithin(t, 5*time.Second, "an on-demand agy provider in the companion's env", pulledAgy(n))
+	// A Claude provider on demand still waits for a start. Listed before an agy one, it would be pulled before it (one
+	// goroutine pulls ahead in list order): once the agy one is in, the Claude one was never asked for.
 	other := &Node{bin: "/usr/local/bin/personad"}
-	h2 := &pullHub{answer: func(name string) (any, error) { return nil, errors.New("not expected") }}
+	var mu sync.Mutex
+	var asked []string
+	h2 := &pullHub{answer: func(name string) (any, error) {
+		mu.Lock()
+		asked = append(asked, name)
+		mu.Unlock()
+		if name == entry.Name {
+			return map[string]any{"launcher": proto.ManagedLauncher{Name: name, Agent: "agy", BaseURL: "https://gw.example.com", Model: "m1", APIKey: "agy-pulled-key"}}, nil
+		}
+		return nil, errors.New("not expected")
+	}}
 	withPullHub(t, other, h2)
-	// setCatalog starts a pull only for what it prefetches, on a goroutine it starts before returning: none started
-	// means none can come later, so the count is read at once.
-	other.setCatalog([]proto.ManagedLauncher{{Name: "box", Model: "m1", Delivery: proto.DeliveryOnDemand, Withheld: true, Rev: "1"}})
-	if h2.count() != 0 {
-		t.Fatalf("an on-demand Claude provider was pulled ahead (%d)", h2.count())
+	other.setCatalog([]proto.ManagedLauncher{{Name: "box", Model: "m1", Delivery: proto.DeliveryOnDemand, Withheld: true, Rev: "1"}, entry.Public()})
+	waitWithin(t, 5*time.Second, "the agy provider pulled after the Claude one's place", pulledAgy(other))
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(asked, []string{entry.Name}) {
+		t.Fatalf("an on-demand Claude provider was pulled ahead: asked for %v", asked)
 	}
 }

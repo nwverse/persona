@@ -243,10 +243,44 @@ func (u *updater) unreplacedCandidate(r *update.Published) error {
 }
 
 func (u *updater) runDevelopment(ctx context.Context, operation string, input map[string]any, result any) error {
-	if err := u.devRun(ctx, u.developmentRequestConfig(), filepath.Join(u.dir, "development"), operation, input, result); err != nil {
-		return i18n.Err("hub-selfupdate.err_development_phase", i18n.Args{"phase": operation})
+	cfg := u.developmentRequestConfig()
+	u.mu.Lock()
+	gen := u.opGen
+	u.mu.Unlock()
+	report := func(p update.DevelopmentProgress) {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		if u.opGen == gen && u.state == p.Phase {
+			u.developmentProgress = &p
+		}
+	}
+	if err := u.devRun(ctx, cfg, filepath.Join(u.dir, "development"), operation, input, result, report); err != nil {
+		u.mu.Lock()
+		step := ""
+		if p := u.developmentProgress; p != nil && u.opGen == gen && update.DevelopmentStep(operation, p.Step, cfg.Backup.Builtin).Phase == p.Phase {
+			step = p.Step
+		}
+		u.mu.Unlock()
+		return developmentPhaseError(operation, step)
 	}
 	return nil
+}
+
+func developmentPhaseError(operation, step string) error {
+	if step == "" {
+		return i18n.Err("hub-selfupdate.err_development_phase", i18n.Args{"phase": operation})
+	}
+	return i18n.Err("hub-selfupdate.err_development_step", i18n.Args{
+		"phase": operation, "step": i18n.Err("hub-selfupdate.development_step_" + step),
+	})
+}
+
+func (u *updater) startDevelopmentPhase(p update.DevelopmentProgress, legacyProgress string) {
+	u.mu.Lock()
+	u.setLocked(p.Phase, legacyProgress, "")
+	u.developmentProgress, u.developmentStarted = &p, time.Now()
+	u.mu.Unlock()
+	u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
 }
 
 // quiesceDevelopmentWriters pauses the writers a snapshot must not see moving.
@@ -392,12 +426,11 @@ func (u *updater) developmentComputerPlatforms(allOwners bool) []string {
 }
 
 func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) error {
-	operation := "build"
-	state := "building"
+	operation, firstStep, lastStep := "build", "fetch", "manifest"
 	if r.Development.BackupID != "" {
-		operation, state = "prepare_backup", "applying_backup"
+		operation, firstStep, lastStep = "prepare_backup", "verify_snapshot", "prepare_artifacts"
 	}
-	u.set(state, "web/hub/node", "")
+	u.startDevelopmentPhase(update.DevelopmentStep(operation, firstStep, false), "web/hub/node")
 	var built struct {
 		Artifacts string   `json:"artifacts"`
 		Ancestors []string `json:"ancestors"`
@@ -421,12 +454,12 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 	if operation == "build" {
 		ancestors, err = update.EncodeAncestors(built.Ancestors)
 		if err != nil {
-			return err
+			return developmentPhaseError(operation, lastStep)
 		}
 	}
 	m, err := update.BuildManifest(built.Artifacts, *r.Manifest)
 	if err != nil {
-		return err
+		return developmentPhaseError(operation, lastStep)
 	}
 	if operation == "build" {
 		// Compare the producer's native and archive hashes with a fresh read of every archive.
@@ -435,7 +468,7 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 		if err != nil || !ok || produced.Version != m.Version || produced.Build != m.Build || produced.Commit != m.Commit ||
 			!reflect.DeepEqual(produced.Files, m.Files) || !reflect.DeepEqual(produced.Programs, m.Programs) ||
 			!reflect.DeepEqual(produced.Nodes, m.Nodes) {
-			return errors.New("development package manifest does not match the build")
+			return developmentPhaseError(operation, lastStep)
 		}
 	}
 	m.Ancestors = ancestors
@@ -452,26 +485,26 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 	if info, err := os.Lstat(identity.NodeBinaryDir()); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return nil, errors.New("node package directory is publisher-managed; configure a dedicated development installation")
 	}
-	u.set("backing_up", "", "")
+	u.mu.Lock()
+	updatedAt := u.currentUpdatedAtLocked()
+	cfg := u.developmentBackupConfigLocked()
+	u.mu.Unlock()
+	u.startDevelopmentPhase(update.DevelopmentStep("backup", "quiesce", cfg.Builtin), "")
 	programs := map[string]string{"personad": target}
 	for _, name := range update.ProgramNames {
 		path := filepath.Join(filepath.Dir(target), name)
 		if _, err := os.Stat(path); err == nil {
 			programs[name] = path
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
+			return nil, developmentPhaseError("backup", "quiesce")
 		}
 	}
 	var saved update.DevelopmentBackup
-	u.mu.Lock()
-	updatedAt := u.currentUpdatedAtLocked()
-	cfg := u.developmentBackupConfigLocked()
-	u.mu.Unlock()
 	// The hub's own writers pause around every dump and the file archive; with
 	// hub.json's hooks the helper does it instead.
 	resume, err := u.quiesceDevelopmentWriters(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return nil, developmentPhaseError("backup", "quiesce")
 	}
 	defer resume()
 	err = u.runDevelopment(ctx, "backup", map[string]any{
@@ -487,7 +520,7 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 	err = u.saveLocked(ctx)
 	u.mu.Unlock()
 	if err != nil {
-		return nil, err
+		return nil, developmentPhaseError("backup", "")
 	}
 	return &saved, nil
 }

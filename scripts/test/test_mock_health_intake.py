@@ -50,6 +50,19 @@ class HealthIntakeMockTests(unittest.TestCase):
         self.assertEqual(response.result["days"][0]["water"], 0)
         self.assertEqual(response.result["days"][-1]["water"], 750)
 
+    def test_changes_pages_use_exclusive_sequences_and_keep_tombstones(self):
+        first = self.request(suffix="/changes", query={"space": ["health"], "limit": ["2"]}).result
+        self.assertEqual([e["seq"] for e in first["changes"]], [1, 2])
+        self.assertEqual(first["next"], 2)
+        self.assertTrue(first["has_more"])
+        identity = first["changes"][0]["id"]
+        self.assertEqual(self.request("DELETE", "/" + identity).status, 200)
+        tail = self.request(suffix="/changes", query={"space": ["health"], "after": ["2"]}).result
+        self.assertEqual([e["seq"] for e in tail["changes"]], [3, 4])
+        self.assertIn("deleted_at", tail["changes"][-1])
+        empty = self.request(suffix="/changes", query={"space": ["health"], "after": ["4"]}).result
+        self.assertEqual(empty, {"changes": [], "next": 4, "has_more": False})
+
     def test_detail_pages_use_exported_gauges_settings_and_action_toasts(self):
         for kind, color in [("water", "blue"), ("protein", "amber")]:
             body = {"context": {"locale": "en", "ui_version": 11}, "state": json.dumps({"kind": kind})}

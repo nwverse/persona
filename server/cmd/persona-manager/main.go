@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/nwverse/persona/server/internal/builtinext"
 	"github.com/nwverse/persona/server/internal/clitext"
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/extension/sourcevalidate"
@@ -24,7 +25,6 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/update"
 	"github.com/nwverse/persona/server/internal/voice"
-	"github.com/nwverse/persona/server/internal/volc"
 )
 
 // What the build wrote in (-X), as personad's (the hub's update checks a program by `version -v`).
@@ -121,9 +121,13 @@ func main() {
 		err = extmgr.ExtensionCommand(ctx, args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "voice":
 		err = voice.Run(ctx)
-	case "volc": // the built-in Volcengine speech extension's program (docs/extensions/volcengine-speech.md)
-		err = volc.Run(ctx, version)
 	default: // join, run, install, uninstall, status, search-reindex (manager.Main says what it does not know)
+		// A built-in module's extension program (`persona-manager volc`), when this build has the module
+		// (internal/builtinext; docs/architecture/core-and-modules.md "Provider seams").
+		if run, ok := builtinext.LookupProgram(args[0]); ok {
+			err = run(ctx, version)
+			break
+		}
 		err = managercli.Manager(ctx, buildInfo(), args)
 	}
 	finish(err)

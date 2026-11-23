@@ -93,7 +93,7 @@ import { backgroundTurn, waitingOnSubagents } from "../../lib/background-work";
 import { doneSubagentLink, useSubagentLink } from "../../lib/subagent-link";
 import { childCall, childCardKey, childOfCall, childPlaces, exchangeStarts, placeChildren, type ChildPlace } from "../../lib/child-cards";
 import { useChildSessions } from "../../lib/use-child-sessions";
-import { openExpanded, openFoldRange } from "./expanded";
+import { openExpanded } from "./expanded";
 import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
 import { containsInput, indexedNavTicks, userInputRevision, windowUserInputs, USER_INPUT_PAGE_SIZE } from "../../lib/user-input-index";
@@ -101,7 +101,7 @@ import { useRevealedInputSeq, useUserInputs } from "./useUserInputs";
 import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
-import type { LandingProof } from "./land-message";
+import type { MessageView } from "./land-message";
 import { publishTranscript, unpublishTranscript } from "./transcript-share";
 import { useEarlierStretches } from "./useEarlierStretches";
 import { dayRowKey, withDayDividers } from "./day-dividers";
@@ -118,8 +118,8 @@ import { isUltracodeQueued, ultracodeQueueDone } from "../../lib/ultracode";
 import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions";
 import { QueueStrip } from "./QueueStrip";
 import type { LoadOutcome } from "./ChatSearch";
-import { forgetReveals, revealItem, undoReveals, clearReveal } from "./search-reveal";
-import { jumpWhenOpen, openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
+import { forgetReveals, undoReveals } from "./search-reveal";
+import { openForward, peekJump, takeJump, type ForwardChat, type ForwardPick } from "../../lib/forward";
 import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
 import { foldHolding, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
@@ -213,9 +213,7 @@ const NO_PLACES = new Map<string, ChildPlace[]>();
 const NO_SUBAGENTS: Subagent[] = [];
 // no fine pointer: the rail draws nothing, so its ticks are not read
 const NO_RAIL_TICKS: NavRailTick[] = [];
-/** Going to a search hit: how long the rows that hold it get to open before the line it is on stands in, when to give
- *  up, and how long it stays lit (Android: 3 s). */
-const FIND_MS = 400;
+/** How long a jump waits for layout to settle, and how long a search hit stays lit (Android: 3 s). */
 const GIVE_UP_MS = 2000;
 const HIT_MS = 3000;
 const SEARCH_NOTICE: Record<SearchLoadOutcome, string | null> = {
@@ -431,15 +429,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // what the rail's jumps and the search page back through: the live stretch, whose start ends it (#5054)
   const trNow = useRef(tr);
   trNow.current = { ...tr, hasMore: earlier.liveHasMore };
-  const railChat = useRef(`${mid}/${sid}`);
-  railChat.current = `${mid}/${sid}`;
+  const chatNow = useRef(`${mid}/${sid}`);
+  chatNow.current = `${mid}/${sid}`;
   // The mounted conversation owns late Check refreshes, including a Check started before leaving and returning.
   const recheckTranscript = useCallback(() => {
-    if (railChat.current === `${mid}/${sid}`) trNow.current.reload();
+    if (chatNow.current === `${mid}/${sid}`) trNow.current.reload();
   }, [mid, sid]);
   useEffect(() => registerOutboxRecheck(mid, sid, recheckTranscript), [mid, sid, recheckTranscript]);
-  const railRun = useRef(0);
-  useEffect(() => () => { railRun.current++; }, [mid, sid]);
   const fine = useFinePointer();
   // a Persona conversation's send the hub refused: a card above the composer, not a toast (docs/assistant/onboarding.md 4.4),
   // while its failed bubble (`entry`) is there
@@ -808,7 +804,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const l = landing.current;
     if (!l) return;
     clearTimeout(l.quiet);
-    l.quiet = window.setTimeout(() => (landing.current = null), ms);
+    l.quiet = window.setTimeout(() => { if (landing.current === l) landing.current = null; }, ms);
   }, []);
   const land = useCallback((row: Element | Range, at: number) => {
     clearTimeout(landing.current?.quiet);
@@ -821,7 +817,30 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     gliding.current?.();
     gliding.current = null;
   }, []);
-  useEffect(() => stopGlide, [stopGlide]);
+  // A pick owns its landing through every page, fold and animation frame. The page read itself is shared.
+  const navigation = useRef(0);
+  const pendingTarget = useRef<string>(undefined);
+  const cancelNavigation = useCallback(() => {
+    navigation.current++;
+    pendingTarget.current = undefined;
+    stopGlide();
+    clearTimeout(jumping.current);
+    jumping.current = 0;
+    clearTimeout(landing.current?.quiet);
+    landing.current = null;
+  }, [stopGlide]);
+  const beginNavigation = useCallback(() => {
+    cancelNavigation();
+    const run = navigation.current;
+    return () => navigation.current === run;
+  }, [cancelNavigation]);
+  // Keep the requested destination through StrictMode's effect replay, including a forwarded original.
+  const targetOnOpen = useMemo(() => landAt || peekJump(mid, sid), [mid, sid, landAt]);
+  useLayoutEffect(() => {
+    takeJump(mid, sid);
+    pendingTarget.current = targetOnOpen;
+    return cancelNavigation;
+  }, [mid, sid, landAt, targetOnOpen, cancelNavigation]);
   const glideTo = useCallback((aim: () => number) => {
     const sc = scroller.current;
     stopGlide();
@@ -955,9 +974,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (saved && (saved.el !== el || saved.scope !== historyScope)) {
       before.current = saved = null;
     }
-    if (historyRewritten) {
-      before.current = saved = null;
-      suppressAutoEarlier.current = true;
+    const front = saved && visibleHistoryFront(el, firstLiveSeq);
+    const prepended = saved && front && (front.live < saved.front.live || front.stretch < saved.front.stretch ||
+      (front.stretch === saved.front.stretch && front.stretchSeq < saved.front.stretchSeq));
+    if (historyRewritten || prepended) {
+      before.current = null;
+      if (historyRewritten) suppressAutoEarlier.current = true;
       if (atEnd.current || first.current) {
         el.scrollTop = el.scrollHeight;
         lastTop.current = el.scrollTop;
@@ -969,7 +991,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         if (savedAnchor && anchorRow) {
           el.scrollTop += anchorRow.getBoundingClientRect().top - el.getBoundingClientRect().top - savedAnchor.offset;
           lastTop.current = el.scrollTop;
-          land(anchorRow, savedAnchor.offset);
+          if (historyRewritten) land(anchorRow, savedAnchor.offset);
+        } else if (saved && !historyRewritten) {
+          el.scrollTop = saved.top + (el.scrollHeight - saved.h);
         } else {
           // The replacement page no longer contains the previous anchor (e.g. shortened to latest turns or rewound).
           // Settle cleanly at the end so a browser-clamped scrollTop (< 300) cannot trigger cascading upward paging.
@@ -982,13 +1006,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       return;
     }
     if (saved) {
-      const front = visibleHistoryFront(el, firstLiveSeq);
-      if (front.live < saved.front.live || front.stretch < saved.front.stretch ||
-        (front.stretch === saved.front.stretch && front.stretchSeq < saved.front.stretchSeq)) {
-        el.scrollTop = saved.top + (el.scrollHeight - saved.h);
-        before.current = null;
-        return;
-      }
       const livePageCommitted = projectedLivePage !== undefined && saved.pages.delete(projectedLivePage);
       const otherPageCommitted = projectedOtherPage !== undefined && saved.pages.delete(projectedOtherPage);
       // The committed page can be wholly outside the rendered stretch. In that case there is no
@@ -1145,21 +1162,31 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (!sc) return;
     const size = () => ({ scrollHeight: sc.scrollHeight, clientHeight: sc.clientHeight });
     const leave = () => follow(false);
-    // (checked before sizes are read: no layout read per wheel or touch event while away from the end)
     // a wheel or a finger scrolling a folded message (fold-scroll.tsx) stays in it: the chat does not move
-    const wheel = (e: WheelEvent) => atEnd.current && !scrollsAFold(e.target, sc, e.deltaY) && leavesOnWheel({ deltaX: e.deltaX, deltaY: e.deltaY, ...size() }) && leave();
+    const wheel = (e: WheelEvent) => {
+      if (!e.deltaY || scrollsAFold(e.target, sc, e.deltaY)) return;
+      cancelNavigation();
+      if (atEnd.current && leavesOnWheel({ deltaX: e.deltaX, deltaY: e.deltaY, ...size() })) leave();
+    };
     let startY: number | null = null;
     const touchStart = (e: TouchEvent) => (startY = e.touches[0]?.clientY ?? null);
     const touchMove = (e: TouchEvent) => {
       const y = e.touches[0]?.clientY;
-      if (atEnd.current && startY !== null && y !== undefined && !scrollsAFold(e.target, sc, startY - y) && leavesOnTouch({ startY, y, ...size() })) leave();
+      if (startY === null || y === undefined || y === startY || scrollsAFold(e.target, sc, startY - y)) return;
+      cancelNavigation();
+      if (atEnd.current && leavesOnTouch({ startY, y, ...size() })) leave();
     };
     const key = (e: KeyboardEvent) => {
       const t = e.target instanceof Element ? e.target : null;
       if (t?.closest("input, textarea, [contenteditable=true]")) return;
+      if (!["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(e.key) || e.defaultPrevented) return;
+      cancelNavigation();
       if (atEnd.current && leavesOnKey({ key: e.key, ...size() })) leave();
     };
-    const down = (e: PointerEvent) => (dragging.current = isScrollbarPress({ targetIsView: e.target === sc }));
+    const down = (e: PointerEvent) => {
+      dragging.current = isScrollbarPress({ targetIsView: e.target === sc });
+      if (dragging.current) cancelNavigation();
+    };
     const up = () => (dragging.current = false);
     sc.addEventListener("wheel", wheel, { passive: true });
     sc.addEventListener("touchstart", touchStart, { passive: true });
@@ -1175,7 +1202,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       window.removeEventListener("pointerup", up);
       window.removeEventListener("keydown", key);
     };
-  }, [follow, scrollEl]);
+  }, [follow, scrollEl, cancelNavigation]);
 
   const loadEarlierNearTop = () => {
     const el = scroller.current;
@@ -1210,6 +1237,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [tr.items, earlier.stretches, earlier.hasMore, earlier.loadingEarlier, earlier.loadEarlier, earlier.due]);
 
   const toEnd = () => {
+    cancelNavigation();
     const el = scroller.current;
     if (!el) return;
     follow(true);
@@ -1626,14 +1654,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   );
   const railJump = useCallback(
     async (lineId: string) => {
-      const scope = `${mid}/${sid}`;
-      const run = ++railRun.current;
+      const current = beginNavigation();
       const deadline = Date.now() + 120_000;
       const target = inputIndex?.inputs.find((input) => `seg:${input.id}` === lineId);
-      const cancelled = () => railChat.current !== scope || run !== railRun.current || Boolean(inputIndex?.history && trNow.current.history && inputIndex.history !== trNow.current.history);
-      stopGlide();
-      clearTimeout(landing.current?.quiet);
-      landing.current = null;
+      const cancelled = () => !current() || Boolean(inputIndex?.history && trNow.current.history && inputIndex.history !== trNow.current.history);
       follow(false);
       if (!target || containsInput(trNow.current.items, target)) {
         const owner = target ? lineOfItem(linesNow.current, trNow.current.items, target.id) : lineId;
@@ -1662,11 +1686,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           return row instanceof HTMLElement ? { y: row.getBoundingClientRect().top, value: row } : null;
         },
       });
-      if (result === "cancelled") return;
+      if (result === "cancelled" || cancelled()) return;
       if (result === "missing") { toast(t("chat-navrail.target_failed"), "error"); return; }
       landRow(result.value, -12);
     },
-    [mid, sid, inputIndex, follow, landRow, stopGlide, loadWithScrollAnchor],
+    [beginNavigation, inputIndex, follow, landRow, loadWithScrollAnchor],
   );
   const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: railJump }), [railTicks, inputIndex?.total, railJump]);
   // the calls with a terminal result: a subagent call without one is one the agent still waits on (the bar's step)
@@ -1683,10 +1707,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const expandFold = tr.expandFold;
   const jumpToCall = useCallback(
     async (call: string) => {
+      const current = beginNavigation();
       if (viewNow.current === "term") setView("chat");
       const scope = `${mid}/${sid}:`;
       const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
       const found = await seekCall(scope, call, items.current, expandFold, frame);
+      if (!current()) return;
       if (!found) return void toast(t("chat-chatview.call_not_loaded"));
       follow(false);
       // the groups just opened grow over the next frames (Collapse): move once the row holds still, the chat's own
@@ -1695,6 +1721,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       let last = NaN;
       for (let still = 0, n = 0; n < 40 && still < 3; n++) {
         await frame();
+        if (!current()) return;
         row = scroller.current?.querySelector<HTMLElement>(`[data-tool-use="${CSS.escape(call)}"]`) ?? null;
         const top = row?.getBoundingClientRect().top ?? NaN;
         still = row && Math.abs(top - last) < 0.5 ? still + 1 : 0;
@@ -1705,7 +1732,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       landRow(row, -(sc.clientHeight - row.getBoundingClientRect().height) / 2);
       row.animate?.([{ backgroundColor: "var(--accent-tint)" }, { backgroundColor: "transparent" }], { duration: 1800, easing: "ease-out" });
     },
-    [mid, sid, follow, expandFold, landRow, setView],
+    [mid, sid, follow, expandFold, landRow, setView, beginNavigation],
   );
   const jump = useCallback((call: string) => void jumpToCall(call), [jumpToCall]);
   // A link to one of its subagents' conversations (#5030, lib/subagent-link.ts): that subagent's card in view, opened; a
@@ -1824,7 +1851,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const [search, setSearch] = useState<{ open: boolean; query: string }>({ open: false, query: "" });
   const origin = useRef<{ atEnd: boolean; line?: string; offset: number } | null>(null);
   const [picked, setPicked] = useState(false);
-  const going = useRef(0);
   // the ring on the hit gone to: one timer, restarted when another (or the same) row lights
   const lit = useRef<{ el: HTMLElement; timer: number } | null>(null);
   const unlight = useCallback(() => {
@@ -1837,7 +1863,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     setSearch({ open: false, query: "" });
     setPicked(false);
     origin.current = null;
-    going.current++;
     unlight();
     forgetReveals();
   }, [mid, sid, unlight]);
@@ -1853,34 +1878,16 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     setSearch((x) => ({ ...x, open: false }));
     if (!picked) origin.current = null;
   }, [picked]);
-  // brings an item into view, opening what holds it, and lights it: a search hit, or a forward's original (#3899)
-  const seekItem = useCallback((itemId: string, quiet = false, proof?: LandingProof) => {
-    const sc = scroller.current;
-    if (!sc) return;
-    const sourceMatches = () => !proof || proof.matches(trNow.current.items);
-    if (!sourceMatches()) return proof?.unavailable();
-    follow(false);
-    revealItem(ctx.scope, itemId);
-    const run = ++going.current;
-    void untilStill<HTMLElement>({
-      frame: nextFrame,
-      now: () => performance.now(),
-      cancelled: () => run !== going.current,
-      giveUpMs: GIVE_UP_MS,
-      // the rows that hold it take a few frames to open: the line it is on only once they had the time
-      locate: (waited) => {
-        if (!sourceMatches()) return null;
-        const exact = sc.querySelector<HTMLElement>(`[data-items~="${CSS.escape(itemId)}"]${proof?.selector ?? ""}`);
-        const lineId = exact || proof || waited <= FIND_MS ? undefined : lineOfItem(linesNow.current, trNow.current.items, itemId);
-        const el = exact ?? (lineId ? sc.querySelector<HTMLElement>(`[data-line="${CSS.escape(lineId)}"]`)?.firstElementChild : null);
-        return el instanceof HTMLElement ? { y: el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop, value: el } : null;
-      },
-    }).then((r) => {
-      if (r === "cancelled") return;
-      clearReveal();
-      if (proof && (r === "missing" || !sourceMatches() || !r.value.matches(proof.selector))) return proof.unavailable();
-      if (r === "missing") return void (quiet || toast(t("chat-chatview.search_not_found")));
-      const el = r.value;
+  const messageView = useMemo<MessageView>(() => ({
+    scope: ctx.scope,
+    transcript: () => trNow.current,
+    lineFor: (id) => lineOfItem(linesNow.current, trNow.current.items, id),
+    beginSeek: () => {
+      const sc = scroller.current;
+      if (sc) follow(false);
+      return sc;
+    },
+    land: (el, sc) => {
       const tall = el.getBoundingClientRect().height > sc.clientHeight;
       el.scrollIntoView({ block: tall ? "start" : "center", behavior: "auto" });
       land(el, el.getBoundingClientRect().top - sc.getBoundingClientRect().top);
@@ -1890,8 +1897,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       void ring.getBoundingClientRect(); // the same row picked again lights again
       ring.setAttribute("data-search-hit", "");
       lit.current = { el: ring, timer: window.setTimeout(unlight, HIT_MS) };
-    });
-  }, [ctx.scope, follow, unlight, land]);
+    },
+  }), [ctx.scope, follow, unlight, land]);
   // the work the hub folded, fetched for the search while it is open (useFoldSearch, #6281): a hit in it opens its fold
   // into the chat first, as "Jump to the step" does (jump.ts seekCall)
   const folds = useFoldSearch(mid, sid, tr.history, earlier.liveItems, search.open);
@@ -1899,31 +1906,28 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const goTo = useCallback((hit: ChatSearchHit) => {
     setSearch((x) => ({ ...x, open: false }));
     setPicked(true);
+    const current = beginNavigation();
     const fold = earlier.liveItems.some((i) => i.id === hit.itemId) ? undefined : foldHolding(folds.fetched, hit.itemId);
-    if (!fold?.fold) return seekItem(hit.itemId);
-    openFoldRange(ctx.scope, fold.seq, fold.fold.through_seq); // its steps land in open groups
-    tr.expandFold(fold).then(
-      () => requestAnimationFrame(() => seekItem(hit.itemId)),
-      () => toast(t("chat-chatview.search_not_found")),
+    void import("./land-message").then(
+      ({ landSearchHit }) => landSearchHit(hit.itemId, fold, messageView, current),
+      () => { if (current()) toast(t("chat-chatview.search_not_found")); },
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- tr.expandFold follows the chat, as seekItem does
-  }, [seekItem, earlier.liveItems, folds.fetched, ctx.scope]);
+  }, [beginNavigation, messageView, earlier.liveItems, folds.fetched]);
   const backToOrigin = useCallback(() => {
     const o = origin.current;
     origin.current = null;
     setPicked(false);
-    landing.current = null;
-    const run = ++going.current;
+    const current = beginNavigation();
     unlight();
     undoReveals();
     const sc = scroller.current;
     if (!sc || !o) return;
-    if (o.atEnd) return void requestAnimationFrame(() => requestAnimationFrame(() => run === going.current && toEnd()));
+    if (o.atEnd) return void requestAnimationFrame(() => requestAnimationFrame(() => current() && toEnd()));
     // what the hits opened closes over a few hundred ms (Collapse): keep the origin line where it was until it holds
     void untilStill<true>({
       frame: nextFrame,
       now: () => performance.now(),
-      cancelled: () => run !== going.current,
+      cancelled: () => !current(),
       giveUpMs: GIVE_UP_MS,
       locate: () => {
         const el = o.line ? sc.querySelector<HTMLElement>(`[data-line="${CSS.escape(o.line)}"]`)?.firstElementChild : null;
@@ -1932,9 +1936,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         sc.scrollTop += el.getBoundingClientRect().top - scTop - o.offset;
         return { y: el.getBoundingClientRect().top - scTop + sc.scrollTop, value: true };
       },
-    }).then((r) => r === "missing" && toast(t("chat-chatview.search_origin_changed")));
+    }).then((r) => r === "missing" && current() && toast(t("chat-chatview.search_origin_changed")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unlight]);
+  }, [beginNavigation, unlight]);
   // "Load earlier and keep searching" (lib/chat-search.ts loadEarlierForSearch): the history's own pages, one after another, the
   // view kept still as each lands above it
   const loadForSearch = useCallback(async (onPage: (n: number) => void, stopped: () => boolean): Promise<LoadOutcome> => {
@@ -1953,24 +1957,17 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // earlier and keep searching" does (at most SEARCH_PAGES pages, the reader scrolling away or another landing stops
   // it); not reached, the chat stays where it opened and says the message is further up.
   useEffect(() => {
-    if (landAt) jumpWhenOpen(mid, sid, landAt);
-  }, [mid, sid, landAt]);
-  const msgLanding = useRef(0);
-  useEffect(() => {
-    const target = peekJump(mid, sid);
+    const target = pendingTarget.current;
     if (!target || tr.loading || target.startsWith("star:") && !tr.firstRead) return;
-    takeJump(mid, sid);
-    const run = ++msgLanding.current;
-    const current = () => run === msgLanding.current;
+    const current = beginNavigation();
     void import("./land-message").then(({ landMessage }) => {
       void landMessage({
-        target, mid, sid, scope: ctx.scope, fromLink: Boolean(landAt), current,
-        transcript: () => trNow.current, seek: seekItem, loadEarlier: (stop) => loadForSearch(() => {}, stop),
+        target, mid, sid, view: messageView, fromLink: Boolean(landAt), current,
+        loadEarlier: (stop) => loadForSearch(() => {}, stop),
       });
     }, () => { if (current()) toast(t("chat-chatview.search_not_found")); });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a new landing is a new item asked for, not the items changing
-  }, [mid, sid, tr.loading, tr.firstRead, landAt, seekItem, loadForSearch]);
-  useEffect(() => () => void msgLanding.current++, [mid, sid, landAt]); // a different destination ends a pending landing
+  }, [mid, sid, tr.loading, tr.firstRead, landAt, beginNavigation, messageView, loadForSearch]);
   const rounds = useMemo(() => segs.filter((x) => x.user).length, [segs]);
 
   // the newest plan of the chat (PlanCard.tsx planCardStep draws its card): while that card is out of view, a pill above the composer
