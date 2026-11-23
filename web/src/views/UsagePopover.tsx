@@ -261,7 +261,7 @@ export function UsagePopover({
 function AccountSection({ a, now, pinned }: { a: UsageAccount; now: number; pinned: boolean }) {
   const from = sourceNames(a);
   const plan = planNote(a);
-  const pinnable = isPinnableUsageAccount(a);
+  const showPin = isPinnableUsageAccount(a) || pinned;
   // A balance's failure is about the provider's balance route, not a usage gateway's stored windows (#11825).
   const problem = isBalanceAccount(a) ? balanceProblemText(a) : problemText(a);
   return (
@@ -270,7 +270,7 @@ function AccountSection({ a, now, pinned }: { a: UsageAccount; now: number; pinn
         <div className="flex items-center gap-1.5">
           <h3 className={cx("min-w-0 flex-1 truncate text-label font-medium", a.stale ? "text-ink-2" : "text-ink")}>{a.name}</h3>
           <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{a.stale ? tr("usage.stale_age", { age: sampleAge(a.sampled_at, now) }) : sampleAge(a.sampled_at, now)}</span>
-          {pinnable && (
+          {showPin && (
             <button
               type="button"
               data-usage-pin={a.id}
@@ -413,24 +413,24 @@ export function ProviderTimeline({ accounts, now }: { accounts: UsageAccount[]; 
         })}
       </div>
       <div data-timeline-legend aria-hidden className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-submeta text-ink-3">
-        {shortLabels.length > 0 && (
-          <span data-legend-item="short" className="inline-flex items-center gap-1.5 whitespace-nowrap">
-            <span className="inline-block h-1 w-3 rounded-full" style={{ background: LANE_COLOR.short }} />
-            <span>{tr("usage.legend_window", { window: shortLabels.join(" / ") })}</span>
+        {shortLabels.map((windowLabel) => (
+          <span key={`short:${windowLabel}`} data-legend-item="short" className={cx("inline-flex max-w-full items-center gap-1.5", windowLabel.length <= 12 && "whitespace-nowrap")}>
+            <span className="inline-block h-1 w-3 shrink-0 rounded-full" style={{ background: LANE_COLOR.short }} />
+            <span>{tr("usage.legend_window", { window: windowLabel })}</span>
           </span>
-        )}
-        {longLabels.length > 0 && (
-          <span data-legend-item="long" className="inline-flex items-center gap-1.5 whitespace-nowrap">
-            <span className="inline-block h-1 w-3 rounded-full" style={{ background: LANE_COLOR.long }} />
-            <span>{tr("usage.legend_window", { window: longLabels.join(" / ") })}</span>
+        ))}
+        {longLabels.map((windowLabel) => (
+          <span key={`long:${windowLabel}`} data-legend-item="long" className={cx("inline-flex max-w-full items-center gap-1.5", windowLabel.length <= 12 && "whitespace-nowrap")}>
+            <span className="inline-block h-1 w-3 shrink-0 rounded-full" style={{ background: LANE_COLOR.long }} />
+            <span>{tr("usage.legend_window", { window: windowLabel })}</span>
           </span>
-        )}
+        ))}
         <span data-legend-item="now" className="inline-flex items-center gap-1.5 whitespace-nowrap">
-          <span className="inline-block h-1 w-3 rounded-full bg-ink" />
+          <span className="inline-block h-1 w-3 shrink-0 rounded-full bg-ink" />
           <span>{tr("usage.timeline_now")}</span>
         </span>
         <span data-legend-item="protect" className="inline-flex items-center gap-1.5 whitespace-nowrap" title={tr("usage.legend_protect_title")}>
-          <span className="inline-block h-1 w-3 rounded-full bg-orange" />
+          <span className="inline-block h-1 w-3 shrink-0 rounded-full bg-orange" />
           <span>{tr("usage.legend_protect")}</span>
         </span>
       </div>
@@ -446,42 +446,12 @@ function WindowRow({ name, w, stale, now }: { name: string; w: UsageWindow; stal
   const fullReset = resetLabel(w.resets_at, now);
   const shortReset = compactResetText(w.resets_at, now);
   const paceVerdict = p && p.state !== "on" ? paceLabel(p.state) : "";
+  const hasDetail = Boolean(paceVerdict || fullReset);
   const meterBaseLabel = w.model
     ? tr("usage.window_model_label", { name, window: w.label, model: w.model, percent: shown(w.used_percent) })
     : tr("usage.window_used_label", { name, window: w.label, percent: shown(w.used_percent) });
   const meterLabel = paceVerdict ? `${meterBaseLabel}, ${paceVerdict}` : meterBaseLabel;
   const rowTitle = [w.label, shown(w.used_percent), p ? paceLabel(p.state) : "", fullReset].filter(Boolean).join(" · ");
-  const interactive = Boolean(paceVerdict);
-  const rowClass = cx(
-    "grid w-full grid-cols-[1.75rem_minmax(2.5rem,1fr)_auto_minmax(0,auto)] items-center gap-x-1.5 text-left text-submeta",
-    hasProtect && "mt-3.5",
-    interactive && "rounded-sm hover:bg-hover/60",
-  );
-  const rowBody = (
-    <>
-      <span className="w-7 truncate text-ink-2">{w.label}</span>
-      <span className={cx("block min-w-0", stale && "opacity-70")}>
-        <Meter
-          used={w.used_percent}
-          expected={p?.expected}
-          protect={w.protect_percent}
-          barClass={TIER_BG[tier]}
-          reserveTop={false}
-          label={meterLabel}
-          tall
-        />
-      </span>
-      <span data-usage-percent className={cx("shrink-0 whitespace-nowrap text-right font-medium tabular-nums", stale ? "text-ink-2" : TIER_TEXT[tier])}>
-        {shown(w.used_percent)}
-      </span>
-      {fullReset && (
-        <span data-usage-reset className="min-w-0 truncate text-right text-ink-3" title={fullReset}>
-          <span data-reset-full className="hidden @[300px]:inline">{fullReset}</span>
-          <span data-reset-short className="@[300px]:hidden">{shortReset}</span>
-        </span>
-      )}
-    </>
-  );
   return (
     <div className="flex flex-col gap-1">
       {w.model && (
@@ -489,27 +459,55 @@ function WindowRow({ name, w, stale, now }: { name: string; w: UsageWindow; stal
           {w.model}
         </span>
       )}
-      {interactive ? (
-        <button
-          type="button"
-          data-window-row={w.label}
-          aria-expanded={expanded}
-          aria-label={rowTitle}
-          title={rowTitle}
-          onClick={() => setExpanded((v) => !v)}
-          className={rowClass}
-        >
-          {rowBody}
-        </button>
-      ) : (
-        <div data-window-row={w.label} title={rowTitle} className={rowClass}>
-          {rowBody}
-        </div>
-      )}
-      {interactive && expanded && p && (
-        <div data-usage-pace-detail className="flex items-baseline justify-between gap-2 pl-7 text-submeta">
-          <span className={cx("shrink-0 whitespace-nowrap", PACE_TEXT[p.state])}>{paceVerdict}</span>
-          {fullReset && <span className="min-w-0 truncate text-right text-ink-3">{fullReset}</span>}
+      <button
+        type="button"
+        data-window-row={w.label}
+        aria-expanded={hasDetail ? expanded : undefined}
+        aria-label={rowTitle}
+        title={rowTitle}
+        disabled={!hasDetail}
+        onClick={() => hasDetail && setExpanded((v) => !v)}
+        className={cx(
+          "grid w-full grid-cols-[1.75rem_minmax(2.5rem,1fr)_auto_minmax(0,auto)_auto] items-center gap-x-1.5 rounded-sm text-left text-submeta [@media(pointer:coarse)]:min-h-11",
+          hasProtect && "mt-3.5",
+          hasDetail && "hover:bg-hover/60",
+        )}
+      >
+        <span className="w-7 truncate text-ink-2">{w.label}</span>
+        <span className={cx("block min-w-0", stale && "opacity-70")}>
+          <Meter
+            used={w.used_percent}
+            expected={p?.expected}
+            protect={w.protect_percent}
+            barClass={TIER_BG[tier]}
+            reserveTop={false}
+            label={meterLabel}
+            tall
+          />
+        </span>
+        <span data-usage-percent className={cx("shrink-0 whitespace-nowrap text-right font-medium tabular-nums", stale ? "text-ink-2" : TIER_TEXT[tier])}>
+          {shown(w.used_percent)}
+        </span>
+        {fullReset ? (
+          <span data-usage-reset className="min-w-0 truncate text-right text-ink-3" title={fullReset}>
+            <span data-reset-full className="hidden @[300px]:inline">{fullReset}</span>
+            <span data-reset-short className="@[300px]:hidden">{shortReset}</span>
+          </span>
+        ) : (
+          <span aria-hidden />
+        )}
+        {hasDetail ? (
+          <span aria-hidden data-window-chevron className={cx("inline-flex shrink-0 items-center text-ink-3 transition-transform", expanded ? "rotate-180" : "-rotate-90")}>
+            <Icon name="chevron" size={10} />
+          </span>
+        ) : (
+          <span aria-hidden />
+        )}
+      </button>
+      {hasDetail && expanded && (
+        <div data-usage-pace-detail className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 pl-7 text-submeta">
+          {paceVerdict && p && <span className={cx("whitespace-nowrap", PACE_TEXT[p.state])}>{paceVerdict}</span>}
+          {fullReset && <span className="text-ink-3">{fullReset}</span>}
         </div>
       )}
     </div>

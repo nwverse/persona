@@ -183,7 +183,7 @@ describe("the popover", () => {
     // Tier boundaries: <50 green, 50-80 orange, >=80 red
     expect([0, 49.9, 50, 79.9, 80, 100].map(usageTier)).toEqual(["low", "low", "mid", "mid", "high", "high"]);
   });
-  it("draws no pace hint in the first 5% of a window, nor a tick, and discloses pace on tap/keyboard activation", async () => {
+  it("draws no pace hint in the first 5% of a window, keeps focus across pace transitions, and discloses details on tap/keyboard activation", async () => {
     const a = account("a", 90, 90);
     a.windows[0].resets_at = iso(4.9 * H + 0.05 * H); // 5h window just started
     const host = document.createElement("div");
@@ -192,18 +192,32 @@ describe("the popover", () => {
     try {
       await act(async () => root.render(<UsagePopover accounts={[a]} now={NOW} />));
       expect(host.querySelectorAll("[data-pace-tick]")).toHaveLength(1);
-      const row5 = host.querySelector('[data-window-row="5h"]')!;
+      const row5 = host.querySelector<HTMLButtonElement>('[data-window-row="5h"]')!;
       const row7 = host.querySelector<HTMLButtonElement>('[data-window-row="7d"]')!;
-      expect(row5.tagName).toBe("DIV");
+      expect(row5.tagName).toBe("BUTTON");
       expect(row5.getAttribute("title")).not.toContain("用得偏快");
       expect(row7.tagName).toBe("BUTTON");
+      expect(row7.className).toContain("[@media(pointer:coarse)]:min-h-11");
+      expect(row7.querySelector("[data-window-chevron]")).not.toBeNull();
       expect(row7.getAttribute("aria-expanded")).toBe("false");
       expect(row7.getAttribute("aria-label")).toContain("用得偏快");
       expect(host.querySelector("[data-usage-pace-detail]")).toBeNull();
 
+      row7.focus();
+      expect(document.activeElement).toBe(row7);
+      // Pace transitions to on-pace: same <button> stays mounted and retains keyboard focus
+      const onPace = account("a", 90, 71);
+      onPace.windows[0].resets_at = iso(4.9 * H + 0.05 * H);
+      await act(async () => root.render(<UsagePopover accounts={[onPace]} now={NOW} />));
+      expect(document.activeElement).toBe(row7);
+
+      await act(async () => root.render(<UsagePopover accounts={[a]} now={NOW} />));
       await act(async () => row7.click());
       expect(row7.getAttribute("aria-expanded")).toBe("true");
-      expect(host.querySelector("[data-usage-pace-detail]")?.textContent).toContain("用得偏快");
+      const detail = host.querySelector("[data-usage-pace-detail]")!;
+      expect(detail.classList.contains("flex-wrap")).toBe(true);
+      expect(detail.textContent).toContain("用得偏快");
+      expect(detail.textContent).toContain("2 天 3 小时后重置");
 
       await act(async () => row7.click());
       expect(row7.getAttribute("aria-expanded")).toBe("false");
@@ -558,9 +572,9 @@ describe("provider cards with a reset timeline (#13173)", () => {
   });
 
   it.each([
-    ["zh-Hans", "额度（按 7d 重置时间，近的在前）", ["现在", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4 小时", "4 天 16 小时", "6 天 24 小时"], ["5h 窗口恢复", "7d / 30d 窗口恢复", "现在", "保护线"], "到此自动暂停调度"],
-    ["en", "Quota (by 7d reset, soonest first)", ["Now", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4h", "4d 16h", "6d 24h"], ["5h window resets", "7d / 30d window resets", "Now", "Protection line"], "Scheduling pauses automatically at this limit"],
-    ["ja", "利用枠（7d リセットが早い順）", ["今", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4時間", "4日16時間", "6日24時間"], ["5h 枠リセット", "7d / 30d 枠リセット", "今", "保護ライン"], "この上限に達すると自動で一時停止します"],
+    ["zh-Hans", "额度（按 7d 重置时间，近的在前）", ["现在", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4 小时", "4 天 16 小时", "6 天 24 小时"], ["5h 窗口恢复", "7d 窗口恢复", "30d 窗口恢复", "现在", "保护线"], "到此自动暂停调度"],
+    ["en", "Quota (by 7d reset, soonest first)", ["Now", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4h", "4d 16h", "6d 24h"], ["5h window resets", "7d window resets", "30d window resets", "Now", "Protection line"], "Scheduling pauses automatically at this limit"],
+    ["ja", "利用枠（7d リセットが早い順）", ["今", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4時間", "4日16時間", "6日24時間"], ["5h 枠リセット", "7d 枠リセット", "30d 枠リセット", "今", "保護ライン"], "この上限に達すると自動で一時停止します"],
   ])("renders card header dot, sort subtitle, short-unit ticks and dynamic legend in %s", async (lang, subtitle, ticks, countdowns, legendLabels, protectTitle) => {
     await initI18n(lang);
     try {
@@ -702,7 +716,7 @@ describe("provider cards with a reset timeline (#13173)", () => {
     const host = document.createElement("div");
     host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
     const row = host.querySelector('[data-window-row="5h"]')!;
-    expect(row.className).toContain("grid-cols-[1.75rem_minmax(2.5rem,1fr)_auto_minmax(0,auto)]");
+    expect(row.className).toContain("grid-cols-[1.75rem_minmax(2.5rem,1fr)_auto_minmax(0,auto)_auto]");
     const full = row.querySelector("[data-reset-full]")!;
     const short = row.querySelector("[data-reset-short]")!;
     expect(full.className).toContain("hidden");
@@ -773,11 +787,15 @@ describe("provider cards with a reset timeline (#13173)", () => {
     expect(popOnly).not.toContain("data-usage-timeline");
     expect(popOnly).not.toContain("data-usage-pin=");
 
-    // If a previously pinned ID becomes notice-only, pinned summary reflects fallback consistently
+    // If a previously pinned ID becomes notice-only, pinned summary reflects fallback and unpinning stays available
     localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, '["cool-1"]');
     try {
-      const pinnedFallback = renderToStaticMarkup(<UsagePopover accounts={[noticeOnly]} now={NOW} />);
-      expect(pinnedFallback).toContain("固定账号暂不可用");
+      const host = document.createElement("div");
+      host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[noticeOnly]} now={NOW} />);
+      expect(host.textContent).toContain("固定账号暂不可用");
+      const unpinBtn = host.querySelector('[data-usage-pin="cool-1"]');
+      expect(unpinBtn).not.toBeNull();
+      expect(unpinBtn?.getAttribute("aria-pressed")).toBe("true");
     } finally {
       resetPinnedUsageAccounts();
       localStorage.removeItem(PINNED_USAGE_ACCOUNTS_KEY);
