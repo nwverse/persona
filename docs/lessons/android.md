@@ -256,6 +256,9 @@ byte-for-byte layout expectations to use the capped density rather than deleting
 `BasicTextField` resolves its own text layout outside `decorationBox`: `ReadingContent { inner() }` changes decoration
 layout but leaves the typed words capped. Put `ReadingContent` around the whole editor and `InterfaceContent` around
 its placeholder, label and accessories; assert the editor's real `TextLayoutResult`, not only the decoration's bounds.
+A layout switch keyed on the font scale (a row stacking its time under the title from 1.5×) must read the chosen
+scale (`LocalReadingDensity`), not `LocalDensity`: under the 1.35 cap the capped scale never reaches the threshold,
+so the switch silently stops firing and long names shrink to an ellipsis at the largest sizes.
 A decorative mark inside a clickable row may be merged into that row's semantics: assert its test tag with the
 unmerged tree, not by dropping the visual assertion. With a frozen Compose clock, a Robolectric `performScrollTo`
 can keep waiting for a choreographer frame and fill the trace-recording heap; keep the requested rows visible in a
