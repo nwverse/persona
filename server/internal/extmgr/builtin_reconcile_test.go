@@ -15,10 +15,11 @@ import (
 // changes), and a machine that connects still gets what it always got from cua and ego.
 func TestBuiltinExtensionsAreBuiltinNodePrograms(t *testing.T) {
 	h, _ := extensionTestHub(t)
-	for _, id := range []string{cuaExtensionID, egoExtensionID, imessageExtensionID} {
-		if id == imessageExtensionID && imessageport.Factory() == nil {
-			continue // built without the iMessage module: no built-in Messages extension (TestManagerWithoutIMessage)
-		}
+	ids := []string{cuaExtensionID, egoExtensionID}
+	if imessageport.Factory() != nil { // the iMessage extension is its module's: absent without it (persona_without_imessage, persona_core_only)
+		ids = append(ids, imessageExtensionID)
+	}
+	for _, id := range ids {
 		p := h.extensions.reg.Get(id)
 		if p == nil || !p.Manifest.Node.Builtin() || p.Manifest.NodeProgram() != nil {
 			t.Fatalf("%s: %+v", id, p)
