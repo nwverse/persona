@@ -283,6 +283,11 @@ func (s *Service) taskInputRoutes() {
 			apierr.Write(w, 400, errors.New("invalid request"))
 			return
 		}
+		// A topic_policy that is not one is the request's fault, not the node's (apierr.Call would answer 502).
+		if err := readTopicPolicy(raw, &Task{}); err != nil {
+			apierr.Write(w, 400, err)
+			return
+		}
 		ex, err := s.taskInputContext(r.Context(), raw)
 		if err != nil {
 			apierr.Call(w, err)

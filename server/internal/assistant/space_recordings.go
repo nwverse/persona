@@ -58,10 +58,14 @@ var (
 	errSpaceRecordingStore    = i18n.Err("assistant-space_recordings.unavailable")
 	errSpaceRecordingOffline  = i18n.Err("assistant-space_recordings.offline")
 	errSpaceRecordingOutdated = i18n.Err("assistant-space_recordings.outdated")
+	errSpaceRecordingInKB     = i18n.Err("assistant-space_recordings.in_kb")
 )
 
 // codeSpaceUnknown: the upload names a track that has no directory here (or none at all).
 const codeSpaceUnknown = "space_unknown"
+
+// codeRecordingInKB: the upload names a track for a recording the knowledge base already holds.
+const codeRecordingInKB = "recording_in_kb"
 
 func (s *Service) spaceRecordingStore() (spaceRecordingStore, bool) {
 	st, ok := s.store().(spaceRecordingStore)
@@ -151,6 +155,10 @@ func (s *Service) putSpaceRecording(ctx context.Context, rawID string, u kb.Reco
 	}
 	if err := u.Clean(); err != nil {
 		return "", "", err
+	}
+	// One the knowledge base holds stays there (a later upload naming a track would make a second copy of it).
+	if e, err := s.kbGet(ctx); err == nil && e.HoldsRecording(id) {
+		return "", "", errSpaceRecordingInKB
 	}
 	st, ok := s.spaceRecordingStore()
 	if !ok {
@@ -309,6 +317,8 @@ func writeSpaceRecordingError(w http.ResponseWriter, err error) {
 		apierr.Write(w, http.StatusBadRequest, err)
 	case errors.Is(err, errSpaceRecordingTrack):
 		apierr.WriteCode(w, http.StatusBadRequest, codeSpaceUnknown, err)
+	case errors.Is(err, errSpaceRecordingInKB):
+		apierr.WriteCode(w, http.StatusConflict, codeRecordingInKB, err)
 	case errors.Is(err, errSpaceRecordingOutdated):
 		apierr.WriteCode(w, http.StatusConflict, proto.CodeNodeOutdated, err)
 	case errors.Is(err, errSpaceRecordingOffline):
