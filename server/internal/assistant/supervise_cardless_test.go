@@ -16,6 +16,7 @@ import (
 // the settle time the watch hands it back to its supervisor once, naming the card to open (#12648).
 func TestReviewCardlessWaitGoesBackOnce(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
+	quietDigest(s) // until its message is let go below: the watches' claim stays pending to be read
 	holdDigest(s)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "做完了，你看下要不要这样发布。")
@@ -36,6 +37,7 @@ func TestReviewCardlessWaitGoesBackOnce(t *testing.T) {
 	if cur.Supervision.CardlessToldAt == nil {
 		t.Fatal("the hand-back was not kept on the ledger round")
 	}
+	setSuperviseTimings(s, shortSuperviseTimings) // the message goes out now, at the test's usual pace
 	releaseDigest(s)
 	waitFor(t, "the card-less message", func() bool { return len(f.notices()) > before })
 	n := f.notices()[before]
@@ -56,6 +58,7 @@ func TestReviewCardlessWaitGoesBackOnce(t *testing.T) {
 // A worker that still holds a card the owner can answer is not card-less.
 func TestReviewCardlessWaitSkipsPendingCard(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
+	quietDigest(s)
 	holdDigest(s)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "做完了。")
@@ -70,6 +73,7 @@ func TestReviewCardlessWaitSkipsPendingCard(t *testing.T) {
 // An open acceptance/conclusion ask already gives the owner something to answer.
 func TestReviewCardlessWaitSkipsOpenAsk(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
+	quietDigest(s)
 	holdDigest(s)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "做完了。")
@@ -88,6 +92,7 @@ func TestReviewCardlessWaitSkipsOpenAsk(t *testing.T) {
 // A new review round clears the round marker, so a card-less wait in the new round is told again.
 func TestReviewCardlessWaitRearmsOnNewRound(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
+	quietDigest(s)
 	holdDigest(s)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "做完了。")
@@ -119,6 +124,7 @@ func TestReviewCardlessWaitRearmsOnNewRound(t *testing.T) {
 func TestReviewCardlessWaitSurvivesRestart(t *testing.T) {
 	database := taskRecoveryDatabase(t)
 	s, f, todo := newSupervisedServiceOn(t, database)
+	quietDigest(s) // until the claim is let go below: the watch's claim stays pending to be read
 	holdDigest(s)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "做完了。")
@@ -126,8 +132,15 @@ func TestReviewCardlessWaitSurvivesRestart(t *testing.T) {
 	if !slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
 		t.Fatalf("card-less review not handed back: %v", pendingKinds(s, todo.ID))
 	}
+	setSuperviseTimings(s, shortSuperviseTimings) // the claim goes out now, at the test's usual pace, before the restart
+	releaseDigest(s)
 	forgetSignals(t, s)
+	// forgetSignals sees the pending signals gone once a digest takes them; the restart waits until that digest has
+	// ended, the claim's delivery acknowledged in the outbox.
+	s.supervise.digestMu.Lock()
+	s.supervise.digestMu.Unlock() //nolint:staticcheck // an empty critical section: it waits for the digest under way
 	again, _ := restartedOn(t, database)
+	quietDigest(again)
 	holdDigest(again)
 	if err := again.ensureTodosLoaded(ctx); err != nil {
 		t.Fatal(err)
@@ -164,12 +177,59 @@ func TestCardlessWorkersStopped(t *testing.T) {
 }
 
 // pendingCardlessSignal returns the queued card-less signal for id, failing the test if it is not there.
-func pendingCardlessSignal(t *testing.T, s *Service, id string) superviseSignal {
-	t.Helper()
+// quietDigest keeps the supervision digest from running in a test that reads what is pending and needs no message to
+// go out. The card-less claim is immediate, so holdDigest does not keep it in, and a digest takes what it delivers out
+// of the pending signals (#13877).
+func quietDigest(s *Service) {
+	setSuperviseTimings(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
+}
+
+// setSuperviseTimings changes s's supervision timings under the locks every reader of them holds, digestMu then b.mu
+// in sendDigest's order, so a digest or timer reading them meanwhile does not race the write.
+func setSuperviseTimings(s *Service, p superviseTimings) {
 	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	g, ok := b.pending[id+"|"+sigCardlessWait]
+	s.superviseTimes = p
+}
+
+// rearmDigest puts s back on the short timings and arms the digest timer for what is pending, as queueing an
+// immediate signal does, under the same locks as setSuperviseTimings: the real timer runs again from here.
+func rearmDigest(s *Service) {
+	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.superviseTimes = shortSuperviseTimings
+	s.scheduleDigestLocked(time.Now())
+}
+
+// pendingCardlessSignal reads the pending claim. On a service with a store it reads the outbox (the relay state's
+// supervise_pending, which is what is persisted), as supervisePendingDurably does: a digest takes what it delivers out
+// of the in-memory pending signals until it ends, while the outbox keeps the claim until its delivery is acknowledged,
+// and the claim's digest timer stays on in some of these tests (#13877). A service with no store has no outbox; its
+// tests here keep the digest quiet (quietDigest), so what is pending in memory is read.
+func pendingCardlessSignal(t *testing.T, s *Service, id string) superviseSignal {
+	t.Helper()
+	key := id + "|" + sigCardlessWait
+	var g superviseSignal
+	var ok bool
+	if s.store() != nil {
+		r := &s.relays
+		r.mu.Lock()
+		if s.relayLocked(context.Background()) {
+			g, ok = r.st.SupervisePending[key]
+		}
+		r.mu.Unlock()
+	} else {
+		b := &s.supervise
+		b.mu.Lock()
+		g, ok = b.pending[key]
+		b.mu.Unlock()
+	}
 	if !ok {
 		t.Fatalf("no pending cardless signal for %s", id)
 	}
@@ -180,6 +240,7 @@ func pendingCardlessSignal(t *testing.T, s *Service, id string) superviseSignal 
 // than spend the round's one notification (and its CardlessToldAt stamp) on an unknown state (#12648 P1).
 func TestReviewCardlessWaitWaitsForAReachableWorker(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
+	quietDigest(s)
 	holdDigest(s)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "做完了。")
@@ -203,6 +264,7 @@ func TestReviewCardlessWaitWaitsForAReachableWorker(t *testing.T) {
 // the marker was stamped, the stale "no card" entry must not render (#12648 P1).
 func TestCardlessDigestDropsWhenACardAppears(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
+	quietDigest(s)
 	holdDigest(s)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "做完了。")
@@ -226,6 +288,7 @@ func TestCardlessDigestDropsWhenACardAppears(t *testing.T) {
 // supervisedWorking moves it): this exercises the digest's own worker revalidation rather than the state hold.
 func TestCardlessDigestDropsWhenAWorkerResumes(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
+	quietDigest(s)
 	holdDigest(s)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "做完了。")

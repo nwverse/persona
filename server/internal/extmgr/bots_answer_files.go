@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"golang.org/x/sync/singleflight"
 )
@@ -22,7 +23,7 @@ const (
 )
 
 // errBotRestarted: the bot client changed while a long answer was prepared. It has no Feishu
-// code, so the assistant treats it as failing for now (feishubot.Transient) and tries again.
+// code, so the assistant treats it as failing for now (botcard.Transient) and tries again.
 var errBotRestarted = errors.New("feishu: the bot restarted while the answer was prepared")
 
 type botAnswerFile struct {
@@ -39,7 +40,7 @@ type botAnswerFiles struct {
 // A delivery retry must replay the same UUID and reply body, including the file_key.
 // The upload is saved before attempting the reply, whose result may be lost.
 func (h *Manager) feishuAnswerContent(ctx context.Context, api *feishubot.Client, parent, uuid, text string) (string, string, error) {
-	if content, inline := feishubot.InlineAnswer(text); inline {
+	if content, inline := botcard.InlineAnswer(text); inline {
 		return feishubot.TypePost, content, nil
 	}
 	digest := sha256.Sum256([]byte(text))

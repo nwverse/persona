@@ -642,6 +642,20 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 			delete(queued.Params, key)
 		}
 		queued.Params["launcher"], queued.Params["model"], queued.Params["effort"], queued.Params["permission_mode"] = a.Launcher, a.Model, a.Effort, a.PermissionMode
+		// The active segment's mode is inherited state, not the queued caller's explicit choice. A Claude segment uses
+		// the current default; non-Claude and external segments keep their legacy generic mode without a resume default.
+		delete(queued.Params, assistantwire.PermissionModeExplicitParam)
+		defaultMode, _ := queued.Params[assistantwire.DefaultPermissionModeParam].(string)
+		useDefault := defaultMode != "" && !proto.IsExternalLauncher(a.Launcher) && s.startPermissionModeSupported(ctx, a.MachineID, a.Launcher, defaultMode)
+		if useDefault && a.Launcher != "" && a.Launcher != "claude" {
+			agent := s.launcherAgent(withUnhidden(ctx, a.Launcher), a.MachineID, a.Launcher)
+			useDefault = agent == "" || agent == "claude"
+		}
+		if useDefault {
+			delete(queued.Params, "permission_mode")
+		} else {
+			delete(queued.Params, assistantwire.DefaultPermissionModeParam)
+		}
 	}
 	if c.Switch != nil {
 		raw, _, err := st.ConversationPreparation(ctx, c.MachineID, c.SessionID, c.Switch.OperationID)
