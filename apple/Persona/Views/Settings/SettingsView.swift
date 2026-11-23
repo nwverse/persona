@@ -279,10 +279,8 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openIPhoneSetup") { p = SettingsPage.iphoneSetupPath } // the guided setup (#8199)
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
-        else if d.bool(forKey: "openLiveScreenSettings") { // Settings › Live Screen (#6396)
-            #if os(iOS)
-            p.append(SettingsPage.liveScreen)
-            #endif
+        else if d.bool(forKey: "openLiveScreenSettings") { // Settings › Live Screen (#6396), the screen-share module's
+            if Modules.registry.settingsEntry(id: "live-screen") != nil { p.append(SettingsPage.module("live-screen")) }
         }
         else if d.string(forKey: "openAlarms") != nil { // Settings › Alarms and Timers on made-up data (#12805)
             #if os(iOS)
@@ -338,8 +336,6 @@ enum SettingsPage: Hashable {
     case health
     /// Settings › Meetings (#2981): Persona's default role in a recorded meeting.
     case meetings
-    /// Settings › Live Screen (#6396, #6398): the live screen's route and its quality on mobile data.
-    case liveScreen
     /// Settings › Alarms and Timers (#12805): the alarms and timers Persona set through AlarmKit.
     case alarms
     #endif
@@ -352,6 +348,8 @@ enum SettingsPage: Hashable {
     case models, agents, appearance, about, pairing, computers
     /// Settings › Advanced (#13395): the rows Settings home leaves out (`SettingsCatalog.advanced`).
     case advanced
+    /// A module's page, by its settings entry's id (`ModuleSlot.settings`): Live Screen is the screen-share module's.
+    case module(String)
     /// Settings › About › Export Diagnostics (Developing Persona, #9460).
     case devExport
     /// Settings › About › Replay a Meeting Tape (Developing Persona, #10589).
@@ -503,9 +501,9 @@ private struct SettingsDestinations: ViewModifier {
         #if os(iOS)
         case .health: WorkoutReportSettingsView()
         case .meetings: MeetingSettingsView()
-        case .liveScreen: LiveScreenSettingsView()
         case .alarms: AlarmsPage()
         #endif
+        case .module(let id): Modules.registry.settingsEntry(id: id)?.page()
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()
         case .translation: TranslationSettingsView()

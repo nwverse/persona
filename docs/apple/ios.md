@@ -1762,13 +1762,19 @@ every platform are described from #13430; this section is the Apple side.
   extensions never link it. It sets no build settings of its own, so a Release build keeps the project's
   `SWIFT_REFLECTION_METADATA_LEVEL = all`.
 - **Slots** (`ModuleSlot`, raw values are the contract's field names): served today are `launch_hooks` (after the core's
-  launch work, `application(_:didFinishLaunchingWithOptions:)`), `deep_links` (`onOpenURL`, before the core's routes)
-  and `composer_actions` (the composer's +: the panel's More tab, the + menus and the prompt bar's sources; a row
+  launch work, `application(_:didFinishLaunchingWithOptions:)`), `deep_links` (`onOpenURL`, before the core's routes),
+  `composer_actions` (the composer's +: the panel's More tab, the + menus and the prompt bar's sources; a row
   `attach-<id>` opens the action's sheet, whose picture goes into the composer like a camera photo; #13400's
-  `composer_source`). Declared but **not yet served**, with no API until a module needs one: `shell_places`, `settings`,
-  `chat_card_kinds`, `chat_accessories`, `toolbar_items`, `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`,
-  `phone_tools`, `intents`, `push_categories` and `audio_leases` (the core's `AudioSessionBroker` does not exist yet).
-  Each gets its registrar method and registry reader with the first module that needs it (#13849).
+  `composer_source`), and, since #14017, the place slots `toolbar_items`, `chat_accessories` and `chat_card_kinds`
+  (`ModuleRegistrar.view(at:when:)`: a view at one of the host's `Place`s — a chat's ··· menu and the assistant's
+  top-bar menu, a chat's footer and the task dock, under a tool call — drawn by `ModuleViews`; `when` says whether it
+  has anything to draw so the host leaves its spacing out), `settings` (`settingsEntry(id:info:row:page:)`: an entry
+  listed, searched and routed as the core's own through `SettingsPage.module(<id>)`) and the client-side
+  `capabilities` (`provide(_:_:)`: an interface the core declares and asks for, such as `LiveScreen`; nil when no
+  active module provides it, and the core then offers none of it). Declared but **not yet served**, with no API until a
+  module needs one: `shell_places`, `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`, `phone_tools`, `intents`,
+  `push_categories` and `audio_leases` (the core's `AudioSessionBroker` does not exist yet). Each gets its registrar
+  method and registry reader with the first module that needs it (#13849).
 - **The module list** (`apple/Persona/App/Modules.swift`) is the seed of the `PersonaHostApp` layer (#13430 decision 4;
   `apple/Packages/PersonaCore` stays the Rust binding). `PersonaHostApp` is the `ModuleHost` (a composer action hands
   back a `UIImage`), `Modules.builtIn` lists the modules in the order their entries appear, and `Modules.registry` is
@@ -1805,6 +1811,20 @@ every platform are described from #13430; this section is the Apple side.
   without a composer action, into PersonaVision (which compiles all of `Persona/`); the watch and widgets do not include
   it. It is on only in a build with the Meta Wearables SDK (`apple/meta-wearables.yml`). Before the pilot the core named
   its types 8 times in 4 files; now 0.
+- **Module homes and the core-only build** (#14017). A module that has left `apple/Persona/` lives in
+  `apple/Modules/<Name>/`. `apple/modules.yml` (included by `project.yml`) compiles each home into the iPhone and Vision
+  apps and sets its condition (`PERSONA_MODULE_SCREEN_SHARE`), under which `Modules.builtIn` lists it;
+  `apple/modules-core-only.yml`, enabled by `PERSONA_CORE_ONLY=YES` at `xcodegen generate`, leaves every home out, as
+  the server's `persona_core_only` tag does. `scripts/ci/apple.sh` builds that core-only app ("Core-only iOS build").
+  The watch, widgets and extensions never compile a module home. Source-scanning PersonaTests (token, icon, motion,
+  sheet and dialog rules) walk `apple/Modules` as well as `apple/Persona`.
+- **`screen-share`** (`apple/Modules/ScreenShare/`, #14017, `feature` = `module.screen-share`): a Mac's live screen over
+  VNC or video, its small window, the screen menus, the computer-activity pill, VNC under a computer tool, Settings ›
+  Live Screen and the kept sign-ins. It adds views at `chatMenu`, `chatFooter` and `toolCall`, the `live-screen`
+  settings entry, and provides `LiveScreen`, which the machine pages ask for (`AppModel.liveScreen`): without the
+  module they offer no VNC, One-Tap Unlock or kept sign-in, and the lock line stands alone. Its DEBUG switches
+  (`-openScreenFresh`, `-openScreenDemo`) and runtime-CLI state run from its launch hook. Its wire and capture packages
+  (`PersonaScreenCore`, `PersonaScreenKit`) stay where they are.
 - **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
   `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
   `GUARDED` in the ratchet; write a type

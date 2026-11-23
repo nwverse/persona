@@ -266,6 +266,8 @@ apple apple/AboutVersionAccessibilityHost core
 apple apple/AboutVersionAccessibilityUITests core
 apple apple/IslandPeer core
 apple apple/LiveActivity core
+apple apple/Modules core
+apple apple/Modules/ScreenShare screen-share
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
 apple apple/PersonaNotify core
@@ -295,7 +297,6 @@ apple apple/Persona/Persona core
 apple apple/Persona/PhoneTools core
 apple apple/Persona/Recording recording
 apple apple/Persona/Resources core
-apple apple/Persona/Screen screen-share
 apple apple/Persona/Views core
 apple apple/Persona/Voice voice
 apple apple/Persona/Views/Feishu lark
