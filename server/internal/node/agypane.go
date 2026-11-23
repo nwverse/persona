@@ -3,6 +3,7 @@ package node
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -57,6 +58,8 @@ type agyParentSubagentInfo struct {
 
 var agyEmbeddedUUIDRe = lazyre.New(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 
+// reportedAgyConversation is the conversation herdr's antigravity-cli integration reports for a pane's row. Persona's own
+// hooks report too (agyhooks.go): agyReportedLocked is the two together.
 func reportedAgyConversation(a host.Agent) string {
 	s := a.AgentSession
 	if a.Agent == agyAgent && s != nil && s.Source == "herdr:antigravity_cli" &&
@@ -66,25 +69,48 @@ func reportedAgyConversation(a host.Agent) string {
 	return ""
 }
 
-// rawAgyConversationLocked checks the latest raw herdr snapshot as well as the pane row.
+// agyReportedLocked is the conversation the pane's agy row has been reported in, by herdr's integration or by
+// Persona's own hook (agyhooks.go). The two must agree: when both speak and differ, nothing is known.
+func (n *Node) agyReportedLocked(a host.Agent) string {
+	if a.Agent != agyAgent {
+		return ""
+	}
+	herdr := reportedAgyConversation(a)
+	hook := n.agyReports[a.PaneID].conversation
+	if herdr != "" && hook != "" && herdr != hook {
+		return ""
+	}
+	return cmp.Or(herdr, hook)
+}
+
+// agyReported is agyReportedLocked for a caller that does not hold n.mu.
+func (n *Node) agyReported(a host.Agent) string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.agyReportedLocked(a)
+}
+
+// rawAgyConversationLocked checks the latest raw snapshots of every engine as well as the pane row.
 // The row ID is pane-derived. Cwd and previously bound session IDs cannot identify
 // a native conversation, and ambiguous reports do not authorize a read or resume.
 func (n *Node) rawAgyConversationLocked(id, pane string) string {
 	a := n.agents[id]
-	conversation := reportedAgyConversation(a)
-	if conversation == "" || a.PaneID != pane || id != otherSession(a) || host.ParsePane(pane).Kind != host.Herdr {
+	conversation := n.agyReportedLocked(a)
+	if conversation == "" || a.PaneID != pane || id != otherSession(a) {
 		return ""
 	}
 	matches := 0
-	for _, raw := range n.hostAgents[host.Herdr] {
-		reported := reportedAgyConversation(raw)
-		if raw.PaneID == pane {
-			if reported != conversation {
+	for _, agents := range n.hostAgents {
+		for _, raw := range agents {
+			reported := n.agyReportedLocked(raw)
+			if raw.PaneID == pane {
+				if reported != conversation {
+					return ""
+				}
+				matches++
+			} else if reported == conversation {
 				return ""
 			}
-			matches++
-		} else if reported == conversation {
-			return ""
 		}
 	}
 	if matches != 1 {
@@ -94,9 +120,11 @@ func (n *Node) rawAgyConversationLocked(id, pane string) string {
 }
 
 func (n *Node) agyConversationClaimedElsewhereLocked(pane, conversation string) bool {
-	for _, raw := range n.hostAgents[host.Herdr] {
-		if raw.PaneID != pane && reportedAgyConversation(raw) == conversation {
-			return true
+	for _, agents := range n.hostAgents {
+		for _, raw := range agents {
+			if raw.PaneID != pane && n.agyReportedLocked(raw) == conversation {
+				return true
+			}
 		}
 	}
 	return false

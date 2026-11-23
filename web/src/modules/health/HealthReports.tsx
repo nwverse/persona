@@ -7,7 +7,7 @@ import { onHubEvent } from "../../lib/store";
 import { Button, Dialog, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { SectionTitle } from "../assistant/parts";
+import { SectionTitle } from "../../views/assistant/parts";
 import { t } from "../../i18n";
 import { reportsPath, type HealthReport } from "./reports";
 

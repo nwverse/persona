@@ -70,7 +70,7 @@ vi.mock("../../lib/store", async (orig) => {
     },
   };
 });
-vi.mock("../chat/ChatView", () => ({ ChatView: () => null }));
+vi.mock("../../views/chat/ChatView", () => ({ ChatView: () => null }));
 
 import { Toasts } from "../../ui/atoms";
 import { Health } from "./Health";

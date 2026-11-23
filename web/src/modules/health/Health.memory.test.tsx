@@ -25,7 +25,7 @@ vi.mock("../../lib/store", async (orig) => ({
     return () => void hub.hello.delete(l);
   },
 }));
-vi.mock("../chat/ChatView", () => ({ ChatView: () => null }));
+vi.mock("../../views/chat/ChatView", () => ({ ChatView: () => null }));
 
 import { Health } from "./Health";
 import { t } from "../../i18n";
