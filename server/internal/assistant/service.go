@@ -165,6 +165,9 @@ type Service struct {
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
 	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings
+	// noReportHold: a report goes out without waiting for its Agent's stop (reportStopHold). Tests about what a report
+	// says set it; supervise_slim_test.go's turn it off again.
+	noReportHold bool
 	// todoAskAfter is how long a linked to-do goes without progress before its recurring check asks the owner (0:
 	// scheduleAskAfter's floor; tests shorten it, schedule_todo_evidence.go).
 	todoAskAfter time.Duration
