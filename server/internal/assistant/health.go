@@ -144,7 +144,11 @@ func (s *Service) redactedNotice(ctx context.Context, l i18n.Lang, space string)
 // its own categories and its track's default categories).
 func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text, summary string, input json.RawMessage) (bool, error) {
 	space, _ := s.selfSpace(ctx, self)
-	if leadOwnAgentTools[tool] && s.isLeader(ctx, self) && !s.trackPolicy(ctx, space).ConfirmOutbound {
+	leadSpace := space // the lead's track: its recorded space when known (a row the node no longer lists keeps it)
+	if sp, known := s.conversationSpace(ctx, self); known {
+		leadSpace = sp
+	}
+	if leadOwnAgentTools[tool] && s.isLeader(ctx, self) && !s.trackPolicy(ctx, leadSpace).ConfirmOutbound {
 		// A direction lead driving its own Agents on the owner's computers: the owner confirmed the work once, when it
 		// reached the lead (a2a_send, the main conversation's hand-off). A track whose rules confirm every hand-off
 		// (health) still asks.
