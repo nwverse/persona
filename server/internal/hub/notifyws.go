@@ -77,7 +77,7 @@ func (h *Hub) notifyDoneUnder(owner, kind, machineID, machine, sessionID, title,
 	}
 	var sent func(Device)
 	if policy.cardID != "" {
-		sent = func(d Device) { h.push.cardPushedTo(policy.cardID, d.ID) }
+		sent = func(d Device) { h.push.cardPushedTo(policy.cardID, d.DeviceID) }
 	}
 	if !h.sessionHiddenFromExtensions(machineID, sessionID) { // only of a session the extensions are shown (extension_private.go)
 		h.emitToExtensions(owner, "agent.finished", map[string]any{"machine_id": machineID, "machine": machine, "session_id": sessionID, "title": title})
