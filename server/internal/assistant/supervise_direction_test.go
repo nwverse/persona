@@ -164,3 +164,37 @@ func TestPlanningMainRetainsItsOwnTask(t *testing.T) {
 	}
 	settleService(t, s)
 }
+
+func TestPlanningLeadExplicitSelfAssignment(t *testing.T) {
+	s, f := newQuietService(t)
+	f.known["lead1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true}, proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true})
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	var args map[string]any
+	if err := json.Unmarshal(planArgs(true), &args); err != nil {
+		t.Fatal(err)
+	}
+	args["supervisor"] = "lead1"
+	raw, _ := json.Marshal(args)
+	if out, err := s.toolTaskPlan(t.Context(), "lead1", raw); err != nil || !strings.Contains(out, "You supervise them") {
+		t.Fatalf("explicit self supervision: %s %v", out, err)
+	}
+	if v := onlyTodo(s).Supervision; v == nil || v.Supervisor != "lead1" || v.SupervisorSource != "plan" {
+		t.Fatalf("explicit self assignment lost: %+v", v)
+	}
+	settleService(t, s)
+}
+
+func TestIncompatibleDirectionLeadCannotSilentlyHandWorkToMain(t *testing.T) {
+	s, f := newQuietService(t)
+	lead := proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, SourceKind: proto.SourceRuntime, Agent: "dsh"}
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true}, lead)
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{lead.SessionID} })
+	if _, err := s.toolTaskPlan(t.Context(), lead.SessionID, planArgs(true)); err == nil {
+		t.Fatal("incompatible planning lead handed its supervision to main")
+	}
+	if todoCount(s) != 0 || len(f.started()) != 0 || len(f.noticesTo("conv1")) != 0 {
+		t.Fatal("refused plan dispatched or woke main")
+	}
+	settleService(t, s)
+}

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// Recorded from the unlocalized upstream tool inventory, plus #5732's explicit
+// Recorded from the unlocalized upstream tool inventory, plus #13362's explicit
 // task_plan supervision-contract exception. This covers the description and
 // schema of every tool, not only a representative golden.
 func TestMCPLegacyBytes(t *testing.T) {

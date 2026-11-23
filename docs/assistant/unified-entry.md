@@ -1387,7 +1387,7 @@ HTTP route exists: the app route and the tool share persistence, sanitation, con
 
 ### Agent tasks (#3617)
 
-Assistant-dispatched tasks (`task_plan`, `agent_start`, and `agent_send` with a new `task`) are supervised by main regardless of this legacy switch (#5732). **Agent tasks** now covers only manually linked user to-dos and reporting-Agent compatibility; it no longer adopts an Agent opened by hand on the Agents page after that Agent did work. Code: `server/internal/assistant/agent_tasks.go`.
+Assistant-dispatched tasks (`task_plan`, `agent_start`, and `agent_send` with a new `task`) are supervised by their planning direction lead, or main for ordinary conversations, regardless of this legacy switch (#13362). **Agent tasks** now covers only manually linked user to-dos and reporting-Agent compatibility; it no longer adopts an Agent opened by hand on the Agents page after that Agent did work. Code: `server/internal/assistant/agent_tasks.go`.
 
 - **Switch**: `agent_tasks` in the assistant's settings (`GET/PUT /api/v1/assistant`, `persona_settings` key `assistant.agent_tasks`, approved on the phone), **off by default**. It controls the legacy manually linked user-to-do supervision below; assistant-dispatched tasks do not depend on it. Supervising a manual to-do costs model calls the user pays for, so it remains the user's choice. To-dos that already have a supervisor keep it when the switch goes off.
 - **`agent_start` from any chat** makes the quiet to-do at once, as from the main chat (`origin` the calling chat, its card in that chat, title from the prompt), also when `main_tasks_quiet` is off. A reporting chat's start (#3192) is unchanged.

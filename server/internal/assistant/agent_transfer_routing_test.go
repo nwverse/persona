@@ -251,7 +251,7 @@ func TestAgentTransferAssignmentRowRoundTrip(t *testing.T) {
 
 func TestAgentTransferDeliversIssueSignalsOnlyOnceAcrossRestart(t *testing.T) {
 	for _, mode := range []string{"planned_by_lead", "transferred_from_main"} {
-		for _, kind := range []string{sigEstimateDue, sigReport, sigIdle, sigReview, sigUndecidable} {
+		for _, kind := range []string{sigEstimateDue, sigReport, sigIdle, sigReview, sigUndecidable, sigAllStopped, sigOrphaned, sigFailed, sigStarted} {
 			t.Run(mode+"/"+kind, func(t *testing.T) {
 				database := todoTestDB(t)
 				caller := "lead1"
@@ -275,6 +275,21 @@ func TestAgentTransferDeliversIssueSignalsOnlyOnceAcrossRestart(t *testing.T) {
 					g.Key, g.Minutes = estimateDueKey(brief), brief.ExpectNow
 				case sigReport:
 					g.Report = upReportQuestion
+				case sigAllStopped:
+					now := time.Now()
+					_, agents := stoppedFixture(now.Add(-time.Minute))
+					agents = agents[:1]
+					agents[0].SessionID, agents[0].MachineID = task.Agents[0].SessionID, task.Agents[0].MachineID
+					f.setSessions(task.Agents[0].MachineID, agents...)
+					var ok bool
+					g, ok = allStoppedSignal(todoNow(s, task.ID), nil, agents, now)
+					if !ok {
+						t.Fatal("planned task did not produce all_stopped")
+					}
+				case sigOrphaned:
+					s.orphans.mu.Lock()
+					s.orphans.now = map[string]TodoOrphan{task.ID: {Reason: orphanOffline, key: g.Key}}
+					s.orphans.mu.Unlock()
 				case sigReview:
 					state = reviewPending
 				}
@@ -295,6 +310,11 @@ func TestAgentTransferDeliversIssueSignalsOnlyOnceAcrossRestart(t *testing.T) {
 				noDirectionsTimers(again)
 				if err := again.ensureTodosLoaded(t.Context()); err != nil {
 					t.Fatal(err)
+				}
+				if kind == sigOrphaned {
+					again.orphans.mu.Lock()
+					again.orphans.now = map[string]TodoOrphan{task.ID: {Reason: orphanOffline, key: g.Key}}
+					again.orphans.mu.Unlock()
 				}
 				again.signal(g)
 				settleService(t, again)

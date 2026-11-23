@@ -304,8 +304,8 @@ func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids m
 	}
 }
 
-// digestTo routes assistant-dispatched task supervision to the main conversation (#5732). Explicit card rungs (g.To)
-// keep their special target; a manually started Agent the owner explicitly put under a leader keeps that leader. Task
+// digestTo routes supervision to the persisted planning/transfer assignment. Explicit escalations and card rungs
+// keep their special target; unmarked legacy tasks retain their compatibility policy. Task
 // leaders' Agent-supervised workers are handled by leaderRoute before this function.
 func (s *Service) digestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
 	// Explicit escalations keep their destination; needs_user alone is not an escalation.
