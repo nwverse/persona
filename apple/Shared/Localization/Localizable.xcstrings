@@ -128073,6 +128073,29 @@
         }
       }
     },
+    "Opens Persona and calls it on your main chat." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens Persona and calls it on your main chat."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personaを開き、メインチャットでPersonaに電話します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Persona，在主对话里呼叫它。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Opens Persona's assistant page so you can talk or type." : {
       "localizations" : {
         "en" : {
