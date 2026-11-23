@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- `assistant.New` must not read the database (#13408). Many tests build the Service on a fake store that embeds a nil
+  `Store` and implements only the methods it needs; one new `Setting` call in `New` (reading the feature-module switch)
+  panicked dozens of unrelated tests. Read what the constructor needs where the manager starts (`main.go`, next to the
+  real store) and pass it in through `Options` (`ModulesOff`, `docs/architecture/core-and-modules.md` "The switch").
+
 - Claude Code's permission modes do not come from a runtime's optional capability list (#13233). `proto.Launcher.PermissionModes` is defined for non-Claude agents; applying a partial list to a Claude-compatible custom launcher drops an inherited bypass choice and silently returns the conversation to the profile's settings. Resolve the backend first: Claude accepts `proto.PermissionModes`, while a non-Claude runtime's declared list stays authoritative. Cover the manager's start params and a non-Claude control. Existing nonempty assistant profiles are not reseeded, so their `permissions.defaultMode` and unrelated settings survive node upgrades; pin that boundary with a real temporary profile rather than rewriting it to make a test pass.
 
 - A command that returns text to the message pipeline must keep its explicit destination (#12700). In the official bot DM, resetting `current` for `/new <first message>` was insufficient: pending-card handlers could consume the text, and parent/root bindings could restore an old target. Carry the fresh Persona target past those handlers while retaining reply metadata for quoted context. Test through `FeishuMessage` with old Persona/Agent bindings, an answerable card and duplicate delivery; keep bare `/new` and ordinary replies as controls.
@@ -983,3 +988,12 @@ synthetic placeholder only when the conversation resumes. Keep the latest verifi
 recovery claim, and check that input when the node lists the conversation again. Read the current transcript,
 since indexed history can predate the echo that identifies the app input. A guarded send that finds the same
 transcript but no process leaves a retry notice. A Stop or later owner input makes the earlier attempt obsolete.
+
+## A node's own session rows never carry the assistant mark (#13879)
+
+`Session.Assistant` is set only when the hub decorates a list for the apps (`hub/assistant_link.go`). The manager's
+`Devices.Session` returns the node's raw row, so a check like `!c.Assistant` there is true for every main and lead.
+Cache keepalive revoked every role this way and never mounted a proxy, while its tests passed because they built the
+inventory with `Assistant: true`. Judge a raw row with `fleetMachine.isAssistant` (its directory), and build test
+inventories the way a node sends them. The same feature also needed Claude Code's `ENABLE_PROMPT_CACHING_1H`: without
+it the CLI declares only five-minute markers on an API key or a gateway, whatever TTL the gateway applies later.
