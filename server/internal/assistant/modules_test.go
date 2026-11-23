@@ -33,7 +33,7 @@ func TestBriefingModuleIsLoadedByDefault(t *testing.T) {
 	}
 }
 
-// The modules row switches a module off at the next start: it is not loaded, its setting is hidden from persona_settings
+// The modules row (read when the manager starts) switches a module off: it is not loaded, its setting is hidden from persona_settings
 // but stays stored (a change to another setting keeps it), and the routines degrade: a routine with facts on opens with
 // none and keeps no briefing run, a daily report has the north star's lines alone, and the acceptance reminders wait for
 // no briefing.
@@ -47,8 +47,12 @@ func TestSwitchedOffBriefingModuleIsAbsent(t *testing.T) {
 	if err := st.PutSetting(ctx, settingsKey, Settings{BriefingWaits: stored}); err != nil {
 		t.Fatal(err)
 	}
+	off := ReadModuleSwitch(ctx, st, t.Logf)
+	if len(off) != 1 || off[0] != "briefing" {
+		t.Fatalf("switch read as %v", off)
+	}
 	f := newFakeHub().withMachine()
-	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)}))
+	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), ModulesOff: off}))
 	if s.modules.Loaded("briefing") || s.briefingOn() || s.modules.Skipped("briefing") != "switched off" {
 		t.Fatalf("loaded %+v, skipped %q", s.modules.Modules(), s.modules.Skipped("briefing"))
 	}

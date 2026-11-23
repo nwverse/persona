@@ -25,21 +25,31 @@ type ModuleSwitch struct {
 	Disabled []string `json:"disabled,omitempty"`
 }
 
-// loadModules loads mods (nil: the built-in ones) into the kernel, leaving out those the modules row switches off.
-// The row is read once, here: the switch takes effect at the next start.
-func (s *Service) loadModules(mods []modapi.Module) {
+// ReadModuleSwitch reads the modules settings row: the ids of the built-in modules switched off. The manager reads it
+// once, when it starts (main.go), and hands it to New, so the switch takes effect at the next start; New itself reads
+// no database. A row that cannot be read switches nothing off.
+func ReadModuleSwitch(ctx context.Context, st Store, logf func(format string, args ...any)) []string {
+	if st == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var sw ModuleSwitch
+	if _, err := st.Setting(ctx, modulesKey, &sw); err != nil {
+		if logf != nil {
+			logf("modules: reading the %s setting: %v; loading every built-in module", modulesKey, err)
+		}
+		return nil
+	}
+	return sw.Disabled
+}
+
+// loadModules loads mods (nil: the built-in ones) into the kernel, leaving out those switched off.
+func (s *Service) loadModules(mods []modapi.Module, off []string) {
 	if mods == nil {
 		mods = kernel.Builtin()
 	}
-	var sw ModuleSwitch
-	if st := s.store(); st != nil && len(mods) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if _, err := st.Setting(ctx, modulesKey, &sw); err != nil {
-			s.logf("modules: reading the %s setting: %v; loading every built-in module", modulesKey, err)
-		}
-		cancel()
-	}
-	s.modules = kernel.New(mods, func(id string) bool { return slices.Contains(sw.Disabled, id) }, s.logf)
+	s.modules = kernel.New(mods, func(id string) bool { return slices.Contains(off, id) }, s.logf)
 }
 
 // moduleStored is what is stored for a module setting key (nil: never set). Each module key the assistant keeps in

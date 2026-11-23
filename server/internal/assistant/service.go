@@ -64,6 +64,8 @@ type Options struct {
 	// Modules are the feature modules to load (modules.go): nil, the built-in ones compiled into this binary
 	// (internal/modules/all); empty, none.
 	Modules []modapi.Module
+	// ModulesOff are the ids of modules switched off (the modules settings row, ReadModuleSwitch).
+	ModulesOff []string
 }
 
 // Service is the assistant. It implements Handler.
@@ -383,7 +385,7 @@ func New(o Options) *Service {
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
 	}
-	s.loadModules(o.Modules) // before anything a module adds to is set up
+	s.loadModules(o.Modules, o.ModulesOff) // before anything a module adds to is set up
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()

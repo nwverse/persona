@@ -86,9 +86,10 @@ missing quietly.
   out. `go build -tags persona_core_only ./...` must pass; `scripts/ci/server.sh build` builds both and runs the module
   tests with them.
 - **At run time**: the settings row `modules` (the `settings` table, as every other setting; no state file) holds
-  `{"disabled": ["<id>", …]}`. The manager reads it when it starts, so a change takes effect at the next start. A module
-  switched off is absent exactly as one left out of the build. There is no screen or tool for the row yet: the settings
-  registry of #13395 is its intended home.
+  `{"disabled": ["<id>", …]}`. The manager reads it once where it starts (`server/internal/assistant/main.go`,
+  `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so a change takes effect at the next
+  start. A module switched off is absent exactly as one left out of the build. There is no screen or tool for the row
+  yet: the settings registry of #13395 is its intended home.
 
 ### Guards
 

@@ -18,7 +18,7 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # macOS, and the tunnel works with the tailscale.com subset they leave.
   ci_run 'Server programs with build-tags.txt' 600 bash -c 'cd server && t="$(cat build-tags.txt)" && go build -tags "$t" ./cmd/... && GOOS=darwin GOARCH=arm64 go build -tags "$t" ./cmd/...'
   ci_run 'Tunnel tests with build-tags.txt' 300 bash -c 'cd server && go test -tags "$(cat build-tags.txt)" -count=1 -timeout=4m ./internal/buildtags/... ./internal/tunnel/...'
-  # Persona Core without its feature modules (docs/architecture/core-and-modules.md "Build tags"): the core builds,
+  # Persona Core without its feature modules (docs/architecture/core-and-modules.md "The switch"): the core builds,
   # and the module list, the kernel and the guards hold, with every module left out and with the pilot left out.
   ci_run 'Core-only and module-less builds' 600 bash -c 'cd server && for t in persona_core_only persona_without_briefing; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=4m ./internal/modapi/... ./internal/modules/... ./internal/assistant/kernel/... || exit 1; done'
   ci_run 'Extension schema and SDK bundle' 300 bash -c 'python3 scripts/test/test_extension_schema.py && python3 scripts/test/test_module_schema.py && python3 scripts/test/test_sdk_bundle.py'
