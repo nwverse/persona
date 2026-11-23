@@ -6,7 +6,8 @@ import { sendDraft } from "../lib/drafts";
 import { navigate } from "../lib/router";
 import { getState } from "../lib/store";
 import { balanceEmpty, balanceText } from "../lib/usage-balance";
-import { accountPace, groupByProvider, isBalanceAccount, isWarn, planNote, providerTimeline, providerTitle, remainingText, resetLabel, resetPinnedUsageAccounts, sampleAge, sortedWindows, sourceNames, TIMELINE_TICKS_HOURS, timelinePosition, togglePinnedUsageAccount, usePinnedUsageAccounts, windowKey, type PaceState, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
+import { groupByProvider, isBalanceAccount, isWarn, planNote, providerTimeline, providerTitle, remainingText, resetLabel, resetPinnedUsageAccounts, sampleAge, sortedWindows, sourceNames, TIMELINE_CAP_MS, TIMELINE_TICKS_HOURS, timelinePosition, togglePinnedUsageAccount, usePinnedUsageAccounts, windowKey, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
+import { accountPace, type PaceState } from "../lib/usage-pace";
 import { cx, EASE } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { Meter } from "./UsageBars";
@@ -192,51 +193,52 @@ function AccountSection({ a, now, pinned }: { a: UsageAccount; now: number; pinn
   );
 }
 
-const TIMELINE_NAME_W = "3.5rem";
+const TIMELINE_NAME_W = "calc(var(--spacing) * 18)";
+const DAY_MS = 24 * 3600_000;
 const LANE_COLOR = { short: "var(--hue-teal)", long: "var(--hue-blue)" } as const;
 
-/** One reset timeline for a whole provider card (#13173): a shared axis (now, 6h, 12h, 1d, 3d, 5d, 7d; the first day
- *  takes 45% of the width), one row per account in the card's order, a capsule per window from the now line to its
- *  reset with a hollow end dot and the time left. Geometry is `providerTimeline` / `timelinePosition`. */
+/** One reset timeline per provider card. Label the start, scale change and end so the axis fits the sidebar.
+ *  Each account has a lane per reset window, with a countdown above its end dot. */
 export function ProviderTimeline({ accounts, now }: { accounts: UsageAccount[]; now: number }) {
   const rows = providerTimeline(accounts, now);
   if (!rows.length) return null;
-  const tickLabel = (h: number) => (h < 24 ? tr("usage.hours", { h }) : tr("usage.days", { d: h / 24 }));
   return (
     <div data-usage-timeline className="border-t border-line pt-2" role="group" aria-label={tr("usage.timeline_title")}>
-      <div className="relative h-4" style={{ marginLeft: TIMELINE_NAME_W }} aria-hidden>
-        <span className="absolute left-0 top-0 text-submeta font-semibold leading-none text-ink">{tr("usage.timeline_now")}</span>
-        {TIMELINE_TICKS_HOURS.map((h, i) => (
-          <span key={h} className={cx("absolute top-0 text-submeta leading-none text-ink-3", i === TIMELINE_TICKS_HOURS.length - 1 ? "-translate-x-full" : "-translate-x-1/2")} style={{ left: `${timelinePosition(h * 3600_000) * 100}%` }}>
-            {tickLabel(h)}
-          </span>
-        ))}
+      <div className="relative h-4 whitespace-nowrap text-submeta leading-none text-ink-3" style={{ marginLeft: TIMELINE_NAME_W }} aria-hidden>
+        <span className="absolute left-0 top-0 -translate-x-1/2 font-semibold text-ink">{tr("usage.timeline_now")}</span>
+        <span className="absolute top-0 -translate-x-1/2" style={{ left: `${timelinePosition(DAY_MS) * 100}%` }}>{tr("usage.days", { d: 1 })}</span>
+        <span className="absolute right-0 top-0">{tr("usage.days", { d: TIMELINE_CAP_MS / DAY_MS })}</span>
       </div>
       <div className="relative" style={{ marginLeft: TIMELINE_NAME_W }}>
         {TIMELINE_TICKS_HOURS.map((h) => (
-          <span key={h} aria-hidden className={cx("absolute inset-y-0 w-px bg-line-strong", h === 24 && "opacity-100", h !== 24 && "opacity-60")} style={{ left: `${timelinePosition(h * 3600_000) * 100}%` }} />
+          <span key={h} aria-hidden className={cx("absolute inset-y-0 z-[1] w-px bg-line-strong", h !== 24 && "opacity-60")} style={{ left: `${timelinePosition(h * 3600_000) * 100}%` }} />
         ))}
-        <span aria-hidden data-timeline-now className="absolute -top-1 bottom-0 z-[3] w-0.5 rounded-full bg-ink" />
+        <span aria-hidden data-timeline-now className="absolute inset-y-0 z-[3] w-0.5 rounded-full bg-ink" />
         {rows.map((r, i) => {
           const parts = r.lanes.map((l) => `${l.label} · ${resetLabel(l.resetsAt, now)}`);
+          const plan = planNote(r.account).split(" ")[0];
+          const shaded = i % 2 === 0;
           return (
-            <div key={r.account.id} data-timeline-row={r.account.id} role="img" aria-label={`${r.account.name}: ${parts.join("; ")}`} title={parts.join("\n")} className={cx("relative h-[30px]", r.account.stale && "opacity-60")}>
-              {i % 2 === 0 && <span aria-hidden className="absolute inset-y-0 right-0 rounded-md bg-inset" style={{ left: `-${TIMELINE_NAME_W}` }} />}
-              <span className="absolute top-0 z-[1] flex h-[30px] flex-col justify-center truncate pl-1 text-submeta leading-tight text-ink-2" style={{ left: `-${TIMELINE_NAME_W}`, width: "3.4rem" }}>
-                {r.account.name}
-                {planNote(r.account) && <small className="truncate text-ink-3">{planNote(r.account).split(" ")[0]}</small>}
+            <div key={r.account.id} data-timeline-row={r.account.id} role="img" aria-label={`${r.account.name}: ${parts.join("; ")}`} title={parts.join("\n")} className="relative flex min-h-8 flex-col justify-center gap-0.5 py-1">
+              {shaded && <span aria-hidden className="absolute inset-y-0 right-0 rounded-md bg-inset" style={{ left: `calc(-1 * ${TIMELINE_NAME_W})` }} />}
+              <span className="absolute inset-y-0 right-full z-[1] flex flex-col justify-center pr-2 pl-1 text-submeta leading-tight text-ink-2" style={{ width: TIMELINE_NAME_W }}>
+                <span className="truncate" title={r.account.name}>{r.account.name}</span>
+                {plan && <small className="truncate text-ink-3">{plan}</small>}
               </span>
               {r.lanes.map((l) => {
                 const color = l.long ? LANE_COLOR.long : LANE_COLOR.short;
-                const top = l.long ? 15 : 5;
-                const dotTop = l.long ? 14 : 3;
-                const flip = l.end > 0.8;
+                const end = `${l.end * 100}%`;
                 return (
-                  <span key={l.key} data-timeline-lane={l.label}>
-                    <span aria-hidden className="absolute left-0 z-[1] rounded" style={{ top, height: l.long ? 9 : 6, width: `${l.end * 100}%`, backgroundImage: `linear-gradient(90deg, transparent, ${color})` }} />
-                    <span aria-hidden className="absolute z-[2] size-[11px] -translate-x-1/2 rounded-full border-2 bg-surface" style={{ left: `${l.end * 100}%`, top: dotTop, borderColor: color }} />
-                    <span aria-hidden className={cx("absolute z-[2] whitespace-nowrap text-submeta font-semibold leading-none", flip && "text-white")} style={{ top: dotTop - 1, ...(flip ? { right: `calc(${100 - l.end * 100}% + 9px)` } : { left: `calc(${l.end * 100}% + 9px)`, color }) }}>
-                      {remainingText(l.remainingMs)}
+                  <span key={l.key} data-timeline-lane={l.label} aria-hidden className="relative z-[2] block">
+                    {/* Share the free space around the label in proportion to the endpoint. */}
+                    <span className="mx-1 grid" style={{ gridTemplateColumns: `${l.end}fr auto ${1 - l.end}fr` }}>
+                      <span data-timeline-remaining className={cx("col-start-2 min-w-0 text-submeta font-semibold leading-none text-ink", shaded ? "bg-inset" : "bg-surface")}>
+                        {remainingText(l.remainingMs)}
+                      </span>
+                    </span>
+                    <span className={cx("relative block h-2.5", r.account.stale && "opacity-60")}>
+                      <span className={cx("absolute left-0 top-1/2 -translate-y-1/2 rounded", l.long ? "h-2" : "h-1.5")} style={{ width: end, backgroundImage: `linear-gradient(90deg, transparent, ${color})` }} />
+                      <span className="absolute top-0 size-2.5 -translate-x-1/2 rounded-full border-2 bg-surface" style={{ left: end, borderColor: color }} />
                     </span>
                   </span>
                 );

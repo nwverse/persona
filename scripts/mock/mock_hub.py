@@ -1087,15 +1087,6 @@ if os.environ.get("MOCK_BG_WAITING") == "1":
                       background=[{"id": "bb1d5te2k", "kind": "shell", "description": "打包发布产物", "command": "make release",
                                    "started_at": ago(minutes=4)}])
 
-if os.environ.get("MOCK_BG_STALLED") == "1":  # #13744: the blog's test run used no CPU and wrote nothing for hours, still Working
-    for _s in SESSIONS:
-        if _s["session_id"] == BLOG:
-            _s.update(status="done", state="working", state_since=ago(hours=4), seen_at=None, background_working=True,
-                      background_waiting=False, background_stalled_since=ago(hours=3, minutes=5),
-                      last_text="迁移完成，测试在后台跑着。",
-                      background=[{"id": "bq7ci42wa", "kind": "shell", "description": "跑全部测试", "command": "pnpm test",
-                                   "started_at": ago(hours=4)}])
-
 # MOCK_HEADER_MODES=1 (#3719): one agent per permission mode, for the mode at the end of the Agents header's second row
 # and its menu. The widget agent: Auto-Edit, and it can take Allow Everything while it runs; tests: Ask First, with a long
 # title; photos: Plan Only; release: Auto; review: no mode reported yet; blog: Allow Everything with no way back from the

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -468,8 +468,8 @@ func TestAcceptanceReopenRound(t *testing.T) {
 		agentTurn(s, f, proto.StatusWorking, "", 0)
 		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
 		waitFor(t, "the second round's card", func() bool { a := askOf(s, id); return a != nil && a.MessageID == "om_round2" })
-		press := func(mid string) *feishubot.CardAction {
-			var a feishubot.CardAction
+		press := func(mid string) *botcard.CardAction {
+			var a botcard.CardAction
 			a.Action.Value = map[string]any{"a": "accept", "id": id}
 			a.Context.MessageID = mid
 			return &a

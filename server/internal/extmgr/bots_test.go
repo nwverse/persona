@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/feishubot"
@@ -774,7 +775,7 @@ func TestBotRecallTellsTheAssistant(t *testing.T) {
 func TestChannelFeishuInThread(t *testing.T) {
 	w := newBotWorld(t)
 	w.pair(t)
-	card := feishubot.NewCard("t", "green", "a").Markdown("thread card").JSON()
+	card := botcard.NewCard("t", "green", "a").Markdown("thread card").JSON()
 	for _, id := range []string{"om_t1", "om_t2", "om_t3", "om_t4"} { // the owner's messages in the private chat
 		w.api.inChat(id, "oc_p2p")
 	}
@@ -801,7 +802,7 @@ func TestChannelFeishuInThread(t *testing.T) {
 func TestChannelFeishuRefusesOtherChats(t *testing.T) {
 	w := newBotWorld(t)
 	w.pair(t)
-	card := feishubot.NewCard("t", "green", "a").Markdown("refused card").JSON()
+	card := botcard.NewCard("t", "green", "a").Markdown("refused card").JSON()
 	before := w.api.count("/open-apis/im/v1/messages")
 	for method, params := range map[string]map[string]any{
 		assistantwire.FeishuPost: {"card": card, "chat_id": "oc_test"},
@@ -851,7 +852,7 @@ func TestBotReplyDetoursIntoTheCallsChat(t *testing.T) {
 	w.pair(t)
 	w.api.rejectReply = 230011
 	api, _ := w.h.botAPI()
-	if _, rerouted, err := w.h.replyOrSend(context.Background(), api, "oc_test", "om_gone", feishubot.TypeText, feishubot.TextContent("detour text"), "k1", true); err != nil || !rerouted {
+	if _, rerouted, err := w.h.replyOrSend(context.Background(), api, "oc_test", "om_gone", feishubot.TypeText, botcard.TextContent("detour text"), "k1", true); err != nil || !rerouted {
 		t.Fatalf("replyOrSend: rerouted %v, err %v", rerouted, err)
 	}
 	w.api.find(t, "/messages/om_gone/reply", "detour text", `"reply_in_thread":true`) // the threaded reply was tried first
