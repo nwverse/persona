@@ -92,6 +92,9 @@ func (s *Service) cardlessWaitSignal(ctx context.Context, t Todo, agents []proto
 	if !cardlessWorkersStopped(agents) {
 		return superviseSignal{}, false
 	}
+	if s.reporterStopped(ctx, t.Origin) {
+		return superviseSignal{}, false // signal would drop it under /stop (#3308): keep the round untold until the user speaks
+	}
 	_, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 		if v.state(t) != reviewPending || v.CardlessToldAt != nil {
 			return false
