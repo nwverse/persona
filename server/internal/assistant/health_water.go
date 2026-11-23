@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // RFC 4122's URL namespace. Names and this namespace are stable across upgrades and restarts.
@@ -216,7 +216,7 @@ func decodeIntakeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 
 // Text input on a notification may include its unit. Keep the extension's integer-ml rules.
 // i18n-ignore: the original unit is matched as input, never displayed as copy.
-var waterAmountPattern = regexp.MustCompile(`^\s*([0-9]+)\s*(?i:ml|毫升)?\s*$`)
+var waterAmountPattern = lazyre.New(`^\s*([0-9]+)\s*(?i:ml|毫升)?\s*$`)
 
 func waterAmount(text string) (int, bool) {
 	m := waterAmountPattern.FindStringSubmatch(text)
