@@ -1243,7 +1243,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                   "added":["…"],"dropped":["…"],"approval":{"text":"…","at":"...","conversation":"…","message_id":"…"}},   // approval: the owner's message that allowed a risky step
                  {"at":"...","kind":"completion","source":"report_to_supervisor|task_review|judge","todo_id":"todo_…","round_id":"plan_…/todo_…@...","actual_minutes":45},
                  {"at":"...","kind":"estimate_due","todo_id":"todo_…"},   // accepted delivery of the current estimate_due review cue
-                 {"at":"...","kind":"overdue","todo_id":"todo_…"}],
+                 {"at":"...","kind":"overdue","todo_id":"todo_…"},
+                 {"at":"...","kind":"memory","todo_id":"todo_…","entries":["entry_…"],"sensitive_entries":["entry_…"]}],   // the memory entries a start's first message carried (#13532)
           "criteria":["…"],"expect_minutes_now":90,     // done_when and expect_minutes as the scope changes left them
           "estimate_source_now":"override","estimate_clock_at":"...","estimate_due_at":"...","estimate_due_told_at":"...",
           // estimate_evidence_now is present when the current estimate has automatic evidence; an override clears it.
@@ -4986,6 +4987,7 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
            "reuse_todo":"todo_…",       // optional (#5279): the to-do the task runs on instead of a new one (task_plan's per-task `todo_id`); the apps neither send it back nor change it
            "todo_id":"todo_…",          // only present after start
            "owner_started":true,        // the hub's (#4929): the owner tapped Start on the card, as against the hub starting it without asking; never read from task_plan arguments or sent back
+           "memory_topic":["finance"],  // the hub's (#13532): the categories the plan's words were tagged with when they made it wait for Start; with owner_started, the sensitive memory entries a start may carry; never read from task_plan arguments or sent back
            "error":"",                   // why the Agent didn't start
            "error_code":"launcher_missing","error_args":{"where":"terminal","launcher":"…","pane_shell":"bash"},
            "retry_with":["claude"]}]}   // the hub's (#10365, feature task_retry_launcher): its launcher could not start on that computer, so the others there a Retry may name, the first suggested
