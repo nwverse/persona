@@ -980,3 +980,8 @@ conversation shared with other work, two runs due in the same minute both read t
 to-do's no-progress decision quoted another task. Find the run's own prompt by its run key (`runKeyIn`) and take the
 reply after it, up to the next message that opened a turn. Refuse turns that a queued message mixed. Test with real
 transcript pages (`runChat`), not bare item lists.
+
+## Tool discovery can invalidate an entire warm conversation (#13719)
+
+Adding an always-loaded tool to the top-level list can invalidate a warm Claude conversation prefix. Test
+the full ordered list before and after discovery and reconnection, including a different upstream order.
