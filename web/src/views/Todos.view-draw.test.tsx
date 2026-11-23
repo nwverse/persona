@@ -83,7 +83,7 @@ const drawn = () => {
   });
   return s?.outerHTML;
 };
-const marks = () => Object.fromEntries([...host.querySelectorAll<HTMLElement>('[data-testid="todo-owner-mark"]')].map((m) => [m.closest<HTMLElement>("[data-todo]")?.dataset.todo, m.dataset.need]));
+const marks = () => Object.fromEntries([...host.querySelectorAll<HTMLElement>('[data-testid="todo-owner-mark"]')].map((m) => [m.closest<HTMLElement>('[data-testid="todo-triage-row"]')?.dataset.id, m.dataset.need]));
 const placed = () =>
   Object.fromEntries(
     [...host.querySelectorAll<HTMLElement>('[data-testid="todo-section"]')].map((s) => [s.dataset.section, [...s.querySelectorAll<HTMLElement>("[data-todo]")].map((r) => r.dataset.todo)]),
