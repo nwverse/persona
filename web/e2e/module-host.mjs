@@ -36,6 +36,12 @@ try {
       await page.getByRole("link", { name: "Inbox" }).first().waitFor();
       assert.equal(await health().count() > 0, on, `${tag}: sidebar entry`);
       await page.screenshot({ path: join(shots, `${tag}-sidebar.png`) });
+      // warmed before it is opened (#13434 review): the entry's hover and the idle tier; nothing for an off module
+      if (on) await health().first().hover();
+      await page.waitForTimeout(6000);
+      const warmed = requested.length;
+      if (on) assert.ok(warmed > 0, `${tag}: the module is warmed before it is opened`);
+      else assert.equal(warmed, 0, `${tag}: an off module is never warmed`);
 
       await page.goto(`${base}/health/new`);
       if (on) await page.getByText("Health").first().waitFor();
@@ -53,7 +59,7 @@ try {
       if (on) assert.ok(requested.length > 0, `${tag}: the module's code and strings load when its page opens`);
       else assert.deepEqual(requested, [], `${tag}: nothing of the module is requested`);
       assert.deepEqual(errors, [], `${tag}: page errors`);
-      console.log(`${tag}: ok, ${requested.length} module request(s)`);
+      console.log(`${tag}: ok, ${warmed} module request(s) before opening it, ${requested.length} in all`);
       await context.close();
     }
   }
