@@ -258,7 +258,7 @@ apple apple/AboutVersionAccessibilityUITests core
 apple apple/IslandPeer core
 apple apple/LiveActivity core
 apple apple/Modules core
-apple apple/Modules/ScreenShare/... screen-share
+apple apple/Modules/ScreenShare screen-share
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
 apple apple/PersonaNotify core
