@@ -1486,7 +1486,6 @@ func TestSideConversationTaskFailedToStartPushes(t *testing.T) {
 	if v := onlyTodo(s0).Supervision; v == nil || v.Supervisor != "main1" {
 		t.Fatalf("the side task is not supervised by main: %+v", v)
 	}
-	time.Sleep(100 * time.Millisecond)
 	if got := f0.pushed(); len(got) != 0 {
 		t.Fatalf("a supervised failed start was pushed to the owner: %+v", got)
 	}
