@@ -3,8 +3,8 @@
 package all
 
 import (
-	"github.com/nwverse/persona/server/internal/modules/imessage"
 	"github.com/nwverse/persona/server/internal/extmgr/imessageport"
+	"github.com/nwverse/persona/server/internal/modules/imessage"
 )
 
 // The iMessage connector module: the connector reaches the extension manager through its port
