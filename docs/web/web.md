@@ -2418,6 +2418,14 @@ those rules are counted by `scripts/ci/web_module_boundary_ratchet.py` (`scripts
 fails when a module's id, route base or sidebar key appears in the `Route` union, the sidebar's built-in pages, their
 colors or the Settings tabs, and when a module namespace is on the first screen.
 
+**The core-only lane** (#13932). Persona Core is a product of its own, so CI builds and tests it with zero modules:
+`npm run build:core-only` and `npm run test:core-only` (both in `scripts/ci/web.sh`) set `PERSONA_WEB_MODULES=none`, and
+`web/core-only.ts` then resolves the module list to an empty one and fails the build, or the test file, when any file
+outside `src/modules` reaches a module's file once its path is resolved (what the ESLint pass cannot read). The modules' own tests are left
+out of that run. A core test that is about a module being there (the Health sidebar entry, its route) says which module
+it needs (`MODULES.some((m) => m.id === "health")`) and skips that part without it; a test of a module's own code lives
+in the module's directory.
+
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
 extension-page id `-health-intake`, which routes as unknown while the module is off), its sidebar entry (right after Inbox, pink with
@@ -2438,7 +2446,8 @@ unknown while the module is off.
 4. Add the descriptor to `MODULES` in `web/src/modules/index.ts`, and remove the feature's hand-wired entries (its
    `Route` variant, its `lazyPage` line, its sidebar entry, its color in `lib/sidebar-icons.ts`).
 5. Tests: the module's own `module.test.tsx` (on and off: entry, route, chunk and catalog requests), and
-   `npm run lint`, which now covers it.
+   `npm run lint`, which now covers it. `npm run build:core-only` and `npm run test:core-only` must still pass: the
+   core may not need the module.
 
 ## Developing Persona (#9617)
 

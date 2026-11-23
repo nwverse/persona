@@ -18,6 +18,9 @@ import SwiftUI
     private(set) var supportsIntake = false
     private(set) var intakeError: String?
     private(set) var intakeBusy = false
+    private(set) var waterImportBusy = false
+    private(set) var isDemo = false
+    var showsWaterMigration: Bool { !isDemo && supportsIntake && intake?.waterExtension == "pending" }
     /// A broadcast arriving during a write is read once the write has settled, by the foreground task.
     private(set) var intakeRefresh = 0
     @ObservationIgnored private var intakeReadPending = false
@@ -30,7 +33,8 @@ import SwiftUI
 
     init(deps: AssistantDeps = .live) { self.deps = deps }
 
-    func load(machine: String, features: Set<String> = []) async {
+    func load(machine: String, features: Set<String> = [], isDemo: Bool = false) async {
+        self.isDemo = isDemo
         guard let api = deps.api() else { return }
         async let today: Void = loadIntake(api: api, supported: features.contains(HealthIntake.feature))
         async let memory = try? api.assistantMemory(space: Session.healthSpace)
@@ -53,6 +57,7 @@ import SwiftUI
             intake = nil
             intakeError = nil
             intakeBusy = false
+            waterImportBusy = false
             intakeOperationID += 1
             intakeReadPending = false
             cupAmount = 250
@@ -182,6 +187,41 @@ import SwiftUI
         }
     }
 
+    /// Import is an explicit user action. Share the intake write lane so another drink or invalidation cannot
+    /// replace the result; a second tap is ignored until both import and its authoritative read have settled.
+    func importWaterExtension() async {
+        guard showsWaterMigration, !intakeBusy, let api = deps.api()?.manager(nil) else { return }
+        await enqueueIntake(on: api) {
+            self.waterImportBusy = true
+            defer { if self.isCurrent(api) { self.waterImportBusy = false } }
+            self.intakeRead += 1
+            do {
+                let result = try await api.importWaterExtension()
+                self.deps.intakeChanged()
+                guard self.isCurrent(api) else { return }
+                self.intake?.waterExtension = nil
+                // A failed refresh must not turn an already completed import into a failed import.
+                do {
+                    let value = try await api.healthIntake()
+                    guard self.isCurrent(api) else { return }
+                    self.intake = value
+                    self.intakeError = nil
+                } catch {
+                    guard self.isCurrent(api) else { return }
+                    self.intakeError = error.shown
+                    self.intakeReadPending = true
+                }
+                #if os(iOS)
+                HomeWidgetData.shared.intakeChanged(on: api, confirmed: self.intake)
+                #endif
+                self.deps.toast(Toast(String(localized: "Moved \(result.imported) records; water extension disabled. Replace widgets, watch faces and shortcuts."), style: .success))
+            } catch {
+                guard self.isCurrent(api) else { return }
+                self.deps.toast(Toast(error.shown ?? String(localized: "Couldn't move the water extension into Health"), style: .error))
+            }
+        }?.value
+    }
+
     /// The space's open conversations, newest first: the hub's list, with what the pushes say since (a title, its
     /// last line, a new one) over it. An archived one leaves the list.
     nonisolated static func merge(_ fetched: [Session], live: [Session]) -> [Session] {
@@ -299,9 +339,9 @@ struct HealthView: View {
         .tabActiveTask(id: IntakeRefresh(group: model.hubGroup, hellos: model.hubHellos,
                                         revision: model.healthIntakeRevision, retry: page.intakeRefresh,
                                         supported: model.hubFeatures.contains(HealthIntake.feature))) {
-            await page.load(machine: machine.id, features: model.hubFeatures)
+            await page.load(machine: machine.id, features: model.hubFeatures, isDemo: model.isDemo)
         }
-        .refreshable { await page.load(machine: machine.id, features: model.hubFeatures) }
+        .refreshable { await page.load(machine: machine.id, features: model.hubFeatures, isDemo: model.isDemo) }
         #if os(iOS)
         // Load outside the conditional List row: a hidden empty section has no row to run its task.
         .tabActiveTask(id: trends.range) { await trends.load() }
@@ -311,6 +351,11 @@ struct HealthView: View {
     private func sections(_ list: [Session]) -> some View {
         ScrollViewReader { proxy in
             List {
+                #if os(iOS)
+                if !model.isDemo, page.showsWaterMigration {
+                    Section { HealthWaterMigrationCard(page: page) }
+                }
+                #endif
                 Section {
                     HealthTodaySection(page: page) { intakeDetail = .init(kind: $0) }
                     #if os(iOS)
