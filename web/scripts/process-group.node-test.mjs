@@ -14,6 +14,7 @@ import { writeFileSync } from "node:fs";
 process.on("SIGTERM", () => {
   if (process.env.PERSONA_TEST_TERM_FILE) writeFileSync(process.env.PERSONA_TEST_TERM_FILE, "cleanup started");
 });
+if (process.env.PERSONA_TEST_WORKER_READY_FILE) writeFileSync(process.env.PERSONA_TEST_WORKER_READY_FILE, "ready");
 setInterval(() => {}, 1_000);`;
 const controlSource = `${workerSource}
 process.on("disconnect", () => process.exit(0));`;
@@ -22,7 +23,11 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 const [mode, ready, workerSource, release] = process.argv.slice(2);
 const sessionStat = readFileSync("/proc/" + process.ppid + "/stat", "utf8");
 const watchdog = Number(sessionStat.slice(sessionStat.lastIndexOf(")") + 2).split(" ")[1]);
-const workers = Array.from({ length: 3 }, () => spawn(process.execPath, [workerSource], { stdio: "ignore" }));
+const workers = Array.from({ length: 3 }, (_, index) => spawn(process.execPath, [workerSource], {
+  stdio: "ignore",
+  env: { ...process.env, PERSONA_TEST_WORKER_READY_FILE: ready + ".worker-" + index },
+}));
+while (!workers.every((_, index) => existsSync(ready + ".worker-" + index))) await new Promise((resolve) => setTimeout(resolve, 5));
 writeFileSync(ready, JSON.stringify({ pgid: process.ppid, session: process.ppid, watchdog, fixture: process.pid, workers: workers.map((child) => child.pid) }));
 if (mode === "normal") {
   const hold = setInterval(() => { if (existsSync(release)) { clearInterval(hold); process.exit(0); } }, 10);
@@ -109,8 +114,13 @@ async function exercise(mode, control) {
       await writeFile(release, "release the normally completing fixture");
       await until(() => access(term).then(() => true, () => false), "normal cleanup to start");
       // This maximum-size deadline arrives after finish() has started its async
-      // cleanup. It must be ignored, not left as a live timer after the result.
+      // cleanup. An explicit acknowledgement proves the guard handled it there;
+      // a late message after finished cannot make this regression pass by accident.
+      let ignored;
+      child.on("message", (message) => { if (message?.type === "deadline-ignored") ignored = message; });
       child.send({ type: "deadline", timeout: 2_147_483_647 });
+      await until(() => ignored, "deadline cleanup acknowledgement");
+      assert.equal(ignored.phase, "cleanup");
     }
     if (mode === "timeout") child.send({ type: "deadline", timeout: 150 });
     if (mode === "abrupt") {

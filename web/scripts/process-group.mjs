@@ -46,6 +46,7 @@ async function parent() {
     watchdog.once("error", (error) => finish(outcome(1, null, { error: error.message })));
     watchdog.on("message", (message) => {
       if (message?.type === "result") finish(message.outcome);
+      else if (message?.type === "deadline-ignored" && process.connected) process.send(message);
     });
     watchdog.on("disconnect", () => finish(outcome(1, null, { error: "test watchdog disconnected before reporting a result" })));
   });
@@ -125,6 +126,10 @@ async function watchdog() {
 
   process.on("disconnect", () => { void finish(outcome(1, null, { parentLost: true }), false); });
   process.on("message", (message) => {
+    if (message?.type === "deadline" && session && (finishing || finished)) {
+      if (process.connected) process.send({ type: "deadline-ignored", phase: finishing ? "cleanup" : "finished" });
+      return;
+    }
     if (message?.type === "deadline" && session && !finishing && !finished) {
       clearTimeout(timer);
       let timeout;
