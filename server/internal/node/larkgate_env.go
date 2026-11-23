@@ -68,6 +68,9 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 	var bases []string // the addresses opened for this process
 	env = []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "PERSONA_ASSISTANT_BIN=" + bin,
 		"PERSONA_SPACE=" + space}
+	if kind := n.trackKind(cwd); kind != "" {
+		env = append(env, trackKindEnv+"="+kind) // track_kind_env.go
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cfg := n.assistantLark(ctx)

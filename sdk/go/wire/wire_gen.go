@@ -5319,13 +5319,13 @@ type TodoDecisionEvent struct {
 	Decision TodoEventDecision `json:"decision"`
 }
 
-// LeaderChangedEvent: event.leader.changed: a leader conversation was made (a side conversation added to
-// assistant.leaders), its title changed, it was filed under another knowledge-base project, it ended (it left
-// assistant.leaders; nothing is deleted) or it was made a leader again. id is the leader conversation's session id,
-// the key a work-log record keeps; title its title as the apps show it; name what the direction is called, to show it
-// by (the name the owner or the secretary gave it, else its knowledge-base project's name, else the title without its
-// "MMDD | kind | " prefix; always sent by a hub that has it, #3679); project the knowledge-base project's slug, left
-// out while it has none; ended true once it is no longer a leader, left out while it is.
+// LeaderChangedEvent: event.leader.changed: a direction was made (an id added to assistant.leaders), its title
+// changed, it was filed under another knowledge-base project, it ended (it left assistant.leaders; nothing is
+// deleted) or it was made current again. id is the stable direction id, the key a work-log record keeps; it is a
+// conversation session id only for a conversation-backed direction. title is its conversation title, or its explicit
+// name when no Persona conversation exists; name is what the direction is called (an explicit name, else its
+// knowledge-base project's name, else the title without its "MMDD | kind | " prefix); project is the knowledge-base
+// project's slug, left out while it has none; ended is true once it is no longer current, left out while it is.
 type LeaderChangedEvent struct {
 	ID      string `json:"id"`
 	Title   string `json:"title"`
@@ -5334,16 +5334,17 @@ type LeaderChangedEvent struct {
 	Ended   bool   `json:"ended,omitempty"`
 }
 
-// LeaderReportEvent: event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it),
-// needs the owner's decision (decision: its review says needs_user, or a plan of the leader's waits for the owner's
-// Start), or is stuck (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours);
-// those are written by the hub from the task's ledger, never by a model. progress (#3679) is the leader's own summary
-// of its direction at the goal level, sent with its leader_progress tool: reached, doing (and where it is stuck),
-// needs_you (what the owner has to do) and links (evidence; link is the first), text the three put together, todo "".
-// id names the report (never sent twice; key on it to be safe), leader the leader conversation's id, todo the task's
-// to-do id (GET /api/v1/todos with todos.read reads it; "" for a plan, which has no to-do until it starts), plan the
-// waiting plan's id (only on a decision about a plan), text at most 300 characters in the owner's language, link the
-// task's PR or delivery link when it has one, at when what it reports happened.
+// LeaderReportEvent: event.leader.report: one of a direction's tasks reached its goal (reached: its review accepted
+// it), needs the owner's decision (decision: its review says needs_user, or a plan of the direction's waits for the
+// owner's Start), or is stuck (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24
+// hours); those are written by the hub from the task's ledger, never by a model. progress (#3679, #8236) is the
+// direction's own summary at the goal level, sent with leader_progress or an authorized leaders.write HTTP / node CLI
+// report: reached, doing (and where it is stuck), needs_you (what the owner has to do) and links (evidence; link is
+// the first), text the three put together, todo "". id names the report (never sent twice; key on it to be safe),
+// leader the stable direction id, todo the task's to-do id (GET /api/v1/todos with todos.read reads it; "" for a
+// plan, which has no to-do until it starts), plan the waiting plan's id (only on a decision about a plan), text at
+// most 300 characters in the owner's language, link the task's PR or delivery link when it has one, at when what it
+// reports happened.
 type LeaderReportEvent struct {
 	ID       string    `json:"id"`
 	Leader   string    `json:"leader"`
@@ -5781,6 +5782,59 @@ type AssistantDataItem struct {
 
 type AssistantDataStatusResult struct {
 	Items []AssistantDataItem `json:"items"`
+}
+
+// MachinesPairLinkParams: machines.pair_link (machines.pair): request a one-time persona://link?... pairing link for
+// a pending link computer.
+type MachinesPairLinkParams struct {
+	// Optional computer id: re-issues a pairing link when an existing pending link machine matches (with name/os/icon
+	// omitted), or creates a new pending link machine with this id (defaulting name to machine_id when name is omitted).
+	MachineID string `json:"machine_id,omitempty"`
+	// Display name for a newly added computer (defaults to machine_id when machine_id is given; required when machine_id
+	// is omitted).
+	Name string `json:"name,omitempty"`
+	// Target OS hint for install commands.
+	OS string `json:"os,omitempty"`
+	// Optional icon for the computer.
+	Icon string `json:"icon,omitempty"`
+}
+
+type MachinesPairLinkResult struct {
+	// The hub machine id assigned to the computer.
+	MachineID string `json:"machine_id"`
+	// The display name of the computer.
+	Name string `json:"name"`
+	// The one-time persona://link?... pairing URL.
+	Link string `json:"link"`
+	// When the pairing link expires.
+	ExpiresAt time.Time `json:"expires_at"`
+	// Whether the computer is waiting for the owner's confirmation.
+	Pending bool `json:"pending"`
+	// Optional one-line Linux install-and-pair command when the hub knows its publication site.
+	InstallLinux string `json:"install_linux,omitempty"`
+}
+
+// MachinesStatusParams: machines.status (machines.read or machines.pair): read one computer's current connection and
+// confirmation state.
+type MachinesStatusParams struct {
+	// The computer's hub machine id.
+	MachineID string `json:"machine_id"`
+}
+
+type MachinesStatusResult struct {
+	MachineID string `json:"machine_id"`
+	Name      string `json:"name,omitempty"`
+	Exists    bool   `json:"exists"`
+	// Whether the computer's link/connection is currently up.
+	Online bool `json:"online"`
+	// Whether the resident node is connected and responding.
+	NodeOnline bool `json:"node_online"`
+	// Whether the computer is waiting for the owner's confirmation.
+	Pending bool `json:"pending"`
+	// When the computer was last seen online, if ever.
+	LastSeen time.Time `json:"last_seen,omitzero"`
+	// Last connection error, if any.
+	Error string `json:"error,omitempty"`
 }
 
 // BrowserMachinesParams: browser.machines (browser.run): list computers that have a browser backend enabled.
@@ -7598,6 +7652,10 @@ var newDef = map[string]func() any{
 	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
 	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
 	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
+	"MachinesPairLinkParams":        func() any { return new(MachinesPairLinkParams) },
+	"MachinesPairLinkResult":        func() any { return new(MachinesPairLinkResult) },
+	"MachinesStatusParams":          func() any { return new(MachinesStatusParams) },
+	"MachinesStatusResult":          func() any { return new(MachinesStatusResult) },
 	"BrowserMachinesParams":         func() any { return new(BrowserMachinesParams) },
 	"BrowserMachine":                func() any { return new(BrowserMachine) },
 	"BrowserMachinesResult":         func() any { return new(BrowserMachinesResult) },
@@ -7745,6 +7803,8 @@ var Calls = map[string]Call{
 	"assistant.entries.list":          {Name: "assistant.entries.list", From: "program", Params: "AssistantEntriesParams", Result: "AssistantEntriesResult"},
 	"event.assistant.entries.changed": {Name: "event.assistant.entries.changed", From: "hub", Params: "AssistantEntriesChangedEvent", Result: "", Event: true},
 	"assistant.data_status":           {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
+	"machines.pair_link":              {Name: "machines.pair_link", From: "program", Params: "MachinesPairLinkParams", Result: "MachinesPairLinkResult"},
+	"machines.status":                 {Name: "machines.status", From: "program", Params: "MachinesStatusParams", Result: "MachinesStatusResult"},
 	"browser.machines":                {Name: "browser.machines", From: "program", Params: "BrowserMachinesParams", Result: "BrowserMachinesResult"},
 	"browser.run":                     {Name: "browser.run", From: "program", Params: "BrowserRunParams", Result: "BrowserRunResult"},
 	"storage.request":                 {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},

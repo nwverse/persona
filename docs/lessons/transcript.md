@@ -113,6 +113,10 @@ Use synthetic conversations for screenshots, not the user's real main conversati
   stream hidden after the turn stops too: the store can retain it until its transcript item arrives. Determine its
   newest transcript owner, not only whether the round is still running.
 
+## Removing a silent round is a projection split, not a row filter
+
+Dropping a quiet wrapper alone leaves two leaks: `task`, `routed` and `answered` feed cards merge back by timestamp, and a done session still reads unread. Split the main timeline from Background activity before work or supervision expansion, retain only those three feed kinds inside the round's half-open interval, and leave plans, messages, notices and decisions visible. Keep full transcript and feed APIs unchanged and use the full renderer for inspection. Unread needs its own rule: compare `seen_at` with the latest non-silent round's end, preserve earlier visible unread, and fail open when the history scan cannot prove it. Opening Background activity never calls `markSeen`.
+
 ## Refusal fallback is session state, not a model setting (#2203)
 
 A `system/model_refusal_fallback` row with session scope can explain a model-route 404 several turns later. Preserve

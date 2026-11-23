@@ -9280,6 +9280,14 @@ if MOCK_TASKS:
             it("user", "text", 4.8, text=_quiet, injected={"kind": "system", "state": "supervise", "level": "triage", "line": "督办：检查示例任务"}),
             it("assistant", "tool_use", 4.7, tool_use_id="mock-supervision-read", tool_name="Bash", tool_input={"command": "printf 'synthetic checks passed'", "description": "Inspect synthetic task checks"}),
             it("user", "tool_result", 4.6, tool_use_id="mock-supervision-read", text="synthetic checks passed"),
+        ]
+        ITEMS[ASK1] += tool("mcp__persona__agent_send", {"machine": "server", "session_id": TESTS, "text": "Continue the synthetic checks.", "task": {"title": "整理发布说明"}},
+                            "It is now your task todo_task_release.", 4.65)
+        ITEMS[ASK1] += tool("mcp__persona__conversation_send", {"id": "example-conversation", "text": "Synthetic checks are complete."},
+                            "Sent to the example conversation.", 4.62)
+        ITEMS[ASK1] += tool("mcp__persona__interaction_answer", {"interaction_id": "mock-supervision-question", "approve": True},
+                            "Answered on behalf of the user.", 4.58)
+        ITEMS[ASK1] += [
             it("assistant", "text", 4.5, text="示例任务的测试通过，无需你处理。"),
             it("assistant", "tool_use", 4.4, tool_use_id="mock-supervision-finish", tool_name="mcp__persona__supervision_finish", tool_input={"visibility": "silent", "summary": "Synthetic checks passed"}),
             it("user", "tool_result", 4.3, tool_use_id="mock-supervision-finish", text='{"visibility":"silent"}'),
@@ -9293,6 +9301,13 @@ if MOCK_TASKS:
         ITEMS[ASK1].sort(key=lambda x: x["ts"])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _i + 1
+        TASK_FEED[ASK1] += [
+            _feed("feed_supervision_task", 4.64, "task", "todo_task_release", {"wake": "active"}),
+            _feed("feed_supervision_routed", 4.63, "routed", "todo_task_release", {"text": "Continue the synthetic checks.", "from": "assistant"}),
+            _feed("feed_supervision_answered", 4.57, "answered", "todo_task_release", {
+                "question": "Run the synthetic checks?", "answer": "Approved by the assistant.", "by": "assistant", "reason": "Routine review"}),
+        ]
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
     # MOCK_RELAYED=1: a message another Persona conversation sent with conversation_send (prompts/assistant/relay.md),
     # then one you typed: only yours is the pale blue bubble (#2643).
     if os.environ.get("MOCK_RELAYED") == "1":
