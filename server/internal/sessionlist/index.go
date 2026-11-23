@@ -186,8 +186,12 @@ type Counts struct {
 	// of its Seen count.
 	JustFinished int `json:"just_finished,omitempty"`
 	// HeldNeeds: how many of State["needs_you"] only wait on held non-interrupting cards (P1/P2) for push grading.
-	HeldNeeds int    `json:"held_needs,omitempty"`
-	Revision  string `json:"revision"`
+	HeldNeeds int `json:"held_needs,omitempty"`
+	// SupervisorHeld: how many of State["needs_you"] only wait on cards their task's supervisor holds (a non-question
+	// card marked delegating, docs/assistant/unified-entry.md "Asks go to the supervisor first"): not the user's until
+	// the supervisor escalates them, so clients take them out of every Needs you count. None of them is in HeldNeeds.
+	SupervisorHeld int    `json:"supervisor_held,omitempty"`
+	Revision       string `json:"revision"`
 }
 
 // PageWithCounts is a page with its view's current counts (with_counts=1): what a separate ?counts=1 read with the

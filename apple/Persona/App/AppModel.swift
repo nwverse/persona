@@ -643,6 +643,7 @@ final class AppModel {
     /// Counts the current hub's hellos (its socket connecting again): a page that reads on reconnect follows it, so it
     /// reads on that alone and not on every push (#11516's page).
     private(set) var hubHellos = 0
+    private(set) var healthIntakeRevision = 0
     /// Numbers the tree reads in the order they were asked; `directionTreeLanded` is the newest one whose answer was
     /// taken. An answer older than that is dropped; a read that fails moves neither, so it never makes an earlier
     /// good answer count as stale.
@@ -3098,6 +3099,9 @@ final class AppModel {
         case .hello(let hello):
             let previousSurfaceCapabilities = extensionSurfaceCapabilities
             link(group)?.received(hello)
+            #if os(iOS)
+            if isHub { Task { await HealthIntakeSync.shared.refresh(model: self) } }
+            #endif
             refoldSides() // this hub may fold side sessions now, or no longer (#7944)
             if let page = sessionLists.lists[group], page.loaded, !page.query.legacy, page.paged != hello.features.contains("sessions_list"), let link = link(group) {
                 page.cancel()
@@ -3239,6 +3243,12 @@ final class AppModel {
             // The direction tree changed (#4352): read it again. Its answer is the default manager's alone, so another
             // manager's page keeps what GET leaders gave it (docs/assistant/managers.md "Clients").
             if isHub, let hubAPI = api, assistantShows(nil) { Task { await refreshDirectionTree(hubAPI) } }
+        case .healthIntake:
+            if isHub { healthIntakeRevision += 1 }
+            #if os(iOS)
+            if isHub { Task { await HealthIntakeSync.shared.refresh(model: self) } }
+            #endif
+            ExtensionUIRegistry.shared.invalidate(extension: HealthIntakeUI.id, ui: nil, group: group)
         case .assistantFeed(let item):
             if isHub { TasksStore.shared.received(item, group: group) }
         case .assistantView(let view):
@@ -3391,6 +3401,7 @@ final class AppModel {
         case .look: "look"
         case .managers: "managers"
         case .directions: "directions"
+        case .healthIntake: "health_intake"
         case .assistantFeed: "assistant_feed"
         case .assistantView: "assistant_view"
         case .assistantViewAction: "assistant_view_action"
@@ -4922,7 +4933,8 @@ final class AppModel {
         }
         // A directory-hidden session's cards count nowhere, as the pages leave them out (`directoryVisibleInteractions`).
         let session = cardSessionResolver()
-        for ix in interactions.values where session(ix.sessionKey)?.hiddenByDirectory != true {
+        // A card its task's supervisor holds is the supervisor's until it passes it up (`Interaction.supervisorHeld`).
+        for ix in interactions.values where session(ix.sessionKey)?.hiddenByDirectory != true && !ix.supervisorHeld {
             guard scope.has(ix.manager ?? session(ix.sessionKey)?.manager, group: ix.group) else { continue }
             // A quiet task's agent asking is the main conversation's to tell (#1731): its count goes there, not on Agents.
             switch place(ix.sessionKey) {
