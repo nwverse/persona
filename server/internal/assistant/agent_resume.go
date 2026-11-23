@@ -74,7 +74,7 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 	}
 	if !cause.AllowsSupervisorResume() {
 		return fmt.Errorf("%s cannot be resumed by the assistant: stop cause is %s. User stops and unknown causes require "+
-			"the user's Resume on its terminal page. Nothing was started or sent", agentLabel(c), cause)
+			"the user's Resume on its terminal page. Give that instruction separately from the choices on a decision card. Nothing was started or sent", agentLabel(c), cause)
 	}
 	if why == "" {
 		return fmt.Errorf("resume_why is required: say why this agent's own context is needed (the user sees it). Nothing was started or sent")
