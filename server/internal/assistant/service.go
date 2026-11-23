@@ -322,6 +322,7 @@ type Service struct {
 	outbound   outboundOnce      // outbound_once.go: one card per hand-off the owner is asked about, none again once allowed
 	dtree      directionTreeBook // direction_tree.go: the direction tree the apps were last told of
 	tview      todoViewBook      // todo_view_push.go: what the apps were told each to-do is filed under
+	trevision  todoRevisionBook  // todo_revision.go: the pushed read's cheap validator
 	offers     routeBook         // route.go: the directions offered for New chats
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
@@ -332,17 +333,18 @@ type Service struct {
 	viewEvents viewNotifications // views.go: only coalesced notifications; contents are stored first
 	viewMemo   viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
 
-	devs          Devices // the computers (devices.go); nil: no fleet
-	mcpWaitMu     sync.Mutex
-	mcpWaits      map[string]*mcpWaitReporter // live opted-in mcp.call requests, by their validated call id
-	agentArchives agentArchiveBook
-	orphans       orphanBook                // tasks_orphan.go: the open to-dos nobody works on
-	agentNative   agentNativeBook           // the tools' own archives (agent_archive_native.go)
-	switchQ       switchQueue               // agents_switch's switches waiting for their agents' turns to end (agents_switch.go)
-	fleet         fleetBook                 // what comes from the nodes (fleet.go)
-	convAttention conversationAttentionBook // the main conversation's silent-round unread cache
-	nextSug       nextSuggestBook           // suggest_next.go: the hub-made next-message suggestions
-	askUp         escalationBook            // cards that reached the user through an escalation (ask_route.go), under fleet.mu
+	devs                 Devices // the computers (devices.go); nil: no fleet
+	mcpWaitMu            sync.Mutex
+	mcpWaits             map[string]*mcpWaitReporter // live opted-in mcp.call requests, by their validated call id
+	agentArchives        agentArchiveBook
+	orphans              orphanBook                // tasks_orphan.go: the open to-dos nobody works on
+	agentNative          agentNativeBook           // the tools' own archives (agent_archive_native.go)
+	switchQ              switchQueue               // agents_switch's switches waiting for their agents' turns to end (agents_switch.go)
+	conversationSwitches conversationSwitchBook    // Assistant conversation batch switches (conversations_switch.go)
+	fleet                fleetBook                 // what comes from the nodes (fleet.go)
+	convAttention        conversationAttentionBook // the main conversation's silent-round unread cache
+	nextSug              nextSuggestBook           // suggest_next.go: the hub-made next-message suggestions
+	askUp                escalationBook            // cards that reached the user through an escalation (ask_route.go), under fleet.mu
 	// delegateHook stands in for Delegate in tests (fleet_delegate.go).
 	delegateHook func(context.Context, DelegateParams) (DelegateResult, error)
 	// fleetEnded, when set, sees every card's end the channels are told (tests).
@@ -402,13 +404,13 @@ func New(o Options) *Service {
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
 	}
-	s.loadModules(o.Modules, o.ModulesOff) // before anything a module adds to is set up
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()
 	s.conversationTagRoutes()
 	s.conversationDeleteRoutes()
 	s.logicalSwitchRoutes()
+	s.conversationSwitchRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
 	s.agentNamingRoutes() // agent_naming_request.go
@@ -479,6 +481,8 @@ func New(o Options) *Service {
 	s.launcherImportRoutes()
 	s.launcherHealthRoutes()
 	s.remoteImageRoutes()
+	// Core routes form the reserved namespace for module routes. Runtime module access starts only after New returns.
+	s.loadModules(o.Modules, o.ModulesOff)
 	return s
 }
 
@@ -1179,6 +1183,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.taskStageSessions(ctx, d)
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
 	s.switchQueueListed(d.MachineID)    // a queued launcher switch whose turn ended (agents_switch.go)
+	s.wakeConversationSwitches()        // queued Assistant conversation batch items (conversations_switch.go)
 	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 	s.directionTreeSessions(d)          // an Agent of the direction tree may have moved (direction_tree.go)
 	s.agentNamesChanged(d)

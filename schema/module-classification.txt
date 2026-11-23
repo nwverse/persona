@@ -36,6 +36,7 @@ module screen-share
 module phone-extra
 module computer-use
 module engines-extra
+module github
 module connectors-extra
 module appearance-styles
 module glasses
@@ -83,6 +84,7 @@ go server/internal/assistant/todo/timeline core
 go server/internal/assistantskills core
 go server/internal/assistantwire core
 go server/internal/botcard core
+go server/internal/botport core
 go server/internal/buildtags core
 go server/internal/buildtags/printtags core
 go server/internal/builtinext core
@@ -122,10 +124,12 @@ go server/internal/extension/serve core
 go server/internal/extension/sourcevalidate core
 go server/internal/extension/uistream core
 go server/internal/extmgr core
+go server/internal/extmgr/githubport core
 go server/internal/extmgr/mailport core
 go server/internal/extmgr/storage core
 go server/internal/extwire core
 go server/internal/fleetsoak core
+go server/internal/githubwire core
 go server/internal/herdr core
 go server/internal/herdrcore core
 go server/internal/host core
@@ -217,6 +221,7 @@ go server/internal/textfmt core
 go server/internal/tmux core
 go server/internal/tokenuse core
 go server/internal/toolcli core
+go server/internal/toolschema core
 go server/internal/transcript core
 go server/internal/tunnel core
 go server/internal/tzguard core
@@ -235,7 +240,6 @@ go server/plugins core
 go server/internal/transcribelive voice
 go server/internal/lark lark
 go server/internal/larkcli lark
-go server/internal/feishubot lark
 go server/internal/connector/larkcli lark
 go server/internal/office office
 go server/internal/screen screen-share
@@ -248,7 +252,6 @@ go server/internal/orcart/... engines-extra
 go server/internal/terncli engines-extra
 go server/cmd/vncbench screen-share
 go server/internal/rexcli engines-extra
-go server/internal/connector/github connectors-extra
 go server/internal/connector/imessage connectors-extra
 go server/internal/assistant/kbhistory knowledge-ui
 go server/internal/assistant/kbsent knowledge-ui
@@ -315,6 +318,7 @@ gradle :core:demo core
 gradle :core:designsystem core
 gradle :core:domain core
 gradle :core:hub core
+gradle :core:inbox core
 gradle :core:moduleapi core
 gradle :core:navigation core
 gradle :core:rustcore core
@@ -325,7 +329,6 @@ gradle :feature:assistant core
 gradle :feature:chat core
 gradle :feature:files core
 gradle :feature:inbox core
-gradle :feature:knowledge knowledge-ui
 gradle :feature:machines core
 gradle :feature:settings core
 gradle :feature:terminal core
@@ -345,7 +348,6 @@ web web/src/i18n/locales core
 web web/src/lib core
 web web/src/lib/configuration core
 web web/src/lib/html-runtime core
-web web/src/lib/voice voice
 web web/src/modules core
 web web/src/screen screen-share
 web web/src/screen/tiers screen-share

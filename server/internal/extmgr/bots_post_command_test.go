@@ -11,6 +11,7 @@ import (
 
 // The event content follows the documented received post shape, not the language-keyed send shape.
 func TestPostAdjacentMentionCommandHandoff(t *testing.T) {
+	needsLarkModule(t)
 	for _, command := range []string{"/read", "/ai"} {
 		t.Run(command, func(t *testing.T) {
 			w := newBotWorld(t)
@@ -44,6 +45,7 @@ func containsFrom(raw json.RawMessage, want string) bool {
 }
 
 func TestPostCommandAdmissionPolicies(t *testing.T) {
+	needsLarkModule(t)
 	otherAt := []map[string]any{{"key": "@_user_10", "name": "Persona", "id": map[string]any{"open_id": "ou_other"}}}
 	bothAt := append(append([]map[string]any{}, otherAt...), atBot...)
 	for _, command := range []string{"/read", "/ai"} {
@@ -103,6 +105,9 @@ func TestPostCommandAdmissionPolicies(t *testing.T) {
 					envelope["event"].(map[string]any)["sender"].(map[string]any)["sender_type"] = tc.senderType
 					event, _ = json.Marshal(envelope)
 				}
+				// Count only what this message makes the bot do: the bot's start-up read of its own identity (after the
+				// pairing and each settings change above) is in the background and may come after the count (#14219).
+				w.botInfoRead(t)
 				total := w.api.total()
 				w.send(t, event)
 				// The accepted /read is handed without an API send; ordinary topic and /ai paths likewise.
@@ -156,12 +161,16 @@ func TestPostCommandAdmissionPolicies(t *testing.T) {
 func textJSON(s string) string { raw, _ := json.Marshal(s); return string(raw) }
 
 func TestPostCommandUnknownBotIdentityIsDenied(t *testing.T) {
+	needsLarkModule(t)
 	for _, command := range []string{"/read", "/ai"} {
 		t.Run(command, func(t *testing.T) {
 			w := newBotWorld(t)
 			w.pair(t)
 			w.topicsOn(t, topicChat)
 			w.readOn(t)
+			// The bot's start-up read of its own identity is done before the test forgets it: a late one could put the id
+			// back, or be the bot-info call the check below finds in place of the message's own (#14219).
+			w.botInfoRead(t)
 			w.api.mu.Lock()
 			w.api.botInfoFail = true
 			w.api.mu.Unlock()
