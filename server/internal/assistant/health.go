@@ -33,14 +33,18 @@ func (s *Service) healthCwd(d Device) string {
 	return stateDirOn(d.Home, d.DataDir, identity.HealthDirName(s.id))
 }
 
-// spaceCwd is the directory of space ("" the assistant's own) on d; "" for a space that has none on this version
-// (only the health space has one so far), so nothing starts in the assistant's directory in its stead.
-func (s *Service) spaceCwd(d Device, space string) string {
+// spaceCwd is the directory of space ("" the assistant's own) on d: the health space's, or a track's whose template is
+// space (spaceTrack, #13472); "" for a space that has none here, so nothing starts in the assistant's directory in
+// its stead.
+func (s *Service) spaceCwd(ctx context.Context, d Device, space string) string {
 	switch space {
 	case "":
 		return s.assistantCwd(d)
 	case SpaceHealth:
 		return s.healthCwd(d)
+	}
+	if e, ok := s.spaceTrack(ctx, space); ok {
+		return stateDirOn(d.Home, d.DataDir, e.DirName)
 	}
 	return ""
 }

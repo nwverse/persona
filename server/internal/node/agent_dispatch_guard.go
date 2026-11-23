@@ -27,6 +27,16 @@ func (n *Node) guardAgentDirectory(ctx context.Context, cwd string) error {
 	for _, state := range []string{n.dir, identity.DataDir(n.home)} {
 		dirs, _ := os.ReadDir(state)
 		for _, dir := range dirs {
+			if identity.IsManagerDirName(strings.ToLower(dir.Name()), "tracks") {
+				// A track's directory (tracks/<slug>, #13472), however its path is spelled.
+				tracks := filepath.Join(state, dir.Name())
+				if info, err := os.Stat(tracks); statErr == nil && err == nil && identity.ValidTrackSlug(strings.ToLower(filepath.Base(cwd))) {
+					if parent, err := os.Stat(filepath.Dir(cwd)); err == nil && os.SameFile(parent, info) {
+						blocked = true
+					}
+				}
+				continue
+			}
 			if !identity.IsManagerDirName(dir.Name(), "assistant") && !identity.IsManagerDirName(dir.Name(), identity.SpaceHealth) {
 				continue
 			}
