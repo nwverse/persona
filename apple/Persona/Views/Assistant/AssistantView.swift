@@ -783,22 +783,10 @@ struct AssistantView: View {
     /// The open conversation is the health space's.
     private var currentIsHealth: Bool { HealthModel.newOpensHealth(current.flatMap { model.session($0) }) }
 
-    /// Health from the sidebar or the shell (#4329): back in the latest health conversation, as Codex does; the Health
-    /// page, its new conversation page, when it has none. `-openAssistantPage health` still shows the page.
+    /// Health from the sidebar or the shell opens its home, with the space's conversations listed (#13273).
     private func enterHealth() {
-        Task {
-            switch await HealthModel.entry(deps: .live, live: model.healthConversations) {
-            case .open(let key):
-                #if os(iOS)
-                if embedded, let unified { unified.select(.conversation, path: navPath, contentChanged: true) }
-                #endif
-                backToRoot()
-                model.openAssistantConversation(key)
-            case .new:
-                backToRoot()
-                present(.health)
-            }
-        }
+        backToRoot()
+        present(.health)
     }
 
     /// The open conversation's domain space (#13500), when it is one other than health's.

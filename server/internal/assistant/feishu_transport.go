@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -13,12 +13,12 @@ import (
 
 // botPost sends a card: as a reply to replyTo, else into the owner's chat; one Feishu refuses goes as rich text
 // (fallback).
-func (s *Service) botPost(ctx context.Context, replyTo string, card *feishubot.Card, fallback string) (string, error) {
+func (s *Service) botPost(ctx context.Context, replyTo string, card *botcard.Card, fallback string) (string, error) {
 	return s.botPostKeyed(ctx, replyTo, card, fallback, "")
 }
 
 // botPostKeyed is botPost with a key for a send into the chat that may be made again: the same key lands once.
-func (s *Service) botPostKeyed(ctx context.Context, replyTo string, card *feishubot.Card, fallback, key string) (string, error) {
+func (s *Service) botPostKeyed(ctx context.Context, replyTo string, card *botcard.Card, fallback, key string) (string, error) {
 	return s.botPostTo(ctx, feishuTarget{}, replyTo, card, fallback, key)
 }
 
@@ -53,7 +53,7 @@ func (t feishuTarget) params(p map[string]any) map[string]any {
 // botPostTo is botPostKeyed to a target. Every card the bot sends goes through here, and each one that lands is logged
 // with what it was (feishuSendAs): how many went out, of which kind and for which conversation, can be counted from
 // the log (#8270).
-func (s *Service) botPostTo(ctx context.Context, to feishuTarget, replyTo string, card *feishubot.Card, fallback, key string) (string, error) {
+func (s *Service) botPostTo(ctx context.Context, to feishuTarget, replyTo string, card *botcard.Card, fallback, key string) (string, error) {
 	if to.Read {
 		return s.botPostContent(ctx, to, replyTo, card.JSON(), fallback, key)
 	}
@@ -61,7 +61,7 @@ func (s *Service) botPostTo(ctx context.Context, to feishuTarget, replyTo string
 }
 
 // botPostContent is botPostTo with the message's content as it goes: a card's JSON, or a card entity's
-// (feishubot.CardEntityContent).
+// (botcard.CardEntityContent).
 func (s *Service) botPostContent(ctx context.Context, to feishuTarget, replyTo, content, fallback, key string) (string, error) {
 	var res struct {
 		MessageID string `json:"message_id"`
@@ -117,7 +117,7 @@ func (s *Service) botSay(ctx context.Context, text string) {
 	}
 }
 
-func (s *Service) botUpdateCard(ctx context.Context, messageID string, card *feishubot.Card) error {
+func (s *Service) botUpdateCard(ctx context.Context, messageID string, card *botcard.Card) error {
 	return s.appCall(ctx, AppFeishu, FeishuUpdateCard, map[string]any{"message_id": messageID, "card": s.workbenchStamp(ctx, card).JSON()}, nil)
 }
 
@@ -133,9 +133,9 @@ func (s *Service) botUnreact(ctx context.Context, messageID, reactionID string) 
 	_ = s.appCall(ctx, AppFeishu, FeishuUnreact, map[string]any{"message_id": messageID, "reaction_id": reactionID}, nil)
 }
 
-func (s *Service) botMessages(ctx context.Context, messageID string) ([]feishubot.Item, error) {
+func (s *Service) botMessages(ctx context.Context, messageID string) ([]botcard.Item, error) {
 	var res struct {
-		Items []feishubot.Item `json:"items"`
+		Items []botcard.Item `json:"items"`
 	}
 	err := s.appCall(ctx, AppFeishu, FeishuMessages, map[string]any{"message_id": messageID}, &res)
 	return res.Items, err

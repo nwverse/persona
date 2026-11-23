@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -125,6 +125,7 @@ func TestAIElsewhereEverythingElseIsDroppedSilently(t *testing.T) {
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
+	w.botInfoRead(t)
 	total := w.api.total()
 	otherAt := []map[string]any{{"key": "@_user_1", "id": map[string]any{"open_id": "ou_someone"}, "name": "Someone"}}
 	for _, c := range []struct {
@@ -192,7 +193,7 @@ func TestAIElsewhereTheGroupStaysClosedExceptForAReplyUnderTheSource(t *testing.
 	eventually(t, 5*time.Second, "taken", func() bool { return len(w.handed()) == 1 })
 	w.api.inChat("om_src", askChat)
 	w.api.inChat("om_other", askChat)
-	card := feishubot.NewCard("t", "green", "a").Markdown("a card").JSON()
+	card := botcard.NewCard("t", "green", "a").Markdown("a card").JSON()
 
 	// Refused, and nothing reaches Feishu for any of them.
 	before := w.api.total()
@@ -244,7 +245,7 @@ func TestAIElsewhereTheGroupStaysClosedExceptForAReplyUnderTheSource(t *testing.
 	w.api.rejectReply = 230011
 	w.api.mu.Unlock()
 	before = w.api.total()
-	if err := w.sendErr(assistantwire.FeishuText, map[string]any{"text": "结论三", "reply_to": "om_src_gone", "chat_id": askChat}); !feishubot.MessageGone(err) {
+	if err := w.sendErr(assistantwire.FeishuText, map[string]any{"text": "结论三", "reply_to": "om_src_gone", "chat_id": askChat}); !botcard.MessageGone(err) {
 		t.Fatalf("a reply whose original is gone: %v", err)
 	}
 	if sent := w.api.since(before); strings.Contains(sent, "receive_id_type=chat_id") || strings.Contains(sent, askChat) {
@@ -579,7 +580,7 @@ func TestSourceAnswerTargetsOnlyTheOriginalRequest(t *testing.T) {
 	w.api.rejectReply = 230011 // the original was withdrawn
 	w.api.mu.Unlock()
 	before = w.api.total()
-	if err := w.sendErr(assistantwire.FeishuText, params); !feishubot.MessageGone(err) {
+	if err := w.sendErr(assistantwire.FeishuText, params); !botcard.MessageGone(err) {
 		t.Fatalf("expected a missing parent error, got %v", err)
 	}
 	if sent := w.api.since(before); strings.Contains(sent, "receive_id_type=chat_id") {

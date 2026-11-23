@@ -1765,15 +1765,32 @@ every platform are described from #13430; this section is the Apple side.
   `composer_source`). Declared but **not yet served**, with no API until a module needs one: `shell_places`, `settings`,
   `chat_card_kinds`, `chat_accessories`, `toolbar_items`, `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`,
   `phone_tools`, `intents`, `push_categories` and `audio_leases` (the core's `AudioSessionBroker` does not exist yet).
+  Each gets its registrar method and registry reader with the first module that needs it (#13849).
 - **The module list** (`apple/Persona/App/Modules.swift`) is the seed of the `PersonaHostApp` layer (#13430 decision 4;
   `apple/Packages/PersonaCore` stays the Rust binding). `PersonaHostApp` is the `ModuleHost` (a composer action hands
   back a `UIImage`), `Modules.builtIn` lists the modules in the order their entries appear, and `Modules.registry` is
   the registry the core reads. It is the only core file that names a module's type.
-- **The switch.** A module is on when it is in the list and its build includes it (`isAvailable`): the build-time
-  overlay or config that compiles its SDK in. There is no everyday setting. DEBUG builds take `-showModules <ids>`
-  (comma-separated, `none` for none) to turn exactly those modules on, for screenshots and tests in any build.
-- **Performance.** The registry is built once, on its first read at launch, by describing entries (no IO; P10). Lookups
-  are reads of arrays built then: no observation, nothing sorted or derived in `body` (P4, P5). A module's titles are
+- **The switch.** A module is on when it is in the list, its build includes it (`isAvailable`: the build-time overlay or
+  config that compiles its SDK in) and the hub allows it. There is no everyday setting. DEBUG builds take
+  `-showModules <ids>` (comma-separated, `none` for none) to turn exactly those modules on, for screenshots and tests in
+  any build.
+- **The hub's module flags** (#13849; the wire rule agreed on #13844). A module the hub may turn off declares
+  `feature` = `module.<id>` (`ModuleDescriptor(id:hubGated:slots:)`); a hub that publishes module flags also announces
+  the marker `modules`. Both names live only in `HubModules` (`PersonaModuleAPI`). A module with a feature is off only
+  when the hub-level hub's hello has `modules` and lacks the module's flag; an older hub (no `modules`) and a hub never
+  heard from leave it on. Each hub's answer is remembered (`HubModuleMemory`: one UserDefaults key per hub group,
+  `hubModules.<group>`, written only when it changes, removed for an older hub), and before this launch's hello the
+  registry is built from it, so a module does not appear and then vanish. `ModuleState` holds the registry: observed, so
+  a hello or a change of hub that changes the answer rebuilds it (`ModuleRegistry.rebuilt(hub:)`) and the views that
+  read it draw again; a module turned on that late runs its launch hooks then, once (`launch(after:)`); one turned off
+  keeps what its hook set up and registers nothing. A hello with no features says nothing and keeps the last answer.
+  The mock hub's `MOCK_HUB_MODULES=<module.id,…|none>` (`scripts/mock/hub_modules_mock.py`) publishes the flags.
+  Tests: `HubModulesTests` (package) and `ModulesTests` (an older hub, a publishing hub with and without the flag, the
+  remembered answer before the hello, another hub's hello).
+- **Performance.** The registry is built once, on its first read at launch, by describing entries (no IO but one
+  UserDefaults read of the remembered answer; P2, P10), and again only when the hub's answer changes. Lookups are reads
+  of arrays built then; the one observed property is the registry itself, which changes at most once per hello
+  (P4, P5, P7). A module's titles are
   `LocalizedStringResource`s resolved where they are drawn, as before.
 - **The ratchet.** `scripts/test/test_apple_module_refs.py` (Linux-runnable, run by `scripts/ci/python-tests.py`) counts,
   per core file, references to the types declared at the top level of each module's directories, by symbol with comments

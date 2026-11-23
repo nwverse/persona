@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -352,7 +352,7 @@ func TestLarkSaysTheRecommendationMayHaveArrived(t *testing.T) {
 	a := askOf(s, todo.ID)
 	failSends(f, context.DeadlineExceeded)
 	inDoubt := i18n.T(s.botLang(ctx), answerInDoubtKeys["unknown"])
-	press := &feishubot.CardAction{}
+	press := &botcard.CardAction{}
 	press.Action.Value = map[string]any{"a": "accept", "id": todo.ID}
 	if r := s.botCardAction(ctx, press, ""); r == nil || r.Toast == nil || r.Toast.Type != "error" || r.Toast.Content != inDoubt {
 		t.Fatalf("the Lark button: %+v", r)

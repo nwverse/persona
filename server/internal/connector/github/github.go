@@ -18,9 +18,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/netproxy"
 )
 
 // Config is hub.json's "github".
@@ -30,7 +31,7 @@ type Config struct {
 	Inbox InboxOptions `json:"inbox,omitempty"`
 	// Egress gives github.proxy: an http:// proxy for everything sent to GitHub (the device flow on its web host,
 	// the REST API, CI logs), for networks that cannot reach github.com directly; empty is direct.
-	connector.Egress
+	netproxy.Egress
 	// APIRoot is where the REST requests go (no trailing slash) instead of the host's own API, read when the connector is
 	// made: a fake GitHub for a test in another package. It is not a setting (never read from hub.json).
 	APIRoot string `json:"-"`
@@ -93,7 +94,7 @@ type Connector struct {
 	mu     sync.Mutex
 	token  string
 	acct   account // account.go: whose the token is, and the epoch everything account-scoped is read under
-	status connector.Status
+	status connectorwire.Status
 	poke   chan struct{}
 	// repoll wakes Watch: the account changed (adopt), so the inbox is read as the new one now, not a poll later.
 	repoll chan struct{}
@@ -129,7 +130,7 @@ type Connector struct {
 
 	// The device flow's sign-in (login.go): GitHub's web host, the hub's store, what it keeps, a code waiting.
 	web       string
-	secrets   connector.Secrets
+	secrets   connectorwire.Secrets
 	dev       deviceLogin
 	devLoaded bool
 	// devUnreadable: the last read of the secrets failed (the store is down, or the secret no longer opens).
@@ -270,7 +271,7 @@ func New(cfg Config, machine string, fetch TokenSource) *Connector {
 	}
 	return &Connector{cfg: cfg, machine: machine, machineID: cfg.Auth.FromMachine, fetch: fetch, source: source, api: api,
 		web: "https://" + cfg.host(), client: httpClient(cfg), opts: cfg.Inbox,
-		status: connector.Status{State: connector.StateNotSignedIn, Error: waiting}, poke: make(chan struct{}, 1),
+		status: connectorwire.Status{State: connectorwire.StateNotSignedIn, Error: waiting}, poke: make(chan struct{}, 1),
 		repoll: make(chan struct{}, 1)}
 }
 
@@ -278,17 +279,17 @@ func (c *Connector) ID() string   { return "github" }
 func (c *Connector) Name() string { return "GitHub" }
 
 // Manifest: everything; a PR's or issue's thread opens as GitHub's own page (threads).
-func (c *Connector) Manifest() connector.Manifest {
-	return connector.Manifest{
-		Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapActions, connector.CapEvents,
-			connector.CapInbox, connector.CapSettle, connector.CapArchive, connector.CapLogin, connector.CapOptions, connector.CapThreads,
-			connector.CapMachines},
+func (c *Connector) Manifest() connectorwire.Manifest {
+	return connectorwire.Manifest{
+		Capabilities: []connectorwire.Capability{connectorwire.CapStatus, connectorwire.CapTools, connectorwire.CapActions, connectorwire.CapEvents,
+			connectorwire.CapInbox, connectorwire.CapSettle, connectorwire.CapArchive, connectorwire.CapLogin, connectorwire.CapOptions, connectorwire.CapThreads,
+			connectorwire.CapMachines},
 		Hosts: []string{c.cfg.host()},
 		Kinds: []string{"review_requested", "mention", "team_mention", "assign", "author", "ci_failed"},
 	}
 }
 
-func (c *Connector) Status(ctx context.Context) connector.Status {
+func (c *Connector) Status(ctx context.Context) connectorwire.Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st := c.status
@@ -299,7 +300,7 @@ func (c *Connector) Status(ctx context.Context) connector.Status {
 		st.Via = "来自 " + c.machine + " 的 gh 登录"
 	}
 	now := time.Now()
-	if st.State == connector.StateOK {
+	if st.State == connectorwire.StateOK {
 		var until time.Time
 		var key string
 		switch {
@@ -309,7 +310,7 @@ func (c *Connector) Status(ctx context.Context) connector.Status {
 			until, key = c.rateReset, "hub-connectors.github_rate_low"
 		}
 		if key != "" {
-			st.State = connector.StateRateLimited
+			st.State = connectorwire.StateRateLimited
 			// Minutes, not a clock time: the hub may be in another time zone.
 			minutes := int(until.Sub(now).Minutes()) + 1
 			st.Error = i18n.T(i18n.From(ctx), key, i18n.Args{"minutes": minutes})
@@ -322,7 +323,7 @@ func (c *Connector) Status(ctx context.Context) connector.Status {
 func (c *Connector) signedIn() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.status.State == connector.StateOK
+	return c.status.State == connectorwire.StateOK
 }
 
 // MachineOnline: the machine the token comes from just connected, so a token that was missing may be there now.
@@ -384,26 +385,26 @@ func (c *Connector) explain(err error) (string, string) {
 	m := c.machine
 	switch {
 	case errors.Is(err, errBadProxy):
-		return connector.StateNotConfigured, "manager.json 的 github.proxy 不对（要 http://[用户名:密码@]主机:端口）"
+		return connectorwire.StateNotConfigured, "manager.json 的 github.proxy 不对（要 http://[用户名:密码@]主机:端口）"
 	case errors.Is(err, errUnauthorized) && c.source == SourceDevice:
-		return connector.StateNotSignedIn, "设备码登录失效了（在 GitHub 上撤销了授权？）：重新登录"
+		return connectorwire.StateNotSignedIn, "设备码登录失效了（在 GitHub 上撤销了授权？）：重新登录"
 	case errors.Is(err, errNoDeviceLogin):
-		return connector.StateNotSignedIn, notSignedIn
+		return connectorwire.StateNotSignedIn, notSignedIn
 	case errors.Is(err, ErrNoMachine):
-		return connector.StateNotConfigured, "manager.json 的 github.auth.from_machine 不是已有的电脑"
+		return connectorwire.StateNotConfigured, "manager.json 的 github.auth.from_machine 不是已有的电脑"
 	case errors.Is(err, ErrOffline):
-		return connector.StateNotSignedIn, "GitHub 未授权（" + m + " 离线）：它连上后会自动再读"
+		return connectorwire.StateNotSignedIn, "GitHub 未授权（" + m + " 离线）：它连上后会自动再读"
 	case errors.Is(err, ErrNodeTooOld):
-		return connector.StateError, m + " 的 personad 太旧，读不了 gh 登录：更新它（scripts/deploy/deploy.sh）"
+		return connectorwire.StateError, m + " 的 personad 太旧，读不了 gh 登录：更新它（scripts/deploy/deploy.sh）"
 	case errors.Is(err, ErrNoGh):
-		return connector.StateNotSignedIn, m + " 上没有 gh：在那台机器上装好 gh 并运行 gh auth login"
+		return connectorwire.StateNotSignedIn, m + " 上没有 gh：在那台机器上装好 gh 并运行 gh auth login"
 	case errors.Is(err, ErrNotSignedIn):
-		return connector.StateNotSignedIn, m + " 上的 gh 没有登录 " + c.cfg.host() + "，或者登录存在钥匙串里、经 ssh 读不到：" +
+		return connectorwire.StateNotSignedIn, m + " 上的 gh 没有登录 " + c.cfg.host() + "，或者登录存在钥匙串里、经 ssh 读不到：" +
 			"在那台机器上运行 gh auth login --insecure-storage"
 	case errors.Is(err, errUnauthorized):
-		return connector.StateNotSignedIn, m + " 上的 gh 登录失效了：在那台机器上运行 gh auth login"
+		return connectorwire.StateNotSignedIn, m + " 上的 gh 登录失效了：在那台机器上运行 gh auth login"
 	}
-	return connector.StateError, "连不上 GitHub：" + Scrub(err.Error())
+	return connectorwire.StateError, "连不上 GitHub：" + Scrub(err.Error())
 }
 
 var errUnauthorized = errors.New("GitHub says the token is not valid (401)")

@@ -16,10 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
-// A pull request or issue opened in the app as GitHub's own thread (connector.Threads, docs/extensions/connectors.md "Interfaces: one manifest, dispatched by declaration"):
+// A pull request or issue opened in the app as GitHub's own thread (connectorwire.Threads, docs/extensions/connectors.md "Interfaces: one manifest, dispatched by declaration"):
 // its header (state, author, labels, branches, description) and its timeline, a page at a time, newest page first:
 // comments, reviews, comments on lines with the diff before them, CI checks (a failure with the end of its log) and
 // the gray lines of what happened (labeled, merged, renamed). Every list is read with If-None-Match: GitHub answers
@@ -377,10 +377,10 @@ type threadCheckRun struct {
 
 // Thread is a page of a PR's or issue's timeline ("example-org/example-repo#12"), oldest first: the newest limit
 // entries for before "", else those before the entry before names.
-func (c *Connector) Thread(ctx context.Context, thread, before string, limit int) (connector.ThreadPage, error) {
+func (c *Connector) Thread(ctx context.Context, thread, before string, limit int) (connectorwire.ThreadPage, error) {
 	m := threadRef.FindStringSubmatch(thread)
 	if m == nil || !validRepo(m[1]) {
-		return connector.ThreadPage{}, fmt.Errorf("%s is not a pull request or an issue", thread)
+		return connectorwire.ThreadPage{}, fmt.Errorf("%s is not a pull request or an issue", thread)
 	}
 	repo, number := m[1], m[2]
 	// The page is one account's: every list below is read under the epoch it began in, or the page fails.
@@ -389,31 +389,31 @@ func (c *Connector) Thread(ctx context.Context, thread, before string, limit int
 	base := fmt.Sprintf("/repos/%s/issues/%s", repo, number)
 	var it threadIssue
 	if err := c.cachedGet(ctx, base, &it); err != nil {
-		return connector.ThreadPage{}, err
+		return connectorwire.ThreadPage{}, err
 	}
 	me := c.Status(ctx).Account
-	chat := connector.ThreadChat{ID: thread, Name: it.Title, Kind: "issue", URL: it.HTMLURL, State: it.State,
+	chat := connectorwire.ThreadChat{ID: thread, Name: it.Title, Kind: "issue", URL: it.HTMLURL, State: it.State,
 		Author: c.threadPerson(it.User), Body: strings.TrimSpace(it.Body), BodyFormat: "markdown"}
 	if !it.Locked {
 		chat.Reply = "github_comment"
 	}
 	for _, l := range it.Labels {
-		chat.Labels = append(chat.Labels, connector.ThreadLabel{Name: l.Name, Color: l.Color})
+		chat.Labels = append(chat.Labels, connectorwire.ThreadLabel{Name: l.Name, Color: l.Color})
 	}
-	var all []connector.ThreadMessage
-	add := func(ms ...connector.ThreadMessage) { all = append(all, ms...) }
+	var all []connectorwire.ThreadMessage
+	add := func(ms ...connectorwire.ThreadMessage) { all = append(all, ms...) }
 
 	comments, err := cachedList[threadComment](c, ctx, base+"/comments")
 	if err != nil {
-		return connector.ThreadPage{}, err
+		return connectorwire.ThreadPage{}, err
 	}
 	for _, cm := range comments {
-		add(connector.ThreadMessage{ID: "c" + strconv.FormatInt(cm.ID, 10), At: cm.CreatedAt, Sender: *c.threadPerson(cm.User),
+		add(connectorwire.ThreadMessage{ID: "c" + strconv.FormatInt(cm.ID, 10), At: cm.CreatedAt, Sender: *c.threadPerson(cm.User),
 			Mine: mine(cm.User, me), Text: cm.Body, Format: "markdown", Edited: edited(cm), URL: cm.HTMLURL})
 	}
 	events, err := cachedList[threadEvent](c, ctx, base+"/events")
 	if err != nil {
-		return connector.ThreadPage{}, err
+		return connectorwire.ThreadPage{}, err
 	}
 	merged := map[int64]bool{} // a merge's second: GitHub adds a closed event to it, said by the merge
 	for _, ev := range events {
@@ -426,7 +426,7 @@ func (c *Connector) Thread(ctx context.Context, thread, before string, limit int
 			continue
 		}
 		if text := eventText(ev); text != "" {
-			add(connector.ThreadMessage{ID: "e" + strconv.FormatInt(ev.ID, 10), At: ev.CreatedAt, Sender: *c.threadPerson(ev.Actor),
+			add(connectorwire.ThreadMessage{ID: "e" + strconv.FormatInt(ev.ID, 10), At: ev.CreatedAt, Sender: *c.threadPerson(ev.Actor),
 				Mine: mine(ev.Actor, me), Event: true, Text: text})
 		}
 	}
@@ -436,9 +436,9 @@ func (c *Connector) Thread(ctx context.Context, thread, before string, limit int
 		pulls := fmt.Sprintf("/repos/%s/pulls/%s", repo, number)
 		var pr threadPull
 		if err := c.cachedGet(ctx, pulls, &pr); err != nil {
-			return connector.ThreadPage{}, err
+			return connectorwire.ThreadPage{}, err
 		}
-		chat.Branch = &connector.ThreadBranch{Head: pr.Head.Ref, Base: pr.Base.Ref}
+		chat.Branch = &connectorwire.ThreadBranch{Head: pr.Head.Ref, Base: pr.Base.Ref}
 		switch {
 		case pr.Merged:
 			chat.State = "merged"
@@ -447,7 +447,7 @@ func (c *Connector) Thread(ctx context.Context, thread, before string, limit int
 		}
 		ms, err := c.reviewMessages(ctx, pulls, me)
 		if err != nil {
-			return connector.ThreadPage{}, err
+			return connectorwire.ThreadPage{}, err
 		}
 		add(ms...)
 		if it.State == "open" && pr.Head.SHA != "" {
@@ -455,25 +455,25 @@ func (c *Connector) Thread(ctx context.Context, thread, before string, limit int
 			if ms, err := c.checkMessages(ctx, repo, pr.Head.SHA, it.CreatedAt); err == nil {
 				add(ms...)
 			} else if errors.Is(err, context.Canceled) || errors.Is(err, errAccountChanged) {
-				return connector.ThreadPage{}, err
+				return connectorwire.ThreadPage{}, err
 			}
 		}
 	}
-	slices.SortStableFunc(all, func(a, b connector.ThreadMessage) int { return a.At.Compare(b.At) })
+	slices.SortStableFunc(all, func(a, b connectorwire.ThreadMessage) int { return a.At.Compare(b.At) })
 	if c.epochNow(ctx) != epoch {
-		return connector.ThreadPage{}, errAccountChanged // the last read answered as the account before: not a page to show
+		return connectorwire.ThreadPage{}, errAccountChanged // the last read answered as the account before: not a page to show
 	}
 
 	end := len(all)
 	if before != "" {
-		end = slices.IndexFunc(all, func(m connector.ThreadMessage) bool { return m.ID == before })
+		end = slices.IndexFunc(all, func(m connectorwire.ThreadMessage) bool { return m.ID == before })
 		if end < 0 {
-			return connector.ThreadPage{}, fmt.Errorf("%s: no entry %s (the thread changed: read it again)", thread, before)
+			return connectorwire.ThreadPage{}, fmt.Errorf("%s: no entry %s (the thread changed: read it again)", thread, before)
 		}
 	}
-	limit = min(max(limit, 1), connector.ThreadMost)
+	limit = min(max(limit, 1), connectorwire.ThreadMost)
 	start := max(0, end-limit)
-	page := connector.ThreadPage{Chat: chat, Messages: slices.Clone(all[start:end])}
+	page := connectorwire.ThreadPage{Chat: chat, Messages: slices.Clone(all[start:end])}
 	if start > 0 {
 		page.Before = all[start].ID
 	}
@@ -481,18 +481,18 @@ func (c *Connector) Thread(ctx context.Context, thread, before string, limit int
 }
 
 // reviewMessages are a PR's reviews (not the empty ones that only hold comments on lines) and its comments on lines.
-func (c *Connector) reviewMessages(ctx context.Context, pulls, me string) ([]connector.ThreadMessage, error) {
+func (c *Connector) reviewMessages(ctx context.Context, pulls, me string) ([]connectorwire.ThreadMessage, error) {
 	reviews, err := cachedList[threadComment](c, ctx, pulls+"/reviews")
 	if err != nil {
 		return nil, err
 	}
-	var out []connector.ThreadMessage
+	var out []connectorwire.ThreadMessage
 	for _, r := range reviews {
 		state := strings.ToLower(r.State)
 		if state == "pending" || state == "" || state == "commented" && strings.TrimSpace(r.Body) == "" {
 			continue
 		}
-		out = append(out, connector.ThreadMessage{ID: "r" + strconv.FormatInt(r.ID, 10), At: r.SubmittedAt, Sender: *c.threadPerson(r.User),
+		out = append(out, connectorwire.ThreadMessage{ID: "r" + strconv.FormatInt(r.ID, 10), At: r.SubmittedAt, Sender: *c.threadPerson(r.User),
 			Mine: mine(r.User, me), Kind: "review", Review: state, Text: r.Body, Format: "markdown", URL: r.HTMLURL})
 	}
 	lines, err := cachedList[threadComment](c, ctx, pulls+"/comments")
@@ -508,11 +508,11 @@ func (c *Connector) reviewMessages(ctx context.Context, pulls, me string) ([]con
 		if line == 0 {
 			line = cm.OriginalLine // on a line the PR no longer has
 		}
-		msg := connector.ThreadMessage{ID: "rc" + strconv.FormatInt(cm.ID, 10), At: cm.CreatedAt, Sender: *c.threadPerson(cm.User),
+		msg := connectorwire.ThreadMessage{ID: "rc" + strconv.FormatInt(cm.ID, 10), At: cm.CreatedAt, Sender: *c.threadPerson(cm.User),
 			Mine: mine(cm.User, me), Kind: "code", Text: cm.Body, Format: "markdown", Edited: edited(cm), URL: cm.HTMLURL,
-			Code: &connector.ThreadCode{Path: cm.Path, Line: line}}
+			Code: &connectorwire.ThreadCode{Path: cm.Path, Line: line}}
 		if q, ok := byID[cm.InReplyTo]; ok {
-			msg.ReplyTo = &connector.ThreadQuote{ID: "rc" + strconv.FormatInt(q.ID, 10), From: q.User.Login, Text: firstLine(q.Body)}
+			msg.ReplyTo = &connectorwire.ThreadQuote{ID: "rc" + strconv.FormatInt(q.ID, 10), From: q.User.Login, Text: firstLine(q.Body)}
 		} else {
 			msg.Code.Hunk = lastLines(cm.DiffHunk, hunkLines) // the first of a conversation shows the code; answers do not repeat it
 		}
@@ -523,14 +523,14 @@ func (c *Connector) reviewMessages(ctx context.Context, pulls, me string) ([]con
 
 // checkMessages are the head commit's checks, each at the time it finished (or started); a failed Actions job carries
 // the end of its log.
-func (c *Connector) checkMessages(ctx context.Context, repo, sha string, opened time.Time) ([]connector.ThreadMessage, error) {
+func (c *Connector) checkMessages(ctx context.Context, repo, sha string, opened time.Time) ([]connectorwire.ThreadMessage, error) {
 	var res struct {
 		Runs []threadCheckRun `json:"check_runs"`
 	}
 	if err := c.cachedGet(ctx, fmt.Sprintf("/repos/%s/commits/%s/check-runs?per_page=100", repo, url.PathEscape(sha)), &res); err != nil {
 		return nil, err
 	}
-	var out []connector.ThreadMessage
+	var out []connectorwire.ThreadMessage
 	logs := 0
 	for _, r := range res.Runs {
 		state := checkState(r)
@@ -541,13 +541,13 @@ func (c *Connector) checkMessages(ctx context.Context, repo, sha string, opened 
 		case r.StartedAt != nil:
 			at = *r.StartedAt
 		}
-		ck := &connector.ThreadCheck{Name: r.Name, State: state, URL: r.HTMLURL}
+		ck := &connectorwire.ThreadCheck{Name: r.Name, State: state, URL: r.HTMLURL}
 		if state == "failure" && r.App.Slug == "github-actions" && logs < failedLogs {
 			logs++
 			ck.Log = c.checkLog(ctx, repo, r.ID)
 		}
-		out = append(out, connector.ThreadMessage{ID: "ck" + strconv.FormatInt(r.ID, 10), At: at,
-			Sender: connector.ThreadPerson{Name: cmp.Or(r.App.Slug, "checks")}, Kind: "check", Check: ck, URL: r.HTMLURL})
+		out = append(out, connectorwire.ThreadMessage{ID: "ck" + strconv.FormatInt(r.ID, 10), At: at,
+			Sender: connectorwire.ThreadPerson{Name: cmp.Or(r.App.Slug, "checks")}, Kind: "check", Check: ck, URL: r.HTMLURL})
 	}
 	return out, nil
 }
@@ -649,8 +649,8 @@ func eventText(ev threadEvent) string {
 }
 
 // threadPerson is who wrote something, with their avatar's media ref ("avatar:<login>:<version>").
-func (c *Connector) threadPerson(p person) *connector.ThreadPerson {
-	tp := &connector.ThreadPerson{ID: p.Login, Name: p.Login}
+func (c *Connector) threadPerson(p person) *connectorwire.ThreadPerson {
+	tp := &connectorwire.ThreadPerson{ID: p.Login, Name: p.Login}
 	if p.Login == "" {
 		tp.Name = "(deleted user)"
 		return tp
@@ -671,10 +671,10 @@ func (c *Connector) threadPerson(p person) *connector.ThreadPerson {
 }
 
 // Media is an avatar ("avatar:<login>:<version>"), small; GitHub's avatar host gets no token.
-func (c *Connector) Media(ctx context.Context, ref string) (connector.Media, error) {
+func (c *Connector) Media(ctx context.Context, ref string) (connectorwire.Media, error) {
 	parts := strings.Split(ref, ":")
 	if len(parts) != 3 || parts[0] != "avatar" || parts[1] == "" {
-		return connector.Media{}, fmt.Errorf("no media %q", ref)
+		return connectorwire.Media{}, fmt.Errorf("no media %q", ref)
 	}
 	login := parts[1]
 	c.etags.mu.Lock()
@@ -683,37 +683,37 @@ func (c *Connector) Media(ctx context.Context, ref string) (connector.Media, err
 	if src == "" { // not seen since the hub started: ask GitHub where it is
 		var u person
 		if err := c.cachedGet(ctx, "/users/"+url.PathEscape(login), &u); err != nil {
-			return connector.Media{}, err
+			return connectorwire.Media{}, err
 		}
 		src = u.AvatarURL
 	}
 	au, err := url.Parse(src)
 	if err != nil || au.Scheme != "https" {
-		return connector.Media{}, fmt.Errorf("no avatar for %s", login)
+		return connectorwire.Media{}, fmt.Errorf("no avatar for %s", login)
 	}
 	q := au.Query()
 	q.Set("s", "96")
 	au.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, au.String(), nil)
 	if err != nil {
-		return connector.Media{}, err
+		return connectorwire.Media{}, err
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return connector.Media{}, errors.New(Scrub(err.Error()))
+		return connectorwire.Media{}, errors.New(Scrub(err.Error()))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return connector.Media{}, fmt.Errorf("avatar of %s: %d", login, resp.StatusCode)
+		return connectorwire.Media{}, fmt.Errorf("avatar of %s: %d", login, resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, connector.MediaMost+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, connectorwire.MediaMost+1))
 	if err != nil {
-		return connector.Media{}, err
+		return connectorwire.Media{}, err
 	}
-	if len(data) > connector.MediaMost {
-		return connector.Media{}, fmt.Errorf("avatar of %s is too big", login)
+	if len(data) > connectorwire.MediaMost {
+		return connectorwire.Media{}, fmt.Errorf("avatar of %s is too big", login)
 	}
-	return connector.Media{Mime: resp.Header.Get("Content-Type"), Data: data}, nil
+	return connectorwire.Media{Mime: resp.Header.Get("Content-Type"), Data: data}, nil
 }
 
 func mine(p person, me string) bool { return me != "" && strings.EqualFold(p.Login, me) }

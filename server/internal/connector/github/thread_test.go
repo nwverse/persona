@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // fakeThreadAPI is GitHub's REST API for one made-up PR (example-org/example-repo#12) and issue (#7), answering
@@ -94,7 +94,7 @@ func TestThreadOfAPullRequest(t *testing.T) {
 	if got := strings.Join(ids, " "); got != want || page.Before != "" {
 		t.Fatalf("messages %s (before %q), want %s", got, page.Before, want)
 	}
-	by := map[string]connector.ThreadMessage{}
+	by := map[string]connectorwire.ThreadMessage{}
 	for _, m := range page.Messages {
 		by[m.ID] = m
 	}

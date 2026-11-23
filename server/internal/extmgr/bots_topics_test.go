@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -49,6 +49,17 @@ func (w *botWorld) topicsOn(t *testing.T, chats ...string) {
 	if code, out := w.do(t, "PUT", "/api/v1/bots/feishu", `{"topic_chats":[`+strings.Join(list, ",")+`]}`); code != 200 {
 		t.Fatalf("topic_chats: %d %v", code, out)
 	}
+}
+
+// botInfoRead waits for the bot's start-up read of its own identity (GET /bot/v3/info, in the background after each
+// restart): a count of the calls the bot makes taken before it ends would count that read as one.
+func (w *botWorld) botInfoRead(t *testing.T) {
+	t.Helper()
+	eventually(t, 5*time.Second, "the bot's own identity read", func() bool {
+		w.h.bots.mu.Lock()
+		defer w.h.bots.mu.Unlock()
+		return w.h.bots.info.OpenID != ""
+	})
 }
 
 func (w *botWorld) settings() FeishuBotSettings {
@@ -253,7 +264,7 @@ func TestTopicChatsSendAndReplyChecks(t *testing.T) {
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
-	card := feishubot.NewCard("t", "green", "a").Markdown("topic card").JSON()
+	card := botcard.NewCard("t", "green", "a").Markdown("topic card").JSON()
 
 	if err := w.sendErr(assistantwire.FeishuText, map[string]any{"text": "到话题群", "chat_id": topicChat}); err != nil {
 		t.Fatal(err)
@@ -486,7 +497,7 @@ func TestBotChatAllowedWithTopicChats(t *testing.T) {
 }
 
 func TestTopicsCommandText(t *testing.T) {
-	bot := []feishubot.Mention{{Key: "@_user_1", Name: "Persona"}}
+	bot := []botcard.Mention{{Key: "@_user_1", Name: "Persona"}}
 	for _, c := range []struct {
 		text     string
 		on, isIt bool
@@ -619,7 +630,7 @@ func TestTopicsCommandIsInForceForTheNextMessage(t *testing.T) {
 	at := func(id, text, thread string) []string { // the list at the moment the next message is let go
 		var seen []string
 		ev := groupEvent(id, "ou_me", text, topicChat, thread)
-		var m feishubot.MessageEvent
+		var m botcard.MessageEvent
 		var env struct {
 			Event json.RawMessage `json:"event"`
 		}

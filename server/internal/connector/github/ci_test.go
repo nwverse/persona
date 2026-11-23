@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // fakeCI is GitHub for CI notifications on made-up data: example-org/example-repo (default branch main), my open PR
@@ -161,7 +161,7 @@ func TestCIFailuresSettleThemselves(t *testing.T) {
 		"ci:example-org/example-repo@feat/w": "GitHub：分支已删除",
 	} {
 		th := got[thread]
-		if want == "" && th.Done != "" || want != "" && (th.Done != connector.DoneRead || th.Why != want) {
+		if want == "" && th.Done != "" || want != "" && (th.Done != connectorwire.DoneRead || th.Why != want) {
 			t.Errorf("%s: done %q why %q, want %q", thread, th.Done, th.Why, want)
 		}
 	}
@@ -176,7 +176,7 @@ func TestCIFailuresSettleThemselves(t *testing.T) {
 	f.note("5", "Lint workflow run succeeded for main branch", "example-org/example-repo")
 	c.inbox.fullAt = time.Time{}
 	c.poll(context.Background())
-	if th := things(t, c)["ci:example-org/example-repo@main"]; th.Done != connector.DoneRead || th.Why != "GitHub：后来成功了" {
+	if th := things(t, c)["ci:example-org/example-repo@main"]; th.Done != connectorwire.DoneRead || th.Why != "GitHub：后来成功了" {
 		t.Errorf("success notification: %+v", th)
 	}
 }
@@ -305,7 +305,7 @@ func TestTierOfPeopleAndBots(t *testing.T) {
 	}
 }
 
-func keys(m map[string]connector.InboxThing) []string {
+func keys(m map[string]connectorwire.InboxThing) []string {
 	var out []string
 	for k := range m {
 		out = append(out, k)
