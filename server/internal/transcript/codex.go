@@ -111,19 +111,10 @@ type codexItem struct {
 	Server    string          `json:"server"`
 	Tool      string          `json:"tool"`
 	Arguments json.RawMessage `json:"arguments"`
-	Result    *struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-			// An image block (MCP content: base64 data and its type), a connector's or computer use's picture.
-			Data     string `json:"data"`
-			MimeType string `json:"mimeType"`
-		} `json:"content"`
-		IsError bool `json:"isError"`
-	} `json:"result"`
-	Error json.RawMessage `json:"error"`
-	// ImageView
-	Path string `json:"path"`
+	Result    json.RawMessage `json:"result"` // MCP object or, for image generation, the encoded image string
+	Error     json.RawMessage `json:"error"`
+	Path      string          `json:"path"`      // ImageView
+	SavedPath string          `json:"savedPath"` // Extension (image_gen.generation)
 	// Extension (kind web.search): what was searched or opened, and what came back
 	Kind   string `json:"kind"`
 	Query  string `json:"query"`
@@ -149,6 +140,17 @@ type codexItem struct {
 	ReceiverThreadIDs []string        `json:"receiver_thread_ids"`
 	ReceiverAgents    json.RawMessage `json:"receiver_agents"`
 	AgentsStates      json.RawMessage `json:"agents_states"`
+}
+
+type codexMcpResult struct {
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+		// An image block (MCP content: base64 data and its type), a connector's or computer use's picture.
+		Data     string `json:"data"`
+		MimeType string `json:"mimeType"`
+	} `json:"content"`
+	IsError bool `json:"isError"`
 }
 
 // isCodexLine tells a rollout line from a Claude transcript line: only rollouts wrap everything in "payload" under a
@@ -579,9 +581,10 @@ func codexItemLines(seq int, ts time.Time, turnID string, it *codexItem, meta *M
 		var parts []string
 		var images []*proto.Image
 		isErr := it.Status == "failed" || len(it.Error) > 0 && string(it.Error) != "null"
-		if it.Result != nil {
-			isErr = isErr || it.Result.IsError
-			for _, c := range it.Result.Content {
+		var result codexMcpResult
+		if json.Unmarshal(it.Result, &result) == nil {
+			isErr = isErr || result.IsError
+			for _, c := range result.Content {
 				switch {
 				case c.Type == "text":
 					parts = append(parts, c.Text)
@@ -605,10 +608,13 @@ func codexItemLines(seq int, ts time.Time, turnID string, it *codexItem, meta *M
 		}
 		return items
 	case "ImageView":
-		input, _ := json.Marshal(map[string]string{"file_path": strings.TrimPrefix(it.Path, "file://")})
-		return codexTool(meta, mk, it.ID, "Read", input, "", false)
+		return codexImageRead(meta, mk, it.ID, it.Path)
 	case "Extension":
 		switch it.Kind {
+		case "image_gen.generation":
+			if it.Status == "completed" && it.SavedPath != "" {
+				return codexImageRead(meta, mk, it.ID, it.SavedPath)
+			}
 		case "web.search":
 			return codexWebSearch(meta, mk, it)
 		case "clock.sleep":
@@ -635,6 +641,11 @@ func codexItemLines(seq int, ts time.Time, turnID string, it *codexItem, meta *M
 	n := mk(0, it.ID, "system", proto.KindNotice)
 	n.Text = "Codex 事件：" + it.Type + "（完整记录在原会话中）"
 	return []proto.Item{n}
+}
+
+func codexImageRead(meta *Meta, mk func(int, string, string, string) proto.Item, id, path string) []proto.Item {
+	input, _ := json.Marshal(map[string]string{"file_path": strings.TrimPrefix(path, "file://")})
+	return codexTool(meta, mk, id, "Read", input, "", false)
 }
 
 // codexPendingKept bounds the backgrounded command ids a Meta keeps: a rollout that starts commands and never records
