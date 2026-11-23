@@ -624,7 +624,7 @@ export class ClientModel {
     if (this.context) { try { await ChatAttachments.forgetHub(this.context, profile.hubId || id); } catch (_) { cleanupFailed = true; } }
     if (this.context) { try { clearImagePreviews(this.context, profile.hubId || id); } catch (_) { cleanupFailed = true; } }
     try { await nativeNotifications.clear(id); } catch (_) { cleanupFailed = true; }
-    try { await this.credentialChange(id, async (): Promise<void> => { await this.vault?.remove(id); }); } catch (_) { cleanupFailed = true; }
+    try { await this.credentialChange(id, async (): Promise<void> => { await this.vault?.remove(id, true); }); } catch (_) { cleanupFailed = true; }
     this.profiles = this.profiles.filter((item: HubProfile) => item.id !== id); this.publishDirectory();
     try { await this.saveProfiles(); } catch (_) { cleanupFailed = true; }
     if (cleanupFailed) { this.error = 'cleanup_incomplete'; throw new Error('cleanup_incomplete'); }
