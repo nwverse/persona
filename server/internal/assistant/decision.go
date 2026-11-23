@@ -570,6 +570,7 @@ func (s *Service) endAskWithTextDelivery(ctx context.Context, id string, asked t
 	cp := *a
 	b.mu.Unlock()
 	s.askChanged(ctx)
+	s.todoPushOver(id) // answered: its push leaves the phones
 	s.updateAskCards(ctx, id, cp)
 }
 

@@ -2,7 +2,7 @@ accepted closes work after the delivery gate (default delivery_gate=merged: park
 
 For accepted (outcome=done), include each done_when criterion once in checks (met=true, nonblank evidence), even with user_check. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts can omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers or Agent claims.
 
-Give accepted outcome/reason/link. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline. Irreversible or visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.
+Give accepted outcome/reason/link. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline. Irreversible or visible_to_others only remind. Recheck at 24h. To take back a needs_user (yours or main's), accept with withdraw_needs_user and a note: no card or push; its push and decision card are withdrawn, never as the user's choice. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.
 
 A non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.{{template "shared/mcp_language" .}}
 
@@ -107,6 +107,10 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
       "maxItems": 6,
       "items": {"type": "string"},
       "description": "accepted, optional: what was done beyond the task's brief (one line each); the task's page lists it after the criteria"
+    },
+    "withdraw_needs_user": {
+      "type": "boolean",
+      "description": "accepted only, on a task waiting in needs_user: you (its supervisor or main) decide it yourself and close it silently; default false"
     },
     "user_check": {
       "type": "boolean",
