@@ -828,6 +828,8 @@ An accepted review without `user_check` still completes the task immediately as 
 
 ## Decisions the owner can answer
 
+When recovery needs the owner’s terminal Resume, give that instruction in the decision reason. Offer choices the supervisor can carry out. The web card opens the linked Agent terminal, where the owner explicitly resumes the session.
+
 (#3804, `assistant/decision.go`.) A supervised task reviewed `needs_user` used to reach the owner as a title and "waiting for your decision", often for a task they had not started themselves. Now only a decision reaches them, it stands on its own, and it never rots.
 
 - **A decision or nothing**: `task_review` with `needs_user` is refused unless it carries `why_owner` (`irreversible`, `visible_to_others`, `priority`, `acceptance` or `only_owner_knows`: why only the owner can decide), `reason` (one sentence: what is to be decided), `recommend`, `options` (2 to 4 of `{label, leads_to}`, the recommended one first; the hub moves it first if the review did not) and `cost_of_waiting` (one sentence). The refusal names everything missing and says what to do when nothing needs the owner: decide it and send the Agent on, send the work back, or close the task. A task that only waits for something is not a decision. A third `rework` is refused the same way unless it carries these fields, in which case it becomes the decision. The ledger's review keeps the fields (`supervision.reviews[]`), with the decision's `deadline` and `reversible` as the review gave them (absent when it gave none, and on reviews from before they were kept), so they can still be read once the decision is made.
