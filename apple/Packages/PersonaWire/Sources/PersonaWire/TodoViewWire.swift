@@ -77,6 +77,7 @@ public nonisolated enum TodoLineKey {
     public static let failedStart = "failed_start"
     public static let agentAsks = "agent_asks"
     public static let interrupted = "interrupted"
+    public static let stoppedUnfinished = "stopped_unfinished"
     public static let decision = "decision"
     public static let decisionDefault = "decision_default"
     public static let cannot = "cannot"
@@ -98,7 +99,7 @@ public nonisolated enum TodoLineKey {
     public static let reported = "reported"
     public static let superseded = "superseded"
     public static let someday = "someday"
-    public static let all = ["failed_start", "agent_asks", "interrupted", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"]
+    public static let all = ["failed_start", "agent_asks", "interrupted", "stopped_unfinished", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"]
 }
 
 /// The argument names produced by this version of the projection. TodoLine.args remains an open string dictionary on

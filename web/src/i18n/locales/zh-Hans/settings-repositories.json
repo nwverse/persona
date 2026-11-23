@@ -44,5 +44,11 @@
   "host_mismatch": "请输入 {hosts} 上的 {provider} 地址，不要包含凭据。",
   "source_unavailable": "{provider} 当前不可用，无法读取此地址。",
   "invalid_url_sources": "请输入不含凭据的 GitHub 或 GitLab HTTP(S) 或 git SSH 链接，或某个来源所列主机上的地址。自托管实例需选择服务类型。",
-  "retry": "重试"
+  "retry": "重试",
+  "task_workflow": "任务跟进方式（可选）",
+  "task_workflow_row": "任务跟进：{value}",
+  "task_workflow_isolated": "独立小任务隔离（默认）",
+  "task_workflow_isolated_hint": "每个新任务独立开展，改动互不干扰，适合按独立小任务推进的仓库。",
+  "task_workflow_shared_branch": "特性分支聚合推进",
+  "task_workflow_shared_branch_hint": "后续任务复用同一空间，占用时自动排队顺次接续；跨仓库任务合并到同一空间协同推进。"
 }

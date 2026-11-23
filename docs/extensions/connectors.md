@@ -47,6 +47,8 @@ does not admit every chat or watch any document; the connector's `doc` Inbox ite
 | `Kinds` | Inbox item kinds; each needs a description in `prompts/inbox/kinds/<id>.md` (`connector.CheckKinds`, each connector's `TestKindsAreDescribed`); an undeclared kind received is logged |
 | `Proxy` | Answers on behalf of another program (subprocess `proc.Conn`): implements every interface, but only declared ones are real |
 
+A connector contributed by an extension that declares `memory_sources` (a memory extension) has its read tools withheld from the assistant's conversations: not listed, and a call there is refused with a pointer to `decisions_query`, since the hub reads that extension's memory itself and grades it by scene (`server/internal/extmgr/memory_sources.go`, `docs/extensions/extensions.md` "Memory sources"). Its writes, and the read tools coding Agents get through `AgentTools`, are unchanged.
+
 The hub uses only `connector.As[interface](c)` to discover capabilities: it asserts the interface only when declared. `Registry.Add` checks the manifest with `connector.Check`: declared but unimplemented, implemented but undeclared (except `Proxy`),
 unknown capabilities, or kinds without an Inbox capability all fail registration. Capability interfaces:
 
@@ -164,7 +166,8 @@ Every write that went out through the gate is kept in the ledger `sent_as_user` 
 
 ### Inbox ingestion
 
-The connector provides `InboxThing` (one thing: `Thread` is its key, `Kind` its own kind, `Tier` / `Why` the tier chosen by its rules, and `Done` means it observed completion);
+The connector provides `InboxThing` (one thing: `Thread` is its key, `Kind` its own kind, `Tier` / `Why` the tier chosen by its rules, and `Done` means it observed completion).
+For a GitHub pull request, `thread_state` records the observed PR state (`open`, `closed` or `merged`) independently of Inbox filing.
 each round, the hub hands candidates to the manager (`inbox.collected` on the bus, `docs/assistant/inbox.md` ("Who owns what")). The manager (`applyConnector` in `assistant/inbox_connectors.go`)
 merges subsequent activity for the same `Thread` into an open item. Classification, AI twin, completion and retention then belong to the manager and are the same for every source; replies, `Settle` and tools derived from events
 are still dispatched to connectors by the hub (the manager asks through `app.call inbox.*`). Items use a generic block (`InboxConnector`), so the App can render them without knowing the source.

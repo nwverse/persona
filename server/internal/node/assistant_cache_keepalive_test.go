@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -58,6 +59,12 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 			var requests atomic.Int32
 			var marked atomic.Int32
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/" && slices.Contains(portProbeAgents, r.Header.Get("User-Agent")) {
+					// A Persona node on the machine running these tests (they run under its agents) finds this server
+					// among an agent's ports and probes it (ports.go). It is not a provider request: counted, it let
+					// the wait below pass before the CLI's own request and failed the byte check.
+					return
+				}
 				b, _ := io.ReadAll(r.Body)
 				requests.Add(1)
 				if r.Header.Get("X-Persona-Request-Kind") == "cache-keepalive" {
@@ -102,11 +109,23 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 			if (p.cacheProxy != nil) != tc.allow {
 				t.Fatal("wrong process got a proxy")
 			}
+			// A send marks the conversation busy before it writes (writeQueuedAgain); the turn's result clears it. Without
+			// that, f.idle below could pass before the node read the provider's message_start, and Tick found nothing yet.
+			p.mu.Lock()
+			p.busy = true
+			p.mu.Unlock()
 			if err := p.write([]byte(`{"type":"user","message":{"role":"user","content":"fixture"}}`)); err != nil {
 				t.Fatal(err)
 			}
 			cliWait(t, "fake provider request", func() bool { return requests.Load() == 1 })
 			f.idle(t, p.id)
+			// The result clears busy before it sends the turn's last delta, the clear of its live text: wait for that too,
+			// or it can land between the snapshots below and read as the refresh's output.
+			cliWait(t, "the turn's live text cleared", func() bool {
+				f.fh.mu.Lock()
+				defer f.fh.mu.Unlock()
+				return len(f.fh.deltas) > 0 && f.fh.deltas[len(f.fh.deltas)-1] == ""
+			})
 			var barrier any
 			if err := f.n.peer.Call(context.Background(), "assistant.lark", map[string]any{}, &barrier); err != nil {
 				t.Fatal(err)
@@ -133,9 +152,10 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 			}
 			f.fh.mu.Lock()
 			afterDeltas, afterInteractions := len(f.fh.deltas), len(f.fh.asked)
+			newDeltas := slices.Clone(f.fh.deltas[deltas:])
 			f.fh.mu.Unlock()
 			if afterDeltas != deltas || afterInteractions != interactions {
-				t.Fatal("refresh emitted UI output or interactions")
+				t.Fatalf("refresh emitted UI output or interactions: deltas %q, interactions %d -> %d", newDeltas, interactions, afterInteractions)
 			}
 			if want == 1 {
 				f.fh.mu.Lock()
@@ -248,6 +268,9 @@ func TestAssistantCacheProxyMountsForHTTPSManagedLauncher(t *testing.T) {
 				if base != p.cacheProxy.BaseURL() || !strings.HasPrefix(base, "http://127.0.0.1:") {
 					t.Fatalf("settings base %q, want the proxy", base)
 				}
+				if s.Env[promptCaching1hEnv] != "1" {
+					t.Fatalf("settings %s = %v: Claude Code would declare only a five-minute cache, which Replay refuses", promptCaching1hEnv, s.Env[promptCaching1hEnv])
+				}
 				b := f.n.cacheWarmPool()
 				b.mu.Lock()
 				_, pooled := b.entries[id]
@@ -257,6 +280,8 @@ func TestAssistantCacheProxyMountsForHTTPSManagedLauncher(t *testing.T) {
 				}
 			} else if strings.HasPrefix(base, "http://127.0.0.1:") {
 				t.Fatalf("unattested start points at a proxy: %q", base)
+			} else if _, set := s.Env[promptCaching1hEnv]; set {
+				t.Fatalf("unattested start asks for one-hour cache writes")
 			}
 		})
 	}

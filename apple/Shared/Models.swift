@@ -895,14 +895,17 @@ nonisolated struct AgentModel: Codable, Hashable, Sendable, Identifiable {
     /// An ID the user typed before that ran, remembered on the hub for this computer and launcher (#1644); listed after
     /// the agent's own, most recent first, with no efforts (not known). It can be forgotten.
     var custom = false
+    /// Other spellings the hub folded into this row because they run the same model and context window (#10365).
+    /// Absent from an older hub, which lists every spelling as its own row.
+    var aliases: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, resolved, efforts, custom
+        case id, name, description, resolved, efforts, custom, aliases
         case isDefault = "default", defaultEffort = "default_effort"
     }
 
     init(id: String, name: String, description: String? = nil, resolved: String? = nil, isDefault: Bool = false,
-         efforts: [String]? = nil, defaultEffort: String? = nil, custom: Bool = false) {
+         efforts: [String]? = nil, defaultEffort: String? = nil, custom: Bool = false, aliases: [String]? = nil) {
         self.id = id
         self.name = name
         self.description = description
@@ -911,6 +914,7 @@ nonisolated struct AgentModel: Codable, Hashable, Sendable, Identifiable {
         self.efforts = efforts
         self.defaultEffort = defaultEffort
         self.custom = custom
+        self.aliases = aliases
     }
 
     init(from decoder: Decoder) throws {
@@ -923,6 +927,7 @@ nonisolated struct AgentModel: Codable, Hashable, Sendable, Identifiable {
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
         defaultEffort = try c.decodeIfPresent(String.self, forKey: .defaultEffort)
         custom = try c.decodeIfPresent(Bool.self, forKey: .custom) ?? false
+        aliases = try c.decodeIfPresent([String].self, forKey: .aliases)
     }
 }
 
@@ -2252,10 +2257,7 @@ extension Session {
         if state == .needsYou, let r = attentionReason, !r.isEmpty { return r } // a stale reason (offline, seen) stays out
         if state != .working, let r = failureReason, !r.isEmpty { return Session.failureText(r) }
         if let r = replyLine(muted: muted) { return r }
-        // The native Mac app is frozen (docs/apple/mac.md): its rows keep the line they had.
-        #if !os(macOS)
         if let c = closeoutPreview() { return c }
-        #endif
         if let w = workLine() { return w }
         return lastText.flatMap { $0.isEmpty ? nil : Fmt.plain($0) }
     }
@@ -2761,9 +2763,11 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var usage: [TokenUsage]? = nil
     /// Raw record identity for a text item with a positional ID, stable before clipping. Older nodes omit it.
     var sourceFingerprint: String? = nil
+    /// The model that wrote this assistant item, including tool work after the last words. Older hubs omit it.
+    var model: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage, model
         case modelRefusal = "model_refusal", narration, codexHeartbeatQuiet = "codex_heartbeat_quiet"
         case sourceFingerprint = "source_fingerprint"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
@@ -2893,8 +2897,21 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var mutedFlag: Bool?
     /// The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
     /// answers questions first"): nothing was pushed yet, and an answer given here wins. The same card comes again
-    /// without it, by `id`.
+    /// without it, by `id`. On a permission, plan or terminal dialog (`screen`) card it means the card went to the
+    /// supervisor of its Agent's task first (`supervisorHeld`).
     var delegating: Bool?
+    /// A card the supervisor of its Agent's task holds: a permission, a plan or a terminal dialog (`screen`) the hub
+    /// handed to the supervising conversation first (`routeAsk` in server/internal/assistant/ask_route.go sets
+    /// `delegating`, and clears it when the supervisor passes the card up with `ask_escalate`). Until then it is the
+    /// supervisor's, not the user's: it is no row of the Agents tab's Needs You and counts nowhere (the list, its header,
+    /// its filter and every badge leave it out), and the app offers no way to answer it (`answerableHere`). The owner
+    /// confirmed it for routed terminal questions on 2026-11-23 (docs/plans/plan-derived-counts.md, D11). A `delegating`
+    /// question is the other case, the assistant deciding whether it may answer for the user (`isDelegating`), and
+    /// stays as it was: listed and answerable.
+    var supervisorHeld: Bool { delegating == true && kind != .question }
+    /// Whether this app offers ways to answer the card (its form, quick answers on a list's card, Siri's Approve First,
+    /// the watch): not while its task's supervisor holds it (`supervisorHeld`), where the card says so instead.
+    var answerableHere: Bool { !supervisorHeld }
     /// What the assistant filled in when it left the question to the user.
     var delegate: Delegate?
     /// A standing rule the hub suggests on a question a supervisor passed up (#4929, #5802); the card comes again

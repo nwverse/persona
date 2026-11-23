@@ -101,7 +101,7 @@ private fun MailDetail(
 
     LaunchedEffect(transport) {
         if (transport != null) {
-            runCatching { accounts = transport.accounts() }
+            val _ = runCatching { accounts = transport.accounts() }
         }
     }
 
@@ -319,7 +319,7 @@ private fun MailDetail(
                 when {
                     shownTranslation != null -> SelectionContainer {
                         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                            Text(shownTranslation.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+                            ReadingContent { Text(shownTranslation.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
                             if (shownTranslation.clipped) Text(stringResource(R.string.inbox_mail_translation_clipped), style = PersonaTheme.type.caption,
                                 color = PersonaTheme.palette.ink3)
                         }
@@ -348,7 +348,9 @@ private fun MailDetail(
                             handleLink(url)
                         }
                     }
-                    mail.text.isNotBlank() -> SelectionContainer { Text(mail.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                    mail.text.isNotBlank() -> SelectionContainer {
+                        ReadingContent { Text(mail.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                    }
                     else -> Text(stringResource(R.string.inbox_mail_no_body), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2)
                 }
             }

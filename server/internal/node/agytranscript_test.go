@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 func TestAgyPaneTranscriptMapping(t *testing.T) {
@@ -179,6 +180,61 @@ func TestAgyToolArrayArgsAreClipped(t *testing.T) {
 	}
 }
 
+func TestAgyToolInput(t *testing.T) {
+	const path = "/example/file.go"
+	const content = "line1\nline2\nline3\n"
+	encode := func(value string) string {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	written := func(path, content string) map[string]string {
+		return map[string]string{"TargetFile": path, "CodeContent": content}
+	}
+	wantWrite := func(path, content string) map[string]string {
+		return map[string]string{"file_path": path, "content": content}
+	}
+	for _, tc := range []struct {
+		name, tool, wantTool string
+		args, want           map[string]string
+		truncated            bool
+	}{
+		{"encoded write", "write_to_file", "Write", written(encode(path), encode(content)), wantWrite(path, content), false},
+		{"plain quoted query", "grep_search", "Grep", map[string]string{"Query": `"exact phrase"`, "SearchPath": "/example"},
+			map[string]string{"pattern": `"exact phrase"`, "path": "/example"}, false},
+		{"plain JSON file", "write_to_file", "Write", written("/example/file.json", `"hello"`), wantWrite("/example/file.json", `"hello"`), false},
+		{"encoded tail cut", "write_to_file", "Write", written(encode(path), "\"line1\\nline2\\nli\n<truncated 41 bytes>"),
+			wantWrite(path, "line1\nline2\nli"+transcript.ApproximateClipNote(55)), true},
+		{"middle cut", "write_to_file", "Write", written(path, "HEAD-PART\n<truncated 40 bytes>\nTAIL-PART"),
+			wantWrite(path, "HEAD-PART"+transcript.ClipNote(58)), true},
+		{"encoded middle cut", "write_to_file", "Write", written(encode(path), "\"head\\n\n<truncated 10 bytes>\ntail\""),
+			wantWrite(path, "head\n"+transcript.ApproximateClipNote(20)), true},
+		{"tail cut after dangling backslash", "write_to_file", "Write", written(encode(path), "\"line1\\n\\\n<truncated 8 bytes>"),
+			wantWrite(path, "line1\n"+transcript.ApproximateClipNote(14)), true},
+		{"tail cut inside Unicode escape", "write_to_file", "Write", written(encode(path), "\"line1\\n\\u00\n<truncated 8 bytes>"),
+			wantWrite(path, "line1\n"+transcript.ApproximateClipNote(14)), true},
+		{"tail cut after escaped backslash", "write_to_file", "Write", written(encode(path), "\"line1\\n\\\\\n<truncated 8 bytes>"),
+			wantWrite(path, "line1\n\\"+transcript.ApproximateClipNote(15)), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := json.Marshal(tc.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tool, input := agyToolInput(tc.tool, raw, tc.truncated)
+			if tool != tc.wantTool || string(input) != string(want) {
+				t.Fatalf("tool input = %s %s, want %s %s", tool, input, tc.wantTool, want)
+			}
+		})
+	}
+}
+
 // The pane reader follows the companion's rules (integrations/antigravity/lib/map.js): a parallel call that fails at
 // once is exported before its sibling's result, and a call that never got a result must not take a later one.
 func TestAgyParallelResultsOutOfOrderPairWithTheirOwnCalls(t *testing.T) {
@@ -269,6 +325,59 @@ func TestAgyCallWithoutResultDoesNotShiftLaterResults(t *testing.T) {
 	}
 	if want := []string{"first", "", "second", "third", "fourth"}; !slices.Equal(got, want) {
 		t.Fatalf("results by call = %q, want %q", got, want)
+	}
+}
+
+func TestAgyAssistantTextNormalizesLocalFileLinks(t *testing.T) {
+	for _, tc := range []struct{ name, input, want string }{
+		{"unix_file_link", "See [notes.md](file:///work/repo/notes.md).", "See [notes.md](/work/repo/notes.md)."},
+		{"line_fragment", "Check [app.go](file:///work/repo/app.go#L10-L20).", "Check [app.go](/work/repo/app.go#L10-L20)."},
+		{"localhost", "[doc](file://localhost/work/repo/doc.md)", "[doc](/work/repo/doc.md)"},
+		{"uppercase_and_spaces", "[a](FILE:///work/My%20Notes/a.md)", "[a](/work/My%20Notes/a.md)"},
+		{"angle_brackets", `[a](<file:///work/My Notes/a.md> "title")`, `[a](</work/My Notes/a.md> "title")`},
+		{"balanced_parens", `[p](file:///work/photo(1).png "shot")`, `[p](/work/photo(1).png "shot")`},
+		{"image", "![chart](file:///work/repo/chart.png)", "![chart](/work/repo/chart.png)"},
+		{"windows_drive", "[win](file:///C:/work/notes.md#L5)", "[win](C:/work/notes.md#L5)"},
+		{"windows_encoded_colon", "[win](file:///c%3A/work/notes.md)", "[win](c:/work/notes.md)"},
+		{"ref_def", `[ref]: file:///work/repo/notes.txt "Ref"`, `[ref]: /work/repo/notes.txt "Ref"`},
+		{"list_continuation", "- item\n    [notes](file:///work/notes.md)", "- item\n    [notes](/work/notes.md)"},
+		{"inline_code", "Use `[notes](file:///work/notes.md)` literally.", "Use `[notes](file:///work/notes.md)` literally."},
+		{"fenced_code", "```md\n[notes](file:///work/notes.md)\n```\n[live](file:///work/live.md)", "```md\n[notes](file:///work/notes.md)\n```\n[live](/work/live.md)"},
+		{"indented_code", "Example:\n\n    [notes](file:///work/notes.md)\n\n[live](file:///work/live.md)", "Example:\n\n    [notes](file:///work/notes.md)\n\n[live](/work/live.md)"},
+		{"remote_host", "[r](file://other-host/share/notes.md)", "[r](file://other-host/share/notes.md)"},
+		{"unc_double_slash", "[u](file:////server/share/notes.md)", "[u](file:////server/share/notes.md)"},
+		{"hub_route", "[api](file:///api/v1/sessions)", "[api](file:///api/v1/sessions)"},
+		{"query_string", "[q](file:///work/notes.md?x=1)", "[q](file:///work/notes.md?x=1)"},
+		{"nul_byte", "[n](file:///work/notes%00.md)", "[n](file:///work/notes%00.md)"},
+		{"relative_file", "[rel](file:notes.md)", "[rel](file:notes.md)"},
+		{"escaped_bracket", `text \](file:///work/notes.md)`, `text \](file:///work/notes.md)`},
+		{"unclosed_link", "See [notes](file:///work/no", "See [notes](file:///work/no"},
+	} {
+		if got := agyAssistantText(tc.input); got != tc.want {
+			t.Errorf("%s: agyAssistantText(%q) = %q, want %q", tc.name, tc.input, got, tc.want)
+		}
+	}
+
+	fixture := `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-01-01T00:00:00Z","content":"Open [u](file:///work/u.md)"}
+{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-01-01T00:00:01Z","thinking":"Check [t](file:///work/t.md)","content":"Opened [notes.md](file:///work/notes.md#L12) and ![img](file:///work/img.png).","tool_calls":[{"name":"view_file","args":{"AbsolutePath":"/work/notes.md"}}]}
+{"step_index":2,"type":"GENERIC","status":"DONE","created_at":"2026-01-01T00:00:02Z","content":"[out](file:///work/out.md)"}
+`
+	steps, _ := parseAgySteps([]byte(fixture), agyTestID)
+	history := mapAgySteps(steps, time.Time{}, nil)
+	if len(history.items) != 5 {
+		t.Fatalf("items = %+v", history.items)
+	}
+	if history.items[0].Text != "Open [u](file:///work/u.md)" {
+		t.Errorf("user text = %q", history.items[0].Text)
+	}
+	if history.items[1].Text != "Check [t](file:///work/t.md)" {
+		t.Errorf("thinking text = %q", history.items[1].Text)
+	}
+	if history.items[2].Text != "Opened [notes.md](/work/notes.md#L12) and ![img](/work/img.png)." {
+		t.Errorf("assistant text = %q", history.items[2].Text)
+	}
+	if history.items[4].Text != "[out](file:///work/out.md)" {
+		t.Errorf("tool output = %q", history.items[4].Text)
 	}
 }
 

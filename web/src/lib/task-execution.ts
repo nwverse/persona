@@ -15,7 +15,7 @@ export function taskExecution(todo: Todo, lookup: SessionLookup) {
   const lead = mostUrgentAgent(todo, lookup)?.session;
   const closeout = running ? undefined : shownCloseout(lead);
   const waiting = !running && closeout?.status !== "done" && sessions.some((s) => s?.work?.phase === "blocked"
-    && (s.work.on === "agent" || s.work.on === "external" && !!s.work.wait?.trim()));
+    && (s.work.on === "agent" || s.work.on === "transient" || s.work.on === "external" && !!s.work.wait?.trim()));
   const stoppedAt = Math.max(timeMs(todo.created_at), ...active.map((a, i) =>
     timeMs(sessions[i]?.work?.turn_at) || timeMs(sessions[i]?.state_since) || timeMs(sessions[i]?.updated_at) || timeMs(a.linked_at)));
   const followedAt = Math.max(timeMs(todo.supervision?.followed_up_at),

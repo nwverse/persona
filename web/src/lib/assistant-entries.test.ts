@@ -227,6 +227,22 @@ describe("the entries' open-to-do count follows the To-dos page's rule", () => {
     expect(got.needsYou).toEqual([]);
   });
 
+  it("keeps a seen review under Just finished and uncounted until it is accepted", () => {
+    const review = { at: stale, verdict: "needs_user" as const, note: "Choose the route." };
+    const seen = base("review-seen", stale, { seen_at: stale, supervision: { supervisor: "main", state: "pending_review", reviews: [review], updated_at: stale } });
+    const reported: Session = {
+      machine_id: "box", session_id: "review-seen", title: "Review", cwd: "/w",
+      state: "idle", status: "idle", updated_at: stale, work: { phase: "done", closeout: { status: "done" } },
+    };
+    const got = run([seen], [reported]);
+    expect(got.needsYou).toEqual([]);
+    expect(got.justFinished.map((i) => i.key)).toEqual(["task:review-seen"]);
+    // #5732 keeps Seen a receipt.
+    expect(openTaskItems(got)).toEqual([]);
+    const unseen = base("review-unseen", stale, { supervision: { supervisor: "main", state: "pending_review", reviews: [review], updated_at: stale } });
+    expect(openTaskItems(run([unseen], [{ ...reported, session_id: "review-unseen", state: "unread" }]))).toEqual([]);
+  });
+
   it("counts unattended work but not Just finished, plans or hand-opened Agents in the task badges", () => {
     const workingSession: Session = { machine_id: "box", session_id: "working", title: "Worker", cwd: "/w", state: "working", status: "working", updated_at: fresh } as Session;
     const todos: Todo[] = [
@@ -246,7 +262,7 @@ describe("the entries' open-to-do count follows the To-dos page's rule", () => {
     const got = run(todos, [workingSession, loneAgent, ready], plans);
     const pageOpen = triageTodos(todos, makeSessionLookup([workingSession, loneAgent, ready]), now).open;
     const chipOpen = openTaskItems(got).filter((i) => i.countsOpen).length;
-    expect(pageOpen).toBe(3); // The legacy page header still uses its inactivity rule during the view rollout.
+    expect(pageOpen).toBe(4); // The page keeps the seen but unaccepted review open (#5732).
     expect(chipOpen).toBe(4); // Working, Waiting, and two stopped tasks needing follow-up.
     expect(got.needsYou.filter((i) => i.kind === "task").map((i) => i.key).sort()).toEqual(["task:review-seen", "task:stale"]);
     expect(got).not.toHaveProperty("review");
@@ -378,6 +394,34 @@ describe("Persona reviewing in the Assistant's entries", () => {
   });
 });
 
+
+// What a task's supervising conversation handles is not the owner's: a supervised task's failed start (its supervisor
+// retries or remedies it) and an Agent's card its supervisor holds (delegating) are in progress, not Needs you; the
+// same card once passed up to the owner, and an unsupervised failed start, still are.
+describe("what a supervisor holds in the Assistant's entries", () => {
+  const now = Date.parse("2026-11-10T09:00:00Z");
+  const at = "2026-11-10T08:00:00Z";
+  const supervision = { supervisor: "lead", state: "", reviews: [], updated_at: at } as unknown as Todo["supervision"];
+  const asking: Session = { machine_id: "box", session_id: "ask", title: "ask", cwd: "/w", state: "needs_you", status: "blocked", updated_at: at } as Session;
+  const card = (delegating: boolean): Interaction => ({ id: "ix_1", machine_id: "box", session_id: "ask", kind: "question", created_at: at, ...(delegating ? { delegating } : {}) }) as Interaction;
+  const failed = (patch: Partial<Todo> = {}): Todo => ({ id: "failed", title: "failed", origin: "main", created_at: at, updated_at: at, done_at: at, start_error: "Desk Mac is offline", agents: [], ...patch }) as Todo;
+  const withAgent = (patch: Partial<Todo> = {}): Todo => ({ id: "asks", title: "asks", origin: "main", created_at: at, updated_at: at, agents: [{ machine_id: "box", session_id: "ask", linked_at: at }], ...patch }) as Todo;
+  const run = (todos: Todo[], interactions?: Interaction[]) => assistantEntries({ conversation: "main", main: "main", todos, sessions: interactions ? [asking] : [], interactions: interactions ?? [], plans: {}, feed: [], now });
+  const keys = (items: { key: string }[]) => items.map((item) => item.key);
+
+  it("leaves a supervised failed start with its supervisor, and an unsupervised one with the owner", () => {
+    expect(keys(run([failed({ supervision })]).needsYou)).toEqual([]);
+    expect(keys(run([failed({ supervision })]).running)).toEqual(["task:failed"]);
+    expect(keys(run([failed()]).needsYou)).toEqual(["task:failed"]);
+  });
+
+  it("leaves a card the supervisor holds with it, and shows the same card once it reaches the owner", () => {
+    const held = run([withAgent({ supervision })], [card(true)]);
+    expect(keys(held.needsYou)).toEqual([]);
+    expect(keys(held.running)).toEqual(["task:asks"]);
+    expect(keys(run([withAgent({ supervision })], [card(false)]).needsYou)).toEqual(["task:asks"]);
+  });
+});
 
 describe("pending plans across Persona conversations", () => {
   const at = "2026-11-21T01:00:00Z";

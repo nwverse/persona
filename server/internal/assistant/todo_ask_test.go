@@ -143,6 +143,7 @@ func TestDirectCompletionEndsDecisionWithoutSending(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
 				ctx := context.Background()
+				setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
 				todo, err := e.s.createTodo(ctx, "Choose rollout", "Review rollout options", "conv1", "")
 				if err != nil {
 					t.Fatal(err)
@@ -205,7 +206,7 @@ func TestDirectCompletionEndsDecisionWithoutSending(t *testing.T) {
 					}
 				}
 				// A later working report must not undo the user's choice, even with a needs_user ledger.
-				e.s.taskWorking(ctx, "box", "s1")
+				e.s.taskWorking(ctx, "box", "s1", startRow{})
 				if todoNow(e.s, todo.ID).DoneAt == nil {
 					t.Fatal("agent activity reopened the user-completed task")
 				}

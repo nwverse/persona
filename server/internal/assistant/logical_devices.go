@@ -102,6 +102,9 @@ func (s *Service) logicalChanged() {
 	s.logical.mu.Unlock()
 }
 
+// logicalDevices is s.devs when the store keeps logical conversations. Embedding the Devices interface promotes only
+// its methods, so an optional capability (nodeAnnouncer, mcpWaitNotifier, machineRedeployer, ReportState) is asked of
+// physicalDevices(): asked of s.devs it would never be found (#12928).
 type logicalDevices struct {
 	Devices
 	s *Service

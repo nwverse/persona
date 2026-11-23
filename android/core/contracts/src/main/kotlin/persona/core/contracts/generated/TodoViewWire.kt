@@ -89,6 +89,7 @@ object TodoLineKey {
     const val FAILED_START = "failed_start"
     const val AGENT_ASKS = "agent_asks"
     const val INTERRUPTED = "interrupted"
+    const val STOPPED_UNFINISHED = "stopped_unfinished"
     const val DECISION = "decision"
     const val DECISION_DEFAULT = "decision_default"
     const val CANNOT = "cannot"
@@ -110,7 +111,7 @@ object TodoLineKey {
     const val REPORTED = "reported"
     const val SUPERSEDED = "superseded"
     const val SOMEDAY = "someday"
-    val ALL = listOf("failed_start", "agent_asks", "interrupted", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday")
+    val ALL = listOf("failed_start", "agent_asks", "interrupted", "stopped_unfinished", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday")
 }
 
 /**

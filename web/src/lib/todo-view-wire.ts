@@ -30,8 +30,8 @@ export const TODO_REASONS = ["failed_start", "agent_asks", "interrupted", "stopp
  * The line keys produced by this version of the projection; see the Line keys table in
  * spec/fixtures/todo-view/README.md. Clients can receive a newer key.
  */
-export type TodoLineKey = "failed_start" | "agent_asks" | "interrupted" | "decision" | "decision_default" | "cannot" | "awaits_reply" | "working" | "persona_working" | "starting" | "background" | "parked" | "finished" | "accepted" | "deployed" | "pr_open" | "usage_limit" | "run_waits" | "finished_seen" | "completed" | "canceled" | "reported" | "superseded" | "someday" | (string & {});
-export const TODO_LINE_KEYS = ["failed_start", "agent_asks", "interrupted", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"] as const;
+export type TodoLineKey = "failed_start" | "agent_asks" | "interrupted" | "stopped_unfinished" | "decision" | "decision_default" | "cannot" | "awaits_reply" | "working" | "persona_working" | "starting" | "background" | "parked" | "finished" | "accepted" | "deployed" | "pr_open" | "usage_limit" | "run_waits" | "finished_seen" | "completed" | "canceled" | "reported" | "superseded" | "someday" | (string & {});
+export const TODO_LINE_KEYS = ["failed_start", "agent_asks", "interrupted", "stopped_unfinished", "decision", "decision_default", "cannot", "awaits_reply", "working", "persona_working", "starting", "background", "parked", "finished", "accepted", "deployed", "pr_open", "usage_limit", "run_waits", "finished_seen", "completed", "canceled", "reported", "superseded", "someday"] as const;
 
 /**
  * The argument names produced by this version of the projection. TodoLine.args remains an open string dictionary on

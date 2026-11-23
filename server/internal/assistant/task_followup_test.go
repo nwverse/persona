@@ -20,7 +20,7 @@ func TestTaskFollowupOnlyRecordsConfirmedSupervisorSends(t *testing.T) {
 		{"every confirmed instruction counts", "side1", "exit", nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _, todo := sideReviewFixture(t)
+			s, _, todo := newSupervisedService(t)
 			ctx := context.Background()
 			a := todo.Agents[0]
 			n, err := s.noteAgentSend(ctx, tc.from, a.MachineID, a.SessionID, "", tc.text)
@@ -49,7 +49,7 @@ func TestTaskFollowupOnlyRecordsConfirmedSupervisorSends(t *testing.T) {
 }
 
 func TestTaskReviewRecordsFollowupButAutomaticWritesDoNot(t *testing.T) {
-	s, _, todo := sideReviewFixture(t)
+	s, _, todo := newSupervisedService(t)
 	ctx := context.Background()
 	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
 		v.State = reviewPending
@@ -61,7 +61,7 @@ func TestTaskReviewRecordsFollowupButAutomaticWritesDoNot(t *testing.T) {
 		t.Fatal("automatic ledger write became supervisor follow-up")
 	}
 	args, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "Add the missing test."})
-	if _, err := s.toolTaskReview(ctx, "side1", args); err != nil {
+	if _, err := s.toolTaskReview(ctx, "conv1", args); err != nil {
 		t.Fatal(err)
 	}
 	got := todoNow(s, todo.ID).Supervision

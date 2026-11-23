@@ -204,7 +204,7 @@ func (n *Node) compactIdle(p *assistantProc) {
 		return
 	}
 	n.forgetCacheWarm(p.id)
-	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "/compact"}})
+	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": n.assistantCompactCommand(p.id)}})
 	p.mu.Lock()
 	tokens := p.context
 	p.compacting, p.compacted = true, true

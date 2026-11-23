@@ -118,6 +118,9 @@ func (s *Service) feishuMessage(ev feishubot.MessageEvent, st FeishuStatus, acti
 		}
 	}
 	if target.Kind == "" {
+		if !content.Forward && s.conclusionQuestion(ctx, &ev, &content, st.Features) {
+			return
+		}
 		if !content.Forward && s.acceptReply(ctx, msg.MessageID, content.Text, len(content.Media) > 0, msg.ParentID, msg.RootID) {
 			return // about a "Please verify" card (acceptance_reply.go)
 		}
@@ -253,7 +256,7 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 		todo, ok, err := s.todo(ctx, t.TodoID)
 		if err != nil {
 			s.logf("bots: reminder reply: todo %s: %v", t.TodoID, err)
-		} else if ok && !s.todoInHealth(ctx, todo) {
+		} else if ok && !s.todoPolicy(ctx, todo).Redact {
 			in.Todo = &prompts.BotTodo{ID: todo.ID, Title: clip(todo.Title, 500), Notes: clip(todo.Notes, 4000)}
 		}
 	}

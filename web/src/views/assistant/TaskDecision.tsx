@@ -18,8 +18,8 @@ import { decisionLaterKey, decisionRound, taskAwaitsDecision } from "../../lib/a
 import { askRow, later, field, startInFlight, useFeed, type FeedItem } from "../../lib/feed";
 import { defaultManager, MANAGER_HEADER, shownManager } from "../../lib/manager-choice";
 import { getState, putTodo, refreshTodos, taskSessionLookup, useStore } from "../../lib/store";
-import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
-import { askOptions, openAsk, interruption, orphanedLine, stoppedReason, waitingLine, TODO_STATUS_INFO, type Todo, type TodoStatus } from "../../lib/todos";
+import { acceptanceStands, latestReview, parkedLine, progressLine } from "../../lib/supervision";
+import { acceptedAtRest, askOptions, isCancelled, openAsk, interruption, orphanedLine, stoppedReason, waitingLine, TODO_STATUS_INFO, type Todo, type TodoStatus } from "../../lib/todos";
 import { Button, toast, cx, useNow } from "../../ui/atoms";
 import { AcceptRow } from "./Brief";
 import { BriefingMark } from "./BriefingMark";
@@ -189,10 +189,10 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, fres
   const feed = useFeed((s) => s.feeds[conversation] ?? EMPTY_FEED);
   const planned = card.plan_id !== undefined && card.index !== undefined ? plans[card.plan_id]?.tasks[card.index] : undefined;
   const title = todo?.title ?? planned?.title ?? t("assistant-tasks.task_fallback");
-  const accepted = !!todo?.done_at && todo.supervision?.state === "accepted";
+  const accepted = !!todo && ((!!todo.done_at && todo.supervision?.state === "accepted") || acceptedAtRest(todo, task?.status ?? "not_started"));
   let state = task?.status ?? (card.state === "followup" ? "follow_up" : card.state);
   if (todo && accepted) state = "accepted";
-  else if (todo?.done_at && todo.supervision?.state === "cancelled") state = "cancelled";
+  else if (todo && isCancelled(todo)) state = "cancelled";
   else if (!todo && card.plan_id && plans[card.plan_id]?.state === "dismissed") state = "cancelled";
   const finished = state === "done" || state === "accepted";
   const clock = useNow(30_000, state === "usage_limit"); // the limit's grace running out
@@ -204,7 +204,7 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, fres
   const prNumber = pr ? /\/(\d+)\/?$/.exec(pr)?.[1] : undefined;
   const toStart = !todo && !!card.plan_id && plans[card.plan_id]?.state === "open";
   // Starting only while an Agent is being started for it; a to-do nobody dispatched says Not started (#7552)
-  const starting = !todo || startInFlight(todo, plans);
+  const starting = !todo || (!(todo.kind === "concern" && acceptanceStands(todo)) && startInFlight(todo, plans));
   const liveWork = !finished && state !== "cancelled" ? activity : undefined;
   const liveLine = backgroundWorkLine(liveWork);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
