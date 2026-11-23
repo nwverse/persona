@@ -1374,6 +1374,9 @@ and run:
 CHAT=<machine>/<session> COLD=6 python3 scripts/diag/android_build_perf.py <serial> out.json debug=<package> release=<package>
 ```
 
+If ADB fails or a frame sample lacks usable counters, the command stops with an error. The output keeps only earlier
+complete checkpoints, so a disconnected device does not appear as a zero-jank run.
+
 ## Baseline Profile
 
 `android/app/src/main/baseline-prof.txt` lists the app's classes and methods that ART should compile ahead of time
