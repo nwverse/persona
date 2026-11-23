@@ -120,7 +120,7 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 		ex.Agent = s.launcherAgent(withUnhidden(ctx, ex.Launcher), machine, ex.Launcher)
 		if ex.Cwd == "" {
 			if d, ok := s.device(ctx, machine); ok {
-				ex.Cwd = s.spaceCwd(d, t.Space) // "" for a space without a directory, never the assistant's
+				ex.Cwd = s.spaceCwd(ctx, d, t.Space) // "" for a space without a directory, never the assistant's
 			}
 		}
 		return ex, nil
