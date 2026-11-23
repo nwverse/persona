@@ -51,6 +51,17 @@ func (w *botWorld) topicsOn(t *testing.T, chats ...string) {
 	}
 }
 
+// botInfoRead waits for the bot's start-up read of its own identity (GET /bot/v3/info, in the background after each
+// restart): a count of the calls the bot makes taken before it ends would count that read as one.
+func (w *botWorld) botInfoRead(t *testing.T) {
+	t.Helper()
+	eventually(t, 5*time.Second, "the bot's own identity read", func() bool {
+		w.h.bots.mu.Lock()
+		defer w.h.bots.mu.Unlock()
+		return w.h.bots.info.OpenID != ""
+	})
+}
+
 func (w *botWorld) settings() FeishuBotSettings {
 	_, set := w.h.botAPI()
 	return set
