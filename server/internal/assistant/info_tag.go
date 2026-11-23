@@ -82,6 +82,12 @@ func (s *Service) conversationCategories(ctx context.Context, sid string) (cats 
 // a row for it, infoNoneTagged for none found).
 func (s *Service) conversationCategoryState(ctx context.Context, sid string) (cats []string, tagged, ok bool) {
 	space, known := s.conversationSpace(ctx, sid)
+	return s.categoryStateIn(ctx, sid, space, known)
+}
+
+// categoryStateIn is conversationCategoryState of conversation sid of track space, known telling whether its track
+// is.
+func (s *Service) categoryStateIn(ctx context.Context, sid, space string, known bool) (cats []string, tagged, ok bool) {
 	floor, registered := s.trackFloor(ctx, space)
 	cats = append(cats, floor...)
 	ok = known && registered

@@ -96,7 +96,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 // words stay the same.
 func keyIsNews(kind string) bool {
 	switch kind {
-	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigDeliveryHold, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo,
+	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigDeliveryHold, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo,
 		sigCheck: // a check's run, or the owner's answer to its decision: an Agent that only runs tools says the same all along
 		return true
 	}
@@ -230,10 +230,11 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 	}, nil
 }
 
-// ackSupervisionDedupLocked marks stable per-head and per-source reservations as delivered. An empty Key distinguishes
-// a delivered notification from one whose process stopped after reservation but before delivery or queue admission
-// (#5732). Other fingerprints depend on their rendered entry and are not recomputed here. dedupMu is held by sendDigest.
-func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []superviseSignal) {
+// ackSupervisionDedupLocked confirms current plan/transfer assignments and stable per-source events.
+// An empty Key distinguishes a confirmed delivery or durable queue admission from a crash after reservation. Re-emitting the same event after restart must not turn a
+// delivered fingerprint into a reservation retry. Use the fingerprints actually rendered: digestEntry mutates
+// start-remedy observation times and must never be called again after delivery. dedupMu is held by sendDigest.
+func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []superviseSignal, rendered ...map[[2]string]string) {
 	b := &s.supervise
 	history := b.dedup
 	st := s.store()
@@ -249,9 +250,22 @@ func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []super
 		stable := g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo ||
 			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
 		if !stable {
-			continue
+			// Unmarked legacy deliveries retain their established acknowledgment path.
+			t, ok := s.todoNow(g.Todo)
+			if !ok || !t.Supervision.assigned() {
+				continue
+			}
 		}
-		key, _ := digestFingerprint(prompts.SuperviseEntry{}, g)
+		key := ""
+		if len(rendered) > 0 {
+			key = rendered[0][[2]string{g.id(), g.Key}]
+		}
+		if key == "" {
+			if !stable {
+				continue
+			}
+			key, _ = digestFingerprint(prompts.SuperviseEntry{}, g)
+		}
 		if seen, ok := next[key]; ok && seen.Key != "" && seen.Key == g.Key {
 			seen.Key = ""
 			next[key] = seen
@@ -273,14 +287,14 @@ func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []super
 
 // forgetSupervision takes the signals' fingerprints out of the deduplication history: their message was queued for a
 // conversation that is gone and was never read, so they are told again. dedupMu is held.
-func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSignal, web string) {
+func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSignal, web string) error {
 	b := &s.supervise
 	history := b.dedup
 	st := s.store()
 	if st != nil {
 		if _, err := st.Setting(ctx, superviseDedupKey, &history); err != nil {
 			s.logf("supervise: could not read the deduplication history: %v", err)
-			return
+			return err
 		}
 	}
 	next := maps.Clone(history)
@@ -296,15 +310,16 @@ func (s *Service) forgetSupervision(ctx context.Context, signals []superviseSign
 		}
 	}
 	if len(next) == len(history) {
-		return
+		return nil
 	}
 	if st != nil {
 		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
 			s.logf("supervise: could not release deduplication entries: %v", err)
-			return
+			return err
 		}
 	}
 	b.dedup = next
+	return nil
 }
 
 // Task-bound fingerprints are bounded by open tasks, not elapsed time. Load once

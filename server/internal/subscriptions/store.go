@@ -33,8 +33,9 @@ type Store interface {
 	LeaseSubscription(ctx context.Context, id string, now, until time.Time) (bool, error)
 	// SeenKeys says which of uids the subscription has seen.
 	SeenKeys(ctx context.Context, id string, uids []string) (map[string]bool, error)
-	// CommitRun writes a run's outcome in one transaction (RunCommit).
-	CommitRun(ctx context.Context, c RunCommit) error
+	// CommitRun writes a run's outcome in one transaction (RunCommit) and returns the outcome whose dedup keys this
+	// transaction actually claimed. Its items and new counts exclude keys another manager claimed first.
+	CommitRun(ctx context.Context, c RunCommit) (RunCommit, error)
 	// HeldItems are the subscription's held items q picks, in the order they were stored (#2039).
 	HeldItems(ctx context.Context, id string, q ItemQuery) ([]Held, error)
 	// HeldItem is the subscription's held item uid (the newest stored, if several); nil when it holds none (#6198).
@@ -182,24 +183,27 @@ func (m *MemStore) SeenKeys(_ context.Context, id string, uids []string) (map[st
 	return out, nil
 }
 
-func (m *MemStore) CommitRun(_ context.Context, c RunCommit) error {
+func (m *MemStore) CommitRun(_ context.Context, c RunCommit) (RunCommit, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.FailCommit != nil {
-		return m.FailCommit
+		return RunCommit{}, m.FailCommit
 	}
 	cur, ok := m.subs[c.Sub.ID]
 	if !ok {
-		return nil // deleted while it ran: nothing is kept
+		return claimedRun(c, nil), nil // deleted while it ran: nothing is kept
 	}
 	if m.seen[c.Sub.ID] == nil {
 		m.seen[c.Sub.ID] = map[string]time.Time{}
 	}
+	claimed := map[string]bool{}
 	for _, k := range c.Seen {
 		if _, had := m.seen[c.Sub.ID][k.UID]; !had {
 			m.seen[c.Sub.ID][k.UID] = c.Now
+			claimed[k.UID] = true
 		}
 	}
+	c = claimedRun(c, claimed)
 	for _, it := range c.Items {
 		it.SubscriptionID = c.Sub.ID
 		m.seq++
@@ -214,7 +218,41 @@ func (m *MemStore) CommitRun(_ context.Context, c RunCommit) error {
 	applyRun(&cur, c, cur.Revision == c.Revision)
 	cur.LeaseUntil = nil
 	m.subs[c.Sub.ID] = cur
-	return nil
+	return c, nil
+}
+
+// claimedRun limits a run to the dedup keys its transaction inserted. Items without a Seen candidate keep their
+// legacy low-level behavior; every service run with fresh items supplies Seen candidates for them.
+func claimedRun(c RunCommit, claimed map[string]bool) RunCommit {
+	if len(c.Seen) == 0 {
+		return c
+	}
+	candidates := make(map[string]bool, len(c.Seen))
+	seen := make([]Seen, 0, len(c.Seen))
+	for _, k := range c.Seen {
+		candidates[k.UID] = true
+		if claimed[k.UID] {
+			seen = append(seen, k)
+		}
+	}
+	c.Seen = seen
+	items := make([]Item, 0, len(c.Items))
+	for _, it := range c.Items {
+		if !candidates[it.UID] || claimed[it.UID] {
+			items = append(items, it)
+		}
+	}
+	c.Items = items
+	c.Sub.LastNewCount = len(items)
+	c.Sub.Runs = slices.Clone(c.Sub.Runs)
+	if len(c.Sub.Runs) > 0 {
+		run := &c.Sub.Runs[len(c.Sub.Runs)-1]
+		run.New = len(items)
+		if run.Baseline > 0 {
+			run.Baseline = len(seen)
+		}
+	}
+	return c
 }
 
 func (m *MemStore) pruneSeen(id string, now time.Time) {

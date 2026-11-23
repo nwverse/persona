@@ -104,20 +104,29 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 // machine until the CLAUDE.md changed.
 func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onlyChanged bool) (string, bool, error) {
 	// Read settings and publish both instruction files in the same per-directory order.
-	dir := s.assistantRel()
+	dir, tmpl := s.assistantRel(), trackTemplateAssistant
+	var track trackEntry
 	switch space {
 	case "":
 	case SpaceHealth:
-		dir = s.healthRel()
+		dir, tmpl = s.healthRel(), trackTemplateHealth
 	default:
-		// Only the health space has a directory so far (spaceCwd): another must never fall back to the assistant's.
-		return "", false, fmt.Errorf("space %q has no directory on this version", space)
+		// A track with a directory of its own (spaceTrack, #13472); another must never fall back to the assistant's.
+		e, ok := s.spaceTrack(ctx, space)
+		if !ok {
+			return "", false, fmt.Errorf("space %q has no directory on this version", space)
+		}
+		dir, tmpl, track = trackRel(e), trackTemplateSpace, e
 	}
 	key := machine + "\x00" + dir
 	s.prepareLocks.acquire(key)
 	defer s.prepareLocks.release(key)
 	if s.isWorkMachine(machine) {
 		return "", false, errWorkAssistant
+	}
+	if tmpl == trackTemplateSpace && !s.trackSpaceNode(machine) {
+		// An older node would write the instructions without the track's SPACE.md and folders.
+		return "", false, i18n.Err("assistant-health.node_no_track_spaces", i18n.Args{"machine": s.machineName(machine)})
 	}
 	var conns struct {
 		Connectors []string          `json:"connectors"`
@@ -135,7 +144,7 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	// conversation restarts for it anyway) instead of restarting it on their own (extmgr extension_assistant_data.go).
 	pluginParams := map[string]any{"machine_id": machine}
 	var own, onDemand string
-	if space != SpaceHealth {
+	if tmpl == trackTemplateAssistant {
 		settings := s.settings(ctx)
 		d := s.assistantPrompt(ctx, machine, conns.LarkCLI, settings)
 		own = prompts.RenderAssistantClaudeMD(d)
@@ -153,14 +162,21 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		plugins.Skills = json.RawMessage("null")
 	}
 	md := own + plugins.Instructions
-	if space == SpaceHealth {
+	switch tmpl {
+	case trackTemplateHealth:
 		md = s.healthClaudeMD(ctx, machine)
+	case trackTemplateSpace:
+		// Like the health space's: its own baseline, without the instructions plugins give the main chat; their
+		// skills still go there.
+		md = s.spaceClaudeMD(ctx, machine, track)
 	}
 	digests, files := skillDigests(plugins.Skills)
 	deny := s.trackDenyDirs(ctx)
 	denyKey, _ := json.Marshal(deny)
 	given := preparedState{md: md, skills: digests, workGuide: onDemand != "", deny: string(denyKey)}
-	if onlyChanged && !files {
+	// A track's instructions end with its SPACE.md, which the node reads (and the user edits there): the node is asked
+	// every time, and what it read is compared after (space_md_digest).
+	if onlyChanged && !files && tmpl != trackTemplateSpace {
 		s.preparedMu.Lock()
 		same := s.prepared[key] == given
 		s.preparedMu.Unlock()
@@ -174,16 +190,25 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	if onDemand != "" {
 		params["work_guide_md"] = onDemand + plugins.Instructions
 	}
+	if tmpl == trackTemplateSpace {
+		params["space"] = map[string]any{"slug": track.Slug, "initial_space_md": s.initialSpaceMD(ctx, track)}
+	}
 	var prep struct {
-		Cwd  string   `json:"cwd"`
-		Need []string `json:"plugin_skills_need"`
+		Cwd           string   `json:"cwd"`
+		Need          []string `json:"plugin_skills_need"`
+		SpaceMDDigest string   `json:"space_md_digest"`
 	}
 	if err := s.call(ctx, machine, DeviceAssistantPrepare, params, &prep); err != nil {
 		return "", false, err
 	}
+	given.spaceMD = prep.SpaceMDDigest
 	s.preparedMu.Lock()
 	if s.prepared == nil {
 		s.prepared = map[string]preparedState{}
+	}
+	if onlyChanged && tmpl == trackTemplateSpace && len(prep.Need) == 0 && s.prepared[key] == given {
+		s.preparedMu.Unlock()
+		return prep.Cwd, false, nil // the node had these instructions already
 	}
 	if len(prep.Need) > 0 {
 		// The node lacks some skills: their files come with the next plugins.assistant (plugins.skills_need below), and
@@ -206,6 +231,8 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 type preparedState struct {
 	md, skills, deny string
 	workGuide        bool
+	// spaceMD is the digest of the SPACE.md a track's instructions ended with, as the node read it.
+	spaceMD string
 }
 
 // skillDigests are the plugin skills of a plugins.assistant answer as prepareSpaceIf compares them, each one's plugin,
@@ -263,7 +290,11 @@ func (s *Service) refreshInstructions(ctx context.Context) {
 	if !ok || !d.Online || d.Home == "" {
 		return
 	}
-	for _, space := range []string{"", SpaceHealth} {
+	spaces := []string{"", SpaceHealth}
+	if s.trackSpaceNode(machine) {
+		spaces = append(spaces, s.spaceTracks(ctx)...) // a node that keeps no track directory gets none (prepareSpaceIf)
+	}
+	for _, space := range spaces {
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		_, wrote, err := s.prepareSpaceIf(cctx, machine, space, true)
 		cancel()
@@ -285,6 +316,11 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			p.Launcher != scope.pick.Launcher || p.Model != scope.pick.Model || p.NewSessionID != scope.execution.SessionID ||
 			!s.externalMainStartScope(ctx, machine, p.NewSessionID, scope.pick) {
 			return proto.Session{}, refusePick(http.StatusBadRequest, i18n.Err("external-adapter.scope_required"))
+		}
+	}
+	if p.RequireLauncher {
+		if err := s.modelPickRefusal(ctx, machine, p.Launcher, s.lang(ctx), true); err != nil {
+			return proto.Session{}, err
 		}
 	}
 	if !s.trackKnown(ctx, p.Space) {
@@ -318,6 +354,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
+	params["model_source"] = s.startModelSource(ctx, p, main)
 	if p.TaskExecution {
 		params["task_execution"] = true
 		if p.LegacyTaskExecution {
@@ -357,7 +394,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			purpose = purposeMain
 		}
 	}
-	if p.Launcher != "" {
+	if p.Launcher != "" && !p.RequireLauncher {
 		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
 		if fit == mainChatRefused {
 			return proto.Session{}, refusal
@@ -376,7 +413,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if params["launch"] != "headless" {
 		return proto.Session{}, badRequest(fmt.Errorf("purpose %q requires headless launch for assistant.send", purpose))
 	}
-	if !p.TaskExecution {
+	if !p.TaskExecution && !p.RequireLauncher {
 		if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 			return proto.Session{}, err
 		}
@@ -592,6 +629,9 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 // conversation_new's). Nobody is in front of it to sign in, so it starts signed in as a meeting's do (startSignedIn):
 // in the profile the assistant's conversations had, not a new private one with no login in it (#6015).
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
+	if p.modelSource.Role != "" {
+		ctx = context.WithValue(ctx, modelSourceKey{}, p.modelSource.Safe())
+	}
 	return s.startSignedIn(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
 		Origin: p.Origin, OriginRef: p.OriginRef, MachineID: p.MachineID, Cwd: p.Cwd, TaskExecution: p.TaskExecution,
 		LegacyTaskExecution: p.LegacyTaskExecution, PromptSelections: p.PromptSelections, TaskModel: p.TaskModel, NewSessionID: p.NewSessionID})
@@ -1047,7 +1087,7 @@ func (s *Service) startRoutes() {
 			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: not a registered space", in.Space))
 			return
 		}
-		if in.Space != "" && s.trackPolicy(ctx, in.Space).HideFromExtensions && r.Header.Get(RoleHeader) == roleExtension {
+		if in.Space != "" && s.trackPolicy(ctx, in.Space).HideFromExtensions && r.Header.Get(RoleHeader) == roleExtension { // a start is a control: trust and grants widen reads only
 			apierr.WriteCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
 			return
 		}
@@ -1285,6 +1325,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if params == nil {
 		params = map[string]any{}
 	}
+	params["model_source"] = s.conversationModelSource(ctx, p.MachineID, p.SessionID)
 	delete(params, "external")
 	delete(params, "cache_keepalive") // only the manager may attest a refresh role, including on early returns
 	if launcher, _ := params["launcher"].(string); proto.IsExternalLauncher(launcher) {

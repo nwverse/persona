@@ -21,6 +21,7 @@ import (
 // variable goes too (assistantOnlyEnvNames). An Agent that wants CLAUDE_CODE_AUTO_COMPACT_WINDOW or ENABLE_TOOL_SEARCH
 // gets them from its launcher or Claude Code's settings, not from the pane.
 var assistantOnlyEnv = []string{
+	modelSourceEnv, modelSourceBinEnv,
 	"PERSONA_ASSISTANT", "PERSONA_ASSISTANT_BIN", "PERSONA_SESSION_ID", "PERSONA_SPACE", "PERSONA_GUEST",
 	"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "ENABLE_TOOL_SEARCH",
 	"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",

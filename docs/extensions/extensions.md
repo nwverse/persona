@@ -485,7 +485,8 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed`; never the health space's chats, nor what a feed holds of a to-do it is not shown (see "Never shown to extensions") |
 | `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories`, `GET /api/v1/todos/{id}/timeline`. From a manager naming `todo_timeline`, the to-do's conversation too: the timeline, and on `GET /api/v1/todos/{id}` its latest rounds, recap and results (what the owner told its runs and their turn summaries), less what "Never shown to extensions" leaves out. Never a to-do it is not shown (same section): it is not listed, and every route of it answers 404 |
-| `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
+| `leaders.read` | See directions and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events"). Does not permit writes |
+| `leaders.write` | Create directions and report their progress | `POST /api/v1/assistant/directions` and `POST /api/v1/assistant/directions/{id}/progress` only. Does not imply `leaders.read`; direction names, notes, ends and to-do aggregation are unchanged |
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
 | `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`, `POST /api/v1/assistant/start-defaults/preview` (read-only: what a policy would do for a task, nothing stored or started); a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
 | `dispatch.guard` | Read and change the explicit-target dispatch guard and narrow the affected conversations' tools | `GET` / `PUT /api/v1/assistant/dispatch-guard`; an extension-written enabled policy must expire within one hour ([assistant.md](../assistant/assistant.md) "Explicit dispatch guard"). Granted by name only, not by the legacy every-scope grant |
@@ -493,7 +494,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `decisions.raise` | Ask the owner for a decision | `POST /api/v1/decisions`, `GET /api/v1/decisions/{id}`, `POST /api/v1/decisions/{id}/withdraw`; raise a rich pending Needs-you decision, poll only the caller's own answer and withdraw it ([todos.md](../assistant/todos.md) "Decisions raised outside a supervisor"). It does not open any owner answer route and is never included in legacy every-scope access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `assistant.entries.read` | Read unified ledger entries | `assistant.entries.list` RPC and `GET /api/v1/assistant/entries`; see "Unified entries ledger" |
-| `assistant.memory.read` | Read what Persona remembers about you (read-only, never the health space) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
+| `assistant.memory.read` | Read what Persona remembers about you (read-only; another track's memory only as the user lets this extension read it) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `transcription` | Turn its own audio into text with the transcription you chose for meetings (never the key, never other audio) | No HTTP route: the `transcription.*` RPC (see "Transcription for extensions"). Not covered by the legacy `hub_api` full access |
 | `market.refresh_own` | Refresh the extension marketplace it was installed from | `POST /api/v1/extensions/-/self/market/refresh` only. Not covered by an all-scope token or the legacy `hub_api` grant: the manifest must name it and the owner must approve it |
@@ -735,8 +736,10 @@ sends, renames, archives or changes a conversation. The manager, which owns the 
 
 The schema is `schema/extension/assistant.schema.json`; the Go SDK has them as `ext.Hub.AssistantConversations` and `AssistantMessages`.
 
-- **Which conversations**: only the assistant's own space. The health space's (docs/assistant/health.md "How directories and memory are isolated") and guest
-  conversations are never listed or read (`not_found`), nor are other agents' sessions (those are `agents.read`'s).
+- **Which conversations**: the assistant's own, each shown by its information categories and what the user lets this extension read
+  (docs/assistant/health.md "Using information by scene", scene 6): an extension the user marked as their own reads every track's; any
+  other reads a conversation carrying a sensitive category (a health space's, one tagged finance) only when granted that category.
+  Guest conversations are never listed or read (`not_found`), nor are other agents' sessions (those are `agents.read`'s).
   `assistant.conversations` lists the ones last active at or after `since`, newest first, 50 a page (at most 200); with `until`, one
   known to have started at or after it is left out (`started` is set when the manager knows when it began). `origin` says who opened it
   (`user`, `channel`, `inbox`, `task`, `spawned`, `lark_agent`, `extension`; what the hub cannot tell is `user`), `title` is empty while
@@ -766,7 +769,7 @@ answer an extension's token 403). The manager answers it from the assistant's co
 
 | Method | Parameters | Returns | Scope |
 | --- | --- | --- | --- |
-| `assistant.memory` | `{include_content?}` | `{entries: [{name, description?, type?, size, created?, modified, content?, truncated?}]}` | `assistant.memory.read` |
+| `assistant.memory` | `{include_content?}` | `{entries: [{name, description?, type?, size, created?, modified, content?, truncated?, track?}]}` | `assistant.memory.read` |
 
 The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ext.Hub.AssistantMemory`.
 
@@ -926,7 +929,11 @@ the run that went wrong without reading any tool output, then opens only that ru
 
 ### Never shown to extensions
 
-Whatever scopes it was granted, an extension's token never sees:
+Whatever scopes it was granted, an extension's token never sees what follows, with one exception (#13246): an extension the
+user marked as their own (`PUT /api/v1/assistant/extension-trust/{id}` with `trust: owner`, such as their memory extension) reads
+the tracks' conversations and cards on the read routes below, and the manager's reads by the user's grants
+(docs/assistant/health.md "Using information by scene"). It still never controls a track's session or sees a private card,
+and the extensions' `agent.needs_you` / `agent.finished` events still leave the tracks out.
 
 - **The health space's conversations** (`docs/assistant/health.md`): not in `GET /api/v1/sessions` (the full list, the paged list, its
   totals and counts) or `/sessions/archived`, and their items, images, info and screen answer 404 as for a chat that does not exist.
@@ -935,7 +942,7 @@ Whatever scopes it was granted, an extension's token never sees:
   read grant. Session controls (a message, interrupt, queue changes, rename, modes, seen) require a listed session outside
   the health space; a resume is decided as "Resuming a chat" says. Extension tokens cannot start sessions in the health
   space. `assistant.conversations` and `assistant.messages` leave health sessions out, and `assistant.memory` reads only
-  the assistant's own memory. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling
+  the memory of tracks the extension may read. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling
   conversation's space to filter their targets. `GET /api/v1/assistant` lists none of them (`?space=health` lists
   nothing), and a chat's feed (`GET …/conversations/{id}/feed`) answers 404 for one of them, or for one whose space
   cannot be told. `agent.finished` is not sent of such a chat either.
@@ -3412,8 +3419,8 @@ Extensions contribute `events` to subscribe to things happening on the hub. Thes
 | `todo.changed` | `id`, `title`, `thread?`, `responsible?`, `done?`, `supervisor?`, `kind?`, `what`: a to-do was created, deleted, or its title, whether it is done, its supervisor, its responsible party, or the thread it is bound to changed (needs `todos.read`, see below; never of a to-do it is not shown, "Never shown to extensions") |
 | `assistant.entries.changed` | `id`, `record_id`, `status:"wrong"`: an entry was marked wrong; needs `assistant.entries.read` (see "Unified entries ledger") |
 | `todo.decision` | `id`, `title`, `thread?`, `decision`: a decision was written on a to-do (needs `todos.read`, see below; never of a to-do it is not shown) |
-| `leader.changed` | `id`, `title`, `project?`, `ended?`: a leader conversation was made, retitled, filed under another project, ended or made a leader again (needs `leaders.read`, see "Leader events") |
-| `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a leader's task reached its goal, needs the owner's decision or is stuck (needs `leaders.read`) |
+| `leader.changed` | `id`, `title`, `project?`, `ended?`: a direction was made, retitled, filed under another project, ended or made current again (needs `leaders.read`, see "Leader events") |
+| `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a direction's task reached its goal, needs the owner's decision or is stuck, or the direction reported progress (needs `leaders.read`) |
 
 SDK programs receive them in `Namespaces["event"]` (method name is the event name).
 
@@ -3435,8 +3442,9 @@ SDK programs receive them in `Namespaces["event"]` (method name is the event nam
 ### Leader events (#3484, #3485)
 
 `leader.changed` and `leader.report` let a work-log extension keep one record per direction of the owner's work and write
-its result lines (`docs/design/proposals/owner-at-a-glance.md` "Contract with a work-log extension"). A *leader* is a
-side conversation in `assistant.leaders`; one leader is one direction. Schema: `schema/extension/leaders.schema.json`
+its result lines (`docs/design/proposals/owner-at-a-glance.md` "Contract with a work-log extension"). A direction is
+usually a side conversation in `assistant.leaders`; since #8236 it can instead be an outside reporting direction with
+no Persona conversation. Either kind has one stable direction id. Schema: `schema/extension/leaders.schema.json`
 (`wire.LeaderChangedEvent`, `wire.LeaderReportEvent`).
 
 ```json
@@ -3444,8 +3452,8 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
  "contributes":{"events":[{"id":"leaders","subscribe":["leader.changed","leader.report","todo.changed"]}]}}
 ```
 
-- **Who is told**: as for the to-do events, with `leaders.read` (or the legacy full access); `todos.read` is not enough.
-- **`leader.changed {id, title, name, project?, ended?}`**: `id` is the leader conversation's session id, the key to keep a
+- **Who is told**: as for the to-do events, with `leaders.read` (or the legacy full access); `todos.read` and `leaders.write` alone are not enough.
+- **`leader.changed {id, title, name, project?, ended?}`**: `id` is the stable direction id (the leader conversation's session id, or an outside direction's server-generated `dir_…` id), the key to keep a
   record by; `title` its title as the apps show it; `name` what the direction is called, **the one to show** (#3679): the
   name the owner (`PUT /api/v1/assistant/directions/{id}/name`) or the secretary (`direction_name`) gave it, else its
   knowledge-base project's name, else `title` without its `MMDD | kind | ` prefix (and when that starts `你是「X」`, a role given in the first message, just `X`, #3744); a new name is a change, told once; `project` the knowledge-base project's slug it is filed under (left
@@ -3461,11 +3469,20 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
   twice; `text` is at most 300 characters in the owner's language; `link` the task's PR when it has one. Progress is
   never reported. Besides those, `kind: "progress"` (#3679) is the
   leader's own summary of its direction at the goal level, sent with its `leader_progress` tool (each reached task, each
-  report cycle): `reached` (what was reached), `doing` (what is being done, and where it is stuck), `needs_you` (what the
+  report cycle), or an authorized outside caller's `POST /api/v1/assistant/directions/{id}/progress` /
+  `personad write-progress`: `reached` (what was reached), `doing` (what is being done, and where it is stuck), `needs_you` (what the
   owner has to do) and `links` (evidence, at most 5; `link` is the first), each part at most 200 characters; `text` puts
   the parts together in the owner's language (「达成：…」「在做：…」「要你做：…」, one per line); `todo` is `""`. A work-log
   card renders one line per direction from the day's latest `progress`. `GET /api/v1/assistant/leaders` lists each
   direction's `name` and latest `progress` (`{reached?, doing?, needs_you?, links?, at}`).
+- **Writing from outside (#8236)**: `leaders.write` allows `POST /api/v1/assistant/directions` with a required
+  `name`, required existing knowledge-base `project` and optional complete coding-Agent `machine_id` / `session_id`
+  pair, and the progress route above for any current direction. The create returns a leader with `external: true` and a
+  generated `dir_…` id, not a Persona conversation id. The Agent remains an optional navigation target only: it does
+  not become the supervisor, and its linked to-dos are not newly aggregated. A targetless direction is allowed. The
+  scope opens no read, event, rename, notes, end or to-do route; request `leaders.read` separately when the extension
+  also needs this section's read model. The local `personad` commands use the same-user node socket instead of an
+  extension token (`docs/integrations/script-cli.md`).
 - **Leaders made before the extension**: `GET /api/v1/assistant/leaders` (`leaders.read`) lists every direction as
   `leader.changed` would tell it now, with `by` (`assistant` or `user`), `at` and `ended_at?`; current leaders first.
 - They share the to-do events' queue and its limits.

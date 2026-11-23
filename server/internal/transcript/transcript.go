@@ -212,6 +212,8 @@ type Meta struct {
 	// turn_duration / an interrupt), no turn started after it. Unlike !TurnOpen it is false when the lines say nothing
 	// (a tail read from mid-turn).
 	TurnClosed bool
+	// CodexClosedTurnID is the id on the closing record, when the rollout supplies it.
+	CodexClosedTurnID string
 	// The closing record, even when it produces no visible item (e.g. Codex without a duration).
 	turnEndedAt time.Time
 	turnEndSeq  int
@@ -242,8 +244,14 @@ type Meta struct {
 	// turnWorked: the turn under way did some work so far (TurnErrorAfterWork when it fails); its end or the next
 	// turn's start sets it back. turnSucceeded: that turn closed after a real reply; TurnSucceeded also checks its error.
 	// turnErrorLine: the uuid of the line that said TurnError (Tail.Settle).
-	turnWorked    bool
-	turnSucceeded bool
+	// UpstreamErrorStreak: consecutive turns that ended in an upstream 5xx/capacity failure with no assistant work in
+	// between (#13372); turnErrorCounted ensures at most one increment per turn.
+	turnWorked          bool
+	turnSucceeded       bool
+	turnErrorCounted    bool
+	upstreamStreakReset bool
+	UpstreamErrorStreak int
+	upstreamErrorLines  []string
 	// turnParts: the latest turn's words so far, for TurnAnswer (answer.go).
 	turnParts     []AnswerPart
 	turnErrorLine string
@@ -507,8 +515,8 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 			it.SourceFingerprint = fingerprint
 		}
-		if it.Role != "system" && !it.TS.IsZero() && it.TS.After(meta.LastActivity) {
-			meta.LastActivity = it.TS
+		if !meta.Codex {
+			meta.observeActivity(*it)
 		}
 		meta.trackActivity(*it)
 		meta.trackPlan(*it)
@@ -541,6 +549,12 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 	}
 	return items
+}
+
+func (m *Meta) observeActivity(it proto.Item) {
+	if it.Role != "system" && !it.TS.IsZero() && it.TS.After(m.LastActivity) {
+		m.LastActivity = it.TS
+	}
 }
 
 func (m *Meta) endTurn(seq int, at time.Time) {
@@ -757,7 +771,10 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		case "turn_duration":
 			meta.endTurn(seq, e.Timestamp)
 			meta.turnSucceeded = meta.turnWorked && meta.TurnError == ""
-			meta.turnWorked = false // the turn's work is done: Claude Code's own continuation after a limit opens with no prompt
+			if meta.turnSucceeded {
+				meta.resetUpstreamStreak()
+			}
+			meta.turnWorked, meta.turnErrorCounted = false, false // the turn's work is done: Claude Code's own continuation after a limit opens with no prompt
 			ms, ok := recordedMilliseconds(e.DurationMS)
 			if !ok || strings.TrimSpace(e.ParentUUID) == "" {
 				return nil

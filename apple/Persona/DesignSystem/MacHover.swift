@@ -31,13 +31,7 @@ private struct MacHoverShade<S: Shape>: ViewModifier {
     @State private var hovering = false
 
     func body(content: Content) -> some View {
-        #if os(macOS)
         content
-            .background { if isEnabled && (hovering || MacHover.showAll) { shape.fill(Theme.Fill.macHover).padding(-outset) } }
-            .onHover { hovering = $0 }
-        #else
-        content
-        #endif
     }
 }
 
@@ -46,26 +40,7 @@ private struct MacHoverActions<Actions: View>: ViewModifier {
     @State private var hovering = false
 
     func body(content: Content) -> some View {
-        #if os(macOS)
         content
-            .overlay(alignment: .topTrailing) {
-                if hovering || MacHover.showAll {
-                    HStack(spacing: Theme.Space.xxs) { actions() }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, Theme.Space.xxs)
-                        .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.badge, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
-                                .strokeBorder(Theme.Fill.chip, lineWidth: Theme.Size.hairline)
-                        }
-                        .padding([.top, .trailing], Theme.Space.xs)
-                        .transition(.opacity)
-                }
-            }
-            .onHover { inside in withAnimation(Theme.Motion.standard) { hovering = inside } }
-        #else
-        content
-        #endif
     }
 }
 
@@ -74,19 +49,7 @@ private struct MacHoverFooter<Actions: View>: ViewModifier {
     @State private var hovering = false
 
     func body(content: Content) -> some View {
-        #if os(macOS)
-        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-            content
-            HStack(spacing: Theme.Space.xxs) { actions() }
-                .buttonStyle(.plain)
-                .opacity(hovering || MacHover.showAll ? 1 : 0)
-                .allowsHitTesting(hovering || MacHover.showAll)
-        }
-        .contentShape(.rect)
-        .onHover { inside in withAnimation(Theme.Motion.standard) { hovering = inside } }
-        #else
         content
-        #endif
     }
 }
 
@@ -112,18 +75,9 @@ struct MacHoverButton: View {
 enum MacHover {
     /// `-showMacHover YES` (DEBUG, Mac): every row and message as if the pointer were over it, for screenshots (the
     /// offscreen snapshot has no pointer).
-    #if os(macOS) && DEBUG
-    static let showAll = UserDefaults.standard.bool(forKey: "showMacHover")
-    #else
     static let showAll = false
-    #endif
 
     /// Puts `text` on the pasteboard and says so.
     @MainActor static func copy(_ text: String, said: String = String(localized: "Copied [Mac Hover 07d6bb]")) {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        AppModel.shared.toast = Toast(said, style: .success)
-        #endif
     }
 }

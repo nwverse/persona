@@ -82,6 +82,24 @@ describe("direction tree", () => {
     expect("responsible" in (withResp.tasks?.[2] ?? {})).toBe(false);
   });
 
+  it("normalizes external metadata without turning a direction id or an incomplete pair into a target", () => {
+    const tree = normalizeTree({ directions: [
+      { id: "outside", name: "Outside", external: true, machine_id: "mac", session_id: "agent-7" },
+      { id: "targetless", name: "Targetless", external: true, machine_id: "mac" },
+      { id: "malformed", name: "Malformed", external: true, machine_id: 7, session_id: " " },
+      { id: "conversation", name: "Conversation", external: false, machine_id: "hub", session_id: "conversation" },
+      { id: "main", secretary: true, external: true, machine_id: "hub", session_id: "main" },
+    ] });
+    expect(tree.directions.map((d) => ({ id: d.id, external: d.external, machine_id: d.machine_id, session_id: d.session_id }))).toEqual([
+      { id: "outside", external: true, machine_id: "mac", session_id: "agent-7" },
+      { id: "targetless", external: true, machine_id: "mac", session_id: undefined },
+      { id: "malformed", external: true, machine_id: undefined, session_id: undefined },
+      { id: "conversation", external: undefined, machine_id: undefined, session_id: undefined },
+      { id: "main", external: undefined, machine_id: undefined, session_id: undefined },
+    ]);
+    // Complete and incomplete pairs become only the routes asserted in SidebarLeaders.test.tsx.
+  });
+
   it("groups by direction only with a leader; the secretary's group shows only with a leader and a task", () => {
     expect(groupsByDirection(TREE)).toBe(true);
     expect(leaderDirections(TREE).map((d) => d.id)).toEqual(["lead-a", "lead-b"]);

@@ -309,15 +309,14 @@ func TestHeldDecisionsCardIsRetriedFromThePush(t *testing.T) {
 	}
 }
 
-// A leader conversation's held decision is already main-supervised: can_wait sends no escalation and wakes nobody;
-// the deferred push still goes out once, without a second supervision stream (#5732).
-func TestLeaderConversationHeldDecisionUsesMainDirectly(t *testing.T) {
+// A lead's decision that can wait stays quiet until its deferred push, then escalates to main once.
+func TestLeaderConversationHeldDecisionEscalatesWhenPushed(t *testing.T) {
 	s, f, todo := newLeaderService(t)
 	briefingOn(s, true)
 	waitsForReview(t, s, f, todo.ID, "两种走法。")
 	args := waitingDecision()
 	args["todo_id"] = todo.ID
-	res, err := runJSON(t, s, "conv1", "task_review", args)
+	res, err := runJSON(t, s, "lead1", "task_review", args)
 	if err != nil || !strings.Contains(res, "can wait (can_wait)") {
 		t.Fatalf("main's needs_user: %s %v", res, err)
 	}
@@ -335,9 +334,7 @@ func TestLeaderConversationHeldDecisionUsesMainDirectly(t *testing.T) {
 	if n := deadlinePushes(f, todo.ID); n != 1 {
 		t.Fatalf("%d pushes, want 1", n)
 	}
-	if escalated() || len(f.noticesTo("conv1")) != 0 {
-		t.Fatalf("the deferred push added an escalation: %q", f.noticesTo("conv1"))
-	}
+	waitFor(t, "the deferred escalation", func() bool { return escalated() && len(f.noticesTo("conv1")) == 1 })
 }
 
 // A held decision that no briefing brought to the owner is pushed while they still have 11 hours to answer, and its

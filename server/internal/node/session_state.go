@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -31,6 +32,8 @@ type stateFile struct {
 }
 
 type sessionState struct {
+	ModelSource modelhttp.Source `json:"model_source,omitzero"`
+
 	SegmentRetired          bool            `json:"segment_retired,omitempty"`
 	SegmentOperation        string          `json:"segment_operation,omitempty"`
 	TaskInstructions        string          `json:"task_instructions,omitempty"`
@@ -73,6 +76,10 @@ type sessionState struct {
 	PlanThen  string `json:"plan_then,omitempty"`
 	AppMode   string `json:"app_mode,omitempty"`
 	AppEffort string `json:"app_effort,omitempty"`
+	// DesktopPendingModel / DesktopPendingEffort: requested initial Codex App settings still awaiting the owning
+	// window's readback. They survive partial creation/restarts and must be confirmed before its first message.
+	DesktopPendingModel  string `json:"desktop_pending_model,omitempty"`
+	DesktopPendingEffort string `json:"desktop_pending_effort,omitempty"`
 	// Tasks: the assistant conversation's background tasks and monitors running right now (node/assistant.go).
 	Tasks []string `json:"tasks,omitempty"`
 	// Compaction: the last compaction the user asked for (assistant_compact.go).
@@ -307,6 +314,7 @@ func (s *stateFile) adoptSwitch(id string, v sessionState) {
 	defer s.persistMu.Unlock()
 	s.mu.Lock()
 	if cur, ok := s.Sessions[id]; ok {
+		cur.ModelSource = v.ModelSource
 		cur.Launcher, cur.Model, cur.ModelFingerprint, cur.ModelEffort = v.Launcher, v.Model, v.ModelFingerprint, v.ModelEffort
 		cur.Cwd, cur.StartedAt, cur.PlanThen, cur.Pane, cur.PendingSwitch = v.Cwd, v.StartedAt, v.PlanThen, v.Pane, v.PendingSwitch
 		cur.EngineHistory, cur.PendingHandoff = v.EngineHistory, v.PendingHandoff // a switch to another engine (engine_switch.go)

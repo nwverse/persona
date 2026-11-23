@@ -41,17 +41,17 @@ func extensionConversations(list []proto.Session) []proto.Session {
 // (#10941).
 func (s *Service) feedHiddenFromExtension(ctx context.Context, id string) bool {
 	if _, _, leader := parseLeaderRef(id); !leader {
-		if s.trackPolicy(ctx, s.notedSpaces(ctx, []string{id})[id]).HideFromExtensions {
+		if s.extensionHides(ctx, s.notedSpaces(ctx, []string{id})[id]) {
 			return true
 		}
 		if c, ok := s.session(ctx, s.conversationMachine(ctx, id, ""), id); ok {
-			if hidden := s.trackPolicy(ctx, runSpace(c)).HideFromExtensions; hidden || s.isAssistantRow(c) {
+			if hidden := s.extensionHides(ctx, runSpace(c)); hidden || s.isAssistantRow(c) {
 				return hidden
 			}
 		}
 	}
 	space, known := s.conversationSpace(ctx, id)
-	return !known || s.trackPolicy(ctx, space).HideFromExtensions
+	return !known || s.extensionHides(ctx, space)
 }
 
 // extensionFeed is what of a feed's items and of the plans they name (feedPlans) an extension's token is shown, and
@@ -104,7 +104,7 @@ func (s *Service) extensionFeed(ctx context.Context, items []FeedItem, plans map
 	}
 	planShown := func(p *TaskPlan) bool {
 		return p != nil && !slices.ContainsFunc(p.Tasks, func(t PlanTask) bool {
-			return t.TodoID != "" && !todoShown(t.TodoID) || s.trackPolicy(ctx, identity.SpaceAt(t.Cwd)).HideFromExtensions
+			return t.TodoID != "" && !todoShown(t.TodoID) || s.extensionHides(ctx, identity.SpaceAt(t.Cwd))
 		})
 	}
 

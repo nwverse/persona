@@ -3735,6 +3735,14 @@ type ConnectorCallParams struct {
 	Contribution string          `json:"contribution"`
 	Name         string          `json:"name"`
 	Args         json.RawMessage `json:"args,omitempty"`
+	// The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+	Track string `json:"track,omitempty"`
+	// The track's kind; absent when not known (the main track).
+	TrackKind string `json:"track_kind,omitempty"`
+	// The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+	// general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+	// confirms a write stays the hub's decision.
+	Categories []string `json:"categories,omitempty"`
 }
 
 // ConnectorCallResult: tools.call and actions.do.
@@ -3783,6 +3791,14 @@ type ConnectorDoParams struct {
 	Name         string          `json:"name"`
 	Args         json.RawMessage `json:"args,omitempty"`
 	RequestID    string          `json:"request_id"`
+	// The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+	Track string `json:"track,omitempty"`
+	// The track's kind; absent when not known (the main track).
+	TrackKind string `json:"track_kind,omitempty"`
+	// The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+	// general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+	// confirms a write stays the hub's decision.
+	Categories []string `json:"categories,omitempty"`
 }
 
 // ConnectorRecallParams: recall: take back a message the connector's program sent in the user's name, which the
@@ -5303,13 +5319,13 @@ type TodoDecisionEvent struct {
 	Decision TodoEventDecision `json:"decision"`
 }
 
-// LeaderChangedEvent: event.leader.changed: a leader conversation was made (a side conversation added to
-// assistant.leaders), its title changed, it was filed under another knowledge-base project, it ended (it left
-// assistant.leaders; nothing is deleted) or it was made a leader again. id is the leader conversation's session id,
-// the key a work-log record keeps; title its title as the apps show it; name what the direction is called, to show it
-// by (the name the owner or the secretary gave it, else its knowledge-base project's name, else the title without its
-// "MMDD | kind | " prefix; always sent by a hub that has it, #3679); project the knowledge-base project's slug, left
-// out while it has none; ended true once it is no longer a leader, left out while it is.
+// LeaderChangedEvent: event.leader.changed: a direction was made (an id added to assistant.leaders), its title
+// changed, it was filed under another knowledge-base project, it ended (it left assistant.leaders; nothing is
+// deleted) or it was made current again. id is the stable direction id, the key a work-log record keeps; it is a
+// conversation session id only for a conversation-backed direction. title is its conversation title, or its explicit
+// name when no Persona conversation exists; name is what the direction is called (an explicit name, else its
+// knowledge-base project's name, else the title without its "MMDD | kind | " prefix); project is the knowledge-base
+// project's slug, left out while it has none; ended is true once it is no longer current, left out while it is.
 type LeaderChangedEvent struct {
 	ID      string `json:"id"`
 	Title   string `json:"title"`
@@ -5318,16 +5334,17 @@ type LeaderChangedEvent struct {
 	Ended   bool   `json:"ended,omitempty"`
 }
 
-// LeaderReportEvent: event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it),
-// needs the owner's decision (decision: its review says needs_user, or a plan of the leader's waits for the owner's
-// Start), or is stuck (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours);
-// those are written by the hub from the task's ledger, never by a model. progress (#3679) is the leader's own summary
-// of its direction at the goal level, sent with its leader_progress tool: reached, doing (and where it is stuck),
-// needs_you (what the owner has to do) and links (evidence; link is the first), text the three put together, todo "".
-// id names the report (never sent twice; key on it to be safe), leader the leader conversation's id, todo the task's
-// to-do id (GET /api/v1/todos with todos.read reads it; "" for a plan, which has no to-do until it starts), plan the
-// waiting plan's id (only on a decision about a plan), text at most 300 characters in the owner's language, link the
-// task's PR or delivery link when it has one, at when what it reports happened.
+// LeaderReportEvent: event.leader.report: one of a direction's tasks reached its goal (reached: its review accepted
+// it), needs the owner's decision (decision: its review says needs_user, or a plan of the direction's waits for the
+// owner's Start), or is stuck (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24
+// hours); those are written by the hub from the task's ledger, never by a model. progress (#3679, #8236) is the
+// direction's own summary at the goal level, sent with leader_progress or an authorized leaders.write HTTP / node CLI
+// report: reached, doing (and where it is stuck), needs_you (what the owner has to do) and links (evidence; link is
+// the first), text the three put together, todo "". id names the report (never sent twice; key on it to be safe),
+// leader the stable direction id, todo the task's to-do id (GET /api/v1/todos with todos.read reads it; "" for a
+// plan, which has no to-do until it starts), plan the waiting plan's id (only on a decision about a plan), text at
+// most 300 characters in the owner's language, link the task's PR or delivery link when it has one, at when what it
+// reports happened.
 type LeaderReportEvent struct {
 	ID       string    `json:"id"`
 	Leader   string    `json:"leader"`
@@ -5593,6 +5610,9 @@ type AssistantMemoryEntry struct {
 	Content string `json:"content,omitempty"`
 	// content was cut or left out for its size.
 	Truncated bool `json:"truncated,omitempty"`
+	// The track whose memory it is; absent for the main track's. Another track's is shown only to an extension that may
+	// read what comes from it: the user's own, or one granted every default category of the track.
+	Track string `json:"track,omitempty"`
 }
 
 // AssistantMemoryResult: an assistant without memory (none written yet, or the feature off) has no entries.

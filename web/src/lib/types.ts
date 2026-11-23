@@ -887,6 +887,9 @@ export interface SessionChildren {
 }
 
 export const SESSION_REVIEW_FEATURE = "session_review";
+/** The hub feature that says it has git/review (lib/session-review.ts). Here, not there, so the chat's check for it
+ *  keeps session-review.ts off the first screen. */
+export const REVIEW_FEATURE = "git_review";
 export const SESSION_REVIEW_TOOL = "persona_session_review";
 
 export function isSessionReview(ix: Pick<Interaction, "kind" | "tool_name">): boolean {
@@ -1044,8 +1047,8 @@ export interface AssistantInfo {
   timezone?: string;
   notes?: string;
   notes_effective?: string;
-  /** The side conversations the user made leaders (docs/assistant/unified-entry.md "Leader conversations"): absent
-   *  when there are none or from an older hub. The sidebar shows them first among the Persona chats, as pinned. */
+  /** The current directions' opaque ids, in hub order: a conversation-backed id indexes `conversations`; an external
+   *  one has no Persona conversation and gets its target from the direction tree or `/assistant/leaders` (#8236). */
   leaders?: string[];
   /** "Fold background rounds" in effect (#4314, docs/assistant/assistant.md "Background rounds"); absent from an older hub, which means on. */
   main_background_folded?: boolean;
