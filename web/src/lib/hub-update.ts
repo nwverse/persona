@@ -12,6 +12,21 @@ export interface BusyItem {
   title: string;
 }
 
+export interface HubDevelopmentProgress {
+  phase: "building" | "backing_up" | "applying_backup";
+  step: string;
+  step_index: number;
+  step_total: number;
+  elapsed_seconds: number;
+  item_label?: string;
+  item_done?: number;
+  item_total?: number;
+  bytes_done?: number;
+  bytes_total?: number;
+  bytes_per_second?: number;
+  percent?: number;
+}
+
 export interface HubUpdateStatus {
   source?: "release" | "beta" | "web-dev";
   development?: {
@@ -52,6 +67,7 @@ export interface HubUpdateStatus {
   };
   state: string;
   progress?: string;
+  development_progress?: HubDevelopmentProgress;
   busy: BusyItem[];
   error?: string;
   auto: boolean;

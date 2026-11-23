@@ -1933,6 +1933,12 @@ The web Changes panel's secondary file tree (#10477) reuses the existing `Resize
 
 ### 4.3 Feedback and haptics
 
+Settings › Hub uses the update group's status row for Web development progress. Pair the
+phase title with the localized step. Use a thin accent bar on the inset track when the
+step supplies a percentage, and the shared spinner while its total is unknown. Use
+`text-meta` for the phase and `text-label` for the step and measurements. Announce
+step changes through the live status label and let the measurements wrap at narrow widths.
+
 Message feedback (#5258, principle 7, super rule 5) reuses the chat's status line and pending bubble, not a new card or
 style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait
 for a model token or overwrite `Session.status`. The pending-send overlay is scoped to the conversation and message,
