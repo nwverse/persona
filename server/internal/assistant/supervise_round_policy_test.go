@@ -28,8 +28,8 @@ var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStu
 // backgroundSignals are the signals an existing background conversation can receive for explicitly addressed legacy
 // notices. Without that explicit legacy target, all of them stay with main for new assistant-dispatched work (#5732).
 var backgroundSignals = []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigAllStopped, sigInterrupted,
-	sigPRConflict, sigDraftPR, sigPRMerged, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable,
-	sigOwnerCannot, sigParkedDue, sigParkedSummary, sigParkDecided, sigInbox, sigOverdue, sigCheck}
+	sigPRConflict, sigDraftPR, sigPRMerged, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable, sigDeliveryHold, sigCardlessWait,
+	sigOwnerCannot, sigParkedDue, sigParkedSummary, sigParkDecided, sigInbox, sigNeedsUserExternalInfo, sigOverdue, sigCheck}
 
 // roundConnectorTools are the round's tools that come with the Lark extension (lark_search) or the lark-cli connector
 // (larkcli_search) rather than the assistant's own list.
@@ -164,6 +164,9 @@ func roundMessage(lang string) string {
 		case sigInbox:
 			e.Inbox = &prompts.SuperviseInbox{Item: "in1", Title: "Release thread", Sender: "A colleague", Preview: "Is it out?",
 				Count: 2, URL: "https://github.com/example/repo/issues/2", ToAgent: "sent"}
+		case sigNeedsUserExternalInfo:
+			e.ExternalInfo = &prompts.NeedsUserExternalInfo{Language: lang, Source: "PR status", Summary: "PR #12 merged",
+				PendingQuestion: "Merge PR #12 now?", PendingRecommend: "Merge after review"}
 		}
 		entries = append(entries, e)
 	}
@@ -203,7 +206,7 @@ var roundPassingMentions = map[string][]string{
 	"kb_search":          {"kb_list"},
 	"schedule_followup":  {"inbox_post"},
 	"supervision_finish": {"ask_user"},
-	"task_plan":          {"kb_list", "repositories_list", "repository_get", "task_retry"},
+	"task_plan":          {"kb_list", "repositories_list", "repository_get", "task_retry", "agent_transfer"},
 	"task_review":        {"agent_start"},
 	"task_scope":         {"agent_supervise", "ask_user"},
 	"todo_get":           {"todo_repository_links_add"},

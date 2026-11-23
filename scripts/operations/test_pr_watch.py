@@ -1935,6 +1935,62 @@ class WatcherTests(unittest.TestCase):
             commands = pr_watch_verify.persona_checks(".", pr(title="test: update an argument-driven check"), 1, {})
         self.assertEqual(commands[0], ("CI scripts", ["bash", "scripts/ci/scripts.sh"]))
 
+    def test_invalid_base_sha_runs_no_git_or_privacy_command(self):
+        import pr_watch_test_guards
+        invalid = (
+            "c" * 39,
+            "c" * 41,
+            "C" * 40,
+            "g" * 40,
+            "--help",
+            "-" + "c" * 39,
+            "c" * 40 + "\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for base in invalid:
+                for repository_guards in (False, True):
+                    with self.subTest(base=base, repository_guards=repository_guards), \
+                            patch.object(pr_watch_test_guards, "checked") as checked, \
+                            patch.object(pr_watch_test_guards, "privacy_environment") as privacy, \
+                            patch.object(pr_watch_test_guards, "documentation_guard") as documentation:
+                        argv = ["--base=" + base, "--head", SHA_A, "--worktree", directory]
+                        if repository_guards:
+                            argv.append("--repository-guards")
+                        with self.assertRaisesRegex(pr_watch_common.WatchError, "base.*40 lowercase hexadecimal"):
+                            pr_watch_test_guards.main(argv)
+                        checked.assert_not_called()
+                        privacy.assert_not_called()
+                        documentation.assert_not_called()
+
+    def test_noncommit_or_missing_base_runs_only_the_object_validator(self):
+        import pr_watch_test_guards
+        for object_type in ("tree", "blob", "tag", "missing"):
+            with self.subTest(object_type=object_type), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(pr_watch_test_guards, "privacy_environment") as privacy, \
+                    patch.object(pr_watch_test_guards, "documentation_guard") as documentation:
+                def fake_checked(argv, **kwargs):
+                    self.assertEqual(["git", "cat-file", "-t", SHA_BASE], argv)
+                    if object_type == "missing":
+                        raise pr_watch_common.WatchError("missing object")
+                    return object_type + "\n"
+                with patch.object(pr_watch_test_guards, "checked", side_effect=fake_checked) as checked:
+                    with self.assertRaisesRegex(pr_watch_common.WatchError, "base.*commit"):
+                        pr_watch_test_guards.main([
+                            "--base", SHA_BASE, "--head", SHA_A, "--worktree", directory, "--repository-guards",
+                        ])
+                checked.assert_called_once()
+                privacy.assert_not_called()
+                documentation.assert_not_called()
+
+    def test_valid_base_commit_is_the_changed_guard_control(self):
+        import pr_watch_test_guards
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(pr_watch_test_guards, "checked", return_value="commit\n") as checked:
+            self.assertEqual(0, pr_watch_test_guards.main([
+                "--base", SHA_BASE, "--head", SHA_A, "--worktree", directory,
+            ]))
+        checked.assert_called_once_with(["git", "cat-file", "-t", SHA_BASE], cwd=Path(directory).resolve())
+
     def test_documentation_guards_use_base_not_stale_watcher_or_pr_source(self):
         import pr_watch_test_guards
         base_source = (
@@ -1979,6 +2035,9 @@ class WatcherTests(unittest.TestCase):
             shown = []
 
             def fake_checked(argv, **kwargs):
+                if argv[:3] == ["git", "cat-file", "-t"]:
+                    self.assertEqual(SHA_BASE, argv[3])
+                    return "commit\n"
                 if argv[:2] == ["git", "show"]:
                     if not argv[2].startswith(SHA_BASE + ":scripts/test/"):
                         raise AssertionError("guard source did not come from the exact base: " + argv[2])
@@ -2833,8 +2892,10 @@ class WatcherTests(unittest.TestCase):
                                   "verify": {}, "merge": True, "privacy": None, "notify_command": None}]
         watcher = pr_watch.Watcher(config, verbose=False)
         with patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run, \
+                patch.object(pr_watch, "require_local_gate") as local_gate, \
                 patch.object(pr_watch, "pr_snapshot", return_value=pr(state="MERGED")):
             watcher.merge(config["repositories"][0], pr())
+        local_gate.assert_called_once_with(repo, SHA_A, SHA_BASE)
         argv = run.call_args.args[0]
         self.assertEqual(argv[2:6], ["--expect-head", SHA_A, "--expect-base", SHA_BASE])
         self.assertEqual(argv[6], "7")

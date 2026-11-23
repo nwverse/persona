@@ -89,7 +89,7 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		// A guest (a meeting's room too) starts as on any resume: spawnClaude reads its tools and kind from its record
 		// (no built-in tools, strict MCP config, project setting sources, its own settings and profile), and
 		// spawnAssistant refuses one whose launcher runs another agent by now.
-		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, IsMain: st.IsMain, MainCompactWindow: st.MainCompactWindow, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions, Origin: st.Origin, OriginKnown: st.OriginKnown}
+		execution := modelExecution{Source: st.ModelSource, Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, IsMain: st.IsMain, MainCompactWindow: st.MainCompactWindow, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions, Origin: st.Origin, OriginKnown: st.OriginKnown}
 		resolved, current, _ := n.assistantModelDecision(ctx, id)
 		if current.OriginKnown {
 			execution.Origin, execution.OriginKnown = current.Origin, true
@@ -176,7 +176,7 @@ func (n *Node) compactAssistantProc(ctx context.Context, p *assistantProc) error
 	if p.agent == "codex" {
 		err = p.cx.compact(ctx)
 	} else {
-		line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "/compact"}})
+		line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": n.assistantCompactCommand(id)}})
 		err = p.write(line)
 	}
 	if err != nil {
@@ -387,4 +387,23 @@ func clipHandoff(s string, max int) string {
 		return s
 	}
 	return string(r[:max]) + "…"
+}
+
+// assistantCompactCommand supplies configured instructions for explicit and idle Claude compactions. Automatic
+// compaction reads the same instructions from the manager-generated CLAUDE.md.
+func (n *Node) assistantCompactCommand(id string) string {
+	instructions := n.assistantCompactInstructions(id)
+	if instructions == "" {
+		return "/compact"
+	}
+	return "/compact " + instructions
+}
+func (n *Node) assistantCompactInstructions(id string) string {
+	if n.peer != nil {
+		if instructions := n.assistantContext(id).CompactInstructions; instructions != "" {
+			return instructions
+		}
+	}
+	st, _ := n.state.get(id)
+	return st.CompactInstructions
 }

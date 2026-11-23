@@ -1,5 +1,6 @@
 // Package nodecmd is the device's command line: what a computer runs for its node and its Agents (`node --stdio`,
-// `node --attach`, `hook`, `mcp`, `ask`, `notify`, `launch`, …). The device's own program `persona-node` is this alone;
+// `node --attach`, `hook`, `mcp`, `ask`, `notify`, `create-direction`, `write-progress`, `launch`, …). The device's own
+// program `persona-node` is this alone;
 // `personad` dispatches the same commands here and adds the hub's and the manager's. It must
 // not link the hub, the manager or the database (cmd/persona-node/main_test.go guards that).
 package nodecmd
@@ -34,7 +35,9 @@ type Build struct {
 }
 
 // Usage is the device commands' part of the usage text (the node part is NodeUsage).
-const Usage = `  personad hook             Claude Code hook entry (reads hook JSON on stdin)
+const Usage = `  personad resource status [resource]  shared runner status as JSON
+  personad gate <project> <ref> [groups...]  join or reuse identical gate work
+  personad hook             Claude Code hook entry (reads hook JSON on stdin)
   personad mcp              Claude Code MCP server (stdio)
   personad ask "question" [--options a,b,c] [--timeout 10m] [--require-remote]
                            block until the question is answered on the phone; exit 0 allowed / option chosen (printed),
@@ -75,6 +78,10 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 	}
 	rest := args[1:]
 	switch args[0] {
+	case "resource":
+		return true, resourceCommand(ctx, rest)
+	case "gate":
+		os.Exit(gateCommand(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
 	case sandbox.AgentExecCommand:
 		stop()
 		return true, sandbox.RunAgentExec(rest)
@@ -91,6 +98,8 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		return true, runLaunch(stop, ticket, rest[0], rest[1:]) // launch.go: bounded wait for the node, Ctrl-C ends it
 	case "assistant-tui": // an assistant conversation's interactive Claude Code, as claude -p to the node (node/assistant_tui.go)
 		os.Exit(node.AssistantTUI(rest, os.Stdin, os.Stdout, os.Stderr))
+	case "model-source": // final Codex provider attribution, after launcher expansion
+		return true, node.ModelSourceLaunch(rest)
 	case "codex-start": // a Codex launcher with the phone's first message, read from a file (node/codex_start.go)
 		return true, node.CodexStart(rest)
 	case "tab-start": // a command a runtime gave to resume its session in a new tab (`pi --session …`, node/pi.go)
@@ -103,6 +112,10 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(scriptcli.Ask(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "notify":
 		os.Exit(scriptcli.Notify(ctx, rest, os.Stdout, os.Stderr))
+	case "create-direction":
+		os.Exit(scriptcli.CreateDirection(ctx, rest, os.Stdout, os.Stderr))
+	case "write-progress":
+		os.Exit(scriptcli.WriteProgress(ctx, rest, os.Stdout, os.Stderr))
 	case "decision":
 		os.Exit(scriptcli.Decision(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "office":

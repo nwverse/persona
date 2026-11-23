@@ -39,7 +39,7 @@ export function InboxTaskLinks({ item }: { item: InboxItem }) {
     <div className="mt-3 flex flex-col items-start gap-1.5" data-inbox-task-links>
       {fwd && (
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 text-xs" data-inbox-todo-forward={fwd.status}>
-          <span className={cx("shrink-0 rounded-chip px-1.5 py-0.5 text-[11px] font-medium", warn ? "bg-field text-red" : "bg-field text-ink-2")}>
+          <span className={cx("shrink-0 rounded-chip px-1.5 py-0.5 text-submeta font-medium", warn ? "bg-field text-red" : "bg-field text-ink-2")}>
             {todoForwardLabel(fwd.status)}
           </span>
           {fwd.reason && <span className="min-w-0 truncate text-ink-3" title={fwd.reason}>{fwd.reason}</span>}

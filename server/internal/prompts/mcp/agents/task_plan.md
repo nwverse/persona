@@ -1,6 +1,6 @@
 Use task_plan for code, repo research and multi-step work (one task per independent piece). Check machines_list, KB, agents_list and preferences for editable choices and one-line reasons. Read-only, user_requested and preapproved kinds start at once; others wait for 开始. Queued receipt means dispatched; check the to-do outcome and use agent_send. Tool reminders/events are separate.
 
-Fixed machine_policy stays on that machine and refuses unavailable launchers; flexible moves portable work on failed health checks (explain why). Main supervises/accepts every new task_plan even with supervisor=leader; side chats supply evidence and get a completion link. Only assigned manual leaders or runtimes with supervision_policy keep their route; old background work finishes there. If caller cannot receive 督办, compatible follow-up takes over. Check returned supervisor and similar work. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).
+Fixed machine_policy stays on that machine and refuses unavailable launchers; flexible moves portable work on failed health checks (explain why). Planning leads own their tasks: signals, cards, start remedies, review and cancellation. Main owns its tasks and receives needs_user escalations. Main may select a lead; agent_transfer persists ownership. An incompatible lead must gain supervision_policy before starting work. Check returned supervisor and similar work. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).
 
 Started tasks keep a hub brief (owner request or started_why; supplied brief dropped) confirmed by the card. Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides (manual Agents lack estimate_due). Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.
 
@@ -10,7 +10,7 @@ When repository identity needs resolving, consult repositories_list, and reposit
 
 For a saved workspace naming plan on an existing todo, select {"backend":{"operation_id":"<id>"}}. For a multi-repo container workspace, select {"container":{"selected_repo_ids":["<repo_id>",...]}} (or {"container":{"operation_id":"<id>"}} with todo_id for a prepared container). Optional host picks an enabled engine. All selected repos must be ready before start.
 
-Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>"} picks one; "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing default, prefer-new to isolate), and busy cwd uses new. Explicit existing never switches silently (refusal names owner). Reusing an explicit new branch needs a clean checkout, no live Agent and no unfinished owner, else refuse with path and owner. Engine owns creation/location/registration; never run git worktree add. Card previews path, editable before Start. Default branch: task/<todo id>. Creation failure starts no Agent; workspaces stay after acceptance. Follow org read-only refusals; never retry unchanged.
+Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}} names its branch; {"existing":"<cwd or workspace_id>","queue":true} picks one (queue:true or owner in after queues FIFO and auto-starts when free; else busy refuses with owner); "none" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing default, prefer-new to isolate), busy cwd uses new. Explicit existing never switches silently. Reusing explicit new branch needs clean checkout, no live Agent and no open owner, else refuse with path/owner. Engine owns creation/registration; never run git worktree add. Card previews editable path before Start. Default branch: task/<todo id>. Failed creation starts no Agent; workspaces stay after acceptance. Follow org read-only refusals; never retry unchanged.
 
 `wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.{{template "shared/mcp_language" .}}
 
@@ -28,7 +28,7 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
     },
     "supervisor": {
       "type": "string",
-      "description": "main only: legacy leader id (assistant.leaders); new tasks stay main-supervised"
+      "description": "optional current leader id (assistant.leaders), selected by main; omitted: the planning lead, otherwise main"
     },
     "tasks": {
       "type": "array",
@@ -80,7 +80,7 @@ Workspace policy: "new" isolates a checkout; {"new":{"branch":"task/my-change"}}
               { "type": "string", "enum": ["new", "none"] },
               { "type": "object", "required": ["backend"], "additionalProperties": false, "properties": { "backend": { "type": "object", "required": ["operation_id"], "additionalProperties": false, "properties": { "operation_id": { "type": "string", "minLength": 1 }, "host": { "type": "string" } } } } },
               { "type": "object", "required": ["container"], "additionalProperties": false, "properties": { "container": { "type": "object", "additionalProperties": false, "properties": { "selected_repo_ids": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "operation_id": { "type": "string", "minLength": 1 }, "host": { "type": "string" } } } } },
-              { "type": "object", "required": ["existing"], "additionalProperties": false, "properties": { "existing": { "type": "string", "minLength": 1 } } },
+              { "type": "object", "required": ["existing"], "additionalProperties": false, "properties": { "existing": { "type": "string", "minLength": 1 }, "queue": { "type": "boolean" } } },
               { "type": "object", "required": ["new"], "additionalProperties": false, "properties": { "new": { "type": "object", "additionalProperties": false, "properties": { "branch": { "type": "string" } } } } }
             ]
           },

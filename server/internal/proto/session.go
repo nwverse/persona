@@ -442,8 +442,9 @@ type Session struct {
 	// rollout's own rate limits), else what the hub reads off Claude Code's words when they name a time zone. Nil: not
 	// known, and nothing waits for it. Only a subscription's limit has one: a gateway's or an API key's 429 never does.
 	TurnErrorResetsAt *time.Time `json:"turn_error_resets_at,omitempty"`
-	// TurnErrorCode says what is wrong when the hub can tell from TurnError (docs/assistant/onboarding.md 5.2): one of the
-	// TurnErrorCode* values, for a card that says what to fix (sign in, the key, the model). Empty: not known.
+	// TurnErrorCode says what is wrong when the hub or node can tell from TurnError (docs/assistant/onboarding.md 5.2):
+	// one of the TurnError* values below, for a client fix card (sign in, the key, the model) or for upstream-stall
+	// visibility (TurnErrorUpstreamUnavailable). Empty: not known.
 	TurnErrorCode string `json:"turn_error_code,omitempty"`
 	// ModelFallback is the refusal fallback still active in this session, as the runtime recorded it.
 	ModelFallback *ModelRefusal `json:"model_fallback,omitempty"`
@@ -532,6 +533,13 @@ const (
 	// TurnErrorToolSearchUnsupported: the gateway refused Claude Code's on-demand tool loading (tool search, #10365). The
 	// node now starts that launcher and model with every tool loaded, so a retry works: not the user's to fix.
 	TurnErrorToolSearchUnsupported = "tool_search_unsupported"
+	// TurnErrorUpstreamUnavailable: the model gateway reported an exhausted upstream account pool, or the session hit >= 2
+	// consecutive upstream 5xx turns with no assistant progress in between (#13372). Visibility label: TurnErrorKind stays
+	// transient unless another rule marks it.
+	TurnErrorUpstreamUnavailable = "upstream_unavailable"
+	// TurnErrorImagesTooLarge: accumulated pictures in the conversation exceed the model API's size, count or dimension
+	// limit (#13045). Compacting the conversation clears older pictures so the failed turn can be sent again.
+	TurnErrorImagesTooLarge = "images_too_large"
 )
 
 // Codes a call refuses with when the assistant's conversation cannot start on a machine (docs/assistant/onboarding.md 4.6, 5.2):

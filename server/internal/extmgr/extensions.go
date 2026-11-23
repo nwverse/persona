@@ -596,6 +596,11 @@ func (ps *extensions) changed(c extension.Change) {
 			}
 		}
 		ps.forgetAssistantData(ctx, c.ID) // what the assistant read of its data directory goes with it
+		// What the user let it read of the assistant's sensitive information goes too (#13246): installed again, it
+		// starts as a third party's with no grant.
+		if err := ps.h.callAssistant(ctx, assistantwire.MethodExtensionTrustForget, assistantwire.ExtensionTrustForget{Extension: c.ID}, nil); err != nil {
+			ps.logf("plugin %s removed: its trust was not forgotten: %v", c.ID, err)
+		}
 		if n, err := ps.h.removeHandoffRules(ctx, c.ID, ""); err != nil {
 			ps.logf("plugin %s removed: its hand-off rules were not: %v", c.ID, err)
 		} else if n > 0 {
@@ -777,6 +782,7 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	default:
 		spec, err := ps.spec(ctx, p, hp)
 		if err != nil {
+			ps.logf("plugin %s: %v", id, err)
 			hp.status, hp.err = host.StateError, err.Error()
 			break
 		}
@@ -1151,8 +1157,10 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		switch method {
 		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
 			return ps.extensionKBCall(ctx, id, method, params)
-		case "assistant.conversations", "assistant.messages", "assistant.memory": // assistant.read, assistant.memory.read (extension_assistant_read.go)
+		case "assistant.conversations", "assistant.messages", "assistant.memory", assistantwire.MethodAssistantEntriesList: // assistant.read, assistant.memory.read (extension_assistant_read.go)
 			return ps.extensionAssistantCall(ctx, id, method, params)
+		case "machines.pair_link", "machines.status": // machines.pair / machines.read (extension_machines.go)
+			return ps.extensionMachinesCall(ctx, id, method, params)
 		case "browser.machines", "browser.run": // browser.run (extension_browser.go)
 			return ps.extensionBrowserCall(ctx, id, method, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)

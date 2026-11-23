@@ -474,6 +474,7 @@
     <string name="agents_todo_hold_user">要你点头</string>
     <string name="agents_todo_hold_agent">Agent 能接着做</string>
     <string name="agents_todo_hold_other">等别人 / CI / 环境</string>
+    <string name="agents_todo_hold_supervisor">督办先看</string>
     <string name="agents_todo_active_agents">正在做的 Agent</string>
     <string name="agents_todo_no_agents">暂无分配的 Agent</string>
     <string name="agents_todo_no_agents_hint">点击底部「交给 Agent」指派任务。</string>

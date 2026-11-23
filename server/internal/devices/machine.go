@@ -634,6 +634,23 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeStartGoalUnsupported, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_start_goal")}
 		}
 	}
+	if method == "assistant.prepare" && !nodeHas(info, nodeproto.TrackSpaces) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			Space json.RawMessage `json:"space"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if len(fields.Space) > 0 && string(fields.Space) != "null" {
+			// A track's directory (#13472): an older node would write its instructions without the track's SPACE.md
+			// or folders. The manager asks only a node it saw announce it; this holds when the node changed since.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.node_outdated")}
+		}
+	}
+	if method == "assistant.space_md" && !nodeHas(info, nodeproto.TrackSpaceMD) {
+		// A track's SPACE.md (#13472): an older node does not know the method. The manager asks only a node it saw
+		// announce it; this holds when the node changed since.
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.node_outdated")}
+	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.ResumeOutsideHealth) {
 		raw, _ := json.Marshal(params)
 		var fields struct {

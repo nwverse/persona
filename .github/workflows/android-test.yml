@@ -26,8 +26,8 @@ jobs:
   android:
     name: Android ${{ matrix.lane }}
     runs-on: ubuntu-latest
-    # Retain headroom until hosted cold/warm timings establish a safe lower bound.
-    timeout-minutes: 45
+    # Hosted lint, tests and evidence need more than 45 minutes; a cancelled lane has no receipt and cannot publish.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: 2
