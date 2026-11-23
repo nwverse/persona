@@ -123,12 +123,11 @@ func TestScopedAssistantResumesInItsOwnDirectory(t *testing.T) {
 	}
 	defer n.stopAssistant(id)
 	var ran string
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		if b, err := os.ReadFile(filepath.Join(fake, "cwd.txt")); err == nil && len(b) > 0 {
-			ran = strings.TrimSpace(string(b))
-			break
-		}
-	}
+	waitWithin(t, 10*time.Second, "the conversation's process to start", func() bool {
+		b, err := os.ReadFile(filepath.Join(fake, "cwd.txt"))
+		ran = strings.TrimSpace(string(b))
+		return err == nil && ran != ""
+	})
 	want, _ := filepath.EvalSymlinks(own)
 	if ran != want {
 		t.Fatalf("the conversation ran in %q, want %q", ran, want)
