@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/update/updatetest"
@@ -26,7 +27,7 @@ func TestStaleLocalNodeBuildIsNotTakenForTheHubs(t *testing.T) {
 		site := newFakeRelease(t)
 		site.publish(t, hub, overlapping(hub, 202611221500), false, map[string]string{"personad-" + plat + ".exe": current})
 		d, dir, _ := packageDevices(t, hub, site.srv.URL)
-		copyFile(t, stale, filepath.Join(dir, "personad-"+plat+".exe"))
+		copyLocalNodeBuild(t, stale, filepath.Join(dir, "personad-"+plat+".exe"))
 		pkg, err := d.nodePackageFor(ctx, goos, arch, nodeproto.ProgramPersonad)
 		if err != nil || pkg.path != "" || pkg.Version != hub || pkg.Fallback || pkg.file.Name != "personad-"+plat+".exe.gz" {
 			t.Fatalf("the stale local build was taken for %s: %+v %v", hub, pkg, err)
@@ -37,12 +38,12 @@ func TestStaleLocalNodeBuildIsNotTakenForTheHubs(t *testing.T) {
 		site := newFakeRelease(t) // no release of the hub's version: only the local build can do
 		d, dir, _ := packageDevices(t, hub, site.srv.URL)
 		local := filepath.Join(dir, "personad-"+plat+".exe")
-		copyFile(t, stale, local)
+		copyLocalNodeBuild(t, stale, local)
 		if pkg, err := d.nodePackageFor(ctx, goos, arch, nodeproto.ProgramPersonad); err == nil && pkg.path == local {
 			t.Fatalf("the stale build was taken: %+v", pkg)
 		}
 		// The deploy puts the hub's build in place: the lookup remembered a moment ago does not stand for ten minutes.
-		copyFile(t, current, local)
+		copyLocalNodeBuild(t, current, local)
 		pkg, err := d.nodePackageFor(ctx, goos, arch, nodeproto.ProgramPersonad)
 		if err != nil || pkg.path != local || pkg.Version != hub {
 			t.Fatalf("the hub's build put in place: %+v %v", pkg, err)
@@ -52,18 +53,18 @@ func TestStaleLocalNodeBuildIsNotTakenForTheHubs(t *testing.T) {
 	t.Run("a build named without .exe", func(t *testing.T) {
 		d, dir, _ := packageDevices(t, hub, "")
 		legacy := filepath.Join(dir, "personad-"+plat)
-		copyFile(t, stale, legacy)
+		copyLocalNodeBuild(t, stale, legacy)
 		if pkg, err := d.nodePackageFor(ctx, goos, arch, nodeproto.ProgramPersonad); err == nil {
 			t.Fatalf("a stale build without .exe was taken: %+v", pkg)
 		}
-		copyFile(t, current, legacy)
+		copyLocalNodeBuild(t, current, legacy)
 		pkg, err := d.nodePackageFor(ctx, goos, arch, nodeproto.ProgramPersonad)
 		if err != nil || pkg.path != legacy || pkg.Version != hub {
 			t.Fatalf("the hub's build without .exe: %+v %v", pkg, err)
 		}
 		// The current name goes first.
 		named := filepath.Join(dir, "personad-"+plat+".exe")
-		copyFile(t, current, named)
+		copyLocalNodeBuild(t, current, named)
 		if pkg, err := d.nodePackageFor(ctx, goos, arch, nodeproto.ProgramPersonad); err != nil || pkg.path != named {
 			t.Fatalf("with both names: %+v %v", pkg, err)
 		}
@@ -72,7 +73,7 @@ func TestStaleLocalNodeBuildIsNotTakenForTheHubs(t *testing.T) {
 	t.Run("a version file still says which build it is", func(t *testing.T) {
 		d, dir, _ := packageDevices(t, hub, "")
 		local := filepath.Join(dir, "personad-"+plat+".exe")
-		copyFile(t, stale, local)
+		copyLocalNodeBuild(t, stale, local)
 		if err := os.WriteFile(local+".version", []byte(old+"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -81,6 +82,23 @@ func TestStaleLocalNodeBuildIsNotTakenForTheHubs(t *testing.T) {
 			t.Fatalf("a labelled build: %+v %v", pkg, err)
 		}
 	})
+}
+
+// The cache observes size and mtime. Equal-sized fixture binaries can be overwritten within one filesystem clock
+// tick; make the replacement's metadata distinct so these cases exercise invalidation without a timing dependency.
+func copyLocalNodeBuild(t *testing.T, from, to string) {
+	t.Helper()
+	previous, err := os.Stat(to)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	copyFile(t, from, to)
+	if previous != nil {
+		stamp := previous.ModTime().Add(time.Second)
+		if err := os.Chtimes(to, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestFileContainsAcrossChunks(t *testing.T) {

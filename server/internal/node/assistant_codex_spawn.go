@@ -131,6 +131,9 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	}
 	compaction := n.assistantCompactionPolicy(launcher, cwd, "", execution)
 	args, personaMCPOnly := n.codexAssistantArgs(key, n.dir, cwd, compaction.codexLimit())
+	if instructions := n.assistantCompactInstructions(id); instructions != "" {
+		args = append(args, codexCompactPromptArgs(instructions)...)
+	}
 	cmd := n.codexAssistantCommand(shell, launcher, args)
 	cmd.Dir = root
 	cmd.Env = identity.Environment(os.Environ(), "PERSONA_ASSISTANT=1")
@@ -253,4 +256,10 @@ func (n *Node) realDir(dir string) string {
 		return dir
 	}
 	return real
+}
+
+// Codex uses this prompt for both manual and automatic compaction; JSON strings are valid TOML basic strings.
+func codexCompactPromptArgs(instructions string) []string {
+	raw, _ := json.Marshal(instructions)
+	return []string{"-c", "compact_prompt=" + string(raw)}
 }

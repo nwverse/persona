@@ -564,6 +564,13 @@ func (s *Service) channelInteraction(ix proto.Interaction) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var to []string
+	redacted, decided := false, false
+	redacts := func() bool { // decided once for every channel, and only when one needs it
+		if !decided {
+			redacted, decided = s.exitPolicy(ctx, interactionText(ix), ix.SessionID, s.ixSpace(ctx, ix)).Redact, true
+		}
+		return redacted
+	}
 	for _, v := range s.textChannels(ctx) {
 		if v.Capabilities.Asks != channel.AsksText || !featureOn(v, channel.FeatureAsks) {
 			continue
@@ -571,8 +578,9 @@ func (s *Service) channelInteraction(ix proto.Interaction) {
 		if ix.Private {
 			continue // a Just me turn's card: never in a channel (meeting_justme.go)
 		}
-		// "All questions" does not take the cards of a space that redacts: only one the channel drives itself (health.go).
-		if !s.channelDrives(ctx, v.ID, ix.MachineID, ix.SessionID) && (!featureOn(v, channel.FeatureAllAsks) || s.ixPolicy(ctx, ix).Redact) {
+		// "All questions" does not take a card that says something sensitive: only one the channel drives itself
+		// (health.go, info_use.go).
+		if !s.channelDrives(ctx, v.ID, ix.MachineID, ix.SessionID) && (!featureOn(v, channel.FeatureAllAsks) || redacts()) {
 			continue
 		}
 		to = append(to, v.ID)

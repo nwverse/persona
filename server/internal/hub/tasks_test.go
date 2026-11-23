@@ -581,8 +581,18 @@ func TestTaskPlanWaitsForTheUser(t *testing.T) {
 	r.Header.Set("Authorization", "Bearer "+h.cfg.Token)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("dismiss after start: %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("dismiss after start: %d %s", w.Code, w.Body)
+	}
+	var dismissed struct{ Plan *assistant.TaskPlan }
+	if err := json.Unmarshal(w.Body.Bytes(), &dismissed); err != nil {
+		t.Fatal(err)
+	}
+	if dismissed.Plan == nil || dismissed.Plan.ID != id || dismissed.Plan.State != "started" {
+		t.Fatalf("dismiss after start must return the started plan: %+v", dismissed.Plan)
+	}
+	if p := loadPlan(h, id); p.State != "started" {
+		t.Fatalf("dismiss changed the started plan: %+v", p)
 	}
 }
 

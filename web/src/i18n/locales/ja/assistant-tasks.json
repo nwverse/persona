@@ -76,6 +76,8 @@
   "retry": "再試行",
   "remove": "削除",
   "continue": "続行",
+  "delivery_ok": "完了しました。公開にはあなたの OK が必要です",
+  "open_task": "タスクを開く",
   "task_fallback": "タスク",
   "say_to": "「{title}」へ",
   "answered": "回答済み",

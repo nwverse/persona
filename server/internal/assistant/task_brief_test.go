@@ -690,3 +690,33 @@ func TestContinuationUsesAuthorizedScope(t *testing.T) {
 	t.Logf("synthetic full prompts (runes/bytes): fresh %d/%d, re-scoped continuation %d/%d",
 		len([]rune(fresh)), len(fresh), len([]rune(replacement)), len(replacement))
 }
+
+func TestContinuationSurvivesEstimateUpdate(t *testing.T) {
+	s, _, _ := briefService(t, "check one job")
+	got, failed := tool(t, s, "task_plan", briefTask(map[string]any{"title": "Check job", "goal": "Check one job", "prompt": "Inspect the job", "done_when": []string{"Result reported"}}))
+	if failed {
+		t.Fatal(got)
+	}
+	waitFor(t, "original start", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	todo := onlyTodo(s)
+	tasks := []PlanTask{{Title: "Continue", Machine: "box", Prompt: "Same inspection", Continues: todo.ID, ContinuesWhy: "Agent stopped"}}
+	if err := s.planBriefs(t.Context(), "", "conv1", tasks); err != nil {
+		t.Fatal(err)
+	}
+	rev := tasks[0].Brief.scopeRevision()
+	// Quoting an operation in a schedule note grants no authority to carry it out.
+	b, err := s.applyScope(t.Context(), todo, scopeChange{By: "conv1", Expect: 42, Change: "Waiting for the merge report", Why: "More time needed"})
+	if err != nil || !b.scopeRevision().Equal(rev) || !b.ClockAt.After(rev) || b.Log[len(b.Log)-1].Kind != briefEventEstimate {
+		t.Fatalf("estimate changed authorized scope: %+v, %v", b, err)
+	}
+	if err := s.checkContinuationScope(&tasks[0]); err != nil || tasks[0].ExpectMinutes != 42 {
+		t.Fatalf("pending continuation: %v, estimate %d", err, tasks[0].ExpectMinutes)
+	}
+	got, failed = tool(t, s, "todo_get", map[string]any{"id": todo.ID})
+	if failed || !strings.Contains(got, "scope_revision: "+rev.Format(time.RFC3339Nano)) {
+		t.Fatalf("todo_get: %s", got)
+	}
+	if _, err = s.applyScope(t.Context(), todo, scopeChange{By: "conv1", Change: "Merge the release", DoneWhen: []string{"Merge the release"}, Expect: 42}); err == nil {
+		t.Fatal("adding a risky criterion needs owner approval")
+	}
+}

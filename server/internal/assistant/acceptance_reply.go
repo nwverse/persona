@@ -258,7 +258,7 @@ func acceptSucceeded() acceptResult { return acceptResult{taken: true} }
 func (s *Service) decisionNotDelivered(ctx context.Context, id string, askedAt time.Time, choice string, cause error) acceptResult {
 	l := s.botLang(ctx)
 	s.userDecided(ctx, id)
-	s.signal(superviseSignal{Todo: id, Kind: sigIdle, Key: "undelivered|" + askedAt.UTC().Format(time.RFC3339Nano),
+	s.signal(superviseSignal{Todo: id, Kind: sigIdle, Key: "undelivered|" + askedAt.UTC().Format(time.RFC3339Nano), Handoff: true,
 		Detail: i18n.T(l, "assistant-reports.decision_not_delivered", i18n.Args{"decision": clip(oneLine(choice), 200),
 			"error": clip(oneLine(i18n.Localize(cause, l)), 120)})})
 	return acceptResult{taken: true, undelivered: cause}

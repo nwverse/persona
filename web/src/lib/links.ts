@@ -18,7 +18,7 @@ import { useSyncExternalStore } from "react";
 import { uuid } from "./format";
 import { openPanel } from "./panel";
 import { agentOpenMode } from "./agent-open";
-import { leaveChat, taskRoute } from "./handoff";
+import { openLinkPage, taskRoute } from "./handoff";
 import { navigate, parse as parseRoute } from "./router";
 import { BASE, stripBase } from "./base";
 import { contextXML } from "./context-xml";
@@ -248,14 +248,14 @@ export function openLink(url: string, title?: string, manager?: string) {
       navigate({ name: "session", mid: r.mid, sid: r.sid });
       return;
     // the side panel on a wide screen while Agents open there (#5424), else a page of its own (#5096, cindy's session
-    // links), the chat keeping its place
+    // links), the chat keeping its place and, from a Persona conversation, the page naming it (#13164)
     case "agent":
       if (beside()) openPanel({ kind: "agent", mid: r.mid, sid: r.sid });
-      else leaveChat({ name: "session", mid: r.mid, sid: r.sid }, false);
+      else openLinkPage({ name: "session", mid: r.mid, sid: r.sid });
       return;
     case "task":
       if (beside()) openPanel({ kind: "task", todo: r.id });
-      else leaveChat(taskRoute(r.id), false);
+      else openLinkPage(taskRoute(r.id));
       return;
     case "conversation":
       navigate({ name: "persona", sid: r.sid, ...(r.mid ? { mid: r.mid } : {}), ...(r.manager ? { manager: r.manager } : {}) });

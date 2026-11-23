@@ -363,7 +363,8 @@ func (s *Service) notifyTaskNeedsUser(ctx context.Context, t Todo, work time.Tim
 	}
 	l := s.lang(ctx)
 	title := i18n.T(l, "assistant-tasks.task_needs_user_title", i18n.Args{"name": t.Title})
-	if s.selfPolicy(ctx, t.Origin).Redact {
+	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
+	if space, _ := s.selfSpace(ctx, t.Origin); s.exitPolicy(ctx, t.Title+"\n"+reason, t.Origin, space).Redact {
 		title = i18n.T(l, "assistant-tasks.task_needs_user_title_health")
 	}
 	body := clip(strings.TrimSpace(reason), 500)
@@ -435,7 +436,8 @@ func (s *Service) notifyTaskFailed(ctx context.Context, t Todo, machine, reason 
 	}
 	l := s.lang(ctx)
 	title := i18n.T(l, "assistant-tasks.task_failed_title", i18n.Args{"name": t.Title})
-	if s.selfPolicy(ctx, t.Origin).Redact {
+	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
+	if space, _ := s.selfSpace(ctx, t.Origin); s.exitPolicy(ctx, t.Title+"\n"+reason, t.Origin, space).Redact {
 		title = i18n.T(l, "assistant-tasks.task_failed_title_health")
 	}
 	r := strings.TrimRight(strings.TrimSpace(reason), ".。") // i18n-ignore: trailing full stops trimmed, not text

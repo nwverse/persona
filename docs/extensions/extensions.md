@@ -492,6 +492,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"), `PUT /api/v1/todos/{id}/repositories` and `PUT /api/v1/todos/{id}/repositories/{repo_id}/links` (replace repository associations and issue/PR links); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access; none of a to-do it is not shown, nor a run or space it may not take onto one (404, see "Never shown to extensions") |
 | `decisions.raise` | Ask the owner for a decision | `POST /api/v1/decisions`, `GET /api/v1/decisions/{id}`, `POST /api/v1/decisions/{id}/withdraw`; raise a rich pending Needs-you decision, poll only the caller's own answer and withdraw it ([todos.md](../assistant/todos.md) "Decisions raised outside a supervisor"). It does not open any owner answer route and is never included in legacy every-scope access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
+| `assistant.entries.read` | Read unified ledger entries | `assistant.entries.list` RPC and `GET /api/v1/assistant/entries`; see "Unified entries ledger" |
 | `assistant.memory.read` | Read what Persona remembers about you (read-only, never the health space) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `transcription` | Turn its own audio into text with the transcription you chose for meetings (never the key, never other audio) | No HTTP route: the `transcription.*` RPC (see "Transcription for extensions"). Not covered by the legacy `hub_api` full access |
@@ -784,6 +785,86 @@ The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ex
 ```json
 {"permissions":{"hub":["assistant.memory.read"]}}
 ```
+
+### Unified entries ledger
+
+The assistant manager owns one append-only ledger for facts, preferences, rules and structured decisions. It serves
+extension authors and integrations; this increment adds no client screen. RPC `assistant.entries.list` requires
+`assistant.entries.read`, independently of conversation or memory grants. The UI/metrics counterpart is
+`GET /api/v1/assistant/entries`. Both use `after`, not `cursor`, and `at`, not `created_at`.
+
+| Request field | Meaning |
+| --- | --- |
+| `after` | Opaque continuation returned by the previous response; omit for the first page |
+| `limit` | Default 50, maximum 200 |
+| `by` | `user`, `agent`, `enkeep`, `import` |
+| `trust` | `user_verbatim`, `user_relayed`, `repo`, `agent`, `inferred` |
+| `status` | `active`, `superseded`, `expired`, `wrong`, or `all`; omitted excludes expired entries |
+| `scope` | Optional object with `executor`, `machine[]`, `project[]`, `personal`; URL-encoded JSON over HTTP |
+| `tag` | One exact tag; entries may have multiple tags |
+| `type` | Optional `fact`, `preference`, `rule`, `decision` filter |
+
+All filters are ANDed. Scope dimensions are ANDed too: `executor=any` entries match either execution audience;
+machine/project restrictions match an overlapping requested ID, or every ID if the stored list is empty. A personal
+filter never grants permission. An installed extension whose manifest declares `assistant.entries.read` and whose
+current per-extension grant includes it may read all personal entries over HTTP or RPC, regardless of source space
+or content category. The manager checks the live registry by authenticated extension ID on every request and again
+when delivering events: disabling the extension or revoking the scope takes effect without renewing its credential.
+An allowed reader may alternatively prove co-location through the same-user Node socket. Legacy full-hub permission
+alone does not opt into remote personal reads; an upgrade that first declares the scope requires fresh consent. No space or privacy-tier exclusion applies; `origin_space` and `category` are
+metadata reserved for later labeling and use-time policy. Secret input fields and automated answers are not owner
+question answers.
+
+The response is `{entries: [...], after: "<opaque continuation>", has_more: false}`. Entries are ordered by increasing,
+server-assigned publication `at`, then `id`. Keep the filters unchanged while paging. At the end, retain `after` for
+future increments; an empty result retains the incoming cursor. Source timestamps do not backdate publication.
+
+| Entry field | Type and meaning |
+| --- | --- |
+| `origin_space`, `category` | Source-space string (`""` means main) and content-category string array (`[]` means general); for example `health`, `finance`, `relationships`, `emotion`, `legal_id`; neither restricts authorized reads |
+| `id`, `type`, `text` | Stable ID, one of the four persisted types, one-line judgment; hot state is not stored |
+| `quote` | Source wording; model-supplied quotes stay inferred until later verification |
+| `source` | `{machine, session, msg_uuid?, card_id?, file?, line?}`; original source pointer |
+| `relayed_via` | Array of relay session identifiers; direct input uses `[]` |
+| `scope` | `{executor: "system"|"assistant"|"any", machine: [], project: [], personal: false}` |
+| `at`, `expires_at` | RFC 3339 publication time and nullable expiry time |
+| `supersedes` | Predecessor ID on the new entry only; `""` when absent |
+| `trust`, `status`, `by` | Values listed above; effective lifecycle status is projected on read |
+| `tag` | Array of arbitrary tags; reserved tags include `seed`, `import`, `probe` |
+| `decision` | Required for decisions: `{options: string[], selected: string[], rejected: string[], reason: string, reversible: boolean|null}` |
+| `ext_id` | Optional reserved publisher identity for a later write protocol |
+
+The four provenance/lifecycle fields `relayed_via`, `supersedes`, `expires_at`, `tag` are always serialized, including
+for `by=user`. Empty values are `[]`, `""`, `null`, `[]`. Selected/rejected values must occur in options and cannot
+overlap. Reversibility `null` means unknown. A free-form card answer becomes an additional option. Multi-select display
+answers are preserved verbatim without guessing how to split them or which alternatives were rejected.
+
+```json
+{"method":"assistant.entries.list","params":{"limit":50,"by":"user","trust":"user_relayed","status":"active","tag":"import","scope":{"executor":"assistant","machine":["computer-example"],"project":["project-example"]}}}
+```
+
+```http
+GET /api/v1/assistant/entries?limit=50&by=user&tag=import
+GET /api/v1/assistant/entries?limit=50&by=user&tag=import&after=OPAQUE_CONTINUATION
+```
+
+Missing RPC permission returns `permission_denied` with `{scope:"assistant.entries.read"}`. Invalid filters/cursors
+return `invalid_params` over RPC and HTTP 400. Old `cursor` and `created_at` parameters are rejected.
+
+Lifecycle changes append successors pointing backward with `supersedes`; UPDATE and DELETE of stored rows are refused.
+A replacement projects its predecessor as superseded. Expiry projects expired status without rewriting stored bytes.
+Owner-only `POST /api/v1/assistant/entries/{id}/wrong` appends a wrong correction and publishes
+`assistant.entries.changed` with `{id, record_id, status:"wrong"}`. The original and correction remain queryable.
+Subscribed running extensions need `assistant.entries.read` to receive `event.assistant.entries.changed`.
+Notifications contain IDs only, are best effort, and require a lifecycle rescan after reconnect; an incremental cursor
+alone does not revisit an earlier row's derived status. Personal invalidations use the same live per-extension grant or co-location proof.
+
+Assistant tools `decision_record` and `decisions_query` write structured decisions and read them. Trusted owner
+question-card answers enter automatically with their card pointer. `decision_record` also accepts up to 20
+`user_quotes` source entries; model-supplied quotes are `by=user, trust=inferred`, while unquoted model decisions are
+`by=agent, trust=agent`. A model cannot supersede a user's or verified entry. This is the H1a source inlet, not the
+external publisher protocol: `assistant.entries.write` / `assistant.entries.withdraw` and transcript quote verification
+are deferred. Existing source pointers and the reserved publisher identity leave room for those later steps.
 
 ### Question history
 
@@ -3329,6 +3410,7 @@ Extensions contribute `events` to subscribe to things happening on the hub. Thes
 | `agent.needs_you` | `machine_id`, `machine`, `session_id`, `interaction_id`, `kind`, `summary`: an Agent is waiting for your answer or approval (never of a card it is not shown, "Never shown to extensions") |
 | `agent.finished` | `machine_id`, `machine`, `session_id`, `title`: an Agent finished (never of a chat it is not shown) |
 | `todo.changed` | `id`, `title`, `thread?`, `responsible?`, `done?`, `supervisor?`, `kind?`, `what`: a to-do was created, deleted, or its title, whether it is done, its supervisor, its responsible party, or the thread it is bound to changed (needs `todos.read`, see below; never of a to-do it is not shown, "Never shown to extensions") |
+| `assistant.entries.changed` | `id`, `record_id`, `status:"wrong"`: an entry was marked wrong; needs `assistant.entries.read` (see "Unified entries ledger") |
 | `todo.decision` | `id`, `title`, `thread?`, `decision`: a decision was written on a to-do (needs `todos.read`, see below; never of a to-do it is not shown) |
 | `leader.changed` | `id`, `title`, `project?`, `ended?`: a leader conversation was made, retitled, filed under another project, ended or made a leader again (needs `leaders.read`, see "Leader events") |
 | `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a leader's task reached its goal, needs the owner's decision or is stuck (needs `leaders.read`) |
