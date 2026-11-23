@@ -7,7 +7,7 @@ import { initI18n } from "../i18n";
 import { onDraftEvent, type DraftEvent } from "../lib/drafts";
 import { PINNED_USAGE_ACCOUNTS_KEY, resetPinnedUsageAccounts, timelinePosition, type UsageAccount } from "../lib/usage-windows";
 import { UsageBars } from "./UsageBars";
-import { UsagePopover } from "./UsagePopover";
+import { compactResetText, providerHue, UsagePopover, usageTier, visibleTimelineTickHours } from "./UsagePopover";
 import { unconnectedUsageProviders } from "./UsageUnconnected";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime();
@@ -145,18 +145,43 @@ describe("the popover", () => {
     expect(html).toContain('data-usage-provider="antigravity" aria-label="Antigravity"');
     expect(html).toContain("Antigravity · Claude/GPT");
   });
-  it("lists every window with percent, countdown, sample age and the pace", () => {
-    // 5h window, 2h elapsed = 40% expected: 70% is over; 7d window, 5 days elapsed (~71%): 10% is under
-    const html = renderToStaticMarkup(<UsagePopover accounts={[account("a", 70, 10)]} now={NOW} />);
+  it("lists every window in a single-line grid with tiered colors, 1px pace tick, countdown, and sample age", () => {
+    // 5h window: 70% (mid tier -> orange), 2h elapsed = 40% expected; 7d window: 10% (low tier -> green), 5d elapsed (~71%); 30d: 85% (high tier -> red)
+    const a = account("a", 70, 10);
+    a.windows.push({ label: "30d", window_minutes: 43200, used_percent: 85, resets_at: iso(10 * 24 * H) });
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
+    const html = host.innerHTML;
     expect(html).toContain("12秒钟前");
     expect(html).toContain("5h");
     expect(html).toContain("7d");
     expect(html).toContain("70%");
     expect(html).toContain("13:00 重置");
     expect(html).toContain("2 天 3 小时后重置");
-    expect(html).toContain("用得偏快");
-    expect(html).toContain("用得偏慢");
-    expect(html.match(/data-pace-tick/g)).toHaveLength(2);
+
+    const row5 = host.querySelector('[data-window-row="5h"]')!;
+    const row7 = host.querySelector('[data-window-row="7d"]')!;
+    const row30 = host.querySelector('[data-window-row="30d"]')!;
+    expect(row5.classList.contains("grid")).toBe(true);
+    expect(row5.querySelector("[data-usage-percent]")?.classList.contains("text-orange")).toBe(true);
+    expect(row5.querySelector('[role="progressbar"] > div')?.classList.contains("bg-orange")).toBe(true);
+    expect(row7.querySelector("[data-usage-percent]")?.classList.contains("text-green")).toBe(true);
+    expect(row7.querySelector('[role="progressbar"] > div')?.classList.contains("bg-green")).toBe(true);
+    expect(row30.querySelector("[data-usage-percent]")?.classList.contains("text-red")).toBe(true);
+    expect(row30.querySelector('[role="progressbar"] > div')?.classList.contains("bg-red")).toBe(true);
+    expect(row5.querySelector("[data-usage-percent]")?.classList.contains("whitespace-nowrap")).toBe(true);
+    expect(row5.querySelector("[data-usage-percent]")?.classList.contains("tabular-nums")).toBe(true);
+
+    // 1px ink-3 expected pace ticks
+    const ticks = [...host.querySelectorAll("[data-pace-tick]")];
+    expect(ticks).toHaveLength(3);
+    for (const tick of ticks) {
+      expect(tick.classList.contains("w-px")).toBe(true);
+      expect(tick.classList.contains("bg-ink-3")).toBe(true);
+    }
+
+    // Tier boundaries: <50 green, 50-80 orange, >=80 red
+    expect([0, 49.9, 50, 79.9, 80, 100].map(usageTier)).toEqual(["low", "low", "mid", "mid", "high", "high"]);
   });
   it("draws no pace hint in the first 5% of a window, nor a tick", () => {
     const a = account("a", 90, 90);
@@ -501,21 +526,34 @@ describe("provider cards with a reset timeline (#13173)", () => {
   });
 
   it.each([
-    ["zh-Hans", ["现在", "1 天", "7 天"], ["4.4 小时", "4 天 16 小时", "6 天 24 小时"]],
-    ["en", ["Now", "1d", "7d"], ["4.4h", "4d 16h", "6d 24h"]],
-    ["ja", ["今", "1日", "7日"], ["4.4時間", "4日16時間", "6日24時間"]],
-  ])("lays out sparse ticks and separate countdowns in %s", async (lang, ticks, countdowns) => {
+    ["zh-Hans", "额度（按 7d 重置时间，近的在前）", ["现在", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4 小时", "4 天 16 小时", "6 天 24 小时"], ["5h 窗口恢复", "7d 窗口恢复", "现在", "保护线"], "到此自动暂停调度"],
+    ["en", "Quota (by 7d reset, soonest first)", ["Now", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4h", "4d 16h", "6d 24h"], ["5h window resets", "7d window resets", "Now", "Protection line"], "Scheduling pauses automatically at this limit"],
+    ["ja", "利用枠（7d リセットが早い順）", ["今", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4時間", "4日16時間", "6日24時間"], ["5h 枠リセット", "7d 枠リセット", "今", "保護ライン"], "この上限に達すると自動で一時停止します"],
+  ])("renders card header dot, sort subtitle, short-unit ticks and 4-item legend in %s", async (lang, subtitle, ticks, countdowns, legendLabels, protectTitle) => {
     await initI18n(lang);
     try {
-      const a = account("a", 10, 20, { name: "Codex Pro team account", plan: "Team" });
+      const a = account("a", 10, 20, { provider: "claude", name: "Codex Pro team account", plan: "Team" });
       a.windows[0].resets_at = iso(4.4 * H);
       a.windows[1].resets_at = iso(112 * H);
       a.windows.push({ label: "30d", window_minutes: 43200, used_percent: 10, resets_at: iso(167.75 * H) });
       const host = document.createElement("div");
       host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
-      const axis = host.querySelector("[data-usage-timeline]")!.firstElementChild!;
-      expect([...axis.children].map((tick) => tick.textContent)).toEqual(ticks);
+
+      const card = host.querySelector('[data-usage-provider="claude"]')!;
+      expect(card.classList.contains("@container")).toBe(true);
+      const dot = card.querySelector<HTMLElement>('[data-provider-dot="claude"]')!;
+      expect(dot.style.background).toBe("var(--hue-orange)");
+      expect(providerHue("claude")).toBe("var(--hue-orange)");
+      expect(providerHue("codex")).toBe("var(--hue-green)");
+      expect(providerHue("agy")).toBe("var(--hue-blue)");
+      expect(providerHue("unknown-provider")).toBe("var(--hue-gray)");
+      expect(card.querySelector("[data-usage-sort-subtitle]")?.textContent).toBe(subtitle);
+
+      const axis = host.querySelector("[data-timeline-axis]")!;
+      const tickEls = [...axis.querySelectorAll("[data-timeline-tick]")];
+      expect(tickEls.map((tick) => tick.textContent)).toEqual(ticks);
       expect(axis.classList.contains("whitespace-nowrap")).toBe(true);
+      for (const tick of tickEls) expect(tick.classList.contains("whitespace-nowrap")).toBe(true);
 
       const row = host.querySelector("[data-timeline-row]")!;
       const name = row.querySelector("[title='Codex Pro team account']")!;
@@ -530,9 +568,82 @@ describe("provider cards with a reset timeline (#13173)", () => {
       expect(labels.map((label) => label.textContent)).toEqual(countdowns);
       const positions = labels.map((label) => parseFloat(label.parentElement!.style.gridTemplateColumns));
       expect(positions).toEqual([4.4, 112, 167.75].map((hours) => timelinePosition(hours * H)));
+
+      const legend = host.querySelector("[data-timeline-legend]")!;
+      expect(legend.classList.contains("flex-wrap")).toBe(true);
+      expect(legend.classList.contains("gap-x-3")).toBe(true);
+      expect(legend.classList.contains("gap-y-1")).toBe(true);
+      const items = [...legend.querySelectorAll<HTMLElement>("[data-legend-item]")];
+      expect(items.map((el) => el.textContent)).toEqual(legendLabels);
+      for (const item of items) expect(item.classList.contains("whitespace-nowrap")).toBe(true);
+      const protectItem = legend.querySelector<HTMLElement>('[data-legend-item="protect"]')!;
+      expect(protectItem.getAttribute("title")).toBe(protectTitle);
+      expect(protectItem.textContent).not.toContain(protectTitle);
     } finally {
       await initI18n("zh-Hans");
     }
+  });
+
+  it("progressively hides 6h then 5d ticks when the axis spacing is below 20px", async () => {
+    expect(visibleTimelineTickHours(null)).toEqual([0, 6, 12, 24, 72, 120, 168]);
+    expect(visibleTimelineTickHours(220)).toEqual([0, 6, 12, 24, 72, 120, 168]);
+    expect(visibleTimelineTickHours(160)).toEqual([0, 12, 24, 72, 120, 168]);
+    expect(visibleTimelineTickHours(100)).toEqual([0, 12, 24, 72, 168]);
+
+    let observerCb: ((entries: { contentRect: { width: number } }[]) => void) | undefined;
+    const origRO = globalThis.ResizeObserver;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: (entries: { contentRect: { width: number } }[]) => void) {
+          observerCb = cb;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<UsagePopover accounts={[account("a", 10, 20)]} now={NOW} />));
+      const ticks = () => [...host.querySelectorAll("[data-timeline-tick]")].map((el) => el.textContent);
+      expect(ticks()).toEqual(["现在", "6h", "12h", "1d", "3d", "5d", "7d"]);
+
+      await act(async () => observerCb?.([{ contentRect: { width: 150 } }]));
+      expect(ticks()).toEqual(["现在", "12h", "1d", "3d", "5d", "7d"]);
+
+      await act(async () => observerCb?.([{ contentRect: { width: 100 } }]));
+      expect(ticks()).toEqual(["现在", "12h", "1d", "3d", "7d"]);
+
+      await act(async () => observerCb?.([{ contentRect: { width: 220 } }]));
+      expect(ticks()).toEqual(["现在", "6h", "12h", "1d", "3d", "5d", "7d"]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      if (origRO) vi.stubGlobal("ResizeObserver", origRO);
+      else Reflect.deleteProperty(globalThis, "ResizeObserver");
+    }
+  });
+
+  it("adapts reset copy for narrow (<300px) container cards while keeping full copy above 300px", () => {
+    expect(compactResetText(iso(45 * 60_000), NOW)).toBe("45m");
+    expect(compactResetText(iso(1.5 * H), NOW)).toBe("1.5h");
+    expect(compactResetText(iso(50 * H), NOW)).toBe("2d 2h");
+    expect(compactResetText(iso(48 * H), NOW)).toBe("2d");
+    expect(compactResetText(iso(47.8 * H), NOW)).toBe("2d");
+    expect(compactResetText(iso(-1000), NOW)).toBe("即将重置");
+
+    const a = account("a", 12, 72);
+    a.windows[0].resets_at = iso(1.5 * H);
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
+    const full = host.querySelector('[data-window-row="5h"] [data-reset-full]')!;
+    const short = host.querySelector('[data-window-row="5h"] [data-reset-short]')!;
+    expect(full.className).toContain("hidden");
+    expect(full.className).toContain("@[300px]:inline");
+    expect(short.className).toContain("@[300px]:hidden");
+    expect(short.textContent).toBe("1.5h");
   });
 
   it("draws no timeline for a card whose accounts have no reset time", () => {
@@ -540,14 +651,18 @@ describe("provider cards with a reset timeline (#13173)", () => {
     a.windows.forEach((w) => delete w.resets_at);
     expect(renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />)).not.toContain("data-usage-timeline");
   });
-  it("draws a protection line, flag and zone on a window that carries protect_percent, and nothing without it", () => {
+  it("draws a protection line, flag and zone and reserves mt-3.5 only on windows with protect_percent", () => {
     const a = account("a", 10, 20);
     a.windows[1].protect_percent = 95;
-    const html = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
+    const html = host.innerHTML;
     expect(html.match(/data-protect-line/g)).toHaveLength(1);
     expect(html).toContain("保护 95%");
     expect(html).toContain("data-protect-zone");
     expect(html).toContain("保护线在 95%");
+    expect(host.querySelector('[data-window-row="5h"]')?.classList.contains("mt-3.5")).toBe(false);
+    expect(host.querySelector('[data-window-row="7d"]')?.classList.contains("mt-3.5")).toBe(true);
     expect(renderToStaticMarkup(<UsagePopover accounts={[account("b", 10, 20)]} now={NOW} />)).not.toContain("data-protect");
   });
   it("renders usage bars and popover typography with named text tokens instead of hard-coded pixel classes (#13211)", () => {
@@ -569,5 +684,41 @@ describe("provider cards with a reset timeline (#13173)", () => {
     expect(popoverHtml).toContain("text-meta");
     expect(popoverHtml).toContain("text-label");
     expect(popoverHtml).toContain("text-submeta");
+  });
+  it("keeps and renders extension accounts that carry notice or headline with or without windows", () => {
+    const noticeOnly: UsageAccount = {
+      id: "cool-1",
+      provider: "claude",
+      name: "Cooldown seat",
+      plan: "Max",
+      sampled_at: iso(-12_000),
+      windows: [],
+      notice: "Cooldown · resumes in 30m",
+    };
+    const stripHtml = renderToStaticMarkup(<UsageBars accounts={[noticeOnly]} now={NOW} />);
+    expect(stripHtml).toContain('data-usage-notice-strip="cool-1"');
+    expect(stripHtml).toContain("Cooldown seat");
+    expect(stripHtml).toContain("Cooldown · resumes in 30m");
+    expect(stripHtml).not.toContain('role="progressbar"');
+
+    const popOnly = renderToStaticMarkup(<UsagePopover accounts={[noticeOnly]} now={NOW} />);
+    expect(popOnly).toContain("data-usage-notice");
+    expect(popOnly).toContain("Cooldown · resumes in 30m");
+    expect(popOnly).not.toContain("data-usage-sort-subtitle");
+    expect(popOnly).not.toContain("data-usage-timeline");
+
+    const withWindows = account("cool-2", 62, 84, {
+      provider: "claude",
+      name: "Restricted seat",
+      headline: "Available 4/5",
+      notice: "Rate limited · resumes in 15m",
+    });
+    const popBoth = renderToStaticMarkup(<UsagePopover accounts={[withWindows]} now={NOW} />);
+    expect(popBoth).toContain("data-usage-headline");
+    expect(popBoth).toContain("Available 4/5");
+    expect(popBoth).toContain("data-usage-notice");
+    expect(popBoth).toContain("Rate limited · resumes in 15m");
+    expect(popBoth).toContain("data-usage-sort-subtitle");
+    expect(popBoth).toContain("data-window-row=\"5h\"");
   });
 });

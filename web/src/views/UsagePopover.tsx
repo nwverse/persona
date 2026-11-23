@@ -1,20 +1,96 @@
 // The account windows and error details behind a click on the sidebar's usage bars (#10082): these are not needed
 // for the cold first screen, so the overlay and its long strings load on intent.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { t as tr } from "../i18n";
 import { sendDraft } from "../lib/drafts";
 import { navigate } from "../lib/router";
 import { getState } from "../lib/store";
 import { balanceEmpty, balanceText } from "../lib/usage-balance";
-import { groupByProvider, isBalanceAccount, isWarn, planNote, providerTimeline, providerTitle, remainingText, resetLabel, resetPinnedUsageAccounts, sampleAge, sortedWindows, sourceNames, TIMELINE_CAP_MS, TIMELINE_TICKS_HOURS, timelinePosition, togglePinnedUsageAccount, usePinnedUsageAccounts, windowKey, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
+import { canonicalUsageProvider, groupByProvider, isBalanceAccount, planNote, providerTimeline, providerTitle, remainingText, resetLabel, resetPinnedUsageAccounts, sampleAge, sortedWindows, sourceNames, TIMELINE_CAP_MS, TIMELINE_TICKS_HOURS, timelinePosition, togglePinnedUsageAccount, usePinnedUsageAccounts, windowKey, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
 import { accountPace, type PaceState } from "../lib/usage-pace";
 import { cx, EASE } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { Meter } from "./UsageBars";
 
-const PACE_TEXT: Record<PaceState, string> = { over: "text-orange", under: "text-green", on: "text-ink-3" };
 const paceLabel = (s: PaceState) => (s === "over" ? tr("usage.pace_over") : s === "under" ? tr("usage.pace_under") : tr("usage.pace_on"));
 const shown = (p: number) => `${Math.round(p)}%`;
+
+type UsageTier = "low" | "mid" | "high";
+const TIER_BG: Record<UsageTier, string> = { low: "bg-green", mid: "bg-orange", high: "bg-red" };
+const TIER_TEXT: Record<UsageTier, string> = { low: "text-green", mid: "text-orange", high: "text-red" };
+
+/** Tiered quota color: <50% green (--green), 50–80% orange (--orange), >=80% red (--red). */
+export function usageTier(percent: number): UsageTier {
+  if (percent >= 80) return "high";
+  if (percent >= 50) return "mid";
+  return "low";
+}
+
+/** Provider brand dot color from the design system's --hue-* palette (no raw hex). */
+const PROVIDER_HUE: Record<string, string> = {
+  claude: "var(--hue-orange)",
+  codex: "var(--hue-green)",
+  openai: "var(--hue-green)",
+  gemini: "var(--hue-blue)",
+  antigravity: "var(--hue-blue)",
+  deepseek: "var(--hue-indigo)",
+  kimi: "var(--hue-purple)",
+  cursor: "var(--hue-teal)",
+  copilot: "var(--hue-indigo)",
+  trae: "var(--hue-green)",
+  grok: "var(--hue-gray)",
+  xai: "var(--hue-gray)",
+};
+
+export function providerHue(provider: string): string {
+  return PROVIDER_HUE[canonicalUsageProvider(provider)] ?? "var(--hue-gray)";
+}
+
+const HOUR_MS = 3600_000;
+const DAY_HOURS = 24;
+const CAP_HOURS = TIMELINE_CAP_MS / HOUR_MS;
+/** Minimum pixel distance between adjacent timeline tick labels before dropping secondary ticks. */
+export const TIMELINE_MIN_TICK_GAP_PX = 20;
+const ALL_TIMELINE_TICKS: readonly number[] = [0, ...TIMELINE_TICKS_HOURS];
+const DROPPABLE_TIMELINE_TICKS = [6, 120] as const;
+
+/** Visible timeline tick hours for an axis width: drop 6h first, then 5d when spacing falls under 20px. */
+export function visibleTimelineTickHours(axisWidthPx: number | null): number[] {
+  const ticks = [...ALL_TIMELINE_TICKS];
+  if (axisWidthPx === null || axisWidthPx <= 0) return ticks;
+  for (const drop of DROPPABLE_TIMELINE_TICKS) {
+    const idx = ticks.indexOf(drop);
+    if (idx <= 0 || idx >= ticks.length - 1) continue;
+    const leftGap = (timelinePosition(ticks[idx] * HOUR_MS) - timelinePosition(ticks[idx - 1] * HOUR_MS)) * axisWidthPx;
+    const rightGap = (timelinePosition(ticks[idx + 1] * HOUR_MS) - timelinePosition(ticks[idx] * HOUR_MS)) * axisWidthPx;
+    if (Math.min(leftGap, rightGap) < TIMELINE_MIN_TICK_GAP_PX) {
+      ticks.splice(idx, 1);
+    }
+  }
+  return ticks;
+}
+
+function tickLabel(hours: number): string {
+  if (hours === 0) return tr("usage.timeline_now");
+  if (hours < DAY_HOURS) return tr("usage.tick_hours", { h: hours });
+  return tr("usage.tick_days", { d: hours / DAY_HOURS });
+}
+
+/** Compact duration for narrow (<300px) cards: "45m", "1.5h", "2d 3h", "5d", or "Resets soon". */
+export function compactResetText(resetsAt: string | undefined, now: number): string {
+  const at = resetsAt ? Date.parse(resetsAt) : NaN;
+  if (!Number.isFinite(at)) return "";
+  const ms = at - now;
+  if (ms <= 0) return tr("usage.due");
+  const mins = Math.ceil(ms / 60_000);
+  if (mins < 60) return tr("usage.tick_minutes", { m: Math.max(1, mins) });
+  const hours = ms / HOUR_MS;
+  if (hours < DAY_HOURS) return tr("usage.tick_hours", { h: Math.round(hours * 10) / 10 });
+  const d = Math.floor(hours / DAY_HOURS);
+  const h = Math.round(hours - d * DAY_HOURS);
+  if (h >= DAY_HOURS) return tr("usage.tick_days", { d: d + 1 });
+  return h === 0 ? tr("usage.tick_days", { d }) : tr("usage.tick_days_hours", { d, h });
+}
 
 function problemText(a: UsageAccount): string {
   switch (a.problem) {
@@ -108,21 +184,34 @@ export function UsagePopover({
             </button>
           </div>
         )}
-        {groupByProvider(accounts).map((g) => (
-          <section key={g.provider} data-usage-provider={g.provider} aria-label={providerTitle(g.provider)} className="flex flex-col gap-3 rounded-control border border-line p-2.5">
-            <header className="flex items-baseline gap-2">
-              <h3 className="min-w-0 flex-1 truncate text-meta font-semibold text-ink">{providerTitle(g.provider)}</h3>
-              <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{tr("usage.provider_accounts", { count: g.accounts.length })}</span>
-              {g.sampledAt && <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{sampleAge(g.sampledAt, now)}</span>}
-            </header>
-            {g.accounts.map((a, i) => (
-              <div key={a.id} className={cx("flex flex-col", i > 0 && "border-t border-line pt-2.5")}>
-                <AccountSection a={a} now={now} pinned={pinnedSet.has(a.id)} />
-              </div>
-            ))}
-            <ProviderTimeline accounts={g.accounts} now={now} />
-          </section>
-        ))}
+        {groupByProvider(accounts).map((g) => {
+          const hasWindows = g.accounts.some((a) => a.windows.length > 0);
+          return (
+            <section key={g.provider} data-usage-provider={g.provider} aria-label={providerTitle(g.provider)} className="@container flex flex-col gap-3 rounded-control border border-line p-2.5">
+              <header className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-2">
+                  <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <span aria-hidden data-provider-dot={g.provider} className="size-2 shrink-0 rounded-full" style={{ background: providerHue(g.provider) }} />
+                    <h3 className="truncate text-meta font-semibold text-ink">{providerTitle(g.provider)}</h3>
+                    <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{tr("usage.provider_accounts", { count: g.accounts.length })}</span>
+                  </span>
+                  {g.sampledAt && <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{sampleAge(g.sampledAt, now)}</span>}
+                </div>
+                {hasWindows && (
+                  <p data-usage-sort-subtitle className="text-submeta text-ink-3">
+                    {tr("usage.card_sort_subtitle")}
+                  </p>
+                )}
+              </header>
+              {g.accounts.map((a, i) => (
+                <div key={a.id} className={cx("flex flex-col", i > 0 && "border-t border-line pt-2.5")}>
+                  <AccountSection a={a} now={now} pinned={pinnedSet.has(a.id)} />
+                </div>
+              ))}
+              <ProviderTimeline accounts={g.accounts} now={now} />
+            </section>
+          );
+        })}
         {unconnected.map((p, i) => (
           <section key={`provider:${p.id}`} aria-label={p.title} className={cx("flex flex-col gap-1 text-xs", (accounts.length > 0 || i > 0) && "border-t border-line pt-2.5")}>
             <div className="flex items-baseline gap-2">
@@ -178,6 +267,8 @@ function AccountSection({ a, now, pinned }: { a: UsageAccount; now: number; pinn
           </div>
         )}
         {problem && <div className="text-submeta leading-snug text-orange">{problem}</div>}
+        {a.headline?.trim() && <div data-usage-headline className="text-submeta leading-snug text-ink-2">{a.headline.trim()}</div>}
+        {a.notice?.trim() && <div data-usage-notice className="text-submeta leading-snug text-ink-3">{a.notice.trim()}</div>}
       </header>
       {a.balance && (
         <div data-usage-balance className="flex items-baseline justify-between gap-2 rounded-control bg-inset px-2.5 py-2">
@@ -194,24 +285,55 @@ function AccountSection({ a, now, pinned }: { a: UsageAccount; now: number; pinn
 }
 
 const TIMELINE_NAME_W = "calc(var(--spacing) * 18)";
-const DAY_MS = 24 * 3600_000;
 const LANE_COLOR = { short: "var(--hue-teal)", long: "var(--hue-blue)" } as const;
 
-/** One reset timeline per provider card. Label the start, scale change and end so the axis fits the sidebar.
- *  Each account has a lane per reset window, with a countdown above its end dot. */
+function useAxisWidth(): [React.RefObject<HTMLDivElement | null>, number | null] {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState<number | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = (w: number) => setWidth(w > 0 ? Math.round(w) : null);
+    measure(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) measure(entry.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width];
+}
+
+/** One reset timeline per provider card. Shows short-unit ticks from TIMELINE_TICKS_HOURS, hiding 6h then 5d when
+ *  narrow width would leave under 20px between adjacent labels. */
 export function ProviderTimeline({ accounts, now }: { accounts: UsageAccount[]; now: number }) {
   const rows = providerTimeline(accounts, now);
+  const [axisRef, axisWidth] = useAxisWidth();
   if (!rows.length) return null;
+  const ticks = visibleTimelineTickHours(axisWidth);
   return (
     <div data-usage-timeline className="border-t border-line pt-2" role="group" aria-label={tr("usage.timeline_title")}>
-      <div className="relative h-4 whitespace-nowrap text-submeta leading-none text-ink-3" style={{ marginLeft: TIMELINE_NAME_W }} aria-hidden>
-        <span className="absolute left-0 top-0 -translate-x-1/2 font-semibold text-ink">{tr("usage.timeline_now")}</span>
-        <span className="absolute top-0 -translate-x-1/2" style={{ left: `${timelinePosition(DAY_MS) * 100}%` }}>{tr("usage.days", { d: 1 })}</span>
-        <span className="absolute right-0 top-0">{tr("usage.days", { d: TIMELINE_CAP_MS / DAY_MS })}</span>
+      <div className="mb-1.5 text-submeta text-ink-3">{tr("usage.timeline_title")}</div>
+      <div ref={axisRef} data-timeline-axis className="relative h-4 whitespace-nowrap text-submeta leading-none text-ink-3" style={{ marginLeft: TIMELINE_NAME_W }} aria-hidden>
+        {ticks.map((h) => {
+          const isNow = h === 0;
+          const isEnd = h === CAP_HOURS;
+          return (
+            <span
+              key={h}
+              data-timeline-tick={h}
+              className={cx("absolute top-0 whitespace-nowrap", isNow ? "left-0 font-semibold text-ink" : isEnd ? "right-0" : "-translate-x-1/2")}
+              style={isNow || isEnd ? undefined : { left: `${timelinePosition(h * HOUR_MS) * 100}%` }}
+            >
+              {tickLabel(h)}
+            </span>
+          );
+        })}
       </div>
       <div className="relative" style={{ marginLeft: TIMELINE_NAME_W }}>
         {TIMELINE_TICKS_HOURS.map((h) => (
-          <span key={h} aria-hidden className={cx("absolute inset-y-0 z-[1] w-px bg-line-strong", h !== 24 && "opacity-60")} style={{ left: `${timelinePosition(h * 3600_000) * 100}%` }} />
+          <span key={h} aria-hidden className={cx("absolute inset-y-0 z-[1] w-px bg-line-strong", h !== DAY_HOURS && "opacity-60")} style={{ left: `${timelinePosition(h * HOUR_MS) * 100}%` }} />
         ))}
         <span aria-hidden data-timeline-now className="absolute inset-y-0 z-[3] w-0.5 rounded-full bg-ink" />
         {rows.map((r, i) => {
@@ -247,12 +369,35 @@ export function ProviderTimeline({ accounts, now }: { accounts: UsageAccount[]; 
           );
         })}
       </div>
+      <div data-timeline-legend aria-hidden className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-submeta text-ink-3">
+        <span data-legend-item="5h" className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <span className="inline-block h-1 w-3 rounded-full" style={{ background: LANE_COLOR.short }} />
+          <span>{tr("usage.legend_5h")}</span>
+        </span>
+        <span data-legend-item="7d" className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <span className="inline-block h-1 w-3 rounded-full" style={{ background: LANE_COLOR.long }} />
+          <span>{tr("usage.legend_7d")}</span>
+        </span>
+        <span data-legend-item="now" className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <span className="inline-block h-1 w-3 rounded-full bg-ink" />
+          <span>{tr("usage.timeline_now")}</span>
+        </span>
+        <span data-legend-item="protect" className="inline-flex items-center gap-1.5 whitespace-nowrap" title={tr("usage.legend_protect_title")}>
+          <span className="inline-block h-1 w-3 rounded-full bg-orange" />
+          <span>{tr("usage.legend_protect")}</span>
+        </span>
+      </div>
     </div>
   );
 }
 
 function WindowRow({ name, w, stale, now }: { name: string; w: UsageWindow; stale: boolean; now: number }) {
   const p = accountPace({ stale }, w, now);
+  const tier = usageTier(w.used_percent);
+  const hasProtect = typeof w.protect_percent === "number" && Number.isFinite(w.protect_percent) && w.protect_percent >= 0 && w.protect_percent <= 100;
+  const fullReset = resetLabel(w.resets_at, now);
+  const shortReset = compactResetText(w.resets_at, now);
+  const rowTitle = [w.label, shown(w.used_percent), p ? paceLabel(p.state) : "", fullReset].filter(Boolean).join(" · ");
   return (
     <div className="flex flex-col gap-1">
       {w.model && (
@@ -260,13 +405,31 @@ function WindowRow({ name, w, stale, now }: { name: string; w: UsageWindow; stal
           {w.model}
         </span>
       )}
-      <div className="flex items-baseline gap-2 text-submeta">
-        <span className="w-7 shrink-0 text-ink-2">{w.label}</span>
-        <span className={cx("shrink-0 tabular-nums", isWarn(w.used_percent) ? "text-orange" : "text-ink")}>{shown(w.used_percent)}</span>
-        {p && p.state !== "on" && <span className={cx("shrink-0 whitespace-nowrap", PACE_TEXT[p.state])}>{paceLabel(p.state)}</span>}
-        <span className="min-w-0 flex-1 truncate text-right text-ink-3">{resetLabel(w.resets_at, now)}</span>
+      <div
+        data-window-row={w.label}
+        title={rowTitle}
+        className={cx("grid grid-cols-[1.75rem_minmax(5rem,1fr)_auto_minmax(0,auto)] items-center gap-x-1.5 text-submeta", hasProtect && "mt-3.5")}
+      >
+        <span className="w-7 truncate text-ink-2">{w.label}</span>
+        <Meter
+          used={w.used_percent}
+          expected={p?.expected}
+          protect={w.protect_percent}
+          barClass={TIER_BG[tier]}
+          reserveTop={false}
+          label={w.model ? tr("usage.window_model_label", { name, window: w.label, model: w.model, percent: shown(w.used_percent) }) : tr("usage.window_used_label", { name, window: w.label, percent: shown(w.used_percent) })}
+          tall
+        />
+        <span data-usage-percent className={cx("shrink-0 whitespace-nowrap text-right font-medium tabular-nums", TIER_TEXT[tier])}>
+          {shown(w.used_percent)}
+        </span>
+        {fullReset && (
+          <span data-usage-reset className="min-w-0 truncate text-right text-ink-3" title={fullReset}>
+            <span data-reset-full className="hidden @[300px]:inline">{fullReset}</span>
+            <span data-reset-short className="@[300px]:hidden">{shortReset}</span>
+          </span>
+        )}
       </div>
-      <Meter used={w.used_percent} expected={p?.expected} protect={w.protect_percent} label={w.model ? tr("usage.window_model_label", { name, window: w.label, model: w.model, percent: shown(w.used_percent) }) : tr("usage.window_used_label", { name, window: w.label, percent: shown(w.used_percent) })} tall />
     </div>
   );
 }

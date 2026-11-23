@@ -128,6 +128,14 @@ describe("which accounts show", () => {
     expect(got.map((a) => a.id)).toEqual(["ok", "mixed"]);
     expect(got[1].windows.map((w) => w.label)).toEqual(["7d"]);
   });
+  it("keeps notice-only accounts in liveAccounts while excluding them from topAccounts bars", () => {
+    const noticeOnly: UsageAccount = { id: "cool", provider: "claude", name: "Cooldown seat", windows: [], sampled_at: at(-60_000), notice: "Cooldown · resumes in 20m" };
+    const blankNotice: UsageAccount = { id: "blank", provider: "claude", name: "Blank", windows: [], sampled_at: at(-60_000), notice: "   " };
+    const got = liveAccounts([noticeOnly, blankNotice, account("ok", 40)], NOW);
+    expect(got.map((a) => a.id)).toEqual(["cool", "ok"]);
+    expect(topAccounts(got).map((a) => a.id)).toEqual(["ok"]);
+    expect(selectSidebarUsageAccounts(got, ["cool"])).toEqual({ bars: [expect.objectContaining({ id: "ok" })], balances: [], custom: false });
+  });
   it("ages kept numbers by stale_at, whatever the hub said when it answered (#1905)", () => {
     const kept = account("kept", 10, { stale_at: at(-H) }); // fresh when the hub answered, an hour past its time now
     const fresh = account("fresh", 10, { stale_at: at(H) });
@@ -275,12 +283,13 @@ describe("provider cards and the reset timeline (#13173)", () => {
     const a = acct("a", "A", "claude", [{ ...win("7d", 10080, 1, 3 * H), model: "Fable" }, win("1d", 1440, 1, H), win("7d", 10080, 1, 5 * H), win("5h", 300, 1, H)]);
     expect(sortedWindows(a).map((w) => `${w.label}${w.model ? "*" : ""}`)).toEqual(["5h", "7d", "1d", "7d*"]);
   });
-  it("sorts a card's accounts by the 7d reset, soonest first, those without one last, then by name", () => {
+  it("sorts a card's accounts by the 7d reset, soonest first, those without one last, then case-insensitive name and id", () => {
     const a1 = acct("1", "Zed", "claude", [win("5h", 300, 1, H), win("7d", 10080, 1, 48 * H)]);
     const a2 = acct("2", "Amy", "claude", [win("7d", 10080, 1, 5 * H)]);
-    const a3 = acct("3", "Bob", "claude", [win("5h", 300, 1, H)]);
+    const a3 = acct("3", "bob", "claude", [win("5h", 300, 1, H)]);
     const a4 = acct("4", "Abe", "claude", [win("7d", 10080, 1)]); // no reset time
-    expect(sortForCard([a1, a3, a4, a2]).map((a) => a.name)).toEqual(["Amy", "Zed", "Abe", "Bob"]);
+    const a5 = acct("5", "Abe", "claude", [win("7d", 10080, 1)]); // same name, tie-broken by id
+    expect(sortForCard([a1, a3, a5, a4, a2]).map((a) => `${a.name}:${a.id}`)).toEqual(["Amy:2", "Zed:1", "Abe:4", "Abe:5", "bob:3"]);
   });
   it("groups by provider in the hub's order, with the newest sample of each", () => {
     const g = groupByProvider([acct("1", "A", "claude", [], at(-5 * H)), acct("2", "B", "codex", [], at(-H)), acct("3", "C", "claude", [], at(-2 * H))]);
