@@ -1,11 +1,13 @@
-// The feature-module boundary (eslint.modules.config.mjs, #13434, docs/web/web.md "Modules") over the cases a review
+// The feature-module boundary (web/eslint.modules.config.mjs, #13434, docs/web/web.md "Modules") over the cases a review
 // found: a module importing the list by any spelling ("../../modules", "../../modules/", "../", "../index"), and core
 // reaching a module through a template literal. Each case is linted as if it were the file named.
 import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
 
-const cwd = fileURLToPath(new URL(".", import.meta.url));
+// web/, where the config lives (kept here, under src, so every path this file names stays inside web/:
+// scripts/ci/paths.py reads quoted relative paths in a test as what it reads)
+const cwd = fileURLToPath(new URL("../../", import.meta.url));
 const eslint = new ESLint({ cwd, overrideConfigFile: "eslint.modules.config.mjs" });
 
 async function problems(file: string, code: string): Promise<number> {

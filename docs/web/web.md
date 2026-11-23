@@ -2365,7 +2365,7 @@ advanced, per-browser choice: the everyday sidebar and Settings stay as they wer
 start, refused when it could still reach `src/modules`) to where it lands. Together they keep files outside `src/modules` from importing a
 module's files (the list is the way in; tests may reach a module's files to test them), keep `src/core` from importing
 even the list, and keep a module from importing the list (`../`, `../../modules`, …) or another module its `module.ts` does not name in
-`needs`. `web/eslint.modules.config.test.ts` holds the cases. Disables of
+`needs`. `web/src/core/module-boundary.lint.test.ts` holds the cases. Disables of
 those rules are counted by `scripts/ci/web_module_boundary_ratchet.py` (`scripts/ci/guards.sh`); the baseline,
 `scripts/ci/web_module_boundary_baseline.json`, started empty and can only shrink. `web/src/modules/module-names.test.ts`
 fails when a module's id, route base or sidebar key appears in the `Route` union, the sidebar's built-in pages, their
