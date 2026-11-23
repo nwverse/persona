@@ -3,5 +3,6 @@
   "id": "recording",
   "api": 1,
   "origin": "builtin",
-  "title": "Meeting recording"
+  "title": "Meeting recording",
+  "feature": "module.recording"
 }

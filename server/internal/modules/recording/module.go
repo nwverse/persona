@@ -30,6 +30,7 @@ func (Module) Info() modapi.Info {
 	return info
 }
 
-// Register adds nothing yet: the module's routes, jobs and feature flags reach the core through
-// internal/recordinghost until the kernel serves those slots (#13844).
+// Register adds nothing: the kernel announces the module's feature flag (module.recording, its manifest's), and its
+// routes, room tools and loops reach the core through internal/recordinghost, made per manager with the knowledge
+// base's route guard (docs/architecture/core-and-modules.md "Recording").
 func (Module) Register(modapi.Host) error { return nil }

@@ -516,7 +516,7 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
   `kbEnd` closes for good, and test fixtures register `t.Cleanup(s.kbEnd)`, not `kbClose` (which stays reopenable,
   for the disconnected case and restart tests). A timer that already holds the engine still writes: the meeting
   fixture runs the attending feed on real timers, so its cleanup waits for the looks already running and lets none
-  start after (`trackAttendFeed` in `server/internal/assistant/meeting_live_test.go`).
+  start after (`trackAttendFeed` in `server/internal/modules/recording/fixtures_test.go`).
 - It shows only under load (one in four shuffled package runs on a busy Mac; six processes of `-run '^TestMeeting'
   -count=20 -cpu=1` reproduce it every time). To find such a writer, give the fixture a directory whose cleanup, when
   `os.RemoveAll` fails, lists what is left (with modification times against the cleanup's start) and dumps every

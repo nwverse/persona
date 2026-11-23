@@ -1,16 +1,11 @@
 package recording
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -18,10 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -989,45 +982,6 @@ func (f *fakeHub) eventTypes() string {
 	return strings.Join(f.events, " ")
 }
 
-// noPlans is a store without the task_plans and assistant_feed tables.
-type noPlans struct{}
-
-func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
-	return errors.New("no task_plans here")
-}
-func (noPlans) TaskPlan(context.Context, string) (*db.TaskPlanRow, error) {
-	return nil, errors.New("no task_plans here")
-}
-func (noPlans) TaskPlans(context.Context, string) ([]db.TaskPlanRow, error) {
-	return nil, nil
-}
-func (noPlans) TaskPlansByID(context.Context, []string) ([]db.TaskPlanRow, error) {
-	return nil, errors.New("no task_plans here")
-}
-func (noPlans) UpdateTaskPlan(context.Context, string, string, string, json.RawMessage, time.Time) (bool, error) {
-	return false, errors.New("no task_plans here")
-}
-func (noPlans) AppendFeed(context.Context, db.FeedRow) error {
-	return errors.New("no assistant_feed here")
-}
-func (noPlans) Feed(context.Context, string, time.Time, int) ([]db.FeedRow, error) {
-	return nil, errors.New("no assistant_feed here")
-}
-func (noPlans) FeedItem(context.Context, string) (*db.FeedRow, error) {
-	return nil, errors.New("no assistant_feed here")
-}
-func (noPlans) MarkFeedSent(context.Context, string, string, time.Time, json.RawMessage) ([]db.FeedRow, error) {
-	return nil, errors.New("no assistant_feed here")
-}
-func (noPlans) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
-	return nil, errors.New("no assistant_feed here")
-}
-
-// FeedConversations: none, as no item is ever written here (what an extension is shown of a to-do, todo_scope.go).
-func (noPlans) FeedConversations(context.Context, []string, []string) (map[string][]string, error) {
-	return map[string][]string{}, nil
-}
-
 // newTestService is an assistant on f with an in-memory store.
 // testLogf is t.Logf until the test ends, nothing after: the service's goroutines (a run's watcher, a snapshot being
 // published) can still log when the test is over, and t.Logf then panics and fails the whole package.
@@ -1179,116 +1133,6 @@ func launcherAgent(name string) string {
 		}
 	}
 	return "claude"
-}
-
-// fakeModel is the model the API purposes run on (manager.json's "ai" in the hello, unless the test set the models
-// itself): a Messages API that answers a tab's name with f.tabReply, the Agents triage with f.triage and the done
-// judge with f.judge (each an error when empty), and the others with f.replies in turn (an error with noModel),
-// keeping what was asked.
-func (f *fakeHub) fakeModel(t testing.TB) {
-	t.Helper()
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.ownModels || f.hello.Models.AI.BaseURL != "" {
-		return
-	}
-	jsonOnly := strings.TrimSpace(prompts.RenderJSONOnly(""))
-	tabName := prompts.RenderTabName()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client
-			http.NotFound(w, r)
-			return
-		}
-		var in struct {
-			System   string `json:"system"`
-			Messages []struct {
-				Content string `json:"content"`
-			} `json:"messages"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&in)
-		user := ""
-		if len(in.Messages) > 0 {
-			user = in.Messages[0].Content
-		}
-		f.mu.Lock()
-		reply, fail, down, delay, stop := "", false, false, time.Duration(0), "end_turn"
-		switch {
-		case in.System == tabName:
-			f.tabAsked = append(f.tabAsked, in.System+"\n---\n"+user)
-			reply = f.tabReply
-		case strings.HasPrefix(in.System, "You tag a piece of text"): // information tagging (info_tag.go)
-			f.infoTagAsked = append(f.infoTagAsked, modelCall{in.System, user})
-			reply, fail = cmp.Or(f.infoTag, `{"categories":[]}`), f.infoTagFails
-		case strings.HasPrefix(in.System, "You sort a note the owner jotted down"): // quick capture (capture_sort.go)
-			f.captureSortAsked = append(f.captureSortAsked, modelCall{in.System, user})
-			reply, fail = f.captureSort, f.captureSort == ""
-		case strings.Contains(in.System, "起一个待办标题"): // a task's todo (todo_titles.go): none unless the test gives one
-			f.todoTitleAsked = append(f.todoTitleAsked, modelCall{in.System, user})
-			reply, fail = f.todoTitleReply, f.todoTitleErr != nil
-		case strings.Contains(in.System, "盯着用户电脑上的编程 Agent") || strings.HasPrefix(in.System, "You watch coding Agents") || strings.HasPrefix(in.System, "ユーザー（呼び方："): // the Agents triage (agents_triage.go)
-			f.triageAsked = append(f.triageAsked, modelCall{strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(in.System), jsonOnly)), user})
-			reply, fail = f.triage, f.triage == ""
-		case strings.Contains(in.System, "向 Persona 的一次汇报转述成一句话") || strings.HasPrefix(in.System, "Paraphrase one report") || strings.HasPrefix(in.System, "開発AgentからPersonaへの一回の報告"): // the Progress row's line (report_line.go)
-			f.reportLineAsked = append(f.reportLineAsked, modelCall{in.System, user})
-			reply, fail = f.reportLine, f.reportLine == ""
-		case strings.Contains(in.System, "先替用户判断 Agent 的提问") || strings.HasPrefix(in.System, "You first assess questions") || strings.HasPrefix(in.System, "ユーザーのAgentからの質問を、まず"): // the delegate (delegate.go)
-			f.delegateAsked = append(f.delegateAsked, modelCall{strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(in.System), jsonOnly)), user})
-			reply, fail = f.delegate, f.delegate == ""
-		case strings.Contains(in.System, "给一件做完的任务记结论"): // the outcome of a finished task (todo_outcome.go)
-			f.outcomeAsked = append(f.outcomeAsked, modelCall{in.System, user})
-			reply, fail = f.outcome, f.outcome == ""
-		case strings.Contains(in.System, `{"lessons":[`): // the lessons of an accepted task (task_lessons.go), in any language
-			f.lessonsAsked = append(f.lessonsAsked, modelCall{in.System, user})
-			reply, fail = f.lessons, f.lessons == ""
-		case strings.HasSuffix(strings.TrimSpace(in.System), jsonOnly):
-			f.judged++
-			f.judgeAsked = append(f.judgeAsked, user)
-			reply, fail, delay = f.judge, f.judge == "", f.judgeDelay
-			if f.judgeBy != nil {
-				reply = f.judgeBy(user)
-				fail = reply == ""
-			}
-			if f.judgeFails > 0 {
-				f.judgeFails--
-				fail = true
-			}
-		case f.noModel:
-			fail = true
-		default:
-			f.asked = append(f.asked, modelCall{in.System, user})
-			if len(f.replies) > 0 {
-				reply = f.replies[min(len(f.asked), len(f.replies))-1]
-			}
-			if n := len(f.asked); n <= len(f.answers) {
-				delay = f.answers[n-1].delay
-				stop = cmp.Or(f.answers[n-1].stop, stop)
-			}
-			down = f.modelDown
-		}
-		f.mu.Unlock()
-		if fail {
-			http.Error(w, `{"error":{"message":"no model"}}`, http.StatusBadRequest)
-			return
-		}
-		if down {
-			http.Error(w, `{"error":{"message":"upstream unavailable"}}`, http.StatusBadGateway)
-			return
-		}
-		if delay > 0 {
-			select {
-			case <-time.After(delay):
-			case <-r.Context().Done():
-				return
-			}
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": reply}}, "stop_reason": stop})
-	}))
-	t.Cleanup(srv.Close)
-	key := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(key, []byte("k"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f.hello.Models.AI = ai.Config{BaseURL: srv.URL, APIKeyFile: key, Model: "fake"}
 }
 
 // lastTurns is the last n turns of items, as the node pages a transcript (transcript.File.PageTurns): a turn opens
