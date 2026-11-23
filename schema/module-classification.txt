@@ -315,6 +315,7 @@ gradle :core:demo core
 gradle :core:designsystem core
 gradle :core:domain core
 gradle :core:hub core
+gradle :core:inbox core
 gradle :core:moduleapi core
 gradle :core:navigation core
 gradle :core:rustcore core
@@ -345,7 +346,6 @@ web web/src/i18n/locales core
 web web/src/lib core
 web web/src/lib/configuration core
 web web/src/lib/html-runtime core
-web web/src/lib/voice voice
 web web/src/modules core
 web web/src/screen screen-share
 web web/src/screen/tiers screen-share
