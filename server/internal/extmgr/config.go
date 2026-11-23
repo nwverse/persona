@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/nwverse/persona/server/internal/cliport"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/imessage"
 	"github.com/nwverse/persona/server/internal/extension/denohost"
@@ -136,6 +137,10 @@ func loadConfig(dir, file string) (*Config, error) {
 	if err := cfg.Lark.Validate(); err != nil { // was the hub's check at start; now the manager's, which uses it
 		cfg.warnings = append(cfg.warnings, err.Error()+": lark is not read")
 		cfg.Lark = lark.Config{}
+	}
+	if cfg.Lark.CLI != nil && !cliport.Available() { // a build without the lark module (persona_without_lark)
+		cfg.warnings = append(cfg.warnings, "lark.cli is not read: "+cliport.ErrUnavailable.Error())
+		cfg.Lark.CLI = nil
 	}
 	if cfg.Lark.LegacyGatewayConfigured() {
 		cfg.warnings = append(cfg.warnings, "lark.container / token / base_url are not read any more: Feishu through a Lark "+

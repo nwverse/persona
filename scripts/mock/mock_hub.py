@@ -5200,7 +5200,7 @@ def meeting_ask(h, st, body, rec):
 
 
 # The meeting conversation (#3862, docs/assistant/meeting-minutes.md "Phase 1: the meeting conversation"), as the hub
-# branch has it (server/internal/assistant/meeting_*.go, server/internal/kb/meeting.go, hub/meeting_receipts.go): the
+# branch has it (server/internal/modules/recording/meeting_*.go, server/internal/kb/meeting.go, hub/meeting_receipts.go): the
 # feature `meeting_conversation` (only beside meeting_attendance); the upload's `room` and `private`, kept apart from the
 # #2981 fields as meeting.json is (a recording that once had `room` stays a room meeting, its role the room's); one room
 # conversation per attended room meeting (an assistant conversation, origin `meeting`, header first); …/ask answered in
@@ -5852,7 +5852,7 @@ def meeting_receipt(h, kind, raw, run):
     return h.send_json(out, status) or True
 
 
-# Handing a meeting to an Agent after it (#8852, assistant/meeting_handoff.go): POST /api/v1/recordings/{id}/handoff sends
+# Handing a meeting to an Agent after it (#8852, modules/recording/meeting_handoff.go): POST /api/v1/recordings/{id}/handoff sends
 # the meeting to an Agent listed here as the owner's own message, after its checks (503, 404 / 410, 400, 409
 # meeting_running, 409 no_material), and keeps each try in MEETING_HANDOFFS (oldest first, the last 20), shown as
 # detail.meta.handoffs. As attending's rules: a Persona conversation is not_agent; Allow All or a machine not listed

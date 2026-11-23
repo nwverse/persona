@@ -28,13 +28,17 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # own tests do not depend on the tags: they run in the shards.
   ci_run 'Builds without the speech modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_volc persona_without_voice; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/builtinext/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=6m -run "Volc|Voice|Transcription" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TranscriptionEndToEnd" ./internal/assistant/ || exit 1; done'
   # The Feishu / Lark module (#13404, docs/architecture/core-and-modules.md "Provider seams"): left out, the binaries
-  # build, the extension host has no bot client (internal/botport) and the bot's tests skip; the rest of the extension
-  # host and the assistant's Feishu paths still pass.
-  ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_core_only persona_without_lark; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
+  # build, the extension host has no bot client (internal/botport) and no lark-cli adapter or connector
+  # (internal/cliport), and their tests skip; the rest of the extension host and the assistant's Feishu paths still pass.
+  ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_core_only persona_without_lark; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/cliport/... ./internal/cliwire/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
   # Mail (docs/architecture/core-and-modules.md "Provider seams"): the extension manager reaches it through its port, so
   # the core without it builds and the manager's mail, inbox, connector and settings tests pass (those of mail itself
   # skip; TestManagerWithoutMail checks it is absent).
   ci_run 'Builds without the mail module' 900 bash -c 'cd server && for t in persona_core_only persona_without_mail; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/mailwire/... && go test -tags "$t" -count=1 -timeout=6m -run "Mail|Inbox|Connector|SelfSettings|Sent|Recall|Golden|SourceMove" ./internal/extmgr/ || exit 1; done'
+  # Meeting recording (docs/architecture/core-and-modules.md "Recording"): left out, the server builds and the core's
+  # tests of where it meets the module pass (the routes, capabilities and room tools are absent, the module's paths
+  # skip); its own tests do not depend on the tags and run in the shards.
+  ci_run 'Builds without the recording module' 900 bash -c 'cd server && for t in persona_core_only persona_without_recording; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/recordinghost/... && go test -tags "$t" -count=1 -timeout=8m -run "Recording|Meeting|DayRecap|Evening|Minutes|Transcription|JustMe|Attendee|Bus|StartPath" ./internal/assistant/ || exit 1; done'
   # The connector modules (docs/architecture/core-and-modules.md "Provider seams"): GitHub reaches the extension manager
   # through its port, so the core without it builds, the manager registers no built-in GitHub connector (the GitHub,
   # connector, inbox, sent and golden tests pass; those that need the module skip) and the assistant's CI checks still
