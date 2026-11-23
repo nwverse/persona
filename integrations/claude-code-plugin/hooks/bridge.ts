@@ -357,20 +357,22 @@ export function takePreTool(
   toolInput: unknown,
   agentId = '',
   hasActiveSameKey = false,
-): string {
+): { id: string; ambiguous: boolean } {
   const key = toolCallKey(toolName, toolInput, false, agentId)
-  if (cache.ambiguous.has(key)) return ''
+  if (cache.ambiguous.has(key)) return { id: '', ambiguous: true }
   const ids = cache.pending.get(key)
-  if (ids === undefined || ids.length === 0) return ''
+  if (ids === undefined || ids.length === 0) {
+    return { id: '', ambiguous: hasActiveSameKey }
+  }
   const live = ids.filter(id => !cache.completed.has(id))
   cache.pending.delete(key)
   for (const id of ids) removeOrder(cache, id)
-  if (live.length === 0) return ''
+  if (live.length === 0) return { id: '', ambiguous: hasActiveSameKey }
   if (live.length > 1 || hasActiveSameKey) {
     cache.ambiguous.set(key, new Set(live))
-    return ''
+    return { id: '', ambiguous: true }
   }
-  return live[0] ?? ''
+  return { id: live[0] ?? '', ambiguous: false }
 }
 
 export function markToolCompleted(cache: PreToolCache, toolUseId: string): void {

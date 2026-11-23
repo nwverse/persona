@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -512,6 +513,13 @@ func ccPluginPermKey(in hookInput) string {
 	return permissionKey(in)
 }
 
+// ccPluginPermAttempt scopes the interactionID fallback attempt salt to (pid, reqID) so two concurrent
+// Claude processes sharing a session never generate the same Hub card ID when tool_use_id is absent,
+// while renewals from the same process remain deterministic.
+func ccPluginPermAttempt(pid int, reqID string) string {
+	return fmt.Sprintf("p%d:%s", pid, reqID)
+}
+
 func (n *Node) runCCPluginPermission(entry *ccPluginPerm, claude claudeProc, in hookInput) {
 	defer n.hookFlights.enter(in.SessionID)()
 
@@ -528,7 +536,7 @@ func (n *Node) runCCPluginPermission(entry *ccPluginPerm, claude claudeProc, in 
 	defer stopWatch()
 
 	ix := proto.Interaction{
-		ID:        interactionID(in, entry.reqID),
+		ID:        interactionID(in, ccPluginPermAttempt(entry.pid, entry.reqID)),
 		SessionID: in.SessionID,
 		Agent:     "claude",
 		Cwd:       in.Cwd,
@@ -626,6 +634,11 @@ func (n *Node) askCCPluginPermission(ctx context.Context, in hookInput, ix proto
 		if n.decided.grace(ctx, answered) {
 			return nil, false
 		}
+		// If a fallback clq_ card is already published for this session, withdraw it synchronously before
+		// publishing the replacement ix_ card so each pending question has only one home on the hub.
+		if n.cx.hasOutsideAsk(in.SessionID) {
+			n.syncCodexCards(ctx)
+		}
 		res, ok, err := n.ask(ctx, ix)
 		if errors.Is(err, errNodeGone) {
 			return nil, true
@@ -633,12 +646,20 @@ func (n *Node) askCCPluginPermission(ctx context.Context, in hookInput, ix proto
 		if answered() {
 			return nil, false
 		}
+		if res.Dismiss {
+			// Remember the owner's hand-back so subsequent scans do not resurrect a fallback clq_ card
+			// while the computer still displays the same question.
+			n.dismissOutsideAskFor(in.SessionID, in.ToolUseID)
+			return nil, false
+		}
 		if err == nil && ok && res.Cancel {
+			n.holdOutsideAskFor(in.SessionID, in.ToolUseID)
 			return map[string]any{"behavior": "deny", "message": prompts.RenderQuestionCancelled()}, false
 		}
 		if err != nil || !ok || len(res.Answers) == 0 {
 			return nil, false
 		}
+		n.holdOutsideAskFor(in.SessionID, in.ToolUseID)
 		var input map[string]any
 		_ = json.Unmarshal(in.ToolInput, &input)
 		if input == nil {
@@ -797,4 +818,30 @@ func (r *ccPluginRegistry) completePerm(req ccPluginPermDoneRequest, pid int) []
 	}
 	slices.SortFunc(matched, func(a, b *ccPluginPerm) int { return a.createdAt.Compare(b.createdAt) })
 	return matched
+}
+
+func (n *Node) outsideAskIDFor(sessionID, toolUseID string) string {
+	if toolUseID == "" {
+		if c, ok := n.outsideClaude(sessionID); ok {
+			if call := n.pendingOutsideAsk(c); call != nil {
+				toolUseID = call.ToolUseID
+			}
+		}
+	}
+	if toolUseID == "" {
+		return ""
+	}
+	return outsideAskPrefix + shortHash(sessionID+"\x00"+toolUseID)
+}
+
+func (n *Node) dismissOutsideAskFor(sessionID, toolUseID string) {
+	if id := n.outsideAskIDFor(sessionID, toolUseID); id != "" {
+		n.cx.dismiss(sessionID, id)
+	}
+}
+
+func (n *Node) holdOutsideAskFor(sessionID, toolUseID string) {
+	if id := n.outsideAskIDFor(sessionID, toolUseID); id != "" {
+		n.cx.hold(sessionID, id)
+	}
 }

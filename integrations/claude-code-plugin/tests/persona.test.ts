@@ -511,6 +511,14 @@ describe('persona plugin', () => {
     await w.clock.settle()
     expect(w.requests.filter(r => r.url.endsWith('/permission-done'))).toEqual([])
 
+    // Phone approves p1 first (removing p1 from activePerms so only p2 remains), then PostToolUse fires for call 1:
+    // because p2 is marked ambiguous, handleToolDone must NOT mis-withdraw p2 by toolKey fallback!
+    pending[0]?.resolve({ status: 200, body: { action: 'decide', decision: { behavior: 'allow', updatedInput: { command: 'echo same' } } } })
+    expect(await p1).toEqual({ decision: { behavior: 'allow', updatedInput: { command: 'echo same' } } })
+    await $.classic.PostToolUse({ session_id: SESSION, tool_use_id: 'toolu_dup_1', tool_name: 'Bash', tool_input: { command: 'echo same' } } as never)
+    await w.clock.settle()
+    expect(w.requests.filter(r => r.url.endsWith('/permission-done'))).toEqual([])
+
     // Completing toolu_sub_same cancels ONLY the subagent card.
     await $.classic.PostToolUse({ session_id: SESSION, tool_use_id: 'toolu_sub_same', agent_id: 'sub-a', tool_name: 'Bash', tool_input: { command: 'echo same' } } as never)
     expect(await pSub).toEqual({})
@@ -519,10 +527,9 @@ describe('persona plugin', () => {
     expect(dones.length).toBe(1)
     expect(dones[0]?.body.tool_use_id).toBe('toolu_sub_same')
 
-    pending[0]?.resolve({ status: 200, body: { action: 'decide', decision: { behavior: 'allow', updatedInput: { command: 'echo same' } } } })
+    // p2 is still alive and can still be approved from the phone.
     pending[1]?.resolve({ status: 200, body: { action: 'decide', decision: { behavior: 'allow', updatedInput: { command: 'echo same' } } } })
     pending[2]?.resolve({ status: 200, body: { action: 'passthrough' } })
-    expect(await p1).toEqual({ decision: { behavior: 'allow', updatedInput: { command: 'echo same' } } })
     expect(await p2).toEqual({ decision: { behavior: 'allow', updatedInput: { command: 'echo same' } } })
   })
 
@@ -841,20 +848,20 @@ describe('protocol helpers', () => {
     const cache = createPreToolCache()
     // Sequential identical calls pair cleanly once the first completes.
     recordPreTool(cache, { tool: 'Bash', tool_use_id: 't1', command: 'ls' })
-    expect(takePreTool(cache, 'Bash', { command: 'ls' })).toBe('t1')
+    expect(takePreTool(cache, 'Bash', { command: 'ls' })).toEqual({ id: 't1', ambiguous: false })
     markToolCompleted(cache, 't1')
     expect(isToolCompleted(cache, 't1')).toBe(true)
     recordPreTool(cache, { tool: 'Bash', tool_use_id: 't2', command: 'ls' })
-    expect(takePreTool(cache, 'Bash', { command: 'ls' })).toBe('t2')
+    expect(takePreTool(cache, 'Bash', { command: 'ls' })).toEqual({ id: 't2', ambiguous: false })
 
     // Concurrent identical calls on the same agent mark ambiguous and refuse to guess.
     recordPreTool(cache, { tool: 'Bash', tool_use_id: 't3', command: 'pwd' })
     recordPreTool(cache, { tool: 'Bash', tool_use_id: 't4', command: 'pwd' })
     recordPreTool(cache, { tool: 'Bash', tool_use_id: 't_sub', agent_id: 'sub-1', command: 'pwd' })
-    expect(takePreTool(cache, 'Bash', { command: 'pwd' })).toBe('')
-    expect(takePreTool(cache, 'Bash', { command: 'pwd' }, 'sub-1')).toBe('t_sub')
+    expect(takePreTool(cache, 'Bash', { command: 'pwd' })).toEqual({ id: '', ambiguous: true })
+    expect(takePreTool(cache, 'Bash', { command: 'pwd' }, 'sub-1')).toEqual({ id: 't_sub', ambiguous: false })
     clearAgentPreTools(cache, '')
     recordPreTool(cache, { tool: 'Bash', tool_use_id: 't5', command: 'pwd' })
-    expect(takePreTool(cache, 'Bash', { command: 'pwd' })).toBe('t5')
+    expect(takePreTool(cache, 'Bash', { command: 'pwd' })).toEqual({ id: 't5', ambiguous: false })
   })
 })

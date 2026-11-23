@@ -58,6 +58,7 @@ type ActivePerm = {
   toolName: string
   toolKey: string
   agentId: string
+  ambiguous: boolean
   cancelled: boolean
   cancelPromise: Promise<'cancelled'>
   cancel: () => void
@@ -149,14 +150,23 @@ export const register: Register = on => {
       if (toolName === '') return next(e)
       const agentId = typeof rec?.agent_id === 'string' ? rec.agent_id : ''
       const toolKey = toolCallKey(toolName, rec?.tool_input, toolName === 'AskUserQuestion', agentId)
-      const hasActiveSameKey = [...activePerms.values()].some(
+      const matchingActive = [...activePerms.values()].filter(
         p => p.sessionId === sessionId && p.toolKey === toolKey,
       )
+      const hasActiveSameKey = matchingActive.length > 0
       const explicitToolUseId = typeof rec?.tool_use_id === 'string' ? rec.tool_use_id : ''
-      const toolUseId =
-        explicitToolUseId !== ''
-          ? explicitToolUseId
-          : takePreTool(preToolCache, toolName, rec?.tool_input, agentId, hasActiveSameKey)
+      let toolUseId = explicitToolUseId
+      let ambiguous = false
+      if (toolUseId === '') {
+        const paired = takePreTool(preToolCache, toolName, rec?.tool_input, agentId, hasActiveSameKey)
+        toolUseId = paired.id
+        ambiguous = paired.ambiguous
+        if (ambiguous) {
+          for (const prev of matchingActive) {
+            if (prev.toolUseId === '') prev.ambiguous = true
+          }
+        }
+      }
       if (isToolCompleted(preToolCache, toolUseId)) {
         return next(e)
       }
@@ -174,6 +184,7 @@ export const register: Register = on => {
         toolName,
         toolKey,
         agentId,
+        ambiguous,
         cancelled: false,
         cancelPromise,
         cancel() {
@@ -368,6 +379,7 @@ function handleToolDone(
     const unpaired: ActivePerm[] = []
     for (const entry of activePerms.values()) {
       if (
+        !entry.ambiguous &&
         entry.toolUseId === '' &&
         entry.toolKey === key &&
         (sessionId === '' || entry.sessionId === sessionId)
@@ -375,7 +387,7 @@ function handleToolDone(
         unpaired.push(entry)
       }
     }
-    // Only match by (agent_id, tool, input) when unambiguous; multiple identical unpaired calls must not guess.
+    // Only match by (agent_id, tool, input) when unambiguous and not marked ambiguous; never guess across identical calls.
     if (unpaired.length === 1 && unpaired[0] !== undefined) {
       matched.push(unpaired[0])
     }

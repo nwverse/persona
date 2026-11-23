@@ -710,3 +710,118 @@ func TestCCPluginPermissionIdleAbandonmentCancelsCard(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// Two concurrent processes on the same session without tool_use_id produce distinct Hub interaction IDs
+// even if both choose the same req_id in the same millisecond, while renewals keep the same ID.
+func TestCCPluginInteractionIDIncludesProcessScope(t *testing.T) {
+	in := hookInput{
+		HookEventName: "PermissionRequest",
+		SessionID:     sidA,
+		ToolName:      "Bash",
+		ToolInput:     json.RawMessage(`{"command":"ls"}`),
+	}
+	id1 := interactionID(in, ccPluginPermAttempt(1001, "p_1000_1"))
+	id1Renew := interactionID(in, ccPluginPermAttempt(1001, "p_1000_1"))
+	id2 := interactionID(in, ccPluginPermAttempt(1002, "p_1000_1"))
+	if id1 != id1Renew {
+		t.Fatalf("same process renewal changed interactionID: %q vs %q", id1, id1Renew)
+	}
+	if id1 == id2 {
+		t.Fatalf("two processes sharing (session, req_id) collided on interactionID %q", id1)
+	}
+}
+
+// Replacing an already-published clq_ fallback card withdraws clq_ strictly before publishing the plugin's
+// ix_ card, and handing back (dismissing) the plugin's AskUserQuestion prevents clq_ from resurrecting.
+func TestCCPluginAskWithdrawsPublishedCLQBeforePublishAndDismissDoesNotResurrect(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	t.Cleanup(func() { <-n.notifySessionsSoon() })
+
+	// Wire-order hub recording codex.interactions events vs interaction.create requests.
+	ctx, cancel := context.WithCancel(context.Background())
+	n2hR, n2hW := io.Pipe()
+	h2nR, h2nW := io.Pipe()
+	peer := rpc.New("n", n2hW)
+	n.peer = peer
+	hub := rpc.New("h", h2nW)
+
+	var mu sync.Mutex
+	var wire []string
+	hub.OnEvent = func(event string, params json.RawMessage) {
+		if event != "codex.interactions" {
+			return
+		}
+		var p struct {
+			Interactions []proto.Interaction `json:"interactions"`
+		}
+		_ = json.Unmarshal(params, &p)
+		mu.Lock()
+		if len(p.Interactions) == 0 {
+			wire = append(wire, "codex.interactions:empty")
+		} else {
+			wire = append(wire, "codex.interactions:"+p.Interactions[0].ID)
+		}
+		mu.Unlock()
+	}
+	hub.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+		if method != "interaction.create" {
+			return map[string]any{}, nil
+		}
+		var p struct {
+			Interaction proto.Interaction `json:"interaction"`
+		}
+		_ = json.Unmarshal(params, &p)
+		mu.Lock()
+		wire = append(wire, "interaction.create:"+p.Interaction.ID)
+		mu.Unlock()
+		return proto.Resolution{Dismiss: true}, nil
+	}
+	go func() { _ = hub.Serve(ctx, n2hR) }()
+	go func() { _ = peer.Serve(ctx, h2nR) }()
+	t.Cleanup(func() { cancel(); _ = n2hW.Close(); _ = h2nW.Close() })
+
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","permissionMode":"default","message":{"role":"user","content":"pick"}}`,
+		askCall(sidA, "toolu_handback", `{"questions":[{"question":"Which?","header":"Pick","options":[{"label":"A"},{"label":"B"}],"multiSelect":false}]}`))
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	c := pluginSocket(t, n)
+
+	// 1. Before plugin interception, syncCodexCards publishes the clq_ fallback card.
+	n.syncCodexCards(context.Background())
+	if !n.cx.hasOutsideAsk(sidA) {
+		t.Fatal("expected clq_ fallback card to be published before plugin permission arrives")
+	}
+
+	// 2. Plugin AskUserQuestion arrives -> withdraws clq_ BEFORE interaction.create, then user dismisses it.
+	status, out := pluginPost(t, c, "permission", map[string]any{
+		"session_id":  sidA,
+		"req_id":      "req-handback-ask",
+		"tool_name":   "AskUserQuestion",
+		"tool_use_id": "toolu_handback",
+		"tool_input":  map[string]any{"questions": []any{map[string]any{"question": "Which?", "header": "Pick", "options": []any{map[string]any{"label": "A"}, map[string]any{"label": "B"}}}}},
+		"wait_ms":     2000,
+	})
+	if status != http.StatusOK || out["action"] != "passthrough" {
+		t.Fatalf("dismissed ask: %d %v", status, out)
+	}
+
+	// Verify strict wire ordering: clq_ published -> clq_ withdrawn -> ix_ created.
+	mu.Lock()
+	gotWire := append([]string(nil), wire...)
+	mu.Unlock()
+	if len(gotWire) < 3 ||
+		!strings.HasPrefix(gotWire[0], "codex.interactions:"+outsideAskPrefix) ||
+		gotWire[1] != "codex.interactions:empty" ||
+		!strings.HasPrefix(gotWire[2], "interaction.create:ix_") {
+		t.Fatalf("unexpected wire order: %v", gotWire)
+	}
+
+	// 3. Subsequent syncCodexCards must NOT resurrect clq_ while the handed-back question is still open.
+	n.syncCodexCards(context.Background())
+	if n.cx.hasOutsideAsk(sidA) || n.cx.sent != "" {
+		t.Fatalf("handed-back plugin AskUserQuestion resurrected clq_ card: hasOutsideAsk=%v sent=%q", n.cx.hasOutsideAsk(sidA), n.cx.sent)
+	}
+}
