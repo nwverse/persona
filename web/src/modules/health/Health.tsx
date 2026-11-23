@@ -9,20 +9,21 @@ import { memoryEntries, type MemoryEntry, type MemoryFile } from "../../lib/memo
 import { safeDraftWrite } from "../../lib/drafts";
 import { noteSent } from "../../lib/outbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
-import { href, navigate, onLinkClick } from "../../lib/router";
+import { href, navigate, onLinkClick, type Route } from "../../lib/router";
+import type { ModulePageProps } from "../../core/module-host";
 import { onHubEvent, useStore } from "../../lib/store";
 import { noteConversation } from "../../lib/manager-choice";
 import type { Session } from "../../lib/types";
 import { Button, Dialog, EASE, IconButton, Loading, Menu, toast, useMenu } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
-import { ChatView } from "../chat/ChatView";
-import { Composer, type Outgoing } from "../chat/Composer";
-import { conversationTitle, newestFirst } from "../assistant/conversations";
+import { ChatView } from "../../views/chat/ChatView";
+import { Composer, type Outgoing } from "../../views/chat/Composer";
+import { conversationTitle, newestFirst } from "../../views/assistant/conversations";
 import { HealthReports } from "./HealthReports";
 import { HealthToday } from "./HealthToday";
 import { REPORT_FILES, startHealthConversation, uploadReports } from "./reports";
-import { healthEntry } from "./entry";
-import { Empty, SectionTitle } from "../assistant/parts";
+import { spaceEntry } from "../../views/spaces/entry";
+import { Empty, SectionTitle } from "../../views/assistant/parts";
 import { t } from "../../i18n";
 
 export const HEALTH_SPACE = "health";
@@ -69,6 +70,18 @@ function useHealthConversations() {
   return { list: merged, mid, error, reload: load };
 }
 
+/** The health page's address (docs/web/web.md "Modules"): `/health`, `/health/new`, `/health/<id>`. */
+export function healthRoute({ sid, fresh }: { sid?: string; fresh?: boolean } = {}): Route {
+  return { name: "module", module: "health", base: "health", path: sid ? [sid] : fresh ? ["new"] : [] };
+}
+
+/** The module's page (module.ts): its address' segments after /health, as the router used to read them. */
+export function HealthPage({ path, onToggleSidebar }: ModulePageProps) {
+  const fresh = path[0] === "new" && !path[1];
+  const sid = fresh ? undefined : path[0] || undefined;
+  return <Health key={sid ?? (fresh ? "new" : "")} sid={sid} fresh={fresh} onToggleSidebar={onToggleSidebar ?? (() => {})} />;
+}
+
 export function Health({ sid, fresh, onToggleSidebar }: { sid?: string; fresh?: boolean; onToggleSidebar: () => void }) {
   if (sid) return <HealthConversation sid={sid} onToggleSidebar={onToggleSidebar} />;
   if (fresh) return <HealthHome onToggleSidebar={onToggleSidebar} />;
@@ -79,11 +92,11 @@ export function Health({ sid, fresh, onToggleSidebar }: { sid?: string; fresh?: 
  *  page. Either replaces this address, so Back skips it. */
 function HealthResume() {
   const { list, error } = useHealthConversations();
-  const entry = healthEntry(list, error);
+  const entry = spaceEntry(list, error);
   const to = entry.kind === "open" ? entry.sid : entry.kind;
   useEffect(() => {
     if (to === "wait") return;
-    navigate(to === "new" ? { name: "health", fresh: true } : { name: "health", sid: to }, true);
+    navigate(to === "new" ? healthRoute({ fresh: true }) : healthRoute({ sid: to }), true);
   }, [to]);
   return <div className="flex h-full items-center justify-center"><Loading /></div>;
 }
@@ -96,12 +109,12 @@ function HealthChatActions({ sid, list }: { sid: string; list: Session[] | null 
     label: conversationTitle(s),
     hint: s.updated_at ? ago(s.updated_at) : undefined,
     checked: s.session_id === sid,
-    onSelect: () => navigate({ name: "health", sid: s.session_id }),
+    onSelect: () => navigate(healthRoute({ sid: s.session_id })),
   }));
   return (
     <>
       {items.length > 0 && <IconButton icon="clock" label={t("health.history")} onClick={menu.open} active={Boolean(menu.anchor)} />}
-      <IconButton icon="compose" label={t("health.new_chat")} onClick={() => navigate({ name: "health", fresh: true })} />
+      <IconButton icon="compose" label={t("health.new_chat")} onClick={() => navigate(healthRoute({ fresh: true }))} />
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align="right" width={320} header={t("health.recent")} items={items} />}
     </>
   );
@@ -146,7 +159,7 @@ function HealthHome({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       const r = await startHealthConversation({ prompt: out.text, images: out.images.length ? out.images : undefined });
       noteConversation(r.session.session_id, undefined);
       noteSent(r.session.machine_id, r.session.session_id, out);
-      navigate({ name: "health", sid: r.session.session_id });
+      navigate(healthRoute({ sid: r.session.session_id }));
       return true;
     } catch (e) {
       toast(t("health.start_failed", { error: errorText(e) }), "error");
@@ -256,7 +269,7 @@ function HealthHome({ onToggleSidebar }: { onToggleSidebar: () => void }) {
 }
 
 function HealthRow({ s }: { s: Session }) {
-  const route = { name: "health" as const, sid: s.session_id };
+  const route = healthRoute({ sid: s.session_id });
   const last = plainMarkdown(s.last_text);
   return (
     <a href={href(route)} onClick={(e) => onLinkClick(e, route)} className="flex min-w-0 items-center gap-3 px-4 py-2.5 transition-colors hover:bg-hover">
