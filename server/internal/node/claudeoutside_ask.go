@@ -1,7 +1,6 @@
 package node
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -51,20 +50,24 @@ func (n *Node) outsideAskCards() []proto.Interaction {
 	return out
 }
 
-// outsideAskCacheEntry caches readPendingOutsideAsk for one transcript file stat so repeated waiting polls avoid disk
-// I/O while any write (size or mtime change) re-reads immediately without metaMinInterval staleness.
+// outsideAskCacheEntry caches a private read-only transcript.File and its last derived pending AskUserQuestion for one
+// file identity (os.SameFile + size + mtime). Because the File is never stored in n.files and never acquires
+// n.pushLock, repeated waiting polls avoid disk I/O without blocking on slow-link subscriber pushes, while any append,
+// in-place rewrite, or atomic same-size/same-mtime replacement re-reads immediately.
 type outsideAskCacheEntry struct {
 	path  string
+	stat  os.FileInfo
 	size  int64
 	mtime time.Time
+	file  *transcript.File
 	item  *proto.Item
 }
 
 // pendingOutsideAsk returns the current turn's unanswered AskUserQuestion call that outside claude c is waiting on, or
-// nil when c is not waiting or its current turn's latest tool call is not an open AskUserQuestion. It performs a
-// bounded read-only suffix scan directly against the transcript file — never acquiring subscriber push locks or
-// triggering watch pushes — so card creation, Capabilities.Approve, AttentionReason, and priority-now replies share
-// one source of truth without blocking on slow links or quickMeta's 3s cache / 384KB tail / KindText clearing.
+// nil when c is not waiting or its current turn's latest tool call is not an open AskUserQuestion. It reads through a
+// private branch-aware transcript.File — never acquiring subscriber push locks or triggering watch pushes — so card
+// creation, Capabilities.Approve, AttentionReason, and priority-now replies share one source of truth across rewound
+// branches, trailing text, metaMinInterval, quickTail, and >8 MiB metadata tails.
 func (n *Node) pendingOutsideAsk(c claudeProc) *proto.Item {
 	if c.Status != "waiting" {
 		return nil
@@ -78,22 +81,35 @@ func (n *Node) pendingOutsideAsk(c claudeProc) *proto.Item {
 	if err != nil {
 		return nil
 	}
+	var f *transcript.File
 	n.cx.mu.Lock()
-	if e, ok := n.cx.outsideAskCache[id]; ok && e.path == p && e.size == st.Size() && e.mtime.Equal(st.ModTime()) {
-		item := copyItemPtr(e.item)
-		n.cx.mu.Unlock()
-		return item
+	if e, ok := n.cx.outsideAskCache[id]; ok && e.path == p && e.stat != nil && os.SameFile(e.stat, st) {
+		if e.size == st.Size() && e.mtime.Equal(st.ModTime()) {
+			item := copyItemPtr(e.item)
+			n.cx.mu.Unlock()
+			return item
+		}
+		f = e.file // same underlying file grew or was edited: refresh incrementally
 	}
 	n.cx.mu.Unlock()
 
-	item := readPendingOutsideAsk(p, st.Size())
+	if f == nil {
+		f = transcript.NewFile(p)
+	}
+	item, err := readPendingOutsideAskFile(f)
+	if err != nil {
+		// Transient open/read failure: never cache a false negative.
+		return nil
+	}
 	n.cx.mu.Lock()
 	if n.cx.outsideAskCache == nil {
 		n.cx.outsideAskCache = map[string]outsideAskCacheEntry{}
 	} else if len(n.cx.outsideAskCache) >= 64 {
 		clear(n.cx.outsideAskCache)
 	}
-	n.cx.outsideAskCache[id] = outsideAskCacheEntry{path: p, size: st.Size(), mtime: st.ModTime(), item: copyItemPtr(item)}
+	n.cx.outsideAskCache[id] = outsideAskCacheEntry{
+		path: p, stat: st, size: st.Size(), mtime: st.ModTime(), file: f, item: copyItemPtr(item),
+	}
 	n.cx.mu.Unlock()
 	return item
 }
@@ -106,64 +122,54 @@ func copyItemPtr(it *proto.Item) *proto.Item {
 	return &cp
 }
 
-// readPendingOutsideAsk scans expanding bounded suffixes of path (from quickTail up to lookBackReach) read-only and
-// returns the current turn's latest tool call when it is an unanswered AskUserQuestion, else nil. Any non-queued user
-// message or turn close ends the previous turn and resets any earlier unanswered AskUserQuestion, whereas trailing
-// assistant text or queued user messages in the same turn keep it open.
-func readPendingOutsideAsk(path string, size int64) *proto.Item {
-	if size <= 0 {
-		return nil
+// isOutsideTurnPrompt reports whether it starts a new user turn (clearing any earlier turn's unanswered
+// AskUserQuestion). Tool results, tool-returned screenshots (which carry ToolUseID != ""), and queued user messages
+// belong to the current turn and do not clear it; genuine user text/image prompts and wakes do.
+func isOutsideTurnPrompt(it proto.Item) bool {
+	if it.Wake {
+		return true
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
+	return it.Role == "user" && it.Kind != proto.KindToolResult && it.ToolUseID == "" && !it.Queued
+}
+
+// readPendingOutsideAskFile refreshes f read-only (no pushLock, no subscriber push) and walks back through branch-aware
+// PageTurns until it finds the current turn's boundary or latest tool call, returning that call when it is an open
+// AskUserQuestion that has neither a tool_result nor a subsequent active-branch turn close.
+func readPendingOutsideAskFile(f *transcript.File) (*proto.Item, error) {
+	if _, _, err := f.RefreshExportSpan(); err != nil {
+		return nil, err
 	}
-	defer f.Close()
-	for chunk := int64(quickTail); ; chunk = min(chunk*2, lookBackReach) {
-		start := max(size-chunk, 0)
-		buf := make([]byte, size-start)
-		if nr, err := f.ReadAt(buf, start); err != nil && nr < len(buf) {
-			return nil
-		}
-		lines := bytes.Split(buf, []byte("\n"))
-		if start > 0 && len(lines) > 0 {
-			lines = lines[1:] // partial first line; included whole in the next larger window
-		}
-		var tm transcript.Meta
-		answered := map[string]bool{}
+	answered := map[string]bool{}
+	beforeSeq := 0
+	for {
+		items, hasMore, _ := f.PageTurns(beforeSeq, 2, 2000)
 		var last *proto.Item
 		sawBoundary := false
-		for _, line := range lines {
-			if len(line) == 0 {
-				continue
-			}
-			prevClosed := tm.TurnClosed
-			items := transcript.ParseLine(0, line, &tm)
-			if tm.TurnClosed && !prevClosed {
+		for i := range items {
+			it := items[i]
+			switch {
+			case it.Kind == proto.KindToolResult && it.ToolUseID != "":
+				answered[it.ToolUseID] = true
+			case isOutsideTurnPrompt(it):
 				last = nil
 				sawBoundary = true
-			}
-			for i := range items {
-				it := items[i]
-				switch {
-				case it.Kind == proto.KindToolResult && it.ToolUseID != "":
-					answered[it.ToolUseID] = true
-				case it.Wake || (it.Role == "user" && it.Kind != proto.KindToolResult && !it.Queued):
-					last = nil
-					sawBoundary = true
-				case it.Role == "assistant" && it.Kind == proto.KindToolUse:
-					cp := it
-					last = &cp
-					sawBoundary = true
-				}
+			case it.Role == "assistant" && it.Kind == proto.KindToolUse:
+				cp := it
+				last = &cp
+				sawBoundary = true
 			}
 		}
-		if sawBoundary || start == 0 || chunk == lookBackReach {
-			if last == nil || last.ToolName != askTool || last.ToolUseID == "" || answered[last.ToolUseID] {
-				return nil
+		if sawBoundary || !hasMore || len(items) == 0 {
+			if last == nil || last.ToolName != askTool || last.ToolUseID == "" || answered[last.ToolUseID] || f.TurnClosedAfter(last.Seq) {
+				return nil, nil
 			}
-			return last
+			return last, nil
 		}
+		nextBefore := items[0].Seq
+		if nextBefore <= 1 || (beforeSeq > 0 && nextBefore >= beforeSeq) {
+			return nil, nil
+		}
+		beforeSeq = nextBefore
 	}
 }
 

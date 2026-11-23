@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -830,5 +831,202 @@ func TestOutsideAskFlushesApproveEvenWhenLastListPreUpdated(t *testing.T) {
 	n.publishGen(staleList, staleGen)
 	if len(rec.snapshot()) != 0 {
 		t.Fatalf("stale pollAgents snapshot overwrote flushed list: %+v", rec.snapshot())
+	}
+}
+
+// Rewound (abandoned) branches in a Claude transcript must be excluded by branch-aware projection, even if an
+// unanswered AskUserQuestion was left on the rewound branch.
+func TestOutsideAskIgnoresRewoundBranch(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 3*time.Second)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	// u1 -> a1 (replied anchor), then abandoned branch u2 (parent a1) -> a2 (AskUserQuestion), then rewound active
+	// branch u3 (sibling of u2 under parent a1) -> a3 (text only), followed by a late abandoned line attached to a2.
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"start"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-11-04T09:00:02Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"text","text":"ready"}]}}`,
+		`{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-11-04T09:00:05Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"old path"}}`,
+		`{"type":"assistant","uuid":"a2","parentUuid":"u2","timestamp":"2026-11-04T09:00:06Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"text","text":"thinking"}]}}`,
+		`{"type":"user","uuid":"u3","parentUuid":"a1","timestamp":"2026-11-04T09:00:10Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"rewound path"}}`,
+		`{"type":"assistant","uuid":"a3","parentUuid":"u3","timestamp":"2026-11-04T09:00:11Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"text","text":"running new path"}]}}`,
+		`{"type":"assistant","uuid":"a2b","parentUuid":"a2","timestamp":"2026-11-04T09:00:12Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_abandoned","name":"AskUserQuestion","input":{"questions":[{"question":"Abandoned?","header":"Old","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}}]}}`)
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+
+	if cards := n.outsideAskCards(); len(cards) != 0 {
+		t.Fatalf("abandoned branch AskUserQuestion emitted card: %+v", cards)
+	}
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudeComputer {
+		t.Fatalf("abandoned branch set Approve: row=%+v caps=%+v", s, s.Capabilities)
+	}
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "check", "client_msg_id": "m-rewound"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if pr, _ := inboxPriority(t, inbox, 0); pr != peerNext {
+		t.Fatalf("send after abandoned branch ask went at %q, want %q", pr, peerNext)
+	}
+}
+
+// A concurrent tool_result returning an image carries ToolUseID != "" and must NOT reset an open AskUserQuestion in the
+// same turn, whereas a genuine user image prompt (ToolUseID == "") starts a new turn and clears it.
+func TestOutsideAskToolResultImageDoesNotResetOpenAsk(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"inspect"}}`,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-11-04T09:00:02Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_shot","name":"Bash","input":{"command":"screenshot"}},{"type":"tool_use","id":"toolu_ask_img","name":"AskUserQuestion","input":{"questions":[{"question":"Looks right?","header":"Visual","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}}]}}`,
+		`{"type":"user","uuid":"r1","timestamp":"2026-11-04T09:00:04Z","sessionId":"`+sidA+`","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_shot","content":[{"type":"text","text":"captured"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"`+tinyPNG+`"}}]}]}}`)
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+
+	if cards := n.outsideAskCards(); len(cards) != 1 || cards[0].ToolUseID != "toolu_ask_img" {
+		t.Fatalf("tool_result screenshot cleared open AskUserQuestion: %+v", cards)
+	}
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || !s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudeAnswer {
+		t.Fatalf("after tool_result screenshot: row=%+v caps=%+v", s, s.Capabilities)
+	}
+
+	// A genuine user image prompt (ToolUseID == "") begins a new turn and clears the earlier unanswered AskUserQuestion.
+	appendLines(t, p, `{"type":"user","uuid":"u2","timestamp":"2026-11-04T09:00:10Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"`+tinyPNG+`"}}]}}`)
+	if cards := n.outsideAskCards(); len(cards) != 0 {
+		t.Fatalf("user image prompt did not clear earlier AskUserQuestion: %+v", cards)
+	}
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudeComputer {
+		t.Fatalf("after user image prompt: row=%+v caps=%+v", s, s.Capabilities)
+	}
+}
+
+// Even when more than 8 MiB (lookBackReach) of trailing metadata lines sit after AskUserQuestion, the private read-only
+// transcript.File still recovers the open question without touching subscriber pushLock.
+func TestOutsideAskBeyond8MiBTrailingMetadata(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"deep"}}`,
+		askCall(sidA, "toolu_deep_8mb", `{"questions":[{"question":"Continue?","header":"Deep","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}`))
+
+	// Append ~8.5 MiB of progress metadata lines (> lookBackReach = 8 MiB).
+	chunk := `{"type":"progress","uuid":"p1","timestamp":"2026-11-04T09:00:10Z","sessionId":"` + sidA + `","data":{"blob":"` + strings.Repeat("z", 512<<10) + `"}}` + "\n"
+	fh, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 17 {
+		if _, err := fh.WriteString(chunk); err != nil {
+			_ = fh.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := fh.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+
+	pushMu := n.pushLock(sidA)
+	pushMu.Lock()
+	defer pushMu.Unlock()
+
+	if cards := n.outsideAskCards(); len(cards) != 1 || cards[0].ToolUseID != "toolu_deep_8mb" {
+		t.Fatalf(">8 MiB trailing metadata hid AskUserQuestion: %+v", cards)
+	}
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || !s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudeAnswer {
+		t.Fatalf(">8 MiB trailing metadata row=%+v caps=%+v", s, s.Capabilities)
+	}
+}
+
+// A transient open/read error must not be cached as a negative result: once the file is readable again with the same
+// stat, the open AskUserQuestion card is returned immediately.
+func TestOutsideAskDoesNotCacheTransientReadError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses chmod 0000 read permissions")
+	}
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"check"}}`,
+		askCall(sidA, "toolu_transient_err", `{"questions":[{"question":"Retry?","header":"Check","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}`))
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+
+	if err := os.Chmod(p, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+
+	if cards := n.outsideAskCards(); len(cards) != 0 {
+		t.Fatalf("unreadable file unexpectedly returned cards: %+v", cards)
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cards := n.outsideAskCards(); len(cards) != 1 || cards[0].ToolUseID != "toolu_transient_err" {
+		t.Fatalf("transient read error was cached: cards=%+v", cards)
+	}
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || !s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudeAnswer {
+		t.Fatalf("after file readable again: row=%+v caps=%+v", s, s.Capabilities)
+	}
+}
+
+// Atomically replacing a transcript with another file of identical size and mtime (same path, different inode) must
+// invalidate outsideAskCache via os.SameFile.
+func TestOutsideAskCacheDetectsSameSizeSameMtimeAtomicReplace(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+
+	askContent := `{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"` + home + `","sessionId":"` + sidA + `","message":{"role":"user","content":"go"}}` + "\n" +
+		askCall(sidA, "toolu_replaced", `{"questions":[{"question":"Ship?","header":"Go","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}`) + "\n"
+	bashBase := `{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"` + home + `","sessionId":"` + sidA + `","message":{"role":"user","content":"go"}}` + "\n" +
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-11-04T09:00:09Z","sessionId":"` + sidA + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_bash_pad","name":"Bash","input":{"command":"`
+	bashTail := `"}}]}}` + "\n"
+	padLen := len(askContent) - len(bashBase) - len(bashTail)
+	if padLen < 1 {
+		t.Fatalf("unexpected fixture lengths: ask=%d bash=%d", len(askContent), len(bashBase)+len(bashTail))
+	}
+	bashContent := bashBase + strings.Repeat("a", padLen) + bashTail
+	if len(bashContent) != len(askContent) {
+		t.Fatalf("fixture size mismatch: %d vs %d", len(bashContent), len(askContent))
+	}
+
+	p := writeTranscript(t, home, home, sidA, time.Now())
+	fixedTime := time.Date(2026, 11, 4, 9, 5, 0, 0, time.UTC)
+	if err := os.WriteFile(p, []byte(bashContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(p, fixedTime, fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+
+	// Warm outsideAskCache with negative result (Bash call).
+	if cards := n.outsideAskCards(); len(cards) != 0 {
+		t.Fatalf("bash call produced card: %+v", cards)
+	}
+
+	// Atomically replace p with a new inode having identical byte length and identical mtime containing AskUserQuestion.
+	other := filepath.Join(filepath.Dir(p), "replacement.jsonl")
+	if err := os.WriteFile(other, []byte(askContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(other, fixedTime, fixedTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(other, p); err != nil {
+		t.Fatal(err)
+	}
+
+	if cards := n.outsideAskCards(); len(cards) != 1 || cards[0].ToolUseID != "toolu_replaced" {
+		t.Fatalf("same-size same-mtime atomic replacement hit stale cache: %+v", cards)
+	}
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || !s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudeAnswer {
+		t.Fatalf("after atomic replacement: row=%+v caps=%+v", s, s.Capabilities)
 	}
 }
