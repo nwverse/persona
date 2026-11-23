@@ -2,6 +2,11 @@
 # A deterministic fake for the larkcli adapter tests. It never reads or writes
 # a credential store and emits only synthetic fixture data.
 set -eu
+# LARKCLI_FAKE_PIDS, when set, is a directory each run records its process id in, first of all, so a test can wait
+# for every run it caused to exit before its temporary directories go (extmgr, #14235). Unset: nothing changes.
+if [ -n "${LARKCLI_FAKE_PIDS:-}" ]; then
+  : > "$LARKCLI_FAKE_PIDS/$$"
+fi
 
 base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 scenario=${LARKCLI_FAKE_SCENARIO:-success}

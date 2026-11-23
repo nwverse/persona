@@ -242,12 +242,10 @@ func (g superviseSignal) immediate() bool { return supervisionBatchImmediate(g) 
 type superviseBook struct {
 	routingMu   sync.RWMutex // moves and card creation exclude routing/delivery; ordinary deliveries may run concurrently
 	mu          sync.Mutex
-	writeMu     sync.Mutex          // one ledger write at a time (updateSupervision)
-	roundEpochs map[string]uint64   // by todo, protected by writeMu; distinguishes a new round from a scope's state reset
-	ownerPushMu sync.Mutex          // ownerPushes only; never held across RPC, todo or database calls
-	ownerPushes map[string]struct{} // todo + work currently being pushed and receipted
-	digestMu    sync.Mutex          // one whole digest, including todo and durable-pending restoration; teardown drains it
-	dedupMu     sync.Mutex          // serializes digest reservations and delivery
+	writeMu     sync.Mutex        // one ledger write at a time (updateSupervision)
+	roundEpochs map[string]uint64 // by todo, protected by writeMu; distinguishes a new round from a scope's state reset
+	digestMu    sync.Mutex        // one whole digest, including todo and durable-pending restoration; teardown drains it
+	dedupMu     sync.Mutex        // serializes digest reservations and delivery
 	dedup       map[string]superviseFingerprint
 	// failedBatchMu serializes the durable leader-failure cooldown document. failedBatches is its memory-only
 	// fallback when this manager has no store; failedBatchesLoaded says whether deferred members were restored.
