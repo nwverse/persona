@@ -324,7 +324,12 @@ struct HealthView: View {
     private func sections(_ list: [Session]) -> some View {
         ScrollViewReader { proxy in
             List {
-                Section { HealthTodaySection(page: page) { intakeDetail = .init(kind: $0) } } header: { Text("Today") }
+                Section {
+                    HealthTodaySection(page: page) { intakeDetail = .init(kind: $0) }
+                    #if os(iOS)
+                    HealthIntakeSyncLink()
+                    #endif
+                } header: { Text("Today") }
                 #if os(iOS)
                 if UIDevice.current.userInterfaceIdiom == .phone {
                     #if DEBUG
@@ -333,7 +338,6 @@ struct HealthView: View {
                     HealthActivitySection()
                     #endif
                 }
-                HealthIntakeSyncLink()
                 if trends.hasData {
                     HealthTrendsSection(model: trends, automaticallyLoads: false)
                 }

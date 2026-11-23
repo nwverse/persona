@@ -58,12 +58,10 @@ struct HealthIntakeSyncLink: View {
 
     var body: some View {
         if sync.visible(model: model), !sync.enabled(model: model) {
-            Section {
-                NavigationLink { WorkoutReportSettingsView() } label: {
-                    Label { Text("Sync to Apple Health").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.health) }
-                }
-                .accessibilityIdentifier("health-intake-sync-link")
+            NavigationLink { WorkoutReportSettingsView() } label: {
+                Label { Text("Sync to Apple Health").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.health) }
             }
+            .accessibilityIdentifier("health-intake-sync-link")
             .task { await sync.load() }
         }
     }
