@@ -1523,8 +1523,12 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 		Text  string   `json:"text"`
 		Tags  []string `json:"tags"`
 		Quote string   `json:"quote"`
+		Tier  string   `json:"tier"`
+		Pin   bool     `json:"pin"`
 	}
-	_ = json.Unmarshal(args, &a)
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(a.Text) == "" {
 		return "", errors.New("text is empty")
 	}
@@ -1544,6 +1548,14 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 	quote, err := s.resolveQuote(ctx, self, a.Quote) // before relayAllowed: a refused quote uses up no rate
 	if err != nil {
 		return "", err
+	}
+	var preset ModelTier
+	a.Tier = strings.TrimSpace(a.Tier)
+	if a.Tier != "" {
+		preset, err = s.tierModel(ctx, a.Tier)
+		if err != nil {
+			return "", err
+		}
 	}
 	counted := time.Now()
 	hop, _, err := s.relayAllowedOn(s.relayRouteFor(ctx, self), self, relayNewKey, counted) // an opening message is a request, never an answer
@@ -1566,30 +1578,54 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 	if err != nil {
 		return "", err
 	}
-	c, err := s.startConversation(sctx, startParams{Text: relayText(msg), Source: msg.source(), Space: space, Origin: OriginSpawned, OriginRef: self})
+	c, err := s.startSignedIn(sctx, StartParams{Text: prompts.MessageSourceText(relayText(msg), msg.source()), Space: space, Origin: OriginSpawned, OriginRef: self,
+		Launcher: preset.Launcher, Model: preset.Model, Effort: preset.Effort, RequireLauncher: a.Tier != ""})
 	if err != nil {
 		return "", err
 	}
 	started = true
-	s.titleNew(c.MachineID, c.SessionID, time.Now())
-	tagNote := quoteNote(quote)
-	if len(tags) > 0 {
-		// The conversation already exists: a tag write that fails must not be reported as a failed start.
-		if _, err := s.setConversationTags(sctx, c.MachineID, c.SessionID, tags, titleByAssistant); err != nil {
-			return fmt.Sprintf("Started conversation %s; it is working on the message now and is named after its first turn. It shows up in the app's sidebar. Its tags could not be saved: %v", c.SessionID, err), nil
-		}
-		tagNote += " It is born with tags: " + strings.Join(tags, ", ") + "."
-	}
 	b := &s.relays
 	b.mu.Lock()
+	pinKept := false
 	if s.relayLocked(ctx) {
 		b.st.Hops[c.SessionID] = relayHop{Hop: hop, At: time.Now().UTC(), From: self} // its report back is the answer
 		// Followed until it reports back: a turn that fails or ends without a word tells self (spawned.go, #4669).
-		b.st.Spawned[c.SessionID] = spawnedConv{Parent: self, At: time.Now().UTC()}
-		s.saveRelayLocked()
+		spawn := spawnedConv{Parent: self, At: time.Now().UTC()}
+		if a.Pin {
+			spawn.PinMachine = c.MachineID
+		}
+		b.st.Spawned[c.SessionID] = spawn
+		pinKept = s.saveRelayLocked() == nil
 	}
 	b.mu.Unlock()
-	return fmt.Sprintf("Started conversation %s; it is working on the message now and is named after its first turn. It shows up in the app's sidebar.%s", c.SessionID, tagNote), nil
+	s.titleNew(c.MachineID, c.SessionID, time.Now())
+	note := quoteNote(quote)
+	lang := s.lang(ctx)
+	if a.Tier != "" {
+		run := ModelTier{Launcher: c.Launcher, Model: c.Model, Effort: c.Effort}
+		note += " " + i18n.T(lang, "assistant-conversations.started_on", i18n.Args{"run": run.runs()})
+		pick := modelPick{MachineID: c.MachineID, Launcher: preset.Launcher, Model: preset.Model, Effort: preset.Effort, At: time.Now().UTC()}
+		if err := s.setModelPick(sctx, c.SessionID, &pick); err != nil {
+			note += " " + i18n.T(lang, "assistant-conversations.pick_save_failed", i18n.Args{"error": err.Error()})
+		}
+	}
+	if a.Pin && pinKept {
+		note += " " + i18n.T(lang, "assistant-conversations.pin_requested")
+		// A short first turn can finish before the start call returns its session ID.
+		if child, ok := s.session(ctx, c.MachineID, c.SessionID); ok && child.Status == proto.StatusDone {
+			s.spawnPinAfterTurn(ctx, c.MachineID, c.SessionID)
+		}
+	} else if a.Pin {
+		note += " " + i18n.T(lang, "assistant-conversations.pin_save_failed")
+	}
+	if len(tags) > 0 {
+		if _, err := s.setConversationTags(sctx, c.MachineID, c.SessionID, tags, titleByAssistant); err != nil {
+			note += fmt.Sprintf(" Its tags could not be saved: %v", err)
+		} else {
+			note += " It is born with tags: " + strings.Join(tags, ", ") + "."
+		}
+	}
+	return fmt.Sprintf("Started conversation %s; it is working on the message now and is named after its first turn. It shows up in the app's sidebar.%s", c.SessionID, note), nil
 }
 
 func (s *Service) toolConversationSend(ctx context.Context, self string, args json.RawMessage) (string, error) {
