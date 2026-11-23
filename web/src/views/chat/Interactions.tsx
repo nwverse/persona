@@ -424,7 +424,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
                 </button>
               </>
             )}
-            {q.multi_select && <span className="text-[11.5px] text-ink-3">{t("chat-interactions.multi_select")}</span>}
+            {q.multi_select && <span className="text-submeta text-ink-3">{t("chat-interactions.multi_select")}</span>}
           </span>
           <SendArrow ready={last ? all : answered(qi) && allowed(qi)} busy={busy} kbd={keys.focused} label={last ? t("chat-interactions.send_answer") : t("chat-interactions.next_question")} onClick={() => (last ? void send() : advance())} />
         </>
@@ -847,7 +847,7 @@ function SupervisorHeldCard({ ix }: { ix: Interaction }) {
       kicker={t("chat-delegate.supervisor_held")}
       title={title}
       footer={
-        <p data-supervisor-held className="flex min-w-0 items-start gap-1.5 text-[12px] leading-snug text-ink-2">
+        <p data-supervisor-held className="flex min-w-0 items-start gap-1.5 text-label leading-snug text-ink-2">
           <Icon name="eye" size={13} stroke={2.2} className="mt-px shrink-0 text-ink-3" />
           <span className="min-w-0">{t("chat-delegate.supervisor_held_hint")}</span>
         </p>
