@@ -1512,6 +1512,9 @@ final class AppModel {
     /// The health space's open conversations the hub has pushed, newest first (Health; `HealthModel` adds the hub's list).
     var healthConversations: [Session] { assistantLists(for: hub?.group ?? "").health }
 
+    /// The domain spaces' open conversations the hub has pushed, newest first (`SpaceHomeModel` adds each space's list).
+    var spaceConversations: [Session] { assistantLists(for: hub?.group ?? "").spaces }
+
     /// The two lists as of the last push, set only when they changed: a push about the agents (most of them) leaves
     /// the Persona page's conversations alone (`AssistantSidebar` was drawn again twice for each one, #390). For a group
     /// other than the one they were made for (the hub just changed), made from every session.
@@ -4865,7 +4868,7 @@ final class AppModel {
         refreshStarred(reset: switched)
         #endif
         if switched {
-            if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
+            if let a = assistantCurrent, let s = session(a), s.assistant, !s.inSpace, !assistantShows(s.manager) { assistantCurrent = assistantMain }
             assistantSwitches += 1
             // the "/" list offers the new assistant's saved prompts, never the one before's (#9436)
             SavedPromptStore.shared.forget()
@@ -5487,13 +5490,16 @@ nonisolated struct TabBadges: Equatable, Sendable {
 }
 
 /// The Persona conversations of one group, newest first: open and archived (`AppModel.assistantConversations`), and
-/// apart from them the health space's open ones (Health, docs/assistant/health.md), which the sidebar never lists.
+/// apart from them the health space's open ones (Health, docs/assistant/health.md) and the other spaces' (#13500), which
+/// the sidebar never lists.
 nonisolated struct AssistantLists: Equatable {
     let group: String
     let shown: Shown?
     let open: [Session]
     let archived: [Session]
     let health: [Session]
+    /// The open conversations of the domain spaces (every space but health's), the default manager's.
+    let spaces: [Session]
 
     /// The manager the Persona page shows on a hub with several, and the roster that says whose a conversation is
     /// (sessions carry their computer's `manager`): the lists are that manager's, and the health space the default's.
@@ -5509,9 +5515,10 @@ nonisolated struct AssistantLists: Equatable {
         let all = sessions.filter { $0.assistant && $0.group == group }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
         func owned(_ s: Session, by manager: (Shown) -> String) -> Bool { shown.map { $0.roster.owner(s.manager) == manager($0) } ?? true }
-        let mine = all.filter { !$0.isHealth && owned($0, by: \.manager) }
+        let mine = all.filter { !$0.inSpace && owned($0, by: \.manager) }
         open = mine.filter { $0.archived != true }
         archived = mine.filter { $0.archived == true }
         health = all.filter { $0.isHealth && $0.archived != true && owned($0, by: \.roster.defaultID) }
+        spaces = all.filter { $0.isDomainSpace && $0.archived != true && owned($0, by: \.roster.defaultID) }
     }
 }
