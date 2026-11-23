@@ -117,7 +117,9 @@ func (ps *extensions) extensionInstructions(ctx context.Context, base string) st
 	data := ps.dataInstructions(ctx, base)
 	var b strings.Builder
 	for _, p := range ps.reg.List() {
-		if !p.Record.Enabled || p.Problem != "" {
+		// An extension that declares memory_sources gives its memory through the hub's filter, not here
+		// (memory_sources.go).
+		if !p.Record.Enabled || p.Problem != "" || extension.DeclaresMemorySources(p) {
 			continue
 		}
 		for _, a := range p.Manifest.AssistantParts() { // with the declarative instructions (contributes.prompts)

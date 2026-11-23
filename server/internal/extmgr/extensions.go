@@ -548,6 +548,7 @@ func (h *Manager) startExtensions(ctx context.Context) {
 // changed is the registry's news: the plugin runs again as it is now; one just upgraded that fails to come up is
 // rolled back.
 func (ps *extensions) changed(c extension.Change) {
+	memorySourcesChanged() // the memory sources are read again at the next assembly (memory_sources.go)
 	if ps.h != nil && ps.h.opts.TranscriptionChanged != nil {
 		defer ps.h.opts.TranscriptionChanged()
 	}
