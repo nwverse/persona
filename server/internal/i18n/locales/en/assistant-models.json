@@ -144,6 +144,7 @@
   "err_run_offline": "{name} is offline. This use runs {launcher} there: bring it online, or choose another provider in Settings › Model configuration",
   "err_run_logged_out": "{launcher} isn’t logged in on {name}: log in there, or choose another provider in Settings › Model configuration",
   "err_run_timeout": "{launcher} on {name} didn’t answer in time",
+  "err_run_too_slow": "{launcher} on {name} wasn’t asked: its runs there take {took} s or more, and this request could wait only {wait} s",
   "err_candidates_extension_only": "Only an extension’s purpose has candidate models",
   "err_candidates_invalid": "Candidate models: choose “extension”, “off” or “custom”, and list each provider and model once, only for “custom”",
   "err_candidates_count": "Candidate models: list 1 to {most}",

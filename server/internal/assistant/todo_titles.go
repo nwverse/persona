@@ -121,6 +121,10 @@ func openedFromPrompt(title, notes string) bool {
 	return t != "" && strings.HasPrefix(oneLine(notes), oneLine(t))
 }
 
+// todoTitleWait is how long a todo's title waits for its model; todoTitleLauncherWait, for one that runs on a launcher's
+// CLI, which starts cold for every request (agy took 12–48 s, #13443). Both fit nameTodoLater's minute.
+var todoTitleWait, todoTitleLauncherWait = 15 * time.Second, 50 * time.Second
+
 // nameTodoLater has the model name a task's todo, off the caller's path; from is the title it was made with.
 func (s *Service) nameTodoLater(ctx context.Context, id, from, prompt string) {
 	s.todos.titling.Add(1)
@@ -150,7 +154,11 @@ func (s *Service) todoTitleFromModel(ctx context.Context, prompt string) string 
 	locale := s.hello(ctx).Locale
 	max := todoTitleMax(locale)
 	language := answerLanguage(locale)
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	wait := todoTitleWait
+	if s.purposeOnLauncher(ctx, "todo.title") {
+		wait = todoTitleLauncherWait
+	}
+	cctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	// Reasoning models think first: a small max_tokens comes back empty (agents_start.go's tab names).
 	text, err := s.purposeModel("todo.title").Complete(cctx,

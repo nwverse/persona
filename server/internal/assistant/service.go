@@ -191,6 +191,7 @@ type Service struct {
 	titles           titleBook             // titles.go
 	phoneKept        keptPhoneTools        // fleet_tools.go: the phone's tools as the hub last listed them
 	agentNames       agentNamingBook       // agent_naming.go
+	runFloors        runFloorBook          // models_run.go: how fast a launcher's runs can be
 	prefs            settingsBook          // profile.go
 	guard            dispatchGuardBook     // dispatch_guard.go
 	main             mainBook              // start.go

@@ -144,6 +144,7 @@
   "err_run_offline": "{name} 不在线。这项用途要在它上面运行 {launcher}：让它上线，或在 设置 › 模型配置 换一个供应商",
   "err_run_logged_out": "{launcher} 在 {name} 上没有登录：到那台电脑上登录，或在 设置 › 模型配置 换一个供应商",
   "err_run_timeout": "{name} 上的 {launcher} 没有及时回答",
+  "err_run_too_slow": "没有请 {name} 上的 {launcher} 回答：它在那里每次至少要 {took} 秒，这次请求只能等 {wait} 秒",
   "err_candidates_extension_only": "只有扩展的用途才有候选模型",
   "err_candidates_invalid": "候选模型：请选择“extension”“off”或“custom”，只有“custom”时才列出供应商和模型，每项只出现一次",
   "err_candidates_count": "候选模型：请列出 1 到 {most} 个",
