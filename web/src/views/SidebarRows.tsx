@@ -192,7 +192,7 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
 }, sameProps);
 
 // The list's one-line notes (loading, no match), as each writes it.
-const NOTE = "px-2 py-1 text-[12px] text-ink-3";
+const NOTE = "px-2 py-1 text-label text-ink-3";
 
 // two shapes as well as two colors, so they tell apart without color: a bare prompt (no frame) and a window with a title bar
 const SOURCE_ICON = { terminal: { name: "run", tone: "text-source-terminal" }, desktop: { name: "appWindow", tone: "text-source-desktop" } } as const;

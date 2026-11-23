@@ -435,7 +435,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
 
           {/* Line 2: Role-attributed Evidence Snippet when searching, else Last message / status line */}
           {evidence ? (
-            <span data-testid="agent-evidence-snippet" className="truncate text-[11.5px] leading-4 text-ink-2">
+            <span data-testid="agent-evidence-snippet" className="truncate text-submeta leading-4 text-ink-2">
               <span
                 className={cx(
                   "mr-1 font-semibold",
