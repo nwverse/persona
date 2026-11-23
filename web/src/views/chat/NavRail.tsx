@@ -7,6 +7,9 @@ import { NAV_RAIL_METRICS as M } from "../../ui/nav-rail-metrics";
 import { cx } from "../../ui/atoms";
 import { t } from "../../i18n";
 
+/** Throttle observer-driven re-measurements so streaming DOM growth does not force full layout every frame. */
+export const NAV_RAIL_OBSERVER_MS = 250;
+
 function labelOf(tick: NavRailTick): string {
   return tick.preview || (tick.attachmentsOnly ? t("chat-navrail.attachments", { count: tick.attachmentsOnly }) : tick.ordinal ? t("chat-navrail.input", { index: tick.ordinal }) : "");
 }
@@ -17,6 +20,50 @@ function labelOf(tick: NavRailTick): string {
 function lineParent(scroller: HTMLElement): Element {
   for (const el of scroller.children) if (el instanceof HTMLElement && el.dataset.chatContent !== undefined) return el;
   return scroller;
+}
+
+const EMPTY_TRACKED: ReadonlySet<string> = new Set();
+
+function isTrackedLine(node: Node, trackedIds: ReadonlySet<string>): boolean {
+  return node instanceof HTMLElement && node.dataset.line !== undefined && trackedIds.has(node.dataset.line);
+}
+
+function isAfter(lastLine: HTMLElement, node: Node, parent: Element): boolean {
+  if (node.parentNode !== parent) return false;
+  const pos = lastLine.compareDocumentPosition(node);
+  return (pos & Node.DOCUMENT_POSITION_DISCONNECTED) === 0 && (pos & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
+
+/** True when every mutation is strictly inside the last measured tick's body or in untracked tail siblings after it
+ *  (including streaming assistant `[data-line]` replies below the last user tick), so no tracked tick offset can shift. */
+function isTailOnlyMutation(
+  records: MutationRecord[],
+  parent: Element,
+  lastLine: HTMLElement | null,
+  trackedIds: ReadonlySet<string>,
+): boolean {
+  if (!lastLine || lastLine.parentElement !== parent) return false;
+  for (const record of records) {
+    if (record.target === parent) {
+      for (const node of record.addedNodes) if (isTrackedLine(node, trackedIds)) return false;
+      for (const node of record.removedNodes) if (isTrackedLine(node, trackedIds)) return false;
+      const prev = record.previousSibling;
+      if (!prev) return false;
+      if (prev !== lastLine && !isAfter(lastLine, prev, parent)) return false;
+      continue;
+    }
+    let child: Node | null = record.target;
+    while (child && child.parentNode !== parent) child = child.parentNode;
+    if (!child) return false;
+    if (child === lastLine) {
+      // Replacing the line wrapper's direct child swaps the measured row element itself.
+      if (record.target === lastLine) return false;
+      continue;
+    }
+    if (isTrackedLine(child, trackedIds)) return false;
+    if (!isAfter(lastLine, child, parent)) return false;
+  }
+  return true;
 }
 
 export function NavRail({ ticks, total, scroller, onJump, reset }: {
@@ -49,6 +96,14 @@ export function NavRail({ ticks, total, scroller, onJump, reset }: {
   const list = useRef(ticks);
   list.current = ticks;
   const dirty = useRef(true);
+  const checkResize = useRef(false);
+  const pendingObserver = useRef<"mutation" | "height" | null>(null);
+  const lastClearance = useRef<string | null>(null);
+  const lastContentWidth = useRef<number | null>(null);
+  const lastTick = useRef<{ id: string; line: HTMLElement; row: HTMLElement; top: number } | null>(null);
+  const trackedIds = useRef<ReadonlySet<string>>(EMPTY_TRACKED);
+  const observerTimer = useRef(0);
+  const lastObserverRun = useRef(-Infinity);
   const offsets = useRef<{ index: number; top: number }[]>([]);
   const previewId = useId();
 
@@ -68,24 +123,59 @@ export function NavRail({ ticks, total, scroller, onJump, reset }: {
   const measure = useCallback(() => {
     frame.current = 0;
     if (!scroller || !fine || !list.current.length) return;
+    if (!dirty.current && checkResize.current) {
+      checkResize.current = false;
+      const tail = lastTick.current;
+      const last = list.current[list.current.length - 1];
+      const lastId = last?.lineId ?? last?.id;
+      const content = lineParent(scroller);
+      if (
+        !tail || tail.id !== lastId || tail.line.parentElement !== content || tail.line.firstElementChild !== tail.row
+        || Math.abs((tail.row.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop) - tail.top) >= 0.5
+      ) {
+        dirty.current = true;
+      }
+    }
     if (dirty.current) {
       dirty.current = false;
+      checkResize.current = false;
+      pendingObserver.current = null;
+      if (observerTimer.current) {
+        clearTimeout(observerTimer.current);
+        observerTimer.current = 0;
+      }
       setHeight(Math.max(0, scroller.clientHeight - M.padding * 2));
       setRight(Math.max(0, scroller.offsetWidth - scroller.clientWidth) + M.edgeGap);
       const content = lineParent(scroller);
+      lastContentWidth.current = content.clientWidth;
       // Wide chats already have a margin. Add only the missing clearance, keeping that column centered.
       const margin = Math.max(0, (scroller.clientWidth - content.clientWidth) / 2);
-      scroller.style.setProperty("--chat-nav-clearance", `${Math.max(0, M.width + M.edgeGap + M.endInset - margin)}px`);
-      const rows = new Map<string, HTMLElement>();
+      const clearance = `${Math.max(0, M.width + M.edgeGap + M.endInset - margin)}px`;
+      if (clearance !== lastClearance.current) {
+        lastClearance.current = clearance;
+        scroller.style.setProperty("--chat-nav-clearance", clearance);
+      }
+      const rows = new Map<string, { line: HTMLElement; row: HTMLElement }>();
       for (const el of content.children) {
         const child = el.firstElementChild;
-        if (el instanceof HTMLElement && el.dataset.line !== undefined && child instanceof HTMLElement) rows.set(el.dataset.line, child);
+        if (el instanceof HTMLElement && el.dataset.line !== undefined && child instanceof HTMLElement) rows.set(el.dataset.line, { line: el, row: child });
       }
       const top = scroller.getBoundingClientRect().top;
+      let nextLast: { id: string; line: HTMLElement; row: HTMLElement; top: number } | null = null;
+      const tracked = new Set<string>();
+      const last = list.current[list.current.length - 1];
+      const lastId = last?.lineId ?? last?.id;
       offsets.current = list.current.flatMap((tick, index) => {
-        const row = rows.get(tick.lineId ?? tick.id);
-        return row ? [{ index, top: row.getBoundingClientRect().top - top + scroller.scrollTop }] : [];
+        const key = tick.lineId ?? tick.id;
+        tracked.add(key);
+        const found = rows.get(key);
+        if (!found) return [];
+        const offsetTop = found.row.getBoundingClientRect().top - top + scroller.scrollTop;
+        if (key === lastId) nextLast = { id: key, line: found.line, row: found.row, top: offsetTop };
+        return [{ index, top: offsetTop }];
       });
+      trackedIds.current = tracked;
+      lastTick.current = nextLast;
     }
     const index = activeNavRailOffset(offsets.current, scroller.scrollTop + M.activeOffset);
     setActive(index === null ? null : list.current[index]?.id ?? null);
@@ -100,27 +190,90 @@ export function NavRail({ ticks, total, scroller, onJump, reset }: {
     schedule();
   }, [ticks, scroller, schedule]);
 
+  const hasTicks = ticks.length > 0;
   useEffect(() => {
-    if (!scroller || !fine || !ticks.length) return;
+    if (!scroller || !fine || !hasTicks) return;
     const content = scroller.querySelector<HTMLElement>("[data-chat-content]") ?? scroller.firstElementChild;
-    const changed = () => { dirty.current = true; schedule(); };
+    const parent = lineParent(scroller);
+    const runObserver = () => {
+      const pending = pendingObserver.current;
+      pendingObserver.current = null;
+      if (!pending) return;
+      lastObserverRun.current = performance.now();
+      if (pending === "mutation") dirty.current = true;
+      else checkResize.current = true;
+      schedule();
+    };
+    const armObserver = (immediate: boolean) => {
+      const elapsed = performance.now() - lastObserverRun.current;
+      if (immediate && elapsed >= NAV_RAIL_OBSERVER_MS) {
+        if (observerTimer.current) {
+          clearTimeout(observerTimer.current);
+          observerTimer.current = 0;
+        }
+        runObserver();
+        return;
+      }
+      if (observerTimer.current) return;
+      const wait = immediate ? Math.max(0, NAV_RAIL_OBSERVER_MS - elapsed) : NAV_RAIL_OBSERVER_MS;
+      observerTimer.current = window.setTimeout(() => {
+        observerTimer.current = 0;
+        runObserver();
+      }, wait);
+    };
+    const onResize: ResizeObserverCallback = (entries) => {
+      let structural = !entries.length;
+      for (const entry of entries) {
+        if (entry.target === scroller) {
+          structural = true;
+          break;
+        }
+        if (entry.target === content) {
+          const width = entry.contentRect?.width;
+          if (width === undefined || lastContentWidth.current === null || Math.abs(width - lastContentWidth.current) >= 0.5) {
+            structural = true;
+            break;
+          }
+        }
+      }
+      if (structural) {
+        dirty.current = true;
+        schedule();
+        return;
+      }
+      if (pendingObserver.current !== "mutation") pendingObserver.current = "height";
+      armObserver(false);
+    };
+    const onMutation: MutationCallback = (records) => {
+      if (isTailOnlyMutation(records, parent, lastTick.current?.line ?? null, trackedIds.current)) return;
+      pendingObserver.current = "mutation";
+      armObserver(true);
+    };
     const scroll = () => { wake(); schedule(); };
     scroller.addEventListener("scroll", scroll, { passive: true });
-    const resize = new ResizeObserver(changed);
+    const resize = new ResizeObserver(onResize);
     resize.observe(scroller);
     if (content) resize.observe(content);
     // Disclosure and equal-height replacements can change anchors without changing the outer content height.
-    const mutations = new MutationObserver(changed);
+    const mutations = new MutationObserver(onMutation);
     if (content) mutations.observe(content, { childList: true, subtree: true });
     return () => {
       scroller.removeEventListener("scroll", scroll);
       scroller.style.removeProperty("--chat-nav-clearance");
+      lastClearance.current = null;
+      lastContentWidth.current = null;
+      lastTick.current = null;
+      trackedIds.current = EMPTY_TRACKED;
+      checkResize.current = false;
+      pendingObserver.current = null;
       resize.disconnect();
       mutations.disconnect();
+      clearTimeout(observerTimer.current);
+      observerTimer.current = 0;
       if (frame.current) cancelAnimationFrame(frame.current);
       frame.current = 0;
     };
-  }, [scroller, fine, ticks.length, schedule, wake]);
+  }, [scroller, fine, hasTicks, schedule, wake]);
 
   useLayoutEffect(() => {
     hovered.current = focused.current = false;
@@ -137,12 +290,17 @@ export function NavRail({ ticks, total, scroller, onJump, reset }: {
     setAnnouncement("");
     setVisible(false);
     setHeight(0);
+    lastTick.current = null;
+    trackedIds.current = EMPTY_TRACKED;
+    checkResize.current = false;
     dirty.current = true;
     schedule();
   }, [reset, fine, schedule]);
 
   useEffect(() => () => {
     clearTimeout(idleTimer.current);
+    clearTimeout(observerTimer.current);
+    observerTimer.current = 0;
     jumpRun.current++;
     if (frame.current) cancelAnimationFrame(frame.current);
     frame.current = 0;

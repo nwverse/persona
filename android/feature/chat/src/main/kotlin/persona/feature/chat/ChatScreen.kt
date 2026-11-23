@@ -33,7 +33,12 @@ import persona.core.chatlist.*
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PhIcons
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
 import persona.core.domain.shownUndelivered
@@ -60,6 +65,7 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.internal.GeneratedComponentManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -71,6 +77,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import persona.core.designsystem.R as DesignR
 
 // Finish the fade in the existing gap below the tab strip, without changing the chat's content padding.
 private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.Standard.s)
@@ -280,6 +287,10 @@ private fun ChatPage(
     val placedForwards = ForwardPlacements.waiting(key)
     // /model in the "/" list asked for the "Mode" sheet: a one-off, cleared once the sheet opened (not replayed when the bar returns).
     var openModes by remember { mutableStateOf(false) }
+    // The model-route card opens only Persona's model picker, never Brief/Board's separate Mode sheet as well.
+    var openModelRoutePicker by remember { mutableStateOf(false) }
+    // The model-route card asks the existing Persona pill to clear its kept pick with the pill's optimistic rollback.
+    var clearModelPick by remember { mutableStateOf(false) }
     // `/permissions` in the "/" list asked for the permission mode menu (#6513): Glass's mode button, the others' "Mode" sheet
     var openPermissions by remember { mutableStateOf(false) }
     // The host's failure notice whose "Retry" went out: hidden until the list catches up; back if that send failed.
@@ -612,14 +623,16 @@ private fun ChatPage(
     var forking by remember { mutableStateOf(false) }
     var rewindBusy by remember { mutableStateOf(false) }
     val actionsService = chrome.actions
+    val forkService = actionsService ?: chrome.forkActions
     val openFork = chrome.forkOpener(renderStyle)
-    val onFork: ((String) -> Unit)? = if (actionsService != null && openFork != null && session?.canFork == true && !readOnly) { itemId ->
+    val canForkHere = !readOnly || (historyReadOnly && !pageSession.managerOffline && child == null && workflowAgent == null && !key.sessionId.contains('@'))
+    val onFork: ((String) -> Unit)? = if (forkService != null && openFork != null && session?.canFork == true && !session.archived && canForkHere) { itemId ->
         val from = session
         if (!forking) {
             forking = true
             scope.launch {
                 try {
-                    val id = actionsService.fork(from, itemId)
+                    val id = forkService.fork(from, itemId)
                     notice = res.getString(R.string.chat_menu_forked)
                     try { sessions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
                     openFork(SessionKey(from.machineId, id))
@@ -697,10 +710,18 @@ private fun ChatPage(
     // A turn that failed on the refusal fallback's missing model (#2528): "Continue" would go to the same model.
     // Every model of a main or leader conversation's recovery chain failed (#7824): the turn's last error card names
     // the cause and when the configured model is back, and keeps "Retry" whatever the error says.
+    val lastUserId = snapshot.items.lastOrNull { it.role == "user" && it.kind == "text" }?.id
+    // Persona's last turn ended on a model set-up error the hub named: the fix replaces the error line (#4339 C18, iOS
+    // `turnFix`). An older hub has no turn_error_code; as on the web, its raw tool-search 400 still names that one remedy.
+    val rawTurnFix = (projection.lines.lastOrNull() as? ChatLine.ApiError)
+        ?.takeIf { it.info.toolSearchUnsupported }?.let { TurnErrorFix.ToolSearchUnsupported }
+    val turnFix = if (renderStyle == ChatRenderStyle.Assistant) {
+        // An explicit hub code always wins, including a code this client does not map (model_fallback_unavailable).
+        if (session?.turnErrorCode.isNullOrBlank()) rawTurnFix else TurnErrorFix.of(session?.turnErrorCode)
+    } else null
     val exhausted = exhaustedRecovery(projection.lines, session?.modelFallback)
     val retryId = retryLine(projection.lines, session?.status == "working" || messages.isNotEmpty(),
-        !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE, exhausted = exhausted != null)
-    val currentOpenPath by rememberUpdatedState(chrome.onOpenPath)
+        !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE, exhausted = exhausted != null, turnFix = turnFix)
     // Paths in messages link only when there on the machine (PathLinks.kt): asked of the session's directory.
     val pathPresence = remember(chrome.files, key, session?.cwd, chrome.onOpenPath != null) {
         val files = chrome.files
@@ -714,19 +735,10 @@ private fun ChatPage(
     val imageDescription = stringResource(R.string.chat_content_image)
     val replyImages = remember(key, repository) { (repository as? ChatLocalStorage)?.replyImages(key) }
         ?.collectAsStateWithLifecycle(initialValue = null)?.value
-    val rowActions = remember(key, repository, replyImages, localImages, photos, retryId, exhausted, chrome.onOpenPath != null, pathPresence, chrome.files, session?.cwd) {
-        ChatRowActions(key, fullText = { item -> repository.fullText(key, item.id) },
-            openPath = if (chrome.onOpenPath != null) ({ path, line -> currentOpenPath?.invoke(path, line) }) else null,
-            paths = pathPresence,
-            photos = photos, pictures = { chatViewerImages(key, currentItems(), repository, imageDescription) },
-            openImages = { images, index -> viewer = ViewerRequest(images, index) },
-            menu = messageMenu, retryLineId = retryId, onRetry = { currentSend(continueText) }, imageDescription = imageDescription,
-            thumbnails = chrome.files?.let { files ->
-                val cwd = session?.cwd.orEmpty().ifBlank { "~" }
-                ({ path -> "${key.machineId}\n$cwd\n$path" to { pixels: Int -> files.thumbnail(key.machineId, cwd, path, pixels) } })
-            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) }, exhausted = exhausted,
-            replyImages = replyImages, localImages = localImages)
-    }
+    val rowActions = rememberChatRowActions(key, repository, replyImages, localImages, photos, retryId, exhausted,
+        chrome.onOpenPath, pathPresence, chrome.files, session?.cwd, chrome.onOpenPath,
+        { images, index -> viewer = ViewerRequest(images, index) }, currentItems, messageMenu,
+        { currentSend(continueText) }, imageDescription)
     val currentMarkdownPaths by rememberUpdatedState(rowActions.paths?.takeIf { rowActions.openPath != null })
     LaunchedEffect(liveItems) {
         liveItems.revisions.collect { revision ->
@@ -797,11 +809,31 @@ private fun ChatPage(
     LaunchedEffect(allRequests) {
         taps = taps.pending(allRequests.map { it.id }.toSet())
     }
-    val lastUserId = snapshot.items.lastOrNull { it.role == "user" && it.kind == "text" }?.id
-    // Persona's last turn ended on a model set-up error the hub named: the fix replaces the error line (#4339 C18, iOS
-    // `turnFix`). Persona's conversations only, as iOS and the web.
-    val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
+    val ownModelPicker = switchSession != null && chrome.assistantManagement != null &&
+        (glass || (!readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)))
+    val clearModelAction: (() -> Unit)? = session?.takeIf {
+        it.modelPick != null && persona.core.domain.models.PersonaModelPanel.MODEL_PICK in persona.core.designsystem.LocalHubFeatures.current &&
+            chrome.assistantManagement != null
+    }?.let { current ->
+        {
+            if (glass && ownModelPicker) clearModelPick = true
+            else scope.launch {
+                try {
+                    chrome.assistantManagement?.clearModelPick(current.key)
+                    sessions.refresh()
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { notice = operationFeedback(error).text.resolve(res) }
+            }
+        }
+    }
+    val turnModelActions = if (turnFix != TurnErrorFix.ModelRoute) null else when {
+        ownModelPicker -> TurnErrorModelActions(openPicker = { openModelRoutePicker = true }, clearPick = clearModelAction,
+            clearLabel = if (session?.sessionId == chrome.mainConversation) R.string.chat_modelpill_follow_default else R.string.chat_modelpill_undo_pick)
+        fixModel != null -> TurnErrorModelActions(
+            openPicker = { fixModel(persona.core.designsystem.ReadinessActionId.PickModel) }, clearPick = clearModelAction)
+        else -> null
+    }
     // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
     val pageCovered = chrome.covered || overlay || linkVisible || statusSheet || activitySheet != null || terminalHelp ||
         taskPageVisible || fullText != null || search.visible || pushedDetail != null
@@ -891,19 +923,7 @@ private fun ChatPage(
     } else null
     val replyUsage = rememberReplyUsage(snapshot.items, projection.lines,
         persona = renderStyle == ChatRenderStyle.Assistant, hideAnswerId = liveAnswerId, catalog = actionsService)
-    val starredChat = remember(key, renderStyle, session, personaName) {
-        StarredChatContext(
-            key = key,
-            conversation = if (renderStyle == ChatRenderStyle.Assistant) {
-                persona.core.contracts.api.StarredConversation.Assistant
-            } else {
-                persona.core.contracts.api.StarredConversation.Agent
-            },
-            title = session?.displayTitle.orEmpty(),
-            speaker = if (renderStyle == ChatRenderStyle.Assistant) personaName else session?.displayTitle.orEmpty(),
-            manager = session?.manager,
-        )
-    }
+    val starredChat = rememberStarredChat(key, renderStyle, session, personaName)
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
@@ -1021,6 +1041,8 @@ private fun ChatPage(
                                         onResumeInTerminal = resumeInTerminal,
                                         turnStart = runningSince,
                                         sides = childCards.sides, sideRollup = childCards.sideRollup, onOpenSide = chrome.onOpenSide,
+                                        onForkSession = if (onFork != null && session?.canFork == true) ({ onFork("") }) else null,
+                                        forking = forking,
                                         menuOpen = headerMenuOpen)
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
@@ -1084,7 +1106,8 @@ private fun ChatPage(
                             (if (feedback == null) notice ?: composerError else composerError)?.let {
                                 Text(it, Modifier.padding(horizontal = Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                             }
-                            if (!historyOnly && !readOnly) ChatStartingNote(session)
+                            if (!historyOnly && !readOnly) ChatStartFailure(session, chrome.actions, sender, sessions,
+                                (chrome.connection?.lastHello?.features ?: persona.core.designsystem.LocalHubFeatures.current).toSet())
                             // The host's own word on it: why it waits for you, or what stopped it, with a retry.
                             // ultracode went off when it resumed (#582, iOS UltracodeLostNote): one line to turn it back on or dismiss.
                             if (!historyOnly && !readOnly && session != null) UltracodeLostNote(session, controls, canSend)
@@ -1223,13 +1246,18 @@ private fun ChatPage(
                                             onPagePick = { pick -> conversationLauncher = pick?.launcher; conversationModel = pick?.model },
                                             onNotice = { notice = it }, enabled = online, onOverlay = { pillOverlay = it },
                                             onConfigure = chrome.onFixModel?.let { fix -> { fix(persona.core.designsystem.ReadinessActionId.EditProvider, null, switchSession.manager) } },
-                                            onEffort = { effort -> controls.run(switchSession, ChatAction.Modes(effort = effort)) })
+                                            onEffort = { effort -> controls.run(switchSession, ChatAction.Modes(effort = effort)) },
+                                            openRequested = openModes || openModelRoutePicker,
+                                            onOpenHandled = { openModes = false; openModelRoutePicker = false },
+                                            clearRequested = clearModelPick, onClearHandled = { clearModelPick = false })
                                     }),
                                     accessory = {
                                         // Brief and Board keep the launcher chip; Glass's pill does its work (#5055).
-                                        if (!glass && renderStyle == ChatRenderStyle.Assistant && !readOnly && canSend && chrome.assistantManagement != null) {
+                                        if (!glass && renderStyle == ChatRenderStyle.Assistant && chrome.assistantManagement != null &&
+                                            !readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)) {
                                             ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
-                                                conversationLauncher, conversationModel) { launcher, model ->
+                                                conversationLauncher, conversationModel, openRequested = openModes || openModelRoutePicker,
+                                                onOpenHandled = { openModes = false; openModelRoutePicker = false }) { launcher, model ->
                                                 conversationLauncher = launcher
                                                 conversationModel = model
                                             }
@@ -1270,7 +1298,7 @@ private fun ChatPage(
                         contentWorkGroups = contentWorkGroups, contentLastSteps = contentLastSteps,
                         contentSourceLabels = contentSourceLabels, waitingOnYou = waitingOnYou,
                         foldsBackground = foldsBackground, onTerminal = agentTerminal, lastUserId = lastUserId, turnFix = turnFix,
-                        fixModel = fixModel, openRecap = openRecap, taskHost = taskHost, folding = folding, foldErrors = foldErrors,
+                        fixModel = fixModel, turnModelActions = turnModelActions, openRecap = openRecap, taskHost = taskHost, folding = folding, foldErrors = foldErrors,
                         onToggle = ::toggle, onExpand = ::expand,
                         onFullText = { item -> readFullText(key, item) }, loader = loader, session = session,
                         earlierEngines = earlierEngines, onReadEarlierText = ::readFullText,
@@ -1337,13 +1365,32 @@ internal fun ChatJumpToLatest(
     newestVisibleItem: State<Item?>,
     readThrough: Item?,
     deferCount: Boolean,
+    agentChat: Boolean,
     onClick: () -> Unit,
 ) {
     // A changing visible row only invalidates this button. Freeze and follow change the timeline in place.
     val count by remember(timeline, timelineVersion, items, newestVisibleItem, readThrough, deferCount) {
         derivedStateOf { timeline.newMessageCount(items, newestVisibleItem.value, readThrough, defer = deferCount) }
     }
-    JumpToLatest(count, onClick, Modifier.sizeIn(minWidth = Tokens.MinTouch.android, minHeight = Tokens.MinTouch.android))
+    if (agentChat) AgentChatJumpToLatest(count, onClick)
+    else JumpToLatest(count, onClick, Modifier.sizeIn(minWidth = Tokens.MinTouch.android, minHeight = Tokens.MinTouch.android))
+}
+
+@Composable
+internal fun AgentChatJumpToLatest(count: Int, onClick: () -> Unit) {
+    val label = if (count > 0) pluralStringResource(DesignR.plurals.designsystem_jump_latest_new, count, count)
+        else stringResource(DesignR.string.designsystem_jump_latest)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
+    ) {
+        if (count > 0) {
+            Text("$count", Modifier.semantics { hideFromAccessibility() },
+                style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.Bold),
+                color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        JHomeNavigationIconButton(PhIcons.ArrowDown, label, onClick)
+    }
 }
 
 private val composerContextMaxHeight = 140.dp

@@ -3,7 +3,7 @@ import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type T
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
 import { decisionDismissed, linkedParkInteraction, parkInteractionID, reviewState, withoutParkInteraction } from "./supervision";
 import { finishedAt, JUST_DONE_MS, supersededFailedStarts, triage } from "./todo-triage";
-import { awaitsReview, dockAgents, heldDelivery, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
 import type { Interaction, Session } from "./types";
@@ -111,8 +111,10 @@ export function taskAwaitsDecision(todo: Todo): boolean {
 }
 
 /** The task waits for its supervisor's review and nothing of it runs: an open `pending_review` whose status is a
- *  finished turn (`awaitsReview`). An agent at work again keeps it In progress. */
+ *  finished turn (`awaitsReview`), or an owner hold its Agent reported that its supervisor has not read yet
+ *  (`heldForSupervisor`). An agent at work again keeps it In progress. */
 function underReview(todo: Todo, status: TodoStatus): boolean {
+  if (heldForSupervisor(todo) && (status === "follow_up" || status === "unread" || status === "not_started")) return true; // #13191
   return !todo.done_at && reviewState(todo) === "pending_review" && awaitsReview(todo, status);
 }
 

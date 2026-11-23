@@ -210,6 +210,9 @@ export interface TodoAsk {
   verdict: string;
   recommend?: string;
   asked_at: string;
+  /** An owner-only terminal action on this task. Older decision cards can still name it as an option. */
+  resume_terminal?: { machine_id: string; session_id: string };
+  terminal_option?: string;
   /** A decision's own fields (#3804), absent from an older hub and from an ask that is no decision: what is to be
    *  decided in one sentence, why only the owner can, the options (2 to 4, the recommended one first) with what each
    *  leads to, and what waiting costs. */
@@ -288,7 +291,9 @@ export interface TodoThread {
 export interface TodoDelivery {
   state: "live" | "pr" | "merged" | "off" | "none" | string;
   gate?: string;
-  unblock?: "user" | "agent" | "other" | string;
+  /** Who can unhold it. `supervisor` (#13191): an owner hold an Agent reported on a supervised task that its supervisor
+   *  has not reviewed yet; it is not the owner's until the supervisor opens a decision. Only `user` is the owner's. */
+  unblock?: "user" | "agent" | "other" | "supervisor" | string;
   at?: string;
 }
 
@@ -318,6 +323,12 @@ export function heldDelivery(todo: Todo): TodoDelivery | null {
   const d = todo.delivery;
   if (todo.done_at || !d) return null;
   return d.state === "pr" || d.state === "merged" || d.state === "off" ? d : null;
+}
+
+/** Its finished work waits for its supervisor to read an owner hold its Agent reported (`unblock` supervisor, #13191):
+ *  the supervisor's to turn into a decision, park or send on, never the owner's Needs you. */
+export function heldForSupervisor(todo: Todo): boolean {
+  return heldDelivery(todo)?.unblock === "supervisor";
 }
 
 export type TodoStatus = "done" | "needs_you" | "interrupted" | "usage_limit" | "unread" | "working" | "waiting" | "follow_up" | "not_started" | "failed";

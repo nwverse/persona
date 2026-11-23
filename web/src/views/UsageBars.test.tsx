@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { initI18n } from "../i18n";
 import { onDraftEvent, type DraftEvent } from "../lib/drafts";
-import { type UsageAccount } from "../lib/usage-windows";
+import { PINNED_USAGE_ACCOUNTS_KEY, resetPinnedUsageAccounts, type UsageAccount } from "../lib/usage-windows";
 import { UsageBars } from "./UsageBars";
 import { UsagePopover } from "./UsagePopover";
 import { unconnectedUsageProviders } from "./UsageUnconnected";
@@ -248,6 +248,18 @@ describe("where the numbers came from (#2595)", () => {
     expect(html).toContain("不能直接读这家服务商的额度");
     expect(html).not.toMatch(/statusLine|网关/);
   });
+  it("leaves out a provider the owner hid from the bars, as a row too (#13179)", () => {
+    const launchers = [{ name: "claude" }, { name: "codex", agent: "codex" }, { name: "agy", agent: "agy" }, { name: "deepseek", display_name: "DeepSeek", agent: "claude", base_url: "https://relay.example.com" }];
+    // nothing hidden: the rows are what they were
+    expect(unconnectedUsageProviders(launchers, [], []).map((p) => p.id)).toEqual(["claude", "codex", "agy", "deepseek"]);
+    // Claude hidden: no "Claude Code" row, but a launcher that runs through Claude Code against another service stays
+    expect(unconnectedUsageProviders(launchers, [], ["claude"]).map((p) => p.id)).toEqual(["codex", "agy", "deepseek"]);
+    // Codex hidden but not Claude: only Claude's row (and the others) remain
+    expect(unconnectedUsageProviders(launchers, [], ["codex"]).map((p) => p.id)).toEqual(["claude", "agy", "deepseek"]);
+    // hidden by the launcher's own name, and "antigravity" is agy
+    expect(unconnectedUsageProviders(launchers, [], ["deepseek", "agy"]).map((p) => p.id)).toEqual(["claude", "codex"]);
+    expect(unconnectedUsageProviders([{ name: "ag", agent: "antigravity" }], [], ["agy"])).toEqual([]);
+  });
   it("lists active providers without usage data and hands setup off to the assistant on click", () => {
     const live = [account("c", 40, 75, { provider: "codex", name: "Codex Pro", local: true })];
     const unconnected = unconnectedUsageProviders(
@@ -291,6 +303,150 @@ describe("where the numbers came from (#2595)", () => {
   });
 });
 
+describe("user-selected pinned usage accounts (#12418)", () => {
+  afterEach(() => {
+    resetPinnedUsageAccounts();
+    localStorage.removeItem(PINNED_USAGE_ACCOUNTS_KEY);
+  });
+
+  const sampleAccounts = (): UsageAccount[] => [
+    account("codex", 85, 30, { provider: "codex", name: "Codex Pro" }),
+    account("claude", 60, 40, { provider: "claude", name: "Claude Max" }),
+    account("agy", 15, 20, { provider: "agy", name: "Antigravity" }),
+    balanceAccount("ds", "12.34"),
+  ];
+  const sampleUnconnected = [{ id: "kimi", title: "Kimi", agent: "claude" }];
+
+  it("pins and unpins accounts from the popover, persists to localStorage, and resets to automatic", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<UsageBars accounts={sampleAccounts()} unconnected={sampleUnconnected} now={NOW} />));
+      const stripBtn = () => host.querySelector<HTMLButtonElement>("[data-usage-bars] > button")!;
+
+      // Default: top 2 window accounts (Codex Pro, Claude Max) + DeepSeek balance + unconnected row
+      expect(stripBtn().textContent).toContain("Codex Pro");
+      expect(stripBtn().textContent).toContain("Claude Max");
+      expect(stripBtn().textContent).not.toContain("Antigravity");
+      expect(stripBtn().textContent).toContain("CNY 12.34");
+      expect(stripBtn().textContent).toContain("Kimi");
+
+      // Open popover: all 4 accounts listed, none pinned, no reset bar
+      await act(async () => stripBtn().click());
+      await vi.waitFor(() => expect(host.querySelector("[data-usage-pin=agy]")).not.toBeNull());
+      expect(host.querySelector("[data-usage-reset-pins]")).toBeNull();
+      expect(host.querySelectorAll("[data-usage-pin]")).toHaveLength(4);
+      expect(host.querySelector("[data-usage-pin=agy]")?.getAttribute("aria-pressed")).toBe("false");
+
+      // Pin Antigravity only: collapsed strip shows Antigravity + unconnected row; popover still lists all 4 live + 1 unconnected
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-pin=agy]")!.click());
+      expect(localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY)).toBe('["agy"]');
+      expect(host.querySelector("[data-usage-pin=agy]")?.getAttribute("aria-pressed")).toBe("true");
+      expect(host.querySelector("[data-usage-reset-pins]")).not.toBeNull();
+      expect(stripBtn().textContent).toContain("Antigravity");
+      expect(stripBtn().textContent).not.toContain("Codex Pro");
+      expect(stripBtn().textContent).not.toContain("Claude Max");
+      expect(stripBtn().textContent).toContain("Kimi");
+      expect(host.querySelectorAll("[data-usage-pin]")).toHaveLength(4);
+      expect(host.querySelectorAll("[data-usage-connect]")).toHaveLength(1);
+
+      // Also pin Codex Pro and DeepSeek balance
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-pin=codex]")!.click());
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-pin=ds]")!.click());
+      expect(localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY)).toBe('["agy","codex","ds"]');
+      expect(stripBtn().textContent).toContain("Antigravity");
+      expect(stripBtn().textContent).toContain("Codex Pro");
+      expect(stripBtn().textContent).toContain("CNY 12.34");
+      expect(stripBtn().textContent).not.toContain("Claude Max");
+
+      // Unpin Antigravity
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-pin=agy]")!.click());
+      expect(localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY)).toBe('["codex","ds"]');
+      expect(stripBtn().textContent).not.toContain("Antigravity");
+      expect(stripBtn().textContent).toContain("Codex Pro");
+      expect(stripBtn().textContent).toContain("CNY 12.34");
+
+      // Reset to automatic
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-reset-pins]")!.click());
+      expect(localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY)).toBeNull();
+      expect(host.querySelector("[data-usage-reset-pins]")).toBeNull();
+      expect(stripBtn().textContent).toContain("Codex Pro");
+      expect(stripBtn().textContent).toContain("Claude Max");
+      expect(stripBtn().textContent).toContain("CNY 12.34");
+      expect(stripBtn().textContent).not.toContain("Antigravity");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("tolerates corrupt localStorage and syncs pinned accounts across tabs via storage events", async () => {
+    localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, "{bad-json");
+    const corruptHtml = renderToStaticMarkup(<UsageBars accounts={sampleAccounts()} now={NOW} />);
+    expect(corruptHtml).toContain("Codex Pro");
+    expect(corruptHtml).toContain("Claude Max");
+    expect(corruptHtml).not.toContain("Antigravity");
+
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, '["agy"]');
+      await act(async () => root.render(<UsageBars accounts={sampleAccounts()} now={NOW} />));
+      const stripBtn = () => host.querySelector<HTMLButtonElement>("[data-usage-bars] > button")!;
+      expect(stripBtn().textContent).toContain("Antigravity");
+      expect(stripBtn().textContent).not.toContain("Codex Pro");
+
+      // Simulate another tab changing the pinned selection
+      await act(async () => {
+        localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, '["claude"]');
+        window.dispatchEvent(new StorageEvent("storage", { key: PINNED_USAGE_ACCOUNTS_KEY, newValue: '["claude"]' }));
+      });
+      expect(stripBtn().textContent).toContain("Claude Max");
+      expect(stripBtn().textContent).not.toContain("Antigravity");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("falls back to automatic ranking when all pinned accounts are offline or expired, and lets the user reset", () => {
+    localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, '["offline-agy"]');
+    const strip = renderToStaticMarkup(<UsageBars accounts={sampleAccounts()} now={NOW} />);
+    expect(strip).toContain("Codex Pro");
+    expect(strip).toContain("Claude Max");
+    expect(strip).toContain("CNY 12.34");
+    expect(strip).not.toContain("Antigravity");
+
+    const popover = renderToStaticMarkup(<UsagePopover accounts={sampleAccounts()} now={NOW} />);
+    expect(popover).toContain("固定账号暂不可用");
+    expect(popover).toContain("恢复默认");
+  });
+
+  it.each([
+    ["en", "Pin Antigravity to sidebar", "Unpin Antigravity from sidebar", "Reset to automatic"],
+    ["zh-Hans", "将 Antigravity 固定到侧栏", "取消将 Antigravity 固定到侧栏", "恢复默认"],
+    ["ja", "Antigravity をサイドバーに固定", "Antigravity のサイドバー固定を解除", "自動表示に戻す"],
+  ])("localizes pin controls and reset action in %s", async (lang, pinLabel, unpinLabel, resetLabelText) => {
+    await initI18n(lang);
+    try {
+      const live = [account("agy", 20, 30, { provider: "agy", name: "Antigravity" })];
+      const unpinned = renderToStaticMarkup(<UsagePopover accounts={live} now={NOW} />);
+      expect(unpinned).toContain(`aria-label="${pinLabel}"`);
+      expect(unpinned).not.toContain(resetLabelText);
+
+      localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, '["agy"]');
+      const pinned = renderToStaticMarkup(<UsagePopover accounts={live} now={NOW} />);
+      expect(pinned).toContain(`aria-label="${unpinLabel}"`);
+      expect(pinned).toContain(resetLabelText);
+    } finally {
+      localStorage.removeItem(PINNED_USAGE_ACCOUNTS_KEY);
+      await initI18n("zh-Hans");
+    }
+  });
+});
+
 describe("provider cards with a reset timeline (#13173)", () => {
   it("draws one card per provider with every account, 5h before 7d, and a timeline under each account", () => {
     const claude = (id: string, name: string, h7: number): UsageAccount => ({
@@ -327,5 +483,25 @@ describe("provider cards with a reset timeline (#13173)", () => {
     expect(html).toContain("data-protect-zone");
     expect(html).toContain("保护线在 95%");
     expect(renderToStaticMarkup(<UsagePopover accounts={[account("b", 10, 20)]} now={NOW} />)).not.toContain("data-protect");
+  });
+  it("renders usage bars and popover typography with named text tokens instead of hard-coded pixel classes (#13211)", () => {
+    const a = account("a", 40, 65, {
+      provider: "claude",
+      name: "Work Claude",
+      plan: "Max",
+      sources: ["Relay"],
+      problem: "unreachable",
+    });
+    a.windows[1].protect_percent = 90;
+    a.windows.push({ label: "7d", window_minutes: 10080, used_percent: 50, resets_at: iso(30 * H), model: "Sonnet" });
+    const stripHtml = renderToStaticMarkup(<UsageBars accounts={[a, balanceAccount("ds", "12.34")]} now={NOW} />);
+    const popoverHtml = renderToStaticMarkup(<UsagePopover accounts={[a, balanceAccount("ds", "12.34")]} now={NOW} />);
+    const arbitraryPxFont = /text-\[(?:length:)?\d+(?:\.\d+)?px\]/;
+    expect(stripHtml).not.toMatch(arbitraryPxFont);
+    expect(popoverHtml).not.toMatch(arbitraryPxFont);
+    expect(stripHtml).toContain("text-submeta");
+    expect(popoverHtml).toContain("text-meta");
+    expect(popoverHtml).toContain("text-label");
+    expect(popoverHtml).toContain("text-submeta");
   });
 });

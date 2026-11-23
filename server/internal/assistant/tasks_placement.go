@@ -217,7 +217,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	t.startFilled, t.startNamed = startFill{}, startNamed{}
 	// A self-planning constraint applies only while a policy rule asks for it on this try.
 	t.planFirst = false
-	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
+	params := map[string]any{"model_source": planModelSource(*t), "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
 	// The start-defaults policy: its preset goes in before the start is resolved, as if the task had named that tier;
 	// its effort and ultracode after the launcher fit, and the goal (a rule's or the Codex default) after that.
 	defaults, withDefaults := s.taskStartDefaults(ctx, t)
@@ -243,6 +243,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	// The last look, on the machine it will really start on (a retry, a remedy, a recovered start and a flexible task moved
 	// by the health check all pass here): a task leader never starts on a work-trust computer.
+	if assistantWorkspace(m, t.Cwd) {
+		return "", "", i18n.Err("rpc-errors.agent_assistant_workspace")
+	}
 	if err := s.leaderOnWorkMachine(t, m); err != nil {
 		return "", "", err
 	}
@@ -419,6 +422,18 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	if decisions := s.todoHandoffDecisionsContext(ctx, t.TodoID); decisions != "" {
 		background = strings.TrimSpace(background + "\n\n" + decisions)
+	}
+	// The memory entries the task needs (memory_handoff.go, scene 3): general ones its words bear on, sensitive ones
+	// only after the owner confirmed a plan whose words carry their categories. The brief notes which went only once
+	// this start went through: a failure below, or a fallback to another computer, carried nothing from here.
+	if memory, carried := s.handOffMemoryContext(ctx, *t, m.ID); memory != "" {
+		background = strings.TrimSpace(background + "\n\n" + memory)
+		noteCtx, todoID := context.WithoutCancel(ctx), t.TodoID
+		defer func() {
+			if err == nil && sid != "" {
+				s.noteHandOffMemory(noteCtx, todoID, carried)
+			}
+		}()
 	}
 	if background != "" {
 		prompt += "\n\n" + background

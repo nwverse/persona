@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mock"))
 import mock_hub as hub
+import health_intake_mock as intake
 
 
 class Handler:
@@ -24,9 +25,9 @@ class HealthIntakeMockTests(unittest.TestCase):
     path = "/api/v1/assistant/health/intake"
 
     def setUp(self):
-        hub.HEALTH_INTAKE_ENABLED = True
-        hub.HEALTH_INTAKE_ENTRIES.clear()
-        hub.HEALTH_INTAKE_ENTRIES.update(hub.health_intake_seed())
+        intake.HEALTH_INTAKE_ENABLED = True
+        intake.HEALTH_INTAKE_ENTRIES.clear()
+        intake.HEALTH_INTAKE_ENTRIES.update(intake.health_intake_seed())
         self.events = []
         self.broadcast = patch.object(hub, "broadcast", self.events.append)
         self.broadcast.start()
@@ -34,7 +35,7 @@ class HealthIntakeMockTests(unittest.TestCase):
 
     def request(self, method="GET", suffix="", body=None, query=None, headers=None):
         handler = Handler(headers)
-        self.assertTrue(hub.health_intake_route(handler, method, self.path + suffix,
+        self.assertTrue(intake.health_intake_route(handler, method, self.path + suffix,
                                               {"space": ["health"]} if query is None else query,
                                               json.dumps(body).encode() if body is not None else b""))
         return handler
@@ -90,9 +91,9 @@ class HealthIntakeMockTests(unittest.TestCase):
         self.assertEqual(first, retry)
         deleted = self.request("DELETE", "/" + draft["id"]).result
         self.assertEqual(deleted["today"]["water"], 750)
-        sequence = hub.HEALTH_INTAKE_ENTRIES[draft["id"]]["seq"]
+        sequence = intake.HEALTH_INTAKE_ENTRIES[draft["id"]]["seq"]
         self.assertEqual(self.request("DELETE", "/" + draft["id"]).result, deleted)
-        self.assertEqual(hub.HEALTH_INTAKE_ENTRIES[draft["id"]]["seq"], sequence)
+        self.assertEqual(intake.HEALTH_INTAKE_ENTRIES[draft["id"]]["seq"], sequence)
         tombstone = self.request("POST", body=draft).result
         self.assertIn("deleted_at", tombstone["entry"])
         self.assertEqual(tombstone["today"]["water"], 750)
@@ -108,7 +109,7 @@ class HealthIntakeMockTests(unittest.TestCase):
     def test_wrong_space_manager_and_old_hub_are_refused(self):
         self.assertEqual(self.request(query={}).status, 400)
         self.assertEqual(self.request(headers={"X-Persona-Manager": "another-manager"}).status, 400)
-        hub.HEALTH_INTAKE_ENABLED = False
+        intake.HEALTH_INTAKE_ENABLED = False
         self.assertNotIn("health_intake", hub.features())
         self.assertEqual(self.request().status, 403)
 

@@ -64,7 +64,7 @@ class PartitionTests(unittest.TestCase):
                                 module + "/internal/node", module + "/internal/node/sub", "./internal/assistant"])
         self.assertEqual(rest, [module + "/cmd/personad", module + "/internal/node/sub"])
         self.assertEqual(parts, ["./internal/assistant", "./internal/node"])
-        self.assertEqual(gp.split(["./internal/hub"]), (["./internal/hub"], []))
+        self.assertEqual(gp.split(["./internal/kb"]), (["./internal/kb"], []))
 
     def test_each_package_is_split_into_its_own_number_of_partitions(self):
         listing = "\n".join("Test%03d" % i for i in range(10)) + "\nok  \texample\t0.1s\n"

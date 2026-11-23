@@ -189,6 +189,7 @@ openTerminalTips
 openTerminalsPage
 openThreadAt
 openTodoDetail
+openTodoPlace
 openTodoTitled
 openTodosChoice
 openTokenUsage
@@ -335,6 +336,8 @@ showLauncherCheck
 showLauncherHelp
 showLiftLines
 showListOffset
+showLocationAlwaysOffer
+showLocationLevel
 showLookBlink
 showLoopDraft
 showMacDropCover
@@ -446,6 +449,7 @@ showUnlockWithoutAuth
 showUpcomingSample
 showUrgentCallSample
 showUrgentCallSampleTitle
+showUsageCardsDemo
 showViewerChromeHidden
 showViewerDecodeDelay
 showViewerDecodeDuringPan

@@ -117,6 +117,11 @@ enum LocationAccess {
         }
     }
 
+    /// While Using or Always (`status` calls both granted): whether a read can work while Persona isn't open (#13200).
+    static func level() -> LocationLevel {
+        LocationLevel(CLLocationManager().authorizationStatus)
+    }
+
     /// Shows the system prompt and waits for the user's answer (or for an
     /// existing answer to be reported).
     static func request() async -> PhoneAuthStatus {

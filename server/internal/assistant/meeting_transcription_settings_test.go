@@ -137,6 +137,9 @@ type settingsTranscribers struct {
 	hook  func(context.Context, string)
 }
 
+// ConnectorTool: none of its tools is a connector's.
+func (f *settingsTranscribers) ConnectorTool(string) bool { return false }
+
 func newSettingsTranscribers() *settingsTranscribers {
 	return &settingsTranscribers{info: extwire.TranscriptionInfo{Protocol: extwire.TranscriptionProtocol, Features: []string{extwire.TranscriptionLive, extwire.TranscriptionReplay}}}
 }

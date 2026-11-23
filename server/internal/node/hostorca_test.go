@@ -60,6 +60,9 @@ func TestMain(m *testing.M) {
 		return []string{self}, []string{"NODE_TEST_PREFLIGHT=1"}
 	}
 	preflightStart = 30 * time.Second
+	// A Codex the fake herdr starts or resumes never draws its input box, so each start would watch the full 8 s for
+	// the update offer; the tests that show the offer show it at once, and a second still reads the screen a few times.
+	codexStartupLook = time.Second
 	// No test may reach the user's running Orca: the default metadata path points nowhere.
 	os.Setenv("ORCA_USER_DATA_PATH", "/tmp/persona-test-no-orca")
 	// Nor the user's botmux: a node registers no botmux host unless a test gives it one.
@@ -100,6 +103,9 @@ func TestMain(m *testing.M) {
 	// A send looks at the box once after typing and confirms nothing: most fakes never write what was typed into the
 	// transcript, and would wait out the window (#6428). sendconfirm_test.go turns it on (withSubmitWindow).
 	submitWindow = 0
+	// Nor the Mac's Agent rules (#13393): a start's task instructions are what the test sent, on any platform. The test
+	// that wants them sets darwin (agent_dispatch_guard_test.go).
+	agentGOOS = "linux"
 	os.Exit(m.Run())
 }
 

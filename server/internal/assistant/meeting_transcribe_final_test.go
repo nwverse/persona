@@ -118,6 +118,32 @@ func TestFinalPass(t *testing.T) {
 	}
 }
 
+// While the pass runs the apps read how far it is (#13461): final_done, the end of the last window it finished, beside
+// the recording's end, kept in meeting.json; neither once the transcript is final.
+func TestFinalPassProgress(t *testing.T) {
+	h := newHubFixture(t)
+	h.meetingAudio(meetingRec)
+	gate := make(chan struct{})
+	h.tr.set(func(f *fakeTranscriber) {
+		f.replay = jobScript{windows: []fakeWindow{{0, 3, false, []fakeLine{{0.5, 1.5, "Replay one."}}}, {3, 9, false, nil}},
+			endGate: gate}
+	})
+	finalGapWait = 0
+	h.s.finalRound(context.Background())
+	waitFor(t, "the first window's progress", func() bool {
+		tr := h.transcription(meetingRec)
+		return tr["state"] == "finishing" && tr["final_done"] == 3.0 && tr["end"] == 6.0
+	})
+	if m, _, _ := h.engine().MeetingRead(meetingRec); m.Transcription.FinalDone != 3 {
+		t.Fatalf("meeting.json %+v", m.Transcription)
+	}
+	close(gate)
+	h.finalState(meetingRec, "final")
+	if tr := h.transcription(meetingRec); tr["final_done"] != nil || tr["end"] != nil {
+		t.Fatalf("final %v", tr)
+	}
+}
+
 // From the pass's start the phone's socket and gap uploads are refused transcription_final; a pass that waited
 // finalGapWait starts with gaps left.
 func TestFinalPassAfterTheWait(t *testing.T) {

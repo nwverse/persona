@@ -137,3 +137,43 @@ func TestKBSearchKind(t *testing.T) {
 		t.Fatalf("an unknown kind: %s", body)
 	}
 }
+
+// A recording the knowledge base holds stays there (#13501): a later upload naming a track is refused with
+// recording_in_kb instead of writing a second copy into the track.
+func TestRecordingInKBRefusesSpace(t *testing.T) {
+	service := kbServiceOn(t, newFakeHub(), newKBStore(), t.TempDir(), nil)
+	engine := kbEng(t, service)
+	server := httptest.NewServer(service)
+	defer server.Close()
+	const id = "22222222-2222-4222-8222-222222222222"
+	upload := kb.RecordingUpload{Revision: 1, StartedAt: time.Now().UTC(), Device: "phone", Title: "Kept sample", Segments: []kb.RecordingSegment{{Text: "kept", End: 1}}}
+	put := func(u kb.RecordingUpload) (int, string) {
+		t.Helper()
+		data, err := json.Marshal(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := http.NewRequest("PUT", server.URL+"/api/v1/recordings/"+id, bytes.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(raw)
+	}
+	if code, body := put(upload); code != 200 {
+		t.Fatalf("first upload: %d %s", code, body)
+	}
+	upload.Revision, upload.Space = 2, "work"
+	code, body := put(upload)
+	if code != http.StatusConflict || !strings.Contains(body, codeRecordingInKB) {
+		t.Fatalf("upload naming a space: %d %s", code, body)
+	}
+	if r, ok := engine.Store.Recording(id); !ok || r.Revision != 1 {
+		t.Fatalf("knowledge base copy changed: %+v %v", r, ok)
+	}
+}
