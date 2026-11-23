@@ -111,6 +111,7 @@ class AssistantTracksHttpTest {
 
             server.enqueue(MockResponse().setBody("""{"items":[{"extension":"notes","trust":"owner","categories":[]}]}"""))
             assertTrue(api.extensionTrust()!!.single().owner)
+            assertEquals("/api/v1/assistant/extension-trust", server.takeRequest().requestUrl?.encodedPath)
             server.enqueue(MockResponse().setBody("""{"extension":"notes","trust":"third_party","categories":[]}"""))
             assertFalse(api.setExtensionTrust("notes", ExtensionTrust("notes", ExtensionTrust.THIRD_PARTY, emptyList())).owner)
             val put = server.takeRequest()

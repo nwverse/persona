@@ -57,12 +57,15 @@ class SpaceMdEditorTest {
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("space-md-field-0").fetchSemanticsNodes().isNotEmpty() }
     }
 
+    /** The text field itself: the tag sits on [persona.core.designsystem.JTextField]'s wrapper, which has no SetText action. */
+    private fun field(index: Int) = rule.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("space-md-field-$index")))
+
     @Test fun savesTheUsersPartAndPutsTheBlockBackByteForByte() {
         val api = Api(null)
         val saved = mutableListOf<SpaceMd>()
         mount(api, saved)
         rule.onNodeWithTag("space-md-managed-state").assertExists()
-        rule.onNodeWithTag("space-md-field-0").performTextReplacement("# Money\n\nBudget and taxes.\n\n")
+        field(0).performTextReplacement("# Money\n\nBudget and taxes.\n\n")
         rule.onNodeWithTag("space-md-save").performClick()
         rule.waitUntil(5_000) { saved.isNotEmpty() }
         val (content, digest) = api.writes.single()
@@ -74,11 +77,11 @@ class SpaceMdEditorTest {
     @Test fun changedElsewhereKeepsWhatWasTypedAndOffersTheLatest() {
         val api = Api(409)
         mount(api)
-        rule.onNodeWithTag("space-md-field-0").performTextReplacement("Mine")
+        field(0).performTextReplacement("Mine")
         rule.onNodeWithTag("space-md-save").performClick()
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("space-md-error").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("This was changed somewhere else", substring = true).assertExists()
-        rule.onNodeWithTag("space-md-field-0").assert(hasText("Mine"))
+        field(0).assert(hasText("Mine"))
         rule.onNodeWithText("Load latest").performClick()
         rule.waitUntil(5_000) { api.reads == 2 }
     }
@@ -86,7 +89,7 @@ class SpaceMdEditorTest {
     @Test fun aMarkerTypedIntoTheFieldIsRefusedBeforeSending() {
         val api = Api(null)
         mount(api)
-        rule.onNodeWithTag("space-md-field-0").performTextReplacement("<!-- persona:managed:state:begin -->x<!-- persona:managed:state:end -->")
+        field(0).performTextReplacement("<!-- persona:managed:state:begin -->x<!-- persona:managed:state:end -->")
         rule.onNodeWithTag("space-md-save").performClick()
         rule.waitForIdle()
         rule.onNodeWithText("The part Persona keeps up to date can't be changed here", substring = true).assertExists()
@@ -97,16 +100,16 @@ class SpaceMdEditorTest {
         val api = Api(null)
         mount(api)
         rule.onNodeWithTag("space-md-save").assertIsNotEnabled()
-        rule.onNodeWithTag("space-md-field-0").performTextReplacement("# Money\n\nBudget.\n\n")
+        field(0).performTextReplacement("# Money\n\nBudget.\n\n")
         rule.onNodeWithTag("space-md-save").assertIsNotEnabled()
-        rule.onNodeWithTag("space-md-field-0").performTextReplacement("# Money\n\nBudget and rent.\n\n")
+        field(0).performTextReplacement("# Money\n\nBudget and rent.\n\n")
         rule.onNodeWithTag("space-md-save").assertIsEnabled()
         assertEquals(emptyList<Pair<String, String>>(), api.writes)
     }
 
     @Test fun anOfflineComputerSaysSo() {
         mount(Api(503))
-        rule.onNodeWithTag("space-md-field-0").performTextReplacement("# Money\n\nBudget and rent.\n\n")
+        field(0).performTextReplacement("# Money\n\nBudget and rent.\n\n")
         rule.onNodeWithTag("space-md-save").performClick()
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("space-md-error").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("The assistant's computer is offline", substring = true).assertExists()
