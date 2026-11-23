@@ -408,6 +408,7 @@ func TestDevelopmentPlatformsFollowRegisteredMachines(t *testing.T) {
 	}{
 		{"mac", "darwin", "arm64", false, true},
 		{"same-platform", "darwin", "arm64", false, true},
+		{"remote-only", "linux", "riscv64", true, true},
 		{"offline", "linux", "arm64", true, true},
 		{"never-seen", "", "", true, true},
 		{"partial", "linux", "", true, true},
@@ -426,12 +427,12 @@ func TestDevelopmentPlatformsFollowRegisteredMachines(t *testing.T) {
 		}
 		h.machines, h.byID[c.id] = append(h.machines, m), m
 	}
-	h.devices.assign = map[string]string{"mac": "remote"}
+	h.devices.assign = map[string]string{"mac": "remote", "remote-only": "remote"}
 	if h.entryOwner("mac") != "remote" || !h.upd.developmentAvailable() {
 		t.Fatal("a remote assistant owning a computer should allow built-in quiesce")
 	}
 	h.bus.current = map[string]*busConn{"remote": {presence: busPresence{ID: "remote", Role: bus.RoleManager, OS: "windows", Arch: "amd64"}}}
-	want := []string{own, "darwin-arm64", "linux-arm64", "windows-amd64"}
+	want := []string{own, "darwin-arm64", "linux-arm64", "linux-riscv64", "windows-amd64"}
 	slices.Sort(want)
 	if got := h.upd.developmentPlatforms(); !slices.Equal(got, slices.Compact(want)) {
 		t.Fatalf("platforms %v, want %v", got, want)

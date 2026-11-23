@@ -427,7 +427,7 @@ func (u *updater) record(ctx context.Context, r updateRecord) error {
 	if r.Result == "updated" {
 		u.settings.ConfirmedDevelopment = nil
 		target := devicewire.DevelopmentBuild(r.Commit, r.ToVersion, r.ToBuild)
-		if r.Source == "web-dev" && target.Valid() {
+		if r.Source == "web-dev" && r.Reason == "" && target.Valid() {
 			u.settings.ConfirmedDevelopment = &target
 		}
 	}

@@ -237,8 +237,8 @@ set aside in the same update transaction so the new embedded UI actually serves.
 restores that override and all swapped programs. Explicit **Apply backup** installs saved programs
 and their embedded Web only; it never extracts this data archive or its standalone override. After
 Hub confirmation, compiled node packages are installed locally even with automatic fleet updates
-off, so **Redeploy** can use the matching build. Fleet installation still requires the separate
-`auto_update_nodes` choice. Applying a backup with fleet auto-update enabled requires saved packages
+off, so **Redeploy** can use the matching build. Automatic deployment to computers requires the
+separate `auto_update_nodes` choice. Applying a backup with fleet auto-update enabled requires saved packages
 for all currently known platforms; otherwise it stops before adoption. With fleet updates off,
 remote Nodes keep their current programs and available saved packages are installed locally.
 A backup replaces only its staged platforms. Other regular local packages remain usable at
@@ -247,10 +247,11 @@ identity, while an existing valid explicit identity is preserved. An invalid ret
 marker stops package adoption and keeps staging for inspection.
 Online/offline Link nodes, SSH/tailcat, busy checks, old capabilities,
 fresh ownership and guardian rollback retain their original behavior in [node-update.md](node-update.md).
-There is no platform configuration or fixed platform matrix. Offline computers with a known
-platform are included. A computer that has never reported its platform supplies no build target;
-once it connects, the next development update includes its platform. With no known remote
-platforms, only the Hub's platform is built. For a freshly compiled development update, old
+The Hub includes offline computers whose platforms it already knows. If an independent
+assistant learns a computer's platform after the Hub builds its packages, the assistant
+can build the missing package from the current confirmed commit. The Hub includes that
+platform the next time it builds. With no known remote platforms, it builds only for its
+own platform. For a freshly compiled development update, old
 unversioned packages are set aside before installation so omitted platforms are not mistaken
 for the new version. A saved-version application instead retains and labels omitted packages
 as described above. Any set-aside or version-label failure stops fleet deployment.

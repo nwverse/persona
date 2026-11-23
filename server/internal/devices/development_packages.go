@@ -108,22 +108,25 @@ func (d *Devices) lookupDevelopment(ctx context.Context, k packageKey) (nodePack
 	plat := k.goos + "-" + k.arch
 	program := k.program
 	var f update.File
+	var found bool
 	if m != nil {
 		switch k.program {
 		case "persona-manager":
-			f = m.Programs[k.program][plat]
-			if f.Name == "" && m.Files[plat].Name != "" {
-				program, f = "personad", m.Files[plat]
+			f, found = m.Programs[k.program][plat]
+			if !found {
+				if full, ok := m.Files[plat]; ok {
+					program, f, found = "personad", full, true
+				}
 			}
 		case "persona-node":
-			f = m.Nodes[k.program][plat]
+			f, found = m.Nodes[k.program][plat]
 		default:
-			f = m.Files[plat]
+			f, found = m.Files[plat]
 		}
 	}
 	name := nodeBinaryName(program, plat) + ".gz"
 	p := nodePackage{Version: t.Version, build: t.Build, goos: k.goos, arch: k.arch, Program: program, development: &t, file: update.File{Name: name}}
-	if f.Name != "" {
+	if found {
 		if f.Name != name || f.Size <= 0 || !validDigest(f.SHA256) || !validDigest(f.BinarySHA256) {
 			return nodePackage{}, errors.New("invalid development package manifest entry")
 		}
@@ -196,7 +199,7 @@ func (d *Devices) fetchDevelopment(ctx context.Context, p nodePackage) (string, 
 		if _, err := d.developmentManifest(ctx, t); err != nil {
 			return "", "", err
 		}
-		if file, source, ok := developmentCached(p, ""); ok {
+		if file, source, ok := developmentCached(p, ""); ok && (source == sourceBuild || p.file.BinarySHA256 == "") {
 			return file, source, nil
 		}
 		source = sourceBuild

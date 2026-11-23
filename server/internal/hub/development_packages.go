@@ -25,12 +25,25 @@ func (u *updater) confirmedDevelopment() (*devicewire.DevelopmentTarget, bool) {
 	if !strings.HasPrefix(u.h.version, "web-dev-") {
 		return nil, false
 	}
-	t := u.settings.ConfirmedDevelopment
-	if !u.confirmed || !u.loaded || t == nil || !t.Valid() || t.Version != u.h.version || t.Build != u.h.build.Number ||
-		t.Commit != u.h.build.Commit || slices.Contains(u.settings.DevelopmentBad, t.Commit) {
+	installed := devicewire.DevelopmentBuild(u.h.build.Commit, u.h.version, u.h.build.Number)
+	if !u.confirmed || !u.loaded || !installed.Valid() || slices.Contains(u.settings.DevelopmentBad, installed.Commit) {
 		return nil, true
 	}
-	return t, false
+	if receipt := u.settings.ConfirmedDevelopment; receipt != nil && *receipt == installed {
+		return &installed, false
+	}
+	// An earlier Hub wrote history without a separate receipt. A rollback
+	// can also restore the previous binary after its successor wrote history.
+	for i := len(u.settings.History) - 1; i >= 0; i-- {
+		r := u.settings.History[i]
+		if r.Source == "web-dev" && r.Commit == installed.Commit && r.ToVersion == installed.Version && r.ToBuild == installed.Build {
+			if r.Result == "updated" && r.Reason == "" {
+				return &installed, false
+			}
+			break
+		}
+	}
+	return nil, true
 }
 
 func (u *updater) stageDevelopmentPackages(r *update.Published, staged string) error {
@@ -78,7 +91,7 @@ func (u *updater) publishDevelopmentPackages(p update.Pending) error {
 		return err
 	}
 	for _, d := range dirs {
-		if d.IsDir() && d.Name() != t.Version && strings.HasPrefix(d.Name(), "web-dev-") {
+		if d.IsDir() && d.Name() != t.Version && d.Name() != p.FromVersion && strings.HasPrefix(d.Name(), "web-dev-") {
 			if err := os.RemoveAll(filepath.Join(root, d.Name())); err != nil {
 				return err
 			}

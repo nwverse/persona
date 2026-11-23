@@ -101,3 +101,27 @@ func TestDevelopmentPackagesRequireConfirmedAdoptionAndManagerAuth(t *testing.T)
 	}
 	get("manifest.json", token, http.StatusUnauthorized)
 }
+
+func TestDevelopmentRollbackCanOfferTheRestoredGoodVersion(t *testing.T) {
+	h := newTestHub(t)
+	u := h.upd
+	good := devicewire.DevelopmentBuild(strings.Repeat("a", 40), "web-dev-aaaaaaaaaaaa-10", 10)
+	failed := devicewire.DevelopmentBuild(strings.Repeat("b", 40), "web-dev-bbbbbbbbbbbb-11", 11)
+	h.version, h.build.Number, h.build.Commit = good.Version, good.Build, good.Commit
+	u.loaded = true
+	for _, target := range []devicewire.DevelopmentTarget{good, failed} {
+		if err := u.record(t.Context(), updateRecord{Source: "web-dev", Result: "updated", ToVersion: target.Version, ToBuild: target.Build, Commit: target.Commit}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := u.record(t.Context(), updateRecord{Source: "web-dev", Result: "rolled_back", ToVersion: failed.Version, ToBuild: failed.Build, Commit: failed.Commit}); err != nil {
+		t.Fatal(err)
+	}
+	if target, hold := u.confirmedDevelopment(); hold || target == nil || *target != good {
+		t.Fatal("previous confirmation unavailable after rollback", target)
+	}
+	h.version, h.build.Number, h.build.Commit = failed.Version, failed.Build, failed.Commit
+	if target, hold := u.confirmedDevelopment(); !hold || target != nil {
+		t.Fatal("rolled-back receipt accepted", target)
+	}
+}
