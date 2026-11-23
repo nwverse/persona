@@ -169,6 +169,7 @@ func (n *Node) hasLayout() bool {
 // of a host that opens tabs; when that host has none yet, a new workspace in dir (newShellSpace). Only a user's explicit
 // action calls this.
 func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShellResult, error) {
+	kind = spaceHostKind(kind)
 	start := ""
 	if strings.TrimSpace(dir) != "" {
 		_, real, err := n.resolveDir(dir, "")

@@ -58,7 +58,7 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 	if workspace == "" && cwd == "" {
 		return nil, "", repo, errors.New("workspace_id is required")
 	}
-	if kind == "" {
+	if kind = spaceHostKind(kind); kind == "" {
 		kind = n.defaultKind()
 	}
 	if _, runtime := engineRuntimes[kind]; runtime && n.hosts.Get(kind) == nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -38,6 +39,17 @@ func (n *Node) listedPane(ctx context.Context, pane string) (host.Agent, error) 
 		}
 	}
 	return host.Agent{}, fmt.Errorf("pane %s is not running", pane)
+}
+
+// spaceHostKind is the kind of host a space action names (git, a shell, a worktree in a workspace): a terminal host's or
+// an engine's as it is, any other "" (no kind: the default engine's, or the host that lists the workspace). A space can
+// hold the sessions of several apps (folderspace.go): a client that takes the space's kind from one of its sessions
+// (claude_desktop, codex_app, a runtime's) still means the terminal workspace the space is.
+func spaceHostKind(kind string) string {
+	if _, engine := engineRuntimes[kind]; engine || slices.Contains(host.Kinds, kind) {
+		return kind
+	}
+	return ""
 }
 
 // hostOfKind is the host a tab or workspace id belongs to: the one of that kind, else the engine's.
@@ -319,7 +331,7 @@ func (n *Node) gitDirOf(ctx context.Context, pane, workspace, kind string) (stri
 	if workspace == "" {
 		return "", errors.New("pane or workspace is required")
 	}
-	h, err := n.hostOfKind(kind)
+	h, err := n.hostOfKind(spaceHostKind(kind))
 	if err != nil {
 		return "", err
 	}
