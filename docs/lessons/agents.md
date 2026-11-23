@@ -164,10 +164,35 @@ error body that could echo private text or credentials.
 ## Supervised handoffs and runtime children (#5751)
 
 Codex sidecar parent/root metadata establishes display ancestry, not a to-do link. A standalone `create_thread` can
-have no parent metadata at all. Use `task_spawn` for a separate session on the current supervised task; never work
-around missing task tools by extracting the hub token. Codex's shared daemon may carry an old pane environment, so
+have no parent metadata at all. Use `task_spawn` for a separate session on the current supervised task; keep the handoff to one bounded subtask and one layer, and never work
+around missing task tools by extracting the hub token. A spawned child must report back instead of spawning again. Codex's shared daemon may carry an old pane environment, so
 its per-turn `CODEX_THREAD_ID` must resolve unambiguously in the node's registry before a CLI handoff. Unknown
 threads must not fall back to whichever task an inherited pane happens to run.
+
+A fallback that is only right when something is absent must not fire on "unknown" (#11999). `planFromRow` keeps
+whatever decodes (a wrongly typed prompt becomes `""`), and `currentPlanAssignment` once returned the same
+`errTaskNotInPlan` for absence and for two plans binding the to-do. A check that compares against the current
+assignment reads it with `strictPlanAssignment` and handles `errTaskPlanAmbiguous` before `errTaskNotInPlan`.
+A fast path must not skip the check it short-circuits: the direct `Todo.PlanID` match used to return before any other
+started plan binding the same to-do was counted, so the strict resolver scans the history even after a direct match.
+A started session acts before session.start answers: the node sends its first prompt first and RPCs run in parallel,
+so a child linked by its workspace in that window passed the depth check. Record ancestry before the start, not after.
+Membership/source and pending/suspect are one authorization, not two independent lock domains: membership writes and
+window begin/end share `todos.writing`, with the final check before the node start and again before confirming its link.
+The final check, child link and successful close are one write transaction, and runtime inventory reload publishes
+through the same boundary. A returned child id is suspect whenever confirmation fails, even if `session.stop` fails.
+When the answer and id are both lost, keep the expected id, pre-start id set, launcher and cwd so a later session list
+can reconcile the actual child as suspect; an unrelated `StartedByPersona=false` late Agent is still ordinary.
+Only an exact child identity may close a task_spawn window as success: heuristic adoption is not confirmation, and
+an expected id being present in the request does not prove that a differently named adoptee is that child.
+Track unresolved starts only for genuinely unknown outcomes and scope them to their machine. Suspect matching and
+retirement are separate decisions: a same-shaped heuristic session stays suspect, but an expected-id start retires
+only on that exact id or expiry; without an exact id, a heuristic match cannot retire the start. Definite refusals
+never create unresolved entries. Workspace fanout can publish a membership before `SessionsChanged`, so discovery and
+direct calls must reconcile the caller's typed identity inside the same `todos.writing` boundary instead of relying on
+a later event. An exact expected id is proof by itself; heuristic shape can only mark a session suspect.
+A failed end also needs the window's `linkedDuring`, not only its final active snapshot: a member can disconnect and
+be linked again after the failed end, and forgetting that history would let it start the next layer.
 
 The task handoff footer must describe the Agent that will actually run (#9846). Fit and health detours can change
 both machine and family. Source matters too: a Codex terminal has no injected Persona MCP server, while Paseo's

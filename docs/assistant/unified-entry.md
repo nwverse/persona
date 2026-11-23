@@ -957,7 +957,7 @@ personad tool task_spawn '{"title":"Check the regression","prompt":"Inspect the 
   `via: <parent machine>/<parent session>` on the **same to-do** before returning the child, to-do and supervisor IDs.
   The child participates in the existing task's progress, completion review and retirement. No new task, task-leader
   role or supervision level is created. An ordinary worker still cannot use a leader's `task_plan` or `task_review`.
-- **Scope**: only `title` and `prompt` are accepted, and the assignment must remain within the current task. Task,
+- **Scope**: only `title` and `prompt` are accepted, and the assignment must remain within the current task. The prompt names one bounded subtask, its boundary, what not to do, and the evidence to return; it must not copy the parent assignment verbatim. Before starting, the manager compares the trimmed prompt with the current `PlanTask.Prompt` (or `Todo.Notes` only when no started plan binds the to-do) and refuses an exact match. A failed plan read, a stored plan whose tasks do not decode (no partly decoded prompt is used), or more than one binding of the to-do leaves the current assignment unknown (the to-do's own plan still binding it counts together with every other started plan binding it): the call is refused without falling back to `Todo.Notes`, nothing starts, and the refusal says not to retry. Internal whitespace and wording are not normalized or judged for similarity. The same original caller may start several different bounded children. An active link whose `source` is `spawned` is the one permitted handoff layer: it does not see `task_spawn`, and a direct call is refused before `startTaskAgent`, without creating a session or Agent link. The child runs before its start answers (the node sends the first prompt first) and a workspace linked to the to-do can link it as `space` meanwhile, so from just before each start until its child is linked as `spawned`, every session newly linked on that computer is held to the same refusal and does not list the tool; once the child is linked, the others list it again. If the start fails or its result is unknown, the sessions linked meanwhile keep no `task_spawn` until the manager restarts. Native sidecars, `task_plan`, permissions and model inheritance are unchanged. Task,
   supervisor, parent, machine, directory and permissions cannot be supplied by the Agent. The current launcher and
   effort are reused. For the model, an original plan assignment that names one wins for its own Agent while it still
   runs on that assignment's launcher (the default launcher when it named none), instead of carrying over a model
@@ -966,7 +966,7 @@ personad tool task_spawn '{"title":"Check the regression","prompt":"Inspect the 
   ID is kept. A reply that uniquely resolves one concrete offered ID uses that ID. An ambiguous, unmatched or unknown
   catalog keeps the reported model (#10557). Permission comes from
   the live parent, or its persisted original plan assignment when Codex does not expose it; unknown permission stays in
-  plan mode, never a writable owner default. Another spawned session with unknown permission cannot borrow the original
+  plan mode, never a writable owner default. A non-assignment caller with unknown permission cannot borrow the original
   Agent's plan permission.
 - **Failure**: an unbound pane, unrelated Agent, completed task, guest or work-trust computer cannot dispatch this
   way. A known Codex thread needs no pane. The terminal entry also runs the Agent's other own tools (`callerTools`,

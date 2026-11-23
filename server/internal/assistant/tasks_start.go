@@ -938,7 +938,15 @@ var (
 	errTaskNotRetryable = i18n.Err("assistant-tasks.not_retryable")
 	errTaskNotInPlan    = i18n.Err("assistant-tasks.not_in_plan")
 	errMachineOffline   = errors.New("machine offline") // matched with errors.Is; the text is machineOffline's
+	// errTaskPlanAmbiguous: more than one started plan binds the to-do. It is errTaskNotInPlan, text included, to
+	// every caller that only needs a usable assignment; task_spawn tells it from a genuinely absent one.
+	errTaskPlanAmbiguous error = ambiguousPlanError{}
 )
+
+type ambiguousPlanError struct{}
+
+func (ambiguousPlanError) Error() string { return errTaskNotInPlan.Error() }
+func (ambiguousPlanError) Unwrap() error { return errTaskNotInPlan }
 
 // machineOffline is errMachineOffline for machine name, said in the request's language.
 func machineOffline(name string) error {
@@ -960,6 +968,12 @@ type planExecutionHistoryStore interface {
 // planExecutionHistory lists every started or dismissed plan across conversations. Main-chat handoffs move open
 // to-dos without moving their plans, so no single Origin/Supervisor/historical conversation is a complete search scope.
 func (s *Service) planExecutionHistory(ctx context.Context) ([]*TaskPlan, error) {
+	return s.readPlanExecutionHistory(ctx, false)
+}
+
+// readPlanExecutionHistory is planExecutionHistory. Strict, any stored plan whose tasks do not decode is an error:
+// the tasks it lost could bind the to-do being looked up.
+func (s *Service) readPlanExecutionHistory(ctx context.Context, strict bool) ([]*TaskPlan, error) {
 	if st := s.store(); st != nil {
 		history, ok := st.(planExecutionHistoryStore)
 		if !ok {
@@ -971,7 +985,11 @@ func (s *Service) planExecutionHistory(ctx context.Context) ([]*TaskPlan, error)
 		}
 		plans := make([]*TaskPlan, 0, len(rows))
 		for _, row := range rows {
-			plans = append(plans, planFromRow(row))
+			p, err := decodePlanRow(row)
+			if err != nil && strict {
+				return nil, err
+			}
+			plans = append(plans, p)
 		}
 		return plans, nil
 	}
@@ -1011,32 +1029,57 @@ func (s *Service) planHistoryOnce() func(context.Context) ([]*TaskPlan, error) {
 // currentPlanAssignment resolves the execution binding, which is not the to-do's historical PlanID after a same-to-do
 // continuation. An exact binding in the same owning conversation keeps the ordinary direct lookup cheap. A handoff or
 // retired binding requires a global started-plan check: exactly one exact TodoID is current; guessing or merging
-// candidates could restore the wrong permission, so absence and ambiguity both fail closed with errTaskNotInPlan.
+// candidates could restore the wrong permission, so absence and ambiguity both fail closed with errTaskNotInPlan
+// (ambiguity as errTaskPlanAmbiguous, which callers that must tell the two apart check first).
 func (s *Service) currentPlanAssignment(ctx context.Context, todo Todo) (*TaskPlan, int, error) {
 	return s.currentPlanAssignmentIn(ctx, todo, s.planExecutionHistory)
 }
 
 // currentPlanAssignmentIn is currentPlanAssignment with the global check reading the plans' history through history.
 func (s *Service) currentPlanAssignmentIn(ctx context.Context, todo Todo, history func(context.Context) ([]*TaskPlan, error)) (*TaskPlan, int, error) {
-	p, loadErr := s.loadPlan(ctx, todo.PlanID)
+	return s.currentPlanAssignmentFrom(ctx, todo, s.loadPlan, history, false)
+}
+
+// strictPlanAssignment is currentPlanAssignment where a stored plan whose tasks do not decode is an error, never a
+// partly empty assignment or an absent one, and where the to-do's own plan binding it is not taken on trust: any other
+// started plan binding the to-do makes the assignment ambiguous (errTaskPlanAmbiguous), so this always reads the
+// history as well. The assignment returned is the one read, for every use the caller makes of it.
+func (s *Service) strictPlanAssignment(ctx context.Context, todo Todo) (*TaskPlan, int, error) {
+	return s.currentPlanAssignmentFrom(ctx, todo,
+		func(ctx context.Context, id string) (*TaskPlan, error) { return s.readPlan(ctx, id, true) },
+		func(ctx context.Context) ([]*TaskPlan, error) { return s.readPlanExecutionHistory(ctx, true) }, true)
+}
+
+// currentPlanAssignmentFrom is currentPlanAssignment reading the to-do's own plan through load. With unique, a direct
+// binding still counts against every started binding in the history; without it, a direct binding answers at once.
+func (s *Service) currentPlanAssignmentFrom(ctx context.Context, todo Todo, load func(context.Context, string) (*TaskPlan, error),
+	history func(context.Context) ([]*TaskPlan, error), unique bool) (*TaskPlan, int, error) {
+	p, loadErr := load(ctx, todo.PlanID)
 	if loadErr != nil && !errors.Is(loadErr, errPlanNotFound) {
 		return nil, 0, loadErr
 	}
+	var found *TaskPlan
+	foundAt, counted := -1, ""
 	if loadErr == nil {
 		i := slices.IndexFunc(p.Tasks, func(t PlanTask) bool { return t.TodoID == todo.ID })
 		sameOwner := p.Conversation == todo.Origin && (todo.Supervision == nil || todo.Supervision.Supervisor == "" || todo.Supervision.Supervisor == p.Conversation)
 		if i >= 0 && sameOwner {
-			return p, i, nil
+			if !unique {
+				return p, i, nil
+			}
+			// The direct plan's own bindings are counted from this read, so its copy in the history is skipped.
+			if slices.ContainsFunc(p.Tasks[i+1:], func(t PlanTask) bool { return t.TodoID == todo.ID }) {
+				return nil, 0, errTaskPlanAmbiguous
+			}
+			found, foundAt, counted = p, i, p.ID
 		}
 	}
 	plans, err := history(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	var found *TaskPlan
-	foundAt := -1
 	for _, candidate := range plans {
-		if candidate.State != planStarted {
+		if candidate.State != planStarted || (counted != "" && candidate.ID == counted) {
 			continue
 		}
 		for i, task := range candidate.Tasks {
@@ -1044,7 +1087,7 @@ func (s *Service) currentPlanAssignmentIn(ctx context.Context, todo Todo, histor
 				continue
 			}
 			if found != nil {
-				return nil, 0, errTaskNotInPlan
+				return nil, 0, errTaskPlanAmbiguous
 			}
 			found, foundAt = candidate, i
 		}

@@ -115,6 +115,8 @@ type Service struct {
 	leaderStarts atomic.Int64
 	// mcpChanges wakes tool discovery when task membership or leader rights change.
 	mcpChanges mcpToolChanges
+	// spawns: task_spawn starts whose child is not linked yet, and sessions that may be such a child (task_spawn_window.go).
+	spawns spawnStarts
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
 	// extOwners keeps the extensions the user marked as their own for the profile (extension_trust.go).
@@ -392,6 +394,7 @@ func New(o Options) *Service {
 	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
+	s.todos.spawns = &s.spawns
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf, DoH: s.remoteImageDoH})
 	if s.store == nil {

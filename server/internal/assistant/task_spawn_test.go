@@ -68,10 +68,325 @@ func TestTaskSpawnStaysOnCallersSupervisedTodo(t *testing.T) {
 		t.Fatalf("child escaped the parent's machine/directory/permission: %+v", start)
 	}
 	prompt, _ := start["prompt"].(string)
-	for _, guard := range []string{"task_spawn", "create_thread", "~/.persona/hub.json", "/api/v1", "never read"} {
+	for _, guard := range []string{"task_spawn", "bounded subtask", "what not to do", "one supervised handoff layer", "create_thread", "~/.persona/hub.json", "/api/v1", "never read"} {
 		if !strings.Contains(prompt, guard) {
 			t.Errorf("assignment lacks %q: %s", guard, prompt)
 		}
+	}
+}
+
+func TestTaskSpawnRefusesSecondLayerAndHidesTool(t *testing.T) {
+	s, f, _ := spawnFixture(t, "codex", "plan")
+	ctx := context.Background()
+	if res := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false); res.IsError {
+		t.Fatal(res.Content)
+	}
+	before := onlyTodo(s)
+	if len(before.Agents) != 2 || before.Agents[1].Source != sourceSpawned {
+		t.Fatalf("first-layer child link: %+v", before.Agents)
+	}
+	child := before.Agents[1]
+	f.setSessions("box", proto.Session{MachineID: "box", SessionID: child.SessionID, Agent: "codex", Launcher: "codex",
+		Cwd: "/code/app", PermissionMode: "plan", Status: proto.StatusWorking})
+	starts := len(f.starts)
+	for attempt := 0; attempt < 2; attempt++ {
+		if tools := s.sessionMCPTools(ctx, "box", child.SessionID, false, false); toolListed(tools, "task_spawn") {
+			t.Errorf("spawned caller still sees task_spawn: %+v", tools)
+		}
+		res := s.mcpCall(ctx, "box", child.SessionID, "task_spawn", json.RawMessage(spawnArgs), false)
+		if !res.IsError || !strings.Contains(res.Content[0].Text, "one supervised handoff layer") ||
+			!strings.Contains(res.Content[0].Text, "do not retry") {
+			t.Errorf("second-layer attempt %d was not refused with a bounded-subtask explanation: %+v", attempt+1, res)
+		}
+	}
+	if len(f.starts) != starts || len(onlyTodo(s).Agents) != 2 {
+		t.Fatalf("second-layer attempts started sessions or links: starts=%d want %d, agents=%+v", len(f.starts), starts, onlyTodo(s).Agents)
+	}
+}
+
+func TestTaskSpawnRejectsOnlyExactParentAssignment(t *testing.T) {
+	const parent = "Parent assignment\nKeep every line."
+	for _, tc := range []struct {
+		name    string
+		prompt  string
+		refused bool
+	}{
+		{name: "exact", prompt: parent, refused: true},
+		{name: "outer whitespace", prompt: " \n\t" + parent + "\n ", refused: true},
+		{name: "internal whitespace is not folded", prompt: "Parent  assignment\nKeep every line."},
+		{name: "bounded scope and evidence are not similarity", prompt: parent + "\nOnly inspect the tests; do not edit files; return the command and result."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, todo := spawnFixture(t, "codex", "plan")
+			ctx := context.Background()
+			if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) { task.Prompt = parent }); err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal(map[string]string{"title": "Bounded child", "prompt": tc.prompt})
+			starts := len(f.starts)
+			res := s.mcpCall(ctx, "box", "s1", "task_spawn", args, false)
+			if tc.refused {
+				if !res.IsError || !strings.Contains(res.Content[0].Text, "bounded subtask") || len(f.starts) != starts || len(onlyTodo(s).Agents) != 1 {
+					t.Fatalf("verbatim parent assignment was not refused before start: %+v", res)
+				}
+				return
+			}
+			if res.IsError || len(f.starts) != starts+1 || len(onlyTodo(s).Agents) != 2 {
+				t.Fatalf("different bounded prompt was treated as a duplicate: %+v", res)
+			}
+		})
+	}
+}
+
+func TestTaskSpawnComparesCurrentContinuationPromptInsteadOfNotes(t *testing.T) {
+	s, f, todo := spawnFixture(t, "codex", "plan")
+	ctx := context.Background()
+	if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) { task.TodoID = "" }); err != nil {
+		t.Fatal(err)
+	}
+	continuation := &TaskPlan{ID: "continuation-spawn", Conversation: todo.Origin, State: planStarted,
+		Tasks: []PlanTask{{TodoID: todo.ID, Machine: "box", Prompt: "Current continued assignment"}}}
+	if err := s.savePlan(ctx, continuation); err != nil {
+		t.Fatal(err)
+	}
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Notes = "Historical assignment"
+	s.todos.mu.Unlock()
+	starts := len(f.starts)
+	args, _ := json.Marshal(map[string]string{"title": "Repeated continuation", "prompt": "\nCurrent continued assignment\t "})
+	if res := s.mcpCall(ctx, "box", "s1", "task_spawn", args, false); !res.IsError || len(f.starts) != starts || len(onlyTodo(s).Agents) != 1 {
+		t.Fatalf("current PlanTask prompt was not used for the exact comparison: %+v", res)
+	}
+	args, _ = json.Marshal(map[string]string{"title": "Different from current plan", "prompt": "Historical assignment"})
+	if res := s.mcpCall(ctx, "box", "s1", "task_spawn", args, false); res.IsError || len(f.starts) != starts+1 {
+		t.Fatalf("Todo.Notes wrongly replaced the current PlanTask prompt: %+v", res)
+	}
+}
+
+func TestTaskSpawnUsesNotesWhenNoPlanAssignmentExists(t *testing.T) {
+	s, f, todo := spawnFixture(t, "codex", "plan")
+	ctx := context.Background()
+	if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) { task.TodoID = "" }); err != nil {
+		t.Fatal(err)
+	}
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].PlanID = ""
+	s.todos.todos[todo.ID].Notes = "Unplanned parent assignment"
+	s.todos.mu.Unlock()
+	starts := len(f.starts)
+	args, _ := json.Marshal(map[string]string{"title": "Repeated notes", "prompt": " \nUnplanned parent assignment\t"})
+	if res := s.mcpCall(ctx, "box", "s1", "task_spawn", args, false); !res.IsError || len(f.starts) != starts || len(onlyTodo(s).Agents) != 1 {
+		t.Fatalf("Todo.Notes was not the fallback exact comparison: %+v", res)
+	}
+}
+
+// failingPlanReadStore fails the next TaskPlan read once, as a database hiccup would.
+type failingPlanReadStore struct {
+	*profileTaskStore
+	failNext bool
+}
+
+func (st *failingPlanReadStore) TaskPlan(ctx context.Context, id string) (*db.TaskPlanRow, error) {
+	if st.failNext {
+		st.failNext = false
+		return nil, errors.New("transient plan read failure")
+	}
+	return st.profileTaskStore.TaskPlan(ctx, id)
+}
+
+func TestTaskSpawnRefusesWhenCurrentAssignmentCannotBeRead(t *testing.T) {
+	st := &failingPlanReadStore{profileTaskStore: &profileTaskStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := spawnFixtureOn(t, "codex", "plan", st)
+	ctx := context.Background()
+	const current = "Current complete parent assignment; return all evidence."
+	if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) { task.Prompt = current }); err != nil {
+		t.Fatal(err)
+	}
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Notes = "Historical notes, not the current assignment"
+	s.todos.mu.Unlock()
+	if p, i, err := s.currentPlanAssignment(ctx, onlyTodo(s)); err != nil || p.Tasks[i].Prompt != current {
+		t.Fatalf("fixture needs a readable current assignment: %v", err)
+	}
+	starts := len(f.starts)
+	for _, prompt := range []string{current, "Only inspect the parser; change nothing else; return the failing test."} {
+		st.failNext = true
+		args, _ := json.Marshal(map[string]string{"title": "Unreadable assignment", "prompt": prompt})
+		res := s.mcpCall(ctx, "box", "s1", "task_spawn", args, false)
+		if !res.IsError || !strings.Contains(res.Content[0].Text, "cannot read this task's current assignment") {
+			t.Fatalf("an unreadable current assignment fell back to Todo.Notes: %+v", res)
+		}
+		if len(f.starts) != starts || len(onlyTodo(s).Agents) != 1 {
+			t.Fatalf("refusal left a child: starts=%d want %d agents=%+v", len(f.starts), starts, onlyTodo(s).Agents)
+		}
+	}
+	if st.failNext {
+		t.Fatal("the injected read failure was never reached")
+	}
+}
+
+// corruptPlanStore serves stored plans, once replacing what the next read returns with rows whose tasks do not
+// decode: a TaskPlan read whose first task's prompt is a number, or a history row whose tasks are not an array.
+type corruptPlanStore struct {
+	*profileTaskStore
+	corruptDirect  bool
+	corruptHistory string
+}
+
+func (st *corruptPlanStore) TaskPlan(ctx context.Context, id string) (*db.TaskPlanRow, error) {
+	row, err := st.profileTaskStore.TaskPlan(ctx, id)
+	if err != nil || !st.corruptDirect {
+		return row, err
+	}
+	st.corruptDirect = false
+	var tasks []map[string]any
+	if err := json.Unmarshal(row.Tasks, &tasks); err != nil {
+		return nil, err
+	}
+	tasks[0]["prompt"] = 42
+	row.Tasks, _ = json.Marshal(tasks)
+	return row, nil
+}
+
+func (st *corruptPlanStore) TaskPlansMadeSince(_ context.Context, _ time.Time) ([]db.TaskPlanRow, error) {
+	st.planMu.Lock()
+	defer st.planMu.Unlock()
+	corrupt := st.corruptHistory
+	st.corruptHistory = ""
+	var rows []db.TaskPlanRow
+	for _, row := range st.plans {
+		if row.ID == corrupt {
+			row.Tasks = json.RawMessage(`{"not":"a task array"}`)
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+// newCorruptPlanStore corrupts nothing until asked. Like the real store it also lists the plans' history, which
+// task_spawn's strict read needs even when the to-do's own plan binds it.
+func newCorruptPlanStore() *corruptPlanStore {
+	return &corruptPlanStore{profileTaskStore: &profileTaskStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+}
+
+// A stored plan whose tasks do not decode is not an empty prompt or an absent assignment: nothing starts.
+func TestTaskSpawnRefusesWhenDirectAssignmentDoesNotDecode(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(map[bool]string{false: "control", true: "prompt type error"}[corrupt], func(t *testing.T) {
+			st := newCorruptPlanStore()
+			s, f, todo := spawnFixtureOn(t, "codex", "plan", st)
+			ctx := context.Background()
+			const current = "Current complete direct assignment; return every piece of evidence."
+			if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) { task.Prompt = current }); err != nil {
+				t.Fatal(err)
+			}
+			s.todos.mu.Lock()
+			s.todos.todos[todo.ID].Notes = "Historical unrelated notes"
+			s.todos.mu.Unlock()
+			starts := len(f.starts)
+			st.corruptDirect = corrupt
+			args, _ := json.Marshal(map[string]string{"title": "Decode check", "prompt": current})
+			res := s.mcpCall(ctx, "box", "s1", "task_spawn", args, false)
+			want := map[bool]string{false: "bounded subtask", true: "cannot read this task's current assignment"}[corrupt]
+			if !res.IsError || !strings.Contains(res.Content[0].Text, want) || !strings.Contains(res.Content[0].Text, "do not retry") {
+				t.Fatalf("want a refusal naming %q: %+v", want, res)
+			}
+			if len(f.starts) != starts || len(onlyTodo(s).Agents) != 1 || st.corruptDirect {
+				t.Fatalf("refusal left a child or never read the plan: starts=%d want %d agents=%+v", len(f.starts), starts, onlyTodo(s).Agents)
+			}
+		})
+	}
+}
+
+func TestTaskSpawnRefusesWhenContinuationHistoryDoesNotDecode(t *testing.T) {
+	const prompt = "Current continued complete assignment; return all evidence."
+	for _, tc := range []struct {
+		name, corrupt string
+		bound         bool
+		want          string
+	}{
+		{name: "control", bound: true, want: "bounded subtask"},
+		{name: "continuation row does not decode", bound: true, corrupt: "continuation", want: "cannot read this task's current assignment"},
+		{name: "another row does not decode", bound: true, corrupt: "unrelated", want: "cannot read this task's current assignment"},
+		{name: "absent assignment falls back to notes", want: "bounded subtask"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newCorruptPlanStore()
+			s, f, todo := spawnFixtureOn(t, "codex", "plan", st)
+			ctx := context.Background()
+			if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) { task.TodoID = "" }); err != nil {
+				t.Fatal(err)
+			}
+			plans := []*TaskPlan{{ID: "unrelated", Conversation: todo.Origin, State: planStarted, Tasks: []PlanTask{{TodoID: "other", Machine: "box", Prompt: "Other"}}}}
+			if tc.bound {
+				plans = append(plans, &TaskPlan{ID: "continuation", Conversation: todo.Origin, State: planStarted,
+					Tasks: []PlanTask{{TodoID: todo.ID, Machine: "box", Prompt: prompt}}})
+			}
+			for _, p := range plans {
+				if err := s.savePlan(ctx, p); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.todos.mu.Lock()
+			s.todos.todos[todo.ID].Notes = map[bool]string{true: "Historical notes", false: prompt}[tc.bound]
+			s.todos.mu.Unlock()
+			starts := len(f.starts)
+			st.corruptHistory = tc.corrupt
+			res := s.mcpCall(ctx, "box", "s1", "task_spawn", spawnPromptArgs(prompt), false)
+			if !res.IsError || !strings.Contains(res.Content[0].Text, tc.want) || !strings.Contains(res.Content[0].Text, "do not retry") {
+				t.Fatalf("want a refusal naming %q: %+v", tc.want, res)
+			}
+			if len(f.starts) != starts || len(onlyTodo(s).Agents) != 1 || st.corruptHistory != "" {
+				t.Fatalf("refusal left a child or never read the history: starts=%d want %d agents=%+v", len(f.starts), starts, onlyTodo(s).Agents)
+			}
+			if !tc.bound {
+				// A different bounded prompt still starts once the absent assignment fell back to the notes.
+				if res := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false); res.IsError || len(f.starts) != starts+1 {
+					t.Fatalf("bounded prompt refused after the notes fallback: %+v", res)
+				}
+			}
+		})
+	}
+}
+
+func spawnPromptArgs(prompt string) json.RawMessage {
+	raw, _ := json.Marshal(map[string]string{"title": "Bounded child", "prompt": prompt})
+	return raw
+}
+
+func TestTaskSpawnAllowsMultipleDifferentBoundedFirstLayerChildren(t *testing.T) {
+	s, f, todo := spawnFixture(t, "codex", "plan")
+	ctx := context.Background()
+	starts := len(f.starts)
+	for _, prompt := range []string{
+		"Only inspect the parser; do not edit files; return the relevant functions and line numbers.",
+		"Only inspect the existing tests; do not change fixtures; return the missing regression cases.",
+	} {
+		args, _ := json.Marshal(map[string]string{"title": "Bounded first-layer child", "prompt": prompt})
+		if res := s.mcpCall(ctx, "box", "s1", "task_spawn", args, false); res.IsError {
+			t.Fatalf("bounded first-layer spawn refused: %+v", res)
+		}
+	}
+	after := onlyTodo(s)
+	if after.ID != todo.ID || after.Supervision.Supervisor != todo.Supervision.Supervisor || len(f.starts) != starts+2 || len(after.Agents) != 3 {
+		t.Fatalf("multiple bounded children changed task ownership or did not start: %+v", after)
+	}
+	for _, agent := range after.Agents[1:] {
+		if agent.Source != sourceSpawned || agent.Via != "box/s1" {
+			t.Errorf("first-layer child link = %+v", agent)
+		}
+	}
+}
+
+func TestTaskSpawnToolDescriptionBoundsDelegation(t *testing.T) {
+	tool := prompts.Tool("task_spawn")
+	for _, want := range []string{"bounded subtask", "what not to do", "evidence to return", "never copy the parent assignment", "one supervised handoff layer"} {
+		if !strings.Contains(tool.Description, want) {
+			t.Errorf("task_spawn description lacks %q: %s", want, tool.Description)
+		}
+	}
+	if schema := string(tool.InputSchema); !strings.Contains(schema, "Bounded subtask") || !strings.Contains(schema, "what not to do") {
+		t.Errorf("task_spawn prompt schema does not require a bounded subtask: %s", schema)
 	}
 }
 
@@ -231,19 +546,30 @@ func TestTaskSpawnRefusesUnscopedArgumentsAndCallers(t *testing.T) {
 }
 
 func TestTaskSpawnDoesNotElevatePermissions(t *testing.T) {
-	for _, tc := range []struct{ launcher, mode, source, want string }{
-		{"codex", "plan", "manual", "plan"},
-		{"claude", "default", "manual", "default"},
-		{"claude", "plan", "manual", "plan"},
-		{"codex", "", "manual", "bypassPermissions"}, // the original assignment's persisted mode
-		{"codex", "", "spawned", "plan"},             // an unknown child cannot borrow that assignment's mode
+	for _, tc := range []struct {
+		launcher, mode, source, want string
+		refused                      bool
+	}{
+		{"codex", "plan", "manual", "plan", false},
+		{"claude", "default", "manual", "default", false},
+		{"claude", "plan", "manual", "plan", false},
+		{"codex", "", "manual", "bypassPermissions", false}, // the original assignment's persisted mode
+		{"codex", "", "space", "plan", false},               // a non-assignment caller cannot borrow that assignment's mode
+		{"codex", "", "spawned", "", true},                  // a spawned caller cannot create another layer
 	} {
 		t.Run(tc.launcher+"/"+tc.mode+"/"+tc.source, func(t *testing.T) {
 			s, f, todo := spawnFixture(t, tc.launcher, tc.mode)
 			s.todos.mu.Lock()
 			s.todos.todos[todo.ID].Agents[0].Source = tc.source
 			s.todos.mu.Unlock()
+			starts := len(f.starts)
 			res := s.mcpCall(context.Background(), "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false)
+			if tc.refused {
+				if !res.IsError || len(f.starts) != starts || len(onlyTodo(s).Agents) != 1 {
+					t.Fatalf("spawned caller started another layer: %+v", res)
+				}
+				return
+			}
 			if res.IsError {
 				t.Fatal(res.Content)
 			}
@@ -318,7 +644,7 @@ func TestTaskSpawnNonAssignmentAgentKeepsReportedModel(t *testing.T) {
 	s, f, todo := spawnFixture(t, "claude", "default")
 	ctx := context.Background()
 	s.todos.mu.Lock()
-	s.todos.todos[todo.ID].Agents[0].Source = "spawned"
+	s.todos.todos[todo.ID].Agents[0].Source = "space"
 	s.todos.mu.Unlock()
 	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Agent: "claude", Launcher: "claude",
 		Cwd: "/code/app", PermissionMode: "default", Model: "upstream/model-x", Status: proto.StatusWorking})
@@ -352,12 +678,14 @@ func TestTaskSpawnStartsWithTheParentsLaunchModel(t *testing.T) {
 		assignment        string
 		assignmentDefault bool
 		spawned           bool
+		nonAssignment     bool
 		catalog           []proto.AgentModel
 		want              string
 	}{
 		{name: "node records the requested id", requested: &requested, want: requested},
 		{name: "node records the launcher default", requested: &launcherDefault},
 		{name: "older node uses the assignment launcher default", assignmentDefault: true},
+		{name: "non-assignment agent keeps its own request", requested: &requested, assignment: "relay/someone-else", nonAssignment: true, want: requested},
 		{name: "spawned agent keeps its own request", requested: &requested, assignment: "relay/someone-else", spawned: true, want: requested},
 		{name: "original assignment wins", requested: &requested, assignment: "relay/planned", want: "relay/planned"},
 		{name: "older node reports a unique resolution", catalog: []proto.AgentModel{row}, want: row.ID},
@@ -371,12 +699,17 @@ func TestTaskSpawnStartsWithTheParentsLaunchModel(t *testing.T) {
 		{name: "model absent from the list", catalog: []proto.AgentModel{{ID: "unrelated"}}, want: reply},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, f, todo := spawnFixtureOn(t, "claude", "plan", &profileTaskStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}})
+			s, f, todo := spawnFixtureOn(t, "claude", "plan", newCorruptPlanStore())
 			ctx := context.Background()
 			setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.claude", Model: "an-unrelated-task-default", Effort: "low"})
 			if tc.spawned {
 				s.todos.mu.Lock()
 				s.todos.todos[todo.ID].Agents[0].Source = "spawned"
+				s.todos.mu.Unlock()
+			}
+			if tc.nonAssignment {
+				s.todos.mu.Lock()
+				s.todos.todos[todo.ID].Agents[0].Source = "space"
 				s.todos.mu.Unlock()
 			}
 			f.agentModels = map[string][]proto.AgentModel{"claude": tc.catalog}
@@ -388,7 +721,18 @@ func TestTaskSpawnStartsWithTheParentsLaunchModel(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
+			startsBefore := len(f.starts)
 			res := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false)
+			if tc.spawned {
+				// The one-layer rule deliberately refuses a spawned child; no session.start is allowed.
+				if !res.IsError || !strings.Contains(res.Content[0].Text, "already a spawned child") {
+					t.Fatalf("spawned child was not refused: %+v", res)
+				}
+				if len(f.starts) != startsBefore {
+					t.Fatalf("spawned child started another layer: %+v", f.starts)
+				}
+				return
+			}
 			if res.IsError {
 				t.Fatal(res.Content)
 			}
@@ -429,7 +773,7 @@ func TestTaskSpawnKeepsExactGatewayID(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
-			s, f, todo := spawnFixtureOn(t, name, "plan", &profileTaskStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}})
+			s, f, todo := spawnFixtureOn(t, name, "plan", newCorruptPlanStore())
 			provider := storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: name, Kind: tc.kind, API: "messages",
 				BaseURL: "https://relay.example.invalid", Models: tc.models}}
 			if tc.presetKind != "" {
@@ -547,28 +891,164 @@ func TestTaskSpawnUsesOnlyDeclarationsOnTheParentsMachine(t *testing.T) {
 	}
 }
 
-func TestTaskSpawnAmbiguousContinuationAssignmentStaysReadOnly(t *testing.T) {
-	s, f, todo := spawnFixture(t, "codex", "")
+// Two started plans binding the same to-do leave its current assignment unknown. That is not an absent assignment:
+// task_spawn refuses rather than comparing against Todo.Notes, whatever the prompt, while retry and remedy still see
+// errTaskNotInPlan. (Before #11999 this spawned a read-only child; neither plan's prompt was known to differ.)
+func TestTaskSpawnRefusesAmbiguousContinuationAssignment(t *testing.T) {
+	const prompt = "Existing complete assignment claimed by two started plans."
+	for name, args := range map[string]json.RawMessage{"parent prompt": spawnPromptArgs(prompt), "bounded prompt": json.RawMessage(spawnArgs)} {
+		t.Run(name, func(t *testing.T) {
+			s, f, todo := spawnFixture(t, "codex", "")
+			ctx := context.Background()
+			if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) { task.TodoID = "" }); err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []string{"continuation-a", "continuation-b"} {
+				plan := &TaskPlan{ID: id, Conversation: todo.Origin, State: planStarted,
+					Tasks: []PlanTask{{TodoID: todo.ID, Machine: "box", Permission: "bypassPermissions", Prompt: prompt}}}
+				if err := s.savePlan(ctx, plan); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.todos.mu.Lock()
+			s.todos.todos[todo.ID].Notes = "Historical notes"
+			s.todos.mu.Unlock()
+			if _, _, err := s.currentPlanAssignment(ctx, onlyTodo(s)); !errors.Is(err, errTaskNotInPlan) {
+				t.Fatalf("fixture is not ambiguous: %v", err)
+			}
+			starts := len(f.starts)
+			res := s.mcpCall(ctx, "box", "s1", "task_spawn", args, false)
+			if !res.IsError || !strings.Contains(res.Content[0].Text, "more than one plan") || !strings.Contains(res.Content[0].Text, "do not retry") {
+				t.Fatalf("ambiguous assignment was not refused: %+v", res)
+			}
+			if len(f.starts) != starts || len(onlyTodo(s).Agents) != 1 {
+				t.Fatalf("refusal left a child: starts=%d want %d agents=%+v", len(f.starts), starts, onlyTodo(s).Agents)
+			}
+			if _, _, _, err := s.remedyOf(ctx, todo.ID); !errors.Is(err, errTaskNotInPlan) {
+				t.Fatalf("ambiguous current assignments did not fail retry/remedy closed: %v", err)
+			}
+		})
+	}
+}
+
+// The to-do's own PlanID still binding it does not settle the assignment while another started plan binds it too:
+// task_spawn refuses whatever the prompt, never taking the direct plan's prompt, permission or model. A plan that is no
+// longer started does not count, so the direct binding stays the unique assignment.
+func TestTaskSpawnRefusesAmbiguityBesideDirectBinding(t *testing.T) {
+	const direct = "Direct complete assignment; return every piece of evidence."
+	const other = "Second started plan's complete assignment\nReturn every piece of evidence."
+	for _, tc := range []struct {
+		name, state, prompt, want string
+	}{
+		{name: "second plan's full prompt", state: planStarted, prompt: other, want: "more than one plan"},
+		{name: "direct plan's full prompt", state: planStarted, prompt: direct, want: "more than one plan"},
+		{name: "bounded prompt", state: planStarted, prompt: "Only inspect one test, edit nothing, return one result.", want: "more than one plan"},
+		{name: "dismissed second plan: direct prompt", state: planDismissed, prompt: direct, want: "bounded subtask"},
+		{name: "dismissed second plan: bounded prompt", state: planDismissed, prompt: "Only inspect one test, edit nothing, return one result."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, todo := spawnFixture(t, "codex", "")
+			ctx := context.Background()
+			if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) {
+				task.Prompt, task.Permission, task.Launcher, task.Model = direct, "bypassPermissions", "codex", "direct/model"
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.savePlan(ctx, &TaskPlan{ID: "also-bound", Conversation: todo.Origin, State: tc.state,
+				Tasks: []PlanTask{{TodoID: todo.ID, Machine: "box", Prompt: other, Permission: "plan", Launcher: "codex", Model: "other/model"}}}); err != nil {
+				t.Fatal(err)
+			}
+			if p, err := s.loadPlan(ctx, onlyTodo(s).PlanID); err != nil || p.State != planStarted || len(p.Tasks) != 1 || p.Tasks[0].TodoID != todo.ID {
+				t.Fatalf("fixture needs the to-do's own started plan still binding it: %v", err)
+			}
+			s.todos.mu.Lock()
+			s.todos.todos[todo.ID].Notes = "Historical notes"
+			s.todos.mu.Unlock()
+			starts := len(f.starts)
+			res := s.mcpCall(ctx, "box", "s1", "task_spawn", spawnPromptArgs(tc.prompt), false)
+			if tc.want == "" {
+				if res.IsError || len(f.starts) != starts+1 || len(onlyTodo(s).Agents) != 2 {
+					t.Fatalf("unique direct binding refused a bounded child: %+v", res)
+				}
+				if launch := f.starts[len(f.starts)-1]; launch["permission_mode"] != "bypassPermissions" || launch["model"] != "direct/model" {
+					t.Fatalf("child did not use the unique direct assignment: %+v", launch)
+				}
+				return
+			}
+			if !res.IsError || !strings.Contains(res.Content[0].Text, tc.want) || !strings.Contains(res.Content[0].Text, "do not retry") {
+				t.Fatalf("want a refusal naming %q: %+v", tc.want, res)
+			}
+			if len(f.starts) != starts || len(onlyTodo(s).Agents) != 1 {
+				t.Fatalf("refusal left a child: starts=%d want %d agents=%+v", len(f.starts), starts, onlyTodo(s).Agents)
+			}
+		})
+	}
+}
+
+// The strict resolver counts the direct binding against every other started binding, its own plan's included, and
+// returns the direct read when it is the only one; currentPlanAssignment keeps answering from the direct binding.
+func TestStrictPlanAssignmentCountsTheDirectBinding(t *testing.T) {
+	ctx := context.Background()
+	s, _, todo := spawnFixture(t, "codex", "plan")
+	if p, i, err := s.strictPlanAssignment(ctx, onlyTodo(s)); err != nil || p.ID != todo.PlanID || i != 0 {
+		t.Fatalf("unique direct binding = %v", err)
+	}
+	if err := s.savePlan(ctx, &TaskPlan{ID: "also-started", Conversation: todo.Origin, State: planStarted, Tasks: []PlanTask{{TodoID: todo.ID}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.strictPlanAssignment(ctx, onlyTodo(s)); !errors.Is(err, errTaskPlanAmbiguous) {
+		t.Fatalf("direct binding beside another started plan = %v", err)
+	}
+	if p, _, err := s.currentPlanAssignment(ctx, onlyTodo(s)); err != nil || p.ID != todo.PlanID {
+		t.Fatalf("lenient resolver changed: %v", err)
+	}
+
+	s, _, todo = spawnFixture(t, "codex", "plan")
+	p, err := s.loadPlan(ctx, todo.PlanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Tasks = append(p.Tasks, p.Tasks[0])
+	if err := s.savePlan(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.strictPlanAssignment(ctx, onlyTodo(s)); !errors.Is(err, errTaskPlanAmbiguous) {
+		t.Fatalf("direct plan binding the to-do twice = %v", err)
+	}
+}
+
+// Only a genuinely absent assignment is errTaskNotInPlan without being ambiguous; ambiguity keeps its text for the
+// callers that only check errTaskNotInPlan.
+func TestCurrentPlanAssignmentTellsAbsenceFromAmbiguity(t *testing.T) {
+	s, _, todo := spawnFixture(t, "codex", "plan")
 	ctx := context.Background()
 	if err := s.patchPlanTask(ctx, todo.PlanID, 0, func(task *PlanTask) { task.TodoID = "" }); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := s.currentPlanAssignment(ctx, onlyTodo(s)); !errors.Is(err, errTaskNotInPlan) || errors.Is(err, errTaskPlanAmbiguous) {
+		t.Fatalf("absent assignment = %v", err)
+	}
 	for _, id := range []string{"continuation-a", "continuation-b"} {
-		plan := &TaskPlan{ID: id, Conversation: todo.Origin, State: planStarted,
-			Tasks: []PlanTask{{TodoID: todo.ID, Machine: "box", Permission: "bypassPermissions"}}}
-		if err := s.savePlan(ctx, plan); err != nil {
+		if err := s.savePlan(ctx, &TaskPlan{ID: id, Conversation: todo.Origin, State: planStarted, Tasks: []PlanTask{{TodoID: todo.ID}}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	res := s.mcpCall(ctx, "box", "s1", "task_spawn", json.RawMessage(spawnArgs), false)
-	if res.IsError {
-		t.Fatal(res.Content)
+	_, _, err := s.currentPlanAssignment(ctx, onlyTodo(s))
+	if !errors.Is(err, errTaskPlanAmbiguous) || !errors.Is(err, errTaskNotInPlan) || err.Error() != errTaskNotInPlan.Error() {
+		t.Fatalf("ambiguous assignment = %v", err)
 	}
-	if got := f.starts[len(f.starts)-1]["permission_mode"]; got != "plan" {
-		t.Fatalf("ambiguous current assignments elevated the child to %v", got)
+}
+
+// Readers other than task_spawn keep what decodes, as before; decodePlanRow reports the failure alongside it.
+func TestDecodePlanRowReportsWhatPlanFromRowKeeps(t *testing.T) {
+	row := db.TaskPlanRow{ID: "p", Tasks: json.RawMessage(`[{"todo_id":"t","prompt":42}]`)}
+	lenient := planFromRow(row)
+	strict, err := decodePlanRow(row)
+	if err == nil || len(lenient.Tasks) != 1 || lenient.Tasks[0].TodoID != "t" || lenient.Tasks[0].Prompt != "" || len(strict.Tasks) != 1 {
+		t.Fatalf("lenient=%+v strict=%+v err=%v", lenient.Tasks, strict.Tasks, err)
 	}
-	if _, _, _, err := s.remedyOf(ctx, todo.ID); !errors.Is(err, errTaskNotInPlan) {
-		t.Fatalf("ambiguous current assignments did not fail retry/remedy closed: %v", err)
+	if _, err := decodePlanRow(db.TaskPlanRow{ID: "ok", Tasks: json.RawMessage(`[{"todo_id":"t","prompt":"p"}]`)}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -566,6 +566,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		expectID = newStartSessionID()
 		params["session_id"] = expectID
 	}
+	t.spawnIdentity = &spawnStartIdentity{expected: expectID, known: knownIDs, launcher: s.startLauncher(ctx, picked), cwd: t.Cwd, machine: m.ID, exactOnly: t.spawnExactOnly}
 	clearStandardSpeed(params)
 	s.setPlanThen(ctx, m.ID, params)
 	if err := s.checkContinuationScope(t); err != nil {
@@ -627,6 +628,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		}
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
 		if !t.backendWorkspace() && startResultUnknown(err) {
+			t.spawnIdentity.until = startMayHaveArrived(err, sentAt) // definite refusals never enter unresolved tracking
 			if t.startWithoutReplay() {
 				if expectID != "" {
 					lookup, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartListTimeout)
@@ -643,9 +645,13 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			// called a failure: an adopted session returns through the normal success path, so the task is linked
 			// once, with no failure receipt, retry or reroute (and no duplicate agent on another computer, #6540).
 			if sess, ok := s.adoptTaskStartSession(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs); ok {
-				s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
-				t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
-				return m.ID, sess.SessionID, nil
+				if !t.spawnIdentity.exactOnly || expectID != "" && sess.SessionID == expectID {
+					s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
+					t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
+					return m.ID, sess.SessionID, nil
+				}
+				// task_spawn confirms only an exact child identity. A same-shaped heuristic session is left running,
+				// not stopped or reassigned; its start remains unresolved for later exact/typed reconciliation.
 			}
 			// Nothing found, and the link took the answer (it closed, or the machine is not reachable now): the
 			// node may not have had the start at all. Wait for the link to come back and look once more; still
@@ -656,9 +662,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					// A start that may have reached the node is looked for until the node's own start has run out
 					// of time, so a retry never opens a second agent beside one still being built (#6540).
 					if sess, ok := s.adoptTaskStartSessionUntil(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs, startMayHaveArrived(err, sentAt)); ok {
-						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
-						t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
-						return m.ID, sess.SessionID, nil
+						if !t.spawnIdentity.exactOnly || expectID != "" && sess.SessionID == expectID {
+							s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
+							t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
+							return m.ID, sess.SessionID, nil
+						}
+						// Same rule as the first adoption pass: heuristic identity is not proof for task_spawn.
 					}
 				}
 				return "", "", startLinkLost{err: err, machine: m.Name, back: back}

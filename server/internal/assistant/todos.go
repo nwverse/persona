@@ -217,6 +217,7 @@ type todoBook struct {
 	todos               map[string]*Todo
 	deletedRequestGates map[string]bool
 	activeBySession     map[[2]string]string  // (machine_id, session_id) -> the open todo it works for
+	spawns              *spawnStarts          // set by New: records active memberships in pending task_spawn windows
 	snapshotSyncing     map[[2]string]bool    // (machine_id, session_id) whose title is being written
 	spacesByKey         map[string]string     // "<machine_id>/<space>" -> todo_id
 	botmux              map[string]botmuxSeen // by machine: its botmux sessions' chats and dispatches (todo_sessions.go)
@@ -259,6 +260,15 @@ type todoBook struct {
 	parentCloseoutWakesLoaded bool
 }
 
+// activateTodoSession publishes an active membership and records it in every pending task_spawn window that did not
+// contain it at begin. Live callers hold mu and writing; initial store loading builds the map before any window exists.
+func (b *todoBook) activateTodoSession(key [2]string, todoID string) {
+	b.activeBySession[key] = todoID
+	if b.spawns != nil {
+		b.spawns.noteMembershipActivated(key[0], key[1])
+	}
+}
+
 // spaceKey computes the unified space key string ("machineID/space").
 func spaceKey(machineID, space string) string {
 	if machineID == "" || space == "" {
@@ -291,7 +301,8 @@ func (s *Service) ensureTodosLoaded(ctx context.Context) error {
 	return err
 }
 
-// loadTodoInventory reads durable state without publishing session lists.
+// loadTodoInventory reads durable state without publishing session lists. Runtime reloads use the same writing-before-mu
+// boundary as other membership writes; loadTodosLocked publishes active rows through activateTodoSession.
 func (s *Service) loadTodoInventory(ctx context.Context) (bool, error) {
 	b := &s.todos
 	b.mu.RLock()
@@ -300,6 +311,8 @@ func (s *Service) loadTodoInventory(ctx context.Context) (bool, error) {
 	if loaded {
 		return false, nil
 	}
+	b.writing.Lock()
+	defer b.writing.Unlock()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.loaded {
@@ -450,7 +463,12 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 	}
 
 	b.todos = tmap
-	b.activeBySession = active
+	// Runtime reload is a membership writer too: publish every active row through the same window history and
+	// todos.writing boundary as live links, so a later disconnect cannot erase it from a failed window.
+	b.activeBySession = make(map[[2]string]string, len(active))
+	for key, todoID := range active {
+		b.activateTodoSession(key, todoID)
+	}
 	b.spacesByKey = spaces
 	b.loaded = true
 	s.todoMarksBaseline(b.todos)
@@ -1590,7 +1608,7 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 				}
 				delete(s.todos.activeBySession, key)
 			} else {
-				s.todos.activeBySession[key] = t.ID
+				s.todos.activateTodoSession(key, t.ID)
 			}
 		}
 	}
@@ -1933,7 +1951,7 @@ func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, titl
 		}
 		target.UpdatedAt = now
 		if target.DoneAt == nil { // as loadTodosLocked has it: only an open todo's agents work for it
-			s.todos.activeBySession[[2]string{mid, sid}] = todoID
+			s.todos.activateTodoSession([2]string{mid, sid}, todoID)
 		}
 	}
 	s.todos.mu.Unlock()

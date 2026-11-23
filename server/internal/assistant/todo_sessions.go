@@ -99,7 +99,7 @@ func (b *todoBook) undoAutoLink(item pendingAutoLink, now time.Time) bool {
 				a.ReleasedAt = nil
 				t.UpdatedAt = now
 				if t.DoneAt == nil { // reopened meanwhile: it works for it again
-					b.activeBySession[key] = t.ID
+					b.activateTodoSession(key, t.ID)
 				}
 				changed = true
 			}
@@ -240,6 +240,7 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 	}
 
 	s.todos.writing.Lock()
+	suspectChanged := s.reconcileUnresolvedStartsLocked(machine, sessions)
 	now := time.Now().UTC()
 	var pending []pendingAutoLink
 
@@ -265,7 +266,7 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 		startError := startErrors.of(c)
 		target.Agents = append(target.Agents, TodoAgent{MachineID: machine, SessionID: c.SessionID, LinkedAt: now, Title: c.Title,
 			Cwd: c.Cwd, Agent: c.Agent, StartError: startError, Source: source, Via: via})
-		s.todos.activeBySession[[2]string{machine, c.SessionID}] = target.ID
+		s.todos.activateTodoSession([2]string{machine, c.SessionID}, target.ID)
 		target.UpdatedAt = now
 		pending = append(pending, pendingAutoLink{todoID: target.ID, machineID: machine, sessionID: c.SessionID, title: c.Title,
 			cwd: c.Cwd, agent: c.Agent, startError: startError, source: source, via: via, linkedAt: now, released: released})
@@ -392,7 +393,7 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 			}
 		}
 	}
-	return doneLinked || len(pending) > 0
+	return doneLinked || suspectChanged || len(pending) > 0
 }
 
 // updateTodoAgentSnapshots keeps the title and start error of the agents that work for todos as their sessions now

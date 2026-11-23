@@ -345,6 +345,7 @@ Child Agents spawned by a linked Agent automatically join the same to-do, tracki
 2. **Dispatcher passes the marker**: after launching a child, the dispatcher reads its own pane marker and writes the value to the child's pane as `persona_from`.
 3. **node reports, assistant associates**: when discovering sessions, node copies `persona_from` into `spawn_from` and reports to hub; hub passes the session list unchanged to assistant (`sessions.changed`). Assistant parses to-do ID/parent Agent; if unfinished, child has no active association and no history in that to-do, automatically link it (`source = "spawned"`, `via = "<parent_machine>/<parent_session>"`). Following does not depend on parent being online or on the same computer.
 4. **Grandchildren follow**: after the child joins, node also sets `persona_todo_ref` on its pane; further generations follow the same mechanism.
+   This marker-based following is separate from `task_spawn`: the explicit tool permits only one supervised handoff layer, and an active `source = "spawned"` caller neither sees nor can invoke it.
 5. **Consume the marker**: after child gets an active association, node's periodic reconciliation automatically clears its pane's `persona_from`, preventing mistaken relinking later.
 
 ### Dispatcher contract and example command
