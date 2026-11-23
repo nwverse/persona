@@ -39,9 +39,13 @@ final class HealthEntryUITests: XCTestCase {
         XCTAssertTrue(health.waitForExistence(timeout: 20), "no Health in the sidebar:\n\(app.debugDescription)")
         health.tap()
 
-        let upload = app.buttons["health-upload-report"].firstMatch
-        XCTAssertTrue(upload.waitForExistence(timeout: 15), "Health did not open its home:\n\(app.debugDescription)")
+        let today = app.descendants(matching: .any)["health-today"].firstMatch
+        XCTAssertTrue(today.waitForExistence(timeout: 15), "Health did not open its home:\n\(app.debugDescription)")
         if screenshots { try shot(app, "home") }
+        let upload = app.buttons["health-upload-report"].firstMatch
+        for _ in 0..<5 where !upload.exists || !upload.isHittable { app.swipeUp() }
+        XCTAssertTrue(upload.waitForExistence(timeout: 15), "the home's report upload is missing:\n\(app.debugDescription)")
+        XCTAssertTrue(upload.isHittable, "the home did not show a reachable report upload")
         // List creates rows as they come into view; the existing chats can start below the first screen.
         let conversation = app.buttons.matching(identifier: "health-conversation").firstMatch
         for _ in 0..<5 where !conversation.exists || !conversation.isHittable { app.swipeUp() }
