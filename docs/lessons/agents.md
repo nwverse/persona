@@ -1489,6 +1489,11 @@ previews, and cache parsed files with bounded storage and file-version invalidat
 Test normal RPC pages, live pushes, delayed export writes and same-size or atomic file updates. Preserve literal
 placeholder examples in complete source text.
 
+For Herdr panes, keep the compact export's step identities and order when filling in text from the full export
+(#13706). A full export can arrive late or still hold the abandoned branch after a rewind. Match the step metadata,
+retained prefix and suffix, and omitted byte count before restoring a field. A late match must invalidate the settled
+preview already cached by clients while keeping the reply's item ID.
+
 ## Filesystem timestamps can alias rapid native rewrites (#5659)
 
 Nanosecond stat fields can repeat across same-size writes within one filesystem timestamp tick. Bypass the parsed
