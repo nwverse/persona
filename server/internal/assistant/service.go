@@ -218,8 +218,10 @@ type Service struct {
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	convSpaces           convSpaceBook          // conversation_space.go
 	trackReg             trackRegistry          // track_registry.go
+	spaceRecs            spaceRecordingBook     // space_recordings.go
 	infoTags             infoTagCache           // info_tag.go
 	infoTagWaiting       infoTagPending         // info_use.go
+	captures             captureWork            // capture_sort.go: wakes the loop that sorts quick captures
 	spaceFill            spaceBackfill          // conversation_space_backfill.go
 	outcomeLines         outcomeLines           // todo_outcome.go
 	conversationWrites   sync.RWMutex
@@ -307,12 +309,13 @@ type Service struct {
 	mcpWaitMu     sync.Mutex
 	mcpWaits      map[string]*mcpWaitReporter // live opted-in mcp.call requests, by their validated call id
 	agentArchives agentArchiveBook
-	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
-	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
-	switchQ       switchQueue     // agents_switch's switches waiting for their agents' turns to end (agents_switch.go)
-	fleet         fleetBook       // what comes from the nodes (fleet.go)
-	nextSug       nextSuggestBook // suggest_next.go: the hub-made next-message suggestions
-	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu
+	orphans       orphanBook                // tasks_orphan.go: the open to-dos nobody works on
+	agentNative   agentNativeBook           // the tools' own archives (agent_archive_native.go)
+	switchQ       switchQueue               // agents_switch's switches waiting for their agents' turns to end (agents_switch.go)
+	fleet         fleetBook                 // what comes from the nodes (fleet.go)
+	convAttention conversationAttentionBook // the main conversation's silent-round unread cache
+	nextSug       nextSuggestBook           // suggest_next.go: the hub-made next-message suggestions
+	askUp         escalationBook            // cards that reached the user through an escalation (ask_route.go), under fleet.mu
 	// delegateHook stands in for Delegate in tests (fleet_delegate.go).
 	delegateHook func(context.Context, DelegateParams) (DelegateResult, error)
 	// fleetEnded, when set, sees every card's end the channels are told (tests).
@@ -384,6 +387,7 @@ func New(o Options) *Service {
 	s.alwaysRoutes()
 	s.infoAccessRoutes()
 	s.trackRoutes()
+	s.captureRoutes() // captures.go: quick capture
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
@@ -844,6 +848,8 @@ func (s *Service) push(ctx context.Context, n Notification) {
 // alerting the phone (notify_user shows that to the model).
 func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult, error) {
 	n.ID, n.Kind = "ntf_"+randomHex(8), NotifyPush
+	// A track's push_cap holds the level (track_attention.go).
+	s.capTrackPush(ctx, &n)
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}

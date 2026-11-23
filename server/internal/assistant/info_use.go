@@ -90,7 +90,7 @@ func (s *Service) trackFloor(ctx context.Context, space string) ([]string, bool)
 func (s *Service) conversationUse(ctx context.Context, sid string) infoUse {
 	space, _ := s.conversationSpace(ctx, sid)
 	cats, _, ok := s.conversationCategoryState(ctx, sid)
-	return infoUse{Categories: cats, Known: ok && !s.infoTagWaiting.has(sid), SourceTrack: space}
+	return infoUse{Categories: cats, Known: ok && !s.infoTagWaiting.has(sid), SourceTrack: space, Rules: s.trackRules(ctx, space)}
 }
 
 // exitUse is text's information on its way out of conversation sid of track space (scenes 3, 4, 5 and 7): the
@@ -100,12 +100,12 @@ func (s *Service) conversationUse(ctx context.Context, sid string) infoUse {
 // else it is taken for sensitive.
 func (s *Service) exitUse(ctx context.Context, text, sid, space string) infoUse {
 	floor, known := s.trackFloor(ctx, space)
-	info := infoUse{Categories: floor, Known: known, SourceTrack: space}
+	info := infoUse{Categories: floor, Known: known, SourceTrack: space, Rules: s.trackRules(ctx, space)}
 	text = strings.TrimSpace(text)
 	if !known || len(floor) > 0 || text == "" || !s.infoTagConfigured(ctx) {
 		return info
 	}
-	cats, err := s.infoTag(ctx, infoTagClip(text), floor, infoTagExitTimeout)
+	cats, err := s.infoTag(ctx, infoTagClip(text), s.infoTagFocus(ctx, space), infoTagExitTimeout)
 	if err == nil || modelUnconfigured(err) {
 		info.Categories, _ = normalCategories(append(cats, floor...))
 		return info

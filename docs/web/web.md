@@ -1392,6 +1392,14 @@ promotion still opens and notifies. A leader conversation keeps the previous vis
 `lib/assistant-entries.ts`) when more than one has rows. `e2e/background-rounds.mjs` checks it in a real browser with
 synthetic data and takes the screenshots; with the switch off the chat is pixel-identical to a build without the feature.
 
+In the main conversation, a completed, non-live round with a successful silent finish and no promotion instead leaves
+no timeline row and adds no unread count or badge. Its inline tools and its `task`, `routed` and `answered` feed cards
+inside the same half-open round interval stay out too; plans, message cards, notices and other decisions always remain
+visible. **Background activity**, from both the conversation menu and Inbox, reuses `SupervisionLine` and the same
+paged transcript to retain the complete round and those feed cards without creating an InboxItem or marking anything
+seen. Full-history APIs are unchanged. `e2e/quiet-supervision.mjs` checks silent and promoted boundaries and captures
+synthetic before/after evidence; promoted tools are inspected after opening their work summary.
+
 The cache retains the source metadata. Unknown nonempty source kinds still use the source presentation. Old hubs fall back
 to injected metadata and complete canonical relay contexts; genuine app inputs and protected quoted templates are never
 reclassified. Source messages cannot settle an identical pending user message or become user-navigation ticks.
