@@ -932,6 +932,9 @@ func (s *Service) queueSignal(g superviseSignal) {
 
 // queueSignalReplacing also removes the older stretch it supersedes from the durable outbox.
 func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) {
+	if g.Kind != sigAsk {
+		g = s.currentSupervisorSignal(g)
+	}
 	if g.At.IsZero() {
 		g.At = time.Now()
 	}

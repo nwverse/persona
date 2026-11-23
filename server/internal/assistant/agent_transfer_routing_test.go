@@ -355,3 +355,27 @@ func TestAgentTransferInDoubtCardKeepsRelayIdentityAndMovesPendingQuestion(t *te
 		t.Fatal("old supervisor received another card after transfer")
 	}
 }
+
+func TestAgentTransferQueuedReportDoesNotRepeatAfterRestart(t *testing.T) {
+	database := todoTestDB(t)
+	s, f, task := newConversationPlanServiceOn(t, database, "conv1", 999999)
+	settleService(t, s)
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusWorking}, proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	g := superviseSignal{Todo: task.ID, Kind: sigReport, Report: upReportQuestion, Key: "queued-report", Detail: "A pending question for the task supervisor"}
+	s.signal(g)
+	waitFor(t, "main's pending report", func() bool { return s.queuedFor("conv1") == 1 })
+	transferPlannedTask(t, s, f, task, "lead1")
+	waitFor(t, "transferred queued report", func() bool { return len(f.noticesTo("lead1")) == 1 })
+	settleService(t, s)
+	again := newRestartedService(t, Options{Hub: f, Store: func() Store { return database }, Logf: t.Logf})
+	shortSupervise(t, again)
+	noDirectionsTimers(again)
+	if err := again.ensureTodosLoaded(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	again.signal(g)
+	settleService(t, again)
+	if len(f.noticesTo("lead1")) != 1 || len(f.noticesTo("conv1")) != 0 {
+		t.Fatal("queued report changed destination or repeated after restart")
+	}
+}

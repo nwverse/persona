@@ -112,7 +112,7 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	groups := map[string][]superviseSignal{}
 	entries := map[string][]prompts.SuperviseEntry{}
 	for i, g := range signals {
-		signals[i] = s.currentAskSignal(g)
+		signals[i] = s.currentSupervisorSignal(g)
 	}
 	signals = mergeSignals(nil, signals)
 	for _, g := range signals {

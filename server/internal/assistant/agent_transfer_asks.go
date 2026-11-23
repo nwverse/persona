@@ -25,7 +25,7 @@ func (s *Service) transferPendingAsks(ctx context.Context, t Todo) error {
 			return g
 		}
 		if g.Kind == sigAsk {
-			return s.currentAskSignal(g)
+			return s.currentSupervisorSignal(g)
 		}
 		if s.digestTo(ctx, cfg, g) == target {
 			g.To = target
@@ -162,10 +162,16 @@ func (s *Service) transferPendingAsks(ctx context.Context, t Todo) error {
 	return nil
 }
 
-// currentAskSignal also repairs a crash after the supervisor write but before the card queue checkpoint.
-// Escalated and already delivered rungs remain explicit destinations.
-func (s *Service) currentAskSignal(g superviseSignal) superviseSignal {
+// currentSupervisorSignal uses the same persisted ordinary recipient at admission, dispatch and queue recheck.
+// Ask rungs and owner escalations retain their distinct state. It also repairs a supervisor-write/queue-checkpoint crash.
+func (s *Service) currentSupervisorSignal(g superviseSignal) superviseSignal {
 	if g.Kind != sigAsk {
+		if t, ok := s.todoNow(g.Todo); ok && t.Supervision.assigned() && g.Kind != sigEscalated {
+			if g.To != t.Supervision.Supervisor {
+				g.batchTo, g.batchUntil = "", time.Time{}
+			}
+			g.To = t.Supervision.Supervisor
+		}
 		return g
 	}
 	id, step, _ := strings.Cut(g.Key, "@")
@@ -215,7 +221,7 @@ func (s *Service) askAlreadyQueued(todo, to string) bool {
 			}
 			list, _ := decodeDigestSignals(msg.Signals)
 			for _, g := range list {
-				if g.Todo == todo && g.Kind == sigAsk && s.currentAskSignal(g).To == to {
+				if g.Todo == todo && g.Kind == sigAsk && s.currentSupervisorSignal(g).To == to {
 					return true
 				}
 			}
