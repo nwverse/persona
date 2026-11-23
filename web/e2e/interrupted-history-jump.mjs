@@ -18,6 +18,21 @@ function readerPosition(scroller) {
   };
 }
 
+// Let the wheel or glide finish, including the frames a queued seek gets after the page is rendered.
+async function settledPosition(chat) {
+  await chat.evaluate(sc => new Promise(resolve => {
+    let lastTop, still = 0;
+    const frame = () => {
+      still = lastTop === sc.scrollTop ? still + 1 : 0;
+      lastTop = sc.scrollTop;
+      if (still >= 12) resolve();
+      else requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }));
+  return chat.evaluate(readerPosition);
+}
+
 // Intercept the same before_seq response for each case. Observe real scroll offsets after the
 // prepend, including the frames where a stale seek would scroll or light its row.
 export async function checkInterruptedJump({ page, url, run, output, target, second, secondOrdinal, source, action, release, append }) {
@@ -60,7 +75,7 @@ export async function checkInterruptedJump({ page, url, run, output, target, sec
     const sc = document.querySelector("[data-chat-scroll]");
     return sc.scrollTop === sc.scrollHeight - sc.clientHeight;
   });
-  run.before = await chat.evaluate(readerPosition);
+  run.before = await settledPosition(chat);
   assert.ok(run.before.line);
   // Deliver live activity and the backward page together.
   append();
@@ -69,18 +84,7 @@ export async function checkInterruptedJump({ page, url, run, output, target, sec
   await chat.locator("[data-compact-divider]").waitFor({ state: "attached" });
   await chat.locator("[data-supervision]").waitFor({ state: "attached" });
   await page.locator("[data-nav-loading]").waitFor({ state: "hidden" });
-  // Include the frames that settle the DOM and run a queued seek after its HTTP request.
-  await chat.evaluate(sc => new Promise(resolve => {
-    let lastTop, still = 0;
-    const frame = () => {
-      still = lastTop === sc.scrollTop ? still + 1 : 0;
-      lastTop = sc.scrollTop;
-      if (still >= 12) resolve();
-      else requestAnimationFrame(frame);
-    };
-    requestAnimationFrame(frame);
-  }));
-  run.after = await chat.evaluate(readerPosition);
+  run.after = await settledPosition(chat);
   run.action = `${source} then ${action}`;
   console.log(`${run.action}: ${JSON.stringify(run.before)} -> ${JSON.stringify(run.after)}`);
   assert.equal(await chat.locator("[data-search-hit]").count(), 0, "The cancelled link must not light its row");
