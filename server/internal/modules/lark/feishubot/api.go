@@ -16,23 +16,6 @@ import (
 	"time"
 )
 
-// Domains of the two clouds; a hub.json domain may also be a full URL (a private deployment).
-const (
-	DomainFeishu = "https://open.feishu.cn"
-	DomainLark   = "https://open" + ".larksuite.com" // two parts: the joined host trips the source name scan
-)
-
-// ResolveDomain turns the configured domain ("", "feishu", "lark" or a URL) into a base URL.
-func ResolveDomain(d string) string {
-	switch strings.ToLower(strings.TrimSpace(d)) {
-	case "", "feishu":
-		return DomainFeishu
-	case "lark", "larksuite":
-		return DomainLark
-	}
-	return strings.TrimRight(strings.TrimSpace(d), "/")
-}
-
 // Client makes the app's REST calls with a tenant access token it keeps fresh.
 type Client struct {
 	appID, appSecret string
@@ -327,14 +310,6 @@ func retryAfterDelay(v string) time.Duration {
 	return 0
 }
 
-// BotInfo is the app's bot: its name and open id (GET /open-apis/bot/v3/info). Asking for it also checks the app's
-// id and secret.
-type BotInfo struct {
-	Name   string `json:"app_name"`
-	OpenID string `json:"open_id"`
-	Avatar string `json:"avatar_url"`
-}
-
 func (c *Client) BotInfo(ctx context.Context) (BotInfo, error) {
 	var out struct {
 		Bot BotInfo `json:"bot"`
@@ -342,14 +317,6 @@ func (c *Client) BotInfo(ctx context.Context) (BotInfo, error) {
 	err := c.call(ctx, "bot info", http.MethodGet, "/open-apis/bot/v3/info", nil, &out)
 	return out.Bot, err
 }
-
-// Message types the bot sends.
-const (
-	TypeText        = "text"
-	TypePost        = "post"
-	TypeFile        = "file"
-	TypeInteractive = "interactive"
-)
 
 type sent struct {
 	MessageID string `json:"message_id"`
@@ -420,16 +387,6 @@ func (c *Client) Unpin(ctx context.Context, messageID string) error {
 	return c.call(ctx, "unpin", http.MethodDelete, "/open-apis/im/v1/pins/"+url.PathEscape(messageID), nil, nil)
 }
 
-// Pin is one pin of a chat: the message and who pinned it.
-type Pin struct {
-	MessageID      string `json:"message_id"`
-	OperatorID     string `json:"operator_id"`
-	OperatorIDType string `json:"operator_id_type"` // app_id for a bot's pin
-}
-
-// ByApp: the app appID pinned it.
-func (p Pin) ByApp(appID string) bool { return p.OperatorIDType == "app_id" && p.OperatorID == appID }
-
 // pinsPagesMost bounds how many pages of a chat's pins are read (50 each).
 const pinsPagesMost = 4
 
@@ -487,9 +444,6 @@ func (c *Client) UserName(ctx context.Context, openID string) (string, error) {
 	err := c.call(ctx, "user", http.MethodGet, "/open-apis/contact/v3/users/"+url.PathEscape(openID)+"?user_id_type=open_id", nil, &out)
 	return out.User.Name, err
 }
-
-// ErrTooLarge: a message's image or file is larger than the download takes.
-var ErrTooLarge = errors.New("feishu download: too large")
 
 // Resource downloads an image or file of a message the bot received (kind "image" or "file"); at most limit bytes.
 // It is a GET, so like call it tries again on a throttled answer, a server failure or a dropped connection, and renews

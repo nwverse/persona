@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/modules/lark/feishubot"
 )
 
 const tokenPath = "/open-apis/auth/v3/tenant_access_token/internal"

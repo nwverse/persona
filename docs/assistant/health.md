@@ -464,7 +464,7 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
 
 - Server (inside `server/`): `go test ./internal/assistant -run Health` (`server/internal/assistant/health_test.go`: starting health chats, separate lists, `main` and unknown `space` rejected, tools do not cross spaces, outbound, golden),
   `go test ./internal/hub -run Health` (push without body), `go test ./internal/connector -run ConfirmEach`, `go test ./internal/node -run LarkGateHealth`, `go test ./internal/identity` (health directory, `SpaceOf`, `IsAssistantDir`).
-  After changing `health_claude_md.md`, update the golden and review the diff (`docs/assistant/prompts.md`). Charts: `go test ./internal/assistant -run HealthClaudeMDTeachesCharts`, `go test ./internal/feishubot -run PersonaCards`.
+  After changing `health_claude_md.md`, update the golden and review the diff (`docs/assistant/prompts.md`). Charts: `go test ./internal/assistant -run HealthClaudeMDTeachesCharts`, `go test ./internal/modules/lark/feishubot -run PersonaCards`.
 - Web: `cd web && npm test && npm run build`.
 - iOS / Mac: `PersonaTests/HealthModelTests` (lists and memory carry `space`, merging pushes, sidebar does not list health chats, new chats carry `space`); build `Persona` and `PersonaMac`.
 - iPhone dietary intake acceptance (real device; not covered by server or simulator tests):

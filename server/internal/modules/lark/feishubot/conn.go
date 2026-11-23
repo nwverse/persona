@@ -33,18 +33,6 @@ import (
 // is waited for that long.
 const eventTurnWait = 3 * time.Second
 
-// Handler takes one event's payload (the JSON Feishu would POST to a webhook) and returns what to answer: nil for an
-// event, the toast / new card for a card callback. It must return quickly: slow work goes on in its own goroutine.
-type Handler func(ctx context.Context, payload []byte) (any, error)
-
-// ConnState is what the settings page shows about the connection.
-type ConnState struct {
-	Connected bool
-	Since     time.Time // connected since, or the last failure
-	Error     string
-	LastEvent time.Time
-}
-
 type clientConfig struct {
 	ReconnectCount    int `json:"ReconnectCount,omitempty"`
 	ReconnectInterval int `json:"ReconnectInterval,omitempty"`

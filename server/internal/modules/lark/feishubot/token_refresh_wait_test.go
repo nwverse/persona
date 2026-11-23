@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/modules/lark/feishubot"
 )
 
 // The cache still considers T0 valid when the API has already rejected it.

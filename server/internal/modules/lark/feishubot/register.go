@@ -20,20 +20,7 @@ import (
 // no console visit, no copy-paste and no pairing code. No token is needed: the device code is the only credential.
 
 const (
-	AccountsFeishu = "https://accounts.feishu.cn"
-	AccountsLark   = "https://accounts" + ".larksuite.com" // two parts: the joined host trips the source name scan
-
 	registrationPath = "/oauth/v1/app/registration"
-)
-
-// Registration polling's answers (RegisterTicket.Status).
-const (
-	RegisterDone     = "done"      // the app is created: AppID, AppSecret and OpenID are set
-	RegisterPending  = "pending"   // not confirmed yet (also: confirmed, the credentials not issued yet)
-	RegisterSlowDown = "slow_down" // asked too often: wait longer
-	RegisterExpired  = "expired"   // the device code ran out: start again
-	RegisterDenied   = "denied"    // the person declined
-	RegisterFailed   = "failed"    // anything else the platform said (ErrorText)
 )
 
 // registerScopes are the tenant scopes the new app asks for beyond the platform's template: what the bot reads and
@@ -54,33 +41,6 @@ func NewRegistrar() *Registrar {
 func (r *Registrar) WithHost(host string) *Registrar {
 	r.host = func(string) string { return host }
 	return r
-}
-
-// AccountsHost is the accounts site of a region: "lark" is Lark's, anything else Feishu's.
-func AccountsHost(region string) string {
-	if region == "lark" {
-		return AccountsLark
-	}
-	return AccountsFeishu
-}
-
-// RegisterChallenge is a started registration: the page to open (or scan) and how long to keep asking.
-type RegisterChallenge struct {
-	DeviceCode string
-	URL        string
-	ExpiresIn  int // seconds
-	Interval   int // seconds between polls
-}
-
-// RegisterTicket is one poll's answer. Brand is the cloud the person's tenant is on ("feishu" / "lark"), when said:
-// a tenant on the other cloud is polled there.
-type RegisterTicket struct {
-	Status    string
-	AppID     string
-	AppSecret string
-	OpenID    string
-	Brand     string
-	ErrorText string
 }
 
 // Begin starts a registration of an app named name in region.
