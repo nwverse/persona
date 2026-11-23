@@ -25,10 +25,13 @@ vi.mock("../../views/chat/ChatView", () => ({
   ChatView: ({ mid, sid, headerActions, placeholder }: { mid: string; sid: string; headerActions?: React.ReactNode; placeholder?: string }) => <div><p data-chat data-placeholder={placeholder}>{`${mid}/${sid}`}</p>{headerActions}</div>,
 }));
 
-import "../index";
+import { registerModule } from "../../core/module-host";
+import { health } from "./module";
 import { Health, HealthPage, healthRoute } from "./Health";
 import { t } from "../../i18n";
 import { parse } from "../../lib/router";
+
+registerModule(health);
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

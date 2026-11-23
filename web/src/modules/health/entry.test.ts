@@ -1,8 +1,11 @@
 // The Health home (#13273) keeps /health/new as an alias and past chats at /health/<id>.
 import { describe, expect, it } from "vitest";
-import "../index";
+import { registerModule } from "../../core/module-host";
+import { health } from "./module";
 import { healthRoute } from "./Health";
 import { href, parse } from "../../lib/router";
+
+registerModule(health);
 
 describe("entering Health", () => {
   it("preserves the home alias and conversation addresses", () => {
