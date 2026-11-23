@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -30,7 +31,7 @@ func TestAgentTransferPlanSignalsAndReload(t *testing.T) {
 	settleService(t, s)
 	transferPlannedTask(t, s, f, task, "lead1")
 	transferPlannedTask(t, s, f, task, "lead1") // same assignment also persists its provenance
-	kinds := append(slices.Clone(backgroundSignals), sigEstimateDue, sigStarted, sigFailed, sigParentCloseout)
+	kinds := append(slices.Clone(backgroundSignals), sigEstimateDue, sigStarted, sigFailed, sigTodoReady, sigParentCloseout, sigHandoffResult)
 	kinds = slices.DeleteFunc(kinds, func(kind string) bool { return kind == sigAsk })
 	check := func(s *Service) {
 		t.Helper()
@@ -44,6 +45,9 @@ func TestAgentTransferPlanSignalsAndReload(t *testing.T) {
 					cfg := s.settings(t.Context())
 					if got := s.digestTarget(t.Context(), cfg, g); got != "lead1" {
 						t.Errorf("immediate %s/%s pinned=%s: %s", state, kind, pinned, got)
+					}
+					if got := s.routeTo(t.Context(), cfg, g, func(string) bool { return false }); got != "lead1" {
+						t.Errorf("unavailable explicit supervisor for %s: %s", kind, got)
 					}
 					if got := s.recheckDigestTarget(t.Context(), cfg, g); got != "lead1" {
 						t.Errorf("queued %s/%s pinned=%s: %s", state, kind, pinned, got)

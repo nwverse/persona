@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 // transferPendingAsks moves only an undelivered first rung. Delivered cards, timed-out rungs and owner
@@ -138,7 +140,7 @@ func (s *Service) askRelayDelivered(to string, msg relayMsg) {
 			continue
 		}
 		for _, p := range s.fleet.interactions {
-			if r := p.route; r != nil && r.todo == g.Todo && r.at() == to && strings.Contains(msg.Text, "interaction_id="+p.ix.ID+"（") {
+			if r := p.route; r != nil && r.todo == g.Todo && r.at() == to && (len(g.Cards) == 0 || slices.ContainsFunc(g.Cards, func(card prompts.SuperviseAsk) bool { return card.ID == p.ix.ID })) {
 				r.delivered = true
 			}
 		}

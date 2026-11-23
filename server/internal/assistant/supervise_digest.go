@@ -304,6 +304,10 @@ func (s *Service) sendDigest(ctx context.Context) {
 // conversation set it is never "", and nothing goes anywhere else than before.
 func (s *Service) routeTo(ctx context.Context, here Settings, g superviseSignal, there func(string) bool) string {
 	to := s.digestTarget(ctx, here, g)
+	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.SupervisorSource == "explicit" &&
+		to == t.Supervision.Supervisor {
+		return to // an unavailable explicit recipient keeps its queue; it never silently falls back to main
+	}
 	if to != here.Main && !there(to) {
 		to = here.Main
 	}
@@ -368,6 +372,9 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	for _, g := range list {
 		if e, ok, deferRetry := s.digestEntryChecked(ctx, g, web); ok {
 			entries = append(entries, e)
+			if g.Kind == sigAsk {
+				g.Cards = e.Asks // receipt names exactly the cards this rendered delivery contains
+			}
 			kept = append(kept, g)
 		} else if deferRetry {
 			retry = append(retry, g)
@@ -503,8 +510,11 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		// The last message may still wait in the queue: this one takes its place with both.
 		all := mergeSignals(queued, kept)
 		var allEntries []prompts.SuperviseEntry
-		for _, g := range all {
+		for i, g := range all {
 			if e, ok := s.digestEntry(ctx, g, web); ok {
+				if g.Kind == sigAsk {
+					all[i].Cards = e.Asks
+				}
 				allEntries = append(allEntries, e)
 			}
 		}

@@ -140,6 +140,9 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 			}
 		}
 		if e, ok := s.digestEntry(ctx, g, web); ok {
+			if g.Kind == sigAsk {
+				g.Cards = e.Asks
+			}
 			// A worker reassigned to an Agent needs the ordinary dispatcher, not assistant.send to its old conversation.
 			if _, handled, _ := s.leaderRoute(g); handled {
 				return msg, false, true
