@@ -356,7 +356,8 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 			return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
 		}
 		return "Created under your direction (you supervise it; to have an Agent do it, use task_plan with todo_id " + t.ID +
-			"): " + todoLine(t, now, loc), nil
+			"): " + todoLine(t, now, loc) +
+			reuseHintText("todo_create", s.activeReuseHints(ctx, self, 3)), nil
 	}
 	if plan.PartOf != nil && *plan.PartOf != "" && self != "" && s.workerRefusal(ctx, machine, self) == nil {
 		// a piece the conversation will hand out itself: its own, so that task_plan's todo_id can run an Agent on it
@@ -371,7 +372,8 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 	if err != nil {
 		return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
 	}
-	return "Created: " + todoLine(t, now, loc), nil
+	return "Created: " + todoLine(t, now, loc) +
+		reuseHintText("todo_create", s.activeReuseHints(ctx, self, 3)), nil
 }
 
 func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {

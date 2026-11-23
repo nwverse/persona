@@ -308,6 +308,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		a.Tasks[0].WaitInputID = "wait_" + randomHex(16)
 	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
+	// Same-directory active agents the conversation already supervises: surfaced with exact ids even when the titles
+	// are worded too differently for planDuplicates (#13192). A hint, never a refusal.
+	reuse := reuseHintText("task_plan", s.planReuseHints(ctx, sessionID, a.Tasks))
 	now := time.Now().UTC()
 	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen,
 		CreatedAt: now, UpdatedAt: now}
@@ -384,7 +387,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			s.directionsSoon() // a leader's plan waiting for Start is a decision for the owner (leader_reports.go)
 		}
 		return fmt.Sprintf("Plan %s is on the user's screen as a card and pushed to their phone; nothing has started. "+
-			"Don't wait for it: carry on. When they start it, the tasks show up in the context snapshot.", p.ID) + dups + taskPlanEstimateNotes(p.Tasks), nil
+			"Don't wait for it: carry on. When they start it, the tasks show up in the context snapshot.", p.ID) + reuse + dups + taskPlanEstimateNotes(p.Tasks), nil
 	}
 	started, err := s.startPlan(ctx, p.ID, nil, false)
 	if err != nil {
@@ -419,6 +422,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	default:
 		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", supervisor)
 	}
+	b.WriteString(reuse)
 	b.WriteString(dups)
 	b.WriteString(taskPlanEstimateNotes(started.Tasks))
 	if wait > 0 && len(started.Tasks) == 1 && scope == nil && started.Tasks[0].Error == "" {
