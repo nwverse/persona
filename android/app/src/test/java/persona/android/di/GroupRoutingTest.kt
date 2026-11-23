@@ -657,8 +657,8 @@ class GroupStartRetryRoutingTest {
             assertEquals("No offline requeue reaches the network", 1, workTransport.requests.size)
         } finally {
             openedGroups.forEach { it.close() }
-            runCatching { store.close() }
-            runCatching { runtime.dataStore.close() }
+            val _ = runCatching { store.close() }
+            val _ = runCatching { runtime.dataStore.close() }
             parent.cancel()
             Security.removeProvider("AndroidKeyStore")
             app.scope.cancel()
