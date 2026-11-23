@@ -2332,7 +2332,8 @@ alias that another module's base or alias starts, or that starts one of theirs. 
 `mcp_tools`, `prompt_sections`, `background_jobs`, …) belongs to the server.
 
 **The module list** (`web/src/modules/index.ts`) imports each module's descriptor (`modules/<id>/module.ts`) and
-registers it. It is the only place module ids appear outside their own directories. `App.tsx` imports it first, so the
+registers it. A descriptor the host refuses throws in development and tests, so it cannot land; in a production build
+it is logged and that module is left out (absent), so one bad module does not stop the app from starting. It is the only place module ids appear outside their own directories. `App.tsx` imports it first, so the
 modules are registered before any address is routed. Importing the list loads no module's code and none of its strings.
 
 **When a module is there.** A module is *on* when its hub feature flag is in the hello's `features` (or it names none)
@@ -2344,9 +2345,9 @@ its sidebar entry does not show. Otherwise it is *off*, and an off module is abs
 - neither its code chunk nor its catalog is requested. `loadModule` refuses an off module, and its page is a
   `lazyPage(…, { listed: false })`, which `loadPages` never preloads.
 
-An on module's page is warmed as the built-in pages are (`core/ModulePage.tsx`, `lib/lazy-page.ts`): when the pointer,
-the focus or a finger reaches a link to it (its sidebar entry), and with the idle tier once the browser is idle after
-start; neither with Data Saver on, and never for an off or pending module. Otherwise it loads on its first render: its strings first (`i18n` `addCatalogs`; its code may call `t()` at module
+An on module's page is warmed as the built-in pages are (`core/ModulePage.tsx`, `lib/lazy-page.ts` `preloadOnIntent`):
+when the pointer, the focus or a finger reaches a link to it (its sidebar entry); not with Data Saver on, and never for
+an off or pending module. Never at idle: that would make every browser fetch every module, outside `IDLE_TIER_BUDGET`. Otherwise it loads on its first render: its strings first (`i18n` `addCatalogs`; its code may call `t()` at module
 scope), then its code. A module's namespaces (`<id>.json`, `<id>-*.json` under `src/i18n/locales/<lang>/`) stay beside the
 others, so every catalog check covers them, but the build leaves them out of `client-startup` and `client-rest` and makes
 them the module's own catalog (`?catalog=module-<id>`, `web/i18n-catalogs.ts`). A module's sidebar label, page title and Labs description

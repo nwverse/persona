@@ -18,7 +18,6 @@ const routeLoaders = new Map<Route["name"], Loader>();
 // Pages chosen by the route's contents, not its name (a feature module's, core/ModulePage.tsx): asked with the route,
 // they load nothing when it is not theirs to load (an off module never routes here at all).
 const routeIntents = new Map<Route["name"], (r: Route) => Promise<unknown> | undefined>();
-const idleTasks: Loader[] = [];
 
 /** Loads what a link to a `name` route opens when the pointer, the focus or a finger reaches it, as `routes` does for
  *  a lazyPage; `load` gets the route and returns undefined for nothing to load. */
@@ -26,10 +25,6 @@ export function preloadOnIntent(name: Route["name"], load: (r: Route) => Promise
   routeIntents.set(name, load);
 }
 
-/** Runs `load` with the idle tier (preloadPages), as `idle` does for a lazyPage. */
-export function preloadWhenIdle(load: Loader): void {
-  idleTasks.push(load);
-}
 const still = () => () => {};
 
 export interface LazyPageOptions {
@@ -140,7 +135,7 @@ export function preloadPages(w: IdleWindow = globalThis as IdleWindow): () => vo
   const doc = w.document;
   for (const type of INTENT) doc?.addEventListener(type, onIntent, LISTEN);
   const unlisten = () => INTENT.forEach((type) => doc?.removeEventListener(type, onIntent, LISTEN));
-  const run = () => [...idleLoaders, ...idleTasks].forEach((l) => void l().catch(() => {}));
+  const run = () => idleLoaders.forEach((l) => void l().catch(() => {}));
   if (w.requestIdleCallback && w.cancelIdleCallback) {
     const id = w.requestIdleCallback(run, { timeout: 5000 });
     return () => {

@@ -7,9 +7,22 @@ import { health } from "./health/module";
 
 export const MODULES: readonly ModuleDescriptor[] = [health];
 
-/** Registers every module once (a second call, a hot reload or a test importing the list again, is a no-op). */
-export function registerModules(): void {
-  for (const m of MODULES) if (!registeredModules().includes(m)) registerModule(m);
+/**
+ * Registers each module once (a second call, a hot reload or a test importing the list again, is a no-op). This runs
+ * when App.tsx loads, before anything draws, so a descriptor the host refuses must not take the app down with it: in
+ * a production build it is logged and that module is left out (absent, as if switched off), and the rest register.
+ * In development and tests (`strict`) the refusal throws, so a bad module cannot land.
+ */
+export function registerModules(list: readonly ModuleDescriptor[] = MODULES, strict = !import.meta.env.PROD, report: (message: string, error: unknown) => void = console.error): void {
+  for (const m of list) {
+    if (registeredModules().includes(m)) continue;
+    try {
+      registerModule(m);
+    } catch (e) {
+      if (strict) throw e;
+      report(`module "${m.id}" was not registered and is left out`, e);
+    }
+  }
 }
 
 registerModules();

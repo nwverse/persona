@@ -36,11 +36,16 @@ try {
       await page.getByRole("link", { name: "Inbox" }).first().waitFor();
       assert.equal(await health().count() > 0, on, `${tag}: sidebar entry`);
       await page.screenshot({ path: join(shots, `${tag}-sidebar.png`) });
-      // warmed before it is opened (#13434 review): the entry's hover and the idle tier; nothing for an off module
-      if (on) await health().first().hover();
-      await page.waitForTimeout(6000);
+      // never fetched at idle (past the idle tier's 5 s); warmed by its entry's hover only; nothing ever for an off module
+      await page.waitForTimeout(6500);
+      const idled = requested.length;
+      assert.equal(idled, 0, `${tag}: nothing of the module is fetched at idle`);
+      if (on) {
+        await health().first().hover();
+        await page.waitForTimeout(3000);
+      }
       const warmed = requested.length;
-      if (on) assert.ok(warmed > 0, `${tag}: the module is warmed before it is opened`);
+      if (on) assert.ok(requested.some((u) => /catalog=module-health/.test(u)) && requested.some((u) => /\/Health\.tsx/.test(u)), `${tag}: hover warms the strings and the chunk`);
       else assert.equal(warmed, 0, `${tag}: an off module is never warmed`);
 
       await page.goto(`${base}/health/new`);
@@ -59,7 +64,7 @@ try {
       if (on) assert.ok(requested.length > 0, `${tag}: the module's code and strings load when its page opens`);
       else assert.deepEqual(requested, [], `${tag}: nothing of the module is requested`);
       assert.deepEqual(errors, [], `${tag}: page errors`);
-      console.log(`${tag}: ok, ${warmed} module request(s) before opening it, ${requested.length} in all`);
+      console.log(`${tag}: ok, ${idled} module request(s) at idle, ${warmed} after hovering its entry, ${requested.length} in all`);
       await context.close();
     }
   }
