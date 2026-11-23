@@ -282,7 +282,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	file := filepath.Join(dir, "start.json")
 	owner, _ := launch.(interface{ Kind() string })
 	isolateHooks := owner != nil && owner.Kind() == host.Orca
-	b, _ := json.Marshal(codexStartFile{Source: execution.Source, Argv: argv, Prompt: filePrompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: cwd})
+	b, _ := json.Marshal(codexStartFile{Source: execution.Source, SourceHosts: sourceHostsFor(execution.Source), Argv: argv, Prompt: filePrompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return nil, err
 	}
@@ -612,8 +612,11 @@ const (
 // then the command and its arguments) and the first message.
 type codexStartFile struct {
 	Source modelhttp.Source `json:"model_source,omitzero"`
-	Argv   []string         `json:"argv"`
-	Prompt string           `json:"prompt"`
+	// SourceHosts is the node's PERSONA_MODEL_SOURCE_HOSTS: the pane's shell has its engine's environment, not the
+	// node's, so the allowlist that lets Source reach the provider gets to codex-start only this way.
+	SourceHosts string   `json:"model_source_hosts,omitempty"`
+	Argv        []string `json:"argv"`
+	Prompt      string   `json:"prompt"`
 	// Agent is the HERDR_AGENT the words run with (hostherdr.go): "codex" for a Codex started in a herdr pane; "" leaves
 	// the variable as it is (tab-start, other hosts).
 	Agent string `json:"agent,omitempty"`
@@ -686,6 +689,10 @@ func runStartFile(f codexStartFile, codex bool) error {
 		sourceEnv := modelSourceEnvironment(f.Source, bin)
 		env = append(withoutEnv(env, envNames(sourceEnv)), sourceEnv...)
 		explicit = append(explicit, sourceEnv...)
+		if hosts := adoptSourceHosts(f.SourceHosts); hosts != "" {
+			env = append(withoutEnv(env, []string{modelhttp.SourceHostsEnv}), hosts)
+			explicit = append(explicit, hosts)
+		}
 	}
 	for len(words) > 0 && shellcmd.AssignRe.MatchString(words[0]) {
 		env = append(env, words[0])
