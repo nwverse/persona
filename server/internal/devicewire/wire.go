@@ -202,8 +202,10 @@ type Config struct {
 	// NodePackagesURL is where the manager fetches the node builds the hub has none of (docs/operations/node-update.md "Node
 	// packages"): a release's dl/ (hub.json's node_packages.url, else the hub build's update URL; "" none), through
 	// NodePackagesProxy (an http:// proxy, internal/netproxy; "" direct).
-	NodePackagesURL   string `json:"node_packages_url,omitempty"`
-	NodePackagesProxy string `json:"node_packages_proxy,omitempty"`
+	NodePackagesURL   string             `json:"node_packages_url,omitempty"`
+	NodePackagesProxy string             `json:"node_packages_proxy,omitempty"`
+	DevelopmentTarget *DevelopmentTarget `json:"development_target,omitempty"`
+	DevelopmentHold   bool               `json:"development_hold,omitempty"`
 	// LinkPingMS / LinkPingTimeoutMS: the heartbeats of the links and streams, hub.json's link section (0: the
 	// protocol's, link.PingEvery / PingTimeout; tests shorten them). The manager tells Persona Link them too.
 	LinkPingMS        int `json:"link_ping_ms,omitempty"`

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
@@ -425,7 +426,12 @@ func TestDevelopmentPlatformsFollowRegisteredMachines(t *testing.T) {
 		}
 		h.machines, h.byID[c.id] = append(h.machines, m), m
 	}
-	want := []string{own, "darwin-arm64", "linux-arm64"}
+	h.devices.assign = map[string]string{"mac": "remote"}
+	if h.entryOwner("mac") != "remote" || !h.upd.developmentAvailable() {
+		t.Fatal("a remote assistant owning a computer should allow built-in quiesce")
+	}
+	h.bus.current = map[string]*busConn{"remote": {presence: busPresence{ID: "remote", Role: bus.RoleManager, OS: "windows", Arch: "amd64"}}}
+	want := []string{own, "darwin-arm64", "linux-arm64", "windows-amd64"}
 	slices.Sort(want)
 	if got := h.upd.developmentPlatforms(); !slices.Equal(got, slices.Compact(want)) {
 		t.Fatalf("platforms %v, want %v", got, want)
@@ -649,6 +655,13 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 					for _, name := range update.ProgramNames {
 						os.WriteFile(filepath.Join(artifacts, name+"-"+runtime.GOOS+"-"+runtime.GOARCH+".gz"), gz(script), 0600)
 					}
+					manifest, err := update.BuildManifest(artifacts, update.Manifest{Version: input["version"].(string), Build: input["build"].(int64), Commit: strings.Repeat("b", 40)})
+					if err != nil {
+						return err
+					}
+					if err := update.Save(filepath.Join(artifacts, "manifest.json"), manifest); err != nil {
+						return err
+					}
 					response = map[string]any{"artifacts": artifacts, "ancestors": []string{h.build.Commit, strings.Repeat("b", 40)}}
 				case "backup":
 					response = update.DevelopmentBackup{ID: "snapshot-fixture", Retained: 3, Pruned: []string{"snapshot-old-fixture"}}
@@ -753,7 +766,19 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			// Simulate the next process's confirmation without touching a real service.
 			h.build.Number = pending.ToBuild
 			h.version = pending.ToVersion
+			h.build.Commit = pending.Development.Commit
+			if offered, _ := u.confirmedDevelopment(); offered != nil {
+				t.Fatal("packages advertised while the watchdog owns the adoption")
+			}
 			u.confirm(context.Background(), pending)
+			offered, held := u.confirmedDevelopment()
+			if offered == nil || held || offered.Commit != pending.Development.Commit {
+				t.Fatal("confirmed adoption was not offered", offered)
+			}
+			var hosted update.Manifest
+			if ok, err := update.Load(filepath.Join(u.packageStore(), offered.Version, "manifest.json"), &hosted); !ok || err != nil || hosted.Commit != offered.Commit || hosted.Files["plan9-arm"].BinarySHA256 == "" {
+				t.Fatal("confirmed packages did not survive staging cleanup", err)
+			}
 			if _, err := os.Stat(filepath.Join(nodes, "personad-"+runtime.GOOS+"-"+runtime.GOARCH)); err != nil {
 				t.Fatal("manual node package missing with automatic fleet updates off", err)
 			}
