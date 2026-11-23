@@ -289,25 +289,25 @@
         }
       }
     },
-    "The hub isn't transcribing right now: %@ refused the requests, maybe because speech recognition isn't turned on for the account, or its quota ran out or expired. Check in its console." : {
+    "The hub isn't transcribing right now: %@ refused the requests, maybe because speech recognition isn't turned on for the account, or its quota ran out or expired. The hub tries again by itself; if this goes on, check in its console." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The hub isn't transcribing right now: %1$@ refused the requests, maybe because speech recognition isn't turned on for the account, or its quota ran out or expired. Check in its console."
+            "value" : "The hub isn't transcribing right now: %1$@ refused the requests, maybe because speech recognition isn't turned on for the account, or its quota ran out or expired. The hub tries again by itself; if this goes on, check in its console."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "hub 暂时没有在转写：「%1$@」拒绝了请求，可能是语音识别资源未开通，或额度用完、已到期。请到它的控制台查看。"
+            "value" : "hub 暂时没有在转写：「%1$@」拒绝了请求，可能是语音识别资源未开通，或额度用完、已到期。hub 会自己重试；一直这样的话，请到它的控制台查看。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ハブは今、文字起こしできていません：「%1$@」がリクエストを拒否しました。音声認識が有効になっていないか、利用枠を使い切ったか期限が切れた可能性があります。サービスのコンソールで確認してください。"
+            "value" : "ハブは今、文字起こしできていません：「%1$@」がリクエストを拒否しました。音声認識が有効になっていないか、利用枠を使い切ったか期限が切れた可能性があります。ハブが自動で再試行します。続く場合は、サービスのコンソールで確認してください。"
           }
         }
       }

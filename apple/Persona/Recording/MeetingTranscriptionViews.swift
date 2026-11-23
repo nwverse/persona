@@ -111,7 +111,7 @@ nonisolated enum MeetingTranscriptionWords {
         let name = service ?? String(localized: "the speech service [Meeting Transcription]")
         switch kind {
         case .refused:
-            return String(localized: "The hub isn't transcribing right now: \(name) refused the requests, maybe because speech recognition isn't turned on for the account, or its quota ran out or expired. Check in its console.")
+            return String(localized: "The hub isn't transcribing right now: \(name) refused the requests, maybe because speech recognition isn't turned on for the account, or its quota ran out or expired. The hub tries again by itself; if this goes on, check in its console.")
         case .busy:
             return String(localized: "The hub isn't transcribing right now: \(name) is busy, maybe because too many sessions are running at once or its quota is used up. The hub tries again by itself; if this goes on, check what's left in its console.")
         case .unreachable:
