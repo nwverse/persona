@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // archiveTieAPI is an accountless search and issues API. It honors GitHub's page size, result window and timestamp filters.
@@ -209,7 +209,7 @@ func (f *archiveTieAPI) cursor() string {
 	return fmt.Sprintf(`{"since":%q}`, f.at.Add(-time.Minute).Format(time.RFC3339))
 }
 
-func addArchiveBatches(t *testing.T, seen map[string]bool, batches []connector.ChatBatch) {
+func addArchiveBatches(t *testing.T, seen map[string]bool, batches []connectorwire.ChatBatch) {
 	t.Helper()
 	for _, batch := range batches {
 		for _, message := range batch.Messages {

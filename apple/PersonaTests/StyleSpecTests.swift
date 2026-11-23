@@ -74,6 +74,43 @@ struct StyleSpecTests {
         #expect(found.isEmpty, "white on the accent under 3.5:1: \(found)")
     }
 
+    @Test func healthRingsHaveDistinctHuesAndReadableActivityLabels() {
+        func hue(_ hex: UInt32) -> Double {
+            let color = UIColor(hex: hex)
+            var h: CGFloat = 0
+            color.getHue(&h, saturation: nil, brightness: nil, alpha: nil)
+            return Double(h) * 360
+        }
+        for hex in [Theme.Health.waterHex.light, Theme.Health.waterHex.dark,
+                    Theme.Health.proteinHex.light, Theme.Health.proteinHex.dark] {
+            for activity: UInt32 in [0xFA114F, 0xA6FF00, 0x00FFF6] {
+                let distance = abs(hue(hex) - hue(activity))
+                #expect(min(distance, 360 - distance) >= 25, "intake hues must stay apart from Activity rings")
+            }
+        }
+        for ui in [UIUserInterfaceStyle.light, .dark] {
+            for color in [Theme.Health.move, Theme.Health.exercise, Theme.Health.stand] {
+                #expect(Self.contrast(color, Theme.Health.activityBackground, ui) >= 4.5)
+            }
+        }
+    }
+
+    @Test func healthWidgetsShareIntakeColorsAndKeepActivityNeutral() {
+        for ui in [UIUserInterfaceStyle.light, .dark] {
+            let water = Self.rgb(HomeWidgetTokens.water, ui), appWater = Self.rgb(Theme.Health.water, ui)
+            let protein = Self.rgb(HomeWidgetTokens.protein, ui), appProtein = Self.rgb(Theme.Health.protein, ui)
+            #expect(water.0 == appWater.0 && water.1 == appWater.1 && water.2 == appWater.2)
+            #expect(protein.0 == appProtein.0 && protein.1 == appProtein.1 && protein.2 == appProtein.2)
+            let neutral = Self.rgb(HomeWidgetTokens.activity, ui)
+            #expect(abs(neutral.0 - neutral.1) < 0.02 && abs(neutral.1 - neutral.2) < 0.03)
+            #expect(Self.contrast(HomeWidgetTokens.healthTodaySteps, HomeWidgetTokens.surface, ui) >= 4.5)
+            var hue: CGFloat = 0
+            UIColor(HomeWidgetTokens.healthTodaySteps).resolvedColor(with: UITraitCollection(userInterfaceStyle: ui))
+                .getHue(&hue, saturation: nil, brightness: nil, alpha: nil)
+            #expect(hue > 0.6 && hue < 0.85, "steps stays purple, clear of Move's red")
+        }
+    }
+
     /// Someday's swipe on a To-dos row (#10465): white words on `Theme.somedayTint` at 4.5:1 or better, light and dark
     /// (DESIGN_SYSTEM 2.1).
     @Test func whiteOnSomeday() {

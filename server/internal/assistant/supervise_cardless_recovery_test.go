@@ -75,9 +75,31 @@ func restartCardlessClaim(t *testing.T, store Store) (*Service, *fakeHub) {
 	return s, f
 }
 
+// cardlessRuns holds, for each manager runCardlessManager started, what cancels its run context.
+var cardlessRuns sync.Map
+
+// runCardlessManager gives s a run context that stopCardlessManager cancels, as a manager's Run has. A digest timer
+// reads the run context when it fires (sendDigest(s.runCtx())). Without one of its own, a timer that fired just
+// before the stop read context.Background, waited for digestMu, and digested after the stop. The store's failure
+// was cleared by then, so it spent the claim the next manager had to recover (#13631). Call it before the watch
+// whose failure the restart recovers.
+func runCardlessManager(t *testing.T, s *Service) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.running.Store(&ctx)
+	cardlessRuns.Store(s, cancel)
+	t.Cleanup(func() {
+		cardlessRuns.Delete(s)
+		cancel()
+	})
+}
+
 // A restart ends the old manager before the failed store recovers. Its retry timer must not race the new manager
 // and turn this process-crash fixture into two writers sharing one outbox.
 func stopCardlessManager(s *Service) {
+	if stop, ok := cardlessRuns.LoadAndDelete(s); ok {
+		stop.(context.CancelFunc)() // what a timer that already fired read
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	s.running.Store(&ctx)
@@ -113,6 +135,23 @@ func deliverCardlessDigest(s *Service, list []superviseSignal) bool {
 	return s.deliverDigest(ctx, s.settings(ctx), "conv1", list, "", time.Now(), time.Time{})
 }
 
+// queueAndDeliverCardlessDigest queues g and delivers it at once, both under digestMu. The real timer still runs.
+// It cannot see g before this delivery: g's queueing arms the timer, and an immediate claim pending beside it fires the
+// timer within the short gather (#13631). A signal with g's fingerprint that a digest delivered earlier still
+// deduplicates g here, so a caller that needs g's first delivery keeps the digest quiet until then (#13877).
+func queueAndDeliverCardlessDigest(s *Service, g superviseSignal) bool {
+	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+	s.queueSignal(g)
+	b.routingMu.RLock()
+	defer b.routingMu.RUnlock()
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	ctx := context.Background()
+	return s.deliverDigest(ctx, s.settings(ctx), "conv1", []superviseSignal{g}, "", time.Now(), time.Time{})
+}
+
 func cardlessNotices(f *fakeHub) int {
 	count := 0
 	for _, text := range f.notices() {
@@ -145,6 +184,7 @@ func TestCardlessClaimRecoveredPendingDeliversOnce(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			runCardlessManager(t, s)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			store.mu.Lock()
@@ -219,6 +259,7 @@ func TestCardlessClaimRecoveryRechecksRoundUnderWriteLock(t *testing.T) {
 	t.Cleanup(func() { stopCardlessManager(s) })
 	holdDigest(s)
 	waitsForReview(t, s, f, todo.ID, "Ready for review.")
+	runCardlessManager(t, s)
 	store.mu.Lock()
 	store.failMarker = true
 	store.mu.Unlock()
@@ -392,8 +433,15 @@ func TestCardlessClaimRetrySurvivesDigestAcknowledgment(t *testing.T) {
 			store := &cardlessClaimStore{DB: taskRecoveryDatabase(t)}
 			s, f, todo := newSupervisedServiceOn(t, store)
 			t.Cleanup(func() { stopCardlessManager(s) })
+			if mode == "deduplicated_sibling" {
+				// The sibling's first delivery below must be the first of its fingerprint, which the review that
+				// waitsForReview leaves pending shares (a review's key is not part of it). The claim is immediate, so
+				// the timer could deliver that review first; no digest runs until the sibling went (#13877).
+				quietDigest(s)
+			}
 			holdDigest(s)
 			waitsForReview(t, s, f, todo.ID, "Ready for review.")
+			runCardlessManager(t, s)
 			store.mu.Lock()
 			store.failMarker = true
 			store.mu.Unlock()
@@ -402,13 +450,13 @@ func TestCardlessClaimRetrySurvivesDigestAcknowledgment(t *testing.T) {
 			list := []superviseSignal{g}
 			if mode != "all_retry" {
 				sibling := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "review-sibling", At: time.Now()}
-				s.queueSignal(sibling)
 				if mode == "deduplicated_sibling" {
-					if !deliverCardlessDigest(s, []superviseSignal{sibling}) {
+					if !queueAndDeliverCardlessDigest(s, sibling) {
 						t.Fatal("the sibling's first real delivery failed")
 					}
-					s.queueSignal(sibling)
+					rearmDigest(s) // the real timer races the delivery under test, as in the other modes
 				}
+				s.queueSignal(sibling)
 				list = append(list, sibling)
 			}
 			deliverCardlessDigest(s, list)
@@ -457,6 +505,7 @@ func TestCardlessClaimOutboxFailureRetriesAfterRestart(t *testing.T) {
 	t.Cleanup(func() { stopCardlessManager(s) })
 	holdDigest(s)
 	waitsForReview(t, s, f, todo.ID, "Ready for review.")
+	runCardlessManager(t, s)
 	store.mu.Lock()
 	store.failOutbox = true
 	store.mu.Unlock()
@@ -467,6 +516,7 @@ func TestCardlessClaimOutboxFailureRetriesAfterRestart(t *testing.T) {
 	store.failOutbox = false
 	store.mu.Unlock()
 	again, againHub := restartedOn(t, store)
+	quietDigest(again)
 	t.Cleanup(func() { stopCardlessManager(again) })
 	againHub.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusIdle, State: "idle"})
 	holdDigest(again)
@@ -482,6 +532,7 @@ func TestCardlessClaimMarkerFailureKeepsRecoveryRecord(t *testing.T) {
 	t.Cleanup(func() { stopCardlessManager(s) })
 	holdDigest(s)
 	waitsForReview(t, s, f, todo.ID, "Ready for review.")
+	runCardlessManager(t, s)
 	store.mu.Lock()
 	store.failMarker = true
 	store.mu.Unlock()
@@ -491,6 +542,7 @@ func TestCardlessClaimMarkerFailureKeepsRecoveryRecord(t *testing.T) {
 	store.failMarker = false
 	store.mu.Unlock()
 	again, _ := restartedOn(t, store)
+	quietDigest(again)
 	t.Cleanup(func() { stopCardlessManager(again) })
 	holdDigest(again)
 	if err := again.ensureTodosLoaded(context.Background()); err != nil {

@@ -202,6 +202,7 @@ func (e *everyMinute) Allow(now time.Time) bool {
 // it on to its center (memberForward).
 func (h *Hub) busRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+bus.Path, h.serveBus)
+	mux.HandleFunc("GET "+devicewire.DevelopmentPackagesPath+"/{commit}/{version}/{file}", h.serveDevelopmentPackage)
 	h.relayRoutes(mux) // the manager's second channel: the connections relayed to it (devices_relay.go)
 }
 

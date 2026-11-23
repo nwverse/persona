@@ -56,6 +56,11 @@ func configureWorld(t *testing.T, code int) (*botWorld, *configureStore, *config
 	h.store = st
 	f := &configurePlatform{code: code}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A Persona node on the machine running these tests probes this port too (GET /, node/ports.go): answered 404,
+		// it is neither a platform request (configurePoll compares their count) nor an unexpected one.
+		if ignoreProbe(w, r) {
+			return
+		}
 		f.mu.Lock()
 		f.requests++
 		code, publishCode, reject, before, beforeInfo := f.code, f.publishCode, f.reject, f.beforeConfig, f.beforeInfo
@@ -103,6 +108,30 @@ func configureWorld(t *testing.T, code int) (*botWorld, *configureStore, *config
 	mux := http.NewServeMux()
 	h.botRoutes(mux)
 	return &botWorld{h: h, mux: mux}, st, f
+}
+
+// The fake platform answers a local node's port probe 404 without counting it or failing the test: the probe landed
+// on it during TestFeishuConfigureDiagnosticLifecycle/rejected_replacement in about 1 run in 15 on a machine with a
+// node, as "unexpected platform request: GET /".
+func TestConfigurePlatformIgnoresPortProbes(t *testing.T) {
+	_, _, f := configureWorld(t, 230002)
+	req, err := http.NewRequest(http.MethodGet, "https://open.feishu.cn/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("User-Agent", "persona-ports") // node.portProbeAgent
+	req.Header.Set("Accept", "text/html")
+	res, err := http.DefaultClient.Do(req) // configureWorld routes it to the fake platform
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	f.mu.Lock()
+	requests := f.requests
+	f.mu.Unlock()
+	if res.StatusCode != http.StatusNotFound || requests != 0 {
+		t.Fatalf("a port probe: HTTP %d, counted %d platform requests", res.StatusCode, requests)
+	}
 }
 
 func configureCredentials(t *testing.T, w *botWorld, id, secret, domain string) map[string]any {

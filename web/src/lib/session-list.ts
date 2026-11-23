@@ -64,6 +64,9 @@ export interface ListCounts {
   just_finished?: number;
   /** How many of `state.needs_you` only wait on held non-interrupting cards (P1/P2) for push grading. */
   held_needs?: number;
+  /** How many of `state.needs_you` only wait on cards a task's supervisor holds (lib/supervisor-held.ts), apart from
+   *  `held_needs`: the lists count them Working, in neither Needs you nor the badge. Absent from an older hub. */
+  supervisor_held?: number;
   revision: string;
 }
 export interface ListPage<T> {
@@ -187,9 +190,11 @@ export class SessionList<T> {
   usesPageCounts(): boolean { return this.pageCounts(); }
 
   /** Give an already shared root the same stable presentation as its filtered copies, without replacing its baseline. */
-  setPresentation(presentation: SessionListPresentation<T>): void {
+  setPresentation(presentation: SessionListPresentation<T> | undefined): void {
     if (this.presentation === presentation) return;
     this.presentation = presentation;
+    // another order starts from the transport's rows: what the last one retained says nothing of it
+    this.presented = [];
     if (!this.snapshot.loaded) return;
     const rows = this.snapshot.supported === false ? this.complete(this.snapshot.rows) : this.visible();
     this.publish({ rows });

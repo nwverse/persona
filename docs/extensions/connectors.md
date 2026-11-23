@@ -34,7 +34,7 @@ does not admit every chat or watch any document; the connector's `doc` Inbox ite
 
 ### Interfaces: one manifest, dispatched by declaration
 
-`server/internal/connector/connector.go`: `Connector` has `ID()`, `Name()`, `Manifest()`. The manifest (`manifest.go`, since v2 · V1) declares what it can do in one place:
+`server/internal/connectorwire/connector.go`: `Connector` has `ID()`, `Name()`, `Manifest()`. The manifest (`connectorwire/manifest.go`, since v2 · V1) declares what it can do in one place. These interfaces and types are the connector SPI: they live in the contract package `connectorwire`, which `internal/connector` aliases, so a connector built as a module needs only the contract and the leaf libraries (#13936). The framework that runs connectors (the registry, the gate, `As` and `Check`) stays in `internal/connector`:
 
 | Manifest field | Meaning |
 | --- | --- |
@@ -236,7 +236,7 @@ with who did it (#5281); never a credential or a typed value. The actions and th
 3. Writes must be `Actions`; the `Describe` card must say who will see the result.
 4. `Status` answers only from memory (queried on every tool listing); errors get a one-sentence `Error`, and self-service fixes get a `Guide`.
 5. No body text, phone numbers or tokens in logs/errors.
-6. For external services, embed `connector.Egress` (`connector/egress.go`) in config to get a `proxy` key (`http://[username:password@]host:port`, empty means direct).
+6. For external services, embed `netproxy.Egress` (`netproxy/egress.go`, also named `connector.Egress`) in config to get a `proxy` key (`http://[username:password@]host:port`, empty means direct).
    Build every HTTP client with `Egress.HTTPClient`: use the proxy when configured, direct otherwise; invalid config errors rather than silently connecting directly. This is how `github.proxy` works (#1106);
    proxy-address parsing lives in `netproxy`, also used by `google.proxy`. Not yet wired: Telegram (MTProto, not HTTP), subprocess / third-party connectors (proxy must be passed to the program), see #1106.
 

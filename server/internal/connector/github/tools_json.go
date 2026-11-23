@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 )
 
-// The read tools' answers as JSON, for source subscriptions (connector.ReadJSON, docs/extensions/subscriptions.md
+// The read tools' answers as JSON, for source subscriptions (connectorwire.ReadJSON, docs/extensions/subscriptions.md
 // "Existing connectors"): an object with one top-level list, whose items carry the names a recipe maps (id, thread,
 // title, author, time, body, link). The models read the text (tools.go); these are the same answers.
 

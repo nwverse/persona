@@ -163,12 +163,16 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 }
 
 // transferTarget refuses a supervisor a task may not be moved to: one that is neither the main conversation nor a
-// current lead, or a lead whose runtime cannot receive supervision policy. The main conversation always takes one.
+// current lead, a lead validateSupervisorLead turns down (a reporting-only direction), or a lead whose runtime cannot
+// receive supervision policy. The main conversation always takes one.
 func (s *Service) transferTarget(ctx context.Context, cfg Settings, lead string) error {
-	if lead != cfg.Main && !s.isLeader(ctx, lead) {
-		return fmt.Errorf("%s is not a leader conversation (GET /api/v1/assistant/leaders lists them)", lead)
+	if lead == cfg.Main {
+		return nil
 	}
-	if lead != cfg.Main && s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, lead) {
+	if err := s.validateSupervisorLead(ctx, lead); err != nil {
+		return err
+	}
+	if s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, lead) {
 		return errors.New("the target lead's runtime cannot receive supervision policy")
 	}
 	return nil
@@ -309,7 +313,14 @@ func (s *Service) agentRouteRoutes() {
 		}
 		todo, made, err := s.putAgentUnder(r.Context(), r.PathValue("mid"), r.PathValue("sid"), strings.TrimSpace(in.Supervisor), in.Title)
 		if err != nil {
-			apierr.Write(w, cond(errors.Is(err, errAgentNotFound), http.StatusNotFound, http.StatusConflict), err)
+			status := http.StatusConflict
+			switch {
+			case errors.Is(err, errAgentNotFound):
+				status = http.StatusNotFound
+			case errors.Is(err, errDirectionUnavailable):
+				status = http.StatusServiceUnavailable
+			}
+			apierr.Write(w, status, err)
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"todo": todo, "made": made})

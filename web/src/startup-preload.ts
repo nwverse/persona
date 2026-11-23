@@ -426,7 +426,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // sections), all in the first screen's static closure; the canvas itself is a chunk of its own (ViewBody10.tsx).
 // Main had 1,583 B of room; the budget stays.
 // #11040: main had 29 B of ja room. The voice call's UI (its bar, the thread's captions, the ended row and the dialog on
-// why a call cannot start: views/chat/voice/VoiceCall.tsx, loaded with the call's code) and 97 of the 101 voice strings
+// why a call cannot start: modules/voice/chat/VoiceCall.tsx, loaded with the call's code) and 97 of the 101 voice strings
 // left the first screen, and startup entries only lazy chunks read (chat-navrail but target_failed, the
 // chat-interactions fields and input toggle, assistant-history.sidebar, agentspage.new_agent) went to the rest of the
 // catalog: ja 482,497 B to 477,736 B (en 479,378 B to 474,739 B, zh-Hans 480,224 B to 475,592 B), measured in one
@@ -541,7 +541,18 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // 285 B in each language, measured in one environment against main c04291e493 after merging it (ja 484,098 B to
 // 484,383 B; en 481,251 B to 481,536 B, zh-Hans 481,974 B to 482,259 B). Main had 108 B of room, so the budget is
 // main's 484,206 B ceiling plus those 285 B.
-export const FIRST_SCREEN_BUDGET = 484_491;
+// #13846: the module host serves the chat slots, Settings categories and card renderers (core/ChatSlots.tsx, the
+// served fields and the hub flag rule in core/module-host.ts, their places in views/chat/ChatView.tsx, Composer.tsx and
+// Interactions.tsx). 799 B in ja, measured in one environment against main 7be9a71cc (ja 484,445 B to 485,244 B; en
+// 481,786 B to 482,585 B, zh-Hans 482,421 B to 483,220 B). Main had 46 B of room, so the budget is main's 484,491 B
+// ceiling plus those 799 B. The web half of #13431 takes voice's first-screen parts off with the move into a module.
+// #13803: mount-once long-chat windowing adds 200 B to the ja first screen, measured in one environment against main at
+// 464c1b17b3 (ja 484,433 B to 484,633 B; en 481,792 B to 481,992 B, zh-Hans 482,418 B to 482,618 B). The near-viewport
+// observer, searchable estimated placeholders and synchronous scroll compensation start with the chat; rich bodies stay
+// deferred. The budget moves by the same 200 B, keeping the 58 B of room main had. Merged with #13846, the measured
+// first screens are ja 485,259 B, en 482,600 B and zh-Hans 483,235 B; the budget keeps #13846's 46 B of room rather
+// than adding the whole separate allowance again.
+export const FIRST_SCREEN_BUDGET = 485_305;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -771,7 +782,13 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // the kept height and the lazy registration of ViewBody10.tsx (whose chunk name it embeds), and the launcher sections
 // (ExtensionView.tsx's chunk) gain the owner's context provider; the canvas itself (about 8 KB) loads on intent with
 // the first view that has a graph. Main had 1,437 B of room; the budget stays.
-export const IDLE_TIER_BUDGET = 46_063;
+// And 12 B for the Agents list's Filter switch (#13727): the idle Palette's "Filter Agents list" row (palette/
+// SavedSearchesDialog.tsx) draws only while Settings > Agents has the list's Filter on (useShowFilter), which is the
+// tier's whole growth: this tree merged with main measured 46,065 B against the 46,063 B budget, 2 B over. 10 B of room on top.
+// And 26 B for the stalled-background hint (#13744): the idle sidebar rows (SidebarRows.tsx) draw "Background commands
+// quiet for N h" under a Working row whose background work has stalled (ui/BackgroundStallHint.tsx). Main 7b023aa70 with
+// #13842 sends 46,091 B at idle, 16 B over; 10 B of room on top.
+export const IDLE_TIER_BUDGET = 46_101;
 
 const gzip = promisify(gzipCompress);
 

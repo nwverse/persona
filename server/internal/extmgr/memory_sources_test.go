@@ -72,10 +72,11 @@ func TestMemorySourceOutlets(t *testing.T) {
 	master := h.cfg.Token
 	ctx := context.Background()
 
+	// Prompt ids of its own: the registry refuses an id another installed extension contributes (#13649).
 	plain := declarativePackage(t, `{"manifest_version": 1, "id": "qa-notes", "name": "QA Notes", "version": "1.0.0", "contributes": {
-		"prompts": [{"id": "about", "kind": "instructions", "file": "assistant/about.md"},
-			{"id": "projects", "kind": "project_context", "source": "data", "dir": "agent/projects"},
-			{"id": "inbox", "kind": "inbox_context", "file": "inbox/context.md"}]}}`)
+		"prompts": [{"id": "notes-about", "kind": "instructions", "file": "assistant/about.md"},
+			{"id": "notes-projects", "kind": "project_context", "source": "data", "dir": "agent/projects"},
+			{"id": "notes-inbox", "kind": "inbox_context", "file": "inbox/context.md"}]}}`)
 	_ = os.MkdirAll(filepath.Join(plain, "assistant"), 0o755)
 	_ = os.WriteFile(filepath.Join(plain, "assistant", "about.md"), []byte("qa-notes-outlet: notes go in the weekly file.\n"), 0o644)
 	installForTest(t, h, plain)
