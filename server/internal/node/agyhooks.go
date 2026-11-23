@@ -16,7 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeclient"
 )
 
-// Persona's own Antigravity CLI hooks (docs/integrations/engines.md "Antigravity CLI panes", #13729), the way Moshi's
+// Persona's own Antigravity CLI hooks (docs/integrations/engines.md "Capabilities by engine", #13729), the way Moshi's
 // hook does it: two report-only entries in agy's global hooks file (PreInvocation names the conversation a pane is in,
 // Stop ends a turn) that tell the node which conversation runs in which terminal. The pane comes from the
 // environment the engine gave the process (nodeclient.HookPane), so this works under any engine and without herdr's
