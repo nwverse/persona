@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
@@ -95,7 +96,7 @@ func TestTokenWaitDuringForcedRefresh(t *testing.T) {
 			unblock()
 			err := <-leader
 			if mode == "failure" {
-				var e *feishubot.APIError
+				var e *botcard.APIError
 				if !errors.As(err, &e) || e.Code != 10001 {
 					t.Fatalf("leader error = %v", err)
 				}
@@ -324,7 +325,7 @@ func TestTokenWaitLatestAfterWake(t *testing.T) {
 			unblockFirst()
 			awaitTokenSignal(t, ctx.woke)
 			if err := <-leader; initialFailure {
-				var e *feishubot.APIError
+				var e *botcard.APIError
 				if !errors.As(err, &e) || e.Code != 10001 {
 					t.Fatalf("leader error = %v", err)
 				}

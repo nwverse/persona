@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -152,8 +153,8 @@ func (f *fakeUUIDAPI) uuids() []string {
 // Every send/reply the bot's chat path makes carries a stable key: the reply card is deterministic per content, two
 // cards of one turn get two keys, the rich-text fallback gets its own key, and unanchored sends never repeat a key.
 func TestBotPostJSONUUIDs(t *testing.T) {
-	cardA := feishubot.NewCard("t", "green", "a").Markdown("card-a").JSON()
-	cardB := feishubot.NewCard("t", "green", "b").Markdown("card-b").JSON()
+	cardA := botcard.NewCard("t", "green", "a").Markdown("card-a").JSON()
+	cardB := botcard.NewCard("t", "green", "b").Markdown("card-b").JSON()
 
 	t.Run("reply cards are deterministic and content-distinct", func(t *testing.T) {
 		f := newFakeUUIDAPI(t)
@@ -305,7 +306,7 @@ func TestBotPostJSONKeyed(t *testing.T) {
 	f := newFakeUUIDAPI(t)
 	h := newTestManager(t)
 	api := feishubot.New("cli", "sec", f.srv.URL)
-	card := feishubot.NewCard("t", "green", "a").Markdown("card-a").JSON()
+	card := botcard.NewCard("t", "green", "a").Markdown("card-a").JSON()
 	for range [2]int{} {
 		if _, err := h.botPostJSONKeyed(context.Background(), api, "chat", "", card, "fb", "mcafe00a10", false); err != nil {
 			t.Fatal(err)
@@ -348,7 +349,7 @@ func TestBotPostJSONKeyedReply(t *testing.T) {
 	f := newFakeUUIDAPI(t)
 	h := newTestManager(t)
 	api := feishubot.New("cli", "sec", f.srv.URL)
-	card := feishubot.NewCard("t", "green", "a").Markdown("card-a").JSON()
+	card := botcard.NewCard("t", "green", "a").Markdown("card-a").JSON()
 	for _, key := range []string{"k1", "k2", ""} {
 		if _, err := h.botPostJSONKeyed(context.Background(), api, "chat", "om_parent", card, "fb", key, true); err != nil {
 			t.Fatal(err)
@@ -371,12 +372,12 @@ func TestChannelFeishuNoDetourReplyToGoneParentFails(t *testing.T) {
 			const text = "reply to a gone parent 5279"
 			w.api.inChat("om_gone", "oc_p2p")
 			err := w.sendErr(assistantwire.FeishuText, map[string]any{"text": text, "reply_to": "om_gone", "in_thread": inThread, "no_detour": true})
-			if err == nil || !feishubot.MessageGone(err) {
+			if err == nil || !botcard.MessageGone(err) {
 				t.Fatalf("%d thread=%v: error %v, want one MessageGone knows", code, inThread, err)
 			}
 			w.api.find(t, "/messages/om_gone/reply", text) // attempted
-			card := feishubot.NewCard("t", "green", "a").Markdown("c").JSON()
-			if err := w.sendErr(assistantwire.FeishuPost, map[string]any{"card": card, "reply_to": "om_gone", "in_thread": inThread, "no_detour": true}); err == nil || !feishubot.MessageGone(err) {
+			card := botcard.NewCard("t", "green", "a").Markdown("c").JSON()
+			if err := w.sendErr(assistantwire.FeishuPost, map[string]any{"card": card, "reply_to": "om_gone", "in_thread": inThread, "no_detour": true}); err == nil || !botcard.MessageGone(err) {
 				t.Fatalf("%d thread=%v: card error %v", code, inThread, err)
 			}
 			if n := w.api.count("POST /open-apis/im/v1/messages "); n != 0 {
@@ -415,7 +416,7 @@ func TestChannelFeishuCallerKeyIsChecked(t *testing.T) {
 	w.pair(t)
 	w.api.inChat("om_5279c", "oc_p2p")
 	const text = "key check 5279c"
-	card := feishubot.NewCard("t", "green", "a").Markdown("card-c").JSON()
+	card := botcard.NewCard("t", "green", "a").Markdown("card-c").JSON()
 	for _, k := range []string{"tp:good1", "tp:你好", strings.Repeat("z", 90)} {
 		w.feishu(t, assistantwire.FeishuText, map[string]any{"text": text, "reply_to": "om_5279c", "uuid": k})
 		w.feishu(t, assistantwire.FeishuPost, map[string]any{"card": card, "reply_to": "om_5279c", "uuid": k})
