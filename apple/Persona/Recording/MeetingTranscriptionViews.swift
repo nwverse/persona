@@ -57,14 +57,43 @@ nonisolated enum MeetingTranscriptionWords {
 
     /// Why the Live box shows the phone's own lines in a hub-mode meeting, once it has fallen back
     /// (`MeetingTranscriptionRule.Shown.fellBack`): waiting for Wi-Fi, the hub stopped for this meeting, or anything else.
-    static func fallback(_ meeting: MeetingTranscription.Meeting) -> String {
+    /// `phoneCannot`: this iPhone can't transcribe the meeting either (`phoneCannot(_:locale:fellBack:)` says why under
+    /// it), so the notice says only what the hub is at, and never that this iPhone's transcript shows (#13385).
+    static func fallback(_ meeting: MeetingTranscription.Meeting, phoneCannot: Bool = false) -> String {
         if meeting.socket == .waitingForWiFi {
-            return String(localized: "Waiting for Wi-Fi to send the audio to the hub. Showing this iPhone's transcript.")
+            return phoneCannot ? String(localized: "Waiting for Wi-Fi to send the audio to the hub.")
+                : String(localized: "Waiting for Wi-Fi to send the audio to the hub. Showing this iPhone's transcript.")
         }
         if meeting.stopped != nil {
-            return String(localized: "The hub stopped transcribing this meeting. Showing this iPhone's transcript.")
+            return phoneCannot ? String(localized: "The hub stopped transcribing this meeting.")
+                : String(localized: "The hub stopped transcribing this meeting. Showing this iPhone's transcript.")
         }
-        return String(localized: "The hub isn't transcribing right now. Showing this iPhone's transcript.")
+        return phoneCannot ? String(localized: "The hub isn't transcribing right now.")
+            : String(localized: "The hub isn't transcribing right now. Showing this iPhone's transcript.")
+    }
+
+    /// Why this iPhone shows no lines of its own for a meeting it can't transcribe (`RecordingTranscription.cannot`,
+    /// #13385): which language and what happens next. `locale`: the meeting's language (`RecordingEntry.locale`), the one
+    /// it is transcribed in or not at all; `fellBack`: a hub-mode meeting whose hub isn't transcribing either, whose
+    /// lines come back once it does.
+    static func phoneCannot(_ error: RecordingSpeechError, locale: String, fellBack: Bool, interface: Locale = .interface) -> String {
+        switch error {
+        case .unsupportedLanguage:
+            let language = languageName(locale, in: interface)
+            return fellBack
+                ? String(localized: "This iPhone can't transcribe \(language) on the device either, so no lines show until the hub transcribes again.")
+                : String(localized: "This iPhone can't transcribe \(language) on the device, so it shows no lines for this meeting.")
+        case .needsNewerSystem where fellBack:
+            return String(localized: "This iPhone needs iOS 26 or later to transcribe on the device, so no lines show until the hub transcribes again.")
+        default:
+            return error.errorDescription ?? ""
+        }
+    }
+
+    /// A recording language's name in the interface language ("Chinese" for zh-CN), as the language pickers name it.
+    static func languageName(_ locale: String, in interface: Locale = .interface) -> String {
+        guard let code = Locale(identifier: locale).language.languageCode?.identifier else { return locale }
+        return interface.localizedString(forLanguageCode: code) ?? locale
     }
 
     /// The recording page's lines for its transcription (`RecordingTranscriptionFacts`): nil when there is nothing to say
@@ -287,20 +316,28 @@ struct MeetingGlossaryPage: View {
 
 /// The notice that hub transcription fell back to this iPhone (#3862 phase 5): why, in words
 /// (`MeetingTranscriptionWords.fallback`), with the phone's mark in the caution color. Under the Live box's title, under
-/// the Highlights card's (phase 2b) and atop the meeting's transcript.
+/// the Highlights card's (phase 2b) and atop the meeting's transcript. When this iPhone can't transcribe the meeting
+/// either (#13385), why, on a line of its own; with no fallback, the same notice says only that.
 struct MeetingTranscriptionFallbackNotice: View {
     var words: String
+    /// Why this iPhone can't transcribe the meeting either, on a line of its own under `words` (#13385).
+    var phone: String? = nil
+    /// `meeting-phone-cannot-transcribe` where `words` itself says why this iPhone can't (no fallback, #13385).
+    var identifier = "meeting-transcription-fallback"
 
     var body: some View {
         Label {
-            Text(words).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: Theme.Space.lines) {
+                Text(words).fixedSize(horizontal: false, vertical: true)
+                if let phone { Text(phone).fixedSize(horizontal: false, vertical: true) }
+            }
         } icon: {
             ThemedIcon(Theme.Icon.phone).foregroundStyle(Theme.caution)
         }
         .font(Theme.Font.caption)
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("meeting-transcription-fallback")
+        .accessibilityIdentifier(identifier)
     }
 }
 
@@ -310,11 +347,15 @@ struct MeetingTranscriptionFallbackNotice: View {
 struct MeetingTranscriptionFallbackRow: View {
     var id: UUID
     @State private var transcription = MeetingTranscription.shared
+    @State private var phone = RecordingTranscription.shared
 
     var body: some View {
         // Whether it fell back doesn't hang on the role (only which lines show does).
         if transcription.shown(id, role: .off).fellBack {
-            MeetingTranscriptionFallbackNotice(words: MeetingTranscriptionWords.fallback(transcription.meeting(id)))
+            let cannot = phone.cannot[id]
+            MeetingTranscriptionFallbackNotice(
+                words: MeetingTranscriptionWords.fallback(transcription.meeting(id), phoneCannot: cannot != nil),
+                phone: cannot.map { MeetingTranscriptionWords.phoneCannot($0, locale: RecordingLibrary.shared.entry(id)?.locale ?? RecordingDefaults.locale, fellBack: true) })
         }
     }
 }
