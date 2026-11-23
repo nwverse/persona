@@ -906,26 +906,29 @@ func TestAgyPaneKeepsCursorTerminalBehavior(t *testing.T) {
 
 func TestAgySubagentDetection(t *testing.T) {
 	const (
-		parentID = "11111111-2222-4333-8444-555555555555"
-		subSys   = "aaaaaaaa-1111-4222-8333-444444444441"
-		subNoSrc = "aaaaaaaa-1111-4222-8333-444444444442"
-		subCort  = "aaaaaaaa-1111-4222-8333-444444444443"
-		subUserS = "aaaaaaaa-1111-4222-8333-444444444444"
-		subOther = "aaaaaaaa-1111-4222-8333-444444444445"
-		normExp  = "bbbbbbbb-1111-4222-8333-444444444441"
-		normEmp  = "bbbbbbbb-1111-4222-8333-444444444442"
-		fullSub  = "cccccccc-1111-4222-8333-444444444441"
-		emptyID  = "dddddddd-1111-4222-8333-444444444441"
-		partID   = "dddddddd-1111-4222-8333-444444444442"
-		missID   = "dddddddd-1111-4222-8333-444444444443"
-		unrID    = "dddddddd-1111-4222-8333-444444444444"
+		parentID  = "11111111-2222-4333-8444-555555555555"
+		subSys    = "aaaaaaaa-1111-4222-8333-444444444441"
+		subNoSrc  = "aaaaaaaa-1111-4222-8333-444444444442"
+		subCort   = "aaaaaaaa-1111-4222-8333-444444444443"
+		wakeUserS = "aaaaaaaa-1111-4222-8333-444444444444"
+		subOther  = "aaaaaaaa-1111-4222-8333-444444444445"
+		errSys    = "aaaaaaaa-1111-4222-8333-444444444446"
+		normExp   = "bbbbbbbb-1111-4222-8333-444444444441"
+		normEmp   = "bbbbbbbb-1111-4222-8333-444444444442"
+		fullSub   = "cccccccc-1111-4222-8333-444444444441"
+		emptyID   = "dddddddd-1111-4222-8333-444444444441"
+		partID    = "dddddddd-1111-4222-8333-444444444442"
+		missID    = "dddddddd-1111-4222-8333-444444444443"
+		unrID     = "dddddddd-1111-4222-8333-444444444444"
 	)
 	root := t.TempDir()
 	agyTestFile(t, root, subSys, `{"step_index":0,"type":"SYSTEM_MESSAGE","source":"SYSTEM","content":"Subagent prompt"}`+"\n")
 	agyTestFile(t, root, subNoSrc, `{"step_index":0,"type":"SYSTEM_MESSAGE","content":"Subagent prompt"}`+"\n")
 	agyTestFile(t, root, subCort, `{"step_index":0,"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE","source":"SYSTEM","content":"Subagent prompt"}`+"\n")
-	agyTestFile(t, root, subUserS, `{"step_index":0,"type":"USER_INPUT","source":"SYSTEM","content":"Injected prompt"}`+"\n")
+	agyTestFile(t, root, wakeUserS, `{"step_index":0,"type":"USER_INPUT","source":"SYSTEM","content":"Background wake input"}`+"\n"+
+		`{"step_index":1,"type":"PLANNER_RESPONSE","content":"Wake handled"}`+"\n")
 	agyTestFile(t, root, subOther, `{"step_index":0,"type":"USER_INPUT","source":"SUBAGENT","content":"Delegated prompt"}`+"\n")
+	agyTestFile(t, root, errSys, `{"step_index":0,"type":"ERROR_MESSAGE","source":"SYSTEM","error":"temporary error"}`+"\n")
 	agyTestFile(t, root, normExp, `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":"User prompt"}`+"\n")
 	agyTestFile(t, root, normEmp, `{"step_index":0,"type":"USER_INPUT","content":"Minimal fixture"}`+"\n")
 	agyTestFile(t, root, emptyID, "")
@@ -944,7 +947,8 @@ func TestAgySubagentDetection(t *testing.T) {
 		{"system_message_with_source", subSys, agyTranscriptSubagent},
 		{"system_message_without_source", subNoSrc, agyTranscriptSubagent},
 		{"cortex_system_message", subCort, agyTranscriptSubagent},
-		{"user_input_system_source", subUserS, agyTranscriptSubagent},
+		{"user_input_system_source_is_normal", wakeUserS, agyTranscriptNormal},
+		{"error_message_system_source_is_normal", errSys, agyTranscriptNormal},
 		{"user_input_subagent_source", subOther, agyTranscriptSubagent},
 		{"full_transcript_fallback", fullSub, agyTranscriptSubagent},
 		{"normal_explicit_user", normExp, agyTranscriptNormal},
@@ -1023,6 +1027,7 @@ func TestAgySubagentDetection(t *testing.T) {
 		{"partial_in_progress", partID, agyCandidatePending},
 		{"unrelated_uuid_in_user_input", mentioned, agyCandidateNormal},
 		{"unrelated_uuid_in_view_file_result", viewedFile, agyCandidateNormal},
+		{"system_sourced_wake_user_input", wakeUserS, agyCandidateNormal},
 		{"normal_new_conversation", normExp, agyCandidateNormal},
 	} {
 		t.Run("classify/"+tc.name, func(t *testing.T) {
@@ -1216,5 +1221,47 @@ func TestAgyPaneLegitimateConversationSwitches(t *testing.T) {
 	items, _ = agyTestItems(t, n, agyTestRow, nil)
 	if len(items) != 1 || items[0].Kind != "notice" {
 		t.Fatalf("cross-pane ambiguity on bound parent was not cleared: %+v", items)
+	}
+
+	// 5. A conversation whose first step is a SYSTEM-sourced wake/background USER_INPUT must not be
+	// misclassified as a subagent: both first bind (session.items, session.info, resume) and switching
+	// from an already-bound parent conversation must succeed.
+	const wakeID = "bbbbbbbb-3333-4444-8555-666666666662"
+	agyTestFile(t, n.agyDataRoot(), wakeID, ""+
+		`{"step_index":0,"type":"USER_INPUT","source":"SYSTEM","created_at":"2026-11-21T11:00:00Z","content":"Background wake prompt"}`+"\n"+
+		`{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T11:00:01Z","model":"gemini-wake","input_tokens":1200,"output_tokens":40,"content":"Handled background wake."}`+"\n")
+
+	// First bind on an unbound pane (pane was cleared by ambiguity above).
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, wakeID))
+	items, wakePage := agyTestItems(t, n, agyTestRow, nil)
+	if len(items) != 1 || items[0].Text != "Handled background wake." || wakePage["history"] != agyStepsHistory(wakeID).token {
+		t.Fatalf("first bind to SYSTEM-sourced USER_INPUT conversation failed: page=%+v items=%+v", wakePage, items)
+	}
+	info := agyTestCall(t, n, "session.info", agyTestRow, nil).(map[string]any)
+	if info["context_tokens"] != 1200 || info["output_tokens"] != 40 {
+		t.Fatalf("session.info for SYSTEM-sourced USER_INPUT conversation = %+v", info)
+	}
+	const resumeModel = "test-model"
+	n.noteWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), agyTestPane, agyTestRow, home, agyAgent, agyAgent, resumeModel, "", "")
+	assertAgyResumeReport(t, f, 0, resumeModel, "", wakeID)
+
+	// Switch from a bound parent conversation (which previously invoked a subagent) to wakeID.
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, parentID))
+	if _, p := agyTestItems(t, n, agyTestRow, nil); p["history"] != parentHistory {
+		t.Fatalf("rebind to parent failed: %+v", p)
+	}
+	n.pollAgyPane(w)
+	waitFor(t, "watch rebounds to parent", func() bool {
+		spans := hub.spans()
+		return len(spans) > 0 && spans[len(spans)-1].history == parentHistory
+	})
+	beforeSwitch := len(hub.spans())
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, wakeID))
+	n.pollAgyPane(w)
+	waitFor(t, "switch from parent to SYSTEM-sourced USER_INPUT conversation", func() bool { return len(hub.spans()) > beforeSwitch })
+	lastSpan := hub.spans()[len(hub.spans())-1]
+	lastItem := hub.got()[len(hub.got())-1]
+	if lastSpan.fromSeq != 0 || lastSpan.history != agyStepsHistory(wakeID).token || lastItem.Text != "Handled background wake." {
+		t.Fatalf("switch to SYSTEM-sourced USER_INPUT conversation failed: span=%+v item=%+v", lastSpan, lastItem)
 	}
 }

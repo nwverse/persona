@@ -102,17 +102,17 @@ func (n *Node) agyConversationClaimedElsewhereLocked(pane, conversation string) 
 }
 
 // isAgySubagentHead reports whether a conversation's opening step indicates a built-in
-// subagent or other system-initiated conversation rather than a user-initiated session.
+// subagent conversation rather than a user-initiated or system-wake session.
 func isAgySubagentHead(stepType, stepSource string) bool {
 	typ := strings.ToUpper(strings.TrimSpace(stepType))
 	src := strings.ToUpper(strings.TrimSpace(stepSource))
 	if typ == "SYSTEM_MESSAGE" || typ == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE" {
 		return true
 	}
-	if src == "SYSTEM" {
-		return true
-	}
-	if typ == "USER_INPUT" && src != "" && src != "USER_EXPLICIT" {
+	// Do not classify source=="SYSTEM" alone (e.g. SYSTEM-sourced USER_INPUT wake/background
+	// steps or ERROR_MESSAGE steps) as a subagent: only explicit non-user, non-system
+	// USER_INPUT sources (such as SUBAGENT) qualify without a SYSTEM_MESSAGE header.
+	if typ == "USER_INPUT" && src != "" && src != "USER_EXPLICIT" && src != "SYSTEM" {
 		return true
 	}
 	return false
