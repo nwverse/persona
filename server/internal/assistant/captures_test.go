@@ -326,7 +326,9 @@ func TestCaptureFileWaitsAndFails(t *testing.T) {
 	if w.Code != http.StatusAccepted || json.Unmarshal(w.Body.Bytes(), &a) != nil {
 		t.Fatalf("add: %d %s", w.Code, w.Body)
 	}
+	f.mu.Lock()
 	f.captureSort = `{"space":null,"confidence":0.1,"action":"keep","title":"Placeholder","categories":[]}`
+	f.mu.Unlock()
 	s.captureRound(ctx, st)
 	c := st.capture(t, a.ID)
 	var sorted assistantwire.CaptureSort
@@ -336,8 +338,11 @@ func TestCaptureFileWaitsAndFails(t *testing.T) {
 	}
 	s.devs = inboxDevs{fleetDevs: newFleetDevs()}
 	s.captureRound(ctx, st)
-	if c := st.capture(t, a.ID); c.Status != assistantwire.CaptureFiled || len(*written) != 1 || len(f.captureSortAsked) != 1 {
-		t.Fatalf("once the node can: %+v, %d written, asked %d times", c, len(*written), len(f.captureSortAsked))
+	f.mu.Lock()
+	asked := len(f.captureSortAsked)
+	f.mu.Unlock()
+	if c := st.capture(t, a.ID); c.Status != assistantwire.CaptureFiled || len(*written) != 1 || asked != 1 {
+		t.Fatalf("once the node can: %+v, %d written, asked %d times", c, len(*written), asked)
 	}
 
 	failing := `{"client_id":"qa-share-0011","source":"web","kind":"text","text":"qa: another placeholder"}`
@@ -345,7 +350,9 @@ func TestCaptureFileWaitsAndFails(t *testing.T) {
 	if w.Code != http.StatusAccepted || json.Unmarshal(w.Body.Bytes(), &a) != nil {
 		t.Fatalf("add: %d %s", w.Code, w.Body)
 	}
+	f.mu.Lock()
 	f.captureSort = ""
+	f.mu.Unlock()
 	for range captureMaxAttempts + 1 {
 		s.captureRound(ctx, st)
 	}
@@ -370,7 +377,9 @@ func TestCaptureWaitingNeverStarvesNew(t *testing.T) {
 		}
 		return a.ID
 	}
+	f.mu.Lock()
 	f.captureSort = `{"space":null,"confidence":0.1,"action":"keep","title":"Placeholder","categories":[]}`
+	f.mu.Unlock()
 	for i := range captureBatch + 1 {
 		add("qa-share-wait-"+string(rune('a'+i)), "qa-plain")
 	}
@@ -387,7 +396,9 @@ func TestCaptureWaitingNeverStarvesNew(t *testing.T) {
 	}
 
 	fresh := add("qa-share-wait-new", "")
+	f.mu.Lock()
 	f.captureSort = `{"space":"qa-plain","confidence":0.4,"action":"discuss","title":"A thought","categories":[]}`
+	f.mu.Unlock()
 	s.captureRound(ctx, st)
 	if c := st.capture(t, fresh); c.Status != assistantwire.CaptureSorted {
 		t.Fatalf("the new capture behind %d waiting ones: %+v", captureBatch+1, c)
