@@ -264,7 +264,7 @@ func (s *Service) quietRemind(todo, to string, ix proto.Interaction) {
 		name = t.Title
 	}
 	title := i18n.T(l, "assistant-tasks.ask_held_title", i18n.Args{"name": name})
-	s.deliver(Notification{Kind: assistantwire.NotifyPush, Level: assistantwire.LevelP1, RelatedKey: "ask:" + todo,
+	s.deliverCard(cardAskHeld, Notification{Kind: assistantwire.NotifyPush, Level: assistantwire.LevelP1, RelatedKey: "ask:" + todo,
 		DeviceID: ix.MachineID, Subtitle: s.machineName(ix.MachineID), SessionID: ix.SessionID, Title: title,
 		Body: clip(oneLine(noticeAsk(ix)), 200)})
 }

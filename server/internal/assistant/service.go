@@ -300,6 +300,8 @@ type Service struct {
 	room       roomState         // meeting_room_tools.go: the meetings' rooms, their asks and sources
 	meetLive   meetingLiveEvents // meeting_events.go: the meeting_live events, at most one a second per recording
 	justMe     justMeBook        // meeting_justme.go: the Just me turns
+	cards      cardLedger        // card_layers.go: the cards pushed to the owner, counted by day, source and which of the six kinds
+	cardAsks   sync.Map          // card_layers.go: the source of each card ask has up (interaction id → source)
 	meetLocks  meetingLocks      // meeting_followup.go: one creation at a time per recording
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
@@ -876,6 +878,7 @@ func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult,
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}
+	s.noteCard(ctx, "", n) // its source is on ctx (withCard; card_layers.go)
 	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
 	if err != nil {
 		s.logf("assistant: push: %v", err)
