@@ -2,7 +2,7 @@ package imessage
 
 import "time"
 
-// The read tools' answers as JSON, for source subscriptions (connector.ReadJSON, docs/extensions/subscriptions.md
+// The read tools' answers as JSON, for source subscriptions (connectorwire.ReadJSON, docs/extensions/subscriptions.md
 // "Existing connectors"): an object with one top-level list, whose items carry the names a recipe maps (id, thread,
 // title, sender, time, body). Codes are masked as in the text the models read (persona.go); people's names and
 // handles are the same as there, and nothing the user did not hand to Persona is read.

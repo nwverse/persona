@@ -50,8 +50,7 @@ modules is a tested product.
 
 What the server enforces today is only the slots it serves (see "Slots" below): a module's settings are hidden but
 stay stored, its routine facts are gone (the routine opens with none), and its tables stay, since no module owns one
-yet. Routes, tools, feature flags and loops are not served yet, so no module adds any; a module that declares one is
-not loaded. Each of those parts of the contract holds from the PR that serves its slot.
+yet. A module that declares a slot the host does not serve is not loaded.
 
 ## Classification
 
@@ -59,7 +58,7 @@ not loaded. Each of those parts of the contract holds from the PR that serves it
 classifies every unit as `core` or a module id: each Go package directory under `server/` and `sdk/go/`, each Apple
 directory `apple/<name>`, `apple/Persona/<name>` and `apple/Packages/<name>`, each Gradle project
 `android/settings.gradle.kts` includes, and each directory under `web/src` one and two levels deep. A unit that is a
-module's future home gets the module id even while it still lives in a core path (`server/internal/mail` is `mail`), so
+module's future home gets the module id even while it still lives in a core path (`server/internal/lark` is `lark`), so
 the list shows how far each module is from its own directory.
 
 One line per unit, `<kind> <unit> <core|module id>`, with `module <id>` lines declaring the ids (#13430 section 2 plus
@@ -90,12 +89,15 @@ package. A module may later keep its own prompts in its own tree, under the same
 
 ### Loading
 
-The manager loads modules once, in `assistant.New`, before anything a module adds to is set up. The kernel leaves out a
-module that is switched off, is written for another `api`, is not `builtin`, declares a slot the host does not serve
-yet, needs a module that does not load (wherever it stands in the list; a cycle of needs loads none of them), or whose
-`Register` fails. A module registers after the modules it needs and after those it wants that load; otherwise list
-order holds. `wants` never keeps a module from loading. An id listed again is ignored after its first entry. A module
-left out adds nothing, including what it added before failing; why is kept (`Kernel.Skipped`) and logged.
+The manager loads modules once, in `assistant.New`, before `New` returns. Core routes are registered first so their real
+patterns reserve the core namespace. Module registration finishes during construction; background jobs start only with
+`Service.Run`. The kernel leaves out a module that is
+switched off, is written for another `api`, is not `builtin`, declares a slot the host does not serve yet, has a feature
+that is not exactly `module.<its own id>`, has a route or tool that conflicts with the core or an already accepted
+module, needs a module that does not load (wherever it stands in the list; a cycle of needs loads none of them), or whose
+`Register` fails. A module registers after the modules it needs and after those it wants that load; otherwise list order
+holds. `wants` never keeps a module from loading. An id listed again is ignored after its first entry. A module left out
+adds nothing, including what it added before failing; why is kept (`Kernel.Skipped`) and logged.
 
 ### Slots
 
@@ -106,8 +108,22 @@ missing quietly.
 | Slot | Served | How |
 | --- | --- | --- |
 | `settings` | Yes | `Host.AddSetting(modapi.Setting)`: the module says what a value means (`Value`, `Check`, `Describe`); the core keeps it stored, lists it in `persona_settings` and asks the owner to approve a change |
+| `feature` | Yes | The manifest value is `module.<id>`. While the module is loaded it joins the manager hello's `features`; the hub forwards it while that default manager is connected |
+| `hub_routes` | Yes | `Host.AddHubRoute(pattern, handler)`: the assistant serves the declared `METHOD /api/v1/…` route only while the module is loaded |
+| `mcp_tools` | Yes | `Host.AddMCPTool(...)`: the assistant lists and dispatches the declared tool only while the module is loaded |
+| `background_jobs` | Yes | `Host.AddBackgroundJob(name, run)`: `Service.Run` starts the declared loop under its context; an absent module starts none |
 | `schedules`: `facts` | Yes | `Host.AddScheduleFacts(modapi.ScheduleFacts)`: the wait rules of the facts a scheduled routine with facts on opens with |
-| `schedules` (others), `hub_routes`, `mcp_tools`, `prompt_sections`, `feature`, `background_jobs`, `db_migrations`, `i18n_namespaces`, `node_programs`, `channel_kinds`, `frame_handlers`, `push_categories`, `shell_places`, `chat_card_kinds`, `composer_actions`, `chat_accessories` | Not yet | Declared but not served: each gets a `Host` method when its first module moves (#13408 remaining work, #13400 to #13403) |
+| `schedules` (others), `prompt_sections`, `db_migrations`, `i18n_namespaces`, `node_programs`, `channel_kinds`, `frame_handlers`, `push_categories`, `shell_places`, `chat_card_kinds`, `composer_actions`, `chat_accessories` | Not yet | Declared but not served: each gets a `Host` method when its first module moves (#13408 remaining work, #13400 to #13403) |
+
+Route validation uses the real `http.ServeMux` conflict rules, including equivalent wildcard patterns, against the core
+and previously accepted modules. The reserved tool names include conditional core tools and compatibility aliases. A
+conflict rejects the module's complete contribution before the live mux changes; core tool dispatch remains authoritative.
+
+A manager that publishes module flags also announces the reserved `modules` marker, including when every module is off
+or built out. Clients treat a module with a `feature` as off only when the hello has `modules` and lacks that feature;
+no hello, or no `modules` marker from an older hub, leaves it on. This keeps the default behavior on older hubs. The
+marker and the module flags disappear from the hub hello when their default manager disconnects. Extension reports cannot
+publish `modules` or anything in the `module.` namespace.
 
 ### The switch
 
@@ -115,18 +131,54 @@ missing quietly.
   out. `go build -tags persona_core_only ./...` must pass. `scripts/ci/server.sh build` builds both and runs, with each
   tag, the module and kernel tests and a `-run` subset of `internal/assistant` (Brief, Module, Setting, Routine, Facts,
   ScheduledConfiguration, NorthStar, Accept, Later, Golden): the assistant's tests of the briefing itself skip
-  (`needsBriefingModule`), and `TestBuildWithoutBriefingLoadsNone` checks the core without it. The whole package passes
-  with both tags too (about 9 minutes each, too long for the lane).
-  `scripts/ci/core-only-smoke.py` (the lane's 'Core-only hub smoke') starts the core alone: it builds the programs
-  with `persona_core_only`, runs `persona-hub run` and its `persona-manager` against a disposable Postgres from a
-  temporary home, and checks health, the manager's `modules: loaded none`, and that every module's program
-  (`builtinext.AddProgram` in `internal/modules/all`), extension and extension route is absent; `--full` checks the
-  opposite on a default build.
+  (`needsBriefingModule`), and `TestBuildWithoutBriefingLoadsNone` checks the core without it. Every server package
+  passes with `persona_core_only` too: the `core-node`, `core-managers` and `core-other` lanes run the whole suite
+  with it ("How to build and run the core alone" below).
 - **At run time**: the settings row `modules` (the `settings` table, as every other setting; no state file) holds
-  `{"disabled": ["<id>", …]}`. The manager reads it once where it starts (`server/internal/assistant/main.go`,
-  `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so a change takes effect at the next
-  start. A module switched off is absent exactly as one left out of the build. There is no screen or tool for the row
-  yet: the settings registry of #13395 is its intended home.
+  `{"disabled": ["<id>", …]}`. `persona_settings` lists and reads this row as the `modules` key. A set rejects unknown
+  or duplicate compiled-in ids before showing the existing owner approval card; `null` or an empty disabled list
+  restores the default. The manager reads the row once where it starts (`server/internal/assistant/main.go`,
+  `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so the saved change takes effect at the
+  next manager start, never as a hot switch in the running process. A module switched off is absent exactly as one left
+  out of the build. There is no settings screen yet; the settings registry of #13395 remains its intended UI home.
+
+### How to build and run the core alone
+
+Persona Core is a product on its own: a hub built without any module starts, serves and passes the core's tests.
+
+- **Build**: `cd server && go build -tags persona_core_only -o ../bin/ ./cmd/personad ./cmd/persona-hub ./cmd/persona-manager`.
+  One module left out: `-tags persona_without_<id>`.
+- **Run**: the core-only `persona-hub run` (or `personad hub run`) with a `hub.json` as for any hub (docs/operations/config.md);
+  keep `persona-manager` beside `persona-hub` and the hub starts it. The manager's log says `modules: loaded none`
+  (a default build: `modules: loaded briefing, voice, volc`, …).
+- **Smoke test**: `python3 scripts/ci/core-only-smoke.py` builds the three programs with `persona_core_only`, starts a
+  disposable `postgres:18-alpine` container on a private port, writes a `hub.json` in a temporary home and runs
+  `persona-hub run` with a clean environment (no `PERSONA_HOME` of the machine's own hub). It checks health, an
+  authenticated request, the manager's `modules: loaded none`, that every module's program (`builtinext.AddProgram` in
+  `internal/modules/all`) is an unknown subcommand of `personad` and `persona-manager`, that its extension is not in
+  `/api/v1/extensions` and `/api/v1/extensions/<id>/-/assistant-data` answers 404, and a clean SIGTERM shutdown, then
+  prints one PASS / FAIL / TIMEOUT line. `--full` runs the same on a default build and expects the opposite. `DOCKER`
+  names another Docker client.
+- **Tests**: `GOFLAGS="-trimpath -tags=persona_core_only" python3 scripts/ci/server-shards.py <node|managers|other>
+  --database-file <file with database_url>` runs a shard's every package without modules; a test of a module's own
+  behaviour skips without it (`needsBriefingModule`, `needsVoiceModule`, `needsVolcModule`). Locally the `other` shard
+  needs Bun 1.4.2 on `PATH`, as in CI.
+- **CI** (`scripts/ci/server.sh`): the `build` lane runs 'Core-only hub smoke' and 'Builds without each module' (each
+  `server/internal/modules/<id>/module.json`: `go build -tags persona_without_<id> ./...` and the module list and guard
+  tests, so a module that moves is covered with no edit); the `core-node`, `core-managers` and `core-other` lanes (and
+  `all`) run 'Server <shard> tests with Postgres, core only'. Measured on the hub machine (64 cores, shared): node
+  about 5.5 minutes, managers about 6, other about 3.5.
+- **Size**: `python3 scripts/diag/core_size.py [--no-build] [--json] <ref> …` prints the core's non-test Go lines (every
+  `*.go` under `server/` that is not `_test.go`, `server/internal/modules/` left out), each module's lines, and the
+  stripped sizes of `personad`, `persona-hub` and `persona-manager` built by default and with `persona_core_only`
+  (`go build -trimpath -ldflags '-s -w'`, the same for both). Read from `git archive`, so no checkout changes.
+
+| Ref | Core non-test lines | Module lines | personad default / core-only | persona-hub | persona-manager default / core-only |
+| --- | --- | --- | --- | --- | --- |
+| `9fa299334` (before modules moved) | 842,284 | briefing 173 | 118,911,239 / 118,898,951 B | 40,755,463 B | 100,917,511 / 100,909,319 B |
+| `2da914f99` (voice and volc moved) | 825,432 | briefing 173, voice 15,132, volc 3,259 | 119,030,023 / 117,809,415 B | 40,792,327 B | 101,007,623 / 99,791,111 B |
+
+`persona-hub` has no module in it, so both of its builds are the same size.
 
 ### Provider seams
 
@@ -147,6 +199,47 @@ with the kernel yet; its `module.json` declares no slot. `scripts/ci/server.sh b
 `builtinext`, the modules, the guards, the extension host's tests of them and the manager's end-to-end meeting
 transcription tests with `persona_core_only`, `persona_without_volc` and `persona_without_voice`.
 
+Mail (`server/internal/modules/mail`, #13936) is the other kind: a service the extension manager runs in process
+(the `/api/v1/mail/` routes, the `mail_*` tools and the mail connector, the Inbox's mail, the `mail.accounts` setting).
+The manager reaches it through the contract `server/internal/mailwire` (the values both sides pass and the `Service`
+interface; the module aliases them) and the port `server/internal/extmgr/mailport`: the module's file in
+`server/internal/modules/all` provides `mail.Open` there in its `init`, and the manager opens mail with it when it runs.
+The port is a package of its own so the composition root need not import `extmgr`. With the module left out
+(`persona_without_mail`, `persona_core_only`) nothing is provided and the manager runs as with a mail service that
+failed to open: the mail routes answer 404, no `mail_*` tool or mail connector is offered, `persona_settings` has no
+`mail.accounts`, and everything else runs (`TestManagerWithoutMail`). The module registers nothing with the kernel and
+its `module.json` declares no slot; the run-time switch (the `modules` row) does not cover it until the kernel serves
+`hub_routes` and `mcp_tools` (#13844). Its prompts (`server/internal/prompts/mcp/mail`) and locales (`mail-*`) stay in
+the core's trees until `prompt_sections` and `i18n_namespaces` are served. `scripts/ci/server.sh build` builds and
+tests the core, the modules, the guards and the manager's mail, inbox, connector and settings tests with
+`persona_core_only` and with `persona_without_mail`.
+
+The GitHub connector (`server/internal/modules/github`, #13936) is a connector the extension manager registers. It is
+written against the connector SPI, the contract `server/internal/connectorwire` (the `Connector` interface, its
+`Manifest` and capability interfaces; `internal/connector`, the framework that runs connectors, aliases them), and the
+manager reaches it through the contract `server/internal/githubwire` (manager.json's `github` section, the token
+source and its errors, the CI-check snapshot, and the `Connector` interface of the methods the manager calls) and the
+port `server/internal/extmgr/githubport`, which the module's file in `server/internal/modules/all` fills with
+`github.Provider`. The assistant's CI checks read `githubwire.PRCheckSnapshot` from the manager, so they need no
+module. With the module left out (`persona_without_github`, `persona_core_only`) the manager registers no built-in
+GitHub connector: it is not listed, `/api/v1/connectors/github/auth` answers 404, no `github_*` tool is offered, and
+an extension's GitHub connector can still take the id (`TestManagerWithoutGitHub`). Its prompts
+(`server/internal/prompts/mcp/github`, `prompts/inbox/kinds/github.md`) stay in the core's trees as mail's do.
+`scripts/ci/server.sh build` runs "Builds without the connector modules" with both tags, and
+`scripts/ci/core-only-smoke.py` checks that a core-only hub lists no GitHub connector.
+Its `module.json` declares `feature` = `module.github`, so a hub whose manager loaded the module announces it. The
+run-time `modules` switch drops the flag, but the extension manager still registers the connector until it reads the
+switch too (only a build without the module leaves the connector out today).
+
+The `lark` module (#13404) is of the same kind as mail: code the manager runs in process, which the extension host
+drives. The core declares what it needs of the Feishu / Lark bot's client in `server/internal/botport` (the client's REST calls,
+the long connection, the device-code registration, as interfaces over the pure types of `server/internal/botcard`, a
+leaf library the core's cards are built with), and `server/internal/modules/all/lark.go` provides it from
+`server/internal/modules/lark/feishubot`. Without the module `botport.Available()` is false: the bot cannot be bound,
+registered or started (the setting answers that it is not part of this build), and the extension host's tests of the
+bot skip (`needsLarkModule`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
+`persona_without_lark`.
+
 ### Guards
 
 `server/internal/archguard` keeps the boundary. Both module guards read the import lines of every `.go` file under
@@ -163,6 +256,13 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
   packages, `modapi` and the other contract packages (pure, so nothing more comes with them), the leaf libraries, its
   own packages, and the modules its `module.json` needs. A module it only wants may be left out of the build (`persona_without_<id>`), so it is reached
   through the kernel, never imported. Each module directory has a `module.json` whose id is the directory's name.
+  Known exceptions are debt in `testdata/module_services.txt`, which only shrinks (a stale line fails): `<module id>
+  <core package>` for any of the module's files, `<module id> (test) <core package>` for its tests only, no wildcards.
+  The lines are the GitHub connector's tests, which run it through the connector registry and gate, the conformance
+  suite and the subscription service with the module's own fixtures, and `recording internal/kb`: the recordings'
+  storage (the `kb.Recording` model with its `Engine` and `Store`) stays in the knowledge base until it offers a
+  recording port. A declared core-service dependency is a known debt, not a precedent: the assistant, the hub and the
+  extension host are never listed.
 - **`TestLibrariesAreLeaves`**: the leaf libraries (`testdata/libraries.txt`) are the core's packages a module may use
   that hold no state and own no feature (localization, the extension SDK, small helpers). Each depends only on the
   standard library, third-party packages, the contracts and the other libraries, so a module that uses one reaches no
@@ -212,6 +312,45 @@ chosen extension or on the phone. The apps' composer dictation is core; the exte
 glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings; `internal/transcribelive`, a
 measuring tool that also reads the knowledge base, stays where it is.
 
+### Recording
+
+`recording` (`server/internal/modules/recording`, #13407) is meeting recording on the manager: the `/api/v1/recordings`
+routes and the phone's audio socket, meetings attended and transcribed on the hub (live jobs, final passes, the
+fallback), the meeting asks, photos, live view, rooms, Just me and follow-ups, and the push of minutes and day recaps
+with the to-dos made of their action items (docs/assistant/meeting-minutes.md, docs/assistant/day-recap.md). Its
+manifest declares `feature: module.recording`, which the kernel announces while it is loaded.
+
+- **The seam**: the core reaches it through `server/internal/recordinghost`, in the core's own terms (`Layer`: what
+  the core asks of it; `Host`: what it asks of the core). `server/internal/modules/all/recording.go` provides it under
+  `!persona_without_recording && !persona_core_only`; the assistant makes one layer per manager before it registers
+  the knowledge base's routes (`internal/assistant/recording.go`, `loadRecording`), unless the `modules` row switches
+  it off. The routes, room tools and loops stay on this seam rather than the kernel's `hub_routes`, `mcp_tools` and
+  `background_jobs` slots: the routes are registered with the knowledge base's route guard, the room tools are guest
+  tools (not assistant tools) and the loops run on the knowledge base's own schedule, so each moves when the kernel
+  can carry those.
+- **The host is the surface to shrink**: about 75 methods (`recordinghost.Host`: settings rows, conversations and
+  their origins, guests, the computers, pushes and channels, to-dos, models, the transcription choice, tracks). Each
+  group becomes a narrower port as the core serves one.
+- **Shared with the core**: the knowledge base (`recording internal/kb`, above), the transcription job's socket
+  (`server/internal/transcribejob`, a leaf library the core's transcription for extensions uses too) and the meeting
+  transcription choice, which stays in the core (`meeting_transcription_settings.go`, the extension host's
+  `transcription` point).
+- **Times as configuration**: the module's times (its `timings.go`, pinned by `TestDefaultTimings`) and the
+  attending feeder's clock and timer come through `Host.Timings` and `Host.FeedClock` from
+  `assistant.Options.RecordingTimings`, `RecordingTimingLists`, `RecordingFeedNow` and `RecordingFeedAfter`: a test and
+  tuning knob of the code that builds the manager, never a user setting, read from no settings, `hub.json` or route.
+  `Layer.Wait` ends the live hub runs and waits for the module's background work; the manager calls it when it stops
+  (`kbEnd`).
+- **Tests**: the module's own tests run on a fake core (`fakecore_test.go`, with the assistant's fake hub ported as
+  `fakehub_test.go` and a real knowledge base on the test's directory); the core's tests of how the module meets the
+  rest of the manager (day-recap pushes over the channels, the evening facts, `kb_get`, the fleet's attendee facts,
+  meeting turns against tool calls, hub transcription end to end) stay in `internal/assistant` and skip without the
+  module (`needsRecordingModule`).
+- **With the module absent** (`persona_without_recording`, `persona_core_only`, or switched off) the recording routes
+  answer 404, the audio socket is unknown, the hello names none of the nine meeting and recording capabilities (so
+  the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
+  (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base.
+
 ### How to add a module
 
 1. Pick the id from #13430 section 2 and check its manifest needs only slots the kernel serves; if it needs another,
@@ -231,6 +370,9 @@ measuring tool that also reads the knowledge base, stays where it is.
 Each client documents its side in its own platform doc; these are pointers only.
 
 - **Apple** (#13432): `PersonaHostApp` with `PersonaModuleAPI` and `PersonaModule<Name>` packages. See `docs/apple/` (written with #13432).
+  A module the hub may turn off declares `feature` = `module.<id>`; the app follows the rule agreed on #13844 (off only
+  when the hello has the marker `modules` and lacks the flag; remembered per hub before the hello). See
+  `docs/apple/ios.md`, "Modules" (#13849).
 - **Android** (#13433): `:core:moduleapi` and `:module:<id>`. See `docs/android/` (written with #13433).
 - **Web** (#13434, #13846): the module host `web/src/core/module-host.ts` and `web/src/modules/<id>/`, serving routes,
   sidebar entries, chat slots, Settings categories and card renderers. See `docs/web/web.md` ("Modules").
