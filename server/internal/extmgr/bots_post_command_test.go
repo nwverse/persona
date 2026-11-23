@@ -103,6 +103,9 @@ func TestPostCommandAdmissionPolicies(t *testing.T) {
 					envelope["event"].(map[string]any)["sender"].(map[string]any)["sender_type"] = tc.senderType
 					event, _ = json.Marshal(envelope)
 				}
+				// Count only what this message makes the bot do: the bot's start-up read of its own identity (after the
+				// pairing and each settings change above) is in the background and may come after the count (#14219).
+				w.botInfoRead(t)
 				total := w.api.total()
 				w.send(t, event)
 				// The accepted /read is handed without an API send; ordinary topic and /ai paths likewise.
@@ -162,6 +165,9 @@ func TestPostCommandUnknownBotIdentityIsDenied(t *testing.T) {
 			w.pair(t)
 			w.topicsOn(t, topicChat)
 			w.readOn(t)
+			// The bot's start-up read of its own identity is done before the test forgets it: a late one could put the id
+			// back, or be the bot-info call the check below finds in place of the message's own (#14219).
+			w.botInfoRead(t)
 			w.api.mu.Lock()
 			w.api.botInfoFail = true
 			w.api.mu.Unlock()
