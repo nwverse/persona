@@ -29,7 +29,7 @@ func desktopCatalogJSON(t *testing.T, path string, value any) {
 }
 
 func TestDesktopWorkspacesWithoutTerminalOrSessions(t *testing.T) {
-	home := t.TempDir()
+	home := physicalTempDir(t)
 	root := filepath.Join(home, "code", "app")
 	other := filepath.Join(home, "code", "other")
 	for _, dir := range []string{root, other} {
@@ -132,6 +132,8 @@ func TestDesktopWorkspacesRespectScopeAndBlockedDirectories(t *testing.T) {
 
 func TestClaudeDesktopCatalogAndRowsShareOriginalProject(t *testing.T) {
 	n, home := testNode(t)
+	home = realPath(home)
+	n.home = home
 	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
 	original, running := filepath.Join(home, "app"), filepath.Join(home, "worktree")
 	for _, dir := range []string{original, running} {
@@ -182,7 +184,7 @@ func TestClaudeDesktopCatalogAndRowsShareOriginalProject(t *testing.T) {
 }
 
 func TestClaudeDesktopProjectRootUsesGitSharedDirectory(t *testing.T) {
-	home := t.TempDir()
+	home := physicalTempDir(t)
 	root := filepath.Join(home, "project")
 	linked := filepath.Join(home, "linked")
 	if err := os.Mkdir(root, 0o700); err != nil {

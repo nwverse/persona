@@ -55,7 +55,7 @@ func TestCodexSQLiteFallbackDoesNotSearchRelativeDirectories(t *testing.T) {
 }
 
 // Exercise the real state and history queries with no SQLite on PATH. The fallback
-// contains a copy of the installed executable; all databases and messages are synthetic.
+// references the installed executable; all databases and messages are synthetic.
 func TestCodexSQLiteFallbackReadsStateAndHistory(t *testing.T) {
 	sqlite := sqlite3WithJSON(t)
 	home := t.TempDir()
@@ -75,11 +75,17 @@ func TestCodexSQLiteFallbackReadsStateAndHistory(t *testing.T) {
 	if err := os.Mkdir(bin, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	executable, err := os.ReadFile(sqlite)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bin, sqliteTestName()), executable, 0o700); err != nil {
+	installed := filepath.Join(bin, sqliteTestName())
+	if runtime.GOOS == "windows" {
+		executable, err := os.ReadFile(sqlite)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(installed, executable, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	} else if err := os.Symlink(sqlite, installed); err != nil {
+		// Keep macOS system executables at their signed location while exercising fallback lookup.
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", "")

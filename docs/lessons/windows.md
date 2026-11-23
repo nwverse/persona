@@ -234,3 +234,7 @@ loss. Codex 0.170.0's external editor exports `composer_text_with_pending`, incl
 disposable pane with a process-local read-only capture editor can measure that actual draft without submitting it.
 Never relax the matcher to silently ignore missing characters. Process-boundary regressions must run the real
 private-file helper and receiver; on WSL, execute the Windows PE variant too, not only a fake composer.
+
+Desktop launch instructions are not a first message. When combining automatic platform instructions with a
+desktop start, keep a blank user prompt blank: Claude may import an empty session, while Codex must refuse before
+creating one. Test this with explicit task instructions too, so the check covers hosts without automatic platform text.

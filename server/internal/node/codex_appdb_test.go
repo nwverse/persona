@@ -209,7 +209,7 @@ func TestCodexAppChatsAreListedLikeTheSidebar(t *testing.T) {
 	if chat.AsksRead || chat.Asks != "" {
 		t.Fatalf("chat without a rollout: AsksRead = %t, Asks = %q; want unknown asks", chat.AsksRead, chat.Asks)
 	}
-	if chat.AgentName != "Codex App" || chat.SpaceKind != "codex_app" || chat.SpaceID != codexDesktopProjectID(home, "p1") {
+	if chat.AgentName != "Codex App" || chat.SpaceKind != "codex_app" || chat.SpaceID != codexDesktopProjectID(canonicalCodexHome(home, ""), "p1") {
 		t.Fatalf("chat placed as %q %q %q, want in its project", chat.AgentName, chat.SpaceKind, chat.SpaceID)
 	}
 	if chat.Capabilities.Send {
@@ -411,7 +411,7 @@ func TestCodexAppChatsInNoProjectAreUnderCodexChats(t *testing.T) {
 	if !rows[sub].IsSubagent {
 		t.Fatal("the subagent is not marked as one")
 	}
-	if r := rows[appChat]; r.SpaceID != codexDesktopProjectID(home, "p1") {
+	if r := rows[appChat]; r.SpaceID != codexDesktopProjectID(canonicalCodexHome(home, ""), "p1") {
 		t.Fatalf("the chat in a project is placed in %q", r.SpaceID)
 	}
 }

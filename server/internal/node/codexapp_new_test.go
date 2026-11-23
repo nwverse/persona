@@ -143,7 +143,7 @@ func TestNewAgentWithTheCodexAppLauncherStartsTheChatInTheApp(t *testing.T) {
 		t.Fatal("the App ran no turn")
 	}
 	req := p["turnStart"].(map[string]any)["request"].(map[string]any)
-	if in := req["input"].([]any)[0].(map[string]any); req["threadId"] != thread || in["text"] != "Fix the CSV export\nand test it" {
+	if in := req["input"].([]any)[0].(map[string]any); req["threadId"] != thread || in["text"] != taskFallback("Fix the CSV export\nand test it", agentPlatformInstructions(runtime.GOOS, "")) {
 		t.Fatalf("turn %v", req)
 	}
 	if !codexDesktopChat(codexSource{home: n.codexHome(), thread: thread, path: rolloutPath(n.codexHome(), thread)}) {
@@ -339,6 +339,7 @@ func TestACodexAppStartRefusesWhatTheAppCannotRun(t *testing.T) {
 		says   string
 	}{
 		{map[string]any{"cwd": dir, "launcher": "codex-app", "prompt": "  "}, "", "第一条消息"},
+		{map[string]any{"cwd": dir, "launcher": "codex-app", "task_instructions": "Keep the task scope."}, "codex_needs_prompt", ""},
 		{map[string]any{"cwd": dir, "launcher": "codex-app", "prompt": "look", "permission_mode": "plan"}, "readonly_unsupported", ""},
 		{map[string]any{"cwd": filepath.Join(dir, "a", "b"), "launcher": "codex-app", "prompt": "hi"}, "", "does not exist"},
 		{map[string]any{"cwd": dir, "launcher": "codex-app", "prompt": "hi", "secret_ticket": strings.Repeat("a", 64)}, secretEnvAgentCode, ""},
@@ -406,6 +407,7 @@ func TestTheCodexAppLauncherIsOfferedWhereTheAppRuns(t *testing.T) {
 		t.Error("offered with no Codex CLI")
 	}
 	codexAppCLI = old
+	n.home = t.TempDir() // the original home still has the fake App listener
 	noFakeCodexBus(t)
 	if _, added := n.withCodexAppLauncher(nil); added {
 		t.Error("offered with the App not running")

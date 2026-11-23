@@ -81,7 +81,7 @@ func TestCodexDesktopUnavailableKeepsChatsViewOnly(t *testing.T) {
 				home := unavailableCodexBus(t, transport == "stale")
 				n := remoteTestNode(t)
 				cwd := t.TempDir()
-				n.sessionScope = &nodeSessionScope{codex: home, dir: cwd}
+				n.home = filepath.Dir(home) // use an ordinary node; scoped nodes refuse all desktop starts
 				n.configureCodex(proto.CodexConfig{})
 				var path string
 				if history == "paginated" {

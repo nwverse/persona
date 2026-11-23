@@ -307,7 +307,7 @@ func TestTheDesktopLauncherNeedsNoTerminalEngine(t *testing.T) {
 	fakeClaudeOnPath(t)
 	shellLaunchers(t)
 	dir := t.TempDir()
-	s, err := startDesktop(t, n, map[string]any{"cwd": dir, "launcher": "claude-desktop"})
+	s, err := startDesktop(t, n, map[string]any{"cwd": dir, "launcher": "claude-desktop", "task_instructions": "Keep the task scope."})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
