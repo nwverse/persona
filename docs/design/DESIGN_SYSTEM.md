@@ -3173,7 +3173,12 @@ page the user watches during the meeting is the page they keep writing in after 
   said now under them in the secondary color (read as "Being said: …"; no "behind" figure while a caption shows, folded
   to the caption alone while the keyboard is up). Otherwise it shows this iPhone's own lines with a notice under its
   title: one caption line, the iPhone mark (`Theme.Icon.phone`) in `Theme.caution` and why in words (waiting for Wi-Fi,
-  the hub stopped transcribing this meeting, or it isn't transcribing right now), "Showing this iPhone's transcript". Not
+  the hub stopped transcribing this meeting, or it isn't transcribing right now), "Showing this iPhone's transcript". When
+  this iPhone can't transcribe the meeting either (#13385: no model for its language, an older iOS, a model that didn't
+  download), the notice says only what the hub is at and never that this iPhone's transcript shows, and a second line in
+  the same notice says why, naming the meeting's language ("This iPhone can't transcribe Chinese on the device either, so
+  no lines show until the hub transcribes again"); with no fallback (a meeting on the phone) the same notice says only
+  that, and no "Listening…" shows. Not
   a `NoticeBanner`: it is about the box's lines, so it sits in the box rather than pushing the page down, and goes by
   itself when the hub is back. It never shows for what isn't a fallback: a pause, the end after Stop, or a reconnect of
   up to 5 seconds (a notice that flashes on every blip teaches people to ignore it). With Persona off, the phone's own
