@@ -63,7 +63,7 @@ import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands, openPickerCommand } from "../../lib/composer-commands";
 import { IMAGE_LIMIT_CODE } from "../../lib/api-errors";
 import { COMPACT_FEATURE, compactBody, compactPath } from "../../lib/compaction";
-import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, snapshotTerminalCompaction, watchTerminalCompaction, type OutgoingPayload } from "../../lib/compact-resend";
+import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, type OutgoingPayload } from "../../lib/compact-resend";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
 import { PendingCards, TurnCards } from "./Interactions";
 import { splitTurnAsks } from "../../lib/turn-asks";
@@ -2293,17 +2293,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         toast(t("chat-lines.compact_resend_unrecoverable"), "error");
         return;
       }
+      const { waitForAssistantCompaction, snapshotTerminalCompaction, watchTerminalCompaction } = await import("../../lib/wait-for-compaction");
+      if (ctl.signal.aborted) return;
       if (compactResend.mode === "assistant") {
-        const { waitForAssistantCompaction } = await import("../../lib/wait-for-assistant-compaction");
-        if (ctl.signal.aborted) return;
         const before = getSession(mid, sid)?.compaction;
-        try {
-          await api(compactPath(sid), { method: "POST", json: compactBody(mid) });
-          window.dispatchEvent(new CustomEvent("persona:compact-requested", { detail: { mid, sid } }));
-        } catch (e) {
-          toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(e) }), "error");
-          return;
-        }
+        await api(compactPath(sid), { method: "POST", json: compactBody(mid) });
+        window.dispatchEvent(new CustomEvent("persona:compact-requested", { detail: { mid, sid } }));
         const outcome = await waitForAssistantCompaction(mid, sid, before, ctl.signal);
         if (ctl.signal.aborted || outcome !== "done") return;
       } else {
@@ -2339,6 +2334,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       backToComposer();
       const went = await sendMessageNow.current(resolved.payload);
       if (!went && key) setErrorRetried((k) => (k === key ? undefined : k));
+    } catch (error) {
+      if (!ctl.signal.aborted) toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(error) }), "error");
     } finally {
       if (compactResendCtl.current === ctl) {
         compactResendCtl.current = null;

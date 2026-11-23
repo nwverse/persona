@@ -980,7 +980,8 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
   if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && (!end.answer || n.seq > at))) end.cut = true;
   const user = end?.user;
   if (end && user && !live && !end.answer && !t.trailing.length && isOwnMessage(user) && !user.queued && !isLoopTick(user) &&
-      !end.steps.some((step) => step.kind === "visualization") &&
+      !end.steps.some((step) => step.kind === "visualization" || (step.kind === "image" && step.item.role === "assistant") ||
+        (step.kind === "tool" && !step.result && supervisionTool(step.use.tool_name) === "supervision_finish" && step.use.tool_input?.visibility === "silent")) &&
       !supervisionVisibility(ordered, results, false).completedSilent) {
     end.emptyResponse = true;
   }

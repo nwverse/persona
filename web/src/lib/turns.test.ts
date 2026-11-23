@@ -236,8 +236,10 @@ describe("chatLines", () => {
   it("omits the empty-response fallback after a silent supervision finish", () => {
     const finish = { ...tool(2, "finish"), tool_name: "mcp__persona__supervision_finish", tool_input: { visibility: "silent" } };
     const receipt = { ...res(3, "finish"), text: '{"visibility":"silent"}' };
-    const [line] = chatLines([u(1, "Check this"), finish, receipt, a(4, "\n")]);
-    expect(line.kind === "segment" && line.seg.emptyResponse).toBeUndefined();
+    for (const tools of [[finish], [finish, receipt]]) {
+      const [line] = chatLines([u(1, "Check this"), ...tools, a(4, "\n")]);
+      expect(line.kind === "segment" && line.seg.emptyResponse).toBeUndefined();
+    }
   });
 
   // #3428: the node's notices for switching ultracode (transcript/ultracode.go) are ordinary notices

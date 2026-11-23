@@ -6,15 +6,17 @@ import {
   canResendFailedTurn,
   compactResendSupport,
   failedTurnToResend,
-  hasPostCommandBoundary,
-  hasPostCommandError,
   resolveFailedTurnPayload,
-  snapshotTerminalCompaction,
-  waitForTerminalCompaction,
-  watchTerminalCompaction,
   type OutgoingPayload,
 } from "./compact-resend";
-import { waitForAssistantCompaction } from "./wait-for-assistant-compaction";
+import {
+  hasPostCommandBoundary,
+  hasPostCommandError,
+  snapshotTerminalCompaction,
+  waitForAssistantCompaction,
+  waitForTerminalCompaction,
+  watchTerminalCompaction,
+} from "./wait-for-compaction";
 import { openPickerCommand } from "./composer-commands";
 import { onModelPicker } from "./model-switch";
 import { onPermissionPicker } from "./permissions-command";
