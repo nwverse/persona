@@ -534,6 +534,12 @@ with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop 
 
 ### Antigravity CLI
 
+For a Herdr pane or local Antigravity runtime session with a Swarm, the node reads the conversation's
+`.system_generated/swarm/members.json` on the regular session list refresh. The optional `Session.swarm_workers`
+roster contains worker names and their activity. A running worker in `working` or `mentions` wake mode shows as
+Working or Waiting, respectively. Stopped and killed workers show as Stopped. The web Agent session overview
+shows the worker count and an expandable roster. The coordinator and board messages are outside that count.
+
 Assistant context remains an ACP embedded text resource followed by the user's separate text block (#12435).
 Antigravity exports that resource as a leading `Content of persona-context:///snapshot.txt:` line and context XML
 inside `USER_INPUT.content`. Both the companion and pane history readers remove the complete leading Persona resource

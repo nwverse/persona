@@ -271,6 +271,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 			}
 			if a.Agent == agyAgent {
+				s.SwarmWorkers = n.agySwarmWorkers(agyConversations[id])
 				if hasRuntimeRow {
 					n.resolveAgyContextWindow(&s)
 				} else {
@@ -337,6 +338,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			}
 		} else if s.Agent == agyAgent {
 			n.resolveAgyContextWindow(s)
+			if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); ok {
+				s.SwarmWorkers = n.agySwarmWorkers(conversation)
+			}
 		}
 		seen[s.SessionID] = true
 		if j != i {

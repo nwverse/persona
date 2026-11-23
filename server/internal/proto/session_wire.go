@@ -214,6 +214,9 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 			w.value(`"subagents":`, &s.Subagents)
 		}
 	}
+	if len(s.SwarmWorkers) > 0 {
+		w.value(`"swarm_workers":`, &s.SwarmWorkers)
+	}
 	if len(s.Workflows) > 0 {
 		w.value(`"workflows":`, &s.Workflows)
 	}
