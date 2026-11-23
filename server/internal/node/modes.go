@@ -359,8 +359,13 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 		n.persistModes(id, mode, effort, true)
 		if n.runtimeAssistant(id) {
 			if h, _, _ := n.runtimes.belongs(id); h != nil {
+				st, _ := n.state.get(id)
+				params := map[string]any{"session_id": id, "permission_mode": mode, "effort": effort, "assistant": true}
+				if env := n.assistantEnvForRuntime(h, n.runtimeAssistantCwd(id, "", st)); env != nil {
+					params["env"] = env
+				}
 				cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
-				_ = h.peer.Call(cctx, "session.modes", map[string]any{"session_id": id, "permission_mode": mode, "effort": effort, "assistant": true}, nil)
+				_ = h.peer.Call(cctx, "session.modes", params, nil)
 				cancel()
 			}
 		}
