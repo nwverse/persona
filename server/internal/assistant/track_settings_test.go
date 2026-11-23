@@ -106,9 +106,10 @@ func TestTrackKindSettingsTakeEffect(t *testing.T) {
 	if len(p) != 3 {
 		t.Fatalf("pushes: %+v", p)
 	}
-	for i, n := range p {
-		if n.Level != assistantwire.LevelP1 {
-			t.Errorf("push %d: level %q, want P1", i, n.Level)
+	// A push sent without a level keeps "" (the hub derives P1 for it); P0 and P1 both reach the hub as P1.
+	for i, want := range []string{"", assistantwire.LevelP1, assistantwire.LevelP1} {
+		if p[i].Level != want {
+			t.Errorf("push %d: level %q, want %q", i, p[i].Level, want)
 		}
 	}
 	// The main conversation's notify_user keeps its level.
