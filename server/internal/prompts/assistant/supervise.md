@@ -12,7 +12,7 @@
    - {{.Title}}（{{.ID}}，{{if eq .Reason "pr_merged"}}PR 已合并{{else}}已完成{{end}}{{with .MergedPRs}}：{{join . "、"}}{{end}}）{{end}}{{end}}{{with .Notes}}
    待办备注 / 启动说明：
 {{chomp (indent "   " .)}}{{end}}{{end}}{{with $e.Asked}}
-   最初的要求（{{$e.AskedAt}} 用户原话{{if $e.AskedCut}}的开头{{end}}）：{{.}}{{if $e.AskedCut}}（全文用 todo_get {{$e.ID}} 看{{with $e.Link}}，或打开 {{.}}{{end}}）{{end}}{{end}}{{with $e.Started}}
+   最初的要求（{{$e.AskedAt}} 用户原话）：{{.}}{{if $e.AskedCut}}（只引了开头，全文见{{if $e.Link}}任务链接或{{end}} todo_get）{{end}}{{end}}{{with $e.Started}}
    这件事的由来（不是用户直接要的）：{{if eq . "leader"}}主管对话{{else if eq . "routine"}}定时任务{{else if eq . "hub"}}Persona 自己{{else}}助手{{end}}发起{{with $e.StartedWhy}}，理由：{{.}}{{end}}{{end}}{{with $e.Dropped}}
    范围调整时已去掉的标准：{{range $j, $c := .}}{{if $j}}；{{end}}{{$c}}{{end}}{{end}}{{if $.Fresh}}{{with $e.LastReview}}
    上次结论（{{.At}}）：{{.Verdict}}{{with .Note}}，{{.}}{{end}}{{end}}{{end}}{{with $e.Inbox}}

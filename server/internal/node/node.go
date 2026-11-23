@@ -171,6 +171,7 @@ type Node struct {
 	agyParentSubs *lru[string, agyParentSubagentInfo]
 	agyReports    map[string]agyHookReport  // pane -> what its agy hook last said (agyhooks.go)
 	agyBound      map[string]agyPaneBinding // herdr pane -> last accepted non-subagent agy conversation (agypane.go)
+	agyTitles     *agyTitleBook             // agy's own conversation titles, as last read (agytitle.go)
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
@@ -1355,9 +1356,15 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// ExtraPath: directories at the front of the node's PATH (hub.json machines[].extra_path, toolpath.go);
 			// nil (an older hub, a call that says nothing of it) leaves PATH as it is, [] takes them out.
 			ExtraPath *[]string `json:"extra_path"`
+			// PrivateNetwork: the hub is in office network mode (hub.json security.private_network_only), so this node's
+			// tailcat endpoint stops (tailcat.go stopTailcat); nil or false (an older hub) leaves it as it is.
+			PrivateNetwork *bool `json:"private_network"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
+		}
+		if c.PrivateNetwork != nil && *c.PrivateNetwork {
+			stopTailcat()
 		}
 		if c.ExtraPath != nil { // before herdr_autostart: a herdr server the node starts next has them too
 			n.setExtraPath(*c.ExtraPath)
@@ -1571,7 +1578,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, err
 		}
 		if p.ResumeSessionID == "" {
-			p.TaskInstructions = agentPlatformInstructions(agentGOOS, p.TaskInstructions)
+			p.TaskInstructions = n.agentStartRules(p.TaskInstructions)
 		}
 		speed, err := n.prepareSessionStartSpeed(ctx, p.Speed, p.Launcher, p.Host, p.ResumeSessionID)
 		if err != nil {

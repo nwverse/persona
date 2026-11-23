@@ -14,7 +14,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/operations/backup"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -116,7 +118,7 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 					t.Fatal("duplicate application accepted")
 				}
 				setSessions(machine)
-				waitFor(t, "shared restart", func() bool { return len(execs()) == 1 })
+				waitForUpdate(t, u, "shared restart", func() bool { return len(execs()) == 1 })
 				var pending update.Pending
 				if ok, err := update.Load(update.PendingPath(u.dir), &pending); !ok || err != nil {
 					t.Fatal(err)
@@ -201,10 +203,11 @@ func TestDevelopmentBackupSettingsAreValidatedAndExposed(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 	v, raw := getUpdate(t, u)
-	if v.Development.BackupDirectory != dir || v.Development.BackupRetain != 5 || !v.Development.BuiltinQuiesce {
+	// Directories come back with symlinks resolved (on macOS /tmp and /var are /private/…): compare them as the hub does.
+	if !backup.SamePath(v.Development.BackupDirectory, dir) || v.Development.BackupRetain != 5 || !v.Development.BuiltinQuiesce {
 		t.Fatalf("settings not exposed: %+v", v.Development)
 	}
-	if v.Development.BackupDefaultDirectory != filepath.Join(h.cfg.dir, "update", "development-backups") {
+	if !backup.SamePath(v.Development.BackupDefaultDirectory, filepath.Join(h.cfg.dir, "update", "development-backups")) {
 		t.Fatalf("recommended directory = %q", v.Development.BackupDefaultDirectory)
 	}
 	if raw["development"].(map[string]any)["backup_retain"] != float64(5) {
@@ -296,7 +299,7 @@ func TestDevelopmentFolderChangeRefusedWhileRecoveryPending(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("folder changed with a coordination marker: %d %s", w.Code, w.Body.String())
 	}
-	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != current {
+	if v, _ := getUpdate(t, u); !backup.SamePath(v.Development.BackupDirectory, current) {
 		t.Fatalf("refused change moved the folder: %q", v.Development.BackupDirectory)
 	}
 	if err := os.Remove(filepath.Join(current, "coordination-pending.json")); err != nil {
@@ -314,7 +317,7 @@ func TestDevelopmentFolderChangeRefusedWhileRecoveryPending(t *testing.T) {
 	if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, other)); w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
-	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != other {
+	if v, _ := getUpdate(t, u); !backup.SamePath(v.Development.BackupDirectory, other) {
 		t.Fatalf("folder after recovery = %q", v.Development.BackupDirectory)
 	}
 }
@@ -407,6 +410,7 @@ func TestDevelopmentPlatformsFollowRegisteredMachines(t *testing.T) {
 	}{
 		{"mac", "darwin", "arm64", false, true},
 		{"same-platform", "darwin", "arm64", false, true},
+		{"remote-only", "linux", "riscv64", true, true},
 		{"offline", "linux", "arm64", true, true},
 		{"never-seen", "", "", true, true},
 		{"partial", "linux", "", true, true},
@@ -425,7 +429,12 @@ func TestDevelopmentPlatformsFollowRegisteredMachines(t *testing.T) {
 		}
 		h.machines, h.byID[c.id] = append(h.machines, m), m
 	}
-	want := []string{own, "darwin-arm64", "linux-arm64"}
+	h.devices.assign = map[string]string{"mac": "remote", "remote-only": "remote"}
+	if h.entryOwner("mac") != "remote" || !h.upd.developmentAvailable() {
+		t.Fatal("a remote assistant owning a computer should allow built-in quiesce")
+	}
+	h.bus.current = map[string]*busConn{"remote": {presence: busPresence{ID: "remote", Role: bus.RoleManager, OS: "windows", Arch: "amd64"}}}
+	want := []string{own, "darwin-arm64", "linux-arm64", "linux-riscv64", "windows-amd64"}
 	slices.Sort(want)
 	if got := h.upd.developmentPlatforms(); !slices.Equal(got, slices.Compact(want)) {
 		t.Fatalf("platforms %v, want %v", got, want)
@@ -649,6 +658,13 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 					for _, name := range update.ProgramNames {
 						os.WriteFile(filepath.Join(artifacts, name+"-"+runtime.GOOS+"-"+runtime.GOARCH+".gz"), gz(script), 0600)
 					}
+					manifest, err := update.BuildManifest(artifacts, update.Manifest{Version: input["version"].(string), Build: input["build"].(int64), Commit: strings.Repeat("b", 40)})
+					if err != nil {
+						return err
+					}
+					if err := update.Save(filepath.Join(artifacts, "manifest.json"), manifest); err != nil {
+						return err
+					}
 					response = map[string]any{"artifacts": artifacts, "ancestors": []string{h.build.Commit, strings.Repeat("b", 40)}}
 				case "backup":
 					response = update.DevelopmentBackup{ID: "snapshot-fixture", Retained: 3, Pruned: []string{"snapshot-old-fixture"}}
@@ -753,7 +769,19 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			// Simulate the next process's confirmation without touching a real service.
 			h.build.Number = pending.ToBuild
 			h.version = pending.ToVersion
+			h.build.Commit = pending.Development.Commit
+			if offered, _ := u.confirmedDevelopment(); offered != nil {
+				t.Fatal("packages advertised while the watchdog owns the adoption")
+			}
 			u.confirm(context.Background(), pending)
+			offered, held := u.confirmedDevelopment()
+			if offered == nil || held || offered.Commit != pending.Development.Commit {
+				t.Fatal("confirmed adoption was not offered", offered)
+			}
+			var hosted update.Manifest
+			if ok, err := update.Load(filepath.Join(u.packageStore(), offered.Version, "manifest.json"), &hosted); !ok || err != nil || hosted.Commit != offered.Commit || hosted.Files["plan9-arm"].BinarySHA256 == "" {
+				t.Fatal("confirmed packages did not survive staging cleanup", err)
+			}
 			if _, err := os.Stat(filepath.Join(nodes, "personad-"+runtime.GOOS+"-"+runtime.GOARCH)); err != nil {
 				t.Fatal("manual node package missing with automatic fleet updates off", err)
 			}

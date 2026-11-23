@@ -756,6 +756,9 @@ func (s *Service) escalatedResolved(ctx context.Context, ix proto.Interaction, r
 	if !ok || st == nil || status != "resolved" || r.Dismiss || ix.Kind == proto.IxQuestion {
 		return
 	}
+	if r.AnsweredBy != "" || r.Late {
+		return // answered for the user (the assistant, a supervisor, the terminal, a default), not the user's own decision
+	}
 	l := s.lang(ctx)
 	q, c := decisionText(interactionQuestion(l, ix)), decisionText(resolutionText(l, ix, r))
 	if q == "" || c == "" {

@@ -82,6 +82,16 @@ func tlsServer(t *testing.T, h http.Handler) *httptest.Server {
 func upstreamAt(t *testing.T, srv *httptest.Server, addrs ...string) {
 	t.Helper()
 	lookup, roots, addrBudget, lastBudget := lookupUpstream, upstreamRoots, tlsAddrBudget, tlsLastBudget
+	transport := directClient.Transport.(*http.Transport)
+	proxy := transport.Proxy
+	// ProxyFromEnvironment may already have cached the runner's proxy. These
+	// synthetic upstreams must always use their local listeners directly.
+	transport.Proxy = nil
+	directClient.CloseIdleConnections()
+	t.Cleanup(func() {
+		transport.Proxy = proxy
+		directClient.CloseIdleConnections()
+	})
 	t.Cleanup(func() {
 		lookupUpstream, upstreamRoots, tlsAddrBudget, tlsLastBudget = lookup, roots, addrBudget, lastBudget
 		lastGood.Clear()

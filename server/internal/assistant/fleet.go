@@ -184,6 +184,31 @@ func (g guardedStore) InsertInteraction(ctx context.Context, ix proto.Interactio
 	return g.st.InsertInteraction(ctx, ix)
 }
 
+// resolvedInteractionInserter is the atomic history write and final outcome update used by reversible-setting
+// auto-approval. A store without both fails closed: the setting is not changed without its queryable decision record.
+type resolvedInteractionInserter interface {
+	InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) error
+	MarkResolvedInteractionOutcome(ctx context.Context, id string, created time.Time, outcome string, at time.Time) error
+}
+
+func (g guardedStore) InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(resolvedInteractionInserter)
+	if !ok {
+		return errNoTable
+	}
+	return st.InsertResolvedInteraction(ctx, ix, res)
+}
+
+func (g guardedStore) MarkResolvedInteractionOutcome(ctx context.Context, id string, created time.Time, outcome string, at time.Time) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(resolvedInteractionInserter)
+	if !ok {
+		return errNoTable
+	}
+	return st.MarkResolvedInteractionOutcome(ctx, id, created, outcome, at)
+}
+
 func (g guardedStore) FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) (err error) {
 	defer guard(&err)
 	return g.st.FinishInteraction(ctx, id, status, res)
@@ -475,20 +500,22 @@ func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.
 // backgroundWaiting (Session.BackgroundWaiting, #6045): working only because of background work, and that work only
 // waits: the node found its background commands waiting, and no subagent or workflow runs (those are work).
 func backgroundWaiting(sess proto.Session) bool {
-	if !sess.BackgroundWorking || !sess.BackgroundWaiting {
-		return false
-	}
+	return sess.BackgroundWorking && sess.BackgroundWaiting && !backgroundIsWork(sess)
+}
+
+// backgroundIsWork: a subagent or workflow runs, which is work whatever its background commands do.
+func backgroundIsWork(sess proto.Session) bool {
 	for _, a := range sess.Subagents {
 		if a.Running {
-			return false
+			return true
 		}
 	}
 	for _, w := range sess.Workflows {
 		if w.Running {
-			return false
+			return true
 		}
 	}
-	return !slices.ContainsFunc(sess.Background, func(t proto.BackgroundTask) bool { return t.Kind == "agent" || t.Kind == "workflow" })
+	return slices.ContainsFunc(sess.Background, func(t proto.BackgroundTask) bool { return t.Kind == "agent" || t.Kind == "workflow" })
 }
 
 func backgroundRunning(sess proto.Session) bool {

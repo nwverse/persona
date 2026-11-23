@@ -200,6 +200,10 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		// Every program and Node package has an independent verified copy in
 		// staged. Only the disposable checkout/build output is removed here;
 		// staged survives idle waiting and exec until confirmation/rollback.
+		if err := u.stageDevelopmentPackages(r, staged); err != nil {
+			fail(err)
+			return
+		}
 		u.removeDevelopmentBuild(r)
 		u.mu.Lock()
 		r.Source = ""

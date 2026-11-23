@@ -63,10 +63,11 @@ func TestNeedsUserJudgmentWaitsAndPushesOnce(t *testing.T) {
 		!strings.Contains(pushes[0].Body, "需要你本人操作") || !strings.Contains(pushes[0].Body, testWeb+"/todos/"+todo.ID) {
 		t.Fatalf("needs-user pushes = %+v", pushes)
 	}
-	wantRelated := "todo:" + todo.ID + "@" + cur.Supervision.Waits.Work.UTC().Format(time.RFC3339Nano)
-	if pushes[0].Level != assistantwire.LevelP0 || pushes[0].RelatedKey != wantRelated {
-		t.Fatalf("an owner action must interrupt low-distraction mode once per work stretch: level=%q related=%q, want P0 %q",
-			pushes[0].Level, pushes[0].RelatedKey, wantRelated)
+	// One key a to-do and reason, not a stretch of work: the hub rings it once while the task waits on the owner.
+	wantRelated := assistantwire.TodoPushKey(todo.ID, assistantwire.TodoPushNeedsUser)
+	if pushes[0].Level != assistantwire.LevelP0 || pushes[0].RelatedKey != wantRelated || pushes[0].CardID != "" {
+		t.Fatalf("an owner action must interrupt low-distraction mode, keyed by the to-do and reason: level=%q related=%q card=%q, want P0 %q",
+			pushes[0].Level, pushes[0].RelatedKey, pushes[0].CardID, wantRelated)
 	}
 	s.superviseJudged(context.Background(), cur, cur.Supervision.Waits.Work, taskDoneCheck{Verdict: verdictNeedsUser, Reason: "需要你本人操作"}, nil)
 	if got := len(f.pushed()); got != 1 {

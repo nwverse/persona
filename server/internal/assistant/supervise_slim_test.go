@@ -28,8 +28,9 @@ func TestSuperviseQuotesTheStartOfALongRequest(t *testing.T) {
 		t.Fatalf("asked = %q (%d runes), cut %v", e.Asked, utf8.RuneCountInString(e.Asked), e.AskedCut)
 	}
 	text := prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{e}})
-	if strings.Contains(text, long) || !strings.Contains(text, "用户原话的开头") ||
-		!strings.Contains(text, "全文用 todo_get "+todo.ID+" 看，或打开 https://hub.example/todos/"+todo.ID) {
+	// The pointer is short: the task's link is in the entry's first line already, not repeated here.
+	if strings.Contains(text, long) || !strings.Contains(text, "…（只引了开头，全文见任务链接或 todo_get）") ||
+		strings.Count(text, "https://hub.example/todos/"+todo.ID) != 1 {
 		t.Fatalf("message:\n%s", text)
 	}
 

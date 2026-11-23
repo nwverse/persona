@@ -19,8 +19,10 @@ let undo: (() => void)[] = [];
 const emit = () => listeners.forEach((l) => l());
 
 export function revealItem(scope: string, itemId: string) {
-  target = { scope, itemId, n: ++count };
+  const request = { scope, itemId, n: ++count };
+  target = request;
   emit();
+  return () => { if (target === request) clearReveal(); };
 }
 
 export function clearReveal() {

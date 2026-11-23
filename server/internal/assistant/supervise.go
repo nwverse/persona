@@ -189,6 +189,9 @@ type TaskReview struct {
 	// SupersededReason records the supervisor's natural-language reason when this task_review superseded an earlier
 	// pending needs_user decision without fabricating an owner selection (#13112).
 	SupersededReason string `json:"superseded_reason,omitempty"`
+	// WithdrewNeedsUser: this accepted review is the supervisor taking back the needs_user it had raised
+	// (task_review withdraw_needs_user): no owner answered it, and nothing was pushed or carded for it.
+	WithdrewNeedsUser bool `json:"withdrew_needs_user,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
