@@ -1,0 +1,161 @@
+// @vitest-environment jsdom
+// The module host (#13434, docs/web/web.md "Modules"): registration rules, when a module is there (its hub flag, this
+// browser's switch, before the hub's hello), its routes and sidebar entries only while it is, and loading its strings,
+// then its code, only while it is on.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parse } from "../lib/router";
+import { getState, reset, subscribe } from "../lib/store";
+
+const setState = (patch: Partial<ReturnType<typeof getState>>) => Object.assign(getState(), patch);
+import { connectModuleHub, enabledNavItems, loadModule, moduleNavKey, moduleRouteAt, moduleState, moduleTitle, registeredModules, registerModule, resetModulesForTest, subscribeModules, type ModuleDescriptor } from "./module-host";
+import { forgetModuleSwitches, moduleSwitchedOff, setModuleSwitchedOff } from "./module-switch";
+
+const code = vi.fn(async () => ({ Page: () => null }));
+const strings = vi.fn(async () => ({ default: { "garden.title": "Garden" }, fallbacks: {} }));
+
+function garden(over: Partial<ModuleDescriptor> = {}): ModuleDescriptor {
+  return {
+    id: "garden",
+    feature: "garden_feature",
+    title: () => "Garden",
+    description: () => "A synthetic module",
+    routes: [{ base: "garden", aliases: [["old", "garden"]], title: () => "Garden page" }],
+    navItems: [{ key: "garden", path: "/garden", icon: "heart", label: () => "Garden", after: "inbox" }],
+    i18nNamespaces: ["garden"],
+    locales: { "zh-Hans": strings, en: strings },
+    load: code,
+    ...over,
+  };
+}
+
+beforeEach(() => {
+  connectModuleHub(getState, subscribe);
+  localStorage.clear();
+  forgetModuleSwitches();
+  reset();
+  resetModulesForTest();
+  code.mockClear();
+  strings.mockClear();
+});
+
+afterEach(() => {
+  localStorage.clear();
+  forgetModuleSwitches();
+  resetModulesForTest();
+});
+
+describe("registering", () => {
+  it("keeps each module once, by a lower-case hyphenated id, with route bases of its own", () => {
+    registerModule(garden());
+    expect(registeredModules().map((d) => d.id)).toEqual(["garden"]);
+    expect(() => registerModule(garden())).toThrow(/twice/);
+    expect(() => registerModule(garden({ id: "Garden" }))).toThrow(/lower-case/);
+    expect(() => registerModule(garden({ id: "yard" }))).toThrow(/claims \/garden/);
+    registerModule(garden({ id: "yard-two", routes: [{ base: "yard", title: () => "Yard" }] }));
+    expect(registeredModules().map((d) => d.id)).toEqual(["garden", "yard-two"]);
+  });
+
+  it("tells subscribers about a registration", () => {
+    const seen = vi.fn();
+    const stop = subscribeModules(seen);
+    registerModule(garden());
+    expect(seen).toHaveBeenCalled();
+    stop();
+  });
+});
+
+describe("whether a module is there", () => {
+  it("needs its flag in the hello's features; before the hello it is pending", () => {
+    const d = garden();
+    expect(moduleState(d, { features: [], loaded: false })).toBe("pending");
+    expect(moduleState(d, { features: [], loaded: true })).toBe("off");
+    expect(moduleState(d, { features: ["other"], loaded: true })).toBe("off");
+    expect(moduleState(d, { features: ["garden_feature"], loaded: true })).toBe("on");
+  });
+
+  it("is on without a flag, whatever the hub says", () => {
+    const d = garden({ feature: undefined });
+    expect(moduleState(d, { features: [], loaded: false })).toBe("on");
+    expect(moduleState(d, { features: ["x"], loaded: true })).toBe("on");
+  });
+
+  it("is off where this browser switched it off, and back on when switched on", () => {
+    const d = garden({ feature: undefined });
+    expect(setModuleSwitchedOff("garden", true)).toBe(true);
+    expect(moduleSwitchedOff("garden")).toBe(true);
+    expect(moduleState(d, { features: ["garden_feature"], loaded: true })).toBe("off");
+    expect(setModuleSwitchedOff("garden", false)).toBe(true);
+    expect(localStorage.getItem("persona.modules.off")).toBeNull();
+    expect(moduleState(d)).toBe("on");
+  });
+
+  it("reads what it can't parse as nothing switched off", () => {
+    localStorage.setItem("persona.modules.off", "{not json");
+    forgetModuleSwitches();
+    expect(moduleSwitchedOff("garden")).toBe(false);
+  });
+});
+
+describe("routes and sidebar entries", () => {
+  it("routes the module's addresses and aliases while it is on, and as unknown ones while it is off", () => {
+    registerModule(garden({ feature: undefined }));
+    expect(parse("/garden")).toEqual({ name: "module", module: "garden", base: "garden", path: [] });
+    expect(parse("/garden/a%20b/c")).toEqual({ name: "module", module: "garden", base: "garden", path: ["a b", "c"] });
+    expect(parse("/old/garden/x")).toEqual({ name: "module", module: "garden", base: "garden", path: ["x"] });
+    expect(moduleTitle({ module: "garden", base: "garden" })).toBe("Garden page");
+    expect(moduleNavKey({ module: "garden", base: "garden" })).toBe("garden");
+    expect(enabledNavItems().map((n) => n.key)).toEqual(["garden"]);
+
+    setModuleSwitchedOff("garden", true);
+    expect(parse("/garden/x")).toEqual({ name: "not-found", path: "/garden/x" });
+    expect(parse("/old/garden")).toEqual({ name: "not-found", path: "/old/garden" });
+    expect(enabledNavItems()).toEqual([]);
+  });
+
+  it("leaves addresses no module has to the router", () => {
+    registerModule(garden({ feature: undefined }));
+    expect(moduleRouteAt(["inbox"])).toBeNull();
+    expect(parse("/inbox")).toEqual({ name: "inbox", id: undefined });
+  });
+
+  it("follows the hub's features: no entry without the flag, the entry once the hello has it", () => {
+    registerModule(garden());
+    expect(parse("/garden")).toMatchObject({ name: "module" }); // pending: the page waits for the hello
+    expect(enabledNavItems()).toEqual([]);
+    setState({ loaded: true, features: ["x"] });
+    expect(parse("/garden")).toEqual({ name: "not-found", path: "/garden" });
+    setState({ features: ["garden_feature"] });
+    expect(enabledNavItems().map((n) => n.key)).toEqual(["garden"]);
+  });
+});
+
+describe("loading", () => {
+  it("never asks for an absent module's strings or code", async () => {
+    registerModule(garden());
+    setState({ loaded: true, features: [] });
+    await expect(loadModule("garden")).rejects.toThrow(/not enabled/);
+    await expect(loadModule("nothing")).rejects.toThrow(/no module/);
+    expect(strings).not.toHaveBeenCalled();
+    expect(code).not.toHaveBeenCalled();
+  });
+
+  it("loads an enabled module's strings, then its code, once", async () => {
+    const order: string[] = [];
+    strings.mockImplementationOnce(async () => (order.push("strings"), { default: { "garden.title": "Garden" }, fallbacks: {} }));
+    code.mockImplementationOnce(async () => (order.push("code"), { Page: () => null }));
+    registerModule(garden({ feature: undefined }));
+    const first = loadModule("garden");
+    expect(loadModule("garden")).toBe(first);
+    await first;
+    expect(order).toEqual(["strings", "code"]);
+    expect(code).toHaveBeenCalledTimes(1);
+  });
+
+  it("tries again after a failed load", async () => {
+    code.mockRejectedValueOnce(new Error("offline"));
+    registerModule(garden({ feature: undefined }));
+    await expect(loadModule("garden")).rejects.toThrow("offline");
+    await expect(loadModule("garden")).resolves.toHaveProperty("Page");
+    expect(code).toHaveBeenCalledTimes(2);
+  });
+});

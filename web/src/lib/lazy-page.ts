@@ -22,6 +22,9 @@ export interface LazyPageOptions {
   idle?: boolean;
   /** The routes it is the page of: a link to one loads it when the pointer, the focus or a finger reaches it. */
   routes?: Route["name"][];
+  /** false: only its own render or `preload` loads it, never loadPages (a feature module's page, core/ModulePage.tsx,
+   *  whose chunk must not be requested while the module is off). */
+  listed?: boolean;
 }
 
 /** A lazy page, with its chunk's load on hand for a caller that knows sooner than a render or a link that it is next. */
@@ -44,7 +47,7 @@ export function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>
         throw e;
       },
     ));
-  loaders.push(once);
+  if (opts.listed !== false) loaders.push(once);
   if (opts.idle) idleLoaders.push(once);
   for (const r of opts.routes ?? []) routeLoaders.set(r, once);
   function LazyPage(props: P) {

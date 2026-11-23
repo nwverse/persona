@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+// the feature modules (the health page is one: docs/web/web.md "Modules")
+import "../modules";
 import { parse, showsSession } from "./router";
 
 describe("showsSession", () => {
