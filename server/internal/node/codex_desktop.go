@@ -218,8 +218,8 @@ func (n *Node) interruptCodexDesktop(ctx context.Context, src codexSource) error
 // A process holding the rollout open only ever said "unknown", which the phone folds away with the quiet ones.
 const codexDesktopRecent = 72 * time.Hour
 
-// codexAppState is what the App keeps in <CODEX_HOME>/.codex-global-state.json about its sidebar: the unread threads,
-// its projects and which thread belongs to which. Read again when the file changes.
+// codexAppState joins the App's legacy sidebar state with its native project catalog and thread assignments.
+// Projects and memberships migrate independently, so both sources remain readable until that migration finishes.
 type codexAppState struct {
 	unread      map[string]bool
 	projectless map[string]bool
@@ -240,32 +240,22 @@ type codexAppProject struct {
 }
 
 type codexAppStateCache struct {
-	mtime   time.Time
-	size    int64
-	dbStamp string // the state database's stamp when its projects were merged (readCodexAppProjects, #6388)
-	state   *codexAppState
+	stamp    string
+	revision uint64
+	state    *codexAppState
 }
 
 var codexAppStates sync.Map // home → codexAppStateCache
 
 func loadCodexAppState(home string) *codexAppState {
-	p := filepath.Join(home, ".codex-global-state.json")
-	st, err := os.Stat(p)
-	if err != nil {
-		return nil
-	}
-	dbStamp := ""
-	if db := codexAppDBPath(home); db != "" {
-		dbStamp = fileStamp(db) + fileStamp(db+"-wal")
-	}
+	snapshot, snapshotErr := codexDesktopProjectSnapshot(home)
 	if v, ok := codexAppStates.Load(home); ok {
 		c := v.(codexAppStateCache)
-		if c.mtime.Equal(st.ModTime()) && c.size == st.Size() && c.dbStamp == dbStamp {
+		if snapshotErr != nil || c.stamp == snapshot.Stamp && c.revision == snapshot.Revision {
 			return c.state
 		}
 	}
-	b, err := os.ReadFile(p)
-	if err != nil {
+	if snapshot.Projects == nil {
 		return nil
 	}
 	var raw struct {
@@ -276,13 +266,15 @@ func loadCodexAppState(home string) *codexAppState {
 		Assignments map[string]struct {
 			ProjectID string `json:"projectId"`
 		} `json:"thread-project-assignments"`
-		Projects map[string]codexAppProject `json:"local-projects"`
-		Order    []string                   `json:"project-order"`
 	}
-	if json.Unmarshal(b, &raw) != nil {
+	b, err := os.ReadFile(filepath.Join(home, ".codex-global-state.json"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	s := &codexAppState{unread: map[string]bool{}, projectless: map[string]bool{}, assigned: map[string]string{}, projects: raw.Projects, order: raw.Order}
+	if err == nil && json.Unmarshal(b, &raw) != nil {
+		return nil
+	}
+	s := &codexAppState{unread: map[string]bool{}, projectless: map[string]bool{}, assigned: map[string]string{}, projects: snapshot.Projects, order: snapshot.Order}
 	for _, hosts := range raw.ReadState.UnreadByIdentity {
 		for host, ids := range hosts {
 			if len(host) < 6 || host[:6] != "local:" {
@@ -297,7 +289,20 @@ func loadCodexAppState(home string) *codexAppState {
 		s.projectless[id] = true
 	}
 	for id, a := range raw.Assignments {
-		s.assigned[id] = a.ProjectID
+		pid := a.ProjectID
+		if canonical := snapshot.NativeProjectIDs[pid]; canonical != "" {
+			pid = canonical
+		}
+		s.assigned[id] = pid
+	}
+	for id, pid := range snapshot.ThreadProjects {
+		if pid == "" {
+			delete(s.assigned, id)
+			s.projectless[id] = true
+			continue
+		}
+		s.assigned[id] = pid
+		delete(s.projectless, id)
 	}
 	add := func(id string) {
 		if validID(id) && len(s.sidebar) < codexAppSidebarMax {
@@ -310,19 +315,9 @@ func loadCodexAppState(home string) *codexAppState {
 	for id := range s.assigned {
 		add(id)
 	}
-	// The migrated App keeps its projects in the state database, not in local-projects (#6388): merge them, with the
-	// json's own projects winning an id both have.
-	for id, p := range readCodexAppProjects(home) {
-		if s.projects == nil {
-			s.projects = map[string]codexAppProject{}
-		}
-		if _, ok := s.projects[id]; !ok {
-			s.projects[id] = p
-		}
-	}
 	slices.Sort(s.sidebar)
 	s.sidebar = slices.Compact(s.sidebar)
-	codexAppStates.Store(home, codexAppStateCache{mtime: st.ModTime(), size: st.Size(), dbStamp: dbStamp, state: s})
+	codexAppStates.Store(home, codexAppStateCache{stamp: snapshot.Stamp, revision: snapshot.Revision, state: s})
 	return s
 }
 

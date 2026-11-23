@@ -193,6 +193,9 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	if tmpl == trackTemplateSpace {
 		params["space"] = map[string]any{"slug": track.Slug, "initial_space_md": s.initialSpaceMD(ctx, track)}
 	}
+	if kind := s.trackKindOf(ctx, space); kind != "" {
+		params["track_kind"] = kind // the node's PERSONA_TRACK_KIND for the directory's processes (an older node ignores it)
+	}
 	var prep struct {
 		Cwd           string   `json:"cwd"`
 		Need          []string `json:"plugin_skills_need"`
@@ -267,6 +270,7 @@ func (s *Service) instructionsLoop(ctx context.Context) {
 	defer t.Stop()
 	for {
 		s.refreshInstructions(ctx)
+		s.spaceRecordingsSweep(ctx) // recording_days for the recordings saved into tracks (space_recordings.go)
 		select {
 		case <-ctx.Done():
 			return
@@ -316,6 +320,11 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			p.Launcher != scope.pick.Launcher || p.Model != scope.pick.Model || p.NewSessionID != scope.execution.SessionID ||
 			!s.externalMainStartScope(ctx, machine, p.NewSessionID, scope.pick) {
 			return proto.Session{}, refusePick(http.StatusBadRequest, i18n.Err("external-adapter.scope_required"))
+		}
+	}
+	if p.RequireLauncher {
+		if err := s.modelPickRefusal(ctx, machine, p.Launcher, s.lang(ctx), true); err != nil {
+			return proto.Session{}, err
 		}
 	}
 	if !s.trackKnown(ctx, p.Space) {
@@ -389,7 +398,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			purpose = purposeMain
 		}
 	}
-	if p.Launcher != "" {
+	if p.Launcher != "" && !p.RequireLauncher {
 		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
 		if fit == mainChatRefused {
 			return proto.Session{}, refusal
@@ -408,7 +417,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if params["launch"] != "headless" {
 		return proto.Session{}, badRequest(fmt.Errorf("purpose %q requires headless launch for assistant.send", purpose))
 	}
-	if !p.TaskExecution {
+	if !p.TaskExecution && !p.RequireLauncher {
 		if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 			return proto.Session{}, err
 		}

@@ -1575,6 +1575,16 @@ explicit user-facing actions still follow the usual visibility rules.
   user can open and close at any time to see the full transcript, history included (super rule 2.4). A scheduled task's
   prompt is never shown in the main chat while folding is on: its source block says only which task ran, closed or open.
   A supervisor message shows its text when opened.
+- **Completed silent rounds**: in the main conversation, a completed round with a successful silent finish, no live
+  work and no promotion leaves no timeline row and contributes no unread count or badge. Its inline tool calls and
+  its `task`, `routed` and `answered` feed cards inside the same half-open round interval stay out too; plans,
+  message cards, notices and other decisions always remain visible. **Background activity**, opened from either the
+  conversation menu or Inbox, retains each such round with its input, replies, tool activity, feed cards and finish
+  receipt, using the same paged history and full-record renderer. Opening it marks nothing seen. Full transcript and
+  feed APIs are unchanged. The hub suppresses unread only for the matching latest silent round: earlier genuinely
+  visible unread work remains unread, working and needs-you states win, and a failed transcript read fails open.
+  Existing daily-briefing totals keep their meaning; a separate exact silently-handled daily total is out of scope
+  because round metrics do not record visibility.
 - **Not folded** (the visibility rule supervision rounds use, `supervisionVisible` / `fold.supervision_user` from
   `server/internal/transcript/fold_supervision.go`): a round that used `ask_user` or `notify_user` successfully, a pending
   `ask_user` while it runs, a `task_review` with an `accepted` or `needs_user` verdict card, or a `supervision_finish`
@@ -2100,6 +2110,26 @@ same sentence on the Lark card and, from the web app's own strings, on its brief
 purpose id. Out of scope: the reverse. Nothing suggests a stronger tier, whatever is reopened; the table of "Models
 for each role" says when to raise it. Once the owner has moved the supervisor down, the same rule may name the next
 tier down after its own 20 settled acceptances, but never the smallest.
+
+## Card ledger (decision rights, rule 4)
+
+The owner decides only six kinds of things (decision-rights design of 2026-11-23): 1 goals and direction, 2 what only
+they know, 3 what goes out under their name, 4 money, 5 what cannot be undone and they never said, 6 what only they can
+do in person (a login, a second factor, a password or form, the experience check). Every card or push the manager sends
+to the owner is recorded with its source, the kind of the six it is (0: none of the six) and its owner
+(`assistant/card_layers.go`). The source is a code constant named where the push is made (`withCard` on the ctx of
+`push`/`pushResult`/`ask`, `deliverCard`, or `inputCardSource` for a card: an Agent's by its kind, the manager's own by
+what `ask` was told or by its tool), and its kind comes from one table, `cardCategories`, never from a model: secret and
+form cards are 6; a connector's write left to the owner (mail, a chat message, a comment) is 3; a supervisor's
+`needs_user`, its decision, an explicit `ask_escalate` and what the owner set up themself (their reminders, water
+reminders, minutes, the day recap, the briefing fallback, finished-turn pushes) are 1; everything else, an Agent's
+approvals, plans and questions, `confirmOutbound`, the main conversation's own `persona_settings` cards and an untagged
+push included, is 0, and every push of kind 0 is a bug. A test holds every source constant to having a kind. Counts are
+kept per day of the owner's time zone in the setting `assistant.card_ledger` (eight days; in memory only without a
+database). Once a day, from the morning briefing's time (`acceptLoop`'s tick), the day before's count goes to the main
+conversation as a message kept without waking it (`keepRelayLater`, setting `assistant.card_ledger_told`): in all, each
+of the six kinds, and kind 0 by source. It is never pushed to the owner and the briefing does not carry it. The ledger
+only records; which cards are pushed is decided where they are made.
 
 ## Supervision by model (#5086)
 

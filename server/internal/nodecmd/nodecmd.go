@@ -1,5 +1,6 @@
 // Package nodecmd is the device's command line: what a computer runs for its node and its Agents (`node --stdio`,
-// `node --attach`, `hook`, `mcp`, `ask`, `notify`, `launch`, …). The device's own program `persona-node` is this alone;
+// `node --attach`, `hook`, `mcp`, `ask`, `notify`, `create-direction`, `write-progress`, `launch`, …). The device's own
+// program `persona-node` is this alone;
 // `personad` dispatches the same commands here and adds the hub's and the manager's. It must
 // not link the hub, the manager or the database (cmd/persona-node/main_test.go guards that).
 package nodecmd
@@ -111,6 +112,10 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(scriptcli.Ask(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "notify":
 		os.Exit(scriptcli.Notify(ctx, rest, os.Stdout, os.Stderr))
+	case "create-direction":
+		os.Exit(scriptcli.CreateDirection(ctx, rest, os.Stdout, os.Stderr))
+	case "write-progress":
+		os.Exit(scriptcli.WriteProgress(ctx, rest, os.Stdout, os.Stderr))
 	case "decision":
 		os.Exit(scriptcli.Decision(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "office":
@@ -165,6 +170,8 @@ func runNode(ctx context.Context, args []string, b Build) error {
 				os.Exit(1)
 			}
 			return err
+		case "agy-hooks": // Persona's entries in the Antigravity CLI's hooks file (node/agyhooks.go)
+			return node.AgyHooksCommand(args[1:], os.Stdout)
 		case "reset-uid":
 			if err := noExtraArgs("reset-uid", args[1:]); err != nil {
 				exitNodeUsage(err)

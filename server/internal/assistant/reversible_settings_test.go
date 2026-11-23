@@ -17,7 +17,10 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-const reversibleBriefingValue = `{"stalled_minutes":20,"silent_minutes":120,"orphan_minutes":10,"card_minutes":3,"max_rows":16}`
+const (
+	reversibleBriefingValue        = `{"stalled_minutes":20,"silent_minutes":120,"orphan_minutes":10,"card_minutes":3,"max_rows":16}`
+	reversibleBriefingDefaultValue = `{"stalled_minutes":20,"silent_minutes":120,"orphan_minutes":10,"card_minutes":3,"max_rows":15}`
+)
 
 type reversibleSettingCase struct {
 	key   string
@@ -158,11 +161,7 @@ func putReversibleRaw(t *testing.T, st *fleetMem, tc reversibleSettingCase, raw 
 			}
 			saved.RecentTaskChats = &value
 		case "assistant.briefing_waits":
-			var value BriefingWaits
-			if err := json.Unmarshal([]byte(raw), &value); err != nil {
-				t.Fatal(err)
-			}
-			saved.BriefingWaits = &value
+			saved.BriefingWaits = moduleValue(json.RawMessage(raw))
 		default:
 			t.Fatalf("unknown reversible setting %q", tc.key)
 		}
@@ -269,7 +268,7 @@ func TestReversibleBooleanNullMatchesLegacyWhenSwitchOff(t *testing.T) {
 
 func TestBriefingWaitsExplicitDefaultNullNoopWhenSwitchOff(t *testing.T) {
 	s, st := newReversibleSettingService(t, false)
-	initial := Settings{BriefingWaits: ptr(defaultBriefingWaits())}
+	initial := Settings{BriefingWaits: moduleValue(json.RawMessage(reversibleBriefingDefaultValue))}
 	if err := st.PutSetting(context.Background(), settingsKey, initial); err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +364,6 @@ func TestReversibleSettingsAutoApproveRestoreAndAudit(t *testing.T) {
 }
 
 func TestReversibleSettingsRestoreExplicitBeforeImages(t *testing.T) {
-	custom := BriefingWaits{StalledMinutes: 21, SilentMinutes: 121, OrphanMinutes: 11, CardMinutes: 4, MaxRows: 14}
 	customRaw := `{"stalled_minutes":21,"silent_minutes":121,"orphan_minutes":11,"card_minutes":4,"max_rows":14}`
 	for _, tc := range []struct {
 		reversibleSettingCase
@@ -374,7 +372,7 @@ func TestReversibleSettingsRestoreExplicitBeforeImages(t *testing.T) {
 	}{
 		{reversibleSettingCase: reversibleSettingCases[0], initial: Settings{MainBackgroundFolded: ptr(true)}, undo: `true`},
 		{reversibleSettingCase: reversibleSettingCases[1], initial: Settings{RecentTaskChats: ptr(false)}, undo: `false`},
-		{reversibleSettingCase: reversibleSettingCases[2], initial: Settings{BriefingWaits: &custom}, undo: customRaw},
+		{reversibleSettingCase: reversibleSettingCases[2], initial: Settings{BriefingWaits: moduleValue(json.RawMessage(customRaw))}, undo: customRaw},
 	} {
 		t.Run(tc.key, func(t *testing.T) {
 			s, st := newReversibleSettingService(t, true)
@@ -397,7 +395,7 @@ func TestReversibleNullClearsExplicitDefaults(t *testing.T) {
 	}{
 		{reversibleSettingCase: reversibleSettingCases[0], initial: Settings{MainBackgroundFolded: ptr(true)}, explicit: `true`},
 		{reversibleSettingCase: reversibleSettingCases[1], initial: Settings{RecentTaskChats: ptr(false)}, explicit: `false`},
-		{reversibleSettingCase: reversibleSettingCases[2], initial: Settings{BriefingWaits: ptr(defaultBriefingWaits())}, explicit: `{"stalled_minutes":20,"silent_minutes":120,"orphan_minutes":10,"card_minutes":3,"max_rows":15}`},
+		{reversibleSettingCase: reversibleSettingCases[2], initial: Settings{BriefingWaits: moduleValue(json.RawMessage(reversibleBriefingDefaultValue))}, explicit: `{"stalled_minutes":20,"silent_minutes":120,"orphan_minutes":10,"card_minutes":3,"max_rows":15}`},
 	} {
 		t.Run(tc.key, func(t *testing.T) {
 			s, st := newReversibleSettingService(t, true)

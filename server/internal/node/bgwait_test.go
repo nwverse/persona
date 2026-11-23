@@ -138,3 +138,49 @@ func TestBackgroundWaitsOnTheSession(t *testing.T) {
 		t.Fatal("task shells are the ones that source Claude Code's snapshot")
 	}
 }
+
+// A worker that hung (#13744): tests whose esbuild service nobody talks to any more, no CPU and no output for hours.
+// It is Working until it has used no CPU for bgStallAfter, then waits; CPU or output puts it back to Working at once.
+func TestBackgroundStalledWorkerWaits(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "task.output")
+	if err := os.WriteFile(out, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	_ = os.Chtimes(out, old, old)
+	cpu := time.Duration(0)
+	n := &Node{}
+	n.bgWait.ps = func() map[int]psRow {
+		return table(row(100, time.Hour, 0, taskShellArgs), row(200, time.Hour, 2*time.Second, "node --test tests/x.test.mjs"),
+			row(201, time.Hour, cpu, "/w/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.28.2 --ping"))
+	}
+	live := []claudeProc{{pid: 100, SessionID: "s1"}}
+	tasks := []proto.BackgroundTask{{ID: "b1", Kind: "shell", OutputFile: out}}
+	look := func() bool {
+		n.bgWait.at = n.bgWait.at.Add(-bgWaitEvery) // the next look is due
+		return n.bgWait.waits("s1", tasks, func() []claudeProc { return live })
+	}
+	look() // the first look has nothing to compare with
+	if look() {
+		t.Fatal("a worker just seen idle is still Working")
+	}
+	n.bgWait.busyAt["s1"] = n.bgWait.at.Add(-bgStallAfter) // no CPU at any look since then
+	if !look() {
+		t.Fatal("a worker with no CPU and no output for bgStallAfter should wait")
+	}
+	cpu = 3 * time.Second // it moves again
+	if look() {
+		t.Fatal("a stalled worker that uses CPU again is Working")
+	}
+	cpu = 3 * time.Second
+	n.bgWait.busyAt["s1"] = n.bgWait.at.Add(-bgStallAfter)
+	_ = os.Chtimes(out, time.Now(), time.Now()) // output again
+	if look() {
+		t.Fatal("a worker writing output is Working")
+	}
+	live = nil
+	look()
+	if _, ok := n.bgWait.busyAt["s1"]; ok {
+		t.Fatal("a claude that is gone keeps no history")
+	}
+}

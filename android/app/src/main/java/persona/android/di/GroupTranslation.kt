@@ -176,6 +176,8 @@ internal fun ChatActions.inGroup(names: GroupNames): ChatActions {
         override suspend fun isMuted(session: Session) = source.isMuted(names.rawSession(session))
         override suspend fun execute(session: Session, action: ChatAction) = source.execute(names.rawSession(session), action)
         override suspend fun verify(session: Session, action: ChatAction) = source.verify(names.rawSession(session), action)
+        override suspend fun continueStart(session: Session, choice: String) =
+            names.session(source.continueStart(names.rawSession(session), choice))
         override suspend fun editQueue(session: Session, keep: List<Int>) = source.editQueue(names.rawSession(session), keep)
         override suspend fun sendQueuedNow(session: Session) = source.sendQueuedNow(names.rawSession(session))
         override suspend fun retryUndelivered(session: Session, messageId: String) =
@@ -342,6 +344,17 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
             })
         }
         override suspend fun revokeStandingAuthorization(id: String) = source.revokeStandingAuthorization(id)
+        override suspend fun tracks() = source.tracks()
+        override suspend fun trackKinds() = source.trackKinds()
+        override suspend fun createTrack(track: persona.core.contracts.api.TrackCreate) = source.createTrack(track)
+        override suspend fun changeTrack(slug: String, change: persona.core.contracts.api.TrackChange) = source.changeTrack(slug, change)
+        override suspend fun spaceMd(slug: String) = source.spaceMd(slug)
+        override suspend fun writeSpaceMd(slug: String, content: String, baseDigest: String) = source.writeSpaceMd(slug, content, baseDigest)
+        override suspend fun conversationCategories(session: SessionKey) = source.conversationCategories(names.raw(session))
+        override suspend fun changeConversationCategories(session: SessionKey, add: List<String>, remove: List<String>) =
+            source.changeConversationCategories(names.raw(session), add, remove)
+        override suspend fun extensionTrust() = source.extensionTrust()
+        override suspend fun setExtensionTrust(id: String, trust: persona.core.contracts.api.ExtensionTrust) = source.setExtensionTrust(id, trust)
     }
 }
 
@@ -368,7 +381,8 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
             AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId,
                 snapshot.leaders, snapshot.directionNames,
                 directionTree = snapshot.directionTree?.mapMachines(names::machineId),
-                backgroundSupervisor = snapshot.backgroundSupervisor, recentTaskChats = snapshot.recentTaskChats)
+                backgroundSupervisor = snapshot.backgroundSupervisor, recentTaskChats = snapshot.recentTaskChats,
+                externalDirections = snapshot.externalDirections.mapValues { it.value.mapMachine(names::machineId) })
         }
         override val pinned = source.pinned.mapIn(scope) { keys -> keys.mapTo(LinkedHashSet(), names::key) }
         override suspend fun refresh() = source.refresh()

@@ -37,6 +37,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	reconnected := len(before) > 0 && !connected.Equal(beforeConn)
 	var unsure []proto.Session
 	var inlineUpdates []SessionRef
+	var a2aIdleRefs []a2aRef
 	fm, hasMachine := s.fleetMachine(machine)
 	_, hasInlineStore := s.store().(inlineViewStore)
 	now := time.Now()
@@ -51,6 +52,9 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		s.noteUpstreamRow(machine, sess, now) // consecutive upstream 5xx / pool-exhaustion turns (fleet_upstream.go)
 		s.availSeen(machine, &sess, was, now) // the owner's wait for a reply (availability.go)
 		prev := was.Status
+		if a2aIdle(sess) && (!was.A2AIdle || reconnected) {
+			a2aIdleRefs = append(a2aIdleRefs, a2aRef{machine, sess.SessionID})
+		}
 		// The turn stopped on background work and its report woke it again within one of the node's list ticks: the
 		// stop never showed, only the woken flag turning on. It is held work all the same (#4187, #4419). By the
 		// background seen during the turn, not only in the last list: the list's background and its woken flag are
@@ -72,8 +76,8 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			s.suggestDrop(machine, sess.SessionID) // a new turn: the last one's suggestion goes, a call on its way is cancelled
 			s.turnsBook().working(key, now)
 			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
-			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
-			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn) }) // after the items that came before it
+			ref, row := SessionRef{MachineID: machine, SessionID: sess.SessionID}, startRow{Rev: sess.Rev, At: sess.UpdatedAt}
+			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn, row) }) // after the items that came before it
 		case prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle) && reconnected:
 			unsure = append(unsure, sess) // reconnectedTurnEnd, once the list is kept
 		case prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle):
@@ -111,6 +115,14 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	s.pruneGoneQuiet(machine)        // the verdicts and Stops of task Agents no longer listed (silent_turns.go)
 	s.pruneGoneUpstream(machine, list)
 	s.fleetKeep(machine, list, connected, unsure)
+	for _, ref := range a2aIdleRefs {
+		s.inOrder(func() { s.a2aRecipientIdle(context.Background(), ref) })
+	}
+	cfg := s.settings(context.Background())
+	mainSession, mainMachine := cfg.Main, cfg.mainRouteMachine()
+	for _, sess := range list {
+		s.refreshMainConversationAttention(sess, mainSession, mainMachine)
+	}
 	for _, ref := range inlineUpdates {
 		s.inOrder(func() { go s.registerInlineTurn(context.Background(), ref) })
 	}
@@ -162,6 +174,7 @@ func (s *Service) reconnectedTurnEnd(machine string, sess proto.Session) {
 // turnPrev is what setSessions reads of a session's previous row: the turn's starts and ends are against it. Only
 // these fields, not the whole row: a session is about 1.5 KB, and the manager would keep a copy of every list.
 type turnPrev struct {
+	A2AIdle    bool
 	Status     string
 	WokeByTask bool
 	Rev        int64
@@ -199,7 +212,7 @@ func (s *Service) fleetKeep(machine string, list []proto.Session, conn time.Time
 	for i := range list { // by index: a range value copies every (large) session it passes
 		sess := &list[i]
 		next[sess.SessionID] = turnPrev{Status: sess.Status, WokeByTask: sess.WokeByTask, Rev: sess.Rev,
-			LastText: sess.LastText, UpdatedAt: sess.UpdatedAt, Launcher: sess.Launcher}
+			LastText: sess.LastText, UpdatedAt: sess.UpdatedAt, Launcher: sess.Launcher, A2AIdle: a2aIdle(*sess)}
 	}
 	for i := range unsure {
 		p := next[unsure[i].SessionID]
@@ -498,15 +511,26 @@ func (s *Service) addHeldRows(machine string, list []proto.Session, held map[str
 // inventory, but must not forget state marks belonging to rows it did not read.
 func (s *Service) decorateInventory(machine string, list []proto.Session, complete bool) []proto.Session {
 	m, _ := s.fleetMachine(machine)
+	r := &s.fleet.rep
+	r.mu.RLock()
+	profile, shown, via := r.profile, r.sessions, r.marks
+	r.mu.RUnlock()
+	var mainSession, mainMachine string
+	if profile != nil {
+		mainSession, mainMachine = profile.Main, cmp.Or(profile.MainMachineID, profile.MachineID)
+	} else {
+		mainSession, mainMachine = s.mainConversationRoute()
+	}
 	s.fleet.mu.Lock()
 	counts := map[string]int{}
 	asking := map[string]proto.Interaction{} // a session's card: its own before the manager's
 	for _, p := range s.fleet.interactions {
-		if p.ix.MachineID == machine {
-			counts[p.ix.SessionID]++
-			if cur, ok := asking[p.ix.SessionID]; !ok || cur.ToolName == assistantwire.WorkCardTool {
-				asking[p.ix.SessionID] = p.ix
-			}
+		if p.ix.MachineID != machine || machine == mainMachine && p.ix.SessionID == mainSession && !directUserInteraction(p.ix) {
+			continue
+		}
+		counts[p.ix.SessionID]++
+		if cur, ok := asking[p.ix.SessionID]; !ok || cur.ToolName == assistantwire.WorkCardTool {
+			asking[p.ix.SessionID] = p.ix
 		}
 	}
 	seen := make(map[string]time.Time, min(len(list), len(s.fleet.seen)))
@@ -516,10 +540,6 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 	}
 	s.fleet.mu.Unlock()
-	r := &s.fleet.rep
-	r.mu.RLock()
-	shown, via := r.sessions, r.marks
-	r.mu.RUnlock()
 	lang := s.lang(context.Background())
 	// The owner's messages to Agents held while their computer is away (internal/devices held.go, #10661): once for
 	// the whole list, worded as the rows are.
@@ -605,6 +625,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		s.decorateWork(machine, &list[i], asking, finishedSince)
 		decorateAwaits(&list[i], asks)
+		if list[i].SessionID == mainSession && list[i].MachineID == mainMachine && mainConversationAttentionCandidate(list[i].Assistant, list[i].Status, list[i].State, list[i].Starting, list[i].PendingInteractions) {
+			s.applyMainConversationAttention(&list[i], mainSession, mainMachine)
+		}
 		decorateSuggestion(&list[i], suggested)
 	}
 	s.decorateTodos(machine, list)

@@ -287,6 +287,10 @@ private fun ChatPage(
     val placedForwards = ForwardPlacements.waiting(key)
     // /model in the "/" list asked for the "Mode" sheet: a one-off, cleared once the sheet opened (not replayed when the bar returns).
     var openModes by remember { mutableStateOf(false) }
+    // The model-route card opens only Persona's model picker, never Brief/Board's separate Mode sheet as well.
+    var openModelRoutePicker by remember { mutableStateOf(false) }
+    // The model-route card asks the existing Persona pill to clear its kept pick with the pill's optimistic rollback.
+    var clearModelPick by remember { mutableStateOf(false) }
     // `/permissions` in the "/" list asked for the permission mode menu (#6513): Glass's mode button, the others' "Mode" sheet
     var openPermissions by remember { mutableStateOf(false) }
     // The host's failure notice whose "Retry" went out: hidden until the list catches up; back if that send failed.
@@ -595,8 +599,7 @@ private fun ChatPage(
         wireText = command ?: linkMessage(composer.message(), linkContexts, context.resources), paneId = session?.paneId,
         conversationLauncher = conversationLauncher, conversationModel = conversationModel, glassAgent = glass && agentChat,
         onFailed = onFailed, onCleared = { refs -> linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } } })
-    // Chat content (group A): the message menu, the image viewer, photos and paths in messages, the API error retry.
-    val messageMenu = remember(key) { MessageMenuState() }
+    // Chat content (group A): the message menu, quote and context actions.
     // A swipe to the left quotes (iOS #1058) wherever the long-press menu's "Quote" is offered.
     val quoteTarget: (MessageTarget) -> Unit = { target ->
         // Over the box as a quote that goes with the next message, the draft left as it is (iOS #986).
@@ -610,10 +613,11 @@ private fun ChatPage(
         composer.focusRequest++
     }
     val pickedQuote by rememberUpdatedState(quoteWords)
+    val messageMenuState = remember(key) { MessageMenuState() }
     val menuWrites = messageMenuWrites(readOnly, session)
     LaunchedEffect(menuWrites) {
-        messageMenu.quote = if (menuWrites) ({ target: MessageTarget -> swipeQuote(target) }) else null
-        messageMenu.quoteWords = if (menuWrites) ({ target: MessageTarget, words: String -> pickedQuote(target, words) }) else null
+        messageMenuState.quote = if (menuWrites) ({ target: MessageTarget -> swipeQuote(target) }) else null
+        messageMenuState.quoteWords = if (menuWrites) ({ target: MessageTarget, words: String -> pickedQuote(target, words) }) else null
     }
     // "Branch to new chat" (#2137) from a reply, "Rewind to here" (#2436) on your message: the menu's session-wide extras (web ⋯).
     var forking by remember { mutableStateOf(false) }
@@ -695,37 +699,17 @@ private fun ChatPage(
         chrome.childSessionId?.let { subagentFolds.open(persona.core.domain.lines.ChildSessionCards.call(it)) }
     }
     val workflowCards = pageSubagents.workflowCards
-    val viewerState = remember { mutableStateOf<ViewerRequest?>(null) }
+    val messageActions = rememberChatRowActionPreparation(key, repository, chrome, scope, renderStyle, session,
+        projection, readOnly, canSend, session?.status == "working" || messages.isNotEmpty(), currentItems, messageMenuState) { send(it) }
+    val messageMenu = messageMenuState
+    val viewerState = messageActions.viewer
     var viewer by viewerState
-    val photos = remember(chrome.files, key, session?.cwd) { chrome.files?.let { AttachedPhotos(it, key.machineId, session?.cwd.orEmpty()) } }
-    val localCacheDir = androidx.compose.ui.platform.LocalContext.current.cacheDir
-    val localImages = remember(chrome.files, chrome.hubScope, key.machineId, session?.cwd, localCacheDir) {
-        chrome.files?.let { LocalMarkdownImages(it, chrome.hubScope, key.machineId, session?.cwd.orEmpty(), localCacheDir) }
-    }
-    // A "Continue" already on its way counts as working: the card offers no second one.
-    // A turn that failed on the refusal fallback's missing model (#2528): "Continue" would go to the same model.
-    // Every model of a main or leader conversation's recovery chain failed (#7824): the turn's last error card names
-    // the cause and when the configured model is back, and keeps "Retry" whatever the error says.
-    val exhausted = exhaustedRecovery(projection.lines, session?.modelFallback)
-    val retryId = retryLine(projection.lines, session?.status == "working" || messages.isNotEmpty(),
-        !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE, exhausted = exhausted != null)
-    // Paths in messages link only when there on the machine (PathLinks.kt): asked of the session's directory.
-    val pathPresence = remember(chrome.files, key, session?.cwd, chrome.onOpenPath != null) {
-        val files = chrome.files
-        val cwd = session?.cwd.orEmpty().ifBlank { "~" }
-        if (files == null || key.machineId.isBlank() || chrome.onOpenPath == null) null
-        else PathPresence(scope, { paths -> files.stat(key.machineId, cwd, paths) })
-    }
-    val currentSend by rememberUpdatedState<(String) -> Unit>({ send(it) })
-    // Stays the same object while the conversation streams: rows read it, and a new one would redraw them all.
+    val lastUserId = snapshot.items.lastOrNull { it.role == "user" && it.kind == "text" }?.id
     val continueText = stringResource(R.string.chat_screen_continue_message)
-    val imageDescription = stringResource(R.string.chat_content_image)
-    val replyImages = remember(key, repository) { (repository as? ChatLocalStorage)?.replyImages(key) }
-        ?.collectAsStateWithLifecycle(initialValue = null)?.value
-    val rowActions = rememberChatRowActions(key, repository, replyImages, localImages, photos, retryId, exhausted,
-        chrome.onOpenPath, pathPresence, chrome.files, session?.cwd, chrome.onOpenPath,
-        { images, index -> viewer = ViewerRequest(images, index) }, currentItems, messageMenu,
-        { currentSend(continueText) }, imageDescription)
+    val rowActions = messageActions.actions
+    val exhausted = messageActions.exhausted
+    val retryId = messageActions.retryId
+    val turnFix = messageActions.turnFix
     val currentMarkdownPaths by rememberUpdatedState(rowActions.paths?.takeIf { rowActions.openPath != null })
     LaunchedEffect(liveItems) {
         liveItems.revisions.collect { revision ->
@@ -796,11 +780,31 @@ private fun ChatPage(
     LaunchedEffect(allRequests) {
         taps = taps.pending(allRequests.map { it.id }.toSet())
     }
-    val lastUserId = snapshot.items.lastOrNull { it.role == "user" && it.kind == "text" }?.id
-    // Persona's last turn ended on a model set-up error the hub named: the fix replaces the error line (#4339 C18, iOS
-    // `turnFix`). Persona's conversations only, as iOS and the web.
-    val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
+    val ownModelPicker = switchSession != null && chrome.assistantManagement != null &&
+        (glass || (!readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)))
+    val clearModelAction: (() -> Unit)? = session?.takeIf {
+        it.modelPick != null && persona.core.domain.models.PersonaModelPanel.MODEL_PICK in persona.core.designsystem.LocalHubFeatures.current &&
+            chrome.assistantManagement != null
+    }?.let { current ->
+        {
+            if (glass && ownModelPicker) clearModelPick = true
+            else scope.launch {
+                try {
+                    chrome.assistantManagement?.clearModelPick(current.key)
+                    sessions.refresh()
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { notice = operationFeedback(error).text.resolve(res) }
+            }
+        }
+    }
+    val turnModelActions = if (turnFix != TurnErrorFix.ModelRoute) null else when {
+        ownModelPicker -> TurnErrorModelActions(openPicker = { openModelRoutePicker = true }, clearPick = clearModelAction,
+            clearLabel = if (session?.sessionId == chrome.mainConversation) R.string.chat_modelpill_follow_default else R.string.chat_modelpill_undo_pick)
+        fixModel != null -> TurnErrorModelActions(
+            openPicker = { fixModel(persona.core.designsystem.ReadinessActionId.PickModel) }, clearPick = clearModelAction)
+        else -> null
+    }
     // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
     val pageCovered = chrome.covered || overlay || linkVisible || statusSheet || activitySheet != null || terminalHelp ||
         taskPageVisible || fullText != null || search.visible || pushedDetail != null
@@ -1073,7 +1077,8 @@ private fun ChatPage(
                             (if (feedback == null) notice ?: composerError else composerError)?.let {
                                 Text(it, Modifier.padding(horizontal = Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                             }
-                            if (!historyOnly && !readOnly) ChatStartingNote(session)
+                            if (!historyOnly && !readOnly) ChatStartFailure(session, chrome.actions, sender, sessions,
+                                (chrome.connection?.lastHello?.features ?: persona.core.designsystem.LocalHubFeatures.current).toSet())
                             // The host's own word on it: why it waits for you, or what stopped it, with a retry.
                             // ultracode went off when it resumed (#582, iOS UltracodeLostNote): one line to turn it back on or dismiss.
                             if (!historyOnly && !readOnly && session != null) UltracodeLostNote(session, controls, canSend)
@@ -1212,13 +1217,18 @@ private fun ChatPage(
                                             onPagePick = { pick -> conversationLauncher = pick?.launcher; conversationModel = pick?.model },
                                             onNotice = { notice = it }, enabled = online, onOverlay = { pillOverlay = it },
                                             onConfigure = chrome.onFixModel?.let { fix -> { fix(persona.core.designsystem.ReadinessActionId.EditProvider, null, switchSession.manager) } },
-                                            onEffort = { effort -> controls.run(switchSession, ChatAction.Modes(effort = effort)) })
+                                            onEffort = { effort -> controls.run(switchSession, ChatAction.Modes(effort = effort)) },
+                                            openRequested = openModes || openModelRoutePicker,
+                                            onOpenHandled = { openModes = false; openModelRoutePicker = false },
+                                            clearRequested = clearModelPick, onClearHandled = { clearModelPick = false })
                                     }),
                                     accessory = {
                                         // Brief and Board keep the launcher chip; Glass's pill does its work (#5055).
-                                        if (!glass && renderStyle == ChatRenderStyle.Assistant && !readOnly && canSend && chrome.assistantManagement != null) {
+                                        if (!glass && renderStyle == ChatRenderStyle.Assistant && chrome.assistantManagement != null &&
+                                            !readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)) {
                                             ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
-                                                conversationLauncher, conversationModel) { launcher, model ->
+                                                conversationLauncher, conversationModel, openRequested = openModes || openModelRoutePicker,
+                                                onOpenHandled = { openModes = false; openModelRoutePicker = false }) { launcher, model ->
                                                 conversationLauncher = launcher
                                                 conversationModel = model
                                             }
@@ -1259,7 +1269,7 @@ private fun ChatPage(
                         contentWorkGroups = contentWorkGroups, contentLastSteps = contentLastSteps,
                         contentSourceLabels = contentSourceLabels, waitingOnYou = waitingOnYou,
                         foldsBackground = foldsBackground, onTerminal = agentTerminal, lastUserId = lastUserId, turnFix = turnFix,
-                        fixModel = fixModel, openRecap = openRecap, taskHost = taskHost, folding = folding, foldErrors = foldErrors,
+                        fixModel = fixModel, turnModelActions = turnModelActions, openRecap = openRecap, taskHost = taskHost, folding = folding, foldErrors = foldErrors,
                         onToggle = ::toggle, onExpand = ::expand,
                         onFullText = { item -> readFullText(key, item) }, loader = loader, session = session,
                         earlierEngines = earlierEngines, onReadEarlierText = ::readFullText,

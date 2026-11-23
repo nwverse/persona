@@ -444,7 +444,11 @@ Since #10365 (`assistant/start_retry_launcher.go`):
   task's code before its text (`lib/start-failure.ts`): a short line for a launcher the terminal cannot run or a
   workspace left in the way (`worktree_path_taken`), the hub's whole sentence under the details. Their buttons are
   **Use <launcher> instead** (when the hub suggests one and lists the feature), **Retry** and **Remove**; Retry no longer
-  needs the to-do's `plan_id`. Apple and Android still offer Retry and Remove only.
+  needs the to-do's `plan_id`. Web, Apple and Android offer the same coded reasons, alternative launcher and Retry
+  without `plan_id`: they read the code first on the failed row and the detail surfaces, keep the raw failure behind
+  Details, look up the to-do's own plan first, then a non-dismissed plan by `todo_id`, and send only
+  `{"launcher":"…"}` on the launcher action (Android on the failed Needs-you row, shared task detail and standalone
+  to-do action bar). Ordinary Retry sends no body from Apple and `{}` from Android.
 
 ### Answering a failed start's question
 
@@ -476,11 +480,15 @@ of going to the computer:
   When the node typed nothing (the question was answered at the computer, or gone by itself), the step is
   `{action: "answer_not_typed", by: "user", choice}` instead: the task's history and the supervising assistant never
   read the owner's answer as the one that took effect.
-- **The web** shows the question card (`views/ShellQuestionCard.tsx`, loaded only for such a failure) on the failed
-  row, the task panel and the to-do page while the tab is kept and the hub lists the feature, beside Retry, which stays.
-  Apple and Android offer Retry only, so the failure's words (`shell_waiting`, also the assistant's notice and 督办
-  detail) offer the answers only "where Persona lists them" and always the way at the computer: answer there, then
-  start again.
+- **The web, Apple and Android** show the question card (`views/ShellQuestionCard.tsx`, Android design-system
+  `ShellQuestionCard`) on the failed row, the task panel and the to-do page while the tab is kept and the hub lists the
+  feature, beside Retry, which stays. Apple and Android send only the offered choice to the task answer route; the hub
+  restarts the task, so no chat message is resent. Android reads the coded question before raw text, keeps the hub's
+  choice order, shares the Retry busy key across Retry, launcher Retry and answering, and reports a refusal inline
+  without resending. Secret prompts offer only Cancel and an SSH host-key prompt only its negative/cancel answers; raw
+  terminal lines stay behind Details and the pane ID is never shown. Older clients offer Retry only, so the failure's
+  words (`shell_waiting`, also the assistant's notice and 督办 detail) offer the answers only "where Persona lists
+  them" and always the way at the computer: answer there, then start again.
 
 ## To-do titles
 
@@ -695,7 +703,7 @@ workspaces are never closed, and repeated close passes do nothing.
 node rejects these (`not_retirable`), assistant records them and does not ask again for 10 minutes if Agent unchanged (`taskCloseRetry`, then retries because node may have upgraded). Old nodes not recognizing `session.stop` are likewise treated as refusals, so nothing is closed while the hub is updated first; after the node upgrade, stopping resumes within at most 10 minutes. A node since #4754 answers an older hub's `session.retire` the same way: it stops the Agent and keeps its terminal.
 Agents linked to no task (user-created, `agent_start`, inspection sessions such as herdr-leader) are not managed by the finished-task rule; the idle rule below covers the ones Persona started.
 
-**Idle Agents stop too** (`assistant/tasks_idle.go`, #2784): in the same minute loop, an Agent Persona started (including a stopped one a message resumed, `agent_send` or the chat) that has been still for `idle_close_hours` (assistant setting, default 12, `0` turns it off, `GET`/`PUT /api/v1/assistant`) is stopped like a finished task's, by the same checks and the same `session.stop`, and keeps its terminal. The idle time counts from the later of its last activity and when the hub first saw it running, so a freshly resumed Agent is not stopped at once (and after a hub restart the clock restarts). Besides the "Do not stop" list above, it is left running when its work state is blocked (on the user, another Agent, CI or a deploy) or has a wake due, and when it belongs to an open task, unless that task itself has had no update for three times the idle time (stalled or never accepted). Transcripts, launch state and the terminal stay; it is read-only from then on, and the user's Resume, or the assistant's explicit resume, brings it back.
+**Idle Agents stop too** (`assistant/tasks_idle.go`, #2784): in the same minute loop, an Agent Persona started (including a stopped one a message resumed, `agent_send` or the chat) that has been still for `idle_close_hours` (assistant setting, default 12, `0` turns it off, `GET`/`PUT /api/v1/assistant`) is stopped like a finished task's, by the same checks and the same `session.stop`; with `close_ended_terminals` on, its terminal tab is closed too, the way a done task's is (`session.retire` with `close_terminal`), and off it keeps its terminal. The idle time counts from the later of its last activity and when the hub first saw it running, so a freshly resumed Agent is not stopped at once. The hub keeps that clock in memory: its first list of a computer after it starts counts from each running Agent's own last activity, so a hub restart does not start the clock again; only an Agent that starts running after that counts from when it is seen. Besides the "Do not stop" list above, it is left running when its work state is blocked (on the user, another Agent, CI or a deploy) or has a wake due, and when it belongs to an open task, unless that task itself has had no update for three times the idle time (stalled or never accepted). Transcripts and launch state stay (the terminal too unless `close_ended_terminals` closed it); it is read-only from then on, and the user's Resume, or the assistant's explicit resume, brings it back.
 
 **`/exit` from the assistant**: `agent_send` with only `/exit` or `/quit` stops a running Agent as `session.stop` does (its tab stays, holding the shell) instead of typing it in; to an Agent that is not running it does nothing, so a stopped Agent is not resumed in a new tab only to quit there.
 
@@ -837,7 +845,7 @@ When recovery needs the owner’s terminal Resume, give that instruction in the 
 - **A default and a date**: a decision whose `why_owner` is not `irreversible` or `visible_to_others` gets a 24-hour deadline with `reversible: true` unless the review sets its own, and "Decision deadlines" below then takes the recommendation. `irreversible` and `visible_to_others` are never taken by default (a review that says `reversible: true` for one is refused). A current decision with an explicit non-reversible deadline is only reminded; once its facts are stale, only a fresh supervisor review raises it to the owner again.
 - **Old decisions are checked first**: a decision that has waited 24 hours goes back to its supervisor once as supervision signal `recheck`, with the decision as it was asked: confirm the facts still hold and re-issue it, or close it. The hand-back is kept on both the ask and the review (`recheck_at`), so a restart does not repeat it and a recheck persisted by an older release gets the same projection. While that review is current, the old round leaves `GET /api/v1/todos[].ask`, Needs you, the owner board and the decision digest; its bare `needs_user` fallback is hidden too. Its option, fixed-response, free-text answer, automatic default, card retry and push paths all refuse the old round instead of acting on stale facts. A fresh `task_review needs_user` starts a clean round and restores those paths. There is no grace-period re-push of the unrefreshed round.
 - **The backlog**: an open task in `needs_user` with nothing the owner can answer (no ask, or one that recommends nothing) goes back to its supervisor once as signal `undecidable`: restate it as a decision, or close it. Kept on the review (`restate_at`). It waits ten minutes after the review or after an answer, so an ask being written or an answer on its way to the Agent is not mistaken for one. After that hand-back the old no-question row and any no-recommendation fallback ask leave the same owner queues and cannot be answered until a fresh review. A `restate_at` belonging to an actual fixed response does not hide the round: `explain_first` intentionally keeps it answerable while the supervisor prepares the background.
-- **A card-less review** (#12648, `assistant/supervise_cardless.go`): a task judged finished waits in `pending_review` for its supervisor, and that review is Persona's to do, never the owner's Needs you. When the supervisor wants the owner to review or decide but says so only in chat — no `needs_user` conclusion, no `accepted` + `user_check`, no `ask_user` card and no pending worker interaction — the owner has nothing to answer. After ten minutes with every active worker stopped and no open ask, the watch raises the `cardless_wait` supervision signal once for the review round. The hub cannot tell an owner wait from a review the supervisor is merely late on, so the message states only what is known (a finished review has waited with no owner card) and names the full review vocabulary — `accepted`/`rework`/`cancelled`, or `needs_user` / `accepted`+`user_check` when the owner truly must act; it never reconstructs a question from chat text. A coding task leader gets the same hand-back through its own `worker_supervise.md` branch. Two guards keep the queued claim honest: the watch will not fire while a worker's machine is unreachable (`cardlessAgentsReachable` reads the watch's per-machine list errors; `taskAgentsIn` drops an unreadable machine's sessions), retrying on a later pass instead of stamping the round on an unknown state; and before a queued/batched digest renders, the hold re-runs the open-ask and stopped-worker checks against current data and drops an entry whose card or active worker appeared after the stamp. The hand-back is kept on the ledger (`cardless_told_at`, one `todo_supervision` column) so a restart cannot repeat it, and any new review round clears it. The `needs_user` equivalent stays `undecidable` above; parked tasks keep their own admission and reconciliation rules.
+- **A card-less review** (#12648, `assistant/supervise_cardless.go`): a task judged finished waits in `pending_review` for its supervisor, and that review is Persona's to do, never the owner's Needs you. When the supervisor wants the owner to review or decide but says so only in chat — no `needs_user` conclusion, no `accepted` + `user_check`, no `ask_user` card and no pending worker interaction — the owner has nothing to answer. After ten minutes with every active worker stopped and no open ask, the watch raises the `cardless_wait` supervision signal once for the review round. The hub cannot tell an owner wait from a review the supervisor is merely late on, so the message states only what is known (a finished review has waited with no owner card) and names the full review vocabulary — `accepted`/`rework`/`cancelled`, or `needs_user` / `accepted`+`user_check` when the owner truly must act; it never reconstructs a question from chat text. A coding task leader gets the same hand-back through its own `worker_supervise.md` branch. Two guards keep the queued claim honest: the watch will not fire while a worker's machine is unreachable (`cardlessAgentsReachable` reads the watch's per-machine list errors; `taskAgentsIn` drops an unreadable machine's sessions), retrying on a later pass instead of stamping the round on an unknown state; and before a queued/batched digest renders, the hold re-runs the open-ask and stopped-worker checks against current data and drops an entry whose card or active worker appeared after the stamp. A new hand-back first keeps its pending signal in the durable supervision outbox, then records the round marker (`cardless_told_at` on `todo_supervision`). If either write fails, a later watch or an outbox restored after restart can finish the same claim; delivery rechecks the current review round, owner cards and workers before completing a missing marker. A failed revalidation write remains pending even when sibling signals in its digest are delivered or deduplicated. The marker prevents a successfully delivered round from being repeated after the short deduplication window or a restart, and a new review round clears it. An older marker with no recoverable outbox entry keeps its existing meaning and is not replayed: such a record cannot safely distinguish an earlier delivery from an earlier lost signal (#13482). The `needs_user` equivalent stays `undecidable` above; parked tasks keep their own admission and reconciliation rules.
 - **"I can't answer this"**: besides its options every decision takes three fixed answers through the accept route (`{"response"}`), and none is ever a default: `decide_yourself` ("You decide"), `not_what_i_asked` ("This isn't what I asked for") and `explain_first` ("Tell me the background first"). Nothing is taken; the task's supervisor gets signal `owner_cannot_answer` once, with the answer and the decision, because the answer says the supervisor was not aligned with the owner.
   - `decide_yourself`: the task stops waiting for the owner and the supervisor decides, telling the Agent and stating its assumption. Asking the same question again is refused. When `why_owner` was `irreversible` or `visible_to_others` the step is not the supervisor's to take: the task stays `needs_user` and the only review accepted is the same decision restated as a plain approval with exactly two options.
   - `not_what_i_asked`: the task stops waiting for the owner and its Agent gets no automatic follow-up (continue, wake, CI follow-up; `workGuard`) until the supervisor reviews the task again (re-scoped with `rework`, `cancelled`, or the link to the owner's request explained in a new decision) or sends its Agent on.
@@ -1406,8 +1414,10 @@ work** group. The detail is read-only by default: it draws the saved
 repositories as rows with their issues and pull requests as links, so the
 associations the agent maintains are visible without opening an editor. Each
 repository row carries its provider's own mark and its project address on one
-line; a link shows its retained full title as the hyperlink, falling back to the
-localized type and number when no title is known. A provider extension's
+line. A link shows its saved title, then the title from a matching PR observation,
+then its localized type and number. The Web matches the current and earlier PR
+observations by URL and shows Open, Draft, Merged or Closed beside the link.
+An open PR with merge conflicts also shows a Conflict warning. A provider extension's
 repository has the extension mark and its source's name after the address (the
 `provider_name` saved with it, else "Another source", never the `ext:` id); its
 links open at their stored addresses, numbered `#N`, with the extension's own
@@ -1467,7 +1477,9 @@ their `maxLength` is only a character ceiling, not a UTF-8 byte validator.
 A nonempty title updates a retained link and increments
 the association revision. Omitted or empty titles in URL-only reports or older
 editors preserve known titles; removing a link removes its title. Agents obtain
-titles from the related work and maintain them through the same tool. The app
+titles from the related work and maintain them through the same tool. The existing
+GitHub status poll also reads the PR title and refreshes a matching saved link.
+Only a changed, nonempty title advances the association revision. The app
 shows a localized type and number until a title is available; it never guesses
 titles or performs a remote metadata request when opening a to-do.
 It preserves source snapshots, aliases and requested refs. Assistant conversations
@@ -1777,3 +1789,56 @@ The engine's workspace ID still identifies its native container. Use the
 backend cleanup endpoint for the prepared repositories and the engine’s
 close action for its terminal. Adding a repository, issue or pull request
 association leaves the task’s launch choice and delivery progress in place.
+
+### Managed bare repository mirrors
+
+Developers who work repeatedly across large or multi-repository codebases on a
+connected computer can opt into per-`(machine, repo_id)` managed bare mirrors
+stored under the Node's protected `~/.persona/repos/<repo_id>.git` directory.
+Mirrors are strictly isolated from user-managed checkouts (`~/workspace/*`);
+Persona never runs `git pull` on user-created working directories and never
+stores Git credentials in the Hub database, reusing only the target machine's
+local Git/SSH/`gh` authentication.
+
+Defaults remain conservative: `enabled` is `false` and `auto_sync` is `false`
+for every `(machine, repo_id)` pair, producing zero background network or disk
+activity until explicitly enabled.
+
+- **Node RPCs (`server/internal/node/repo_mirror.go`, registered via `nodeRPC`)**:
+  - `repo.mirror.ensure`: initializes `~/.persona/repos/<repo_id>.git` as a bare
+    mirror if missing, or refreshes it with `git fetch --prune --tags` when
+    older than the requested TTL (default 5 minutes, overridable with
+    `ttl_seconds` or `force: true`). Per-repository single-flight locking
+    coalesces concurrent calls cleanly, with bounded timeouts, empty hooks
+    (`core.hooksPath`), and symlink/path guards (`~/.persona/repos` is also
+    protected from remote file-browsing APIs in `server/internal/node/pathguard.go`).
+  - `repo.mirror.status`: reports one mirror or lists all mirrors with
+    `default_ref`, `head_commit`, `last_synced_at` and recursive `disk_bytes`.
+  - `repo.mirror.remove`: waits for any in-flight sync on that repository,
+    safely deletes `<repo_id>.git` and its metadata/lock under
+    `~/.persona/repos/`, and reports `freed_bytes`.
+- **Manager persistence & opt-in periodic sync (`server/internal/assistant/repositorystore/repo_mirrors.go`, `server/internal/assistant/repo_mirrors.go`)**:
+  - Per-`(machine, repo_id)` mirror settings and sync status live in
+    Manager-owned table `repo_mirrors` (migration
+    `20261122172523_repo_mirrors.sql`, keeping Hub thin).
+  - When both `enabled` and `auto_sync` are `true`, the Manager runs a
+    low-frequency periodic sync loop (`sync_interval_minutes` in `[15, 1440]`,
+    default `30`) with jitter and exponential failure backoff.
+  - Full-credential HTTP routes (no extension scopes):
+    `GET /api/v1/assistant/repositories/mirrors`,
+    `GET /api/v1/assistant/repositories/{id}/mirrors/{machine_id}`,
+    `PUT /api/v1/assistant/repositories/{id}/mirrors/{machine_id}`,
+    `POST /api/v1/assistant/repositories/{id}/mirrors/{machine_id}/sync`, and
+    `DELETE /api/v1/assistant/repositories/{id}/mirrors/{machine_id}`.
+- **Backend workspace preparation integration**:
+  - During `PrepareBackendWorkspace` (including `task_plan` `workspace.backend`
+    and `workspace.container`), the Manager refreshes any enabled mirrors for
+    the target machine within TTL and passes `mirror_repos` in
+    `task.workspace.prepare`.
+  - The Node populates each task workspace's private bare repository locally
+    from `~/.persona/repos/<repo_id>.git` (with zero `objects/info/alternates`
+    dependencies and keeping `remote.origin.url` pointing at the real upstream
+    URL), force-refreshing once if a requested ref was pushed within the TTL
+    window, and falling back cleanly to the direct remote path whenever no
+    mirror is enabled, an older Node lacks `repo.mirror.ensure`, or a ref is
+    unavailable in the mirror.

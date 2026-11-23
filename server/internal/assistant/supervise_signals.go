@@ -930,6 +930,15 @@ func (s *Service) queueSignal(g superviseSignal) {
 	s.queueSignalReplacing(nil, g)
 }
 
+// preserveIdleHandoff lets a newer turn idle replace the handoff's key without erasing the undelivered decision.
+func preserveIdleHandoff(cur, next superviseSignal) superviseSignal {
+	if cur.Kind == sigIdle && next.Kind == sigIdle && cur.Handoff && !next.Handoff {
+		next.Handoff = true
+		next.Detail = cur.Detail
+	}
+	return next
+}
+
 // queueSignalReplacing also removes the older stretch it supersedes from the durable outbox.
 func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) {
 	if g.Kind != sigAsk {
@@ -972,6 +981,7 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 		if g.Detail == "" && cur.Key == g.Key {
 			g.Detail = cur.Detail // the watch's sight of what an event told already
 		}
+		g = preserveIdleHandoff(cur, g)
 		if g.Kind == sigReport && cur.Key != g.Key {
 			g = joinReports(cur, g) // two questions before the message went: both are asked
 		}
@@ -1262,9 +1272,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 			if g, ok := s.undecidableSignal(ctx, t, now); ok {
 				s.signal(g)
 			}
-			if g, ok := s.cardlessWaitSignal(ctx, t, agents, lists, now); ok { // a review the owner cannot answer (#12648)
-				s.signal(g)
-			}
+			s.signalCardlessWait(ctx, t, agents, lists, now) // a review the owner cannot answer (#12648)
 		}
 		if g, ok := s.deliveryHoldSignal(ctx, t, now); ok { // an owner hold with no card goes to its supervisor first
 			s.signal(g)
