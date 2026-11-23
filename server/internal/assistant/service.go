@@ -265,6 +265,10 @@ type Service struct {
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
 	briefsOptional bool
+	// mainPlansWait: a plan from the main conversation waits on its card as an ordinary conversation's does, as before
+	// decision rights (task_plan). Only the tests written before then, which start the main conversation's plans from
+	// their cards, set it; the hub never does.
+	mainPlansWait bool
 	// noInfoTag: nothing is tagged with information categories whatever model info.tag has (infoTagConfigured), as
 	// with none set up. Tests turn tagging off unless they are about it: a model's socket inside a synctest bubble
 	// never counts as blocked.

@@ -63,6 +63,9 @@ const (
 	cardAgentDone          = "agent_done"           // fleet_push.go: a turn finished (the devices' "done" pushes setting)
 	cardAskEscalated       = "ask_escalated"        // ask_route.go: a supervisor's ask_escalate rang an Agent's card to the owner
 	cardPlanWaiting        = "plan_waiting"         // tasks_plan.go: a plan waits for Start
+	cardPlanMoney          = "plan_money"           // tasks_plan.go: a plan waits for Start: a task spends money
+	cardPlanOutward        = "plan_outward"         // tasks_plan.go: a plan waits for Start: a task speaks outward as the owner
+	cardPlanIrreversible   = "plan_irreversible"    // tasks_plan.go: a plan waits for Start: an irreversible step not agreed
 	cardAgentPlan          = "agent_plan"           // an Agent's plan approval card
 	cardTaskFailed         = "task_failed"          // supervise_events.go notifyTaskFailed
 	cardAgentPermission    = "agent_permission"     // an Agent's tool approval
@@ -99,6 +102,11 @@ var cardCategories = map[string]int{
 
 	// 3, outward as the owner: a connector's write (mail, a chat message, a comment) goes out under their name.
 	cardOutboundWrite: cardCatOutward,
+	cardPlanOutward:   cardCatOutward, // a planned task says it speaks outward as the owner
+
+	// 4, money; 5, irreversible and never said: a planned task says so (task_plan owner_step).
+	cardPlanMoney:        cardCatMoney,
+	cardPlanIrreversible: cardCatIrreversible,
 
 	// 1, goals and direction: a supervisor's review judged the owner must decide, and the decision it raises.
 	cardLeaderNeedsUser: cardCatDirection,

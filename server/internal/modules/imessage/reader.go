@@ -23,11 +23,12 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connectorwire"
+	"github.com/nwverse/persona/server/internal/imessagewire"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // ID is the connector's id: the key in hub.json, the RPCs' "id".
-const ID = "imessage"
+const ID = imessagewire.ID
 
 // Reader reads one home's Messages data.
 type Reader struct {
@@ -113,11 +114,12 @@ type MessagesPage struct {
 	Before   string    `json:"before,omitempty"`
 }
 
+// Why a read failed (errors.Is); defined in the contract package imessagewire, so the manager names them too.
 var (
 	// ErrNoPermission: macOS does not let this process read the Messages data (Full Disk Access).
-	ErrNoPermission = errors.New("no permission to read the Messages data")
+	ErrNoPermission = imessagewire.ErrNoPermission
 	// ErrNoChat: no conversation has that id.
-	ErrNoChat = errors.New("no such conversation")
+	ErrNoChat = imessagewire.ErrNoChat
 )
 
 func (r *Reader) chatDB() string { return filepath.Join(r.Home, "Library", "Messages", "chat.db") }

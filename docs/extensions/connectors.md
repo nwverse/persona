@@ -20,7 +20,7 @@ Discord (the user's own bot, extension, #917): the first step (D1) is the `disco
 | id | Name | How it runs | Knowledge base | Inbox | Assistant tools | Writes | Login |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `github` | GitHub | In the hub (`modules/github`) | `Archive` (`updated_at` cursor) | Yes, rule-based tiers + noise reduction (`rules.go`) | `github_search/read/diff/checks` | `github_comment`, `github_review` (gated) | Reads `gh` login from a computer (`credential.gh_token`) |
-| `imessage` | Messages | Reads on the Mac's node, with an RPC-forwarding adapter in the hub (`connector/imessage`) | `Archive` (ROWID) | Yes; its rows also as `inbox_things` in its subscription catalog (#6317) | `imessage_chats/read/search` | None | None (grant personad Full Disk Access on the Mac) |
+| `imessage` | Messages | Reads on the Mac's node, with an RPC-forwarding adapter in the hub (`modules/imessage`) | `Archive` (ROWID) | Yes; its rows also as `inbox_things` in its subscription catalog (#6317) | `imessage_chats/read/search` | None | None (grant personad Full Disk Access on the Mac) |
 | `telegram` | Telegram | Extension `telegram` in the `nwverse/persona-extensions` marketplace (#1704, #2057, code outside this repo), called by the hub over the process extension protocol (`connector/proc`) | `Archive` | Yes | Read-only tools; reads through the `tg` CLI (`Unlisted`) | `telegram_send/forward/react/mark_read` (`tg` CLI, `Unlisted`, gated) | Stepwise `Login` (phone number, code, two-step verification password), session encrypted in `connector_secrets` |
 | `x` | X | Extension `x` in the `nwverse/persona-extensions` marketplace (nwverse/persona-extensions#179, `docs/plans/plan-x.md`), called by the hub over the process extension protocol (`connector/proc`); two optional sources: the X API (the user's own developer app, pay-per-use) or the `grok` CLI on the hub machine (the user's subscription) | None: X's deletion rules keep posts in the extension's data directory with short retention (`docs/plans/plan-x.md` ("X's rules")) | Yes, `mention` (X API source only) | `x_digest/feed/following/post/search` (`x_search` runs a Grok search) | None (read-only) | Stepwise `Login` (one step: the four X API keys), keys encrypted in `connector_secrets`; the Grok source needs no sign-in here (`grok login` on the hub machine) |
 | `discord` | Discord | Extension `discord` in the `nwverse/persona-extensions` marketplace (nwverse/persona-extensions#181, `docs/plans/plan-discord.md`), called by the hub over the process extension protocol (`connector/proc`); reads Discord's REST API as the user's own bot, through the optional `proxy` secret when the hub machine can't reach Discord | `Archive` (the channels, threads and forum posts the bot can read: a first backfill, then what moved, every 5 minutes) | Not yet (D2) | `discord_channels/messages/search` | None (read-only) | Stepwise `Login` (one step: the bot token), token encrypted in `connector_secrets` |
@@ -351,7 +351,7 @@ Size: **small**.
 Current state: three execution models, three conventions.
 
 - Subprocess: no version, relies on "same build". Most fields lack JSON tags, so wire keys are Go field names (`Cursor`, `Batches`), hard for third parties to reproduce.
-- node relay: five iMessage-specific methods, then hardcoded in `node/node.go` (now `serveLocalConnector` in `node/connectors.go`).
+- node relay: five iMessage-specific methods, then hardcoded in `node/node.go` (now `ServeLocal` in `modules/imessage/node.go`, reached through `node/imessageport`).
 - Third party: HTTP + MCP was designed in `../plans/plan-connectors.md` ("External process") but not implemented.
 
 Proposal:
@@ -409,7 +409,7 @@ Size: **medium**. Hub Inbox, GitHub, Telegram, Messages; the App's mute menu is 
 **Agreed; v2 records but does not merge. Hints store only HMAC hashes, are hidden from models, and are used only to recognize people (decided).**
 
 Current state: knowledge-base people (`Person` in `kb/store.go`) have only one `Source` + `SourceID`; the same person has separate entries in Lark, mail, Messages and Telegram.
-To keep numbers off disk, Messages already uses a phone/email hash as the person id (`PersonKey` in `connector/imessage/persona.go`).
+To keep numbers off disk, Messages already uses a phone/email hash as the person id (`PersonKey` in `modules/imessage/persona.go`).
 
 Proposal:
 

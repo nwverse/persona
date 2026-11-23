@@ -27,13 +27,13 @@ import java.time.ZoneOffset
 @get:StringRes
 internal val PointKind.label: Int
     get() = when (this) {
-        PointKind.Concept -> R.string.knowledge_point_concept
-        PointKind.Decision -> R.string.knowledge_point_decision
-        PointKind.Practice -> R.string.knowledge_point_practice
-        PointKind.Pitfall -> R.string.knowledge_point_pitfall
-        PointKind.Fact -> R.string.knowledge_point_fact
-        PointKind.Question -> R.string.knowledge_point_question
-        PointKind.Plain -> R.string.knowledge_point_plain
+        PointKind.Concept -> R.string.knowledge_ui_point_concept
+        PointKind.Decision -> R.string.knowledge_ui_point_decision
+        PointKind.Practice -> R.string.knowledge_ui_point_practice
+        PointKind.Pitfall -> R.string.knowledge_ui_point_pitfall
+        PointKind.Fact -> R.string.knowledge_ui_point_fact
+        PointKind.Question -> R.string.knowledge_ui_point_question
+        PointKind.Plain -> R.string.knowledge_ui_point_plain
     }
 
 /** The kind's small label; pitfalls and open questions in the caution tone, the others quiet. */
@@ -46,7 +46,7 @@ internal fun PointPill(kind: PointKind, modifier: Modifier = Modifier) {
 /** "Why: …" for most points, "Cause: …" for a pitfall. */
 @Composable
 internal fun pointReason(kind: PointKind, why: String): String =
-    stringResource(if (kind == PointKind.Pitfall) R.string.knowledge_point_cause else R.string.knowledge_point_why, why)
+    stringResource(if (kind == PointKind.Pitfall) R.string.knowledge_ui_point_cause else R.string.knowledge_ui_point_why, why)
 
 @Composable
 private fun confirmedText(day: String): String {
@@ -67,7 +67,7 @@ internal fun PointRow(point: TopicPoint, position: GroupPosition, onClick: () ->
                 Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
                     PointPill(kind)
                     point.confirmed?.takeIf { it.isNotBlank() }?.let {
-                        Text(stringResource(R.string.knowledge_point_confirmed, confirmedText(it)), style = PersonaTheme.type.micro,
+                        Text(stringResource(R.string.knowledge_ui_point_confirmed, confirmedText(it)), style = PersonaTheme.type.micro,
                             color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
@@ -98,33 +98,33 @@ internal fun PointSheet(
     val kind = PointKind.of(point.kind)
     val sources = remember(point, links) { pointSources(point, links) }
     val copy = rememberCopy()
-    val copied = stringResource(R.string.knowledge_point_copied)
+    val copied = stringResource(R.string.knowledge_ui_point_copied)
     JSheet(onDismiss = onDismiss, scrollable = true) {
         Column(Modifier.fillMaxWidth().padding(bottom = Tokens.Space.l), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
                 PointPill(kind)
                 point.confirmed?.takeIf { it.isNotBlank() }?.let {
-                    Text(stringResource(R.string.knowledge_point_confirmed, confirmedText(it)), style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1)
+                    Text(stringResource(R.string.knowledge_ui_point_confirmed, confirmedText(it)), style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1)
                 }
             }
             ReadingContent { SelectionContainer { Text(point.text, style = PersonaTheme.type.title, color = palette.ink) } }
             if (crumbs.isNotEmpty()) Text(crumbs.joinToString(" › "), style = PersonaTheme.type.caption, color = palette.ink3)
             point.why?.takeIf { it.isNotBlank() }?.let { why ->
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                    Text(stringResource(if (kind == PointKind.Pitfall) R.string.knowledge_point_cause_title else R.string.knowledge_point_why_title),
+                    Text(stringResource(if (kind == PointKind.Pitfall) R.string.knowledge_ui_point_cause_title else R.string.knowledge_ui_point_why_title),
                         style = PersonaTheme.type.caption, color = palette.ink2, modifier = Modifier.semantics { heading() })
                     ReadingContent { SelectionContainer { Text(why, style = PersonaTheme.type.body, color = palette.ink) } }
                 }
             }
             if (sources.isNotEmpty()) Column {
-                JSectionHeader(stringResource(R.string.knowledge_point_from), count = sources.size)
+                JSectionHeader(stringResource(R.string.knowledge_ui_point_from), count = sources.size)
                 sources.forEachIndexed { index, source ->
                     JGroupItem(GroupPosition.of(index, sources.size)) {
                         JRow(source.name, subtitle = source.oneLine?.takeIf { it.isNotBlank() }, subtitleLines = 1, onClick = { onOpen(source) })
                     }
                 }
             }
-            JButton(stringResource(R.string.knowledge_point_copy), { copy(point.text, copied) }, Modifier.fillMaxWidth(),
+            JButton(stringResource(R.string.knowledge_ui_point_copy), { copy(point.text, copied) }, Modifier.fillMaxWidth(),
                 kind = JButtonKind.Secondary, icon = PersonaIcons.copy)
         }
     }
@@ -138,7 +138,7 @@ internal fun LazyListScope.topicPoints(detail: KnowledgeDetail, topic: String, o
     val root = groupPoints(detail.points)
     if (root.size == 0) {
         item("points-empty", contentType = "empty") {
-            JEmptyState(stringResource(R.string.knowledge_points_title), stringResource(R.string.knowledge_points_empty), icon = PersonaIcons.topic)
+            JEmptyState(stringResource(R.string.knowledge_ui_points_title), stringResource(R.string.knowledge_ui_points_empty), icon = PersonaIcons.topic)
         }
         return
     }
@@ -148,7 +148,7 @@ internal fun LazyListScope.topicPoints(detail: KnowledgeDetail, topic: String, o
         }
     }
     if (root.points.isNotEmpty()) {
-        item("points-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_points_title), count = root.points.size) }
+        item("points-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_ui_points_title), count = root.points.size) }
         block("points", root.points)
     }
     root.groups.forEachIndexed { index, group ->

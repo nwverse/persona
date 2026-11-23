@@ -14,8 +14,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/cliwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	adapter "github.com/nwverse/persona/server/internal/modules/lark/larkcli"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
