@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RecordingAsk } from "../../lib/kb";
-import { meetingMeta } from "../../lib/kb";
+import { meetingMeta } from "./recording-view";
 import {
   followupThread, fromMeeting, hasMaterial, linesFrom, liveLines, liveLinesEnd, meetingClock, meetingLines, meetingRunning, meetingTopics,
   mergeLiveLines, newerParts, offersTalk, photoOf, roomState, roomThread,

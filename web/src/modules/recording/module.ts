@@ -10,8 +10,8 @@ import type { ModuleDescriptor } from "../../core/module-host";
 
 export const recording: ModuleDescriptor = {
   id: "recording",
-  title: () => t("settings-labs.module_recording"),
-  description: () => t("settings-labs.module_recording_hint"),
+  title: () => t("sidebar.module_recording"),
+  description: () => t("sidebar.module_recording_hint"),
   kbKinds: ["recordings"],
   i18nNamespaces: ["recording"],
   locales: byLanguage(import.meta.glob<CatalogModule>("../../i18n/locales/*/_meta.json", { query: "?catalog=module-recording" })),

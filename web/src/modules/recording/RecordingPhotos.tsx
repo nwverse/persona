@@ -8,7 +8,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import { t } from "../../i18n";
 import { apiBlob, enc } from "../../lib/api";
-import { recordingClock, type RecordingPhoto, type RecordingView } from "../../lib/kb";
+import { type RecordingPhoto } from "../../lib/kb";
+import { recordingClock, type RecordingView } from "./recording-view";
 import { Collapse, cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ImageViewer } from "../../views/chat/ImageViewer";

@@ -7,24 +7,8 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { formatList, t } from "../../i18n";
 import { tRich } from "../../i18n/rich";
 import { api, ApiError, enc } from "../../lib/api";
-import {
-  dayClock,
-  entryFromDetail,
-  isKind,
-  minutesKeptUntil,
-  recapGaps,
-  recapGroups,
-  recordingClock,
-  recordingView,
-  type DayPart,
-  type DayRecapEntry,
-  type DayRecapGap,
-  type KBDetail,
-  type KBDetailResponse,
-  type KBEntry,
-  type MinutesAction,
-  type RecordingView,
-} from "../../lib/kb";
+import { entryFromDetail, isKind, type DayRecapEntry, type DayRecapGap, type KBDetail, type KBDetailResponse, type KBEntry, type MinutesAction } from "../../lib/kb";
+import { dayClock, minutesKeptUntil, recapGaps, recapGroups, recordingClock, recordingView, type DayPart, type RecordingView } from "./recording-view";
 import { href } from "../../lib/router";
 import { Button, copyText, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";

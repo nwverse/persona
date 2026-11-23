@@ -16,23 +16,8 @@ import { t } from "../../i18n";
 import { api, ApiError, enc, errorText, imageURL, sessionPath } from "../../lib/api";
 import { conversationPage } from "../../lib/conversation-page";
 import { uuid } from "../../lib/format";
-import {
-  countsAsMeeting,
-  meetingConversation,
-  meetingKind,
-  meetingMeta,
-  meetingRoom,
-  recordingPhotos,
-  type KBDetail,
-  type LiveLine,
-  type MeetingConversation,
-  type MeetingRoom,
-  type MeetingTopic,
-  type RecordingAsk,
-  type RecordingLive,
-  type RecordingPhoto,
-  type RecordingView,
-} from "../../lib/kb";
+import { type KBDetail, type LiveLine, type MeetingConversation, type MeetingRoom, type MeetingTopic, type RecordingAsk, type RecordingLive, type RecordingPhoto } from "../../lib/kb";
+import { countsAsMeeting, meetingConversation, meetingKind, meetingMeta, meetingRoom, recordingPhotos, type RecordingView } from "./recording-view";
 import { messageManager } from "../../lib/manager-choice";
 import {
   followupThread,

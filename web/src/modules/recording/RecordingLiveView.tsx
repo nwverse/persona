@@ -5,7 +5,8 @@
 // and again on `meeting_live` or its 5-second poll. Read-only; the transcript keeps every line once uploaded.
 import { useId, useLayoutEffect, useRef } from "react";
 import { t } from "../../i18n";
-import { recordingClock, type LiveLine, type MeetingTopic, type RecordingView } from "../../lib/kb";
+import { type LiveLine, type MeetingTopic } from "../../lib/kb";
+import { recordingClock, type RecordingView } from "./recording-view";
 import { cx, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Card, SectionTitle } from "../../views/knowledge/KBParts";

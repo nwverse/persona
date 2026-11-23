@@ -194,5 +194,10 @@
   "rename_hint": "Leave it empty to name it automatically. A new name from the iPhone replaces this one.",
   "renamed": "Renamed",
   "rename_cleared": "Named automatically again",
-  "rename_failed": "Couldn't rename: {error}"
+  "rename_failed": "Couldn't rename: {error}",
+  "device_phone": "iPhone",
+  "device_watch": "Apple Watch",
+  "duration_hours": "{h} h {m} min",
+  "duration_minutes": "{m} min {s} s",
+  "duration_seconds": "{s} s"
 }

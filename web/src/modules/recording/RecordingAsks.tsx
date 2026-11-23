@@ -4,7 +4,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText } from "../../lib/api";
-import { formatSpan, isKind, recordingClock, type KBDetail, type RecordingAsk, type RecordingLive, type RecordingView } from "../../lib/kb";
+import { formatSpan, isKind, type KBDetail, type RecordingAsk, type RecordingLive } from "../../lib/kb";
+import { recordingClock, type RecordingView } from "./recording-view";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { useStore } from "../../lib/store";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";

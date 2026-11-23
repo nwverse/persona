@@ -191,5 +191,10 @@
   "rename_hint": "空欄のままにすると、自動で名前が付きます。あとで iPhone で名前を変えると、そちらが優先されます。",
   "renamed": "名前を変更しました",
   "rename_cleared": "自動の名前に戻しました",
-  "rename_failed": "名前を変更できませんでした：{error}"
+  "rename_failed": "名前を変更できませんでした：{error}",
+  "device_phone": "iPhone",
+  "device_watch": "Apple Watch",
+  "duration_hours": "{h} 時間 {m} 分",
+  "duration_minutes": "{m} 分 {s} 秒",
+  "duration_seconds": "{s} 秒"
 }

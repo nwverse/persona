@@ -191,5 +191,10 @@
   "rename_hint": "留空则自动命名。之后在 iPhone 上再改名，会以 iPhone 的为准。",
   "renamed": "已改名",
   "rename_cleared": "已恢复自动命名",
-  "rename_failed": "改名没成功：{error}"
+  "rename_failed": "改名没成功：{error}",
+  "device_phone": "手机",
+  "device_watch": "手表",
+  "duration_hours": "{h} 小时 {m} 分",
+  "duration_minutes": "{m} 分 {s} 秒",
+  "duration_seconds": "{s} 秒"
 }

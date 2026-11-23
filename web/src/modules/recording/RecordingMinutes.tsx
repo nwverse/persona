@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText } from "../../lib/api";
-import { citedPhoto, formatSpan, minutesKeptUntil, recordingClock, transcriptTarget, type KBDetail, type MinutesAction, type MinutesPoint, type RecordingView } from "../../lib/kb";
+import { formatSpan, type KBDetail, type MinutesAction, type MinutesPoint } from "../../lib/kb";
+import { citedPhoto, minutesKeptUntil, recordingClock, transcriptTarget, type RecordingView } from "./recording-view";
 import { minutesOverview, type OverviewCite } from "./minutes-overview";
 import { minutesWait } from "./minutes-wait";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
