@@ -326,6 +326,9 @@ func notifyMessage(kind string, payload map[string]any) map[string]any {
 	if td, ok := payload["todo"]; ok { // a decision's push (decidePayloadIn)
 		msg["todo"] = td
 	}
+	if health, ok := payload["health"]; ok {
+		msg["health"] = health
+	}
 	if id, ok := payload["recording_id"]; ok { // a meeting's minutes (notifyDoneUnder)
 		msg["recording_id"] = id
 	}
