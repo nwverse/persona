@@ -4,4 +4,3 @@ dist
 /public/pake/client.wasm
 /public/pake/wasm_exec.js
 /public/pake/THIRD_PARTY_NOTICES.txt
-dist-core-only

@@ -6,7 +6,8 @@
 // from a file outside src/modules that lands in a module's files fails the build or the test file: the ESLint boundary
 // catches the import paths it can read, this catches whatever reaches a module at all once the paths are resolved.
 // Module files themselves (their code and their tests) are never reached in this mode; vite.config.ts leaves their
-// tests out.
+// tests out. The build writes to node_modules/.cache/persona-core-only: outside the folders a dev server or a browser
+// test's Vite watches, and never served.
 import { fileURLToPath } from "node:url";
 import { relative, sep } from "node:path";
 import type { Plugin } from "vite";
