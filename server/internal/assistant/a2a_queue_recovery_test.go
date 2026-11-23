@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -183,5 +184,46 @@ func TestA2AQueuedResultStillWaitsForOfflineSender(t *testing.T) {
 	task = a2aProcessOne(t, s, st, cfg, task.ID)
 	if task.Events[i].Delivery != a2aDelivered || len(h.sentCalls()) != 2 {
 		t.Fatalf("old queued result did not reach the recovered sender: %+v", task)
+	}
+}
+
+func TestA2AIdleNotificationBypassesBusyPollLease(t *testing.T) {
+	s, h, st, cfg, parent, child := a2aFixture(t)
+	setStatus(h.fakeHub, child.Machine, child.Session, proto.StatusWorking)
+	task, err := s.a2aStart(t.Context(), st, cfg, parent, child, "leased", "", "Deliver on idle.", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A worker checked the busy target and left its next check eight seconds
+	// away. An idle notification must make it due without waiting out that lease.
+	rows, err := st.A2AClaim(t.Context(), 1)
+	if err != nil || len(rows) != 1 || rows[0].ID != task.ID {
+		t.Fatalf("claim: %+v %v", rows, err)
+	}
+	if rows, err := st.A2AClaim(t.Context(), 1); err != nil || len(rows) != 0 {
+		t.Fatalf("busy check lease not held: %+v %v", rows, err)
+	}
+	loopCtx, stop := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); s.a2aLoop(loopCtx) }()
+	t.Cleanup(func() {
+		stop()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("A2A loop did not stop")
+		}
+	})
+	setStatus(h.fakeHub, child.Machine, child.Session, proto.StatusDone)
+	s.a2aRecipientIdle(t.Context(), child)
+	waitFor(t, "idle notification to bypass the eight-second lease", func() bool {
+		current, err := decodeA2A(st.A2AGet(t.Context(), task.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return current.State == a2aWorking
+	})
+	if len(h.sentCalls()) != 1 {
+		t.Fatalf("idle request was not delivered exactly once: %+v", h.sentCalls())
 	}
 }

@@ -49,6 +49,8 @@ For an existing session, send its exact machine and session IDs.
 Each receiving session runs one active A2A task at a time; additional sends to a
 busy session are queued and delivered in FIFO order when the active task ends.
 An active request waiting for delivery is retried when the recipient becomes idle.
+Idle session lists and turn-end events make that request due immediately, rather
+than leaving it behind the delivery worker's previous polling lease.
 If it still cannot be delivered after ten minutes of active waiting, it fails with
 an explanation and the next queued task is released. Time spent behind another
 task in the FIFO does not consume this delivery budget. The deadline survives a

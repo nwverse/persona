@@ -71,6 +71,21 @@ func (s *Service) a2aSignal() {
 	}
 }
 
+// Idle notifications shorten only the queued request's check lease. The
+// delivery worker still uses the revision fence and the node's idle guard.
+func (s *Service) a2aRecipientIdle(ctx context.Context, ref a2aRef) {
+	st, err := s.a2aStore()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if err := st.A2AReady(ctx, ref.Machine, ref.Session); err != nil {
+		s.logf("A2A idle delivery: %v", err)
+	}
+	s.a2aSignal()
+}
+
 func a2aDeliveryID(task string, seq int) string {
 	return fmt.Sprintf("%s%s-%d", proto.A2ADeliveryPrefix, task, seq)
 }

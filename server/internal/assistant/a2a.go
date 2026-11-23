@@ -51,6 +51,7 @@ type a2aStore interface {
 	A2ACount(context.Context, string, string, string, string, string, *time.Time) (int, error)
 	A2AUpdate(context.Context, db.A2ARow, time.Time, *time.Time) (bool, error)
 	A2AClaim(context.Context, int) ([]db.A2ARow, error)
+	A2AReady(context.Context, string, string) error
 	A2ADispatches(context.Context, string, string, string, time.Time) ([]db.A2ARow, error)
 }
 
