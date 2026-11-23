@@ -42,17 +42,9 @@ struct AssistantTopBar: View {
     @State private var hint: String?
     /// The launcher whose "Other Model…" is open (#1644): a model ID typed by hand for the next message.
     @State private var typingFor: String?
-    #if os(macOS)
-    @Environment(\.macTitleRowLeading) private var titleRowLeading
-    #endif
 
     /// The bar's height below the status bar: what the conversation leaves free at its top so nothing hides under it.
-    /// On the Mac, the title bar's row (`macBar`).
-    #if os(macOS)
-    static let height: CGFloat = Theme.Size.macToolbarHeight
-    #else
     static let height: CGFloat = 70
-    #endif
     /// How far below the bar the fog fades out.
     static let fade: CGFloat = 44
     /// How far below the safe area's top the fog stays solid: just past the round buttons and the switch, so a line of
@@ -82,19 +74,9 @@ struct AssistantTopBar: View {
             // Session Info is a sheet, like the Agents chat's (SessionInfoSheet).
             .sheet(isPresented: Binding(get: { showInfo && key != nil }, set: { showInfo = $0 })) {
                 if let key {
-                    #if os(macOS)
-                    // A window sheet: SessionInfoSheet has no stack or Done of its own on the Mac (it is the chat's inspector there).
-                    NavigationStack {
-                        SessionInfoSheet(key: key, session: session, assistant: true)
-                            .navigationTitle("Session Info")
-                            .macSheetDone { showInfo = false }
-                    }
-                    .macSheet()
-                    #else
                     SessionInfoSheet(key: key, session: session, assistant: true)
                         .presentationDetents([.medium, .large])
                         .presentationDragIndicator(.visible)
-                    #endif
                 }
             }
             .onChange(of: key) { showInfo = false }
@@ -121,9 +103,7 @@ struct AssistantTopBar: View {
     }
 
     @ViewBuilder private var bar: some View {
-        #if os(macOS)
-        if shell != nil { shellBar } else if AppStyle.current.usesBeautifulUI { classicBar } else { macBar }
-        #elseif os(iOS)
+        #if os(iOS)
         if shell != nil { shellBar } else if drawerTitle { drawerRow } else { classicBar }
         #else
         if shell != nil { shellBar } else { classicBar }
@@ -167,58 +147,6 @@ struct AssistantTopBar: View {
         .frame(height: Self.height, alignment: .top)
         .barScreenshotBanner(name: ownName)
         .background(alignment: .top) { BarFog(solid: Self.fogSolid, fade: Self.fade) }
-    }
-    #endif
-
-    #if os(macOS)
-    /// The Mac's (#2113): the title bar's row of the conversation's column, as the Agents chat's (`macTitleRow`):
-    /// Chat History, the name (its menu: Knowledge, Details, the copies, the launcher, Interrupt), and New Chat (⇧⌘N) at the end,
-    /// instead of the phone's face over a pill in the middle.
-    private var macBar: some View {
-        let link = model.connection.shown
-        return HStack(spacing: Theme.Space.s) {
-            MacTitleRowButton(String(localized: "Chat History [Shell Components 60636b]"), symbol: sidebarIsColumn ? Theme.Icon.sidebar : Theme.Icon.sidebarMenu, action: openSidebar)
-                .accessibilityIdentifier("assistant-sidebar-button")
-            Menu { menuItems(link) } label: {
-                HStack(spacing: Theme.Space.xs) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(name).font(Theme.Font.heading).foregroundStyle(Theme.macLabel).lineLimit(1)
-                        Group {
-                            if let hint {
-                                Label(hint, systemImage: Theme.Icon.successFilled).foregroundStyle(Theme.positive)
-                            } else if link != .online {
-                                ConnectionLabel(phase: link, compact: true)
-                            }
-                        }
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    }
-                    ThemedIcon(Theme.Icon.expand).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
-                }
-                .contentShape(.rect)
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .fixedSize()
-            .help("Knowledge, details, copy directory and chat info")
-            .accessibilityLabel(link != .online ? String(localized: "\(name), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true))") : name)
-            .accessibilityIdentifier("persona-avatar")
-            .connectionDetails($showLink)
-            .layoutPriority(-1)
-            Spacer(minLength: Theme.Space.s)
-            MacTitleRowButton(String(localized: "New Chat (⇧⌘N)"), symbol: Theme.Icon.compose, action: newConversation)
-                .disabled(key == nil)
-                .accessibilityIdentifier("assistant-new")
-        }
-        .padding(.horizontal, Theme.Space.l)
-        // In the title bar's row, past the traffic lights when the bar is at the window's edge (#830).
-        .padding(.leading, max(0, titleRowLeading - Theme.Space.l))
-        .frame(height: Self.height)
-        .frame(maxWidth: .infinity)
-        .background(alignment: .top) { BarFog(solid: Self.height - Theme.Space.sm, fade: Self.fade) }
-        .animation(Theme.Motion.standard, value: hint)
-        .task(id: hint) { await clearHint() }
     }
     #endif
 
@@ -311,11 +239,6 @@ struct AssistantTopBar: View {
             }
         }
         .padding(.horizontal, Theme.Space.l)
-        #if os(macOS)
-        // In the title bar's row, past the traffic lights when the bar is at the window's edge (#830); the fog under
-        // it stays the whole width.
-        .padding(.leading, max(0, titleRowLeading - Theme.Space.l))
-        #endif
         .padding(.top, Self.topInset)
         .frame(height: Self.height, alignment: .top)
         .barScreenshotBanner(name: ownName)

@@ -23,13 +23,10 @@ struct ExtensionViewRenderer: View {
     @Binding var link: LinkTarget?
 
     var body: some View {
-        #if !os(macOS)
-        // Mac pages already expose the same search in their toolbar.
         if let search = view.search, let model, model.managesConfirmation {
             Section { ExtensionSearchRow(search: search, model: model, link: $link) }
                 .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
         }
-        #endif
         if let f = view.filter, let model {
             Section { ExtensionFilterChips(filter: f, model: model, link: $link) }
                 .listRowInsets(EdgeInsets())
@@ -547,13 +544,9 @@ struct ExtensionViewStack: View {
 }
 
 extension View {
-    /// Where an extension's links open: the link card (iPhone) or the panel at the trailing edge (Mac).
+    /// Where an extension's links open: the link card.
     @ViewBuilder func pluginLinks(_ link: Binding<LinkTarget?>) -> some View {
-        #if os(macOS)
-        macLinkPanel(link)
-        #else
         modifier(ExtensionLinkSheet(link: link))
-        #endif
     }
 
     /// The pages `models` ask to push (docs/extensions/extensions.md「Page navigation」), on the navigation stack this page is on; the one
@@ -731,12 +724,7 @@ struct ExtensionPageView: View {
     }
 
     private func updateVisibility() {
-        var foreground = phase == .active
-        #if DEBUG && os(macOS)
-        // A validated loopback capture uses the normal stream while its window stays non-activating.
-        // This exception exists only for the DEBUG batch; production still requires an active scene.
-        foreground = foreground || MacExtensionSnapshotBatch.isCapturing
-        #endif
+        let foreground = phase == .active
         page.setVisible(pageVisible && tabActive && foreground)
     }
 
