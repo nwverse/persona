@@ -85,13 +85,8 @@ func (s *Service) taskNoticeOfStart(ctx context.Context, t Todo, machine, state,
 		s.quietNotify(ctx, t, machine, state, ask, text, files)
 		return
 	}
-	if state == "failed" && !t.Quiet && t.Origin != "" && !s.isMain(ctx, t.Origin) && !s.isLeader(ctx, t.Origin) &&
-		!s.isLeaderRef(t.Supervision.Supervisor) {
-		// A side conversation's task, whoever supervises it now: the user still gets the failure push they got before
-		// the task had a ledger (#5081), and the supervisor its signal. A leader conversation's own task, and a
-		// worker's, stay their supervisor's business.
-		s.notifyTaskFailed(ctx, t, machine, text)
-	}
+	// A supervised task's failed start is its supervisor's business: the failed signal below carries it there, with
+	// its start remedies, and only the supervisor's needs_user brings it to the owner. No push to the phone.
 	g := superviseSignal{Todo: t.ID, Machine: machine, Detail: text, At: time.Now()}
 	switch state {
 	case "failed":
@@ -187,7 +182,7 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 		if ai.IsNotConfigured(err) {
 			detail = "判定模型未配置" // i18n-ignore: the supervision message is the assistant's prompt
 		}
-		s.signal(superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: detail})
+		s.signal(superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: detail, JudgeDown: true})
 		return
 	}
 	detail := verdictWords[c.Verdict]
@@ -373,8 +368,11 @@ func (s *Service) notifyTaskNeedsUser(ctx context.Context, t Todo, work time.Tim
 	}
 	n := Notification{ID: "ntf_task_needs_" + t.ID + "_" + work.UTC().Format(time.RFC3339Nano), Kind: NotifyPush,
 		Subtitle: "Persona", DeviceID: here, SessionID: conversation, Title: title, Body: body,
-		// Only the owner can take this action: it interrupts low-distraction mode, once per stretch of work (#5732).
-		Level: assistantwire.LevelP0, RelatedKey: "todo:" + t.ID + "@" + work.UTC().Format(time.RFC3339Nano)}
+		// Only the owner can take this action: it interrupts low-distraction mode (#5732).
+		// The hub rings it once while the to-do waits on the owner for it, whatever the stretch of work (one key a to-do
+		// and reason, push_todo_dedup.go); todoPushOver lets the next one ring. No card id (pushDecisionAbout says why).
+		Level: assistantwire.LevelP0, RelatedKey: assistantwire.TodoPushKey(t.ID, assistantwire.TodoPushNeedsUser)}
+	s.noteCard(ctx, cardLeaderNeedsUser, n)
 	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 		s.logf("task %s: needs-user push: %v", t.ID, err)
 		return false
@@ -403,10 +401,12 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	if st := t.Supervision.state(t); st != reviewPending && st != reviewParked && st != reviewTimedOut && st != reviewClosing && (t.Supervision == nil || t.Supervision.Waits == nil) {
 		return
 	}
+	ownerWaitEnded := false
 	if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 		if v.State != reviewPending && v.State != reviewParked && v.State != reviewTimedOut && v.State != reviewClosing && v.Waits == nil {
 			return false
 		}
+		ownerWaitEnded = v.Waits != nil
 		v.Waits = nil // its agent goes on: the owner's answer reached it, or the work changed (#1277)
 		if v.State != reviewPending && v.State != reviewParked && v.State != reviewTimedOut && v.State != reviewClosing && v.State != reviewNeedsUser {
 			return true
@@ -420,6 +420,8 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 		return true
 	}); err != nil {
 		s.logf("task %s: supervision: %v", t.ID, err)
+	} else if ownerWaitEnded {
+		s.todoPushOver(t.ID) // the owner wait is over: the next one may ring
 	}
 }
 
@@ -449,7 +451,7 @@ func (s *Service) notifyTaskFailed(ctx context.Context, t Todo, machine, reason 
 	if sub == "" {
 		sub = "Persona"
 	}
-	s.push(ctx, Notification{
+	s.push(withCard(ctx, cardTaskFailed), Notification{
 		Subtitle:  sub,
 		DeviceID:  here,
 		SessionID: t.Origin,

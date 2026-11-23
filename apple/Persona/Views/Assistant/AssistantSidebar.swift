@@ -1,12 +1,9 @@
 import BeautifulUI
 import PersonaKit
 import SwiftUI
-#if canImport(UIKit)
 import UIKit
-#endif
 import PersonaWire
 
-#if os(iOS) || os(visionOS)
 /// How far the Persona tab's sidebar is out (0 closed … 1 open). Its own object so following the finger only redraws
 /// the page's motion modifier (offset, scale, opacities) and moves two UIKit views, never the conversation or the sidebar.
 @Observable final class AssistantDrawer {
@@ -713,9 +710,7 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
 struct DrawerPan {}
 #endif
 
-#endif
 
-#if os(iOS) || os(visionOS)
 /// Marks a view whose sideways drags the drawer and the strip leave alone, either way (the To Decide pager's card, #12831):
 /// a drag that starts inside a mounted mark is the view's own.
 struct SwipePageMark: UIViewRepresentable {
@@ -763,7 +758,6 @@ struct SwipeRowMark: UIViewRepresentable {
         return false
     }
 }
-#endif
 
 /// Calls `closed` when the drawer is back in: only this empty view reads whether it is out, so the sidebar itself is
 /// not redrawn when it comes out.
@@ -806,6 +800,10 @@ struct AssistantSidebar: View {
     var onOpenExtension: ((ExtensionNavRoute) -> Void)? = nil
     /// Health: the health space's page (docs/assistant/health.md); nil leaves the row out.
     var openHealth: (() -> Void)? = nil
+    /// A domain space (#13500, docs/apple/ios.md "Domain spaces"): its latest conversation, else its home; and New
+    /// space. nil leaves the Spaces section out.
+    var openSpace: ((String) -> Void)? = nil
+    var openNewSpace: (() -> Void)? = nil
     /// Recordings (docs/apple/recording.md「Meeting recordings」): opens the Recordings page, whose Record starts one, or
     /// the recording running. nil leaves the row out (the Mac records nothing).
     var openRecordingsPage: (() -> Void)? = nil
@@ -828,6 +826,7 @@ struct AssistantSidebar: View {
     /// The Sidebar layout's folds (the rows part): the places and Persona's chats, remembered on this device.
     @StoredValue("sidebar.fold.places") private var placesFolded = false
     @StoredValue("sidebar.fold.chats") private var chatsFolded = false
+    @StoredValue("sidebar.fold.spaces") private var spacesFolded = false
     /// The To-dos places under the To-dos row (#10465), folded by the owner only: open at first, never by itself.
     @StoredValue("sidebar.fold.todos") private var todosFolded = false
     @State private var own = AssistantSidebarUI()
@@ -875,18 +874,16 @@ struct AssistantSidebar: View {
                 .padding(.horizontal, Theme.Space.xl)
                 .padding(.top, besideBar ? AssistantTopBar.topInset : Theme.Space.s)
                 .padding(.bottom, Theme.Space.s)
-            // A list (not a stack in a scroll view) for its rows' own swipe: a conversation swipes left to Archive. On the
-            // Mac it selects the open conversation: ↑ / ↓ open the next, Delete archives (`MacListKeys`, #2113).
-            MacSelectingList(selection: Binding(get: { current }, set: { key in if let key, key != current { open(key) } })) {
+            // A list (not a stack in a scroll view) for its rows' own swipe: a conversation swipes left to Archive.
+            List {
                 Group {
                     if ui.query.isEmpty {
                         // The main conversation first, once, in every layout (#2004): never again under Pin or Recent.
                         mainItem(all)
                         VStack { Divider() }.padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s) // a row lays a bare Divider out upright
                         actions(all)
-                        if !macPlacesGroup {
-                            VStack { Divider() }.padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s) // a row lays a bare Divider out upright
-                        }
+                        spacesSection
+                        VStack { Divider() }.padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s) // a row lays a bare Divider out upright
                         conversations(all, archived: archived)
                     } else {
                         results(searchRows(all))
@@ -971,6 +968,12 @@ struct AssistantSidebar: View {
                 ui.placeRows(at: x)
             }
             if !placesFolded { actions(all) }
+            if showsSpaces {
+                foldHeading(String(localized: "Spaces [Sidebar Layout]"), folded: $spacesFolded, id: "sidebar-fold-spaces") {
+                    EmptyView()
+                } tally: { EmptyView() }
+                if !spacesFolded { spaceRows }
+            }
             // No New Chat on the heading: the column has one, its foot's (#4206, the owner).
             foldHeading(String(localized: "Persona Chats [Sidebar Layout]"), folded: $chatsFolded, id: "sidebar-fold-chats") {
                 EmptyView()
@@ -1249,7 +1252,7 @@ extension AssistantSidebar {
             HStack {
                 if model.showsAssistantSwitcher, let current = model.currentAssistant {
                     // One installed assistant uses the switcher too; only a missing roster or current assistant keeps the persona title.
-                    AssistantSwitcherHeader(manager: current, nameFont: Theme.Font.title, compact: macTitleRow,
+                    AssistantSwitcherHeader(manager: current, nameFont: Theme.Font.title,
                                             faceGap: part == .header ? Self.headFaceGap : Theme.Space.m, openSettings: showSettings)
                 } else {
                     // A hub without a roster has no switcher: with several hubs the title keeps a hub menu under it (#12594).
@@ -1300,11 +1303,6 @@ extension AssistantSidebar {
         Theme.Space.m + Theme.Sidebar.glyphColumn + Theme.Sidebar.gap - headShift - Theme.Size.avatar
     }
 
-    /// The header sits in the Mac's title bar row: one line.
-    private var macTitleRow: Bool {
-        false
-    }
-
     /// Settings on the page `AppModel.settingsPath` names (the switcher's Manage Assistants…): the way this sidebar has
     /// to Settings, else the app's own.
     private func showSettings() {
@@ -1338,6 +1336,36 @@ extension AssistantSidebar {
             .padding(.horizontal, Theme.Space.m)
             .scaledFrame(height: Theme.Size.avatar)
             .background(Theme.Fill.chip, in: .capsule)
+        }
+    }
+
+    // MARK: Spaces (#13500)
+
+    /// The assistant has tracks and this sidebar opens spaces.
+    private var showsSpaces: Bool { openSpace != nil && SpaceStore.shared.supported == true }
+
+    /// The whole sidebar's Spaces: a heading over the spaces' rows and New space, under the places.
+    @ViewBuilder private var spacesSection: some View {
+        if showsSpaces {
+            heading(String(localized: "Spaces [Assistant Sidebar]")) { EmptyView() }
+            spaceRows
+        }
+    }
+
+    /// One row per space (`SpaceStore.sidebar`, worked out when the tracks change), then New space. Health keeps its own
+    /// row among the places.
+    @ViewBuilder private var spaceRows: some View {
+        if let openSpace {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(SpaceStore.shared.sidebar) { track in
+                    action(track.name, SpaceIcon.symbol(of: track), id: "sidebar-space-\(track.slug)", place: .space(track.slug)) {
+                        openSpace(track.slug)
+                    }
+                }
+                if let openNewSpace {
+                    action(String(localized: "New space"), Theme.Icon.add, id: "sidebar-new-space", place: .newSpace, run: openNewSpace)
+                }
+            }
         }
     }
 
@@ -1455,15 +1483,14 @@ extension AssistantSidebar {
         let key = model.assistantMain
         let main = all.first { $0.key == key }
         let selected = key != nil && key == current
-        let radius = Theme.Sidebar.radius
         return Button { if let key { open(key) } else { newConversation() } } label: {
             HStack(spacing: Theme.Sidebar.gap) {
-                // Where the places below have their symbol, drawn as theirs (on the Mac's plain list, `macPlace`'s).
+                // Where the places below have their symbol, drawn as theirs.
                 Theme.Icon.image(Theme.Icon.home).resizable().scaledToFit() // resizable: an Image, not ThemedIcon
                     .fontWeight(isShell ? .medium : .regular)
-                    .foregroundStyle(macPlacesGroup ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.primary))
+                    .foregroundStyle(Color.primary)
                     .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
-                    .scaledFrame(width: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn)
+                    .scaledFrame(width: Theme.Sidebar.glyphColumn)
                 Text("Main Chat").font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 Spacer(minLength: 0)
                 if let main { RowStateMark(state: main.state) }
@@ -1474,11 +1501,9 @@ extension AssistantSidebar {
             .background {
                 if selected { SidebarSelectedShade() }
             }
-            .macHoverShade(in: RoundedRectangle(cornerRadius: radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
         .accessibilityLabel([String(localized: "Main Chat"), main.flatMap { stateWord($0) }].compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("sidebar-main")
@@ -1668,7 +1693,6 @@ extension AssistantSidebar {
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Sidebar.rowPadding)
             .scaledFrame(minHeight: Theme.Sidebar.row)
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1873,12 +1897,10 @@ extension AssistantSidebar {
                     SidebarSelectedShade()
                 }
             }
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous), isEnabled: drawsShade)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .tag(s.key)
-        .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
         // a row a search found by a message says the manager's whole snippet in the last message's place (#6284)
         .sourceLabel([title, counts, isMain && s.title != title ? s.title : nil], source: source, opener: opener,
                      [stateWord(s, under: leadWorking), said?.snippet ?? (preview.isEmpty ? nil : preview)],
@@ -1893,9 +1915,7 @@ extension AssistantSidebar {
                 .tint(Theme.accent)
             }
         }
-        #if os(iOS) || os(visionOS)
         .background { if !kept { SwipeRowMark() } } // the drawer leaves a drag to the left on it to the row
-        #endif
         .contextMenu {
             if isMain { MainConversationMenu(key: s.key) } // Compact context, New Main Chat… (#1762)
             if !kept {
@@ -1960,19 +1980,19 @@ extension AssistantSidebar {
                 drawer?.close()
                 openTodoAgentChat(model.inHub(target), in: model)
             } label: {
-                outsideLabel(entry, named: named, selected: selected, drawsShade: drawsShade, interactive: true)
+                outsideLabel(entry, named: named, selected: selected, drawsShade: drawsShade)
             }
             .buttonStyle(.plain)
             .contentShape(.rect)
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityIdentifier("sidebar-outside-direction")
         } else {
-            outsideLabel(entry, named: named, selected: false, drawsShade: false, interactive: false)
+            outsideLabel(entry, named: named, selected: false, drawsShade: false)
         }
     }
 
     private func outsideLabel(
-        _ entry: AssistantSidebarGroups.DirectionEntry, named: String, selected: Bool, drawsShade: Bool, interactive: Bool
+        _ entry: AssistantSidebarGroups.DirectionEntry, named: String, selected: Bool, drawsShade: Bool
     ) -> some View {
         let counts = entry.outside?.counts.label
         let running = entry.outside?.running ?? false
@@ -1988,8 +2008,6 @@ extension AssistantSidebar {
         .background {
             if selected && drawsShade { SidebarSelectedShade() }
         }
-        .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous),
-                       isEnabled: interactive && drawsShade)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([named, counts, running ? AgentState.working.label : nil]
             .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
@@ -2008,11 +2026,6 @@ extension AssistantSidebar {
     // MARK: Foot: Persona, Settings
 
     private var machineID: String { model.assistantConfig?.machineID ?? model.hubMachineID }
-
-    /// The Mac's place is a row like the conversations': no line between it and them.
-    private var macPlacesGroup: Bool {
-        false
-    }
 
     /// Persona's face and name with where it runs (a tap: its profile), Settings on the right (the tab bar is hidden while
     /// the drawer is out).

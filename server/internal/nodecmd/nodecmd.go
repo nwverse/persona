@@ -133,7 +133,10 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		}
 		runSysmon(ctx, n)
 	case "node-update-check":
-		return true, json.NewEncoder(os.Stdout).Encode(nodeupdate.Check{Version: b.Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Program: b.Program, ResidentHandover: node.ResidentHandoverSupported})
+		return true, json.NewEncoder(os.Stdout).Encode(nodeupdate.Check{
+			Version: b.Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Program: b.Program,
+			ResidentHandover: node.ResidentHandoverSupported, AdoptionMarker: true,
+		})
 	case "node-update-watch":
 		return true, runNodeUpdateWatch(ctx, rest)
 	default:
@@ -170,6 +173,8 @@ func runNode(ctx context.Context, args []string, b Build) error {
 				os.Exit(1)
 			}
 			return err
+		case "agy-hooks": // Persona's entries in the Antigravity CLI's hooks file (node/agyhooks.go)
+			return node.AgyHooksCommand(args[1:], os.Stdout)
 		case "reset-uid":
 			if err := noExtraArgs("reset-uid", args[1:]); err != nil {
 				exitNodeUsage(err)

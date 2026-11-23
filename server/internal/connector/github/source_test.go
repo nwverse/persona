@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 func TestMissingScopes(t *testing.T) {
@@ -96,7 +96,7 @@ func TestChoosingASource(t *testing.T) {
 	}
 	c.UseMachine(ctx, "mac", "示例 Mac", func(context.Context, string) (string, error) { return "from-mac", nil })
 	c.check(ctx)
-	if st := c.Status(ctx); c.Source() != SourceMachine || c.MachineID() != "mac" || st.Via != "来自 示例 Mac 的 gh 登录" || st.State != connector.StateOK {
+	if st := c.Status(ctx); c.Source() != SourceMachine || c.MachineID() != "mac" || st.Via != "来自 示例 Mac 的 gh 登录" || st.State != connectorwire.StateOK {
 		t.Fatalf("machine: %+v", st)
 	}
 	if scopes, _ := c.Scopes(); len(MissingScopes(scopes)) == 0 {
@@ -107,7 +107,7 @@ func TestChoosingASource(t *testing.T) {
 	}
 	c.UseDevice()
 	c.check(ctx)
-	if st := c.Status(ctx); st.State != connector.StateNotSignedIn || st.Error != notSignedIn {
+	if st := c.Status(ctx); st.State != connectorwire.StateNotSignedIn || st.Error != notSignedIn {
 		t.Fatalf("device without a token: %+v", st)
 	}
 }

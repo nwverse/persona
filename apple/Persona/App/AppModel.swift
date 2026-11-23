@@ -2,9 +2,7 @@ import Foundation
 import Observation
 import PersonaKit
 import SwiftUI
-#if canImport(UIKit)
 import UIKit
-#endif
 import UserNotifications
 import PersonaWire
 
@@ -554,14 +552,14 @@ final class AppModel {
     var terminalAsk: SessionKey?
     /// The phone writes waiting for Allow / Deny, one shown at a time (#4456).
     @ObservationIgnored let phoneConfirmations = PhoneConfirmations()
-    /// The one on screen (RootView / MacRootView's alert).
+    /// The one on screen (RootView's alert).
     var pendingConfirmation: PhoneConfirmation? { phoneConfirmations.current }
     /// Phone tool results the socket could not take yet, sent when it connects (#4456).
     @ObservationIgnored let toolResults = ToolResultOutbox()
     /// Remembered across launches together with the open dev chat (restoreChat), so a relaunch lands where you were.
     var selectedTab: AppTab = .assistant {
         didSet {
-            DeferredDefaults.set(selectedTab.rawValue, forKey: "app.tab")
+            UserDefaults.standard.set(selectedTab.rawValue, forKey: "app.tab")
             DevMode.shared.tab(selectedTab) // the screen in front, while Developing Persona records (#9460)
             #if DEBUG
             ShellTrace.shared.note("tab \(oldValue)->\(selectedTab)")
@@ -645,6 +643,7 @@ final class AppModel {
     /// Counts the current hub's hellos (its socket connecting again): a page that reads on reconnect follows it, so it
     /// reads on that alone and not on every push (#11516's page).
     private(set) var hubHellos = 0
+    private(set) var healthIntakeRevision = 0
     /// Numbers the tree reads in the order they were asked; `directionTreeLanded` is the newest one whose answer was
     /// taken. An answer older than that is dropped; a read that fails moves neither, so it never makes an earlier
     /// good answer count as stale.
@@ -817,7 +816,6 @@ final class AppModel {
         self.stateFolder = stateFolder
         personas = store ?? PersonaStore()
         RetiredPreferences.clear(from: .standard)
-        TextSize.current.applyToMacFonts() // what `textSize` starts at
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
         assistantPicks = AssistantPickStore.load(folder: stateFolder)
@@ -879,11 +877,9 @@ final class AppModel {
         let language = LanguageStore.shared.apply()
         WatchSync.shared.onActivated = { [weak self] in
             WatchSync.shared.push(language: language)
-            #if os(iOS) || os(visionOS)
             // All-day recording: the erases and deletes the watch hasn't confirmed go now that a send reaches it
             // (docs/assistant/day-recap.md「Erasing」「Deleting」), paired with a hub or not.
             RecordingDayReceiver.shared.sessionActivated()
-            #endif
             guard let self, self.isPaired, !self.isDemo else { return }
             WatchSync.shared.push(persona: self.personas.chosenID)
             self.pushWatchConfigs()
@@ -898,11 +894,7 @@ final class AppModel {
         }
         applyPersonaPalette()
         connection.onCaughtUp = { [weak self] in self?.flushOutbox() }
-        #if os(iOS) || os(visionOS)
         let leaving = [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification]
-        #else
-        let leaving = [NSApplication.willTerminateNotification]
-        #endif
         for name in leaving {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { @Sendable [weak self] _ in
                 MainActor.assumeIsolated {
@@ -920,12 +912,10 @@ final class AppModel {
             MainActor.assumeIsolated { self?.registerPhone() }
         }
         #endif
-        #if os(iOS) || os(visionOS)
         if registryUnreadable {
             NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil,
                                                    queue: .main) { @Sendable _ in MainActor.assumeIsolated { AppModel.shared.retryRegistry() } }
         }
-        #endif
         DemoHub.shared.onNotSent = { [weak self] in self?.toast = Toast(DemoText.notSent) }
         countBadges()
         startHeldRetryRestoration()
@@ -1067,10 +1057,8 @@ final class AppModel {
     func start() {
         guard isPaired else { return }
         for link in links {
-            #if os(iOS) || os(visionOS)
             // Launched in the background (a push, a file from the watch): the socket waits for the app to open.
             link.live.suspended = UIApplication.shared.applicationState == .background
-            #endif
             link.live.connect(link.fallback)
         }
         if isDemo { return } // no watch, no device credentials: nothing to talk to
@@ -1523,6 +1511,9 @@ final class AppModel {
 
     /// The health space's open conversations the hub has pushed, newest first (Health; `HealthModel` adds the hub's list).
     var healthConversations: [Session] { assistantLists(for: hub?.group ?? "").health }
+
+    /// The domain spaces' open conversations the hub has pushed, newest first (`SpaceHomeModel` adds each space's list).
+    var spaceConversations: [Session] { assistantLists(for: hub?.group ?? "").spaces }
 
     /// The two lists as of the last push, set only when they changed: a push about the agents (most of them) leaves
     /// the Persona page's conversations alone (`AssistantSidebar` was drawn again twice for each one, #390). For a group
@@ -2860,9 +2851,7 @@ final class AppModel {
         // Simulator automation (scripts/app/sim.sh) must not take the real iPhone's phone_* tool calls.
         let automation = UserDefaults.standard.string(forKey: "pairURL") != nil
         if automation { tools = [] }
-        #if os(iOS) || os(visionOS)
         tools += RuntimeCLI.hubToolSpecs(features: link.features) // the runtime CLI over the hub, when switched on
-        #endif
         if automation && tools.isEmpty { return }
         #endif
         guard let data = try? JSON.encoder.encode(tools),
@@ -3113,6 +3102,11 @@ final class AppModel {
         case .hello(let hello):
             let previousSurfaceCapabilities = extensionSurfaceCapabilities
             link(group)?.received(hello)
+            // The hub may turn modules off, or on again (#13849, docs/apple/ios.md "Modules"); kept per hub.
+            ModuleState.shared.heard(Set(hello.features), from: group, isHub: isHub)
+            #if os(iOS)
+            if isHub { Task { await HealthIntakeSync.shared.refresh(model: self) } }
+            #endif
             refoldSides() // this hub may fold side sessions now, or no longer (#7944)
             if let page = sessionLists.lists[group], page.loaded, !page.query.legacy, page.paged != hello.features.contains("sessions_list"), let link = link(group) {
                 page.cancel()
@@ -3128,6 +3122,7 @@ final class AppModel {
             DirectionFilings.shared.hello(group)
             if isHub { hubHellos += 1 }
             #if os(iOS)
+            if isHub { HomeWidgetData.shared.intakeChanged() }
             // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
             if isHub { MeetingConversation.shared.reconnected() }
             // The meeting flags a start without the app in front reads follow every hello, not only the Recordings page.
@@ -3254,6 +3249,13 @@ final class AppModel {
             // The direction tree changed (#4352): read it again. Its answer is the default manager's alone, so another
             // manager's page keeps what GET leaders gave it (docs/assistant/managers.md "Clients").
             if isHub, let hubAPI = api, assistantShows(nil) { Task { await refreshDirectionTree(hubAPI) } }
+        case .healthIntake:
+            if isHub { healthIntakeRevision += 1 }
+            #if os(iOS)
+            if isHub { HomeWidgetData.shared.intakeChanged() }
+            if isHub { Task { await HealthIntakeSync.shared.refresh(model: self) } }
+            #endif
+            ExtensionUIRegistry.shared.invalidate(extension: HealthIntakeUI.id, ui: nil, group: group)
         case .assistantFeed(let item):
             if isHub { TasksStore.shared.received(item, group: group) }
         case .assistantView(let view):
@@ -3284,9 +3286,7 @@ final class AppModel {
         case .extensionInvalidate(let ext, let id):
             ExtensionUIRegistry.shared.invalidate(extension: ext, ui: id, group: group)
             if ext == SubscriptionsUI.id { SubscriptionsRefresh.shared.changed() } // the entry rows' counts
-            #if os(iOS) || os(visionOS)
             ExtensionWidgetReconciliation.invalidate(group: group, owner: ext, contribution: id)
-            #endif
         #if os(iOS)
         case .meetingLive(let recordingID, let changed, let revs):
             // Recordings sync with the hub-level group's hub: another group's meetings are none of this phone's.
@@ -3408,6 +3408,7 @@ final class AppModel {
         case .look: "look"
         case .managers: "managers"
         case .directions: "directions"
+        case .healthIntake: "health_intake"
         case .assistantFeed: "assistant_feed"
         case .assistantView: "assistant_view"
         case .assistantViewAction: "assistant_view_action"
@@ -4643,18 +4644,14 @@ final class AppModel {
     /// the front (a switch the system cut short, the first launch after the separate App Icon setting went). Nothing
     /// happens when it already is, so no alert.
     func followAppIcon() {
-        #if os(iOS) || os(visionOS)
         let look = isDemo ? AppIconChoice.standard : personas.appIcon // Demo Mode shows only the default Avatar
         Task { await appIcon.follow(look, scheme: colorScheme) }
-        #endif
     }
 
-    /// Small / Standard / Large on top of the system's text size (Settings › Interface Style › Text Size); RootView applies it. On the Mac the
-    /// fonts read it from `Theme.Font.scale` (text styles there do not follow Dynamic Type, #833).
+    /// Small / Standard / Large on top of the system's text size (Settings › Interface Style › Text Size); RootView applies it.
     var textSize: TextSize = TextSize.current {
         didSet {
             UserDefaults.standard.set(textSize.rawValue, forKey: "ui.textSize")
-            textSize.applyToMacFonts()
         }
     }
 
@@ -4664,10 +4661,8 @@ final class AppModel {
     var colorScheme: ColorSchemeChoice = ColorSchemeChoice.current {
         didSet {
             UserDefaults.standard.set(colorScheme.rawValue, forKey: ColorSchemeChoice.key)
-            #if os(iOS) || os(visionOS)
             colorScheme.apply()
             followAppIcon() // Paper on the home screen takes the same look
-            #endif
         }
     }
 
@@ -4815,6 +4810,7 @@ final class AppModel {
 
     /// Another group was picked for the hub-level pages: their data starts over from that group's.
     func hubChanged() {
+        ModuleState.shared.follow(hub?.group ?? "", features: hub?.features ?? []) // the modules this hub allows (#13849)
         if let g = hub?.group {
             assistantConfig = heldAssistant(g)
         }
@@ -4877,7 +4873,7 @@ final class AppModel {
         refreshStarred(reset: switched)
         #endif
         if switched {
-            if let a = assistantCurrent, let s = session(a), s.assistant, !s.isHealth, !assistantShows(s.manager) { assistantCurrent = assistantMain }
+            if let a = assistantCurrent, let s = session(a), s.assistant, !s.inSpace, !assistantShows(s.manager) { assistantCurrent = assistantMain }
             assistantSwitches += 1
             // the "/" list offers the new assistant's saved prompts, never the one before's (#9436)
             SavedPromptStore.shared.forget()
@@ -4945,7 +4941,8 @@ final class AppModel {
         }
         // A directory-hidden session's cards count nowhere, as the pages leave them out (`directoryVisibleInteractions`).
         let session = cardSessionResolver()
-        for ix in interactions.values where session(ix.sessionKey)?.hiddenByDirectory != true {
+        // A card its task's supervisor holds is the supervisor's until it passes it up (`Interaction.supervisorHeld`).
+        for ix in interactions.values where session(ix.sessionKey)?.hiddenByDirectory != true && !ix.supervisorHeld {
             guard scope.has(ix.manager ?? session(ix.sessionKey)?.manager, group: ix.group) else { continue }
             // A quiet task's agent asking is the main conversation's to tell (#1731): its count goes there, not on Agents.
             switch place(ix.sessionKey) {
@@ -5319,9 +5316,7 @@ final class AppModel {
 
 enum AppTab: String, Hashable {
     case assistant, chats, mail, settings
-    #if os(iOS) || os(visionOS)
     case feishu
-    #endif
 }
 
 struct Toast: Identifiable, Equatable {
@@ -5500,13 +5495,16 @@ nonisolated struct TabBadges: Equatable, Sendable {
 }
 
 /// The Persona conversations of one group, newest first: open and archived (`AppModel.assistantConversations`), and
-/// apart from them the health space's open ones (Health, docs/assistant/health.md), which the sidebar never lists.
+/// apart from them the health space's open ones (Health, docs/assistant/health.md) and the other spaces' (#13500), which
+/// the sidebar never lists.
 nonisolated struct AssistantLists: Equatable {
     let group: String
     let shown: Shown?
     let open: [Session]
     let archived: [Session]
     let health: [Session]
+    /// The open conversations of the domain spaces (every space but health's), the default manager's.
+    let spaces: [Session]
 
     /// The manager the Persona page shows on a hub with several, and the roster that says whose a conversation is
     /// (sessions carry their computer's `manager`): the lists are that manager's, and the health space the default's.
@@ -5522,9 +5520,10 @@ nonisolated struct AssistantLists: Equatable {
         let all = sessions.filter { $0.assistant && $0.group == group }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
         func owned(_ s: Session, by manager: (Shown) -> String) -> Bool { shown.map { $0.roster.owner(s.manager) == manager($0) } ?? true }
-        let mine = all.filter { !$0.isHealth && owned($0, by: \.manager) }
+        let mine = all.filter { !$0.inSpace && owned($0, by: \.manager) }
         open = mine.filter { $0.archived != true }
         archived = mine.filter { $0.archived == true }
         health = all.filter { $0.isHealth && $0.archived != true && owned($0, by: \.roster.defaultID) }
+        spaces = all.filter { $0.isDomainSpace && $0.archived != true && owned($0, by: \.roster.defaultID) }
     }
 }
