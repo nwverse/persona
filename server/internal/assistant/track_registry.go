@@ -18,13 +18,12 @@ import (
 // in the field the wire calls space (Session.Space, StartParams.Space, ?space=). The main space ("") is the
 // assistant's own directory and is no entry; the health space is the built-in entry, which the manager supplies.
 // Every decision on how a track's information is used (the lock screen and channels, extensions, the knowledge base,
-// handing it out, the other conversations' file tools) reads the track's TrackPolicy, never its name or kind.
+// handing it out, the other conversations' file tools) is usage's (usage.go), by the information's categories and the
+// scene: a track takes part only through its default categories, never its name or kind.
 
-// TrackPolicy is how a track's information may be used, one switch a use. The switches are temporary: they give
-// every privacy decision one place to read, and are to be replaced by a decision on the information's categories and
-// the scene it is used in. Collection is meant to be unrestricted, so the extensions the user owns (the memory
-// extension among them) are to read every track then. Until that lands every track other than the main space,
-// registered or not, gets the strictest policy: the health space's, as "when unsure, treat it as health" always did.
+// TrackPolicy is how a track's information may be used, one switch a use: usage's rules for the scenes the call sites
+// ask about, summed up (policyOf). The switches are temporary: they give the call sites one place to read until each
+// asks usage for its own scene.
 type TrackPolicy struct {
 	// Redact: pushes, the lock screen, Lark and the plugin channels say only that there is news.
 	Redact bool
@@ -51,7 +50,7 @@ func (p TrackPolicy) strictness() int {
 	return n
 }
 
-// strictPolicy turns every use rule on: the health space's.
+// strictPolicy turns every use rule on: sensitive information's outside its track, the health space's.
 var strictPolicy = TrackPolicy{Redact: true, HideFromExtensions: true, NoKBWrite: true, ConfirmOutbound: true, DenyMainRead: true}
 
 // The information categories (docs/assistant/health.md), checked here rather than in the database so adding one is a
@@ -212,14 +211,18 @@ func (s *Service) trackEntryOf(ctx context.Context, slug string) (trackEntry, bo
 	return trackEntry{}, false
 }
 
-// trackPolicy is the policy of track space: the main space ("") has every switch off; every other track, registered
-// or not, archived or not, the strictest (strictPolicy). The next step decides by the information's categories and the
-// scene, then applies what the track's kind tightens; never by a track's name or kind.
+// trackPolicy is the policy of track space, from what its information carries at least: the main space's (none) has
+// every switch off, a registered track's (archived or not) follows its default categories (the health space's, health,
+// turns every switch on), and a slug the registry does not know is taken for sensitive (strictPolicy).
 func (s *Service) trackPolicy(ctx context.Context, space string) TrackPolicy {
 	if space == "" {
-		return TrackPolicy{}
+		return policyOf(infoUse{Known: true})
 	}
-	return strictPolicy
+	e, ok := s.trackEntryOf(ctx, space)
+	if !ok {
+		return policyOf(infoUse{SourceTrack: space})
+	}
+	return policyOf(infoUse{Categories: e.DefaultCategories, Known: true, SourceTrack: space})
 }
 
 // trackKnown: slug is the main space ("") or a registered track that is not archived: what a conversation, a task or

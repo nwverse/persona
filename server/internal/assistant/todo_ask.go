@@ -174,6 +174,14 @@ func (s *Service) pushDecisionErr(ctx context.Context, id string) (bool, error) 
 	if lines := decisionLines(l, s.location(ctx), &a); len(lines) > 0 {
 		n.Body += "\n" + strings.Join(lines, "\n")
 	}
+	// A decision whose words say something sensitive is still pushed (it is due), but the lock screen hears only that
+	// there is news, and a tap opens it, with no answer to give from there (exitPolicy; a track that redacts is not
+	// pushed, above). The recommended label stays in the payload for the app, which the lock screen does not show.
+	space, _ := s.selfSpace(ctx, sessionID)
+	if s.exitPolicy(ctx, n.Title+"\n"+n.Body+"\n"+strings.Join(n.Todo.Options, "\n"), sessionID, space).Redact {
+		n.Title, n.Body = s.redactedNotice(ctx, l, space)
+		n.Todo.Options, n.Todo.Lockscreen = nil, assistantwire.OwnerAskLockscreenOpenOnly
+	}
 	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 		s.logf("task %s: decision push: %v", id, err)
 		return false, err

@@ -8,6 +8,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -18,11 +19,13 @@ func (s *Service) taskSourceParams(ctx context.Context, t Task, text, cwd string
 	if cwd != "" {
 		params["cwd"], params["task_execution"] = cwd, true
 	}
-	return params, s.sendModel(ctx, t.MachineID, t.SessionID, params, lang)
+	err := s.sendModel(ctx, t.MachineID, t.SessionID, params, lang)
+	params["model_source"] = modelhttp.Source{Role: "routine", Todo: t.TodoID, Routine: t.ID}.Safe()
+	return params, err
 }
 
 func taskResumeParams(t Task, text string, ex TaskExecution) map[string]any {
-	params := map[string]any{"session_id": t.RunSessionID, "text": text, "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true, "cwd": ex.Cwd, "task_execution": true}
+	params := map[string]any{"model_source": modelhttp.Source{Role: "routine", Todo: t.TodoID, Routine: t.ID}, "session_id": t.RunSessionID, "text": text, "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true, "cwd": ex.Cwd, "task_execution": true}
 	if ex.LegacyCompatible {
 		params[devicewire.LegacyTaskExecution] = true
 	}
@@ -30,7 +33,7 @@ func taskResumeParams(t Task, text string, ex TaskExecution) map[string]any {
 }
 
 func taskStartParams(t Task, text string, ex TaskExecution) startParams {
-	return startParams{Text: text, Source: taskMessageSource(t), PermissionMode: t.PermissionMode,
+	return startParams{modelSource: modelhttp.Source{Role: "routine", Todo: t.TodoID, Routine: t.ID}, Text: text, Source: taskMessageSource(t), PermissionMode: t.PermissionMode,
 		Purpose: "task." + t.ID, Space: t.Space, Origin: OriginTask, OriginRef: t.ID, MachineID: ex.MachineID, Cwd: ex.Cwd,
 		TaskExecution: true, LegacyTaskExecution: ex.LegacyCompatible, PromptSelections: t.PromptSelections,
 		TaskModel: &ModelBinding{Provider: launcherProvider(ex.Launcher), Model: ex.Model, Effort: ex.Effort, PermissionMode: ex.PermissionMode}}

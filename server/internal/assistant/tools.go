@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -211,6 +212,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		return s.toolKnowledgeFolder(ctx, name, args)
 	case "kb_search", "kb_list", "kb_get", "kb_update":
+		// What kb_update writes carries its own categories (info_use.go exitPolicy): a sensitive text is not written
+		// either, judged once the update is valid and about to be written.
+		ctx = withKBWriteCheck(ctx, func(text string) error {
+			if space, _ := s.selfSpace(ctx, self); s.exitPolicy(ctx, text, self, space).NoKBWrite {
+				return errors.New("this isn't written to the knowledge base: it carries sensitive information, which stays in " +
+					"its conversation and memory. Nothing was saved")
+			}
+			return nil
+		})
 		return s.toolKB(ctx, name, args)
 	case "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume":
 		return s.historyTools().Call(ctx, name, args) // kbhistory/tools.go
@@ -259,8 +269,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// which the meeting page shows.
 			return justMeNotice(s.lang(ctx)), nil
 		}
-		if s.selfPolicy(ctx, self).Redact { // the lock screen and the channels hear there is news, not what it is (health.go)
-			a.Title, a.Body = spaceNotice(s.lang(ctx))
+		// The lock screen and the channels hear there is news, not what it is (health.go): decided once, for the push and
+		// its copies alike.
+		if space, _ := s.selfSpace(ctx, self); s.exitPolicy(ctx, a.Title+"\n"+a.Body, self, space).Redact {
+			a.Title, a.Body = s.redactedNotice(ctx, s.lang(ctx), space)
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
 		res, err := s.pushResult(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
@@ -434,7 +446,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if resume != "" { // the phone says it resumes the agent, and why
 			summary = s.resumeNote(ctx, c, am, resume) + "\n\n" + a.Text
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, summary, args); err != nil {
+		words := a.Text // the words the agent gets: the text, and a task's title and done_when
+		if a.Task != nil {
+			words = strings.Join(append([]string{a.Task.Title, a.Text}, a.Task.DoneWhen...), "\n\n")
+		}
+		if ok, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
 			return "", err
 		} else if !ok {
 			return "The user declined on the phone: nothing was sent to that agent.", nil
@@ -727,7 +743,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Ultracode {
 			where += " · ultracode"
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
+		if ok, err := s.confirmOutbound(ctx, machine, self, name, a.Prompt, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
 			return "", err
 		} else if !ok {
 			return "The user declined on the phone: no agent was started.", nil
@@ -1805,4 +1821,51 @@ func agentsListLabel(c proto.Session) string {
 		return "被停下了，没做完" // i18n-ignore: agents_list output for the model, as the lines around it
 	}
 	return "中断了，没做完" // i18n-ignore: agents_list output for the model, as the lines around it
+}
+
+// kbUpdateText is the words a kb_update writes (names, notes, summaries, log lines, profile items), not its ids, links
+// or settings.
+func kbUpdateText(args json.RawMessage) string {
+	var u kbwire.Update
+	if json.Unmarshal(args, &u) != nil {
+		return ""
+	}
+	parts := []string{u.Name, u.Status, u.Goal, u.MyRole, u.Note, u.Summary, u.Log}
+	if u.Pinned != nil {
+		parts = append(parts, *u.Pinned)
+	}
+	parts = append(parts, u.Aliases...)
+	parts = append(parts, u.Tags...)
+	if p := u.Profile; p != nil {
+		for _, items := range [][]kbwire.ProfileItem{p.Facts, p.Views, p.Inferences} {
+			for _, it := range items {
+				parts = append(parts, it.Text, it.Basis)
+			}
+		}
+		for _, c := range p.Commitments {
+			parts = append(parts, c.Text)
+		}
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			b.WriteString(p)
+			b.WriteByte('\n')
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// kbWriteCheckKey carries what a knowledge-base write from a conversation is checked against (withKBWriteCheck).
+type kbWriteCheckKey struct{}
+
+// withKBWriteCheck gives toolKB the check of the words a kb_update writes, for the conversation that calls it.
+func withKBWriteCheck(ctx context.Context, check func(text string) error) context.Context {
+	return context.WithValue(ctx, kbWriteCheckKey{}, check)
+}
+
+// kbWriteCheckOf is the check withKBWriteCheck gave ctx, nil for none.
+func kbWriteCheckOf(ctx context.Context) func(text string) error {
+	check, _ := ctx.Value(kbWriteCheckKey{}).(func(text string) error)
+	return check
 }
