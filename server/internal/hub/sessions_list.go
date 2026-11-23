@@ -222,7 +222,7 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root st
 		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane, HiddenByDirectory: row.HiddenByDirectory(),
 		State: row.State, BackgroundWaiting: row.BackgroundWaiting, JustFinished: row.Work != nil && row.Work.JustFinished,
 		Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
-		Fold: indexedFold(mid, row, root, todo, indexed.Fold), Private: healthSession(row), Assistant: row.Assistant,
+		Fold: indexedFold(mid, row, root, todo, indexed.Fold), Private: spaceSession(row), Assistant: row.Assistant,
 	}
 	// What q finds a row by: the fields the apps' own searches read, the branch too (#4770).
 	text := [...]string{row.Title, row.Cwd, row.RepoRoot, row.Branch, row.SpaceName, row.SlotName, row.AgentName, row.LastText}
@@ -583,7 +583,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		return
 	}
 	opts.Manager = manager
-	opts.NoPrivate = restrictedAgentData(r) // external Agent clients cannot see health-space conversations
+	opts.NoPrivate = h.spacesHidden(r) // external Agent clients cannot see a space's conversations, but the user's own extension (#13246)
 	if values, lookup := r.URL.Query()["session_id"]; lookup {
 		if len(values) != 1 || values[0] == "" || opts.Machine == "" || opts.Since != "" || opts.Cursor != "" {
 			sessionListErr(w, errors.New("exact session lookup requires one nonempty session_id and machine_id, without since or cursor"))
@@ -917,7 +917,7 @@ func (h *Hub) sessionListHint(before, revision string) listHint {
 }
 
 // send queues the hint for c: with since and changed when c asked for them in its URL and is not an extension's token
-// (which never sees a health conversation, and so must not see its id change either).
+// (which never sees a space conversation, and so must not see its id change either).
 func (hint listHint) send(c *client) {
 	if hint.detailed != nil && c.urlFeatures[featureSessionsListChanges] && c.role != roleExtension {
 		c.queue(hint.detailed)

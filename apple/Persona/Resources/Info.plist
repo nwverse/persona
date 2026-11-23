@@ -67,6 +67,8 @@
 	<string>Persona controls your Home accessories and scenes only when you ask and approve each change on your iPhone, for example to turn off the living room light.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Persona connects straight to your computer when it's on the same Wi-Fi, to show its screen faster.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Persona reads your location only when the assistant needs it to answer you, for example when you ask “How far am I from home?” while Persona isn't open. When you move a long way, iOS may wake Persona in the background, but it doesn't record where you go.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Persona shares your current location with Claude only when you ask, for example to find what time it is where you are or which office you are in.</string>
 	<key>NSMicrophoneUsageDescription</key>

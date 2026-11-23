@@ -497,6 +497,7 @@
     <string name="agents_todo_hold_user">needs your OK</string>
     <string name="agents_todo_hold_agent">the agent can go on</string>
     <string name="agents_todo_hold_other">waiting on others / CI / an environment</string>
+    <string name="agents_todo_hold_supervisor">its supervisor reads it first</string>
     <string name="agents_todo_active_agents">Agents on it</string>
     <string name="agents_todo_no_agents">No agents assigned</string>
     <string name="agents_todo_no_agents_hint">Tap “Hand to agent” below to assign it.</string>

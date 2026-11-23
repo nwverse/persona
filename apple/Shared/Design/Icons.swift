@@ -31,8 +31,8 @@ extension Theme {
         /// A status dot (online, unread).
         static let dot = "circle.fill"
         static let time = "clock"
-        /// Someday on a to-do (#10465): the owner's own "not now", put aside for some other day (its swipe, its menu and
-        /// the list's Show Someday). Not `time`, which is Waiting's clock.
+        /// Someday on a to-do (#10465): the owner's own "not now", put aside for some other day (its swipe and its
+        /// menu). Not `time`, which is Waiting's clock.
         static let someday = "moon.stars.fill"
         /// An agent that only waits on background commands (Waiting in the Background, #6045): the mark in place of its dot.
         static let backgroundWaiting = "clock.fill"
@@ -649,12 +649,8 @@ extension Theme {
         static let pairing = "link.badge.plus"
         /// Settings › Connectors: the data sources Persona reads and acts in (this device, mail, Lark).
         static let connectors = "point.3.connected.trianglepath.dotted"
-        /// This device as a connector (its contacts, calendar, photos…): iPhone, iPad or Mac.
-        #if os(macOS)
-        static let thisDevice = laptop
-        #else
+        /// This device as a connector (its contacts, calendar, photos…): iPhone or iPad.
         static let thisDevice = "iphone.gen3"
-        #endif
         /// AI Draft Reply: a reply drafted in the user's voice.
         static let draftReply = "pencil.and.scribble"
         /// A drafted reply that will not go out: its message was handled elsewhere first (a message card, #4797).
@@ -667,6 +663,9 @@ extension Theme {
         static let quickCommands = "slash.circle"
         /// The day's Today card at the top of the assistant's conversation (docs/assistant/unified-entry.md).
         static let today = "sun.max.fill"
+        /// To-dos' Today place (#10465, DESIGN_SYSTEM 3.5 "To-dos places"): an outline among the sidebar's outlined
+        /// places, and its empty state.
+        static let todoToday = "sun.min"
         /// Something done on the phone from the conversation: an event added to its calendar, a reminder.
         static let addedEvent = "calendar.badge.plus"
         static let addedReminder = "checklist.checked"

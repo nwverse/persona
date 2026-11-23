@@ -92,7 +92,7 @@ func (s *Service) toolTodoRepositoryLinksAdd(ctx context.Context, machine, self,
 	if !ok {
 		return "", db.ErrTodoNotFound
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, name, todo.Title, args); err != nil || !ok {
+	if ok, err := s.confirmOutbound(ctx, machine, self, name, "", todo.Title, args); err != nil || !ok {
 		return todoNotAllowed(err)
 	}
 	if _, ok := s.store().(todoRepositoryImportStore); !ok {

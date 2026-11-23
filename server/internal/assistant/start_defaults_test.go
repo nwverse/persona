@@ -331,7 +331,7 @@ func TestStartDefaultsGoalRefusedStartsWithoutIt(t *testing.T) {
 }
 
 // The facts a start gives say which conversation actually follows the task up, not which one planned it. New work
-// planned by a leader, or carrying the legacy supervisor input, is still main-supervised; read-only and role ride along.
+// planned by a lead, or explicitly assigned to one by main, uses that lead’s class; read-only and role ride along.
 // The explicit manual-Agent and task-leader worker topologies keep their specialized class.
 func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 	s, f := newQuietService(t)
@@ -347,7 +347,7 @@ func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 		task["machine"], task["cwd"], task["why"] = "box", "/code/app", "the repo is on box"
 		args := map[string]any{"tasks": []map[string]any{task}}
 		if supervisor != "" {
-			args["supervisor"] = supervisor // legacy input; the new task is still supervised by main
+			args["supervisor"] = supervisor // explicit initial assignment by main
 		}
 		raw, _ := json.Marshal(args)
 		res, err := s.toolTaskPlan(ctx, conversation, raw)
@@ -376,14 +376,14 @@ func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 	planWait(3)
 	waitFor(t, "the starts to finish their bookkeeping", func() bool { return s.taskStarting.Load() == 0 })
 	got := seen()
-	if a := got[0]; a.Supervisor != dispatchClassMain || a.Readonly || a.Role != "worker" || a.DoneWhen != 1 || a.Machine != "box" {
+	if a := got[0]; a.Supervisor != dispatchClassLeader || a.Readonly || a.Role != "worker" || a.DoneWhen != 1 || a.Machine != "box" {
 		t.Fatalf("task planned by the leader: %+v", a)
 	}
 	if b := got[1]; b.Supervisor != dispatchClassMain || !b.Readonly {
 		t.Fatalf("main's own task: %+v", b)
 	}
-	if c := got[2]; c.Supervisor != dispatchClassMain {
-		t.Fatalf("task with the legacy supervisor input: %+v", c)
+	if c := got[2]; c.Supervisor != dispatchClassLeader {
+		t.Fatalf("task with an explicit supervisor: %+v", c)
 	}
 }
 
@@ -444,8 +444,8 @@ func TestStartDefaultsPolicyOnlyWhereItsRuleMatches(t *testing.T) {
 		return startsOf(f)[before]
 	}
 	led := start("lead1", false)
-	if led["ultracode"] != nil || led["goal"] != nil || led["effort"] == "max" {
-		t.Fatalf("the leader-only rule reached main-supervised work: %v", led)
+	if led["ultracode"] != true || led["goal"] == nil || led["effort"] != "max" {
+		t.Fatalf("the planning lead missed its defaults: %v", led)
 	}
 	own := start("conv1", false)
 	if own["ultracode"] != nil || own["goal"] != nil || own["effort"] == "max" {
@@ -475,8 +475,8 @@ func TestStartDefaultsPolicyOnlyWhereItsRuleMatches(t *testing.T) {
 		t.Fatalf("put main rule: %d %s", code, body)
 	}
 	led = start("lead1", false)
-	if led["ultracode"] != true || led["effort"] != "max" || led["goal"] == nil {
-		t.Fatalf("main-supervised work planned by the leader missed the defaults: %v", led)
+	if led["ultracode"] != nil || led["effort"] == "max" || led["goal"] != nil {
+		t.Fatalf("the planning lead received main-only defaults: %v", led)
 	}
 	own = start("conv1", false)
 	if own["ultracode"] != true || own["effort"] != "max" || own["goal"] == nil {

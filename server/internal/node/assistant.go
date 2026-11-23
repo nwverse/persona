@@ -472,9 +472,23 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 	}
 	if origin == originInbox && guest == nil {
-		// Plan rejects MCP before consulting allowedTools, which stalls investigation and inbox_suggest. Default keeps
-		// Persona's explicit MCP allowlist effective; the manager/node origin policy remains the outbound boundary.
-		mode = "default"
+		// Only the manager's dedicated field may carry the AI twin's own saved mode. The generic caller mode and an older
+		// manager's missing field stay in default. A live process keeps its mode; a new or stopped process uses the setting.
+		keepCurrent := false
+		if resume {
+			n.mu.Lock()
+			p := n.procs[id]
+			keepCurrent = p != nil && p.alive()
+			n.mu.Unlock()
+		}
+		current := ""
+		if keepCurrent {
+			// The incoming generic mode is caller-controlled, not evidence of what this process runs. Read the live
+			// conversation's actual mode so neither an old nor a current manager can elevate it through that field.
+			current, _ = n.modesOf(id)
+			current = cmp.Or(current, st.AppMode, proto.ModeDefault)
+		}
+		mode = inboxPermissionMode(requested.InboxPermissionMode, current, keepCurrent)
 	}
 	if err := checkFileReferenceAudience(ctx, text, origin, guest != nil, public); err != nil {
 		return "", err
@@ -500,6 +514,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	// A new conversation has no legacy origin to recover. A resumed one gets here only with the manager's explicit
 	// decision or a previously persisted one; internal sends retain the decision already in session state.
 	execution.OriginKnown = originKnown
+	if execution.Source.Role == "" {
+		execution.Source = st.ModelSource
+	}
 	// An agent runtime's launcher, or a conversation one runs (assistant_runtime.go): it keeps its model; the node
 	// keeps the conversation's state, snapshot, mode and memory.
 	rl := launcherOr(launcher, st.Launcher)
@@ -550,7 +567,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			// What it ran, with this message's claude_interactive: the manager's switch, sent with every message, not a
 			// model pick (assistant_tui.go). Without it a message that picks no model (a supervision message, a relay)
 			// started claude -p, and restarted a conversation that runs interactive Claude Code.
-			execution = modelExecution{CacheKeepalive: execution.CacheKeepalive, Strict: execution.Strict, Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin, Interactive: execution.Interactive, FollowsSetting: execution.FollowsSetting || st.FollowsSetting}
+			execution = modelExecution{Source: execution.Source, CacheKeepalive: execution.CacheKeepalive, Strict: execution.Strict, Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, SupervisionInstructions: st.SupervisionInstructions, Origin: origin, Interactive: execution.Interactive, FollowsSetting: execution.FollowsSetting || st.FollowsSetting}
 		}
 	}
 	if launcher != "" && st.Launcher != "" && launcher != st.Launcher && execution.Fingerprint == "" {
@@ -913,7 +930,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		n.noteModes(id, mode, effort)
 	}
-	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Origin != origin || st.OriginKnown != execution.OriginKnown || st.IsMain != execution.IsMain || st.MainCompactWindow != execution.MainCompactWindow || st.ConfigDir != execution.ConfigDir || st.FollowsSetting != execution.FollowsSetting || st.SupervisionInstructions != execution.SupervisionInstructions || hasInput && st.TaskExecution != execution.Strict || !resume && !hasInput {
+	if st, known := n.state.get(id); !known || st.Launcher != launcher || st.Cwd != cwd || st.Model != execution.Model || st.ModelFingerprint != execution.Fingerprint || st.ModelEffort != execution.Effort || st.Origin != origin || st.OriginKnown != execution.OriginKnown || st.ModelSource != execution.Source || st.IsMain != execution.IsMain || st.MainCompactWindow != execution.MainCompactWindow || st.ConfigDir != execution.ConfigDir || st.FollowsSetting != execution.FollowsSetting || st.SupervisionInstructions != execution.SupervisionInstructions || hasInput && st.TaskExecution != execution.Strict || !resume && !hasInput {
 		started := st.StartedAt
 		if started.IsZero() {
 			started = time.Now().UTC()
@@ -922,6 +939,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		st.Model, st.ModelFingerprint, st.ModelEffort = execution.Model, execution.Fingerprint, execution.Effort
 		st.Origin = origin
 		st.OriginKnown = execution.OriginKnown
+		st.ModelSource = execution.Source
 		st.IsMain, st.MainCompactWindow = execution.IsMain, execution.MainCompactWindow
 		st.SupervisionInstructions = execution.SupervisionInstructions
 		st.FollowsSetting = execution.FollowsSetting
@@ -1344,6 +1362,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			if p.commandLifecycle(ev.Command, ev.State) {
 				n.notifySessionsSoon() // the queue strip shows it, or no longer
 			}
+		case "rate_limit_event":
+			// the account's subscription windows after a reply (#12855, usagewindows_claudestream.go)
+			n.claudeStreamUsage(p.launcher, p.model.ConfigDir, line, time.Now())
 		case "stream_event":
 			if ev.ParentToolUseID != nil && *ev.ParentToolUseID != "" {
 				// A subagent's stream (#4495): its words are not the conversation's live text, its start does not clear

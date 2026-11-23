@@ -23,13 +23,10 @@ struct ExtensionViewRenderer: View {
     @Binding var link: LinkTarget?
 
     var body: some View {
-        #if !os(macOS)
-        // Mac pages already expose the same search in their toolbar.
         if let search = view.search, let model, model.managesConfirmation {
             Section { ExtensionSearchRow(search: search, model: model, link: $link) }
                 .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
         }
-        #endif
         if let f = view.filter, let model {
             Section { ExtensionFilterChips(filter: f, model: model, link: $link) }
                 .listRowInsets(EdgeInsets())
@@ -547,13 +544,9 @@ struct ExtensionViewStack: View {
 }
 
 extension View {
-    /// Where an extension's links open: the link card (iPhone) or the panel at the trailing edge (Mac).
+    /// Where an extension's links open: the link card.
     @ViewBuilder func pluginLinks(_ link: Binding<LinkTarget?>) -> some View {
-        #if os(macOS)
-        macLinkPanel(link)
-        #else
         modifier(ExtensionLinkSheet(link: link))
-        #endif
     }
 
     /// The pages `models` ask to push (docs/extensions/extensions.md「Page navigation」), on the navigation stack this page is on; the one
@@ -561,7 +554,6 @@ extension View {
     func extensionPushes(_ models: [ExtensionViewModel]) -> some View { modifier(ExtensionPushes(models: models)) }
 }
 
-#if os(iOS) || os(visionOS)
 private struct ExtensionLinkSheet: ViewModifier {
     @Environment(AppModel.self) private var model
     @Binding var link: LinkTarget?
@@ -570,7 +562,6 @@ private struct ExtensionLinkSheet: ViewModifier {
         content.sheet(item: $link) { t in LinkSheet(target: t, key: model.assistantMain ?? model.assistantCurrent) }
     }
 }
-#endif
 
 /// A page an extension pushes: its extension, which of its interfaces (its `ui`), the state it starts with.
 nonisolated struct ExtensionPushTarget: Hashable, Sendable {
@@ -731,12 +722,7 @@ struct ExtensionPageView: View {
     }
 
     private func updateVisibility() {
-        var foreground = phase == .active
-        #if DEBUG && os(macOS)
-        // A validated loopback capture uses the normal stream while its window stays non-activating.
-        // This exception exists only for the DEBUG batch; production still requires an active scene.
-        foreground = foreground || MacExtensionSnapshotBatch.isCapturing
-        #endif
+        let foreground = phase == .active
         page.setVisible(pageVisible && tabActive && foreground)
     }
 

@@ -701,6 +701,9 @@ class ReceiptTests(Case):
         ws = Socket(self.hub.port, "?features=sessions_delta,todo_send_state")
         self.addCleanup(ws.close)
         self.assertIsNotNone(ws.message(lambda m: m.get("type") == "hello"))
+        # The mock lists the socket among its clients after the hello and before the machines list: a post between the
+        # two would find nobody to tell.
+        self.assertIsNotNone(ws.message(lambda m: m.get("type") == "machines"))
         op = "0a1b2c3d-0000-4000-8000-0000000000af"  # no client_hello yet: the URL is enough, as on the hub
         self.assertEqual(self.post(ROUTE, {"todo_id": "t01", "text": "Hi"}, **{"X-Persona-Op-Id": op})[0], 200)
         self.assertEqual([ws.message(receipt("todo_send_state"))["state"] for _ in range(2)], ["processing", "delivered"])

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { get } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -78,6 +79,24 @@ test('ACP updates during rewind cannot start autonomous work or restore the old 
   assert.equal(runtime.idle(), true)
   const final = await node.peer.call('session.items', { session_id: SESSION })
   assert.deepEqual(final.items.map((item) => item.text), ['Repeat', 'First answer'])
+})
+
+test('the native fake answers port discovery and keeps serving the conversation', async (t) => {
+  const { home, node, rewind } = await fixture(t)
+  await rewind()
+  await until('native service port', () => existsSync(join(home, 'service-port')))
+  const port = Number(readFileSync(join(home, 'service-port'), 'utf8'))
+  const probe = await new Promise((resolve) => {
+    const req = get({ hostname: '127.0.0.1', port, path: '/', headers: { Connection: 'close', 'User-Agent': 'persona-ports' } }, (res) => {
+      res.resume()
+      res.on('end', () => resolve({ status: res.statusCode }))
+    })
+    req.on('error', (error) => resolve({ error }))
+  })
+  assert.equal(probe.error, undefined)
+  assert.equal(probe.status, 404)
+  const page = await node.peer.call('session.items', { session_id: SESSION })
+  assert.deepEqual(page.items.map((item) => item.text), ['Repeat', 'First answer'])
 })
 
 test('native rewind preserves the prefix, resets watched history and persists through replacement exports', async (t) => {

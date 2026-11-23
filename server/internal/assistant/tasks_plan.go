@@ -37,7 +37,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	var a struct{ Tasks []PlanTask }
-	lead := "" // legacy supervisor input, kept in the saved plan; new work is supervised by main (#5732)
+	lead := "" // optional initial leader assignment; omission keeps the planning lead or main
 	if scope != nil {
 		tasks, err := scope.workerTasks(args)
 		if err != nil {
@@ -92,6 +92,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
+		t.MemoryTopic = nil    // the hub's: the plan's own confirmation decision sets it (below)
 		t.RequestGate, t.Queue = "", nil
 		t.CloseTabOnAccept, t.TerminalTarget, t.TerminalCleanup = false, taskTerminalTarget{}, ""
 		t.TerminalAuthorized = false
@@ -118,7 +119,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", fmt.Errorf("task %d: expect_minutes must be zero or a positive number of minutes", i+1)
 		}
 		t.DoneWhen, t.ExpectMinutes = cleanDoneWhen(t.DoneWhen), min(t.ExpectMinutes, 24*60)
-		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() {
+		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() && !s.canInferContainerWorkspace(ctx, *t) {
 			return "", fmt.Errorf("task %d: title, prompt and cwd are required", i+1)
 		}
 		t.Brief = nil // the hub's (planBriefs below), never the tool call's
@@ -163,6 +164,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
+		}
+		if m, ok := s.machineByName(ctx, t.Machine); ok && assistantWorkspace(m, t.Cwd) {
+			return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
 		}
 		// Validate the tier now without pinning its model: it is resolved again at dispatch.
 		preview := *t
@@ -241,8 +245,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	// A round the hub started for a scheduled task (schedule_grant.go, #8045): its plan names the schedule, so the card
-	// can offer to let it start these by itself, and that schedule's grant may start them now. Never in the health
-	// space, whose plans always wait for Start.
+	// can offer to let it start these by itself, and that schedule's grant may start them now. Never for a plan whose
+	// words are confirmed before they leave (policy below), which always waits for Start.
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.inScheduledTurn(ctx, machine, sessionID) {
 		// A round the hub started has no message of the owner's: "the user asked for this" is only the model's word.
 		for i := range a.Tasks {
@@ -253,11 +257,35 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	// wrong lead, so until the owner writes there, "the user asked for this" is no Start for writable work it plans
 	// outside the kinds the owner already let this lead start (heldOutsideOwnKinds, #12953).
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.handedOver(sessionID) {
-		s.heldOutsideOwnKinds(ctx, sessionID, a.Tasks)
+		s.heldOutsideOwnKinds(ctx, machine, sessionID, a.Tasks)
+	}
+	// A plan from a conversation hands its prompts to agents outside it (scene 3): what it says, titles first (they are
+	// what its push shows), decides once whether it waits for "Start" and what its push says (health.go). A leader's
+	// workers (scope) need no decision.
+	var policy TrackPolicy
+	var space string
+	if scope == nil {
+		var out strings.Builder
+		for _, t := range a.Tasks {
+			out.WriteString(t.Title + "\n")
+		}
+		for _, t := range a.Tasks {
+			out.WriteString(t.Prompt + "\n" + t.Context + "\n\n")
+		}
+		space, _ = s.selfSpace(ctx, sessionID)
+		u := s.exitUse(ctx, out.String(), sessionID, space)
+		policy = policyOf(u)
+		// The categories that made the plan wait for "Start" are the sensitive memory entries its starts may carry once
+		// the owner tapped it (memory_handoff.go): the text the owner confirms is the one tagged, never another.
+		if policy.ConfirmOutbound && u.Known {
+			for i := range a.Tasks {
+				a.Tasks[i].MemoryTopic = slices.Clone(u.Categories)
+			}
+		}
 	}
 	var round Task
 	var inRound bool
-	if scope == nil && !s.inHealth(ctx, sessionID) {
+	if scope == nil && !policy.ConfirmOutbound {
 		if round, inRound = s.scheduledRoundOf(ctx, machine, sessionID); inRound && round.grantEligible() && s.claudeConversation(ctx, machine, sessionID) {
 			for i := range a.Tasks { // the card offers to let this schedule start these by itself
 				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle, a.Tasks[i].ScheduleBasis = round.ID, round.labelIn(s.lang(ctx)), round.runGrantBasis
@@ -281,9 +309,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			s.logf("task plan %s: feed: %v", p.ID, err)
 		}
 	}
-	// A plan from the health space hands its prompts to agents outside it: it waits for the user's "Start" on its card,
-	// whatever would start it at once, and its push names no task (health.go).
-	health := s.inHealth(ctx, sessionID)
+	// A plan whose words are confirmed before they leave waits for the user's "Start" on its card, whatever would start
+	// it at once; one whose words are redacted names no task in its push (policy above).
 	if scope != nil { // no card: a leader's workers start at once, as part of the task the user let start
 		started, err := s.startPlan(ctx, p.ID, nil, false)
 		if err != nil {
@@ -294,6 +321,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		for _, t := range started.Tasks {
 			if t.Error != "" {
 				fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
+			} else if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
+				fmt.Fprintf(&b, "- %s → todo %s on %s (queued: %s)\n", t.Title, t.TodoID, t.Machine, t.Queue.Reason)
 			} else {
 				fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
 			}
@@ -308,7 +337,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	if health || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" }) || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
+	if policy.ConfirmOutbound || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" }) || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, s.planWithSuggestion(ctx, p, s.lang(ctx)))})
 		// A card below the answer is easy to miss: push it as well.
 		titles := make([]string, 0, len(p.Tasks))
@@ -326,8 +355,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			machineName = m.Name
 		}
 		body := strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep"))
-		if health {
-			title, body = healthNotice(l)
+		if policy.Redact {
+			title, body = s.redactedNotice(ctx, l, space)
 		}
 		s.push(ctx, Notification{Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
 		if lead != "" || s.isLeader(ctx, sessionID) {
@@ -349,7 +378,11 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if t.Error != "" {
 			fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
 		} else {
-			fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
+			if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
+				fmt.Fprintf(&b, "- %s → todo %s on %s (queued: %s)\n", t.Title, t.TodoID, t.Machine, t.Queue.Reason)
+			} else {
+				fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
+			}
 			if todo, ok := s.todoNow(t.TodoID); ok && todo.Supervision != nil {
 				supervisor = todo.Supervision.Supervisor
 			}
@@ -388,17 +421,17 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	return b.String(), nil
 }
 
-// planSupervisor validates task_plan's legacy supervisor input: "" or a current leader, which only the main
-// conversation may name. The value is saved for old-plan recognition; every new task is supervised by main (#5732).
+// planSupervisor validates an optional initial leader assignment. A lead may name itself; main may choose
+// a current lead explicitly. Omission uses the planning lead, or main for an ordinary conversation.
 func (s *Service) planSupervisor(ctx context.Context, self, lead string) (string, error) {
 	lead = strings.TrimSpace(lead)
 	switch {
 	case lead == "" || lead == self:
 		return "", nil
 	case !s.isMain(ctx, self):
-		return "", errors.New("supervisor: only the main conversation may name a leader here; leave it out: new tasks are supervised by the main conversation")
+		return "", errors.New("supervisor: only the main conversation may name another leader; omit it to keep this direction lead as supervisor")
 	case !s.isLeader(ctx, lead):
-		return "", fmt.Errorf("supervisor: %s is not a leader conversation (assistant.leaders lists them); leave it out: the main conversation supervises the tasks", lead)
+		return "", fmt.Errorf("supervisor: %s is not a leader conversation (assistant.leaders lists them); omit it to use the default supervisor", lead)
 	}
 	return lead, nil
 }

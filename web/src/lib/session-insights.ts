@@ -1,22 +1,43 @@
-// Pure aggregation helper for the lazy Session Insights popover (#12541).
-// Aggregates existing protocol data only: Session context window, Item.Usage (including Fold.usage and
-// deduplicated subagent reports), item timestamps for latest turn duration, and in-memory token-rate history.
+// Pure aggregation helper for the lazy Session Insights popover (#12541, #13054).
+// Aggregates protocol data: Session context window & ContextBreakdown, Item.Usage (including Fold.usage and
+// deduplicated subagent reports), Item.ttft_ms, item timestamps for latest turn duration, and in-memory token-rate history.
 // Unavailable metrics are returned as null so callers omit them honestly rather than displaying fake zeros.
+import { t } from "../i18n";
 import { contextUsage, type ContextUsage } from "./context-usage";
 import { sessionCan } from "./format";
 import { bareModel, replyModelName } from "./model-change";
 import { loadRateHistory, turnAverage, type RateHistory } from "./token-rate";
-import type { Item, Session, TokenUsage } from "./types";
+import type { ContextBreakdown, Item, Session, TokenUsage } from "./types";
 
-/** Reserved slot for future protocol context-window category breakdown (e.g. system / tools / messages). */
-export interface ContextBreakdownSegment {
-  key: string;
-  label?: string;
+export type ContextBreakdownKey = "system_and_rules" | "tools_and_mcp" | "conversation" | "tool_outputs";
+
+/** Canonical stacking order for the ContextBreakdown bar. */
+export const CONTEXT_BREAKDOWN_ORDER: readonly ContextBreakdownKey[] = [
+  "system_and_rules",
+  "tools_and_mcp",
+  "conversation",
+  "tool_outputs",
+];
+
+export interface ContextBreakdownCategory {
+  key: ContextBreakdownKey;
   tokens: number;
+  /** Share of total window/denominator in [0, 100]. */
+  windowShare: number;
+  /** Share of occupied breakdown tokens in [0, 100]. */
+  usedShare: number;
 }
 
-export interface ContextBreakdownSlot {
-  segments: ContextBreakdownSegment[];
+export interface SessionContextBreakdown {
+  source: "exact" | "estimated";
+  segments: ContextBreakdownCategory[];
+  occupiedTokens: number;
+  freeTokens: number | null;
+  freeShare: number | null;
+  totalTokens: number;
+  autoCompactThreshold: number | null;
+  autoCompactShare: number | null;
+  topConsumer: { key: ContextBreakdownKey; tokens: number; usedShare: number } | null;
 }
 
 export interface SessionModelUsage {
@@ -62,7 +83,7 @@ export interface SessionPerformanceSummary {
   avgTokPerSec: number | null;
   /** Peak measured output speed in tok/s. */
   peakTokPerSec: number | null;
-  /** Reserved optional slot for future Time-To-First-Token (ms) metric. */
+  /** Latest observed streaming Time-To-First-Token in milliseconds (0 is valid). */
   ttftMs?: number | null;
 }
 
@@ -70,16 +91,15 @@ export interface SessionInsights {
   context: ContextUsage | null;
   tokens: SessionTokenSummary | null;
   performance: SessionPerformanceSummary | null;
-  /** Reserved optional slot for future ContextBreakdown data. */
-  breakdown?: ContextBreakdownSlot | null;
+  breakdown?: SessionContextBreakdown | null;
 }
 
 export interface SessionInsightsOptions {
   /** Override the in-memory token-rate history (defaults to loadRateHistory for the session). */
   rateHistory?: RateHistory | null;
-  /** Reserved optional slot for future context breakdown data. */
-  breakdown?: ContextBreakdownSlot | null;
-  /** Reserved optional slot for future TTFT (ms) data. */
+  /** Override session.context_breakdown (defaults to session.context_breakdown). */
+  breakdown?: ContextBreakdown | null;
+  /** Override latest observed TTFT in ms (defaults to latest valid Item.ttft_ms). */
   ttftMs?: number | null;
 }
 
@@ -87,6 +107,21 @@ export interface CompactSupport {
   supported: boolean;
   mode: "assistant" | "agent" | null;
   running: boolean;
+}
+
+export interface StepTokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  hasCache: boolean;
+}
+
+export interface StepTelemetrySummary {
+  tokens: StepTokenUsage | null;
+  durationMs: number | null;
+  ttftMs: number | null;
 }
 
 interface RawBucket {
@@ -100,6 +135,7 @@ interface RawBucket {
 }
 
 const positive = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+const nonNegInt = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : null);
 
 function tsMs(ts?: string): number | null {
   if (!ts) return null;
@@ -112,6 +148,68 @@ function hitRateOf(input: number, cacheRead: number, cacheWrite: number): { hasC
   if (!hasCache) return { hasCache: false, cacheHitRate: null };
   const prompt = input + cacheRead + cacheWrite;
   return { hasCache: true, cacheHitRate: prompt > 0 ? cacheRead / prompt : null };
+}
+
+/**
+ * Validates and normalizes a protocol ContextBreakdown into stacked-bar segments, headroom,
+ * auto-compact marker position, and top context consumer. Returns null when source is invalid
+ * or no valid categories exist.
+ */
+export function normalizeContextBreakdown(
+  raw: ContextBreakdown | null | undefined,
+  contextWindow?: number,
+): SessionContextBreakdown | null {
+  if (!raw || (raw.source !== "exact" && raw.source !== "estimated")) return null;
+
+  const rawSegments: { key: ContextBreakdownKey; tokens: number }[] = [];
+  let occupiedTokens = 0;
+  for (const key of CONTEXT_BREAKDOWN_ORDER) {
+    const val = nonNegInt(raw[key]);
+    if (val === null) continue;
+    rawSegments.push({ key, tokens: val });
+    occupiedTokens += val;
+  }
+
+  const win = typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0 ? Math.round(contextWindow) : 0;
+  const rawFree = nonNegInt(raw.free);
+  const freeTokens = rawFree !== null ? rawFree : win > 0 && rawSegments.length > 0 ? Math.max(0, win - occupiedTokens) : null;
+  const rawThreshold = nonNegInt(raw.auto_compact_threshold);
+  const autoCompactThreshold = rawThreshold !== null && rawThreshold > 0 ? rawThreshold : null;
+
+  if (rawSegments.length === 0 && freeTokens === null && autoCompactThreshold === null) return null;
+
+  const totalTokens = Math.max(win, occupiedTokens + (freeTokens ?? 0));
+  const segments: ContextBreakdownCategory[] = rawSegments.map((s) => ({
+    key: s.key,
+    tokens: s.tokens,
+    windowShare: totalTokens > 0 ? (s.tokens / totalTokens) * 100 : 0,
+    usedShare: occupiedTokens > 0 ? (s.tokens / occupiedTokens) * 100 : 0,
+  }));
+
+  const freeShare = freeTokens !== null && totalTokens > 0 ? (freeTokens / totalTokens) * 100 : null;
+  const autoCompactShare =
+    autoCompactThreshold !== null && totalTokens > 0
+      ? Math.min(100, Math.max(0, (autoCompactThreshold / totalTokens) * 100))
+      : null;
+
+  let topConsumer: SessionContextBreakdown["topConsumer"] = null;
+  for (const seg of segments) {
+    if (seg.tokens > 0 && (!topConsumer || seg.tokens > topConsumer.tokens)) {
+      topConsumer = { key: seg.key, tokens: seg.tokens, usedShare: seg.usedShare };
+    }
+  }
+
+  return {
+    source: raw.source,
+    segments,
+    occupiedTokens,
+    freeTokens,
+    freeShare,
+    totalTokens,
+    autoCompactThreshold,
+    autoCompactShare,
+    topConsumer,
+  };
 }
 
 /**
@@ -275,6 +373,18 @@ export function latestTurnDurationMs(items: readonly Item[]): number | null {
   return null;
 }
 
+/**
+ * Extracts the latest observed streaming TTFT (ms) from loaded transcript items.
+ * Preserves observed 0 ms while ignoring missing or negative values.
+ */
+export function latestTtftMs(items: readonly Item[]): number | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const v = items[i].ttft_ms;
+    if (typeof v === "number" && Number.isFinite(v) && v >= 0) return v;
+  }
+  return null;
+}
+
 function sampleAverageRate(history: RateHistory): number | null {
   if (!history.samples.length) return null;
   let weightedSum = 0;
@@ -291,7 +401,7 @@ function sampleAverageRate(history: RateHistory): number | null {
   return weightTotal > 0 ? weightedSum / weightTotal : null;
 }
 
-/** Summarizes performance metrics from transcript timestamps and in-memory token-rate history. */
+/** Summarizes performance metrics from transcript timestamps, item TTFT, and in-memory token-rate history. */
 export function summarizeSessionPerformance(
   items: readonly Item[],
   rateHistory?: RateHistory | null,
@@ -318,7 +428,8 @@ export function summarizeSessionPerformance(
     peakTokPerSec = maxRate > 0 ? maxRate : null;
   }
 
-  const validTtft = ttftMs !== undefined && ttftMs !== null && Number.isFinite(ttftMs) && ttftMs > 0 ? ttftMs : null;
+  const candidateTtft = ttftMs !== undefined ? ttftMs : latestTtftMs(items);
+  const validTtft = candidateTtft !== null && Number.isFinite(candidateTtft) && candidateTtft >= 0 ? candidateTtft : null;
 
   if (turnMs === null && latestTokPerSec === null && avgTokPerSec === null && peakTokPerSec === null && validTtft === null) {
     return null;
@@ -333,7 +444,7 @@ export function summarizeSessionPerformance(
   };
 }
 
-/** Builds the full Session Insights snapshot from existing Session, Item, and token-rate data. */
+/** Builds the full Session Insights snapshot from Session, Item, ContextBreakdown, TTFT, and token-rate data. */
 export function buildSessionInsights(
   session: Session | undefined,
   items: readonly Item[] = [],
@@ -345,12 +456,15 @@ export function buildSessionInsights(
       ? loadRateHistory(`${session.machine_id}/${session.session_id}`)
       : null;
 
-  const breakdown = options?.breakdown && options.breakdown.segments.length > 0 ? options.breakdown : null;
+  const context = contextUsage(session);
+  const rawBreakdown = options && "breakdown" in options ? options.breakdown : session?.context_breakdown;
+  const breakdown = normalizeContextBreakdown(rawBreakdown, context?.window ?? session?.context_window);
+  const ttftOverride = options && "ttftMs" in options ? options.ttftMs : undefined;
 
   return {
-    context: contextUsage(session),
+    context,
     tokens: aggregateSessionTokens(items),
-    performance: summarizeSessionPerformance(items, history, options?.ttftMs),
+    performance: summarizeSessionPerformance(items, history, ttftOverride),
     ...(breakdown ? { breakdown } : {}),
   };
 }
@@ -361,6 +475,45 @@ export function formatHitRate(rate: number | null): string | null {
   const pct = Math.min(100, Math.max(0, rate * 100));
   if (Math.abs(pct - Math.round(pct)) < 0.05) return `${Math.round(pct)}%`;
   return `${pct.toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+/** Formats a non-negative latency in ms: "<1000 ms" as "{ms} ms", >= 1000 ms as seconds ("1.45 s", "12.3 s"). */
+export function formatLatencyMs(ms: number): string {
+  const clamped = Math.max(0, Number.isFinite(ms) ? ms : 0);
+  const roundedMs = Math.round(clamped);
+  if (roundedMs < 1000) return t("chat-sessioninsights.ttft_ms", { ms: roundedMs });
+  const sec = clamped / 1000;
+  const formatted = sec < 10 ? sec.toFixed(2).replace(/\.?0+$/, "") : sec.toFixed(1).replace(/\.0$/, "");
+  return t("chat-sessioninsights.ttft_s", { s: formatted });
+}
+
+/** Summarizes L3 per-step token consumption, elapsed duration, and TTFT from step items. */
+export function summarizeStepTelemetry(
+  items: readonly (Item | undefined)[],
+  durationMs?: number | null,
+): StepTelemetrySummary | null {
+  const present = items.filter((it): it is Item => Boolean(it));
+  const agg = present.length ? aggregateSessionTokens(present) : null;
+  const tokens: StepTokenUsage | null = agg
+    ? {
+        input: agg.input,
+        output: agg.output,
+        cacheRead: agg.cacheRead,
+        cacheWrite: agg.cacheWrite,
+        total: agg.total,
+        hasCache: agg.hasCache,
+      }
+    : null;
+  const validDuration = typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0 ? durationMs : null;
+  let ttftMs: number | null = null;
+  for (const it of present) {
+    if (typeof it.ttft_ms === "number" && Number.isFinite(it.ttft_ms) && it.ttft_ms >= 0) {
+      ttftMs = it.ttft_ms;
+      break;
+    }
+  }
+  if (tokens === null && validDuration === null && ttftMs === null) return null;
+  return { tokens, durationMs: validDuration, ttftMs };
 }
 
 /**

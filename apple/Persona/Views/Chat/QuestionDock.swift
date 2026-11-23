@@ -143,6 +143,8 @@ extension EnvironmentValues {
 
 struct CardDock {
     var collapse: @MainActor () -> Void
+    /// View in Chat of a task's card (#12625): its Agent's chat pushed over the conversation, at the message that asked.
+    var source: (@MainActor () -> Void)? = nil
 }
 
 /// One card of the pager.
@@ -153,6 +155,8 @@ struct DockCard: Identifiable {
     var blocked: AnswerBlock? = nil
     /// The line under its title: the task it asks for, or whose it is (a side session's card).
     var from: String? = nil
+    /// One of the tasks' cards, asked in its Agent's chat (not the conversation's own).
+    var task = false
     var id: String { interaction.id }
 }
 
@@ -172,6 +176,8 @@ struct QuestionDock: View {
     /// What the footer holds besides the pager, held as `PendingCards.footerRest` is (#1580).
     @State private var footerRest: CGFloat = 0
     @State private var containerLength: CGFloat = 0
+    /// Pushes an Agent's chat over the conversation (`conversationAgentPush`, #12030).
+    @Environment(\.pushInboxChat) private var pushChat
 
     var body: some View {
         let cards = Self.cards(own: own, conversation: conversation)
@@ -232,7 +238,11 @@ struct QuestionDock: View {
 
     /// The pager's card.
     private func page(_ c: DockCard, resize: CardResize?, ids: [String]) -> some View {
-        let dock = CardDock(collapse: { collapse(ids) })
+        var dock = CardDock(collapse: { collapse(ids) })
+        if c.task {
+            let ix = c.interaction
+            dock.source = { openAgent(ix) }
+        }
         return VStack(alignment: .leading, spacing: Theme.Space.s) {
             InteractionPanel(interaction: c.interaction, from: c.from)
                 .disabled(!c.enabled)
@@ -302,6 +312,14 @@ struct QuestionDock: View {
             }
     }
 
+    /// View in Chat on a task's card (#12625): its Agent's chat as a drill-down over the conversation (`openInPage`), landing
+    /// on the message that asked (`MessageJump.card`); Back comes back to the pager on the same card.
+    private func openAgent(_ ix: Interaction) {
+        let model = AppModel.shared
+        model.messageJump = MessageJump(key: ix.sessionKey, item: "", card: ix)
+        model.openInPage(ix.sessionKey, push: conversationAgentPush(pushChat))
+    }
+
     private func collapse(_ ids: [String]) {
         Haptics.tap()
         withAnimation(Theme.Motion.state) { state.fold(ids) }
@@ -340,7 +358,7 @@ extension QuestionDock {
         var items: [QuestionDockLogic.Item] = []
         for todo in store.tasks(of: conversation) {
             for ix in store.interactions(todo) where tasks[ix.id] == nil {
-                tasks[ix.id] = DockCard(interaction: ix, from: todo.title)
+                tasks[ix.id] = DockCard(interaction: ix, from: todo.title, task: true)
                 items.append(.init(id: ix.id, createdAt: ix.createdAt))
             }
         }

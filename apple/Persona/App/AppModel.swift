@@ -2,9 +2,7 @@ import Foundation
 import Observation
 import PersonaKit
 import SwiftUI
-#if canImport(UIKit)
 import UIKit
-#endif
 import UserNotifications
 import PersonaWire
 
@@ -554,14 +552,14 @@ final class AppModel {
     var terminalAsk: SessionKey?
     /// The phone writes waiting for Allow / Deny, one shown at a time (#4456).
     @ObservationIgnored let phoneConfirmations = PhoneConfirmations()
-    /// The one on screen (RootView / MacRootView's alert).
+    /// The one on screen (RootView's alert).
     var pendingConfirmation: PhoneConfirmation? { phoneConfirmations.current }
     /// Phone tool results the socket could not take yet, sent when it connects (#4456).
     @ObservationIgnored let toolResults = ToolResultOutbox()
     /// Remembered across launches together with the open dev chat (restoreChat), so a relaunch lands where you were.
     var selectedTab: AppTab = .assistant {
         didSet {
-            DeferredDefaults.set(selectedTab.rawValue, forKey: "app.tab")
+            UserDefaults.standard.set(selectedTab.rawValue, forKey: "app.tab")
             DevMode.shared.tab(selectedTab) // the screen in front, while Developing Persona records (#9460)
             #if DEBUG
             ShellTrace.shared.note("tab \(oldValue)->\(selectedTab)")
@@ -632,6 +630,12 @@ final class AppModel {
     /// The directions' names by leader conversation id (`GET /api/v1/assistant/leaders`): the sidebar's Directions group
     /// shows these instead of the conversations' titles. Read again with the assistant; empty without leaders.
     private(set) var directionNames: [String: String] = [:]
+    /// Outside reporting directions by opaque direction id (#8236). The tree is authoritative when present; the flat
+    /// leaders endpoint supplies names and navigation targets on older hubs without a tree. Runtime-only, and cleared
+    /// with the assistant scope so one hub or manager's directions never appear on another's page.
+    private(set) var outsideDirections: [String: DirectionTree.Direction] = [:]
+    /// The flat endpoint's metadata-only copy, retained so a tree 404 can drop tree counts without dropping the rows.
+    @ObservationIgnored private var outsideDirectionFallback: [String: DirectionTree.Direction] = [:]
     /// The hub's direction tree (#4352, `GET /api/v1/assistant/directions/tree`): the directions' open to-dos with their
     /// state and Agents, for the sidebar's Pinned rows, the To-dos page and the Agents page. Read with the assistant, on
     /// every connect and on the `directions` event; nil from a hub without it (404) or before it is read.
@@ -748,6 +752,8 @@ final class AppModel {
     }
     /// Per group: the one retry of its waiting messages due in a few seconds (`retryOutboxSoon`).
     @ObservationIgnored var outboxRetry: [String: Task<Void, Never>] = [:]
+    /// One selective shell-question resend per conversation; ordinary outbox flushing remains independent.
+    @ObservationIgnored var resendingShellStarts = Set<SessionKey>()
     #if DEBUG
     @ObservationIgnored var inboxHandOffDoneForTests: ((PendingMessage.InboxHandOff) -> Void)?
     #endif
@@ -809,7 +815,6 @@ final class AppModel {
         self.stateFolder = stateFolder
         personas = store ?? PersonaStore()
         RetiredPreferences.clear(from: .standard)
-        TextSize.current.applyToMacFonts() // what `textSize` starts at
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
         assistantPicks = AssistantPickStore.load(folder: stateFolder)
@@ -871,11 +876,9 @@ final class AppModel {
         let language = LanguageStore.shared.apply()
         WatchSync.shared.onActivated = { [weak self] in
             WatchSync.shared.push(language: language)
-            #if os(iOS) || os(visionOS)
             // All-day recording: the erases and deletes the watch hasn't confirmed go now that a send reaches it
             // (docs/assistant/day-recap.md「Erasing」「Deleting」), paired with a hub or not.
             RecordingDayReceiver.shared.sessionActivated()
-            #endif
             guard let self, self.isPaired, !self.isDemo else { return }
             WatchSync.shared.push(persona: self.personas.chosenID)
             self.pushWatchConfigs()
@@ -890,11 +893,7 @@ final class AppModel {
         }
         applyPersonaPalette()
         connection.onCaughtUp = { [weak self] in self?.flushOutbox() }
-        #if os(iOS) || os(visionOS)
         let leaving = [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification]
-        #else
-        let leaving = [NSApplication.willTerminateNotification]
-        #endif
         for name in leaving {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { @Sendable [weak self] _ in
                 MainActor.assumeIsolated {
@@ -912,12 +911,10 @@ final class AppModel {
             MainActor.assumeIsolated { self?.registerPhone() }
         }
         #endif
-        #if os(iOS) || os(visionOS)
         if registryUnreadable {
             NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil,
                                                    queue: .main) { @Sendable _ in MainActor.assumeIsolated { AppModel.shared.retryRegistry() } }
         }
-        #endif
         DemoHub.shared.onNotSent = { [weak self] in self?.toast = Toast(DemoText.notSent) }
         countBadges()
         startHeldRetryRestoration()
@@ -1059,10 +1056,8 @@ final class AppModel {
     func start() {
         guard isPaired else { return }
         for link in links {
-            #if os(iOS) || os(visionOS)
             // Launched in the background (a push, a file from the watch): the socket waits for the app to open.
             link.live.suspended = UIApplication.shared.applicationState == .background
-            #endif
             link.live.connect(link.fallback)
         }
         if isDemo { return } // no watch, no device credentials: nothing to talk to
@@ -1608,16 +1603,24 @@ final class AppModel {
         }
     }
 
-    /// The directions' names for `leaders`: none without leaders; a hub that cannot list them keeps what is held (or
-    /// none), and the sidebar shows those conversations' titles. The counts come from the direction tree alone.
+    /// The directions' names and outside metadata for `leaders`: none without leaders; a hub that cannot list them
+    /// keeps what is held (or none), and the sidebar shows those conversations' titles. Counts come from the tree alone.
     private func refreshDirectionInfo(_ api: APIClient, leaders: [String]) async {
         guard !leaders.isEmpty else {
             if !directionNames.isEmpty { directionNames = [:] }
+            outsideDirectionFallback = [:]
+            let outside = directionTree?.outsideDirections ?? [:]
+            if outside != outsideDirections { outsideDirections = outside }
             return
         }
         guard let list = try? await api.leaders(), showsPage(of: api) else { return }
         let names = APIClient.directionNames(list)
         if names != directionNames { directionNames = names }
+        // This response may land after the tree. Keep newly announced flat rows, but never replace a tree row's counts
+        // and running state with the flat endpoint's metadata-only fallback (#8236).
+        outsideDirectionFallback = APIClient.outsideDirections(list)
+        let outside = outsideDirectionFallback.merging(directionTree?.outsideDirections ?? [:]) { _, tree in tree }
+        if outside != outsideDirections { outsideDirections = outside }
     }
 
     /// What the To-dos and Agents pages' headers call direction `d`: its name, Secretary for the secretary group, else
@@ -1667,6 +1670,9 @@ final class AppModel {
         // changed, not on a filed session's turn.
         let taken = read.map { DirectionFilings.shared.takeFiled($0) }
         if taken != directionTree { directionTree = taken }
+        let outside = outsideDirectionFallback.merging(taken?.outsideDirections ?? [:]) { _, tree in tree }
+        if outside != outsideDirections { outsideDirections = outside }
+        // A 404 rolls back to the flat endpoint's names and targets only; a transport failure above keeps both copies.
         guard let tree = read else { return }
         let names = tree.leaderNames
         if names != directionNames { directionNames = names }
@@ -1675,10 +1681,11 @@ final class AppModel {
             cfg.leaders = ids
             assistantConfig = cfg
         }
-        // A direction the page's conversations do not list yet: the whole settings are read, so its row appears
-        // without a relaunch.
+        // An unlisted conversation-backed direction needs the whole settings read so its row appears without a relaunch.
+        // An outside direction is already complete here: treating its opaque id as a missing conversation would reread
+        // the assistant after every tree push (#8236).
         let known = Set((assistantConfig?.conversations ?? []).map(\.sessionID))
-        if followLeaders, ids.contains(where: { !known.contains($0) }) { await refreshAssistant() }
+        if followLeaders, tree.hasUnlistedConversation(known: known) { await refreshAssistant() }
     }
 
     /// The Couldn't Load Settings retry: the page flips back to Reading at once, and repeated taps share the one request (#4200).
@@ -1760,7 +1767,7 @@ final class AppModel {
         if let w = warmed, w.launcher == launcher, w.manager == api.shownManager, Date().timeIntervalSince(w.at) < 180 { return }
         warmed = (launcher, api.shownManager, Date())
         if let r = try? await api.warmAssistant(launcher: launcher), hubFeatures.contains(AssistantReadiness.feature), showsPage(of: api) {
-            readiness.land(r)
+            readiness.land(r, modelPick: assistantMain.flatMap { session($0) }?.modelPick)
         }
     }
 
@@ -1771,7 +1778,7 @@ final class AppModel {
     /// ask again now. Nothing on a hub without readiness.
     func readinessChanged() {
         guard hubFeatures.contains(AssistantReadiness.feature) else { return }
-        Task { await readiness.refresh(api: api, force: true) }
+        Task { await readiness.refresh(api: api, force: true, modelPick: assistantMain.flatMap { session($0) }?.modelPick) }
     }
 
     func setAssistantLauncher(_ launcher: String) async {
@@ -2840,9 +2847,7 @@ final class AppModel {
         // Simulator automation (scripts/app/sim.sh) must not take the real iPhone's phone_* tool calls.
         let automation = UserDefaults.standard.string(forKey: "pairURL") != nil
         if automation { tools = [] }
-        #if os(iOS) || os(visionOS)
         tools += RuntimeCLI.hubToolSpecs(features: link.features) // the runtime CLI over the hub, when switched on
-        #endif
         if automation && tools.isEmpty { return }
         #endif
         guard let data = try? JSON.encoder.encode(tools),
@@ -2900,11 +2905,7 @@ final class AppModel {
     /// `deviceID` is the phone's id for pushes: while it is connected the hub sends its Live Activity no pushes, the app
     /// draws it from the fleet events (hub/liveactivity.go).
     nonisolated static func registration(deviceName: String, tools: Any, simulator: Bool, deviceID: String = "") -> [String: Any] {
-        #if os(macOS)
-        ["type": "register_desktop", "device_name": deviceName, "device_id": deviceID]
-        #else
         ["type": "register_phone", "device_name": deviceName, "tools": tools, "simulator": simulator, "device_id": deviceID]
-        #endif
     }
 
     /// Streamed replies drawn at most 5 times a second (`DeltaPacer`).
@@ -3268,9 +3269,7 @@ final class AppModel {
         case .extensionInvalidate(let ext, let id):
             ExtensionUIRegistry.shared.invalidate(extension: ext, ui: id, group: group)
             if ext == SubscriptionsUI.id { SubscriptionsRefresh.shared.changed() } // the entry rows' counts
-            #if os(iOS) || os(visionOS)
             ExtensionWidgetReconciliation.invalidate(group: group, owner: ext, contribution: id)
-            #endif
         #if os(iOS)
         case .meetingLive(let recordingID, let changed, let revs):
             // Recordings sync with the hub-level group's hub: another group's meetings are none of this phone's.
@@ -3446,12 +3445,6 @@ final class AppModel {
 
     private func confirm(_ summary: String) async -> Bool {
         Haptics.attention()
-        #if os(macOS)
-        // The alert hangs off the main window: bring it up (reopen it if it was closed) so the question is seen.
-        // From the background activating may not be granted: the Dock icon bounces until the user comes.
-        MacShellState.shared.showMain()
-        NSApp.requestUserAttention(.criticalRequest)
-        #endif
         // One at a time: a second write waits behind the one on screen instead of taking its place (#4456).
         return await phoneConfirmations.ask(summary)
     }
@@ -4564,22 +4557,14 @@ final class AppModel {
     /// This iPhone's guided setup (`persona://iphone/setup`, #8199).
     func openIPhoneSetup() {
         settingsPath = SettingsPage.iphoneSetupPath
-        #if os(macOS)
-        MacShellState.shared.go(.settings, self)
-        #else
         selectedTab = .settings
         if tabRouter != nil { shellSettings = true }
-        #endif
     }
 
     func openSentRecords() {
         settingsPath = SettingsPage.sentPath
-        #if os(macOS)
-        MacShellState.shared.go(.settings, self)
-        #else
         selectedTab = .settings
         if tabRouter != nil { shellSettings = true }
-        #endif
     }
 
     /// A provider import link opened from outside (#5428): the Model providers page reads it through the hub's parse
@@ -4590,12 +4575,8 @@ final class AppModel {
         let request = ProviderImportRequest(link: link)
         providerImport = request
         settingsPath.append(ModelLaunchersRoute(id: request.id))
-        #if os(macOS)
-        MacShellState.shared.go(.settings, self)
-        #else
         selectedTab = .settings
         if tabRouter != nil { shellSettings = true }
-        #endif
     }
     /// The space's other agent a chat page switched to in its header (`ChatView.switchTo`), by the session it opened
     /// with: the page built again for that path goes to it. Cleared back at the list.
@@ -4645,18 +4626,14 @@ final class AppModel {
     /// the front (a switch the system cut short, the first launch after the separate App Icon setting went). Nothing
     /// happens when it already is, so no alert.
     func followAppIcon() {
-        #if os(iOS) || os(visionOS)
         let look = isDemo ? AppIconChoice.standard : personas.appIcon // Demo Mode shows only the default Avatar
         Task { await appIcon.follow(look, scheme: colorScheme) }
-        #endif
     }
 
-    /// Small / Standard / Large on top of the system's text size (Settings › Interface Style › Text Size); RootView applies it. On the Mac the
-    /// fonts read it from `Theme.Font.scale` (text styles there do not follow Dynamic Type, #833).
+    /// Small / Standard / Large on top of the system's text size (Settings › Interface Style › Text Size); RootView applies it.
     var textSize: TextSize = TextSize.current {
         didSet {
             UserDefaults.standard.set(textSize.rawValue, forKey: "ui.textSize")
-            textSize.applyToMacFonts()
         }
     }
 
@@ -4666,10 +4643,8 @@ final class AppModel {
     var colorScheme: ColorSchemeChoice = ColorSchemeChoice.current {
         didSet {
             UserDefaults.standard.set(colorScheme.rawValue, forKey: ColorSchemeChoice.key)
-            #if os(iOS) || os(visionOS)
             colorScheme.apply()
             followAppIcon() // Paper on the home screen takes the same look
-            #endif
         }
     }
 
@@ -4821,6 +4796,8 @@ final class AppModel {
             assistantConfig = heldAssistant(g)
         }
         directionTree = nil // the other hub's to-dos and sessions; `refreshAssistant` below reads this one's
+        outsideDirections = [:]
+        outsideDirectionFallback = [:]
         directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
         DirectionFilings.shared.forget() // moves out to the other hub
         // The picked group's settings are read again: until that read finishes, the page shows its loading state.
@@ -4865,6 +4842,8 @@ final class AppModel {
         // The tree is the default manager's: kept through a re-read of it, dropped for any other.
         if switched || !assistantShows(nil) {
             directionTree = nil // the other manager's; `refreshAssistant` below reads this one's
+            outsideDirections = [:]
+            outsideDirectionFallback = [:]
             directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
             DirectionFilings.shared.forget() // moves out to the other manager
         }
@@ -5111,11 +5090,6 @@ final class AppModel {
 
     /// Images handed to a chat's composer from elsewhere (an image edited in the viewer); the composer takes them.
     var composerInbox: [SessionKey: [UIImage]] = [:]
-    #if os(macOS)
-    /// Files dropped on a chat's page anywhere but its composer: the composer takes them as if dropped on
-    /// it (`MacDrop.take`: pictures attached, other files uploaded).
-    var composerDrops: [SessionKey: [URL]] = [:]
-    #endif
     /// Page excerpts picked as context for a chat's next message (`<persona-context>`).
     /// Kept across launches with the text (#4578): a quote is the larger part of a reply.
     var composerContexts: [SessionKey: [ContextRef]] = AppModel.savedContexts() { didSet { saveContexts(); markDrafts() } }
@@ -5322,9 +5296,7 @@ final class AppModel {
 
 enum AppTab: String, Hashable {
     case assistant, chats, mail, settings
-    #if os(iOS) || os(visionOS)
     case feishu
-    #endif
 }
 
 struct Toast: Identifiable, Equatable {

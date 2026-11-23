@@ -73,114 +73,10 @@ def validate_host(source: str) -> None:
         source_lock.fail("About Build host must select only the supplied Build component")
 
 
-def kotlin_code_only(source: str) -> str:
-    """Blank comments and literal text, retaining interpolation as Kotlin code.
-
-    This is a bounded lexer for the exclusion check, not a Kotlin parser. Nested block comments and
-    nested interpolation braces are tracked so a literal cannot hide a real interpolated reference.
-    """
-    code = []
-    stack = [("code", 0)]
-    index = 0
-    while index < len(source):
-        kind, depth = stack[-1]
-        char = source[index]
-        following = source[index + 1] if index + 1 < len(source) else ""
-        if kind == "code":
-            if source.startswith("//", index):
-                code.append("  ")
-                stack.append(("line", 0))
-                index += 2
-            elif source.startswith("/*", index):
-                code.append("  ")
-                stack.append(("block", 1))
-                index += 2
-            elif source.startswith('"""', index):
-                code.append("   ")
-                stack.append(("raw", 0))
-                index += 3
-            elif char in ('"', "'"):
-                code.append(" ")
-                stack.append(("string" if char == '"' else "char", 0))
-                index += 1
-            elif char == "}" and depth:
-                code.append(char)
-                stack.pop()
-                index += 1
-            elif char == "{" and depth:
-                stack[-1] = (kind, depth + 1)
-                code.append(char)
-                index += 1
-            else:
-                code.append(char)
-                index += 1
-        elif kind == "line":
-            code.append("\n" if char == "\n" else " ")
-            index += 1
-            if char == "\n":
-                stack.pop()
-        elif kind == "block":
-            if source.startswith("/*", index):
-                stack[-1] = (kind, depth + 1)
-                code.append("  ")
-                index += 2
-            elif source.startswith("*/", index):
-                code.append("  ")
-                index += 2
-                if depth == 1:
-                    stack.pop()
-                else:
-                    stack[-1] = (kind, depth - 1)
-            else:
-                code.append("\n" if char == "\n" else " ")
-                index += 1
-        elif kind == "char":
-            code.append("\n" if char == "\n" else " ")
-            if char == "\\":
-                code.append("\n" if following == "\n" else " ")
-                index += 2
-            else:
-                index += 1
-                if char == "'":
-                    stack.pop()
-        else:
-            if char == "\\" and kind == "string":
-                code.append("  ")
-                index += 2
-            elif (kind == "raw" and source.startswith('"""', index)) or (kind == "string" and char == '"'):
-                terminator = 3 if kind == "raw" else 1
-                code.append(" " * terminator)
-                index += terminator
-                stack.pop()
-            elif char == "$" and following == "{":
-                code.append("${")
-                stack.append(("code", 1))
-                index += 2
-            elif char == "$" and (following == "_" or following.isalpha()):
-                code.append(char)
-                stack[-1] = (kind + "-interpolation", 0)
-                index += 1
-            else:
-                code.append("\n" if char == "\n" else " ")
-                index += 1
-        if stack[-1][0].endswith("-interpolation"):
-            while index < len(source) and (source[index] == "_" or source[index].isalnum()):
-                code.append(source[index])
-                index += 1
-            stack[-1] = (stack[-1][0][:-len("-interpolation")], 0)
-    return "".join(code)
-
-
 def validate_production_exclusion(android: Path) -> None:
-    for production in android.rglob("*.kt"):
-        relative = production.relative_to(android)
-        parts = relative.parts
-        source_sets = {parts[index + 1] for index, part in enumerate(parts[:-1]) if part == "src"}
-        if not source_sets or source_sets <= {"test", "androidTest"}:
-            continue
-        source = production.read_text(encoding="utf-8")
-        if any(fragment in kotlin_code_only(source) for fragment in ("AboutBuildSnapshot", "AboutBuildRow")):
-            source_lock.fail(f"Ordinary production source must exclude this test-only consumer: {relative}")
+    source_lock.validate_production_exclusion(
+        android, ("AboutBuildSnapshot", "AboutBuildRow"),
+        "Ordinary production source must exclude this test-only consumer")
 
 
 def validate_consumer_lock() -> dict:
@@ -208,6 +104,13 @@ def run(cli: Path, mode: str, android_out: Path, harmony_out: Path) -> None:
     subprocess.run([str(cli), mode, "--input", str(SOURCE), "--mapping", str(MAPPING),
                     "--android-out", str(android_out), "--harmony-out", str(harmony_out)],
                    cwd=ROOT, capture_output=True, text=True, timeout=90, check=True, errors="replace")
+
+
+def remove_new_output(generated: Path) -> None:
+    """Remove a failed run's new output, or preserve an explicit cleanup failure."""
+    generated.unlink(missing_ok=True)
+    if generated.exists():
+        source_lock.fail("New unreviewed Kotlin still exists after removal")
 
 
 def main() -> int:
@@ -248,13 +151,19 @@ def main() -> int:
         if isinstance(error, subprocess.CalledProcessError):
             source_lock.report_process_failure(error)
         print(f"Refract About Build: FAILED: {error}", file=sys.stderr)
-        if args.mode == "generate" and before is not None:
+        if args.mode == "generate":
             try:
-                source_lock.restore_reviewed_output(before, GENERATED)
+                if before is not None:
+                    source_lock.restore_reviewed_output(before, GENERATED)
+                else:
+                    remove_new_output(GENERATED)
             except (ValueError, OSError) as restore_error:
                 print(f"Refract About Build: secondary restoration failure: {restore_error}", file=sys.stderr)
                 return 1
-            print("Refract About Build: original reviewed Kotlin restored after generation failure", file=sys.stderr)
+            if before is not None:
+                print("Refract About Build: original reviewed Kotlin restored after generation failure", file=sys.stderr)
+            else:
+                print("Refract About Build: new unreviewed Kotlin removed after generation failure", file=sys.stderr)
         return 1
     return 0
 

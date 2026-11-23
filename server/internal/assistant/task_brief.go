@@ -70,10 +70,13 @@ func automaticEstimate(minutes int, source string) (int, string) {
 // Kinds of brief log entries.
 const (
 	briefEventScope       = "scope"
+	briefEventEstimate    = "estimate"
 	briefEventOverdue     = "overdue"
 	briefEventDispatch    = "dispatch"
 	briefEventCompletion  = "completion"
 	briefEventEstimateDue = "estimate_due"
+	// briefEventMemory: the memory entries a start of the to-do carried in its first message (memory_handoff.go).
+	briefEventMemory = "memory"
 )
 
 // BriefRequest is the owner's message that led to a task: its words as they wrote them (cut at briefRequestMax, then
@@ -114,7 +117,11 @@ type BriefEvent struct {
 	Added         []string      `json:"added,omitempty"`
 	Dropped       []string      `json:"dropped,omitempty"`
 	Approval      *BriefRequest `json:"approval,omitempty"`
-	eventID       string        // process-local continuation rollback identity; never part of the wire or stored schema
+	// Entries are the memory entries a memory event's start carried, SensitiveEntries the sensitive ones among them
+	// (#13532): what the first message took of the user's memory, for the owner to check.
+	Entries          []string `json:"entries,omitempty"`
+	SensitiveEntries []string `json:"sensitive_entries,omitempty"`
+	eventID          string   // process-local continuation rollback identity; never part of the wire or stored schema
 }
 
 // BriefCriterion is one criterion's result when the work ended: met, not_met, unchecked (nobody checked it), or dropped
@@ -310,11 +317,27 @@ func (tb *taskBrief) criteria() []string {
 	return slices.Clone(out)
 }
 
+func (e BriefEvent) updatesEstimate() bool {
+	return e.Kind == briefEventDispatch || (e.Kind == briefEventScope || e.Kind == briefEventEstimate) && e.ExpectMinutes > 0
+}
+
+// scopeRevision is the last change to authorized work. Older scope entries remain
+// authoritative even when their only evidence is a prose change.
+func (b TaskBrief) scopeRevision() time.Time {
+	at := b.CreatedAt
+	for _, e := range b.Log {
+		if e.Kind == briefEventScope {
+			at = e.At
+		}
+	}
+	return at
+}
+
 // expect is the brief's expect_minutes as its dispatches and scope changes left it.
 func (tb *taskBrief) expect() int {
 	out := tb.rec.ExpectMinutes
 	for _, e := range tb.st.Log {
-		if (e.Kind == briefEventScope || e.Kind == briefEventDispatch) && e.ExpectMinutes > 0 {
+		if e.updatesEstimate() && e.ExpectMinutes > 0 {
 			out = e.ExpectMinutes
 		}
 	}
@@ -326,7 +349,7 @@ func (tb *taskBrief) expect() int {
 func (tb *taskBrief) estimateState() (expect int, source string, clock time.Time) {
 	source, clock = tb.rec.EstimateSource, tb.rec.CreatedAt
 	for _, e := range tb.st.Log {
-		if e.Kind != briefEventDispatch && (e.Kind != briefEventScope || e.ExpectMinutes <= 0) {
+		if !e.updatesEstimate() {
 			continue
 		}
 		clock = e.At
@@ -342,7 +365,7 @@ func (tb *taskBrief) estimateState() (expect int, source string, clock time.Time
 func (tb *taskBrief) estimateEvidence() *TaskEstimateEvidence {
 	evidence := tb.rec.EstimateEvidence
 	for _, event := range tb.st.Log {
-		if event.Kind == briefEventDispatch || event.Kind == briefEventScope && event.ExpectMinutes > 0 {
+		if event.updatesEstimate() {
 			evidence = event.EstimateEvidence
 		}
 	}
@@ -358,7 +381,7 @@ func (tb *taskBrief) estimateEvidence() *TaskEstimateEvidence {
 func (tb *taskBrief) estimateDueToldAt() *time.Time {
 	var told *time.Time
 	for _, e := range tb.st.Log {
-		if e.Kind == briefEventDispatch || e.Kind == briefEventScope && e.ExpectMinutes > 0 {
+		if e.updatesEstimate() {
 			told = nil
 			continue
 		}
@@ -416,7 +439,7 @@ func (tb *taskBrief) latestCompletion() *BriefEvent {
 func (tb *taskBrief) clockAt() time.Time {
 	at := tb.rec.CreatedAt
 	for _, e := range tb.st.Log {
-		if e.Kind == briefEventScope {
+		if e.Kind == briefEventScope || e.Kind == briefEventEstimate {
 			at = e.At
 		}
 	}
@@ -436,7 +459,7 @@ func (tb *taskBrief) dueAt() time.Time {
 func (tb *taskBrief) overdueAt() *time.Time {
 	for i := len(tb.st.Log) - 1; i >= 0; i-- {
 		switch e := tb.st.Log[i]; e.Kind {
-		case briefEventScope:
+		case briefEventScope, briefEventEstimate:
 			return nil
 		case briefEventOverdue:
 			at := e.At
