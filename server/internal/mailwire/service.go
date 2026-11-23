@@ -43,6 +43,13 @@ var ErrMaybeSent = errors.New("the server got the message but did not answer it,
 // failure).
 var ErrTimedOut = errors.New("imap: operation timed out")
 
+// MicrosoftClientSetting is the settings row holding the Outlook client ID the user entered, sealed in its
+// MicrosoftClientSealedField; the key rotation re-seals it (db.SealedSettings names it through these).
+const (
+	MicrosoftClientSetting     = "mail.microsoft_client"
+	MicrosoftClientSealedField = "enc"
+)
+
 // AccountRow is one account as the mail module persists it: non-secret JSON plus ciphertext (mail_accounts).
 type AccountRow struct {
 	ID          string

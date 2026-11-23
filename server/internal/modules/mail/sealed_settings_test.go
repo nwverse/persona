@@ -6,21 +6,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/mailwire"
 )
 
-// The Outlook client ID is sealed in settings (microsoftClientSetting): the key rotation re-seals the fields listed for
-// it in db.SealedSettings, so the sealed field of sealedSetting must be there.
+// The Outlook client ID is sealed in settings (microsoftClientSetting): the key rotation re-seals the field the contract
+// names for it (db.SealedSettings lists mailwire.MicrosoftClientSealedField), so sealedSetting holds exactly that one.
 func TestTheMicrosoftClientIsReSealed(t *testing.T) {
-	i := slices.IndexFunc(db.SealedSettings(), func(s db.SealedSetting) bool { return s.Key == microsoftClientSetting })
-	if i < 0 || db.SealedSettings()[i].List {
-		t.Fatalf("%s is not an object in db.SealedSettings", microsoftClientSetting)
-	}
 	typ := reflect.TypeOf(sealedSetting{})
-	for i2 := range typ.NumField() {
-		name, _, _ := strings.Cut(typ.Field(i2).Tag.Get("json"), ",")
-		if !slices.Contains(db.SealedSettings()[i].Fields, name) {
-			t.Errorf("sealedSetting.%s is not re-sealed by the key rotation", name)
-		}
+	var fields []string
+	for i := range typ.NumField() {
+		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		fields = append(fields, name)
+	}
+	if want := []string{mailwire.MicrosoftClientSealedField}; !slices.Equal(fields, want) {
+		t.Errorf("sealedSetting has %v, the key rotation re-seals %v", fields, want)
 	}
 }

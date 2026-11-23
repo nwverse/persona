@@ -4,9 +4,12 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extmgr/mailport"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/mailwire"
@@ -58,3 +61,31 @@ func (u unknownMailAccount) Error() string {
 }
 func (unknownMailAccount) Code() string    { return "mail_account_unknown" }
 func (unknownMailAccount) HTTPStatus() int { return http.StatusNotFound }
+
+// Without the mail module (persona_without_mail, persona_core_only, or a factory that failed) mail is absent: its
+// routes answer 404, no mail_* tool reaches the agents or the assistant, and persona_settings has no mail.accounts.
+func TestManagerWithoutMail(t *testing.T) {
+	h := newTestManager(t)
+	h.mail = nil
+	h.connectors = connector.NewRegistry(nil)
+	h.registerConnectors()
+	for _, assistant := range []bool{false, true} {
+		for _, tl := range toolsForAgents(t, h, assistant) {
+			if strings.HasPrefix(tl.Name, "mail_") {
+				t.Errorf("assistant %v is offered %s without mail", assistant, tl.Name)
+			}
+		}
+	}
+	if h.connectors.Get("mail") != nil {
+		t.Error("the mail connector is registered without mail")
+	}
+	for _, s := range h.selfSettings() {
+		if strings.HasPrefix(s.key, "mail.") {
+			t.Errorf("persona_settings lists %s without mail", s.key)
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/accounts", nil)
+	if code, body := callReq(t, h.routes(), req, h.cfg.Token); code != http.StatusNotFound {
+		t.Errorf("GET /api/v1/mail/accounts without mail: %d %v, want 404", code, body)
+	}
+}

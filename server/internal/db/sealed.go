@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/nwverse/persona/server/internal/mailwire"
 )
 
 // The manager's secrets sealed with its secret.key (internal/secretkey), where they are in its database: the built-in
@@ -44,7 +46,7 @@ var sealedSettings = []SealedSetting{
 	{Key: "launchers.managed", List: true, Fields: []string{"key_sealed", "headers_sealed", "env_sealed"}},     // internal/assistant storedLauncher
 	{Key: "launchers.machine_keys", List: true, Fields: []string{"key_sealed"}},                                // internal/assistant machineKey
 	{Key: "bots.feishu", Fields: []string{"secret_enc", "registration_device_enc", "registration_secret_enc"}}, // internal/extmgr FeishuBotSettings
-	{Key: "mail.microsoft_client", Fields: []string{"enc"}},                                                    // internal/modules/mail sealedSetting
+	{Key: mailwire.MicrosoftClientSetting, Fields: []string{mailwire.MicrosoftClientSealedField}},              // internal/modules/mail sealedSetting
 }
 
 // SealedSettings are the settings values that hold sealed strings (the packages that write them check theirs is here).

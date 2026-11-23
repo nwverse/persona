@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/mailwire"
 )
 
 // Outlook "Sign in with Microsoft" (docs/extensions/mail.md "Outlook: Sign In with Microsoft"): the same flow as Google's. The app opens
@@ -31,7 +32,7 @@ const (
 	// app catches with ASWebAuthenticationSession, so no release per hub and nothing in Info.plist.
 	DefaultMicrosoftRedirect = "persona-mail-oauth://outlook"
 
-	microsoftClientSetting = "mail.microsoft_client" // the client ID the user entered, encrypted (settings table)
+	microsoftClientSetting = mailwire.MicrosoftClientSetting // the client ID the user entered, encrypted (settings table)
 )
 
 var (

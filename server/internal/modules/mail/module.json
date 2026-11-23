@@ -23,7 +23,7 @@
     "POST /api/v1/mail/messages/{aid}/{uid}/flags",
     "POST /api/v1/mail/send"
   ],
-  "mcp_tools": ["mail_accounts", "mail_search", "mail_read", "mail_send", "mail_save_attachment"],
+  "mcp_tools": ["mail_accounts", "mail_search", "mail_read", "mail_save_attachment", "mail_send"],
   "settings": ["mail.accounts"],
   "i18n_namespaces": ["mail-connect", "mail-errors", "mail-oauth", "mail-preset"]
 }
