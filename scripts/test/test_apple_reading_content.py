@@ -16,6 +16,7 @@ READING_FILES = {
     "DesignSystem/ReadingSize.swift": "the modifier itself",
     "DesignSystem/WindowTextSize.swift": "the window cap, which names the modifier in its comment",
     "DesignSystem/QuoteViews.swift": "the user's message bubble and its quotes",
+    "DesignSystem/ActivityRings.swift": "the Activity rings' values beside Apple's ring view on the Health home (#13251)",
     "DesignSystem/ShellComposerBar.swift": "what is being typed",
     "Views/Chat/ComposerParts.swift": "what is being typed",
     "Views/Chat/MessageViews.swift": "assistant replies, streamed and finished",
