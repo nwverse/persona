@@ -52,20 +52,44 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 	s.modules = kernel.New(mods, func(id string) bool { return slices.Contains(off, id) }, s.logf)
 }
 
+// moduleValue is a module setting's value as the assistant's settings keep it: the JSON as stored, nil when never set.
+// A stored null reads as never set, so it is left out when the settings are written again, as the typed pointer it
+// replaces was.
+type moduleValue json.RawMessage
+
+func (v moduleValue) MarshalJSON() ([]byte, error) {
+	if len(v) == 0 {
+		return []byte("null"), nil
+	}
+	return json.RawMessage(v).MarshalJSON()
+}
+
+func (v *moduleValue) UnmarshalJSON(data []byte) error {
+	if string(bytes.TrimSpace(data)) == "null" {
+		*v = nil
+		return nil
+	}
+	*v = append(moduleValue(nil), data...) // a copy: never the backing array of a value another copy holds
+	return nil
+}
+
 // moduleStored is what is stored for a module setting key (nil: never set). Each module key the assistant keeps in
 // its own settings has its field here, so a switched-off module's value stays as it was.
 func moduleStored(v Settings, key string) json.RawMessage {
 	switch key {
 	case "assistant.briefing_waits":
-		return v.BriefingWaits
+		return json.RawMessage(v.BriefingWaits)
 	}
 	return nil
 }
 
 func moduleStore(v *Settings, key string, raw json.RawMessage) error {
+	if string(bytes.TrimSpace(raw)) == "null" {
+		raw = nil
+	}
 	switch key {
 	case "assistant.briefing_waits":
-		v.BriefingWaits = raw
+		v.BriefingWaits = moduleValue(raw)
 		return nil
 	}
 	return errors.New(key + " has no place in the assistant's settings")

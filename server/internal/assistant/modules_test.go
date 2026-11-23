@@ -41,6 +41,25 @@ func TestBuildWithoutBriefingLoadsNone(t *testing.T) {
 	assertBriefingAbsent(t, s)
 }
 
+// A stored null is never set: it reads as nil and is left out when the settings are written again; a value round-trips
+// byte for byte.
+func TestModuleValueNullIsNeverSet(t *testing.T) {
+	var v Settings
+	if err := json.Unmarshal([]byte(`{"briefing_waits":null}`), &v); err != nil || v.BriefingWaits != nil {
+		t.Fatalf("null read as %q (%v)", v.BriefingWaits, err)
+	}
+	if raw, _ := json.Marshal(v); strings.Contains(string(raw), "briefing_waits") {
+		t.Fatalf("a never-set value was written: %s", raw)
+	}
+	stored := `{"stalled_minutes":25,"silent_minutes":150,"orphan_minutes":12,"card_minutes":4,"max_rows":7}`
+	if err := json.Unmarshal([]byte(`{"briefing_waits":`+stored+`}`), &v); err != nil || string(v.BriefingWaits) != stored {
+		t.Fatalf("value read as %q (%v)", v.BriefingWaits, err)
+	}
+	if raw, _ := json.Marshal(v); !strings.Contains(string(raw), `"briefing_waits":`+stored) {
+		t.Fatalf("value written as %s", raw)
+	}
+}
+
 func ownSettingKeys(s *Service) []string {
 	var keys []string
 	for _, o := range s.ownSettings() {
@@ -72,7 +91,7 @@ func TestSwitchedOffBriefingModuleIsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored := json.RawMessage(`{"stalled_minutes":25,"silent_minutes":150,"orphan_minutes":12,"card_minutes":4,"max_rows":7}`)
-	if err := st.PutSetting(ctx, settingsKey, Settings{BriefingWaits: stored}); err != nil {
+	if err := st.PutSetting(ctx, settingsKey, Settings{BriefingWaits: moduleValue(stored)}); err != nil {
 		t.Fatal(err)
 	}
 	off := ReadModuleSwitch(ctx, st, t.Logf)

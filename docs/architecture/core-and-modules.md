@@ -44,9 +44,14 @@ used when loaded), and one list per kind of slot it adds to: `feature` (a wire f
 name. Where an extension point exists or is filed, the slot uses its name (#13400 to #13403), so built-in modules and
 extensions share one registry shape and a module can later become an extension.
 
-**A disabled or excluded module is absent**: its routes answer 404, its tools and feature flags are not announced, it
-runs no loop, its settings keys stay stored but are hidden, and its tables stay. The core without modules is a tested
-product.
+**A disabled or excluded module is absent.** That is the contract: its routes answer 404, its tools and feature flags
+are not announced, it runs no loop, its settings keys stay stored but are hidden, and its tables stay. The core without
+modules is a tested product.
+
+What the server enforces today is only the slots it serves (see "Slots" below): a module's settings are hidden but
+stay stored, its routine facts are gone (the routine opens with none), and its tables stay, since no module owns one
+yet. Routes, tools, feature flags and loops are not served yet, so no module adds any; a module that declares one is
+not loaded. Each of those parts of the contract holds from the PR that serves its slot.
 
 ## Server
 
