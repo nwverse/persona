@@ -210,6 +210,73 @@ Entering Health goes straight back to the latest health chat, with its context, 
 | iOS / Mac | the sidebar's **Health** runs `AssistantView.enterHealth` (`HealthModel.entry`); the top bar's **New Chat** in a health chat pushes the Health page (`HealthModel.newOpensHealth`). `-openAssistantPage health` / `-openShellPage health` still show the page itself. Tests: `HealthModelTests` |
 | Android | the assistant sidebar's **Health** (`HealthEntry.resolve`), see "Android entry point" below |
 
+## Water and protein
+
+Persona keeps water and protein entries in the default assistant manager's database (#13175).
+These are Persona's own records, counted independently of other apps' dietary samples below.
+An entry has a UUID, kind, amount (ml or g), measurement time and optional food note. Recording
+the same UUID again returns the original. Delete marks an entry as undone; it never revives on
+a retry. Each add or first undo receives a new change number. Rows and undo markers are kept.
+Today and calendar-day totals use the phone's last reported assistant time zone, including
+23- and 25-hour days. Without one, intake resolves the machine's IANA zone from `TZ` or its
+localtime link, falling back to `UTC` for both calculation and the returned identifier.
+
+The hub forwards the manager's routes under `/api/v1/assistant/health/`:
+
+| Route | Purpose |
+| --- | --- |
+| `GET intake` | Today's totals, goals and entries for both kinds, daily totals (7 days by default), and the time zone |
+| `POST intake` | Record `{id,kind,amount?,at?,note?}`; water without an amount uses one configured cup |
+| `DELETE intake/{id}` | Undo a record from any date |
+| `GET intake/changes` | Current row states after a change number, including undo markers, in sequence order |
+| `POST intake/ui` | Draw a detail page or handle its actions with the extension-page UI envelope |
+| `POST water/reminder` | Handle a water notification's buttons and return a localized toast |
+
+Omit the selected manager header and `manager` query so the hub uses the default manager.
+`space=health` may be sent for context, but the hub does not use it to select a manager.
+Full-access devices may call
+these routes; the watch's answer credential may only GET or POST `intake`. Extension,
+scoped and read-only credentials cannot access the data. The manager owns measurements,
+settings, pages and scheduling; the hub only authenticates, forwards and delivers pushes.
+A content-free `health_intake` WebSocket event makes open apps reload. The hub wakes closed
+iPhone widgets for intake changes at most once per 15 minutes, without changing Live Activity
+content. Clients show these capabilities only when hello includes `health_intake`.
+
+**Details.** Water and Protein reuse the Subscriptions page's declarative renderer under
+reserved extension id `-health-intake`, page `pages`. Initial state selects `kind:"water"`
+or `kind:"protein"`. The pages show today's entries with Delete (protein includes what was
+eaten), 7/30-day bar charts and how many dates met the current goal. Today's gauge and the
+bar-chart series use the named category colors `blue` for water and `amber` for protein,
+including after the goal is met. The existing UI-version fitting keeps the total, unit and
+percentage when an older renderer cannot draw the gauge. Water's timezone note mentions
+recording and reminders; protein's mentions recording only. Today's entries are
+paged in groups of 40. Settings open from the page: water goal, cup size, reminders on/off,
+start/end, interval, weekends, stop when done; protein goal. Changes are validated before
+saving to `health.intake`. Invalid stored settings fall back to defaults and are logged, so
+records and the settings form remain usable; a valid save repairs the stored setting. Defaults: water 2000 ml, cup 250 ml, reminders off; protein 60 g.
+Water goal is 500–6000 ml, cup 50–1000 ml, interval 15–240 minutes; protein goal 10–300 g.
+Start and end are exact `HH:mm`, with start before end. Each water entry is 1–3000 ml;
+protein is 0.1–200 g and remains positive after rounding. Records support one decimal place. The water page and
+notification text input use whole ml, as the water extension does.
+
+**Reminders.** Water alone can remind, off by default. In the chosen time window it reminds
+at the configured interval, optionally skips weekends and stops once the goal is met. Later
+snoozes for 30 minutes; recording water from any entry point clears snooze and starts a new
+interval. A restart catches up at most once within the allowed window. State lives in
+`health.intake.water_reminder` (`last`, `snooze`, `reason`). The page explains the next reminder,
+why reminders are off, and the last delivery status. It reads the hub's existing low-distraction
+state: P1 reminders go to the briefing without ringing. The existing notification outbox
+queues a reminder while the hub is disconnected. Quiet hours do not suppress these requested
+reminders. The notification says “Time for some water” and today's progress; it carries no
+chat content. Its fixed category is `HEALTH_WATER`; Drank a cup, Later and Record another amount
+call the reminder endpoint. Button record IDs are stable UUIDv5 names, so repeated taps and
+network retries record once, even after an entry was undone. Older clients show a plain alert.
+
+Request and response fields, reserved page state, category action identifiers and examples
+are in [protocol.md](../protocol/protocol.md) ("Health intake"). No language model is involved
+in the pages, settings or scheduling, and none of these routes grants an extension access to
+Health chats or memory.
+
 ## Dietary intake and resting energy
 
 The Health space uses `phone_health_summary` for system health data, including dietary intake written by apps such as 薄荷健康. Its requested metrics are:
