@@ -79,6 +79,8 @@ describe("Background activity projection", () => {
   it("keeps user-requested acceptance, owner verification, and needs_user visible", () => {
     const cases = [
       { name: "user_requested accepted", verdict: "accepted", receipt: '{"background":false,"message":"accepted"}', userCheck: false },
+      { name: "malformed accepted receipt", verdict: "accepted", receipt: "not JSON", userCheck: false },
+      { name: "non-boolean marker", verdict: "accepted", receipt: '{"background":"true"}', userCheck: false },
       { name: "user_check accepted", verdict: "accepted", receipt: '{"background":true,"message":"accepted"}', userCheck: true },
       { name: "needs_user", verdict: "needs_user", receipt: '{"background":true,"message":"decision card sent"}', userCheck: false },
     ];

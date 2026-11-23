@@ -780,8 +780,8 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
       let internalAccepted = false;
       if (verdict === "accepted" && use.tool_input?.user_check !== true) {
         try {
-          const value: unknown = JSON.parse(result.text ?? "");
-          internalAccepted = !!value && typeof value === "object" && !Array.isArray(value) && "background" in value && value.background === true;
+          const { background } = JSON.parse(result.text ?? "");
+          internalAccepted = background === true;
         } catch {
           // Legacy and malformed receipts keep the accepted review visible.
         }
@@ -791,11 +791,9 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
     }
     if (name !== "supervision_finish") return { visible: true, completedSilent: false };
     try {
-      const value: unknown = JSON.parse(result.text ?? "");
-      if (value && typeof value === "object" && !Array.isArray(value) && "visibility" in value) {
-        if (value.visibility === "user") return { visible: true, completedSilent: false };
-        if (value.visibility === "silent") silent = true;
-      }
+      const { visibility } = JSON.parse(result.text ?? "");
+      if (visibility === "user") return { visible: true, completedSilent: false };
+      if (visibility === "silent") silent = true;
     } catch {
       // A failed or malformed receipt does not decide visibility.
     }
