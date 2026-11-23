@@ -63,6 +63,7 @@ import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
 import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
 import { openStartPage } from "./lib/start-page";
+import { conversationRoute } from "./lib/conversation-page";
 import { useTrackTitle } from "./lib/tracks";
 import { connectModuleHub, moduleExtensionAt, moduleTitle, useModuleStates } from "./core/module-host";
 import { ModuleExtensionPage, ModulePage } from "./core/ModulePage";
@@ -314,6 +315,9 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
   if (sub) return route.at ? exact() : { link: undefined, to: routePath({ ...route, sid: sub.parent }), mid: route.mid, sid: undefined };
   const rows = pageRows(s, route.mid);
   const row = rows.find((r) => r.session_id === route.sid);
+  // a Persona conversation's `/s/…` link (a push, a copied address): its own page, which draws its plan cards, questions
+  // and tasks; the agent chat here shows none of them
+  if (row?.assistant && !route.at) return { link: undefined, to: routePath(conversationRoute(route.mid, route.sid, s.sessions, s.assistant, row.manager)), mid: route.mid, sid: undefined };
   // a lead's worker's (#5180): the lead's page, the worker in its Team panel
   const worker = workerTarget(rows, route.mid, row, inWorkView(route));
   if (worker) return worker;

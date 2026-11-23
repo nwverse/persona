@@ -86,6 +86,7 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 	infer := buildManagedInferLaunchers(m)
 	n.managed.byID, n.managed.full, n.managed.infer = m, full, infer
 	n.managed.mu.Unlock()
+	n.syncAgyProvider()
 	if len(prefetch) > 0 {
 		go func() {
 			for _, name := range prefetch {
@@ -95,6 +96,7 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 				}
 				cancel()
 			}
+			n.syncAgyProvider()
 		}()
 	}
 }
