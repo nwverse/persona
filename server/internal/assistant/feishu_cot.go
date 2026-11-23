@@ -13,7 +13,6 @@ import (
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -26,9 +25,6 @@ import (
 // The run's Ext keeps "cot" and "cot_msg" (the agent message's ids, shared by its events as the run id) and
 // "cot_para" (the last paragraph, which the next tool calls hang under and the process ends with); "cot_off" marks a
 // run whose agent message could not be used.
-
-// cotItemsMost bounds what a run keeps of its turn's process.
-const cotItemsMost = 2000
 
 // cotResultMost is how much of a tool's output the agent message shows.
 const cotResultMost = 1500
@@ -75,14 +71,6 @@ func (s *Service) loadCot(p *cotProgress, r *channel.Run) {
 	p.off = p.off || s.runExt(r, "cot_off") != ""
 }
 
-// runExt is one of a run's channel values, read under the channels' lock (a held run's next turn clears them).
-func (s *Service) runExt(r *channel.Run, key string) string {
-	c := &s.chans
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return r.Ext[key]
-}
-
 // setCotExt keeps one of the agent message's values on the run itself: the answer works on a copy of it, and a value
 // only the copy had would be gone when the answer is tried again after a restart.
 func (s *Service) setCotExt(r *channel.Run, p *cotProgress, key, value string) {
@@ -94,17 +82,6 @@ func (s *Service) setCotExt(r *channel.Run, p *cotProgress, key, value string) {
 		s.setRunExt(real, key, value)
 	}
 	s.setRunExt(r, key, value)
-}
-
-// cotItem: it is part of a turn's process.
-func cotItem(it proto.Item) bool {
-	switch it.Kind {
-	case proto.KindThinking, proto.KindText:
-		return it.Role == "assistant" && strings.TrimSpace(it.Text) != ""
-	case proto.KindToolUse, proto.KindToolResult:
-		return true
-	}
-	return false
 }
 
 // progressAfter: the progress card is there within a second or two of the message, before the turn is seen working.
@@ -340,18 +317,6 @@ func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *chanLive, it
 	return true
 }
 
-// runItems is a copy of what the run saw of its turn's process.
-func (s *Service) runItems(id string) (*chanLive, []proto.Item) {
-	c := &s.chans
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	p := c.live[id]
-	if p == nil {
-		return nil, nil
-	}
-	return p, append([]proto.Item(nil), p.items...)
-}
-
 // cotProgressNow shows r's process in its agent message. True means a legacy private run needs no card; a topic run
 // returns false after its native update so the progress card still appears beside it.
 func (f feishuSink) cotProgressNow(ctx context.Context, r *channel.Run) bool {
@@ -449,73 +414,6 @@ func (f feishuSink) cotEnd(ctx context.Context, cot, msg string) error {
 		}
 	}
 	return err
-}
-
-// Folded panel limits: newest calls shown, per-line rune cap (escape entities kept whole), own JSON byte budget.
-const (
-	processPanelStepsMost = 40
-	processPanelLineRunes = 120
-	processPanelMaxBytes  = 4000
-)
-
-// processPanel is the fallback card's folded process, self-bounded for the quiet end card outside answerCards
-// (its foot/note are short).
-func processPanel(l i18n.Lang, c *botcard.Card, steps []string) {
-	addProcessPanel(l, c, steps, fitPanelSteps(l, steps, min(processPanelStepsMost, len(steps)), processPanelMaxBytes))
-}
-
-// fitPanelSteps halves from start until the panel's JSON inside an empty card envelope is at most maxBytes.
-func fitPanelSteps(l i18n.Lang, steps []string, start, maxBytes int) int {
-	empty := len(botcard.NewCard("", "", "").JSON())
-	for n := start; n > 0; n /= 2 {
-		probe := botcard.NewCard("", "", "")
-		addProcessPanel(l, probe, steps, n)
-		if len(probe.JSON())-empty <= maxBytes {
-			return n
-		}
-	}
-	return 0
-}
-
-// addProcessPanel shows the last maxSteps clipped lines; title counts all steps, a line notes hidden earlier ones.
-func addProcessPanel(l i18n.Lang, c *botcard.Card, steps []string, maxSteps int) {
-	if maxSteps <= 0 || len(steps) == 0 {
-		return
-	}
-	maxSteps = min(maxSteps, len(steps))
-	var b strings.Builder
-	if hidden := len(steps) - maxSteps; hidden > 0 {
-		b.WriteString(i18n.T(l, "assistant-feishu.earlier_steps", i18n.Args{"count": hidden}))
-	}
-	for _, st := range steps[len(steps)-maxSteps:] {
-		b.WriteString("- " + clipPanelLine(st, processPanelLineRunes) + "\n")
-	}
-	c.Collapsible(i18n.T(l, "assistant-feishu.cot_tools", i18n.Args{"count": len(steps)}), strings.TrimSpace(b.String()))
-}
-
-// panelEntityStart matches a dangling entity prefix the card escapers emit ("&#124;"-style number or "&sim") at
-// the cut; a literal '&' before other text stays.
-var panelEntityStart = lazyre.New(`&(?:#[0-9]{0,5}|s(?:i(?:m)?)?)?$`)
-
-// clipPanelLine cuts an already card-escaped line to n runes plus an ellipsis, never splitting an escape entity;
-// a literal '&' stays.
-func clipPanelLine(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return panelEntityStart.ReplaceAllString(string(r[:n]), "") + "…"
-}
-
-// runSteps is a copy of the tool-call lines the run saw.
-func (s *Service) runSteps(id string) []string {
-	c := &s.chans
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if p := c.live[id]; p != nil {
-		return append([]string(nil), p.steps...)
-	}
-	return nil
 }
 
 // feishuCode is the error code Feishu answered a call with (0 when the call did not get that far).

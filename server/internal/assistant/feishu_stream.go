@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"crypto/sha256"
-	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/botcard"
@@ -22,11 +21,6 @@ import (
 // message update that finds it gone forgets it, and the next tick posts a new card.
 
 const (
-	// progressLiveID is the element of the progress card the conversation's words are streamed into.
-	progressLiveID = "live"
-	// progressLiveMost is how much of the words the card shows (their end): text that has outgrown it is written over
-	// rather than streamed on, as it no longer starts the same.
-	progressLiveMost = 2000
 	// kitDownFor is how long progress cards go as messages after CardKit would not make one (the app lacks its
 	// permission, an older hub): it is not asked on every run.
 	kitDownFor = 10 * time.Minute
@@ -58,15 +52,6 @@ func (k *cardKit) next(now time.Time) int64 {
 	}
 	k.seq = n
 	return n
-}
-
-// progressLive is the conversation's words as the progress card shows them: escaped, and only their end when long.
-func progressLive(live string) string {
-	live = strings.TrimSpace(live)
-	if r := []rune(live); len(r) > progressLiveMost {
-		live = "…" + string(r[len(r)-progressLiveMost:])
-	}
-	return botcard.EscapeMarkdown(live)
 }
 
 // liveElement is the card's element the words go in, nil when it has none.

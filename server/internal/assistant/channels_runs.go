@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The turns channels wait on (docs/extensions/channels.md "Message flow"): one copy for every channel. A message from a channel
@@ -428,3 +431,61 @@ var (
 	errCannotSend = errors.New("cannot send yet")
 	errNoChannel  = errors.New("no channel")
 )
+
+// chansNow is the channels' clock.
+func (s *Service) chansNow() time.Time {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.clock()
+}
+
+// unreachable: the call did not reach the hub, or did not come back (worth trying again).
+func unreachable(err error) bool {
+	return errors.Is(err, bus.ErrOffline) || errors.Is(err, rpc.ErrClosed) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// cotItemsMost bounds what a run keeps of its turn's process.
+const cotItemsMost = 2000
+
+// runExt is one of a run's channel values, read under the channels' lock (a held run's next turn clears them).
+func (s *Service) runExt(r *channel.Run, key string) string {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return r.Ext[key]
+}
+
+// cotItem: it is part of a turn's process.
+func cotItem(it proto.Item) bool {
+	switch it.Kind {
+	case proto.KindThinking, proto.KindText:
+		return it.Role == "assistant" && strings.TrimSpace(it.Text) != ""
+	case proto.KindToolUse, proto.KindToolResult:
+		return true
+	}
+	return false
+}
+
+// runItems is a copy of what the run saw of its turn's process.
+func (s *Service) runItems(id string) (*chanLive, []proto.Item) {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p := c.live[id]
+	if p == nil {
+		return nil, nil
+	}
+	return p, append([]proto.Item(nil), p.items...)
+}
+
+// runSteps is a copy of the tool-call lines the run saw.
+func (s *Service) runSteps(id string) []string {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if p := c.live[id]; p != nil {
+		return append([]string(nil), p.steps...)
+	}
+	return nil
+}
