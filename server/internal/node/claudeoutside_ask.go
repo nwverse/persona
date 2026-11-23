@@ -34,7 +34,8 @@ func (n *Node) outsideAskCards() []proto.Interaction {
 	seen := map[string]bool{}
 	for _, c := range n.liveClaudes() {
 		// The status file first: every other check reads a file or the process, and almost no claude is waiting.
-		if c.Status != "waiting" || seen[c.SessionID] || n.outsideSource(c) == "" || outsidePane(c) != "" {
+		// A session with an in-flight hook interaction (activeAsks) already owns a real hook card on the hub.
+		if c.Status != "waiting" || seen[c.SessionID] || n.activeAsks.active(c.SessionID) || n.outsideSource(c) == "" || outsidePane(c) != "" {
 			continue
 		}
 		if p, has := peerOf(c); !has || !peerReachable(p) {
@@ -49,16 +50,38 @@ func (n *Node) outsideAskCards() []proto.Interaction {
 	return out
 }
 
+// pendingOutsideAsk returns the unanswered AskUserQuestion call that outside claude c is waiting on, or nil when c is
+// not waiting or its transcript's latest tool call is not an open AskUserQuestion. Both outsideAskCard and
+// claudeSessions/sendOutsidePriority read through this so card creation, Capabilities.Approve, AttentionReason, and
+// priority-now replies share one source of truth (unaffected by quickMeta's 3s cache, 384KB tail window, or KindText
+// clearing LastTool).
+func (n *Node) pendingOutsideAsk(c claudeProc, blockingRefresh bool) *proto.Item {
+	if c.Status != "waiting" {
+		return nil
+	}
+	id := c.SessionID
+	f, err := n.file(id)
+	if err != nil {
+		return nil
+	}
+	if blockingRefresh {
+		if n.refresh(id, f) != nil {
+			return nil
+		}
+	} else {
+		if n.refreshForPage(id, f) != nil {
+			return nil
+		}
+	}
+	items, _, _ := f.PageTurns(0, 2, 2000)
+	return pendingAsk(items)
+}
+
 // outsideAskCard is the card of the question claude c waits on, ok false when its transcript's latest call is not an
 // AskUserQuestion still open (a permission prompt, a plan, a dialog of its own) or the call cannot be one card.
 func (n *Node) outsideAskCard(c claudeProc) (proto.Interaction, bool) {
 	id := c.SessionID
-	f, err := n.file(id)
-	if err != nil || n.refresh(id, f) != nil {
-		return proto.Interaction{}, false
-	}
-	items, _, _ := f.PageTurns(0, 2, 2000)
-	call := pendingAsk(items)
+	call := n.pendingOutsideAsk(c, true)
 	if call == nil {
 		return proto.Interaction{}, false
 	}

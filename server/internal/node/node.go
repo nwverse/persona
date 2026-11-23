@@ -406,8 +406,10 @@ type Node struct {
 	// assistantCompact, compactIdle, restoreModel, a queue edit (assistantEditQueue) and a round's process retiring
 	// (roundSettled) at a time (model_restore.go, #2528)
 	assistantLife typingLocks
-	restores      restoreMarks // "back to the configured model" asked, until newer model evidence (model_restore.go)
-	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
+	restores      restoreMarks    // "back to the configured model" asked, until newer model evidence (model_restore.go)
+	hookFlights   hookFlights     // hook calls in progress by session: their process waits on them (model_restore.go)
+	activeAsks    hookFlights     // blocking interaction.create RPCs in progress by session (hooks.go)
+	outsideListed map[string]bool // sessions last listed by claudeSessions (guarded by mu; claudebg.go)
 
 	// dialogWait: first messages waiting for the dialog that kept them out to be answered (firstprompt.go).
 	dialogWait sync.WaitGroup

@@ -924,6 +924,9 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	if n.peer == nil { // no hub: nobody to ask
 		return proto.Resolution{}, false, nil
 	}
+	if ix.SessionID != "" {
+		defer n.enterActiveAsk(ctx, ix.SessionID)()
+	}
 	ctx, cancel := context.WithDeadline(ctx, ix.ExpiresAt)
 	defer cancel()
 	var res proto.Resolution
@@ -957,6 +960,22 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 		n.editedAnswers.Store(ix.ID, res.EditedText)
 	}
 	return res, true, nil
+}
+
+// enterActiveAsk marks session id as holding an in-flight interaction.create RPC. When id is currently listed via
+// claudeSessions (outside Persona's managed panes), entering publishes the updated list (Capabilities.Approve = true)
+// before interaction.create reaches the hub so clients do not lock the card, and leaving pokes a refresh once the last
+// active interaction for id finishes.
+func (n *Node) enterActiveAsk(ctx context.Context, id string) func() {
+	first, leave := n.activeAsks.enterCount(id)
+	if first && n.isOutsideListed(id) {
+		n.awaitOutsideSessionPush(ctx, n.pokeOutsideSessions())
+	}
+	return func() {
+		if leave() && n.isOutsideListed(id) {
+			n.pokeOutsideSessions()
+		}
+	}
 }
 
 // fileRuleScope is the permission rule content for a file tool's call: its file's directory and below

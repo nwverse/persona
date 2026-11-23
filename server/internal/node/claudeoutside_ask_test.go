@@ -4,12 +4,17 @@ package node
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
 )
 
@@ -209,4 +214,457 @@ func TestOutsideAnswerText(t *testing.T) {
 	if !strings.Contains(got, "First line? → no") || !strings.Contains(got, "your rule") {
 		t.Fatalf("by the assistant: %q", got)
 	}
+}
+
+// Trailing assistant KindText clears quickMeta.LastTool, yet outsideAskCards still creates a clq_ card. claudeSessions
+// and plain chat replies must use the same pendingOutsideAsk source of truth so the card stays interactive and chat
+// replies still go at priority now.
+func TestOutsideAskTrailingTextKeepsApproveAndAttention(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 3*time.Second)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"choose"}}`,
+		askCall(sidA, "toolu_trailing_text", `{"questions":[{"question":"Which one?","header":"Pick","options":[{"label":"A"},{"label":"B"}],"multiSelect":false}]}`),
+		`{"type":"assistant","uuid":"a2","timestamp":"2026-11-04T09:00:10Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"text","text":"Please pick one."}]}}`)
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := n.metaNow(p, st); m.tool != "" {
+		t.Fatalf("precondition failed: expected KindText to clear quickMeta.tool, got %q", m.tool)
+	}
+
+	s := byID(listSessions(t, n))[sidA]
+	if s.Status != proto.StatusBlocked || s.AttentionReason != proto.AttentionClaudeAnswer ||
+		s.Capabilities == nil || !s.Capabilities.Approve || !s.Capabilities.Send {
+		t.Fatalf("trailing text after AskUserQuestion: row=%+v caps=%+v", s, s.Capabilities)
+	}
+	if cards := n.outsideAskCards(); len(cards) != 1 {
+		t.Fatalf("outsideAskCards = %+v, want 1 card", cards)
+	}
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "A", "client_msg_id": "m-trailing"}); err != nil {
+		t.Fatalf("plain reply: %v", err)
+	}
+	if pr, _ := inboxPriority(t, inbox, 0); pr != peerNow {
+		t.Fatalf("plain reply priority = %q, want %q", pr, peerNow)
+	}
+}
+
+// Within metaMinInterval (3s), n.meta returns the cached quickMeta from before AskUserQuestion was appended.
+// claudeSessions must still set Capabilities.Approve and AttentionClaudeAnswer immediately to match outsideAskCards.
+func TestOutsideAskWithinMetaMinIntervalKeepsApprove(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"plan"}}`,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-11-04T09:00:05Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"text","text":"Thinking through options."}]}}`)
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "busy", inbox, nil)
+
+	// Warm n.metas within metaMinInterval with m.tool == "".
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || s.Capabilities.Approve {
+		t.Fatalf("busy warm-up: caps=%+v, want Approve=false", s.Capabilities)
+	}
+
+	// Immediately append AskUserQuestion and flip to waiting without clearing n.metas.
+	appendLines(t, p, askCall(sidA, "toolu_cached", `{"questions":[{"question":"Proceed?","header":"Confirm","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}`))
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := n.meta(p, st); m.tool != "" {
+		t.Fatalf("precondition failed: expected cached quickMeta.tool to stay empty within metaMinInterval, got %q", m.tool)
+	}
+
+	s := byID(listSessions(t, n))[sidA]
+	if s.Status != proto.StatusBlocked || s.AttentionReason != proto.AttentionClaudeAnswer ||
+		s.Capabilities == nil || !s.Capabilities.Approve {
+		t.Fatalf("within metaMinInterval: row=%+v caps=%+v", s, s.Capabilities)
+	}
+	if cards := n.outsideAskCards(); len(cards) != 1 {
+		t.Fatalf("outsideAskCards = %+v, want 1 card", cards)
+	}
+}
+
+// When trailing data pushes AskUserQuestion beyond quickTail (384 KB), quickMeta loses LastTool while PageTurns still
+// creates a clq_ card. claudeSessions must still set Capabilities.Approve and AttentionClaudeAnswer.
+func TestOutsideAskPastQuickTailKeepsApprove(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	bigPad := strings.Repeat("x", quickTail+64<<10)
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"audit"}}`,
+		askCall(sidA, "toolu_bigtail", `{"questions":[{"question":"Target?","header":"Scope","options":[{"label":"All"},{"label":"Changed"}],"multiSelect":false}]}`),
+		`{"type":"progress","uuid":"p1","timestamp":"2026-11-04T09:00:10Z","sessionId":"`+sidA+`","data":{"blob":"`+bigPad+`"}}`)
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := n.metaNow(p, st); m.tool != "" {
+		t.Fatalf("precondition failed: expected quickTail truncation to leave quickMeta.tool empty, got %q", m.tool)
+	}
+
+	s := byID(listSessions(t, n))[sidA]
+	if s.Status != proto.StatusBlocked || s.AttentionReason != proto.AttentionClaudeAnswer ||
+		s.Capabilities == nil || !s.Capabilities.Approve {
+		t.Fatalf("past quickTail: row=%+v caps=%+v", s, s.Capabilities)
+	}
+	if cards := n.outsideAskCards(); len(cards) != 1 {
+		t.Fatalf("outsideAskCards = %+v, want 1 card", cards)
+	}
+}
+
+type outsideWireEvent struct {
+	kind     string
+	sessions []proto.Session
+	cards    []proto.Interaction
+}
+
+type outsideHubRecorder struct {
+	mu     sync.Mutex
+	events []outsideWireEvent
+}
+
+func (r *outsideHubRecorder) snapshot() []outsideWireEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]outsideWireEvent(nil), r.events...)
+}
+
+func (r *outsideHubRecorder) clear() {
+	r.mu.Lock()
+	r.events = nil
+	r.mu.Unlock()
+}
+
+func wireOutsideHub(t *testing.T, n *Node, onRequest func(ctx context.Context, method string, params json.RawMessage) (any, error)) *outsideHubRecorder {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	n2hR, n2hW := io.Pipe()
+	h2nR, h2nW := io.Pipe()
+	n.peer = rpc.New("n", n2hW)
+	hub := rpc.New("h", h2nW)
+	rec := &outsideHubRecorder{}
+	hub.OnEvent = func(event string, params json.RawMessage) {
+		switch event {
+		case "sessions.changed":
+			var p struct {
+				Sessions []proto.Session `json:"sessions"`
+			}
+			if json.Unmarshal(params, &p) == nil {
+				rec.mu.Lock()
+				rec.events = append(rec.events, outsideWireEvent{kind: event, sessions: p.Sessions})
+				rec.mu.Unlock()
+			}
+		case "codex.interactions":
+			var p struct {
+				Interactions []proto.Interaction `json:"interactions"`
+			}
+			if json.Unmarshal(params, &p) == nil {
+				rec.mu.Lock()
+				rec.events = append(rec.events, outsideWireEvent{kind: event, cards: p.Interactions})
+				rec.mu.Unlock()
+			}
+		}
+	}
+	if onRequest != nil {
+		hub.OnRequest = onRequest
+	}
+	go func() { _ = hub.Serve(ctx, n2hR) }()
+	go func() { _ = n.peer.Serve(ctx, h2nR) }()
+	t.Cleanup(func() {
+		waitFor(t, "listPush idle", func() bool {
+			n.listPush.mu.Lock()
+			defer n.listPush.mu.Unlock()
+			return !n.listPush.building
+		})
+		cancel()
+		_ = n2hW.Close()
+		_ = h2nW.Close()
+		_ = n2hR.Close()
+		_ = h2nR.Close()
+	})
+	return rec
+}
+
+// Adding or removing a clq_ card in syncCodexCards immediately pokes/publishes sessions.changed in the right order
+// (Approve=true before codex.interactions on add; codex.interactions before Approve=false on remove), and a transient
+// status flicker while a clq_ card is still published never drops Capabilities.Approve.
+func TestOutsideAskCardChangesPokeSessionsAndSurviveFlicker(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	n.events = newHerdrEvents()
+	rec := wireOutsideHub(t, n, nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"work"}}`,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-11-04T09:00:05Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}`)
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "busy", inbox, nil)
+
+	// Publish initial baseline (Approve=false).
+	n.publish(n.sessionList(context.Background(), false))
+	waitFor(t, "baseline sessions.changed", func() bool { return len(rec.snapshot()) >= 1 })
+	rec.clear()
+	n.events.drained()
+
+	// New AskUserQuestion appears -> syncCodexCards must poke and push Approve=true BEFORE codex.interactions.
+	appendLines(t, p, askCall(sidA, "toolu_poke", `{"questions":[{"question":"Ship now?","header":"Release","options":[{"label":"Yes"},{"label":"Later"}],"multiSelect":false}]}`))
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+	n.syncCodexCards(context.Background())
+
+	if !n.events.drained() {
+		t.Fatal("adding clq_ card did not poke session watcher")
+	}
+	waitFor(t, "add events on wire", func() bool { return len(rec.snapshot()) >= 2 })
+	evs := rec.snapshot()
+	if evs[0].kind != "sessions.changed" || evs[1].kind != "codex.interactions" {
+		t.Fatalf("add event order = [%s, %s], want [sessions.changed, codex.interactions]", evs[0].kind, evs[1].kind)
+	}
+	sAdd := byID(evs[0].sessions)[sidA]
+	if sAdd.Capabilities == nil || !sAdd.Capabilities.Approve || sAdd.AttentionReason != proto.AttentionClaudeAnswer {
+		t.Fatalf("sessions.changed on add: row=%+v caps=%+v", sAdd, sAdd.Capabilities)
+	}
+	if len(evs[1].cards) != 1 || !strings.HasPrefix(evs[1].cards[0].ID, outsideAskPrefix) {
+		t.Fatalf("codex.interactions on add: %+v", evs[1].cards)
+	}
+
+	// Transient status flicker while clq_ card is still published on hub must keep Approve=true.
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "busy", inbox, nil)
+	if sFlicker := byID(listSessions(t, n))[sidA]; sFlicker.Capabilities == nil || !sFlicker.Capabilities.Approve {
+		t.Fatalf("status flicker while clq_ published dropped Approve: caps=%+v", sFlicker.Capabilities)
+	}
+
+	// Question ends and transitions to a computer-only Bash permission prompt -> syncCodexCards withdraws clq_ BEFORE
+	// pushing Approve=false and AttentionClaudeComputer.
+	rec.clear()
+	n.events.drained()
+	appendLines(t, p, toolResult(sidA, "toolu_poke", "Yes"),
+		`{"type":"assistant","uuid":"a2","timestamp":"2026-11-04T09:02:00Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_bash","name":"Bash","input":{"command":"ls"}}]}}`)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, nil)
+	n.syncCodexCards(context.Background())
+
+	if !n.events.drained() {
+		t.Fatal("removing clq_ card did not poke session watcher")
+	}
+	waitFor(t, "remove events on wire", func() bool { return len(rec.snapshot()) >= 2 })
+	evs = rec.snapshot()
+	if evs[0].kind != "codex.interactions" || evs[1].kind != "sessions.changed" {
+		t.Fatalf("remove event order = [%s, %s], want [codex.interactions, sessions.changed]", evs[0].kind, evs[1].kind)
+	}
+	if len(evs[0].cards) != 0 {
+		t.Fatalf("codex.interactions on remove = %+v, want empty", evs[0].cards)
+	}
+	sRem := byID(evs[1].sessions)[sidA]
+	if sRem.Capabilities == nil || sRem.Capabilities.Approve || sRem.AttentionReason != proto.AttentionClaudeComputer {
+		t.Fatalf("sessions.changed on remove: row=%+v caps=%+v", sRem, sRem.Capabilities)
+	}
+}
+
+// A Claude session with an active blocking hook interaction (interaction.create in flight) that falls back into
+// claudeSessions must keep Capabilities.Approve=true (even without a peer inbox), avoid AttentionClaudeComputer and
+// duplicate clq_ cards, and restore Capabilities.Approve=false once the hook call finishes.
+func TestFallbackHookSessionKeepsApproveWhileHookActive(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	n.events = newHerdrEvents()
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	rec := wireOutsideHub(t, n, func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method == "interaction.create" {
+			close(started)
+			<-release
+			allow := true
+			return proto.Resolution{Allow: &allow}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	})
+
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-04T09:00:00Z","cwd":"`+home+`","sessionId":"`+sidA+`","message":{"role":"user","content":"run build"}}`,
+		askCall(sidA, "toolu_hook_ask", `{"questions":[{"question":"Mode?","header":"Run","options":[{"label":"Fast"},{"label":"Full"}],"multiSelect":false}]}`))
+	inbox := newFakeInbox(t, p)
+
+	// Start with no inbox to verify active hook approval works without peer inbox, and establish it as outside-listed.
+	writeOutsideClaude(t, home, sidA, "cli", "waiting", nil, nil)
+	n.publish(n.sessionList(context.Background(), false))
+	waitFor(t, "initial fallback sessions.changed", func() bool { return len(rec.snapshot()) >= 1 })
+	if s := byID(rec.snapshot()[0].sessions)[sidA]; s.Capabilities == nil || s.Capabilities.Approve || s.AttentionReason != proto.AttentionClaudeComputer {
+		t.Fatalf("before hook: row=%+v caps=%+v", s, s.Capabilities)
+	}
+	rec.clear()
+
+	hookDone := make(chan error, 1)
+	rawIn, _ := json.Marshal(hookInput{
+		HookEventName: "PermissionRequest",
+		SessionID:     sidA,
+		Cwd:           home,
+		ToolName:      "Bash",
+		ToolUseID:     "toolu_hook_bash",
+		ToolInput:     json.RawMessage(`{"command":"go test ./..."}`),
+	})
+	go func() {
+		_, err := n.handleHook(context.Background(), sockRequest{Kind: "hook", SessionID: sidA, Input: rawIn})
+		hookDone <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for hook interaction.create")
+	}
+
+	// Entering activeAsks pushed sessions.changed with Approve=true and empty AttentionReason before interaction.create.
+	waitFor(t, "approve pushed for active hook", func() bool {
+		for _, ev := range rec.snapshot() {
+			if ev.kind == "sessions.changed" {
+				s := byID(ev.sessions)[sidA]
+				if s.Capabilities != nil && s.Capabilities.Approve && s.AttentionReason == "" {
+					return true
+				}
+			}
+		}
+		return false
+	})
+
+	// Even if an inbox is present alongside an AskUserQuestion in the transcript, activeAsks suppresses duplicate clq_.
+	writeOutsideClaude(t, home, sidA, "cli", "waiting", inbox, nil)
+	if cards := n.outsideAskCards(); len(cards) != 0 {
+		t.Fatalf("active hook session emitted duplicate clq_ cards: %+v", cards)
+	}
+	if s := byID(listSessions(t, n))[sidA]; s.Capabilities == nil || !s.Capabilities.Approve || s.AttentionReason != "" {
+		t.Fatalf("while hook active: row=%+v caps=%+v", s, s.Capabilities)
+	}
+
+	// Switch back to no-inbox before releasing so post-hook state cleanly reverts to Approve=false + computer-only.
+	writeOutsideClaude(t, home, sidA, "cli", "waiting", nil, nil)
+	rec.clear()
+	close(release)
+	if err := <-hookDone; err != nil {
+		t.Fatalf("handleHook returned error: %v", err)
+	}
+
+	waitFor(t, "approve cleared after hook ends", func() bool {
+		for _, ev := range rec.snapshot() {
+			if ev.kind == "sessions.changed" {
+				s := byID(ev.sessions)[sidA]
+				if s.Capabilities != nil && !s.Capabilities.Approve && s.AttentionReason == proto.AttentionClaudeComputer {
+					return true
+				}
+			}
+		}
+		return false
+	})
+}
+
+// A session that starts its blocking hook while still in a herdr pane, then temporarily drops out of herdr into
+// claudeSessions while two concurrent hook asks are in flight, keeps Approve=true until both asks finish.
+func TestHookSessionFallingBackMidHookKeepsApproveUntilAllAsksFinish(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	n.events = newHerdrEvents()
+	f.reply("session.snapshot", snapshot(nil, nil, []any{
+		claudeAgent(sidA, proto.StatusBlocked, "w1:p1", "w1:t1", "w1", home, "build"),
+	}, nil))
+
+	started := make(chan string, 2)
+	release1 := make(chan struct{})
+	release2 := make(chan struct{})
+	rec := wireOutsideHub(t, n, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		if method != "interaction.create" {
+			return map[string]any{"ok": true}, nil
+		}
+		var p struct {
+			Interaction proto.Interaction `json:"interaction"`
+		}
+		_ = json.Unmarshal(raw, &p)
+		started <- p.Interaction.ToolUseID
+		if p.Interaction.ToolUseID == "toolu_mid_1" {
+			<-release1
+		} else {
+			<-release2
+		}
+		allow := true
+		return proto.Resolution{Allow: &allow}, nil
+	})
+
+	bgTranscript(t, home, home, sidA, "build")
+	writeOutsideClaude(t, home, sidA, "cli", "waiting", nil, nil)
+
+	// Initially listed by herdr pane (not claudeSessions).
+	if s := byID(listSessions(t, n))[sidA]; s.SourceKind != "" {
+		t.Fatalf("expected herdr pane initially, got %+v", s)
+	}
+
+	hookDone := make(chan error, 2)
+	for _, toolID := range []string{"toolu_mid_1", "toolu_mid_2"} {
+		rawIn, _ := json.Marshal(hookInput{
+			HookEventName: "PermissionRequest",
+			SessionID:     sidA,
+			Cwd:           home,
+			ToolName:      "Bash",
+			ToolUseID:     toolID,
+			ToolInput:     json.RawMessage(`{"command":"echo hi"}`),
+		})
+		go func(input json.RawMessage) {
+			_, err := n.handleHook(context.Background(), sockRequest{Kind: "hook", SessionID: sidA, Input: input})
+			hookDone <- err
+		}(rawIn)
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for concurrent hook interaction.create calls")
+		}
+	}
+
+	// Herdr drops the pane mid-hook -> session falls back to claudeSessions.
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	s := byID(listSessions(t, n))[sidA]
+	if s.SourceKind != proto.SourceClaudeTerminal || s.Capabilities == nil || !s.Capabilities.Approve || s.AttentionReason != "" {
+		t.Fatalf("mid-hook fallback row=%+v caps=%+v", s, s.Capabilities)
+	}
+
+	// Completing the first hook must keep Approve=true while the second hook is still active.
+	close(release1)
+	if err := <-hookDone; err != nil {
+		t.Fatalf("first hook error: %v", err)
+	}
+	s = byID(listSessions(t, n))[sidA]
+	if s.Capabilities == nil || !s.Capabilities.Approve || s.AttentionReason != "" {
+		t.Fatalf("after first of two hooks finished: row=%+v caps=%+v", s, s.Capabilities)
+	}
+
+	// Completing the second hook clears Approve=false and pushes sessions.changed.
+	rec.clear()
+	close(release2)
+	if err := <-hookDone; err != nil {
+		t.Fatalf("second hook error: %v", err)
+	}
+	waitFor(t, "approve cleared after last concurrent hook", func() bool {
+		for _, ev := range rec.snapshot() {
+			if ev.kind == "sessions.changed" {
+				s := byID(ev.sessions)[sidA]
+				if s.Capabilities != nil && !s.Capabilities.Approve && s.AttentionReason == proto.AttentionClaudeComputer {
+					return true
+				}
+			}
+		}
+		return false
+	})
 }

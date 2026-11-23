@@ -137,18 +137,32 @@ type hookFlights struct {
 }
 
 func (h *hookFlights) enter(id string) func() {
+	_, leave := h.enterCount(id)
+	return func() { leave() }
+}
+
+// enterCount records an in-flight call for id, returning whether this is the first active call for id and an idempotent
+// leave function that reports whether leaving dropped id's active count back to zero.
+func (h *hookFlights) enterCount(id string) (first bool, leave func() bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.n == nil {
 		h.n = map[string]int{}
 	}
 	h.n[id]++
-	return func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		if h.n[id]--; h.n[id] <= 0 {
-			delete(h.n, id)
-		}
+	first = h.n[id] == 1
+	h.mu.Unlock()
+	var once sync.Once
+	return first, func() bool {
+		last := false
+		once.Do(func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.n[id]--; h.n[id] <= 0 {
+				delete(h.n, id)
+				last = true
+			}
+		})
+		return last
 	}
 }
 
