@@ -322,6 +322,7 @@ type Service struct {
 	outbound   outboundOnce      // outbound_once.go: one card per hand-off the owner is asked about, none again once allowed
 	dtree      directionTreeBook // direction_tree.go: the direction tree the apps were last told of
 	tview      todoViewBook      // todo_view_push.go: what the apps were told each to-do is filed under
+	trevision  todoRevisionBook  // todo_revision.go: the pushed read's cheap validator
 	offers     routeBook         // route.go: the directions offered for New chats
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench

@@ -5,6 +5,7 @@
 import { act, useEffect, useReducer } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LEGACY_SCHEME } from "../../lib/compatibility";
 import type { Item, Session } from "../../lib/types";
 
 // a mouse (fine pointer) or a touch screen alone, per test
@@ -398,8 +399,9 @@ describe("image-limit Compact and send again (#13045)", () => {
     act(() => upsertSession(captured.session!));
     await flush();
     expect(bodies).toHaveLength(1);
-    expect(bodies[0].text).toMatch(/<(?:persona|jarvis)-context kind="edit" title="Doc">line 1<\/(?:persona|jarvis)-context>/);
-    expect(bodies[0].text).toMatch(/<(?:persona|jarvis)-file kind="file" path="\/tmp\/a\.pdf" name="a\.pdf"\/>/);
+    const tag = `(?:persona|${LEGACY_SCHEME})`;
+    expect(bodies[0].text).toMatch(new RegExp(`<${tag}-context kind="edit" title="Doc">line 1</${tag}-context>`));
+    expect(bodies[0].text).toMatch(new RegExp(`<${tag}-file kind="file" path="/tmp/a\\.pdf" name="a\\.pdf"/>`));
     expect(bodies[0].text).toContain("帮我看看这张图");
     expect(bodies[0].images).toEqual([{ mime: "image/png", data: "UE5H" }]);
   });

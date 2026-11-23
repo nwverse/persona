@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // quotaAnswer is the quota headers of one answer; an empty resource leaves X-RateLimit-Resource out.
@@ -67,7 +67,7 @@ func TestLowSearchQuotaIsNotTheCoreQuota(t *testing.T) {
 	if c.ratesLow() {
 		t.Error("a low search quota marked the core quota low")
 	}
-	if st := c.Status(context.Background()); st.State != connector.StateOK {
+	if st := c.Status(context.Background()); st.State != connectorwire.StateOK {
 		t.Errorf("status %+v", st)
 	}
 }

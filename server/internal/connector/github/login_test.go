@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -89,7 +90,7 @@ func TestDeviceLogin(t *testing.T) {
 	c.web, c.api = srv.URL, srv.URL
 	c.UseSecrets(sec)
 	c.check(ctx)
-	if st := c.Status(ctx); st.State != connector.StateNotSignedIn || st.Error != notSignedIn || st.Via != "" {
+	if st := c.Status(ctx); st.State != connectorwire.StateNotSignedIn || st.Error != notSignedIn || st.Via != "" {
 		t.Fatalf("before: %+v", st)
 	}
 	if err := connector.Check(c); err != nil {
@@ -97,7 +98,7 @@ func TestDeviceLogin(t *testing.T) {
 	}
 
 	p, err := c.LoginStep(ctx, "", nil)
-	if err != nil || p.Step != "device" || p.Kind != connector.PromptDeviceCode || len(p.Fields) != 0 ||
+	if err != nil || p.Step != "device" || p.Kind != connectorwire.PromptDeviceCode || len(p.Fields) != 0 ||
 		p.UserCode != "ABCD-1234" || p.URL != "https://github.com/login/device" || p.Interval != 5 {
 		t.Fatalf("first step %+v %v", p, err)
 	}
@@ -116,7 +117,7 @@ func TestDeviceLogin(t *testing.T) {
 	if p, err = c.LoginStep(ctx, "device", nil); err != nil || !p.Done || p.Account != "example-user" {
 		t.Fatalf("done %+v %v", p, err)
 	}
-	if st := c.Status(ctx); st.State != connector.StateOK || st.Via != "设备码登录" {
+	if st := c.Status(ctx); st.State != connectorwire.StateOK || st.Via != "设备码登录" {
 		t.Fatalf("after: %+v", st)
 	}
 	var kept deviceLogin
@@ -130,7 +131,7 @@ func TestDeviceLogin(t *testing.T) {
 	c2.web, c2.api = srv.URL, srv.URL
 	c2.UseSecrets(sec)
 	c2.check(ctx)
-	if st := c2.Status(ctx); st.State != connector.StateOK {
+	if st := c2.Status(ctx); st.State != connectorwire.StateOK {
 		t.Fatalf("after a restart: %+v", st)
 	}
 
@@ -142,11 +143,11 @@ func TestDeviceLogin(t *testing.T) {
 	if kept.Token != "" {
 		t.Fatalf("after logout %+v", kept)
 	}
-	if st := c.Status(ctx); st.State != connector.StateNotSignedIn {
+	if st := c.Status(ctx); st.State != connectorwire.StateNotSignedIn {
 		t.Fatalf("signed out: %+v", st)
 	}
 	// Signing in again starts at the code.
-	if p, _ = c.LoginStep(ctx, "", nil); p.Kind != connector.PromptDeviceCode {
+	if p, _ = c.LoginStep(ctx, "", nil); p.Kind != connectorwire.PromptDeviceCode {
 		t.Fatalf("again %+v", p)
 	}
 	mu.Lock()
@@ -187,7 +188,7 @@ func TestDeviceLoginOldClientID(t *testing.T) {
 	c.web, c.api = srv.URL, srv.URL
 	c.UseSecrets(sec)
 	c.check(ctx)
-	if st := c.Status(ctx); st.State != connector.StateOK || st.Account != "example-user" {
+	if st := c.Status(ctx); st.State != connectorwire.StateOK || st.Account != "example-user" {
 		t.Fatalf("the old token: %+v", st)
 	}
 	if err := c.Logout(ctx); err != nil {

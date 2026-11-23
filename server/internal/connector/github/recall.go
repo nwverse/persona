@@ -9,14 +9,14 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
-// Taking back what the assistant wrote (connector.Recaller, docs/extensions/connectors.md "Sent as the user"): a comment can be
+// Taking back what the assistant wrote (connectorwire.Recaller, docs/extensions/connectors.md "Sent as the user"): a comment can be
 // deleted, a review cannot. GitHub's REST API deletes only a review that was never submitted ("Submitted reviews
 // cannot be deleted"), and dismissing one leaves it on the page; there is nothing to call for a review that went out.
 
-var _ connector.Recaller = (*Connector)(nil)
+var _ connectorwire.Recaller = (*Connector)(nil)
 
 // How long a recall may take: all of it (the delete and the lookups after a 404), and one lookup. Variables so that
 // tests can shorten them.
@@ -33,9 +33,9 @@ func (c *Connector) CanRecall(action string, _ time.Duration) bool { return acti
 // redirect (a repository that moved answers 301) and sends it on as a GET, which answers 200 and deletes nothing, so a
 // repository renamed or transferred since the write cannot be recalled (the outcome is unknown). A 404 says the comment
 // is not there, or that the token cannot see it, or cannot delete it: recallGone looks.
-func (c *Connector) Recall(ctx context.Context, m connector.SentMessage) error {
+func (c *Connector) Recall(ctx context.Context, m connectorwire.SentMessage) error {
 	if m.Action != "github_comment" {
-		return fmt.Errorf("%w: GitHub deletes a comment, not a submitted review (%s)", connector.ErrCannotRecall, m.Action)
+		return fmt.Errorf("%w: GitHub deletes a comment, not a submitted review (%s)", connectorwire.ErrCannotRecall, m.Action)
 	}
 	repo, number, err := recallTarget(m.Target)
 	if err != nil {
@@ -44,7 +44,7 @@ func (c *Connector) Recall(ctx context.Context, m connector.SentMessage) error {
 	// The ref goes into the request's path: only the whole number GitHub gave (wholeID), as it wrote it.
 	id, err := strconv.ParseInt(m.Ref, 10, 64)
 	if err != nil || id <= 0 || strconv.FormatInt(id, 10) != m.Ref {
-		return fmt.Errorf("%w: the ledger row has no comment id that GitHub could have given", connector.ErrCannotRecall)
+		return fmt.Errorf("%w: the ledger row has no comment id that GitHub could have given", connectorwire.ErrCannotRecall)
 	}
 	ctx, cancel := context.WithTimeout(ctx, recallTimeout)
 	defer cancel()
@@ -53,20 +53,20 @@ func (c *Connector) Recall(ctx context.Context, m connector.SentMessage) error {
 	case err == nil && code == http.StatusNoContent:
 		return nil
 	case err == nil: // a 2xx that is not the 204 the documentation gives, or a 304: it does not say the comment is gone
-		return fmt.Errorf("%w: GitHub answered %d, not 204", connector.ErrRecallUnknown, code)
+		return fmt.Errorf("%w: GitHub answered %d, not 204", connectorwire.ErrRecallUnknown, code)
 	case code == http.StatusNotFound:
 		return c.recallGone(ctx, repo, number, id, err)
 	case code >= 500: // the request got to GitHub, which may have deleted the comment before it failed
-		return fmt.Errorf("%w: %v", connector.ErrRecallUnknown, err)
+		return fmt.Errorf("%w: %v", connectorwire.ErrRecallUnknown, err)
 	case code == http.StatusUnauthorized: // the token was refused: nothing was deleted
-		return fmt.Errorf("%w: %w", connector.ErrRecallUnavailable, err)
+		return fmt.Errorf("%w: %w", connectorwire.ErrRecallUnavailable, err)
 	case code != 0: // refused: 403 (the token may not delete it), 422, a redirect that was not followed
 		return err
 	case beforeSending(err): // no request went out: no token, no machine, a bad proxy
-		return fmt.Errorf("%w: %w", connector.ErrRecallUnavailable, err)
+		return fmt.Errorf("%w: %w", connectorwire.ErrRecallUnavailable, err)
 	}
 	// No answer at all (a timeout, a connection that broke): the comment may be gone.
-	return fmt.Errorf("%w: %v", connector.ErrRecallUnknown, err)
+	return fmt.Errorf("%w: %v", connectorwire.ErrRecallUnknown, err)
 }
 
 func commentPath(repo string, id int64) string {
@@ -115,7 +115,7 @@ func recallTarget(raw json.RawMessage) (string, int, error) {
 			}
 		}
 	}
-	return "", 0, fmt.Errorf("%w: the ledger row does not say which repository and issue the comment is on", connector.ErrCannotRecall)
+	return "", 0, fmt.Errorf("%w: the ledger row does not say which repository and issue the comment is on", connectorwire.ErrCannotRecall)
 }
 
 // beforeSending says whether err is one that stopped a request before it went out: the token could not be had (the

@@ -327,10 +327,14 @@ type relayBook struct {
 	holds    map[string]*time.Timer // by conversation: drains its queue again when the hold for the owner ends
 	stuck    map[string]relayMsg    // by conversation: the message that could not go in at the last drain (pickLocked)
 	// failedAt: by conversation, when a delivery into it last failed because it did not take the message (it did not
-	// start, its computer was away): that message, when nothing else may go, waits relayRetryGap for its next try, so a
-	// conversation that cannot start is not cold-started again on every session list (#10194). In memory: a restart
-	// tries at once.
+	// start, its computer was away): that message, when nothing else may go, waits relayRetryGap for its next try. A
+	// role-change refusal instead holds every message (roleChange below): passing over the last failed message must not
+	// let another one retry that refusal on every session list (#10194, #13918). In memory: a restart tries at once.
 	failedAt map[string]time.Time
+	// roleChange: by conversation, a role-change busy refusal waits for the old process's work to end. The value says a
+	// session list has shown that work since the refusal. While shown, no message goes; the first later idle list releases
+	// at once. If no list ever shows it, failedAt remains the bounded fallback (#13918). In memory, like failedAt.
+	roleChange map[string]bool
 	// ownerTurns: the conversations whose round the owner is on, in memory only (#6394). While one is set, every
 	// queued message waits, whatever its rank: the owner's own message always goes before the queue. A restart falls
 	// back on the persisted Spoke presence window (relay_presence.go).
@@ -414,6 +418,7 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 		b.quoted, b.roundsFrom = map[string]time.Time{}, map[string]time.Time{}
 		b.stuck = map[string]relayMsg{}
 		b.failedAt = map[string]time.Time{}
+		b.roleChange = map[string]bool{}
 		b.ownerTurns = map[string]ownerTurn{}
 	}
 	return true
@@ -865,6 +870,8 @@ func (msg relayMsg) source() *proto.MessageSource {
 		return &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: msg.From, Title: msg.FromTitle}
 	case superviseTool:
 		return &proto.MessageSource{Kind: proto.SourceSupervision}
+	case prFollowupTool, taskEndTool, relayRefusedTool, spawnNoticeTool, chatReplyTool:
+		return &proto.MessageSource{Kind: proto.SourceNotice, Title: "Persona"}
 	default:
 		return nil
 	}
@@ -900,7 +907,7 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
 	}
-	s.availInput(machine, to, relayKind(msg), time.Now()) // a notice has no message source of its own
+	s.availInput(machine, to, relayKind(msg), time.Now())
 	if msg.Tool == superviseTool {
 		// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
 		s.holdPushes(ctx, to)
@@ -1078,34 +1085,58 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 		b.mu.Unlock()
 		return
 	}
-	var due []string
+	type dueRelay struct {
+		id         string
+		background bool // the list used for this try showed background work
+	}
+	var due []dueRelay
 	held := map[string]time.Duration{}
 	now := time.Now()
 	for _, c := range list {
-		if len(b.st.Queue[c.SessionID]) > 0 && c.Status != proto.StatusWorking && !c.Starting && !b.draining[c.SessionID] && !b.replacing[c.SessionID] {
-			i, wait := b.pickLocked(c.SessionID, leads[c.SessionID], now)
-			if last, stuck := b.stuck[c.SessionID]; stuck && i >= 0 && b.st.Queue[c.SessionID][i] == last {
-				// Only the message it failed to take is left to go: tried again after a gap, not on every list.
-				if gap := relayRetryGap - now.Sub(b.failedAt[c.SessionID]); gap > 0 {
-					held[c.SessionID] = gap
-					continue
-				}
-			}
-			if i < 0 {
-				held[c.SessionID] = wait
+		id := c.SessionID
+		if len(b.st.Queue[id]) == 0 || b.draining[id] || b.replacing[id] {
+			continue
+		}
+		background := backgroundRunning(c)
+		sawWork, waiting := b.roleChange[id]
+		if waiting && (c.Status == proto.StatusWorking || c.Starting || background) {
+			// A role-change refusal is an event gate, not a poll: the first list with all of the old process's work over
+			// releases it. This also covers background tasks, which do not make the node's foreground Status working.
+			b.roleChange[id] = true
+			continue
+		}
+		if c.Status == proto.StatusWorking || c.Starting {
+			continue
+		}
+		if waiting && sawWork {
+			delete(b.roleChange, id)
+			delete(b.failedAt, id) // work completion is the retry event; do not add another gap after it
+			waiting = false
+		}
+		i, wait := b.pickLocked(id, leads[id], now)
+		if i < 0 {
+			held[id] = wait
+			continue
+		}
+		last, stuck := b.stuck[id]
+		if waiting || (stuck && b.st.Queue[id][i] == last) {
+			// A role-change refusal belongs to the conversation: pickLocked passing over b.stuck must not let two
+			// messages alternate around the gap (#13918). Other failures keep their per-message fairness (#10194).
+			if gap := relayRetryGap - now.Sub(b.failedAt[id]); gap > 0 {
+				held[id] = gap
 				continue
 			}
-			b.frontLocked(c.SessionID, i)
-			b.draining[c.SessionID] = true
-			due = append(due, c.SessionID)
 		}
+		b.frontLocked(id, i)
+		b.draining[id] = true
+		due = append(due, dueRelay{id: id, background: background})
 	}
 	b.mu.Unlock()
 	for id, wait := range held {
 		s.drainAfter(machine, id, wait)
 	}
-	for _, id := range due {
-		go func(id string) {
+	for _, next := range due {
+		go func(id string, background bool) {
 			// A transfer must finish before a supervision drain selects its routing state.
 			s.supervise.routingMu.RLock()
 			defer s.supervise.routingMu.RUnlock()
@@ -1191,8 +1222,14 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			}
 			delete(b.stuck, id)
 			delete(b.failedAt, id)
+			delete(b.roleChange, id)
 			if err != nil && !keep && !leaves && failure != relayFailedInDoubt {
 				b.failedAt[id] = time.Now()
+				if roleChangeBusy(err) {
+					// If this try's own list already showed background work, the next all-idle list is its completion
+					// event. Otherwise one active list must be seen first; absent that, relayRetryGap is the fallback.
+					b.roleChange[id] = background
+				}
 			}
 			taken := false
 			var replay []superviseSignal
@@ -1237,7 +1274,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			} else if !keep && err != nil && !refused { // relayRefused logged a refusal
 				s.logf("relay to %s: %v", short(id), err)
 			}
-		}(id)
+		}(next.id, next.background)
 	}
 }
 
