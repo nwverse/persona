@@ -3102,6 +3102,8 @@ final class AppModel {
         case .hello(let hello):
             let previousSurfaceCapabilities = extensionSurfaceCapabilities
             link(group)?.received(hello)
+            // The hub may turn modules off, or on again (#13849, docs/apple/ios.md "Modules"); kept per hub.
+            ModuleState.shared.heard(Set(hello.features), from: group, isHub: isHub)
             #if os(iOS)
             if isHub { Task { await HealthIntakeSync.shared.refresh(model: self) } }
             #endif
@@ -4808,6 +4810,7 @@ final class AppModel {
 
     /// Another group was picked for the hub-level pages: their data starts over from that group's.
     func hubChanged() {
+        ModuleState.shared.follow(hub?.group ?? "", features: hub?.features ?? []) // the modules this hub allows (#13849)
         if let g = hub?.group {
             assistantConfig = heldAssistant(g)
         }

@@ -26,9 +26,11 @@ import (
 // recordingLayer is the module as the core reaches it.
 type recordingLayer = recordinghost.Layer
 
-// loadRecording makes the module's layer when the kernel loaded it (after loadModules).
-func (s *Service) loadRecording() {
-	if s.modules == nil || !s.modules.Loaded(recordinghost.ModuleID) {
+// loadRecording makes the module's layer when the build has the module and the modules row does not switch it off
+// (off, Options.ModulesOff): as the kernel decides, before it loads, since the module's routes are registered with the
+// knowledge base's (kbRoutes).
+func (s *Service) loadRecording(off []string) {
+	if slices.Contains(off, recordinghost.ModuleID) {
 		return
 	}
 	if rec, ok := recordinghost.New(recordingHost{s}); ok {

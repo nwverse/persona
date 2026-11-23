@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/kbwire"
 )
 
@@ -39,10 +38,10 @@ func archiveState(it issue) (string, time.Time) {
 // or closed, or reopened after it had ended, at the state's time (for a reopen, the thread's update). Its ID is the
 // state and that time, so a replay or a cursor that starts over sends the same line, which the knowledge base keeps
 // once.
-func archiveStateLine(it issue, prev string) (kb.SourceMessage, bool) {
+func archiveStateLine(it issue, prev string) (kbwire.SourceMessage, bool) {
 	state, at := archiveState(it)
 	if state == prev {
-		return kb.SourceMessage{}, false
+		return kbwire.SourceMessage{}, false
 	}
 	var text string
 	switch state {
@@ -52,23 +51,23 @@ func archiveStateLine(it issue, prev string) (kb.SourceMessage, bool) {
 		text = "（状态）已关闭" // i18n-ignore: archive data
 	default:
 		if !kbwire.ChatEnded(prev) {
-			return kb.SourceMessage{}, false // open, and never seen ended: nothing happened
+			return kbwire.SourceMessage{}, false // open, and never seen ended: nothing happened
 		}
 		at = it.UpdatedAt.UTC()
 		text = "（状态）重新打开" // i18n-ignore: archive data
 	}
-	return kb.SourceMessage{ID: fmt.Sprintf("state-%s-%d", state, at.Unix()), SenderName: "GitHub", Type: "SYSTEM", Text: text, At: at}, true
+	return kbwire.SourceMessage{ID: fmt.Sprintf("state-%s-%d", state, at.Unix()), SenderName: "GitHub", Type: "SYSTEM", Text: text, At: at}, true
 }
 
 // archiveChat is the knowledge-base chat of thread it, with its state.
-func archiveChat(it issue) kb.SourceChat {
+func archiveChat(it issue) kbwire.SourceChat {
 	kind := "issue"
 	if it.PullRequest != nil {
 		kind = "pr"
 	}
 	owner, name, _ := strings.Cut(it.repo(), "/")
 	state, at := archiveState(it)
-	return kb.SourceChat{ID: fmt.Sprintf("%s-%s-%d", owner, name, it.Number), Name: fmt.Sprintf("%s#%d %s", name, it.Number, it.Title),
+	return kbwire.SourceChat{ID: fmt.Sprintf("%s-%s-%d", owner, name, it.Number), Name: fmt.Sprintf("%s#%d %s", name, it.Number, it.Title),
 		Kind: kind, UpdatedAt: it.UpdatedAt, State: state, StateAt: at, SourceURL: it.HTMLURL}
 }
 
@@ -134,7 +133,7 @@ func noteArchiveState(cur *archiveCursor, thread string, it issue) {
 // it sends; limited: it stopped for a rate limit, the thread still first in the queue, to be read once the limit lifts.
 // A thread that can't be read for good (archiveGone, or a name the cursor holds wrongly) leaves the queue without a
 // state, so it never holds the archive up; any other failure ends the call, to be tried again.
-func (c *Connector) archiveRecheck(ctx context.Context, cur *archiveCursor, limit int) (chats []kb.SourceChat, lines [][]kb.SourceMessage, n int, limited bool, err error) {
+func (c *Connector) archiveRecheck(ctx context.Context, cur *archiveCursor, limit int) (chats []kbwire.SourceChat, lines [][]kbwire.SourceMessage, n int, limited bool, err error) {
 	for len(cur.Recheck) > 0 && n < limit {
 		if c.ratesLow() {
 			return chats, lines, n, true, nil
@@ -150,7 +149,7 @@ func (c *Connector) archiveRecheck(ctx context.Context, cur *archiveCursor, limi
 			it, code, h, readErr := c.archiveIssue(ctx, repo, number)
 			switch {
 			case readErr == nil:
-				var msgs []kb.SourceMessage
+				var msgs []kbwire.SourceMessage
 				if line, ok := archiveStateLine(it, cur.States[thread]); ok {
 					msgs = append(msgs, line)
 				}

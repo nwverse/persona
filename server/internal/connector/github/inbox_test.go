@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // fakeNotifications is GitHub's notifications and the threads they are about, on made-up data. The test changes
@@ -116,8 +116,8 @@ func openPR(reviewers string) string {
 		"html_url":"https://github.com/example-org/example-repo/pull/12","requested_reviewers":[` + reviewers + `]}`
 }
 
-func things(t *testing.T, c *Connector) map[string]connector.InboxThing {
-	out := map[string]connector.InboxThing{}
+func things(t *testing.T, c *Connector) map[string]connectorwire.InboxThing {
+	out := map[string]connectorwire.InboxThing{}
 	list, _ := c.Collect(context.Background())
 	for _, th := range list {
 		out[th.Thread] = th
@@ -187,7 +187,7 @@ func TestNotificationsBecomeThings(t *testing.T) {
 	f.notifications = "[" + note("1", "review_requested", "PullRequest", "https://api.github.com"+api12, t2) + "]"
 	c.poll(context.Background())
 	got = things(t, c)
-	if got["example-org/example-repo#12"].Done != connector.DoneReplied {
+	if got["example-org/example-repo#12"].Done != connectorwire.DoneReplied {
 		t.Errorf("answered: %+v", got["example-org/example-repo#12"])
 	}
 	if got["example-org/example-repo#7"].Read {
@@ -208,7 +208,7 @@ func TestReviewRequestWithdrawnOrMerged(t *testing.T) {
 	f.notifications = "[" + note("1", "review_requested", "PullRequest", "https://api.github.com"+api12, t1) + "]"
 	c := f.server(t)
 	c.poll(context.Background())
-	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneRead || th.ThreadState != "open" {
+	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connectorwire.DoneRead || th.ThreadState != "open" {
 		t.Errorf("withdrawn: %+v", th)
 	}
 
@@ -216,7 +216,7 @@ func TestReviewRequestWithdrawnOrMerged(t *testing.T) {
 	f.notifications = "[" + note("1", "review_requested", "PullRequest", "https://api.github.com"+api12, t2) + "]"
 	c.inbox.fullAt = time.Time{}
 	c.poll(context.Background())
-	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneReplied {
+	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connectorwire.DoneReplied {
 		t.Errorf("reviewed: %+v", th)
 	}
 
@@ -224,7 +224,7 @@ func TestReviewRequestWithdrawnOrMerged(t *testing.T) {
 	f.notifications = "[" + note("1", "review_requested", "PullRequest", "https://api.github.com"+api12, fixtureAt(10*time.Hour)) + "]"
 	c.inbox.fullAt = time.Time{}
 	c.poll(context.Background())
-	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneRead || th.ThreadState != "merged" {
+	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connectorwire.DoneRead || th.ThreadState != "merged" {
 		t.Errorf("merged: %+v", th)
 	}
 }
@@ -239,7 +239,7 @@ func TestFewRequestsLeftReadsNoThreads(t *testing.T) {
 	h.Set("X-RateLimit-Remaining", "100")
 	h.Set("X-RateLimit-Reset", "9999999999")
 	c.noteRate(h)
-	if st := c.Status(context.Background()); st.State != connector.StateRateLimited || !strings.Contains(st.Error, "只看通知") {
+	if st := c.Status(context.Background()); st.State != connectorwire.StateRateLimited || !strings.Contains(st.Error, "只看通知") {
 		t.Fatalf("%+v", st)
 	}
 	f.mu.Lock()
@@ -257,14 +257,14 @@ func TestReplyComments(t *testing.T) {
 	f := &fakeNotifications{prs: map[string]string{}, comments: map[string]string{}}
 	f.notifications = "[]"
 	c := f.server(t)
-	if err := c.Reply(context.Background(), connector.InboxReply{Thread: "example-org/example-repo#12", Text: "看过了"}); err != nil {
+	if err := c.Reply(context.Background(), connectorwire.InboxReply{Thread: "example-org/example-repo#12", Text: "看过了"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.posted) != 1 || f.posted[0] != `/repos/example-org/example-repo/issues/12/comments {"body":"看过了"}` {
 		t.Fatalf("%v", f.posted)
 	}
 	for _, bad := range []string{"notification:3", "../x#1", "example-org/example-repo#x"} {
-		if err := c.Reply(context.Background(), connector.InboxReply{Thread: bad, Text: "x"}); err == nil {
+		if err := c.Reply(context.Background(), connectorwire.InboxReply{Thread: bad, Text: "x"}); err == nil {
 			t.Errorf("%s was replied to", bad)
 		}
 	}
