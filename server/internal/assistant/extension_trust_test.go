@@ -65,8 +65,8 @@ func trustService(t *testing.T) (*Service, *trustMemStore) {
 	return s, st
 }
 
-// listedIDs are the conversation ids assistant.conversations shows, asked plainly (ext "") or for extension ext.
-func listedIDs(t *testing.T, s *Service, ext string) string {
+// extensionListedIDs are the conversation ids assistant.conversations shows, asked plainly (ext "") or for extension ext.
+func extensionListedIDs(t *testing.T, s *Service, ext string) string {
 	t.Helper()
 	method, params := assistantwire.MethodAssistantConversations, `{"since":"2026-01-02T00:00:00Z"}`
 	if ext != "" {
@@ -90,25 +90,25 @@ func listedIDs(t *testing.T, s *Service, ext string) string {
 func TestExtensionTrustDecidesReads(t *testing.T) {
 	ctx := context.Background()
 	s, st := trustService(t)
-	if got := listedIDs(t, s, ""); got != "main-0000-0000" {
+	if got := extensionListedIDs(t, s, ""); got != "main-0000-0000" {
 		t.Fatalf("plain read: %s", got)
 	}
-	if got := listedIDs(t, s, "qa-memory"); got != "main-0000-0000" {
+	if got := extensionListedIDs(t, s, "qa-memory"); got != "main-0000-0000" {
 		t.Fatalf("an extension the user never marked: %s", got)
 	}
 	_ = st.SetExtensionTrust(ctx, "qa-memory", assistantwire.ExtensionTrustOwner, nil, "user")
-	if got := listedIDs(t, s, "qa-memory"); got != "main-0000-0000,slee-0000-0000" {
+	if got := extensionListedIDs(t, s, "qa-memory"); got != "main-0000-0000,slee-0000-0000" {
 		t.Fatalf("the user's own extension: %s", got)
 	}
-	if got := listedIDs(t, s, "qa-other"); got != "main-0000-0000" {
+	if got := extensionListedIDs(t, s, "qa-other"); got != "main-0000-0000" {
 		t.Fatalf("another extension, while one is the user's own: %s", got)
 	}
 	_ = st.SetExtensionTrust(ctx, "qa-other", assistantwire.ExtensionTrustThirdParty, []string{categoryFinance}, "user")
-	if got := listedIDs(t, s, "qa-other"); got != "main-0000-0000" {
+	if got := extensionListedIDs(t, s, "qa-other"); got != "main-0000-0000" {
 		t.Fatalf("a third party granted finance only: %s", got)
 	}
 	_ = st.SetExtensionTrust(ctx, "qa-other", assistantwire.ExtensionTrustThirdParty, []string{categoryHealth}, "user")
-	if got := listedIDs(t, s, "qa-other"); got != "main-0000-0000,slee-0000-0000" {
+	if got := extensionListedIDs(t, s, "qa-other"); got != "main-0000-0000,slee-0000-0000" {
 		t.Fatalf("a third party granted health: %s", got)
 	}
 
@@ -116,10 +116,10 @@ func TestExtensionTrustDecidesReads(t *testing.T) {
 	if err := s.tagConversation(ctx, "main-0000-0000", []string{categoryFinance}, infoTaggedByModel, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := listedIDs(t, s, "qa-third"); got != "" {
+	if got := extensionListedIDs(t, s, "qa-third"); got != "" {
 		t.Fatalf("a third party, the main conversation tagged finance: %q", got)
 	}
-	if got := listedIDs(t, s, "qa-memory"); got != "main-0000-0000,slee-0000-0000" {
+	if got := extensionListedIDs(t, s, "qa-memory"); got != "main-0000-0000,slee-0000-0000" {
 		t.Fatalf("the user's own extension, the main conversation tagged finance: %s", got)
 	}
 
