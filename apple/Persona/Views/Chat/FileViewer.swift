@@ -226,23 +226,12 @@ struct FileViewer: View {
         .environment(\.viewImages, nil)
         .environment(\.openURL, OpenURLAction { url in
             guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
-                #if os(macOS)
-                return LinkPolicy.system(url)
-                #else
                 return .systemAction
-                #endif
             }
             openLink(url)
             return .handled
         })
-        #if os(macOS)
-        .macLinkPanel($link, key: key)
-        // Outside the panel: its GeometryReader takes any size, so a minimum inside it never reached the sheet and the
-        // sheet opened at its toolbar's 470 × 80 (#1502). The stack's bars are the sheet window's, still on top of this.
-        .macLargeSheet(bars: true)
-        #else
         .sheet(item: $link) { target in LinkSheet(target: target, key: key) }
-        #endif
     }
 
     private func openLink(_ url: URL) {

@@ -105,6 +105,9 @@ type fakeCIExtensions struct {
 	call func(context.Context, string, int) (github.PRCheckSnapshot, time.Time, bool, error)
 }
 
+// ConnectorTool: none of its tools is a connector's.
+func (f fakeCIExtensions) ConnectorTool(string) bool { return false }
+
 func (f fakeCIExtensions) PRChecks(ctx context.Context, repo string, number int) (github.PRCheckSnapshot, time.Time, bool, error) {
 	return f.call(ctx, repo, number)
 }

@@ -96,11 +96,9 @@ struct NeedsYouWaitingCard: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                #if !os(macOS)
                 if !Self.onComputer(session) {
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                 }
-                #endif
             }
             if let line = Self.line(session) {
                 Text(line)
@@ -145,14 +143,7 @@ struct NeedsYouWaitingCard: View {
     /// The Mac: under the title, after the icon's column, as the cards' lines sit (`InteractionPreviewCard`).
     private struct UnderTitle: ViewModifier {
         func body(content: Content) -> some View {
-            #if os(macOS)
-            HStack(spacing: Theme.Space.s) {
-                Spacer(minLength: 0).scaledFrame(width: Theme.Size.icon)
-                content
-            }
-            #else
             content
-            #endif
         }
     }
 

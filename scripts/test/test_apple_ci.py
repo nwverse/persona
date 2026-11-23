@@ -277,17 +277,21 @@ class AppleCIPreparationTests(unittest.TestCase):
     stop_watcher() {
       local code=$?
       trap - EXIT TERM INT
-      : > "$watch_log/observer.stop"
+      # A fast probe may finish while the product checks are still running.
+      # Give those bounded commands the existing short drain before asking the
+      # observer to stop its polling, then let final evidence finish naturally.
       for _ in $(seq 1 50); do
+        [ -e "$watch_log/product-ready" ] && break
         kill -0 "$watcher" 2>/dev/null || break
         sleep 0.1
       done
-      # A collector child can outlive both its parent and the watcher.
-      # Close the owned group even after the watcher leader has exited.
+      : > "$watch_log/observer.stop"
+      # The observer stops polling after its bounded product phase, then
+      # completes final evidence. The outer 900-second deadline still owns a
+      # stuck watcher; never kill it before that final collection.
+      wait "$watcher" || true
+      # Close any remaining descendant after the watcher has finished.
       kill -KILL "-$watcher" 2>/dev/null || true
-      if kill -0 "$watcher" 2>/dev/null; then
-        kill -KILL "$watcher" 2>/dev/null || true
-      fi
       wait "$watcher" || true
       exit "$code"
     }
@@ -323,6 +327,29 @@ class AppleCIPreparationTests(unittest.TestCase):
             current = current.replace(' || [ "$LANE" = ios-ipad-diagnostic ]', '').replace('|ios-ipad-diagnostic', '')
             current = current.replace('      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; diagnostics="$9"; lane="${10}"; shift 10',
                                       '      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8')
+            current = current.replace('''        for _ in $(seq 1 50); do
+          [ -e "$watch_log/product-ready" ] && break
+          kill -0 "$watcher" 2>/dev/null || break
+          sleep 0.1
+        done
+        : > "$watch_log/observer.stop"
+        # Let the stop-aware observer finish bounded final evidence. The
+        # existing readiness deadline remains the hard outer bound.
+        wait "$watcher" || true
+        if kill -0 "$watcher" 2>/dev/null; then
+          kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
+        fi
+        wait "$watcher" || true
+''', '''        : > "$watch_log/observer.stop"
+        for _ in $(seq 1 50); do
+          kill -0 "$watcher" 2>/dev/null || break
+          sleep 0.1
+        done
+        if kill -0 "$watcher" 2>/dev/null; then
+          kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
+        fi
+        wait "$watcher" || true
+''')
             current = current.replace('      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "$DIAGNOSTICS" "$LANE" "${IOS_COMMON[@]}" \\',
                                       '      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "${IOS_COMMON[@]}" \\')
             current = current.replace('        if [ "$lane" = ios-ipad-diagnostic ]; then\n          timeout --kill-after=5s 180s python3 "$ci_root/scripts/ci/apple_diagnostics.py" \\\n            "$output" "$diagnostics" --scope regular || true\n        fi\n', '')

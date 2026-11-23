@@ -149,6 +149,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return fmt.Sprintf("Task %s is already accepted and closed.", t.ID) + terminalCleanupWords(terminalCleanupStatus(plan)), nil
 		}
 	}
+	if decided && slices.ContainsFunc(decision.Options, func(o DecisionOption) bool { return terminalResumeLabel(o.Label) }) {
+		return "", errors.New("Resume on a terminal page is an action only the owner can perform. Put that instruction in the reason and give options the supervisor can carry out, such as starting a replacement or waiting for the owner. A decision button cannot resume an Agent")
+	}
 	if err := restated(t, a.Verdict, decision); err != nil {
 		return "", err
 	}
@@ -360,7 +363,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b.mu.Lock()
 	b.init()
 	var keys []string
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigAllStopped, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigParkedDue} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigAllStopped, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigParkedDue, sigCardlessWait} {
 		key := t.ID + "|" + k
 		delete(b.pending, key) // reviewed: what waited is answered
 		keys = append(keys, key)
