@@ -54,6 +54,11 @@ const (
 	MethodKeepUndelivered = "assistant.keep_undelivered"
 )
 
+// InboxPermissionModeParam is manager-only authorization metadata on assistant.send, session.send and
+// assistant.model. It carries the AI twin's own saved mode separately from the caller-controlled permission_mode.
+// Older nodes ignore it and retain their default clamp; newer nodes never treat its absence as permission to bypass.
+const InboxPermissionModeParam = "inbox_permission_mode"
+
 // CodeUndeliveredAhead: SendParams refuses the owner's message because older ones to the same conversation are kept
 // undelivered (MethodKeepUndelivered): the hub keeps this one behind them instead of sending it first.
 const CodeUndeliveredAhead = "undelivered_ahead"
@@ -67,7 +72,9 @@ const CodeDeliveryUnknown = "delivery_unknown"
 // (docs/protocol/protocol.md "hub ↔ node"), passed through by the hub's device.call like the others.
 const (
 	DeviceAssistantDirectory = "assistant.directory" // {path} -> {cwd}; validates an existing directory without writes
-	// DeviceAssistantPrepare: {dir, claude_md, work_guide_md?, connectors, clis, plugin_skills} → {cwd, plugin_skills_need}.
+	// DeviceAssistantPrepare: {dir, claude_md, work_guide_md?, connectors, clis, plugin_skills, deny_dirs?} → {cwd,
+	// plugin_skills_need}. deny_dirs: [{dir, track}], the track directories the assistant's other conversations' Read
+	// and Edit are denied (nodeproto.DenyDirs).
 	DeviceAssistantPrepare   = "assistant.prepare"
 	DeviceAssistantExecution = "assistant.execution" // {session_id} → proto.AssistantExecution
 	// DeviceAssistantGuestPrepare: {dir, claude_md} → {cwd}: a guest conversation's directory (assistant/guest.go), only

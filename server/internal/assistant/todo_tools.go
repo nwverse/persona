@@ -161,6 +161,9 @@ func (s *Service) toolTodoGet(ctx context.Context, machine, self string, args js
 	var b strings.Builder
 	b.WriteString(todoLine(t, now, loc) + "\n")
 	fmt.Fprintf(&b, "created %s, updated %s\n", t.CreatedAt.In(loc).Format(toolTimeLayout), t.UpdatedAt.In(loc).Format(toolTimeLayout))
+	if brief, ok := s.briefOfTodo(t.ID); ok {
+		fmt.Fprintf(&b, "scope_revision: %s\n", brief.scopeRevision().Format(time.RFC3339Nano))
+	}
 	if t.failedStart() {
 		// Stored done (#1077), but nothing was done: it is open and waits on the owner, as the app shows it (#10365).
 		fmt.Fprintf(&b, "did not start %s: not done, it still waits on the owner; task_retry starts it again (optionally with "+
@@ -344,7 +347,7 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		}
 		return "Concern recorded (it stays open until you report its outcome with concern_report): " + todoLine(t, now, loc), nil
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_create", title, args); err != nil || !ok {
+	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_create", "", title, args); err != nil || !ok {
 		return todoNotAllowed(err)
 	}
 	if s.isLeader(ctx, self) {
@@ -441,7 +444,7 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 	if !changed {
 		return "", errors.New("nothing to change: give title, notes, due, remind, priority, project, part_of or after")
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_update", t.Title, args); err != nil || !ok {
+	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_update", "", t.Title, args); err != nil || !ok {
 		return todoNotAllowed(err)
 	}
 	out, err := s.editTodo(ctx, t.ID, e)
@@ -476,7 +479,7 @@ func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, 
 		if err != nil || said != "" {
 			return said, err
 		}
-	} else if ok, err := s.confirmOutbound(ctx, machine, self, name, t.Title, args); err != nil || !ok {
+	} else if ok, err := s.confirmOutbound(ctx, machine, self, name, "", t.Title, args); err != nil || !ok {
 		return todoNotAllowed(err)
 	}
 	out, err := s.editTodo(ctx, t.ID, db.TodoEdit{Done: &complete})

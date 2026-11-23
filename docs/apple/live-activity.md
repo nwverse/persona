@@ -306,6 +306,15 @@ Each received push redraws both the Dynamic Island and the Lock Screen, so the h
 - Tapping the activity itself (compact, Lock Screen): with one Agent, open it (`persona://open?machine=…&session=…`); with several, simply return to the App (`persona://open`), at the page and position where you left (a list stays a list, a chat stays the same chat and line; if the system ended the App, cold launch restores the last chat and the reading position recorded on backgrounding). Each expanded-view row opens its own session. Before 2026-10-29 it always opened the first item; the user reported "tapping the Dynamic Island goes into some Agent".
 - When the Lock Screen draws a single request (the one with buttons, or the one nameless line such as "A permission request is waiting" when details are hidden), tapping the Lock Screen opens that request's session (`FleetLink.lockScreen`, #4318): it opens what is drawn, not a guess. With several rows or only counts, as above. The Apple Watch Smart Stack (`.small`) still taps as the whole activity.
 - Simulator automation (`-pairURL`) doesn't report tokens, so the hub won't mistake the real device's activity for the simulator's.
+- **One card** (#12982): before applying a fleet (and once at launch) `keepOne` ends every Fleet activity but one, of either
+  attribute type, ended ones included: the running one updated last stays (latest stale date). iOS ends an activity after about
+  eight hours but leaves it on the Lock Screen, stale, for hours; the app no longer saw it and started a new one beside it, then
+  only ever updated the first of the two. The hub does its part: when a phone reports a new activity's token it ends the activity
+  that token replaces, and it ends an activity `fleetRetireBefore` (20 minutes) before `fleetMaxAge`, so the next start never sits
+  beside a card iOS ended.
+- **No push route, no card in the background** (#12982): going to the background while the first group's hub has no push route
+  to this phone (`PushRoute.route == "none"`, e.g. the relay refusing its topic), the app ends the activity: nothing could update
+  or end it any more, and it would keep old counts and an old request for hours. It starts again when the app is back in front.
 
 ## Buttons (`apple/LiveActivity/FleetIntents.swift`)
 
@@ -317,7 +326,13 @@ Each received push redraws both the Dynamic Island and the Lock Screen, so the h
 - `LiveActivityIntent`'s `perform` runs in the App process (the system starts it in the background if needed), so the extension only compiles the types, with empty `perform`
   (`WIDGET_EXTENSION` compilation condition). The App implementation is in `FleetActions`: call resolve, immediately remove this item from the activity (optimistic update; the hub push follows),
   and on failure send a local notification explaining why (410 "already handled" still removes it).
-- Stale content (`isStale`, no hub push for 15 minutes) has no buttons, to avoid tapping Allow on a request already handled.
+- Stale content (`isStale`, no hub push for 15 minutes) has no buttons, to avoid tapping Allow on a request already handled. Since
+  #12982 the stale Lock Screen draws only the persona and "Waiting for hub…": no counts and no rows, which are no longer known to be true.
+- **Buttons only with context** (#12982): Allow / Deny or Approve appear only when the card can say who asks, what, and what
+  approving does. The manager leaves `interaction` empty for a permission without a summary (a bare tool name), a plan without a
+  title and a private ("Just me") permission or plan (`decidable` in `server/internal/assistant/fleet_live.go`); with Lock Screen
+  details off (rows read "A permission request is waiting") both the hub (`forDevice`) and the app (`FleetState.tailored`) drop it
+  from every permission and plan row. Questions and terminal cards never have buttons and keep their `interaction`. Without buttons a tap on the request opens it in the app.
 
 ## Settings (Settings › Notifications › Live Activities)
 

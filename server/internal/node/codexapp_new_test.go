@@ -192,7 +192,8 @@ func TestACodexAppStartRefusesWhatTheAppCannotRun(t *testing.T) {
 		t.Fatalf("seeded %v, opened %v", seed.seeded(), *opened)
 	}
 	n.sessionScope = &nodeSessionScope{codex: t.TempDir()} // a home with no bus: the App is not running for it
-	if _, err := startCodexApp(t, n, map[string]any{"cwd": dir, "launcher": "codex-app", "prompt": "hi"}); err == nil || !strings.Contains(err.Error(), "没在运行") {
+	_, err := startCodexApp(t, n, map[string]any{"cwd": dir, "launcher": "codex-app", "prompt": "hi"})
+	if code, data := refusalOf(t, err); code != "codex_read_only" || data["delivered"] != deliveredNone {
 		t.Fatalf("no App: %v", err)
 	}
 }

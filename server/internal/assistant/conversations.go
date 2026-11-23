@@ -1756,15 +1756,15 @@ func (s *Service) selfSpace(ctx context.Context, self string) (string, bool) {
 }
 
 // knownSpace is selfSpace for the tools that reach other conversations. One that can't be told is taken for the
-// assistant's own: those tools then reach the assistant's conversations only, never the health space's, so health
-// conversations stay out of reach either way (the worst case is a health conversation seeing the assistant's list).
+// assistant's own: those tools then reach the assistant's conversations only, never a space's, so a space's
+// conversations stay out of reach either way (the worst case is a space's conversation seeing the assistant's list).
 func (s *Service) knownSpace(ctx context.Context, self string) (string, error) {
 	space, _ := s.selfSpace(ctx, self)
 	return space, nil
 }
 
-// ownSpaceConversation finds conversation id among those of self's space: the health space's conversations and the
-// assistant's own don't read, rename, archive or message each other.
+// ownSpaceConversation finds conversation id among those of self's space: the conversations of different spaces (the
+// assistant's own included) don't read, rename, archive or message each other.
 func (s *Service) ownSpaceConversation(ctx context.Context, self, id string) (proto.Session, error) {
 	space, err := s.knownSpace(ctx, self)
 	if err != nil {

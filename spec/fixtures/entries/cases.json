@@ -3417,6 +3417,120 @@
       }
     },
     {
+      "name": "supervised_delivery_hold_with_its_supervisor",
+      "description": "An Agent's closeout held a supervised task's delivery for the owner, but no review came since: the hub sends unblock supervisor (#13191). It is its supervisor's to turn into a real decision, park or send on, so it is in In progress with its supervisor reviewing, never in Needs you; the web lists it under Persona reviewing (web_review). Once the supervisor opens needs_user, the hold is unblock user again and the task is in Needs you. A client that does not know the value treats it as not the owner's.",
+      "source": [
+        "web/src/lib/assistant-entries.ts assistantEntries",
+        "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
+        "apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift AssistantEntries.split",
+        "server/internal/assistant/delivery.go currentDelivery",
+        "docs/assistant/agent-work.md"
+      ],
+      "derived": true,
+      "input": {
+        "conversation": "main-chat",
+        "main": "main-chat",
+        "now": "2026-11-10T09:00:00Z",
+        "todos": [
+          {
+            "id": "t-held",
+            "title": "Send the sample notice",
+            "origin": "main-chat",
+            "created_at": "2026-11-10T08:00:00Z",
+            "updated_at": "2026-11-10T08:40:00Z",
+            "agents": [
+              {
+                "machine_id": "mac",
+                "session_id": "w-held",
+                "linked_at": "2026-11-10T08:00:00Z"
+              }
+            ],
+            "supervision": {
+              "supervisor": "main-chat",
+              "state": ""
+            },
+            "delivery": {
+              "state": "pr",
+              "gate": "Approve the test send after the deploy",
+              "unblock": "supervisor",
+              "at": "2026-11-10T08:40:00Z"
+            }
+          },
+          {
+            "id": "t-decided",
+            "title": "Publish the sample page",
+            "origin": "main-chat",
+            "created_at": "2026-11-10T07:00:00Z",
+            "updated_at": "2026-11-10T08:40:00Z",
+            "agents": [
+              {
+                "machine_id": "mac",
+                "session_id": "w-decided",
+                "linked_at": "2026-11-10T07:00:00Z"
+              }
+            ],
+            "supervision": {
+              "supervisor": "main-chat",
+              "state": "needs_user",
+              "reviews": [
+                {
+                  "at": "2026-11-10T08:45:00Z",
+                  "verdict": "needs_user",
+                  "reason": "Approve the release"
+                }
+              ]
+            },
+            "delivery": {
+              "state": "pr",
+              "gate": "Approve the release",
+              "unblock": "user",
+              "at": "2026-11-10T08:40:00Z"
+            }
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac",
+            "session_id": "w-held",
+            "title": "w-held",
+            "cwd": "/home/user/project",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-10T08:40:00Z",
+            "state_since": "2026-11-10T08:40:00Z"
+          },
+          {
+            "machine_id": "mac",
+            "session_id": "w-decided",
+            "title": "w-decided",
+            "cwd": "/home/user/project",
+            "state": "idle",
+            "status": "idle",
+            "updated_at": "2026-11-10T08:40:00Z",
+            "state_since": "2026-11-10T08:40:00Z"
+          }
+        ],
+        "interactions": [],
+        "plans": {},
+        "feed": []
+      },
+      "expected": {
+        "needs_you": [
+          "task:t-decided"
+        ],
+        "running": [
+          "task:t-held"
+        ],
+        "shelved": [],
+        "supervisor_review": [
+          "task:t-held"
+        ],
+        "web_review": [
+          "task:t-held"
+        ]
+      }
+    },
+    {
       "name": "personal_verification_needs_you_before_ask",
       "description": "A personal-verification task has one owner-action home, not running, shelved or completed.",
       "source": [

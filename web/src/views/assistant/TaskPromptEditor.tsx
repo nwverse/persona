@@ -74,8 +74,8 @@ export function TaskPromptEditor({ draft, saved, disabled, onChange }: { draft: 
           commands={commands}
         />
       </fieldset>
-      <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">{t("assistant-taskeditor.input_hint")}</p>
-      <p role={inputError || invalidFile ? "alert" : "status"} className="mt-1 text-[11.5px] text-ink-3">
+      <p className="mt-1 text-submeta leading-relaxed text-ink-3">{t("assistant-taskeditor.input_hint")}</p>
+      <p role={inputError || invalidFile ? "alert" : "status"} className="mt-1 text-submeta text-ink-3">
         {inputError || (invalidFile ? t("assistant-taskeditor.input_changed") : ex && !supported ? t("assistant-taskeditor.input_unsupported") : !current ? t("assistant-taskeditor.input_loading") : "")}
       </p>
     </div>

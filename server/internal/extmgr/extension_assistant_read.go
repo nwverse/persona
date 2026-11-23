@@ -18,6 +18,8 @@ func (ps *extensions) extensionAssistantCall(ctx context.Context, id, method str
 	switch method {
 	case assistantwire.MethodAssistantConversations, assistantwire.MethodAssistantMessages:
 		scope = extension.ScopeAssistantRead
+	case assistantwire.MethodAssistantEntriesList:
+		scope = extension.ScopeAssistantEntriesRead
 	case assistantwire.MethodAssistantMemory:
 		scope = extension.ScopeAssistantMemoryRead
 	default:
@@ -29,6 +31,9 @@ func (ps *extensions) extensionAssistantCall(ctx context.Context, id, method str
 	}
 	if ps.h == nil {
 		return nil, &rpc.Error{Code: assistantwire.CodeAssistantOffline, Message: errAssistantOffline.Error()}
+	}
+	if method == assistantwire.MethodAssistantEntriesList {
+		ctx = assistantwire.WithEntriesReader(ctx, id)
 	}
 	var out json.RawMessage
 	if err := ps.h.kbAsk(ctx, method, params, &out); err != nil { // kbAsk: the manager's answer, assistant_offline coded
