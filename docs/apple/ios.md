@@ -1785,7 +1785,9 @@ every platform are described from #13430; this section is the Apple side.
   without a composer action, into PersonaVision (which compiles all of `Persona/`); the watch and widgets do not include
   it. It is on only in a build with the Meta Wearables SDK (`apple/meta-wearables.yml`). Before the pilot the core named
   its types 8 times in 4 files; now 0.
-- **Adding a module.** Give its sources a directory of their own and add it to `MODULES` in the ratchet; write a type
+- **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
+  `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
+  `GUARDED` in the ratchet; write a type
   conforming to `PersonaModule` there (descriptor, `isAvailable`, `register(into:)`); add it to `Modules.builtIn`; turn
   each core call site into a registry read. If it needs a slot that is not served yet, add the slot's registrar method,
   its registry reader and package tests in the same change. Lower the ratchet's baseline as references go. Folders move
