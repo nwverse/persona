@@ -34,6 +34,11 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 	if err != nil {
 		return "ref_invalid"
 	}
+	if slices.Contains(e.mirrorRepos, r.RepoID) {
+		if used, code := e.sourceFromMirror(ctx, r, transport, ref); used {
+			return code
+		}
+	}
 	// Resolve against what the source advertises now. An earlier failed
 	// preparation can leave tracking branches and tags in this private store.
 	requested := ref.Value
@@ -125,6 +130,148 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 		return "persistence_failed"
 	}
 	return ""
+}
+
+// sourceFromMirror leverages an opt-in managed bare mirror (~/.persona/repos/<repo_id>.git) to
+// populate the workspace's self-contained private bare repository locally (no objects/info/alternates,
+// keeping remote.origin.url pointing at the real upstream transport). Returns used=false whenever
+// the mirror is unavailable, mismatched, or lacks the requested ref so the caller falls back cleanly
+// to direct remote resolution.
+func (e *workspaceExecutor) sourceFromMirror(ctx context.Context, r *taskworkspace.Instance, transport string, ref repository.RequestedRef) (used bool, code string) {
+	if !repository.ValidateMirrorRepoID(r.RepoID) {
+		return false, ""
+	}
+	// Guard against reusing a mirror that belongs to a different repository identity.
+	if _, _, metaPath, _, _, err := e.n.repoMirrorPaths(r.RepoID); err == nil {
+		if existingMeta, ok := readRepoMirrorMeta(metaPath); ok && existingMeta.Identity != (repository.Identity{}) && existingMeta.Identity != r.Input.SourceSnapshot.Identity {
+			return false, ""
+		}
+	}
+	ensureReq := repository.MirrorEnsureRequest{
+		RepoID:     r.RepoID,
+		Identity:   r.Input.SourceSnapshot.Identity,
+		CloneURL:   transport,
+		TTLSeconds: e.mirrorTTLSeconds,
+	}
+	info, err := e.n.ensureRepoMirror(ctx, ensureReq)
+	if err != nil || !info.Exists || info.Path == "" {
+		return false, ""
+	}
+	resolvedRef, advertised, ok := resolveRefInMirror(ctx, info.Path, ref)
+	if !ok && !info.Fetched {
+		// Mirror skipped fetch due to TTL; force-refresh once in case the requested ref was pushed recently.
+		ensureReq.Force = true
+		info, err = e.n.ensureRepoMirror(ctx, ensureReq)
+		if err != nil || !info.Exists || info.Path == "" {
+			return false, ""
+		}
+		resolvedRef, advertised, ok = resolveRefInMirror(ctx, info.Path, ref)
+	}
+	if !ok || advertised == "" {
+		return false, ""
+	}
+	objectFormat := "sha1"
+	if len(advertised) == 64 {
+		objectFormat = "sha256"
+	}
+	if !e.owned(r.CommonDir) {
+		if err := e.claimDir(r.CommonDir); err != nil {
+			return true, "path_conflict"
+		}
+	}
+	for _, path := range []string{filepath.Join(r.CommonDir, "config"), filepath.Join(r.CommonDir, "objects"), filepath.Join(r.CommonDir, "refs")} {
+		if workspaceNoLinks(path) != nil {
+			return true, "git_layout_mismatch"
+		}
+	}
+	if _, err := e.git(ctx, r.CommonDir, "init", "--bare", "--object-format="+objectFormat, "."); err != nil {
+		return true, "source_failed"
+	}
+	// Keep origin pointing at the real upstream repository so subsequent agent pushes/fetches work normally.
+	if _, err := e.git(ctx, r.CommonDir, "config", "remote.origin.url", transport); err != nil {
+		return true, "source_failed"
+	}
+	var commit string
+	if ref.Kind == "commit" {
+		if _, err := e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", info.Path, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+			return true, "source_fetch_failed"
+		}
+		commit, err = workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", advertised+"^{commit}")
+		if err != nil {
+			if _, fetchErr := e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", info.Path, advertised); fetchErr != nil {
+				return true, "ref_not_found"
+			}
+			commit, err = workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", advertised+"^{commit}")
+			if err != nil {
+				return true, "ref_not_found"
+			}
+		}
+	} else {
+		if _, err := e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", info.Path, resolvedRef, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+			return true, "source_fetch_failed"
+		}
+		commit, err = workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+		if err != nil {
+			return true, "ref_not_found"
+		}
+	}
+	r.ResolvedRef = resolvedRef
+	normalized, err := repository.NormalizeRef(repository.RequestedRef{Kind: "commit", Value: commit})
+	if err != nil {
+		return true, "source_failed"
+	}
+	if _, err := e.git(ctx, r.CommonDir, "update-ref", "refs/persona/base", normalized.Value); err != nil {
+		return true, "source_failed"
+	}
+	r.ResolvedCommit = normalized.Value
+	r.State = "source_ready"
+	if err := e.save(); err != nil {
+		return true, "persistence_failed"
+	}
+	return true, ""
+}
+
+func resolveRefInMirror(ctx context.Context, mirrorDir string, ref repository.RequestedRef) (resolvedRef, commit string, ok bool) {
+	switch ref.Kind {
+	case "default":
+		sym, err := workspaceReadGit(ctx, mirrorDir, "symbolic-ref", "--quiet", "HEAD")
+		if err != nil || !strings.HasPrefix(sym, "refs/heads/") {
+			return "", "", false
+		}
+		sha, err := workspaceReadGit(ctx, mirrorDir, "rev-parse", "--verify", sym+"^{commit}")
+		if err != nil || sha == "" {
+			return "", "", false
+		}
+		return sym, sha, true
+	case "branch":
+		full := "refs/heads/" + strings.TrimPrefix(ref.Value, "refs/heads/")
+		sha, err := workspaceReadGit(ctx, mirrorDir, "rev-parse", "--verify", full+"^{commit}")
+		if err != nil || sha == "" {
+			return "", "", false
+		}
+		return full, sha, true
+	case "tag":
+		full := "refs/tags/" + strings.TrimPrefix(ref.Value, "refs/tags/")
+		sha, err := workspaceReadGit(ctx, mirrorDir, "rev-parse", "--verify", full+"^{commit}")
+		if err != nil || sha == "" {
+			return "", "", false
+		}
+		return full, sha, true
+	case "ref":
+		sha, err := workspaceReadGit(ctx, mirrorDir, "rev-parse", "--verify", ref.Value+"^{commit}")
+		if err != nil || sha == "" {
+			return "", "", false
+		}
+		return ref.Value, sha, true
+	case "commit":
+		sha, err := workspaceReadGit(ctx, mirrorDir, "rev-parse", "--verify", ref.Value+"^{commit}")
+		if err != nil || !strings.EqualFold(sha, ref.Value) {
+			return "", "", false
+		}
+		return ref.Value, sha, true
+	default:
+		return "", "", false
+	}
 }
 func (e *workspaceExecutor) materialize(ctx context.Context, r *taskworkspace.Instance) string {
 	if !e.owned(e.journal.Plan.RootPath) || !e.owned(r.CommonDir) {
