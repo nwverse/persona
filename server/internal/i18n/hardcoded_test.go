@@ -40,6 +40,8 @@ var hardcodedDirs = []string{
 	"internal/botcard",
 	"internal/modules/lark",
 	"internal/hub",
+	"internal/githubwire",
+	"internal/modules/github",
 	"internal/modules/mail",
 	"internal/mailwire",
 	"internal/quota",

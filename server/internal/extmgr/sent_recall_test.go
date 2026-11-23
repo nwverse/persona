@@ -514,6 +514,7 @@ func TestRecallSentTwiceAtOnce(t *testing.T) {
 // under the id of a connector that can recall other things (GitHub's, registered here: it is the kind of message that
 // is refused, not a connector that is missing): no connector but one that says it can offers a recall.
 func TestRecallSentNeverMailsNorRecordedSends(t *testing.T) {
+	needsGitHubModule(t)
 	needsLarkModule(t)
 	h := newTestManager(t)
 	st := newSentLedgerStore()

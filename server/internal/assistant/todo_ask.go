@@ -182,9 +182,9 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 	n := Notification{ID: "ntf_" + randomHex(8), Kind: assistantwire.NotifyDecide, Subtitle: "Persona", DeviceID: here, SessionID: sessionID,
 		Title: i18n.T(l, "assistant-reports.verdict_title", i18n.Args{"task": clip(oneLine(t.Title), 30)}),
 		Body:  verdictText(l, &a) + "\n" + recommendText(l, &a),
-		// A decision the owner must take now: P0 interrupts even with the hub's push tiering on, every time it is
-		// pushed (its reminders too); the hub keys it by to-do and round.
-		Level: assistantwire.LevelP0,
+		// The level goes by why it is the owner's (decisionPushLevel): one that cannot wait interrupts even with the
+		// hub's push tiering on, every time it is pushed (its reminders too); the hub keys it by to-do and round.
+		Level: decisionPushLevel(a.WhyOwner),
 		// The ask and how its push may answer it: the view's (projection), so a notification never offers what the
 		// to-do's row would not answer in place.
 		Todo: &assistantwire.NotifyTodo{ID: id, AskedAt: a.AskedAt, Recommend: a.Recommend, Responses: ownerResponses,
