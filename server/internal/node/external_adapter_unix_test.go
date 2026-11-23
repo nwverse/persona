@@ -540,6 +540,12 @@ func TestExternalAdapterFixtureRootMayUseHostAliases(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Remove(alias) })
 	externalAdapterTrustRoot = alias
+	// Keep every configured path behind the alias too. On macOS t.TempDir is
+	// commonly under /var, whose canonical path is /private/var.
+	helper := filepath.Join(alias, "adapter-helper")
+	f.config.Command = []string{helper, externalAdapterHelperFlag, filepath.Join(alias, filepath.Base(f.statePath))}
+	f.config.NativeProgram = helper
+	f.saveConfig(t)
 	t.Setenv(externalAdapterConfigEnv, filepath.Join(alias, filepath.Base(f.configPath)))
 	r := f.load(t)
 	if got := r.launchers(context.Background(), true); len(got) != 1 {
