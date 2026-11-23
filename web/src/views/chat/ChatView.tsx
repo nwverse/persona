@@ -51,6 +51,7 @@ import type { Interaction, Item, Session, Subagent } from "../../lib/types";
 import { REVIEW_FEATURE } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
+import { BackgroundStallHint } from "../../ui/BackgroundStallHint";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { StoppedAgentLine } from "./StoppedAgentLine";
@@ -3185,6 +3186,7 @@ export const Header = memo(function Header({
             <span className="truncate">{branch}</span>
           </span>
         )}
+        {!editing && session && !assistant && <BackgroundStallHint session={session} className="ml-1.5 max-w-56 shrink rounded-full px-1.5 py-0.5 text-[12px] @max-[800px]:hidden" />}
       </div>
       {topCenter && <div className="flex min-w-0 flex-1 justify-center lg:hidden">{topCenter}</div>}
       <div className={headerSlot(Boolean(topCenter), "end")}>
