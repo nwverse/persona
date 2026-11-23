@@ -302,7 +302,7 @@ describe("folding a block of the sidebar", () => {
 });
 
 describe("ordering the Agents list (#11801)", () => {
-  it("offers no activity sort, including to a browser that used one before", async () => {
+  it("ignores the old per-browser activity sort key: the choice is the hub's now (Settings › Agents)", async () => {
     localStorage.setItem("persona.agentSort", "updated");
     await withAgent();
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
