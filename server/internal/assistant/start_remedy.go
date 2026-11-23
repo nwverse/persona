@@ -540,6 +540,11 @@ func (s *Service) remedyEntry(ctx context.Context, t Todo, e *prompts.SuperviseE
 	}
 	pt := p.Tasks[i]
 	e.RetryWith = pt.RetryWith
+	if pt.ErrorCode == proto.CodeAgentStartStalled {
+		// What the agent's screen showed when it stopped (a dialog the computer does not know, every choice of it), as
+		// its rows: the failure's reason is one clipped line. Also for a start that failed for good, whose tab is gone.
+		e.Screen = strings.TrimRight(pt.ErrorArgs["screen"], "\n")
+	}
 	r := pt.Start
 	if r == nil || r.State != remedying || !time.Now().Before(r.Until) {
 		return
