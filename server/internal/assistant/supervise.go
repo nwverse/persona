@@ -191,6 +191,9 @@ type TaskReview struct {
 	SupersededReason string `json:"superseded_reason,omitempty"`
 	// OutwardPreviousState is the state before an automated outward-promise decision.
 	OutwardPreviousState string `json:"outward_previous_state,omitempty"`
+	// WithdrewNeedsUser: this accepted review is the supervisor taking back the needs_user it had raised
+	// (task_review withdraw_needs_user): no owner answered it, and nothing was pushed or carded for it.
+	WithdrewNeedsUser bool `json:"withdrew_needs_user,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:

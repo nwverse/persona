@@ -40,6 +40,7 @@ struct AssistantTopBar: View {
     var openKnowledge: () -> Void
     var openProfile: () -> Void
     @State private var showInfo = false
+    @State private var showDefaultPermissions = false
     @State private var showBackgroundActivity = false
     @State private var showLink = false
     @State private var launchers: [Launcher] = []
@@ -86,7 +87,14 @@ struct AssistantTopBar: View {
                         .presentationDragIndicator(.visible)
                 }
             }
-            .onChange(of: key) { showInfo = false; showBackgroundActivity = false }
+            .onChange(of: key) { showInfo = false; showDefaultPermissions = false; showBackgroundActivity = false }
+            // A direction's permission sheet lives on the bar, not on a menu row that disappears as the menu closes.
+            .sheet(isPresented: $showDefaultPermissions) {
+                NavigationStack {
+                    DefaultPermissionsView()
+                        .pageToolbar { SheetClose { showDefaultPermissions = false } }
+                }
+            }
             .sheet(isPresented: Binding(get: { showBackgroundActivity && key == model.assistantMain },
                                         set: { showBackgroundActivity = $0 })) {
                 if let key { BackgroundActivitySheet(key: key) }
@@ -495,7 +503,7 @@ struct AssistantTopBar: View {
         // Only this conversation's things: the hub is picked in the sidebar's assistant switcher, with its assistants (#12594).
         Section(menuTitle) {
             // A leader conversation's first item: the page of everything under its direction (#11516).
-            DirectionPageMenuItem(key: key)
+            DirectionPageMenuItem(key: key, showsPermissions: $showDefaultPermissions)
             // The Agent SDK could not run here (#2455): it says so, and why.
             if session?.runtimeFallback?.isEmpty == false,
                let r = AssistantRuntime.status(runtime: session?.runtime, fallback: session?.runtimeFallback) {

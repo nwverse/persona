@@ -48,7 +48,7 @@ struct PersonaApp: App {
                     #if os(iOS)
                     if ShortcutCallbacks.shared.handle(url) { return } // a shortcut Persona ran came back (#2283)
                     #endif
-                    if MetaGlasses.shared.handle(url) { return } // the Meta AI app's callback (docs/apple/meta-glasses.md)
+                    if Modules.registry.handle(url) { return } // a module's own URL, as the Meta AI app's callback (docs/apple/ios.md, "Modules")
                     #if os(iOS)
                     if let link = FleetLink.session(url) { // tapped the Live Activity
                         // "group|machine" for another group's row (FleetMerge); a row the hub pushed names no group.
@@ -174,12 +174,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         ErrorReports.installExceptionHandler(queue: .shared) // first: a crash while launching is reported too (#5621)
         ExtensionSurfaceAppLease.install() // background time around the App Group store's lock, before anything writes it (#11360)
+        LogWaterRefresh.writeSnapshot = { group in
+            AppModel.shared.handle(.healthIntake, group: group)
+            #if os(iOS)
+            await HomeWidgetWriter.shared.flushAndWait()
+            #endif
+        }
         // Developing Persona carries on recording when it was left on (#9460); reads two defaults otherwise.
         DevMode.shared.launch(tab: UserDefaults.standard.string(forKey: "app.tab").flatMap(AppTab.init(rawValue:)) ?? .assistant)
         _ = KeyboardState.shared // watches the keyboard from the start: a card may come while it is already up
         UNUserNotificationCenter.current().delegate = self
         Task { await ExtensionNotificationActions.preserveAndRegister { NotificationActions.categories } }
-        MetaGlasses.shared.configure() // a no-op without the Meta Wearables SDK (docs/apple/meta-glasses.md)
+        Modules.registry.launch() // the active modules' launch hooks, as the Meta glasses' set-up (docs/apple/ios.md, "Modules")
         #if os(iOS)
         QuickAction.publish()
         // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the
@@ -471,6 +477,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             completionHandler(.noData)
             return
         }
+        if WaterReminderActions.reminderID(info) != nil {
+            guard let group = WaterReminderOrigin(info).group(AppModel.shared) else {
+                completionHandler(.noData)
+                return
+            }
+            nonisolated(unsafe) let done = completionHandler
+            Task {
+                await LogWaterRefresh.run(group: group)
+                done(.newData)
+            }
+            return
+        }
         if let widget = info["extension_widget"] as? [String: Any],
            let owner = widget["extension"] as? String, let id = widget["id"] as? String,
            !owner.isEmpty, !id.isEmpty, !AppModel.shared.isDemo {
@@ -516,13 +534,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     // queue, do the work there and call back from there.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        let ref = PushCrypto.notificationInfo(notification.request.content.userInfo).flatMap(Self.sessionRef)
+        let info = PushCrypto.notificationInfo(notification.request.content.userInfo)
+        let ref = info.flatMap(Self.sessionRef)
+        let waterOrigin = info.flatMap { WaterReminderActions.reminderID($0) == nil ? nil : WaterReminderOrigin($0) }
         nonisolated(unsafe) let content = notification.request.content.copy() as! UNNotificationContent
         nonisolated(unsafe) let done = completionHandler
         Task { @Sendable in
             await ExtensionNotificationActions.register(content: content)
             DispatchQueue.main.async {
                 let (key, visible, quiet) = MainActor.assumeIsolated {
+                    if let waterOrigin, let group = waterOrigin.group(AppModel.shared) {
+                        Task { await LogWaterRefresh.run(group: group) }
+                    }
                     let key = ref.flatMap(Self.sessionKey)
                     // A quiet task's agent (#1731) is the main conversation's to tell; a hub that knows sends no push for it.
                     return (key, AppModel.shared.visibleSession, key.map(AppModel.shared.isQuiet) ?? false)
@@ -592,9 +615,24 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let event = ExtensionNotificationEvent(id: response.notification.request.identifier, info: info,
                                               category: response.notification.request.content.categoryIdentifier,
                                               actionID: action, text: text)
+        let water = WaterReminderActions.request(category: response.notification.request.content.categoryIdentifier,
+                                                 action: action, info: info, text: text)
+        // Reuse the extension event's strict origin routing, even though this is a built-in notification.
+        let waterOrigin = WaterReminderOrigin(info)
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
+                if let water {
+                    let model = AppModel.shared
+                    if let group = waterOrigin.group(model) {
+                        AppDelegate.inBackground("water-reminder", done: done) { await WaterReminderActions.run(water, group: group) }
+                    } else {
+                        AppDelegate.inBackground("water-reminder", done: done) {
+                            await WaterReminderActions.show(String(localized: "Can't find the hub this notification came from. Reconnect, then do it in the app."), id: water.reminder)
+                        }
+                    }
+                    return
+                }
                 if extensionNotice {
                     if let event { ExtensionNotificationDelivery.run(event, done: done) }
                     else { done() }

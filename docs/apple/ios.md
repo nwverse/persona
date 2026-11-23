@@ -1744,6 +1744,53 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
 - Brand coral (`Theme.brand`) only Persona marks: chat-home icon, Lock Screen four-point star. Actions use current `Theme.accent`.
   Both AccentColor assets (watch titles/tint, system dialogs) system blue; iPhone/iPad window `tintColor` follows theme (`WindowTint`, UIKit List icons, #1188); Live Activities cannot read style, stroke/buttons fixed system blue, button deep `#0071E3`, white contrast 4.7:1.
 
+## Modules
+
+Persona Core and feature modules (#13430; the Apple part is #13432). The product layer and the module contract shared by
+every platform are described from #13430; this section is the Apple side.
+
+- **`PersonaModuleAPI`** (`apple/Packages/PersonaModuleAPI`): the contract, Foundation and SwiftUI only, tested with
+  `swift test` (and in `scripts/ci/apple.sh`). A module is a `PersonaModule`: a `ModuleDescriptor` (`id` from #13430
+  section 2, `feature` for the wire feature flag it needs, the `slots` it uses), `isAvailable` (built into this binary)
+  and `register(into:)`, which adds entries through a `ModuleRegistrar`. `ModuleRegistry` is built once from the module
+  list; a module is active when it is listed and enabled, and an inactive module registers nothing. Entries for an
+  undeclared slot, duplicate ids and malformed ids are refused and listed in `problems` (asserted empty in DEBUG). The
+  package links into the iOS and Vision apps and PersonaTests; nothing in `Shared/` imports it, so the watch, widgets and
+  extensions never link it. It sets no build settings of its own, so a Release build keeps the project's
+  `SWIFT_REFLECTION_METADATA_LEVEL = all`.
+- **Slots** (`ModuleSlot`, raw values are the contract's field names): served today are `launch_hooks` (after the core's
+  launch work, `application(_:didFinishLaunchingWithOptions:)`), `deep_links` (`onOpenURL`, before the core's routes)
+  and `composer_actions` (the composer's +: the panel's More tab, the + menus and the prompt bar's sources; a row
+  `attach-<id>` opens the action's sheet, whose picture goes into the composer like a camera photo; #13400's
+  `composer_source`). Declared but **not yet served**, with no API until a module needs one: `shell_places`, `settings`,
+  `chat_card_kinds`, `chat_accessories`, `toolbar_items`, `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`,
+  `phone_tools`, `intents`, `push_categories` and `audio_leases` (the core's `AudioSessionBroker` does not exist yet).
+- **The module list** (`apple/Persona/App/Modules.swift`) is the seed of the `PersonaHostApp` layer (#13430 decision 4;
+  `apple/Packages/PersonaCore` stays the Rust binding). `PersonaHostApp` is the `ModuleHost` (a composer action hands
+  back a `UIImage`), `Modules.builtIn` lists the modules in the order their entries appear, and `Modules.registry` is
+  the registry the core reads. It is the only core file that names a module's type.
+- **The switch.** A module is on when it is in the list and its build includes it (`isAvailable`): the build-time
+  overlay or config that compiles its SDK in. There is no everyday setting. DEBUG builds take `-showModules <ids>`
+  (comma-separated, `none` for none) to turn exactly those modules on, for screenshots and tests in any build.
+- **Performance.** The registry is built once, on its first read at launch, by describing entries (no IO; P10). Lookups
+  are reads of arrays built then: no observation, nothing sorted or derived in `body` (P4, P5). A module's titles are
+  `LocalizedStringResource`s resolved where they are drawn, as before.
+- **The ratchet.** `scripts/test/test_apple_module_refs.py` (Linux-runnable, run by `scripts/ci/python-tests.py`) counts,
+  per core file, references to the types declared at the top level of each module's directories, by symbol with comments
+  and strings blanked out; the baseline `scripts/test/apple_module_refs_baseline.json` may only go down (`--update`
+  lowers it, `--list` shows each reference). The core is `apple/` outside module directories, outside the module list
+  and outside tests.
+- **Modules today.** `glasses` (the pilot, `apple/Persona/Glasses/`, `docs/apple/meta-glasses.md`): launch set-up,
+  the Meta AI app's callback URL and Glasses Photo in the composer. Its sources compile into the iOS app and, as a stub
+  without a composer action, into PersonaVision (which compiles all of `Persona/`); the watch and widgets do not include
+  it. It is on only in a build with the Meta Wearables SDK (`apple/meta-wearables.yml`). Before the pilot the core named
+  its types 8 times in 4 files; now 0.
+- **Adding a module.** Give its sources a directory of their own and add it to `MODULES` in the ratchet; write a type
+  conforming to `PersonaModule` there (descriptor, `isAvailable`, `register(into:)`); add it to `Modules.builtIn`; turn
+  each core call site into a registry read. If it needs a slot that is not served yet, add the slot's registrar method,
+  its registry reader and package tests in the same change. Lower the ratchet's baseline as references go. Folders move
+  into `PersonaModule<Name>` packages later (#13432 step 3).
+
 ## Data flow
 
 - Logic-layer choice (2026-10-31): pages with "load → display → edit → save" use MVVM: an `@Observable` `XxxModel` beside the page,
@@ -2450,13 +2497,30 @@ hub sends (`GET /api/v1/assistant`, the value in effect). Who it is for: people 
   request that names its manager, so those rows need `manager` in the read). The hub's answer is kept for that field
   and handed to `AppModel.assistantConfig`; a refusal puts the page's value back with a toast. A control waits while its
   own write is out.
-- **Not here**: `inbox_signals` (Tell supervisors about new messages) moves to the Inbox's own settings (#4524), and
-  `default_permission_mode` has no page in the app yet.
+- **Not here**: `inbox_signals` (Tell supervisors about new messages) moves to the Inbox's own settings (#4524).
 - **Mock hub**: the default mock sends every field with the hub's defaults and checks a `PUT` as the hub does;
   `MOCK_LEGACY_HUB=1` has none of them. Debug launch: `-openAssistantPage agentFollowUp`.
 - **Tests**: `AgentFollowUpTests` (reads, each change's request and header, the hub's answer, rollback, the menus'
   words) and `AgentFollowUpUITests` against the mock hub (light / dark shots with `TEST_RUNNER_PERSONA_SHOTS`);
   `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` on this page.
+
+## Permission defaults (#13286)
+
+Settings › Agent includes **Default Permissions**, the manager's existing `default_permission_mode` from
+`GET /api/v1/assistant`. It applies only to new non-guest conversations without an explicit choice; existing
+conversations keep their current mode. A direction leader's title menu also has **Default Permissions**, opening the
+same `DefaultPermissionsSettingsSection` in a sheet rather than a direction-specific override. Both use the existing
+sparse `PUT /api/v1/assistant`, require the answering manager to confirm the selected mode, and put the previous value
+back if the write or confirmation fails.
+
+Settings › Models decodes the existing launcher `permission_mode` in `ModelBinding`. The AI twin's editor shows **Inbox
+Permissions**: an unset or legacy Plan value displays **Default permissions**, never the parent Agents' Full access,
+and Plan is not offered. An explicit supported choice saves through the same purpose PATCH; Follow Agents writes
+`permission_mode: null` and restores the safe default. Other launcher purposes retain their ordinary inheritance and
+provider-specific mode lists.
+
+Tests: `AgentFollowUpTests`, `ModelConfigurationModelTests`, `AgentFollowUpUITests`,
+`LarkAgentModelConfigurationTests` and `DirectionScreensUITests`; the UI cases use only synthetic loopback fixtures.
 
 ## Background supervisor (#5083)
 
@@ -3291,13 +3355,21 @@ Key points:
 
 ## Settings by scope (#5236)
 
-The shared iPhone, iPad and Mac settings page has three groups:
+The shared iPhone and iPad settings page has three groups, then one Advanced row. Settings home shows each group's core rows
+only (#13395, at most ten; `SettingsCatalog.core`); Settings › Advanced shows the rest under the same groups
+(`SettingsCatalog.advanced`), and search finds every entry on either:
 
-| Scope | Entries |
-| --- | --- |
-| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Extensions, Knowledge Selection, Meetings, Agent, Machines (platform and hub capabilities decide availability) |
-| This Device | Appearance & Display, Language & Dictation, Notifications, Translation, Storage, Health, This iPhone, About |
-| Hub | Hub Connection, Hub Version, Assistants, Avatar, Devices & Pairing |
+| Scope | Settings home | Settings › Advanced |
+| --- | --- | --- |
+| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Inbox Sources, Extensions, Machines | Knowledge Selection, Meetings, Agent |
+| This Device | Notifications, About | Appearance & Display, Language & Dictation, Live Screen, Translation, Storage, Health, Alarms and Timers, This iPhone |
+| Hub | Hub Connection | Hub Version, Assistants, Avatar, Devices & Pairing |
+
+Platform and hub capabilities decide availability, as before: Inbox Sources with the hub's `inbox_sources`, Extensions with
+its extension manager, Live Screen while a computer offers it, Alarms and Timers with AlarmKit, and the hub's own rows only with
+a hub paired (not in demo mode). The Advanced row's value is the hub update's state while one is out or under way. A row keeps
+its accessibility identifier wherever its tier puts it (`SettingsEntry.rowID`); `-openAdvancedSettings YES` (DEBUG) opens
+Settings › Advanced for screenshots.
 
 Whenever the hub answers a roster, with one or many installed assistants, the first heading is **<name>'s Settings**,
 with the current assistant's first-letter avatar and state dot plus **Switch**. Switch opens the same assistant

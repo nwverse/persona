@@ -358,6 +358,7 @@ func (s *Service) supersedeDecision(ctx context.Context, id, reason string) {
 	cp := *a
 	b.mu.Unlock()
 	s.askChanged(ctx)
+	s.todoPushOver(id) // a later decision of the task rings again
 	if len(cp.Messages) > 0 {
 		s.updateAskCards(ctx, id, cp)
 	}

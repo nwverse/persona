@@ -86,6 +86,7 @@ type agyTranscriptUsage struct {
 	turns         int
 	compacted     bool
 	hasUsage      bool
+	first         string // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
 }
 
 type agyHistory struct {
@@ -105,6 +106,7 @@ type agyRevision struct {
 	hash                    [32]byte
 	branch, native, rewrite string
 	steps                   []agyStepMemo
+	full                    os.FileInfo // snapshot that supplied restored text
 }
 
 func isAgyStepRunning(status string) bool {

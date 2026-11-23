@@ -10,6 +10,8 @@ import {
   updateFinished, updateStateTitle, updateWorking, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus,
 } from "../../lib/hub-update";
 import { channelTitle, dockerSteps, latestWarning, recordTitle, recordTone, sourceBehindWarning, updateView } from "../../lib/hub-update-settings";
+import { machineDeployment } from "../../lib/machine-deploy";
+import { managerOf, multiManager, useRoster } from "../../lib/managers";
 import { navigate } from "../../lib/router";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useStore } from "../../lib/store";
@@ -296,7 +298,7 @@ function HubUpdates() {
         </Row>
       </Group>}
 
-      <Nodes />
+      <Nodes development={status.source === "web-dev"} />
 
       {history.length > 0 && (
         <Group title={t("settings-hubsettings.history")}>
@@ -444,18 +446,40 @@ function DockerRows({ s }: { s: HubUpdateStatus }) {
   );
 }
 
-/** Each computer's personad: it keeps its version after the hub updates unless auto_update_nodes is on; Redeploy updates one. */
-function Nodes() {
+function Nodes({ development }: { development: boolean }) {
   const machines = useStore((s) => s.machines);
+  const roster = useRoster();
   if (!machines.length) return null;
+  const showOwners = multiManager(roster);
   return (
-    <Group title={t("settings-hubsettings.nodes")} footer={t("settings-hubsettings.nodes_footer")}>
-      {machines.map((m) => (
-        <Row key={m.id} label={m.name} onClick={() => navigate({ name: "machine", mid: m.id })}>
-          {m.node_mismatch && <Pill tone="orange">{t("settings-hubsettings.version_differs")}</Pill>}
-          <span className="max-w-[220px] truncate font-mono text-ink-3">{m.node_version || (m.online ? t("settings-hubsettings.unknown") : t("settings-hubsettings.offline"))}</span>
-        </Row>
-      ))}
+    <Group title={t("settings-hubsettings.nodes")} anchor="hub-nodes"
+      footer={t(development ? "settings-hubsettings.dev_nodes_footer" : "settings-hubsettings.nodes_footer")}>
+      {machines.map((m) => {
+        const deployment = machineDeployment(m);
+        const owner = showOwners && m.manager ? managerOf(roster, m.manager) : null;
+        const source = m.deploy_source === "hub_package" ? t("settings-hubsettings.hub_package")
+          : m.deploy_source === "local_build" ? t("settings-hubsettings.local_build") : "";
+        const detail = [owner && t("settings-hubsettings.managed_by", { name: owner.name }), source].filter(Boolean).join(" · ");
+        const reason = !deployment.busy && m.can_deploy !== true && m.deploy_reason !== m.deploy_error ? m.deploy_reason : undefined;
+        const offline = !m.online && t("settings-hubsettings.offline");
+        const version = m.node_version || offline || t("settings-hubsettings.unknown");
+        const badge = deployment.busy ? <Pill tone="accent">{deployment.label}</Pill>
+          : m.node_mismatch ? <Pill tone="orange">{t("settings-hubsettings.version_differs")}</Pill>
+          : m.node_version && offline && <Pill>{offline}</Pill>;
+        return (
+          <Row key={m.id} onClick={() => navigate({ name: "machine", mid: m.id })} wrapHint
+            label={<span className="flex flex-wrap items-center gap-x-2 gap-y-1" aria-live="polite">
+              <span className="min-w-0 truncate">{m.name}</span>
+              {badge}
+              <span className="min-w-0 truncate font-mono text-meta text-ink-3 sm:ml-auto" title={m.node_version}>{version}</span>
+            </span>}
+            hint={(detail || deployment.error || reason) && <span className="block whitespace-normal break-words">
+              {detail && <span className="block">{detail}</span>}
+              {deployment.error && <span className="block text-red">{deployment.error}</span>}
+              {reason && <span className="block">{reason}</span>}
+            </span>} />
+        );
+      })}
     </Group>
   );
 }

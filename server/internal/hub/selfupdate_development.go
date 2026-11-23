@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/operations/backup"
@@ -117,7 +120,7 @@ func (u *updater) developmentUnavailableErr() error {
 	if u.h.build.Channel == update.Docker {
 		return i18n.Err("hub-selfupdate.err_development_docker")
 	}
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return i18n.Err("hub-selfupdate.err_development_platform")
 	}
 	var bc update.DevelopmentBackupConfig
@@ -329,6 +332,9 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 	if err != nil {
 		return nil, err
 	}
+	if !devicewire.ValidDevelopmentCommit(candidate.Commit) {
+		return nil, errors.New("development source did not resolve to a full commit")
+	}
 	number := update.DevelopmentNumber(u.h.build.Number)
 	m := &update.Manifest{Version: fmt.Sprintf("web-dev-%s-%d", candidate.Commit[:12], number), Build: number,
 		Commit: candidate.Commit, Released: time.Now()}
@@ -358,8 +364,22 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 // Build only this Hub and the platforms its registered computers last reported.
 // Offline computers keep their platform; never-seen computers supply none yet.
 func (u *updater) developmentPlatforms() []string {
+	platforms := u.developmentComputerPlatforms(true)
+	for _, peer := range u.h.busRoster() {
+		if peer.Role == bus.RoleManager && peer.ID != devicesOwner && peer.OS != "" && peer.Arch != "" {
+			platforms = append(platforms, peer.OS+"-"+peer.Arch)
+		}
+	}
+	slices.Sort(platforms)
+	return slices.Compact(platforms)
+}
+
+func (u *updater) developmentComputerPlatforms(allOwners bool) []string {
 	platforms := []string{runtime.GOOS + "-" + runtime.GOARCH}
 	for _, mc := range u.h.knownEntries() {
+		if !allOwners && u.h.entryOwner(mc.ID) != devicesOwner {
+			continue
+		}
 		if m := u.h.machineByID(mc.ID); m != nil {
 			s := m.snapshot()
 			if s.OS != "" && s.Arch != "" {
@@ -383,8 +403,11 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 		Ancestors []string `json:"ancestors"`
 	}
 	platforms := u.developmentPlatforms()
-	if operation == "prepare_backup" && !u.nodesEnabled() {
+	if operation == "prepare_backup" {
 		platforms = []string{runtime.GOOS + "-" + runtime.GOARCH}
+		if u.nodesEnabled() {
+			platforms = u.developmentComputerPlatforms(false)
+		}
 	}
 	err := u.runDevelopment(ctx, operation, map[string]any{
 		"candidate": r.Development, "version": r.Manifest.Version, "build": r.Manifest.Build,
@@ -404,6 +427,16 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 	m, err := update.BuildManifest(built.Artifacts, *r.Manifest)
 	if err != nil {
 		return err
+	}
+	if operation == "build" {
+		// Compare the producer's native and archive hashes with a fresh read of every archive.
+		var produced update.Manifest
+		ok, err := update.Load(filepath.Join(built.Artifacts, "manifest.json"), &produced)
+		if err != nil || !ok || produced.Version != m.Version || produced.Build != m.Build || produced.Commit != m.Commit ||
+			!reflect.DeepEqual(produced.Files, m.Files) || !reflect.DeepEqual(produced.Programs, m.Programs) ||
+			!reflect.DeepEqual(produced.Nodes, m.Nodes) {
+			return errors.New("development package manifest does not match the build")
+		}
 	}
 	m.Ancestors = ancestors
 	r.Manifest = m
@@ -459,16 +492,10 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 	return &saved, nil
 }
 
-// Only the built-in child manager is known to share this Hub's package directory
-// and restart with it. Independent managers keep their original update channel.
+// The Hub owns its child and can pause its writers. Independent assistants have their own update path.
 func (u *updater) developmentTopology() error {
 	if u.h.cfg == nil || !u.h.cfg.Assistant.StartsBuiltin() {
 		return i18n.Err("hub-selfupdate.err_development_topology")
-	}
-	for _, mc := range u.h.knownEntries() {
-		if u.h.entryOwner(mc.ID) != devicesOwner {
-			return i18n.Err("hub-selfupdate.err_development_topology")
-		}
 	}
 	return nil
 }

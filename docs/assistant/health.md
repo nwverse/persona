@@ -14,7 +14,7 @@ With a separate directory, Claude Code's per-directory auto memory, CLAUDE.md an
 | What ChatGPT Health does | What Persona v1 does | Later |
 | --- | --- | --- |
 | A separate Health entry in the sidebar (desktop) / menu (phone), opening an independent space ([1]) | A separate **Health** entry in the web sidebar, `/health`; **Health** in the iOS, Mac and Android assistant sidebar | Android: the rest of the Health home (memory, reports, sources) |
-| Health home: recent data and trends, synced records, suggested questions, past health chats, connected accounts ([2]) | `/health` page: a one-line privacy note, data sources (Apple Health / Health Connect via the phone), suggested questions, past health chats, health memory | Recent trend cards on the home page (using the structured cards from #886) |
+| Health home: recent data and trends, synced records, suggested questions, past health chats, connected accounts ([2]) | Health home: Today with water and protein, Activity rings on iPhone, trends on iPhone and iPad with Apple Health data, data sources, suggested questions, past health chats and health memory | More connected data sources |
 | Health memory is stored separately and does not flow back into regular chats; users can view and delete it ([3]) | The Health space has its own directory and its auto memory belongs only to it; viewable and deletable on the web; the main chat's tools cannot see health chats | Give the Health space only health-related tools |
 | Talking about health in a regular chat suggests moving to Health ([4]) | Not done | Suggest "Continue in Health" when the main chat touches on health |
 | Connected data is not used for training, with extra encryption and isolation ([5]) | All data stays on your own hub and computers; `kb_update` from a health chat is rejected (blocked in code); not sending to other chats relies on chat tools only accepting the same space; push and `phone_notify` notifications carry no health content; handing to an Agent, sending email and Lark each need confirmation on the phone ("outbound") | More data sources: medical records, checkup report uploads, heart rate / HRV from recordings (#1950) |
@@ -35,7 +35,7 @@ Sources:
   `identity.HealthDir`, `identity.SpaceHealth`, `identity.SpaceOf` are in `server/internal/identity/paths.go`; `IsAssistantDir` also holds for the health directory,
   so health chats, like assistant chats, are "assistant chats" (`assistant: true`) and use the same tools, authorization and questions.
 - **CLAUDE.md**: the Health space has its own `server/internal/prompts/assistant/health_claude_md.md` (golden: `server/internal/assistant/testdata/prompts/health_claude_md.golden`):
-  talk only about health; read data with `phone_health_summary`, record data with `phone_health_write_sample` (confirmed on the phone); do not write to the knowledge base or send health content to other chats; when the user wants to share with someone (doctor, coach, family), help send it, with the send confirmed on the phone;
+  talk only about health; read system data with `phone_health_summary`; log Persona water and protein with `health_intake`, and other data such as weight and sleep with `phone_health_write_sample` (confirmed on the phone); do not write to the knowledge base or send health content to other chats; when the user wants to share with someone (doctor, coach, family), help send it, with the send confirmed on the phone;
   no diagnosis, no prescribing; on danger signs, tell the user to seek medical care first; when discussing numbers, attach a chart card by default ("Charts" below). Connector and plugin skills are installed the same way as in the assistant directory, but the instructions plugins give the assistant (`plugins.Instructions`) are not added to the health CLAUDE.md: those were written for the main chat's work scenarios, and v1 deliberately leaves them out.
 - **Memory**: Claude Code's auto memory is per working directory (`~/.claude/projects/<encoded dir>/memory/`). Only health chats read and write the health directory's memory; it is not in the main chat's context, and vice versa.
 - **Files** (#3282): the main chat's Claude can read files on the computer with Read / Bash; separate directories do not mean unreadable. So the main chat (not the Health space's assistant chat) starts with deny rules:
@@ -94,12 +94,12 @@ Which categories a use reads depends on the scene:
 The memory ledger's entries (`assistant_entries`, `server/internal/assistant/entries.go`), and the memory extension's as a second source, reach a conversation, a task or a draft through one assembler (`server/internal/assistant/memory_assemble.go`), which picks entries by their scope and lets each through by `usage` for the scene it goes to. It reads no track's name or kind.
 
 - **What usage is told of an entry** (`memoryEntryUses` in `server/internal/assistant/memory_assemble_entry.go`, the one place that reads an entry's space and categories): its track is the space of the conversation it names as its source (the space dimension of its scope until the entry type has one). An entry that states another track (`origin_space`) than its conversation's is not known; one that states none whose conversation cannot be told now is in no track and not known. `decision_record` sets `origin_space` itself, never from the model: the recording conversation's space when it is in one, else its source conversation's. Its categories are its own (`category`) and its track's default categories. Nothing tags entries themselves yet: an entry that carries no category takes the categories its conversation was tagged with, whenever they are kept, and is known only when that conversation was tagged and no turn of it waits to be tagged; otherwise it is used as usual in its own track and taken for sensitive everywhere else. With no model set up for `info.tag`, an entry carries its track's default categories and those its conversation was tagged with before. An entry naming an unknown category or a track the registry does not know is not known. An assembly reads the newest 2000 entries the scope selects (`NewestAssistantEntries`).
-- **The memory extension's entries, a second source** (`memoryExtensionUses` and `memorySources` in the same file): a memory extension keeps its own entries, and from a version that sets them each carries the space it was first said in (`origin_space`, the slug, `""` for the main space) and its categories (`categories`). The assembler takes them after the ledger's (oldest first, so a budget goes to the ledger's first), every one personal, with ids prefixed `memory-extension:` so a to-do's brief tells them apart. From an extension that sets both fields, an entry's track is the space it states (it names no conversation the manager could check it against, as a ledger entry naming none keeps what it states), and its categories are its own plus its track's default categories, added by the manager; an unknown space or category makes it not known. Both fields are left out when empty, so a missing field means "the main space" or "no category" only for an extension that sets them; the source says so for the whole batch (`Tagged`), never per entry. From an older extension, or one whose version cannot be told, where an entry was said cannot be told: it is in no track and not known, so the strictest rule holds and no assembly carries it (not the main conversation's standing channel or recalls either). **No source hands these entries to the manager on main yet:** the extension delivers rendered text (its `instructions`, `project_context` and `inbox_context` files and its own recall tool), filtered by its own rules (`Resident`, `Named`), and the manager does not filter that text; those deliveries are unchanged for every extension version. `Service.memoryExtension` is where a source plugs in; standing, recall, hand-off and the Inbox helper already read it.
-- **The read-only call a memory extension offers** (decided in #13532: grading by scene is the hub's alone, so it is not written again in each memory extension): `memory.entries` of the extension point `memory_sources` (`docs/extensions/extensions.md` "Memory sources", `schema/extension/memory.schema.json`) answers the entries one by one, most important first, each with `id`, `text`, `status`, `facet`, `origin_space`, `categories`, `standing` (the extension's always-in-context entries, its `Resident`; only these go to a standing channel), `rank` and `subjects` (the names whose mention brings it in, its `Named`; an entry that is not standing comes in only by relevance, in a recall, a hand-off or the Inbox), and per page `tagged`, `has_more` and `after`. `memoryExtensionBatchOf` (`server/internal/assistant/memory_extension_wire.go`) maps the pages to the assembler's input: only `active` entries that hold to the schema's rules, tagged only when every page says so, subjects as tags (so `entryRelevant` matches them), `standing` carried on the entry (the standing-channel gate comes with the wiring change), and the most important last (standing first, then by rank, the extension's order kept among equals), since a budget is spent newest first. The protocol is defined but not wired: the point is not registered and nothing calls it. **Transition**: until an extension declares `memory_sources`, its four text outlets (instructions, project context, Inbox context, its recall tool) are delivered unchanged; once it does, a separate change makes the manager read `memory.entries` into `Service.memoryExtension` and stops delivering those four outlets of that extension directly, so no entry reaches a scene around the filter. A call that fails, times out, answers over 1 MB or answers a page whose own fields break the schema leaves that assembly without the extension's entries; an entry that breaks a rule (an unknown `status` included) is dropped alone. It never falls back to the text.
-- **A standing channel** (scene 1 and 2, `standingMemory`): a conversation's own track's entries, and personal entries from elsewhere that are general, newest first within 1.5 KB each; never a sensitive entry from elsewhere. Nothing feeds the standing channels yet: wiring the assembler into them is the memory ledger's next step.
-- **A recall** (scene 2): `decisions_query` returns the conversation's own track's entries, general entries from elsewhere, and sensitive entries from elsewhere only when the conversation's categories carry every one of theirs. The filter runs on the page the ledger read, so the cursor and `has_more` stay the ledger's. `space_search` and entity prefetch do not exist yet; they take the same recall rule when they come.
-- **A dispatched task's first message** (scene 3, `server/internal/assistant/memory_handoff.go`): entries for any executor that apply on the computer it starts on (personal ones only on the owner's own computer, none on a work computer), general ones when they share two terms (common English words aside) with the task's title and prompt, within 1.5 KB, as a context block (`server/internal/prompts/todo/memory_entries.md`). A sensitive entry goes only after a confirmation: the plan's words, tagged once when the plan is made, carried every one of its categories, so the plan waited for the owner's Start on its card (`PlanTask.memory_topic`), and the owner tapped it (`owner_started`). A leader's workers, `task_spawn`, a plan the hub started without asking or one whose words were general carry no sensitive entry. No hand-off asks a model. Once the start went through, the to-do's brief notes what went: a `memory` event in its log with the entry ids and the sensitive ones among them (`docs/protocol/protocol.md`); a failed start, or a fallback to another computer, notes nothing for the try that did not start.
-- **The Inbox's helper and drafts** (scene 5, `inboxMemory`): general entries the message shares terms with, never a sensitive one. The Inbox carries no ledger entries yet; this is the rule it takes when it does.
+- **The memory extension's entries, a second source** (`memoryExtensionUses` and `memorySources` in the same file): a memory extension keeps its own entries, and from a version that sets them each carries the space it was first said in (`origin_space`, the slug, `""` for the main space) and its categories (`categories`). The assembler takes them after the ledger's (oldest first, so a budget goes to the ledger's first), every one personal, with ids prefixed `memory-extension:` so a to-do's brief tells them apart. From an extension that sets both fields, an entry's track is the space it states (it names no conversation the manager could check it against, as a ledger entry naming none keeps what it states), and its categories are its own plus its track's default categories, added by the manager; an unknown space or category makes it not known. Both fields are left out when empty, so a missing field means "the main space" or "no category" only for an extension that sets them; the source says so for the whole batch (`Tagged`), never per entry. From an older extension, or one whose version cannot be told, where an entry was said cannot be told: it is in no track and not known, so the strictest rule holds and no assembly carries it (not the main conversation's standing channel or recalls either). **The source** (#13586, `server/internal/assistant/memory_extension_source.go`): an extension that declares `memory_sources` answers its entries through `memory.entries`; the extensions' manager reads every such contribution that is on (`server/internal/extmgr/memory_sources.go`), each read is mapped (`memoryExtensionBatchOf`) and merged, and `Service.memoryExtension` keeps the result for a minute (10 seconds after a failed read; any extension change reads again). An extension that does not declare it still delivers rendered text (its `instructions`, `project_context` and `inbox_context` files and its own recall tool), filtered by its own rules (`Resident`, `Named`), which the manager does not filter; one that declares it has those outlets withheld, with its own MCP servers in the assistant and its data-directory skills (`docs/extensions/extensions.md` "Memory sources").
+- **The read-only call a memory extension offers** (decided in #13532: grading by scene is the hub's alone, so it is not written again in each memory extension): `memory.entries` of the extension point `memory_sources` (`docs/extensions/extensions.md` "Memory sources", `schema/extension/memory.schema.json`) answers the entries one by one, most important first, each with `id`, `text`, `status`, `facet`, `origin_space`, `categories`, `standing` (the extension's always-in-context entries, its `Resident`; only these go to a standing channel), `rank` and `subjects` (the names whose mention brings it in, its `Named`; an entry that is not standing comes in only by relevance, in a recall, a hand-off or the Inbox), and per page `tagged`, `has_more` and `after`. `memoryExtensionBatchOf` (`server/internal/assistant/memory_extension_wire.go`) maps the pages to the assembler's input: only `active` entries that hold to the schema's rules, tagged only when every page says so, subjects as tags (so `entryRelevant` matches them), `standing` carried on the entry (only standing entries reach a standing channel: `memoryExtensionBatch.standingOnly`), and the most important last (standing first, then by rank, the extension's order kept among equals), since a budget is spent newest first. Registered and wired (#13586): once an extension declares `memory_sources`, the manager reads `memory.entries` into `Service.memoryExtension` and stops delivering that extension's text outlets (instructions, project context, Inbox context, its connectors' read tools in the assistant's conversations, its own MCP servers in the assistant, its data-directory skills) directly, so no entry reaches a scene around the filter; an extension that does not declare it keeps them unchanged. A call that fails, times out, answers over 1 MB or answers a page whose own fields break the schema leaves that assembly without the extension's entries; an entry that breaks a rule (an unknown `status` included) is dropped alone. It never falls back to the text.
+- **A standing channel** (scene 1 and 2, `standingMemory`): a conversation's own track's entries, and personal entries from elsewhere that are general, newest first within 1.5 KB each; never a sensitive entry from elsewhere. Of the memory extension, only its standing entries. A main-space conversation's standing channel is a section of its per-message snapshot (`withStandingMemory` in `server/internal/assistant/memory_extension_source.go`, `server/internal/prompts/assistant/snapshot_memory.md`), sent again only when it changes, with the memory extension's entries only and only on the owner's own assistant computer (not a guest's conversation, not a work computer); track conversations (spaces, health) take none, and their context is unchanged (a recall, `decisions_query`, is how they reach their own track's standing entries). The standing section never waits for a read of the memory sources: it takes what the source keeps for the current extensions, or none until the read it starts is done. The ledger's entries reach standing channels in the memory ledger's next step.
+- **A recall** (scene 2): `decisions_query` returns the conversation's own track's entries, general entries from elsewhere, and sensitive entries from elsewhere only when the conversation's categories carry every one of theirs. The filter runs on the page the ledger read, so the cursor and `has_more` stay the ledger's. The memory extension's entries a recall lets through come beside them on the first page (`memory: [{id, text}]`, `recallExtensionMemory`): with `tag`, only those whose subjects or text name it; at most 3 KB, the most important first. `space_search` and entity prefetch do not exist yet; they take the same recall rule when they come.
+- **A dispatched task's first message** (scene 3, `server/internal/assistant/memory_handoff.go`): entries for any executor that apply on the computer it starts on (personal ones only on the owner's own computer, none on a work computer), general ones when they share two terms (common English words aside) with the task's title and prompt, within 1.5 KB, as a context block (`server/internal/prompts/todo/memory_entries.md`). A sensitive entry goes only after a confirmation: the plan's words, tagged once when the plan is made, carried every one of its categories, so the plan waited for the owner's Start on its card (`PlanTask.memory_topic`), and the owner tapped it (`owner_started`). A leader's workers, `task_spawn`, a plan the hub started without asking or one whose words were general carry no sensitive entry. No hand-off asks a model. Once the start went through, the to-do's brief notes what went: a `memory` event in its log with the entry ids and the sensitive ones among them (`docs/protocol/protocol.md`); a failed start, or a fallback to another computer, notes nothing for the try that did not start. An Agent started outside a plan (one the assistant starts, a to-do handed to a new Agent) carries the memory extension's general entries its words bear on, never a sensitive one, only on the owner's own computer, with no brief note (`agentStartMemory`).
+- **The Inbox's helper and drafts** (scene 5, `inboxMemory`): general entries the message shares terms with, never a sensitive one. The memory extension's go to triage and drafts by this rule (`inboxMemoryContext`: at most 1 KB, as a background block under the extension's name); the Inbox carries no ledger entries yet, and takes this rule when it does.
 - **Extensions** (scene 6): an extension the user marked as their own reads every track's memory files (`assistant.memory`, `memorySpaces` in `server/internal/assistant/memory_rpc.go`); a third party's reads a track's only with a grant for every default category of it. Reading ledger entries (`assistant.entries.list`, `GET /api/v1/assistant/entries`) still filters by the personal boundary only.
 
 ## Tracks and kinds
@@ -123,7 +123,7 @@ A track is of a kind (#13472): a config whose every field picks one of the optio
 - **Recordings in a track** (#13501): a recording upload with `space` (`PUT /api/v1/recordings/{id}`, `docs/protocol/protocol.md` "Recording sync") goes to that track instead of the knowledge base. The manager renders its transcript as `recordings/<day>-<id>.md` (front matter with the recording and the track's default categories, then one timed line per sentence) and has the assistant's machine write it there (`assistant.space_recording`, capability `track_recordings_v1`; `server/internal/node/assistant_space_recordings.go`); `assistant_space_recordings` keeps its revision and tombstone. Such a recording is never in the knowledge base (`kb_list`, `kb_search`, summaries, minutes): the track's conversations read the file. Once in a track a recording stays there, whatever a later upload names, and one the knowledge base holds stays in it (409 `recording_in_kb`); an all-day recording cannot go to a track (400). `recording_days` applies to it too: past it, or when deleted, its file is removed (later, when the computer was away) and a tombstone kept until the window ends (`server/internal/assistant/space_recordings.go`).
 - **Reading and writing SPACE.md**: the apps read a track's `SPACE.md` with `GET /api/v1/assistant/tracks/{slug}/space-md` and the user saves it with `PUT` (`content` and the `base_digest` it was read at; a stale one is refused, so two edits never overwrite each other). The user's write may change anything but the blocks between `persona:managed` markers and the markers themselves, compared byte for byte. The track's own conversations, and only they (`spaceTools` in `server/internal/assistant/track_space_md.go`; the main chat's and the health space's tool lists are unchanged), get the MCP tool `space_state_update {text}`, which replaces the text of the state block alone, at most 2048 bytes; the model never edits that block itself. Both go to the node on the assistant's computer (`assistant.space_md`, capability `track_space_md_v1`, `server/internal/node/assistant_space_md.go`), which reads the file without following a link, keeps the file it replaces in `.space/history/` (the latest 20) and writes atomically. After the user's write the track's `CLAUDE.md` and `AGENTS.md` are written again at once; after the state's, at the next refresh.
 - **Who changes them**: `GET` / `POST /api/v1/assistant/tracks`, `PUT /api/v1/assistant/tracks/{slug}`, `GET` / `POST /api/v1/assistant/track-kinds` and `PUT /api/v1/assistant/track-kinds/{slug}` are for full-access clients only; writes check that the caller is the user (403 otherwise), and a built-in track or kind is never changed (403). A change names the revision it was made against (409 when another came first), and a kind change that would leave one of its tracks invalid is refused (409).
-- **In the apps**: the web lists the tracks of the `spaces` sidebar group in a Spaces section, opens each at `/tracks/<slug>`, edits its `SPACE.md` and creates and archives spaces (`docs/web/web.md`, "Domain spaces"). The health space keeps its own entry and pages.
+- **In the apps**: the web lists the tracks of the `spaces` sidebar group in a Spaces section, opens each at `/tracks/<slug>`, edits its `SPACE.md` and creates and archives spaces (`docs/web/web.md`, "Domain spaces"). Android does the same in the drawer's Spaces section (`docs/android/android.md`, "Domain spaces (#13500)"). The health space keeps its own entry and pages.
 
 ## Quick capture
 
@@ -160,6 +160,7 @@ The `conversation*` tools in a chat only see chats in the same space (`server/in
 - Calls not made from a chat (no caller session id) count as the assistant's own space.
 
 - `kb_update` from a health chat fails outright: health information does not go into the knowledge base (`assistant/tools.go` `runTool`). Knowledge base reads (`kb_search` etc.) work as usual.
+- `health_intake` logs, lists and deletes only in a known Health conversation. `runTool` checks `agentCallerSpace` using the caller's machine and session, including Health subdirectories; main-space and unknown callers are refused before storage access. Health chats on another computer work too. The tool appears in both spaces' discovery lists, but discovery grants no access.
 - Scheduled follow-ups and scheduled tasks created in a health chat (`schedule_followup`, `schedule_routine`) record their space (`Task.space`); when one fires and needs a new chat, it opens in the Health space.
   The space owns the task's working directory: a nonempty task `cwd` is rejected when saving and before dispatch,
   including an older stored override. Clear it to restore the canonical Health directory. Launcher, model, effort
@@ -206,11 +207,123 @@ Entering Health goes straight back to the latest health chat, with its context, 
 
 | Client | Where |
 | --- | --- |
-| Web | `/health` resumes and replaces itself (Back skips it); `/health/new` is the new chat page; `views/health/entry.ts` `healthEntry`, header buttons `HealthChatActions` in `views/health/Health.tsx`. Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
+| Web | `/health` resumes and replaces itself (Back skips it); `/health/new` is the new chat page; `views/spaces/entry.ts` `spaceEntry`, header buttons `HealthChatActions` in `modules/health/Health.tsx` (the health module, `docs/web/web.md` "Modules"). Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
 | iOS / Mac | the sidebar's **Health** runs `AssistantView.enterHealth` (`HealthModel.entry`); the top bar's **New Chat** in a health chat pushes the Health page (`HealthModel.newOpensHealth`). `-openAssistantPage health` / `-openShellPage health` still show the page itself. Tests: `HealthModelTests` |
 | Android | the assistant sidebar's **Health** (`HealthEntry.resolve`), see "Android entry point" below |
 
+## Water and protein
+
+Persona keeps water and protein entries in the default assistant manager's database (#13175).
+These are Persona's own records, counted independently of other apps' dietary samples below.
+An entry has a UUID, kind, amount (ml or g), measurement time and optional food note. Recording
+the same UUID again returns the original. Delete marks an entry as undone; it never revives on
+a retry. Each add or first undo receives a new change number. Rows and undo markers are kept.
+Today and calendar-day totals use the phone's last reported assistant time zone, including
+23- and 25-hour days. Without one, intake resolves the machine's IANA zone from `TZ` or its
+localtime link, falling back to `UTC` for both calculation and the returned identifier.
+
+The hub forwards the manager's routes under `/api/v1/assistant/health/`:
+
+| Route | Purpose |
+| --- | --- |
+| `GET intake` | Today's totals, goals and entries for both kinds, daily totals (7 days by default), and the time zone |
+| `POST intake` | Record `{id,kind,amount?,at?,note?}`; water without an amount uses one configured cup |
+| `DELETE intake/{id}` | Undo a record from any date |
+| `GET intake/changes` | Current row states after a change number, including undo markers, in sequence order |
+| `POST intake/ui` | Draw a detail page or handle its actions with the extension-page UI envelope |
+| `POST water/reminder` | Handle a water notification's buttons and return a localized toast |
+
+Omit the selected manager header and `manager` query so the hub uses the default manager.
+`space=health` may be sent for context, but the hub does not use it to select a manager.
+Full-access devices may call
+these routes; the watch's answer credential may only GET or POST `intake`. Extension,
+scoped and read-only credentials cannot access the data. The manager owns measurements,
+settings, pages and scheduling; the hub only authenticates, forwards and delivers pushes.
+A content-free `health_intake` WebSocket event makes open apps reload. The hub wakes closed
+iPhone widgets for intake changes at most once per 15 minutes, without changing Live Activity
+content. Clients show these capabilities only when hello includes `health_intake`.
+
+**Today on the Health home.** iPhone, iPad and the web show separate water and protein
+rings with today's amount and goal. Water offers **Drank a Glass** (the configured cup)
+and **Other Amount**; protein offers **Log Grams**. Logging updates the total locally at
+once, then reconciles it with the hub. A successful log offers Undo; a failed write rolls
+back and offers Retry with the same record UUID. A record already undone elsewhere stays
+undone on retry. These totals come from Persona's intake records in the default manager,
+not from Apple Health or other apps. Goals and the day boundary come from the same intake
+response. Open pages reload after a `health_intake` event, a reconnect and a return to the
+foreground, waiting for pending writes to settle.
+
+Tapping either ring opens its detail page: a sheet with a close button on iPhone and iPad,
+or a full page on the web using the existing extension-page route. iPhone also shows
+Activity rings and health trends; iPad shows trends when Apple Health data can be read,
+without Activity rings. The web shows neither Activity rings nor Apple Health trends.
+Without the `health_intake` feature, iOS shows **Update your hub first** in Today and the
+web omits the block without requesting intake data. Demo mode supplies sample intake
+records and both detail pages through the in-app demo hub; page actions return sample
+pages rather than saving detail-page edits.
+
+**Details.** Water and Protein reuse the Subscriptions page's declarative renderer under
+reserved extension id `-health-intake`, page `pages`. Initial state selects `kind:"water"`
+or `kind:"protein"`. The pages show today's entries with Delete (protein includes what was
+eaten), 7/30-day bar charts and how many dates met the current goal. Today's gauge and the
+bar-chart series use the named category colors `blue` for water and `amber` for protein,
+including after the goal is met. The existing UI-version fitting keeps the total, unit and
+percentage when an older renderer cannot draw the gauge. Water's timezone note mentions
+recording and reminders; protein's mentions recording only. Today's entries are
+paged in groups of 40. Settings open from the page: water goal, cup size, reminders on/off,
+start/end, interval, weekends, stop when done; protein goal. Changes are validated before
+saving to `health.intake`. Invalid stored settings fall back to defaults and are logged, so
+records and the settings form remain usable; a valid save repairs the stored setting. Defaults: water 2000 ml, cup 250 ml, reminders off; protein 60 g.
+Water goal is 500–6000 ml, cup 50–1000 ml, interval 15–240 minutes; protein goal 10–300 g.
+Start and end are exact `HH:mm`, with start before end. Each water entry is 1–3000 ml;
+protein is 0.1–200 g and remains positive after rounding. Records support one decimal place. The water page and
+notification text input use whole ml, as the water extension does.
+
+**Reminders.** Water alone can remind, off by default. In the chosen time window it reminds
+at the configured interval, optionally skips weekends and stops once the goal is met. Later
+snoozes for 30 minutes; recording water from any entry point clears snooze and starts a new
+interval. A restart catches up at most once within the allowed window. State lives in
+`health.intake.water_reminder` (`last`, `snooze`, `reason`). The page explains the next reminder,
+why reminders are off, and the last delivery status. It reads the hub's existing low-distraction
+state: P1 reminders go to the briefing without ringing. The existing notification outbox
+queues a reminder while the hub is disconnected. Quiet hours do not suppress these requested
+reminders. The notification says “Time for some water” and today's progress; it carries no
+chat content. Its fixed category is `HEALTH_WATER`; Drank a cup, Later and Record another amount
+call the reminder endpoint. Button record IDs are stable UUIDv5 names, so repeated taps and
+network retries record once, even after an entry was undone. Older clients show a plain alert.
+
+Request and response fields, reserved page state, category action identifiers and examples
+are in [protocol.md](../protocol/protocol.md) ("Health intake"). No language model is involved
+in the pages, settings or scheduling, and none of these routes grants an extension access to
+Health chats or memory.
+
+## Activity rings
+
+On iPhone, the Health home shows an **Activity** section between Today and health trends
+when HealthKit is available. It reads today's local Apple Health activity summary,
+including Move, Exercise and Stand values and goals. Apple's Activity ring view draws the
+rings on black with their standard colors. When both Exercise and Stand goals are absent, only Move is
+shown; a paused summary is identified. The tile does not open another app.
+
+The foreground **Allow Reading** button requests only the activity-summary read type when
+it has not yet been requested. Loading the page checks whether a request is needed but
+never opens the authorization sheet itself. The type is also part of the existing health
+tool's read-permission set. Background readers do not request permission. When HealthKit
+is unavailable the section is hidden. An empty result says there may be no data or reading
+may not be allowed, and points to iOS Settings > Health > Data Access & Devices > Persona;
+a query error says today's summary could not be read. An empty result is never treated as
+proof that access was denied.
+
+Activity rings are absent on iPad, Vision Pro and the web. Demo mode supplies intake data,
+not a simulated activity summary: the iPhone tile follows the device's HealthKit availability
+and authorization state. DEBUG screenshot examples can supply Allow Reading, unreadable,
+Move-only and three-ring states without reading real health data.
+
 ## Dietary intake and resting energy
+
+`health_intake` is authoritative for Persona's own water and protein records (see "Water and protein" above). Its `list` action returns every active record, with IDs, for 1–366 days including today (default 7), plus daily totals and goals; `delete` accepts a returned ID and repeated deletion succeeds. Each `log` generates a new server UUID, so an uncertain write must be checked with `list` before logging again. Explicit ml or protein grams can be logged directly; photos and other estimates first need an `ask_user` confirmation, with food and portion saved in the note. Repeatedly confirmed foods, or an explicit request to remember one, belong in Health memory; "the usual" still gets a confirmation card. Water reminders are configured on the water detail page.
+
+When Apple Health synchronization is enabled, its protein total already includes the samples Persona wrote. Never add Persona's protein total to the Apple Health total: they overlap. Persona's own progress uses its intake records; the phone summary describes the system total from all available sources.
 
 The Health space uses `phone_health_summary` for system health data, including dietary intake written by apps such as 薄荷健康. Its requested metrics are:
 
@@ -299,11 +412,11 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
 - iOS / Mac (#4587): files picked via the Health page's input box (both interface styles) and via **Files** in a health chat's input box, as well as files dragged in on Mac, all carry `dest=health` (`FileUploads.start(…, dest:)`);
   photos are still sent as images, and videos still go to the temporary directory. A hub / node older than #4546 returns 400 / "unknown upload destination"; the App reports the upload failed, which goes away after updating the hub.
 - **Entry point (#4656)**: with only the input box's `+`, it is not obvious you can upload, so the Health page has an explicit **Upload a Checkup Report**: on the web below the home input box, on iOS / Mac at the front of **Try Asking**.
-  Tapping it picks a PDF or images (images are also uploaded as files, with the original kept in `reports/` as well). Once everything is uploaded, a health chat starts automatically (`views/health/reports.ts`, `FileUploads.startAll`) with the paths in the first message;
+  Tapping it picks a PDF or images (images are also uploaded as files, with the original kept in `reports/` as well). Once everything is uploaded, a health chat starts automatically (`modules/health/reports.ts`, `FileUploads.startAll`) with the paths in the first message;
   it still starts if you leave the page mid-upload. To test the whole path: iOS launch argument `-showReportUpload <file name>[,<file name>…]` (on the mock hub, look for `POST …/files?dest=health` and `POST /api/v1/assistant/conversations`); with `-showReportUploadMB <n>` each file is that big and stays on its way a while.
 - **View and delete (#4998)**: **Checkup Reports** on the Health page lists reports in `reports/` (`server/internal/node/healthreports.go`): an original and its same-named `.md` record count as one report; record-only reports (photos sent in chat) count too.
   View the structured record, open the original or delete. Deletion is permanent and removes both original and record; **content already mentioned in chats and health memory is not deleted with them**, as the confirmation explains. Names must identify a single regular file in `reports/`; symlinks, directories and `../` are rejected.
-  On the web it is on the home page (`views/health/HealthReports.tsx`); iOS / Mac use a separate page (`HealthReportsView.swift`). An old node returns 409 `node_outdated`, which the page displays. APIs live in `server/internal/devices/healthreports.go`, forwarded by hub (`devicewire.Routes`).
+  On the web it is on the home page (`modules/health/HealthReports.tsx`); iOS / Mac use a separate page (`HealthReportsView.swift`). An old node returns 409 `node_outdated`, which the page displays. APIs live in `server/internal/devices/healthreports.go`, forwarded by hub (`devicewire.Routes`).
   Screenshot arguments: `-openReportRecord YES` (open the first report's record directly), `-showReportDelete YES` (show delete confirmation directly), both starting from the reports page.
 - Not yet: Android (its Health entry has no reports section and its box takes no files, #4329).
 
@@ -316,13 +429,12 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
 ## Health trends on iOS (#3272)
 
 - `apple/Persona/Views/Health/HealthTrendsSection.swift`: **Health Trends**, steps (`bar`), sleep and weight (`line`; `stat` when there is only one day) over the last 7 / 30 days, drawn as `persona-card` with the same renderer as cards in health answers (`AssistantViewCard`).
-- Data is read from Apple Health directly on the phone (`HealthTool.daily`, the same queries as `phone_health_summary`), not via the hub. If health permission has not been requested, it shows **Allow Access**; if it cannot read, it explains where to turn it on.
-- It is just a component; the Health space entry point and past chats are in #2901, whose Health home page includes this section directly.
+- Data is read directly from Apple Health on the iPhone or iPad (`HealthTool.daily`, the same queries as `phone_health_summary`), not via the hub. The reusable section can offer **Allow Access** before permission has been requested, or explain how to allow reading when it has no data; the home hides these empty states as described below.
+- On the Health home, trends follow Today and, on iPhone, Activity rings. iPhone and iPad show the section only when at least one metric has data; unavailable, unreadable or not-yet-authorized data leaves it hidden. Home reads do not request access. Vision Pro and the web do not include this section.
 - Screenshots: `-showHealthTrends sample` (the simulator has no health data, so sample data is used), `empty`, `ask`, `YES` (reads the device).
 
 ## Later
 
-- A Health tab on the phone (#2901), with **Health Trends** above on its home page.
 - Suggest "Continue in Health" when the main chat touches on health.
 - diet-advice push notifications go into the Health space.
 - The main chat reading the health directory via Bash or via Codex: block it fully with a sandbox or OS-level isolation (after #3282).
