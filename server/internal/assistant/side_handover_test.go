@@ -27,20 +27,25 @@ func sideReviewFixture(t *testing.T) (*Service, *fakeHub, Todo) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the link", func() bool { return len(onlyTodo(s).Agents) == 1 })
-	todo := onlyTodo(s)
+	return s, f, deliverPendingReview(t, s, f, onlyTodo(s), "side1")
+}
+
+// deliverPendingReview starts the fixture with a review already delivered to its supervisor.
+func deliverPendingReview(t *testing.T, s *Service, f *fakeHub, todo Todo, supervisor string) Todo {
+	t.Helper()
 	v, _, err := s.updateSupervision(context.Background(), todo.ID, func(v *Supervision) bool {
-		v.Supervisor, v.State = "side1", reviewPending
+		v.Supervisor, v.State = supervisor, reviewPending
 		return true
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.signal(superviseSignal{Todo: todo.ID, Kind: sigReview, Key: reviewKey(&v), To: "side1"})
-	waitFor(t, "the legacy side conversation's supervision message", func() bool { return reviewsTold(f, "side1", todo.ID) == 1 })
-	if v := todoNow(s, todo.ID).Supervision; v == nil || v.Supervisor != "side1" || v.State != reviewPending {
-		t.Fatalf("ledger = %+v, want side1's legacy task waiting for review", v)
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigReview, Key: reviewKey(&v), To: supervisor})
+	waitFor(t, "the initial review notice", func() bool { return reviewsTold(f, supervisor, todo.ID) == 1 })
+	if v := todoNow(s, todo.ID).Supervision; v == nil || v.Supervisor != supervisor || v.State != reviewPending {
+		t.Fatalf("ledger = %+v, want %s waiting for review", v, supervisor)
 	}
-	return s, f, todoNow(s, todo.ID)
+	return todoNow(s, todo.ID)
 }
 
 // listSide has the assistant's machine list the main conversation conv1, idle, and the side conversation side1 in
@@ -175,20 +180,22 @@ func TestReviewOfASideConversationThatIsGoneIsHandedOver(t *testing.T) {
 	waitFor(t, "the review told to the main conversation", func() bool { return reviewsTold(f, "conv1", todo.ID) == 1 })
 }
 
-// A leader conversation keeps the reviews of its tasks however long they wait: the ledger's supervisor is what places
-// a task in its direction, so handing the review over would take the task out of the direction the owner set up. Its
-// already-delivered legacy signal is not repeated to main.
+// A direction keeps reviews for Agents it explicitly adopted (#5732). Even after
+// the cardless settle time, the reminder goes to that lead and the ledger stays its own.
 func TestReviewLeftWaitingByALeaderStaysWithIt(t *testing.T) {
-	s, f, todo := sideReviewFixture(t)
-	ctx := context.Background()
-	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"side1"} })
-
-	s.superviseWatch(ctx, time.Now().Add(time.Hour))
-	s.sendDigest(ctx)
-	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "side1" {
-		t.Fatalf("a leader's review was handed to %q", got)
+	c := boxAgent("manual01")
+	s, f := leadTakeEnv(t, c)
+	if _, err := runJSON(t, s, "lead0001", "agent_supervise", map[string]any{"machine": "box", "session_id": c.SessionID}); err != nil {
+		t.Fatal(err)
+	}
+	todo := deliverPendingReview(t, s, f, onlyTodo(s), "lead0001")
+	s.superviseWatch(t.Context(), time.Now().Add(time.Hour))
+	s.sendDigest(t.Context())
+	waitFor(t, "the cardless reminder to the lead", func() bool { return reviewsTold(f, "lead0001", todo.ID) == 2 })
+	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "lead0001" {
+		t.Fatalf("the review moved to %q", got)
 	}
 	if n := reviewsTold(f, "conv1", todo.ID); n != 0 {
-		t.Fatalf("the main conversation got %d supervision message(s) for a leader's already-told task", n)
+		t.Fatalf("main got %d supervision messages for the lead's review", n)
 	}
 }
