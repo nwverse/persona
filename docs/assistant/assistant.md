@@ -2111,6 +2111,23 @@ purpose id. Out of scope: the reverse. Nothing suggests a stronger tier, whateve
 for each role" says when to raise it. Once the owner has moved the supervisor down, the same rule may name the next
 tier down after its own 20 settled acceptances, but never the smallest.
 
+## Card ledger (four-layer cards, rule 5)
+
+Every card or push the manager sends to the owner is recorded with its layer (1 should not exist, 2 the supervising
+lead handles it, 3 the main conversation handles it, 4 only the owner can), its source and its owner
+(`assistant/card_layers.go`; design `docs/designs/cards-four-layers-20261123.md`, rule 5). The source is a code
+constant named where the push is made (`withCard` on the ctx of `push`/`pushResult`/`ask`, `deliverCard`, or the kind
+of an Agent's card in `notifyInteractionAt`), and its layer comes from one table, `cardLayers`: layer 4 is only the
+whitelist of the design's Appendix B (secret/form cards, `confirmOutbound`, a supervisor's `needs_user` and its decision
+push) plus what the owner set up themself (their reminders, water reminders, minutes, the day recap, finished-turn
+pushes); a source missing from the table is layer 0, unclassified, and counts as not layer 4. The owner of an Agent's
+card is the conversation supervising its task, of any other push the conversation it opens. Counts are kept per day of
+the owner's time zone in the setting `assistant.card_ledger` (eight days; in memory only without a database). The
+briefing card (`briefFixedCardLedger`, after the disabled routines) says the reconciliation in one line, "Pushed to you
+today: N, of which layers 1–3: M (sources a×2, b×1)": a briefing before noon reconciles the whole of yesterday, one from
+noon on today so far, so each day is reconciled in full once, the next morning. With nothing pushed that day there is no
+line. The ledger only records; which cards are pushed is decided where they are made.
+
 ## Supervision by model (#5086)
 
 Step K1 of the same proposal (section 9c): what supervision costs per accepted task, by the model the supervisor ran

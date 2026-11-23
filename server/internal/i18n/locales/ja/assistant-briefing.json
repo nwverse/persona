@@ -40,5 +40,10 @@
   "count_none": "対応が必要な項目はありません",
   "count_sep": "・",
   "later_done": "処理済み",
-  "later_handled": "処理済みにしました。"
+  "later_handled": "処理済みにしました。",
+  "card_ledger_today": "今日あなたに届いたカード {n} 件、うち第 1–3 層 {m} 件（発生元 {sources}）",
+  "card_ledger_today_clean": "今日あなたに届いたカード {n} 件、すべて第 4 層",
+  "card_ledger_yesterday": "昨日あなたに届いたカード {n} 件、うち第 1–3 層 {m} 件（発生元 {sources}）",
+  "card_ledger_yesterday_clean": "昨日あなたに届いたカード {n} 件、すべて第 4 層",
+  "card_ledger_sep": "、"
 }

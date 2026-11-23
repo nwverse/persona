@@ -40,5 +40,10 @@
   "count_none": "nothing needs you",
   "count_sep": " · ",
   "later_done": "Handled",
-  "later_handled": "Marked as handled."
+  "later_handled": "Marked as handled.",
+  "card_ledger_today": "Pushed to you today: {n}, of which layers 1–3: {m} (sources {sources})",
+  "card_ledger_today_clean": "Pushed to you today: {n}, all layer 4",
+  "card_ledger_yesterday": "Pushed to you yesterday: {n}, of which layers 1–3: {m} (sources {sources})",
+  "card_ledger_yesterday_clean": "Pushed to you yesterday: {n}, all layer 4",
+  "card_ledger_sep": ", "
 }

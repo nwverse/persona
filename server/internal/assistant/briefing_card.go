@@ -96,6 +96,7 @@ func (s *Service) briefCardWithHeader(f *briefFacts, label, answer, header strin
 	// non-owner tail at BriefingWaits.MaxRows; all owner rows are written here. Later optional sections yield room.
 	briefFixedDirections(c, &plain, &room, f)
 	briefFixedDisabled(c, &plain, &room, f)
+	briefFixedCardLedger(c, &plain, &room, f)
 	// Everything through the fixed lists is required. If those lists alone exceed the old 1500-rune phone fallback,
 	// deliver them in full and omit only the optional sections below; clipping the combined string would cut owner rows.
 	requiredPlain := len(plain)
@@ -351,6 +352,17 @@ func briefFixedDisabled(c *feishubot.Card, plain *[]string, room *briefBudget, f
 		*plain = append(*plain, r.Line)
 	}
 	text := body.String()
+	c.Markdown(text)
+	room.bytes, room.els = room.bytes-mdCost(text), room.els-1
+}
+
+// briefFixedCardLedger is the day's one line on the cards pushed to the owner (card_layers.go), when any was.
+func briefFixedCardLedger(c *feishubot.Card, plain *[]string, room *briefBudget, f *briefFacts) {
+	if f.CardLedger == "" {
+		return
+	}
+	*plain = append(*plain, f.CardLedger)
+	text := feishubot.EscapeMarkdown(f.CardLedger)
 	c.Markdown(text)
 	room.bytes, room.els = room.bytes-mdCost(text), room.els-1
 }
