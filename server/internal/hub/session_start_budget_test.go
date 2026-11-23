@@ -73,7 +73,7 @@ func TestSessionStartBudgetMatchesNodeStartup(t *testing.T) {
 			if want == "" {
 				want = tc.configured
 			}
-			budget := startBudget(startsAsync(tc.async, "", "wrapper", want))
+			budget := startBudget(startsAsync(tc.async, "", "wrapper", want), 0)
 			min, max := 60*time.Second, 101*time.Second
 			if tc.short {
 				min, max = 10*time.Second, 16*time.Second
@@ -85,34 +85,54 @@ func TestSessionStartBudgetMatchesNodeStartup(t *testing.T) {
 	}
 }
 
-func TestSessionStartAgyUsesSynchronousBudget(t *testing.T) {
+func TestSessionStartUsesResolvedLauncherBudget(t *testing.T) {
 	for _, tc := range []struct {
-		name, requested, resolved, agent string
-		replyAt                          time.Duration
-		wantOK                           bool
+		name, requested, resolved, agent, resume string
+		codexWait, replyAt, timeout              time.Duration
+		replyError                               *rpc.Error
 	}{
-		{"named launcher", "agy", "agy", "", 20 * time.Second, true},
-		{"manager resolved launcher", "", "agy-wrapper", "agy", 99 * time.Second, true},
-		{"manager resolved launcher times out", "", "agy-wrapper", "agy", 101 * time.Second, false},
+		{name: "named AGY launcher", requested: "agy", resolved: "agy", replyAt: 20 * time.Second},
+		{name: "manager resolved AGY", resolved: "agy-wrapper", agent: "agy", replyAt: 99 * time.Second},
+		{name: "AGY retains its own budget", resolved: "agy-wrapper", agent: "agy", codexWait: 3 * time.Minute,
+			replyAt: 101 * time.Second, timeout: 100 * time.Second},
+		{name: "named Codex launcher", requested: "codex", resolved: "codex", codexWait: 3 * time.Minute, replyAt: 150 * time.Second},
+		{name: "manager resolved Codex", resolved: "codex-wrapper", agent: "codex", codexWait: 3 * time.Minute, replyAt: 150 * time.Second},
+		{name: "old Codex node", resolved: "codex-wrapper", agent: "codex", replyAt: 101 * time.Second, timeout: 100 * time.Second},
+		{name: "Codex resume retains its own budget", requested: "codex", resolved: "codex", agent: "codex", resume: "existing",
+			codexWait: 3 * time.Minute, replyAt: 101 * time.Second, timeout: 100 * time.Second},
+		{name: "Codex sends its own configured timeout", resolved: "codex-wrapper", agent: "codex", codexWait: 4 * time.Minute,
+			replyAt: 4 * time.Minute, replyError: &rpc.Error{Code: "codex_no_box", Message: "no composer within 240 seconds", Data: json.RawMessage(`{"seconds":240}`)}},
+		{name: "Codex budget includes a startup allowance", resolved: "codex-wrapper", agent: "codex", codexWait: 4 * time.Minute,
+			replyAt: 281 * time.Second, timeout: 280 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := newTestHub(t)
 				startReceiptNode(t, h, func(ctx context.Context, raw json.RawMessage) (any, error) {
-					var params struct{ Launcher string }
+					var params struct {
+						Launcher string
+						Async    bool
+					}
 					if err := json.Unmarshal(raw, &params); err != nil {
 						return nil, err
 					}
 					if params.Launcher != tc.resolved {
 						t.Errorf("node launcher = %q, want %q", params.Launcher, tc.resolved)
 					}
+					if tc.resume == "" && (tc.agent == "codex" || tc.resolved == "codex") && params.Async {
+						t.Error("fresh Codex start requested an async reply from the node")
+					}
 					select {
 					case <-ctx.Done():
 						return nil, ctx.Err()
 					case <-time.After(tc.replyAt):
-						return map[string]any{"session": proto.Session{SessionID: "created", Agent: "agy"}}, nil
+						if tc.replyError != nil {
+							return nil, tc.replyError
+						}
+						return map[string]any{"session": proto.Session{SessionID: "created", Agent: tc.agent}}, nil
 					}
 				})
+				h.byID["machine"].info.CodexStartWait = tc.codexWait
 				hubIn, managerOut := io.Pipe()
 				managerIn, hubOut := io.Pipe()
 				hubPeer, managerPeer := rpc.New("h", hubOut), rpc.New("m", managerOut)
@@ -144,6 +164,7 @@ func TestSessionStartAgyUsesSynchronousBudget(t *testing.T) {
 
 				body, err := json.Marshal(map[string]any{
 					"machine_id": "machine", "cwd": "/code", "launcher": tc.requested, "tab_name": "test", "async": true,
+					"resume_session_id": tc.resume,
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -152,14 +173,36 @@ func TestSessionStartAgyUsesSynchronousBudget(t *testing.T) {
 				w := httptest.NewRecorder()
 				startedAt := time.Now()
 				h.startSession(w, r)
-				if (w.Code == http.StatusOK) != tc.wantOK {
-					t.Fatalf("start after %s = %d %s", time.Since(startedAt), w.Code, w.Body)
-				}
-				if elapsed := time.Since(startedAt); !tc.wantOK && elapsed != 100*time.Second {
-					t.Fatalf("start timed out after %s, want 100s", elapsed)
+				elapsed := time.Since(startedAt)
+				switch {
+				case tc.timeout > 0:
+					if w.Code == http.StatusOK || elapsed != tc.timeout || !strings.Contains(w.Body.String(), `"code":"timeout"`) {
+						t.Fatalf("start after %s = %d %s, want timeout after %s", elapsed, w.Code, w.Body, tc.timeout)
+					}
+				case tc.replyError != nil:
+					if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"code":"codex_no_box"`) ||
+						!strings.Contains(w.Body.String(), `"seconds":240`) {
+						t.Fatalf("start after %s = %d %s, want the node's timeout", elapsed, w.Code, w.Body)
+					}
+				default:
+					if w.Code != http.StatusOK {
+						t.Fatalf("start after %s = %d %s, want success", elapsed, w.Code, w.Body)
+					}
 				}
 			})
 		})
+	}
+}
+
+func TestMachineSnapshotReportsCodexStartBudget(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "machine"})
+	if got := m.snapshot().CodexStartBudgetMS; got != 0 {
+		t.Fatalf("old node budget = %d ms, want no advertised budget", got)
+	}
+	m.info.CodexStartWait = 3 * time.Minute
+	if got := m.snapshot().CodexStartBudgetMS; got != 220_000 {
+		t.Fatalf("advertised budget = %d ms, want 220000", got)
 	}
 }
 

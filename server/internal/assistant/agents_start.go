@@ -77,8 +77,8 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 				delete(params, "permission_mode")
 			}
 			leaveLauncherNote(ctx, note) // the app says so (agents_bus.go launcher_note, #4661)
-			// AGY returns a session only after startup, including for a launcher resolved from Model settings.
-			if declared, _ := params["agent_type"].(string); declared == "" && agent.agent == "agy" {
+			// AGY and Codex return a session only after startup, including for a launcher resolved from Model settings.
+			if declared, _ := params["agent_type"].(string); declared == "" && (agent.agent == "agy" || agent.agent == "codex") {
 				params["agent_type"] = agent.agent
 			}
 		}

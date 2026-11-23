@@ -144,6 +144,7 @@ func (n *Node) tabSpace(ctx context.Context, launch host.Launcher, cwd, asked st
 	}
 	for _, space := range spaces {
 		if space.ID == ts.id {
+			// A live rename takes precedence. The saved label is the fallback if the workspace disappears.
 			if space.Label != "" {
 				ts.label = space.Label
 			}

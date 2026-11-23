@@ -241,6 +241,9 @@ func (m *Machine) snapshot() proto.Machine {
 		s.CanDeploy, s.DeployReason = &can, why
 	}
 	s.Online, s.Error = m.online || warm, m.err
+	if m.info.CodexStartWait > 0 {
+		s.CodexStartBudgetMS = startBudget(false, m.info.CodexStartWait).Milliseconds()
+	}
 	if m.lastSeen.After(s.LastSeen) { // the session lists the hub got since the manager's last report
 		s.LastSeen = m.lastSeen
 	}

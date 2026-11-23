@@ -110,14 +110,19 @@ func TestAgentStartParams(t *testing.T) {
 	}
 }
 
-func TestAgentStartParamsResolvesAgyType(t *testing.T) {
-	f := newFakeHub().withMachine()
-	f.launcherList = []proto.Launcher{{Name: "agy-wrapper", Agent: "agy", Source: "zshrc"}}
-	s := newTestService(t, f)
-	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.agy-wrapper"})
-	got, err := s.AgentStartParams(t.Context(), AgentStartParams{MachineID: "server", Params: map[string]any{"async": true}})
-	if err != nil || got["launcher"] != "agy-wrapper" || got["agent_type"] != "agy" {
-		t.Fatalf("resolved start params = %v, %v", got, err)
+func TestAgentStartParamsResolvesSynchronousAgentType(t *testing.T) {
+	for _, agent := range []string{"agy", "codex"} {
+		t.Run(agent, func(t *testing.T) {
+			launcher := agent + "-wrapper"
+			f := newFakeHub().withMachine()
+			f.launcherList = []proto.Launcher{{Name: launcher, Agent: agent, Source: "zshrc"}}
+			s := newTestService(t, f)
+			setModel(t, s, "agent.new", ModelBinding{Provider: "launcher." + launcher})
+			got, err := s.AgentStartParams(t.Context(), AgentStartParams{MachineID: "server", Params: map[string]any{"async": true}})
+			if err != nil || got["launcher"] != launcher || got["agent_type"] != agent {
+				t.Fatalf("resolved start params = %v, %v", got, err)
+			}
+		})
 	}
 }
 

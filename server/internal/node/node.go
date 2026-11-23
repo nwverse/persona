@@ -2980,6 +2980,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		BuiltinPrograms:    builtinProgramIDs,
 		Clipboard:          clipshare.Support(),
 		ClaudePlugin:       n.claudePluginStatus(),
+		CodexStartWait:     codexStartWait,
 	}
 }
 
