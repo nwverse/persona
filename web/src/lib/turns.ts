@@ -776,7 +776,17 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
     }
     if (result.is_error) continue;
     if (name === "task_review") {
-      if (use.tool_input?.verdict === "accepted" || use.tool_input?.verdict === "needs_user") return { visible: true, completedSilent: false };
+      const verdict = use.tool_input?.verdict;
+      let internalAccepted = false;
+      if (verdict === "accepted" && use.tool_input?.user_check !== true) {
+        try {
+          const value: unknown = JSON.parse(result.text ?? "");
+          internalAccepted = !!value && typeof value === "object" && !Array.isArray(value) && "background" in value && value.background === true;
+        } catch {
+          // Legacy and malformed receipts keep the accepted review visible.
+        }
+      }
+      if ((verdict === "accepted" || verdict === "needs_user") && !internalAccepted) return { visible: true, completedSilent: false };
       continue;
     }
     if (name !== "supervision_finish") return { visible: true, completedSilent: false };
