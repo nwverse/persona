@@ -99,9 +99,9 @@ func (s *Service) planTaskSupervisor(ctx context.Context, conversation string, t
 	return "", planInvalid{i18n.Err("assistant-conversations.supervision_reviewer_required")}
 }
 
-// legacyLeaderPlanSupervision reports whether t's saved pre-#5732 plan explicitly assigned its current leader.
-// That topology is not the manual-Agent exception and rehomes to main. An unavailable or non-matching plan proves
-// nothing, so an explicit leader assignment is left alone rather than guessed away.
+// legacyLeaderPlanSupervision reports whether t's saved plan assigned its current leader before the ledger recorded
+// where an assignment came from (#13346). That is the leader's own planning, which the leader supervises (#13362), not
+// the manual-Agent exception. An unavailable or non-matching plan proves nothing.
 func (s *Service) legacyLeaderPlanSupervision(ctx context.Context, t Todo) bool {
 	if t.PlanID == "" || t.Supervision == nil || t.Supervision.assigned() || !s.isLeader(ctx, t.Supervision.Supervisor) {
 		return false
@@ -118,23 +118,34 @@ func (s *Service) legacyLeaderPlanSupervision(ctx context.Context, t Todo) bool 
 	return false
 }
 
-// effectiveSupervisor resolves current plan/transfer ownership before legacy migration policy, including needs_user.
+// effectiveSupervisor is the conversation that supervises t: the ledger's supervisor, or main when it names none. A
+// leader's planning written before the ledger recorded its source is not main's either; rehomeSupervisedTodos marks it
+// as that leader's plan assignment when the to-dos load (#13619).
 func (s *Service) effectiveSupervisor(ctx context.Context, cfg Settings, t Todo) string {
 	if t.Supervision == nil || t.Supervision.Supervisor == "" {
-		return cfg.Main
-	}
-	if t.Supervision.assigned() {
-		return t.Supervision.Supervisor
-	}
-	if s.legacyLeaderPlanSupervision(ctx, t) {
 		return cfg.Main
 	}
 	return t.Supervision.Supervisor
 }
 
+// legacyLeaderAssignment reports whether open, unmarked t is work its current leader handed out before the ledger
+// recorded where an assignment came from: a saved plan that assigned it to the leader, or an Agent on a task the leader
+// itself opened. task_plan, agent_start and hand-offs record both as "plan" now. A leader's direction to-do with no
+// Agent yet stays unmarked (the plan that first runs one decides its supervisor), and so does a manually opened Agent
+// assigned to a leader, which keeps its compatibility route.
+func (s *Service) legacyLeaderAssignment(ctx context.Context, t Todo) bool {
+	v := t.Supervision
+	if t.DoneAt != nil || v == nil || v.assigned() || !s.isLeader(ctx, v.Supervisor) {
+		return false
+	}
+	return (t.Origin == v.Supervisor && len(t.Agents) > 0) || s.legacyLeaderPlanSupervision(ctx, t)
+}
+
 // rehomeSupervisedTodos brings open legacy side-supervised tasks under main without rewriting their review state or
 // criteria. Explicit leader assignments and task-leader workers are the two specialized topologies to keep (#5732).
 // A legacy background ledger also stays: that conversation may still accept the old task it already supervised.
+// A leader's own unmarked work is first recorded as its plan assignment, as task_plan would record it now: the
+// supervisor_source column arrived empty, and without it every route treated such work as main's (#13619).
 func (s *Service) rehomeSupervisedTodos(ctx context.Context) {
 	main := s.settings(ctx).Main
 	if main == "" {
@@ -154,8 +165,20 @@ func (s *Service) rehomeSupervisedTodos(ctx context.Context) {
 		if t.Supervision.assigned() {
 			continue
 		}
+		if s.legacyLeaderAssignment(ctx, t) {
+			if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+				if v.assigned() || v.Supervisor != sup {
+					return false
+				}
+				v.SupervisorSource = "plan"
+				return true
+			}); err != nil {
+				s.logf("task %s: record its leader's plan assignment: %v", t.ID, err)
+			}
+			continue
+		}
 		_, _, worker := parseLeaderRef(sup)
-		manualLeader := s.isLeader(ctx, sup) && s.effectiveSupervisor(ctx, s.settings(ctx), t) == sup
+		manualLeader := s.isLeader(ctx, sup)
 		capableRuntime := sup != "" && t.Origin == sup && s.runtimeWithSupervisionPolicy(ctx, s.settings(ctx).MachineID, sup)
 		if sup == main || worker || manualLeader || capableRuntime || s.isBackground(ctx, sup) {
 			continue
