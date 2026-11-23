@@ -1571,6 +1571,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.a2aLoop(ctx)
 	go s.resourceLoop(ctx)
 	go s.transcriptionReadyLoop(ctx)
+	go s.waterReminderLoop(ctx)
 	recoverCtx, cancel := context.WithTimeout(ctx, taskFailTimeout)
 	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {
 		s.logf("recover interrupted task starts: %v", err)
@@ -1588,6 +1589,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.sourceReportLoop(ctx)             // the reports back to where a todo was asked (todo_source.go)
 	go s.remindLoop(ctx)                   // the todos' reminders (todo_plan.go)
 	go s.urgentLoop(ctx)                   // urgent calls' retries and reminders (urgent_call_loop.go)
+	go s.attentionLoop(ctx)                // the attention mode's end (attention.go)
 	go s.channelLoop(ctx)                  // the channels' runs that lost their watcher (channels.go)
 	go s.kbLoop(ctx)                       // the knowledge base (kb.go)
 	go s.kbHistoryLoop(ctx)                // importing chats' older history into it, off by default (kbhistory/history.go)
@@ -1598,11 +1600,13 @@ func (s *Service) Run(ctx context.Context) {
 	go s.admissionQueueLoop(ctx)           // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
 	// The leaders' tasks that got stuck (leader_reports.go).
 	go s.leaderReportsLoop(ctx)
-	go s.healthLoop(ctx)       // each machine's launchers (launcher_health.go)
-	go s.instructionsLoop(ctx) // the CLAUDE.md on the assistant's machine (start.go)
-	go s.searchLoop(ctx)       // the chat search index (search_index.go)
-	go s.historyLoop(ctx)      // durable assistant history, on by default
-	go s.undeliveredLoop(ctx)  // the owner's messages that could not go in (undelivered.go)
+	go s.healthLoop(ctx)         // each machine's launchers (launcher_health.go)
+	go s.repoMirrorSyncLoop(ctx) // opt-in low-frequency managed bare repository mirrors (repo_mirrors.go)
+	go s.instructionsLoop(ctx)   // the CLAUDE.md on the assistant's machine (start.go)
+	go s.searchLoop(ctx)         // the chat search index (search_index.go)
+	go s.historyLoop(ctx)        // durable assistant history, on by default
+	go s.undeliveredLoop(ctx)    // the owner's messages that could not go in (undelivered.go)
+	go s.captureLoop(ctx)        // sorting and filing quick captures (capture_sort.go)
 	s.scheduleLoop(ctx)
 	s.todoViewsStop() // the To-dos view's timers (todo_view_push.go)
 }
@@ -2258,7 +2262,7 @@ func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 	if s.exitPolicy(ctx, name+"\n"+body, run.SessionID, t.Space).Redact {
 		name, _ = s.redactedNotice(ctx, l, t.Space)
 	}
-	s.push(ctx, Notification{Title: i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: body})
+	s.push(withCard(ctx, cardScheduleFailed), Notification{Title: i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: body})
 }
 
 // oneOffNotStarted handles confirmed pre-delivery failures; Facts/Report runs use the fixed-facts fallback first.
@@ -2336,7 +2340,7 @@ func (s *Service) tellWaitingSkip(ctx context.Context, t Task, m Device) {
 	if s.exitPolicy(ctx, name, t.RunSessionID, t.Space).Redact {
 		name, _ = s.redactedNotice(ctx, l, t.Space)
 	}
-	s.push(ctx, Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: t.RunSessionID,
+	s.push(withCard(ctx, cardScheduleSkipped), Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: t.RunSessionID,
 		Title: i18n.T(l, "assistant-schedule.waiting_skipped", i18n.Args{"name": name}), Body: i18n.T(l, "assistant-schedule.waiting_skipped_body")})
 }
 
@@ -2450,7 +2454,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		if s.exitPolicy(ctx, name+"\n"+text, run.SessionID, t.Space).Redact {
 			name, _ = s.redactedNotice(ctx, s.lang(ctx), t.Space)
 		}
-		s.push(ctx, Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: run.SessionID, Title: i18n.T(s.lang(ctx), "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: text})
+		s.push(withCard(ctx, cardScheduleFailed), Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: run.SessionID, Title: i18n.T(s.lang(ctx), "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: text})
 	}
 	if run.Retried {
 		return
@@ -3141,6 +3145,10 @@ func (s *Service) scheduleRoutes() {
 			writeTaskStateError(w, err)
 			return
 		}
+		if err := s.applyTaskSpace(r, &t, raw); err != nil { // a track of its own (schedule_space.go)
+			writeTaskSpaceError(w, err)
+			return
+		}
 		applyUntil(&t, end, hasUntil, clearUntil)
 		dropStaleUntil(&t, hasUntil, now)
 		if err := checkTask(&t, now); err != nil {
@@ -3226,6 +3234,10 @@ func (s *Service) scheduleRoutes() {
 		}
 		if err := editTaskState(&t, in, raw, now); err != nil {
 			writeTaskStateError(w, err)
+			return
+		}
+		if err := s.applyTaskSpace(r, &t, raw); err != nil { // moved to another track (schedule_space.go)
+			writeTaskSpaceError(w, err)
 			return
 		}
 		push, has, err := pushIn(raw)

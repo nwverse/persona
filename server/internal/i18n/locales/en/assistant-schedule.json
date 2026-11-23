@@ -80,5 +80,9 @@
   "selected_file_unavailable": "The selected file is unavailable or its execution context changed. Remove it and choose it again.",
   "file_runtime_unsupported": "This agent does not support file selection. Use text or choose another agent.",
   "input_context_unavailable": "The task or its original conversation is unavailable. Reopen the task and try again.",
-  "execution_antigravity_unavailable": "Antigravity is disconnected or unavailable on {machine}. Restore Antigravity on that computer, then run this task again to continue its existing conversation."
+  "execution_antigravity_unavailable": "Antigravity is disconnected or unavailable on {machine}. Restore Antigravity on that computer, then run this task again to continue its existing conversation.",
+  "execution_space_directory": "Tasks in a space use the space's folder. Clear the working directory to continue.",
+  "unknown_space": "That space is not available for tasks. Choose another space or none.",
+  "bad_topic_policy": "Choose whether each run starts a new conversation or continues the same one.",
+  "space_owner_only": "Only you can move a task into or out of a space, from the app."
 }

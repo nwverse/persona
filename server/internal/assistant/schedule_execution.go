@@ -78,6 +78,9 @@ func (s *Service) checkTaskSourceRestore(ctx context.Context, previous, next Tas
 // Check both edited candidates and stored tasks; validation in the editor alone cannot protect old records.
 func checkTaskExecutionSpace(t Task) error {
 	if t.Space != "" && t.Cwd != "" {
+		if t.Space != SpaceHealth {
+			return i18n.Err("assistant-schedule.execution_space_directory")
+		}
 		return i18n.Err("assistant-schedule.execution_health_directory")
 	}
 	return nil
