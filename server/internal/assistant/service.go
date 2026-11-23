@@ -391,6 +391,7 @@ func New(o Options) *Service {
 	s.urgentCallRoutes() // urgent_call.go
 	s.reporterRoutes()
 	s.directionRoutes()
+	s.directionOutsideRoutes()
 	s.dispatchPolicyRoutes() // dispatch_policy_routes.go
 	s.dispatchGuardRoutes()  // dispatch_guard.go
 	s.startPresetRoutes()
@@ -945,6 +946,9 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 		// identity on every client. Keep its stored ordinary title for when it ends.
 		names := s.directionSessionNames(ctx, cfg, titles)
 		for id, name := range names {
+			if d := s.directionOf(id); d != nil && d.Outside != nil {
+				continue // this is a direction, not a conversation to decorate
+			}
 			if name != "" {
 				view(id, leadersAt).Title = name
 			}
