@@ -5,6 +5,7 @@ Used by test_module_classification.py (every unit classified, no stale line) and
 (test_apple_module_refs.py), which takes a module's Apple directories from here.
 """
 from dataclasses import dataclass
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import re
 import subprocess
@@ -93,11 +94,11 @@ def tracked_files(root=ROOT):
 
 
 def gradle_projects(settings_text):
-    """Every project path a settings.gradle.kts includes."""
-    projects = []
-    for call in re.finditer(r"\binclude\(([^)]*)\)", settings_text):
-        projects += re.findall(r'"(:[^"]+)"', call.group(1))
-    return projects
+    """Use the same literal include inventory as the Android CI shards."""
+    spec = spec_from_file_location("android_shards", ROOT / "scripts/ci/android-shards.py")
+    shards = module_from_spec(spec)
+    spec.loader.exec_module(shards)
+    return shards.modules(settings_text)
 
 
 def inventory(files, settings_text):
