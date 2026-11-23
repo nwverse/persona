@@ -1429,6 +1429,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     static let healthSpace = "health"
     /// A conversation of the health space: kept off the Persona page's lists, shown on Health.
     var isHealth: Bool { assistantSpace == Self.healthSpace }
+    /// A conversation of any of the assistant's spaces, health's included (#13500): kept off the Persona page's lists.
+    var inSpace: Bool { assistantSpace != nil }
+    /// A conversation of a domain space other than health's (#13500, docs/apple/ios.md "Domain spaces").
+    var isDomainSpace: Bool { inSpace && !isHealth }
 
     var hasSource: Bool { !(sourceKind ?? "").isEmpty }
     var canRead: Bool { !hasSource || capabilities?.read == true }

@@ -12,11 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // DevelopmentConfig is trusted installation configuration, never supplied by an
@@ -135,7 +136,7 @@ func DevelopmentStep(operation, step string, builtin bool) DevelopmentProgress {
 
 // Progress labels can only name compiled programs and Go's public target
 // components. Paths, configuration, filenames and command output are excluded.
-var developmentTargetLabel = regexp.MustCompile(`^(personad|persona-(hub|node|manager)) \((aix|android|darwin|dragonfly|freebsd|illumos|ios|js|linux|netbsd|openbsd|plan9|solaris|wasip1|windows)-(386|amd64|arm|arm64|loong64|mips|mipsle|mips64|mips64le|ppc64|ppc64le|riscv64|s390x|wasm)\)$`)
+var developmentTargetLabel = lazyre.New(`^(personad|persona-(hub|node|manager)) \((aix|android|darwin|dragonfly|freebsd|illumos|ios|js|linux|netbsd|openbsd|plan9|solaris|wasip1|windows)-(386|amd64|arm|arm64|loong64|mips|mipsle|mips64|mips64le|ppc64|ppc64le|riscv64|s390x|wasm)\)$`)
 
 func readDevelopmentProgress(r io.Reader, operation string, builtin bool, report func(DevelopmentProgress)) {
 	s := bufio.NewScanner(r)

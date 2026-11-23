@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assistantEntries } from "./assistant-entries";
+import { directUserWaiting } from "./direct-waiting";
 import { agentRowKey, agentRowLabel, agentRowMark } from "./task-row-status";
 import { makeSessionLookup, type Todo } from "./todos";
 import type { Session } from "./types";
@@ -65,7 +66,9 @@ describe("closeout-based entries aligned with #10174", () => {
   });
   it("escalates only after the full hour and honors real follow-up, not automatic ledger writes", () => {
     expect(entries(agent, todo, now).needsYou).toEqual([]);
-    expect(keys(entries(agent, todo, now + 1).needsYou)).toEqual(["task:task"]);
+    const stopped = entries(agent, todo, now + 1).needsYou;
+    expect(keys(stopped)).toEqual(["task:task"]);
+    expect(keys(directUserWaiting(stopped))).toEqual(["task:task"]);
     const followed = { ...todo, supervision: { ...todo.supervision!, followed_up_at: new Date(now).toISOString() } };
     expect(entries(agent, followed, now + 1).needsYou).toEqual([]);
     expect(entries(agent, followed, now + 1).justFinished).toEqual([]);
