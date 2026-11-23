@@ -1202,7 +1202,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             // Each module's pages (Modules.kt); in demo mode a module has no services and says why its pages cannot work.
             moduleEntries(modules) { module ->
                 persona.core.moduleapi.ModuleNavContext(navigator, session.modules[module.id],
-                    unavailable = { message -> UnavailablePage(message, navigator) })
+                    unavailable = { message -> UnavailablePage(message, navigator) }, audioFocus = shell.audioFocus.forModule(module))
             }
             tools?.run { register(navigator) }
         }

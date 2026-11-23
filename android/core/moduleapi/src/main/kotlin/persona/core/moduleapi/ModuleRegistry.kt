@@ -16,8 +16,6 @@ class ModuleRegistry(val modules: List<PersonaModule>, warn: (String) -> Unit = 
         modules.forEach { module ->
             if (module.settingsPages().isNotEmpty())
                 warn("Module '${module.id}' declares settings pages, but Settings does not show module pages yet; they are not shown")
-            if (module.audioUses.isNotEmpty())
-                warn("Module '${module.id}' declares audio uses, but the shell has no audio broker yet; nothing arbitrates them")
         }
     }
 
