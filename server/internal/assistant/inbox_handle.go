@@ -234,6 +234,7 @@ func (b *inboxBook) setHandling(it *InboxItem, state, errText string, now time.T
 	if a == nil {
 		return
 	}
+	a.InterruptedByDisable = false // a newer handling state supersedes the off-transition interruption
 	if state != HandlingAgent {
 		a.WakeSlot = false
 	}

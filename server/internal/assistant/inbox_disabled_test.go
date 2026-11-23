@@ -214,6 +214,26 @@ func TestInboxReenabledKeepsFailureAfterDisabledInterruption(t *testing.T) {
 	checkNoTwinWork(t, h)
 }
 
+func TestInboxReenabledDoesNotResumeClosedInterruption(t *testing.T) {
+	h := agentHub(t)
+	it := disabledTwinItem(h, "closed-interruption", HandlingLooking, AgentRunning, "existing-session")
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = false })
+	h.handPass(context.Background())
+	checkTwinReleased(t, it, i18n.Default)
+	h.inbox.mu.Lock()
+	h.inbox.closeHandling(it, "user", time.Now())
+	h.inbox.mu.Unlock()
+	if !it.open() || it.Handling == nil || it.Handling.State != HandlingDone {
+		t.Fatalf("the close fixture did not leave a settled open item: %+v", it.Handling)
+	}
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
+	h.handPass(context.Background())
+	if !it.open() || it.Handling == nil || it.Handling.State != HandlingDone {
+		t.Fatalf("a settled item resumed after re-enable: %+v", it.Handling)
+	}
+	checkNoTwinWork(t, h)
+}
+
 func TestInboxReenabledInstructionConsumesInterruption(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := agentHub(t)
