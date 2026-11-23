@@ -572,6 +572,10 @@ Measured with `claude plugin … --json` in throwaway `CLAUDE_CONFIG_DIR`s while
   messages in a row taken during one long turn, the thirteenth never written anywhere). Never treat an inbox write as a
   delivery, and prefer the plugin's `$.prompt.submit({ asUser: true })` for the owner's words whenever the session's
   plugin can take them, busy or not (`docs/integrations/claude-integration.md` "Owner input through the Persona plugin").
+- Run `claude plugin validate` and `claude plugin test` on the exact conflict-resolved head, not only the pre-merge
+  branch: one lost `}` kept every hook from loading. A timer that releases a busy poll is only a scheduling boundary,
+  never `submitted: true`; let the real submission continuation ack and cover delayed rejection and `drop`, idle and
+  busy (#11980).
 
 ## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
 

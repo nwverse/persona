@@ -536,7 +536,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // (and in en and zh-Hans) against main 86ff5c5259.
 // #11801: stable structural sidebar ordering adds 343 B in ja against main 0009fe34d6 (ja 483,664 B to 484,007 B;
 // en 480,757 B to 481,104 B, zh-Hans 481,491 B to 481,816 B). Keep main's 199 B of room above the new ja size.
-export const FIRST_SCREEN_BUDGET = 484_206;
+// #8236: a conversationless direction stays visible and opens only its actual outside Agent, while a targetless one is
+// a non-link (lib/direction-names.ts, lib/direction-tree.ts, views/Sidebar.tsx and views/SidebarRows.tsx). This adds
+// 285 B in each language, measured in one environment against main c04291e493 after merging it (ja 484,098 B to
+// 484,383 B; en 481,251 B to 481,536 B, zh-Hans 481,974 B to 482,259 B). Main had 108 B of room, so the budget is
+// main's 484,206 B ceiling plus those 285 B.
+export const FIRST_SCREEN_BUDGET = 484_491;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
