@@ -126,7 +126,8 @@ func TestReviewCardlessWaitSurvivesRestart(t *testing.T) {
 	if !slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
 		t.Fatalf("card-less review not handed back: %v", pendingKinds(s, todo.ID))
 	}
-	forgetSignals(t, s)
+	// Taking a signal out of the in-memory batch is not a durable delivery acknowledgment.
+	settleService(t, s)
 	again, _ := restartedOn(t, database)
 	holdDigest(again)
 	if err := again.ensureTodosLoaded(ctx); err != nil {

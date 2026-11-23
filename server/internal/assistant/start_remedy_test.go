@@ -189,6 +189,8 @@ func TestRemedyEndsWithTheTurnThatSawIt(t *testing.T) {
 		ctx := context.Background()
 		todo, p := remedyingTask(t, s, f, keptRefusal(proto.CodeShellWaiting))
 		waitFor(t, "the supervision message", func() bool { return len(f.notices()) == 1 })
+		// The fake receiver can append the message before the startup dispatcher releases its slot.
+		waitFor(t, "the failed startup dispatch to settle", func() bool { return !s.taskStartOnWay(todo.ID) })
 		if !s.supervising("conv1") {
 			t.Fatal("the supervision turn is not held")
 		}
@@ -357,6 +359,8 @@ func TestRemedyIsNotEndedByAnotherConversationsTurn(t *testing.T) {
 	ctx := context.Background()
 	todo, p := remedyingTask(t, s, f, keptRefusal(proto.CodeShellWaiting))
 	waitFor(t, "the supervision message", func() bool { return len(f.notices()) == 1 })
+	// The fake receiver can append the message before the startup dispatcher releases its slot.
+	waitFor(t, "the failed startup dispatch to settle", func() bool { return !s.taskStartOnWay(todo.ID) })
 	s.holdPushes(ctx, "s900") // a supervision message went into another conversation after the failure was told
 	s.remedyTurnEnded(ctx, "s900")
 	if got := todoNow(s, todo.ID); got.DoneAt != nil {
