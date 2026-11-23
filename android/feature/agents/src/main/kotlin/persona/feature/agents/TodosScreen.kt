@@ -769,7 +769,7 @@ private fun TodoTriageRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = Tokens.Space.xxl)
-                            .then(if (url != null) Modifier.clickable { runCatching { links.openUri(url) } } else Modifier),
+                            .then(if (url != null) Modifier.clickable { val _ = runCatching { links.openUri(url) } } else Modifier),
                     )
                 }
                 Row(
@@ -834,6 +834,7 @@ internal fun TodoHoldLine(hold: TodoHold, modifier: Modifier = Modifier) {
         HoldUnblock.User -> stringResource(R.string.agents_todo_hold_user)
         HoldUnblock.Agent -> stringResource(R.string.agents_todo_hold_agent)
         HoldUnblock.Other -> stringResource(R.string.agents_todo_hold_other)
+        HoldUnblock.Supervisor -> stringResource(R.string.agents_todo_hold_supervisor)
         null -> null
     }
     Text(

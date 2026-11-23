@@ -104,6 +104,7 @@ GET /api/v1/sessions/{mid}/{sid}/screen
 GET /api/v1/skills
 GET /api/v1/ws
 GET {bus.Path}
+GET {devicewire.DevelopmentPackagesPath}/{commit}/{version}/{file}
 GET {devicewire.RelayPath}
 GET {link.Path}
 GET {link.StreamPath}
@@ -202,6 +203,7 @@ POST /api/v1/sessions
 POST /api/v1/sessions/{mid}/{sid}/agent-messages
 POST /api/v1/sessions/{mid}/{sid}/attach
 POST /api/v1/sessions/{mid}/{sid}/close
+POST /api/v1/sessions/{mid}/{sid}/continue-in-new-chat # starts a new chat from the computer's handoff, like POST /api/v1/sessions and .../fork (context_handoff.go, #12751)
 POST /api/v1/sessions/{mid}/{sid}/fork
 POST /api/v1/sessions/{mid}/{sid}/interrupt
 POST /api/v1/sessions/{mid}/{sid}/keys

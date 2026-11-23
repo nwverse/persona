@@ -70,7 +70,7 @@ fun ComposeMailPage(
     var confirmDiscard by remember { mutableStateOf(false) }
 
     LaunchedEffect(transport) {
-        runCatching {
+        val _ = runCatching {
             val list = transport.accounts()
             accounts = list
             if (list.isNotEmpty() && list.none { it.id == accountId }) {

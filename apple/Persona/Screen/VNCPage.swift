@@ -21,7 +21,6 @@ struct VNCPage: View {
     /// Which of its ways each rail is in on an iPhone on its side (`fittingRail`, #5289).
     @State private var topRailFit = 0
     @State private var bottomRailFit = 0
-    #if os(iOS) || os(visionOS)
     @State private var screenView: VNCScreenUIView?
     /// The picture is zoomed in (a pinch, or ⋯ › Zoom In): ⋯ offers Zoom to Fit instead of Zoom In.
     @State private var zoomed = false
@@ -70,18 +69,13 @@ struct VNCPage: View {
     @State private var askedConnection = 0
     /// Long enough for a whole Retina frame over the hub's relay on a slow network: a healthy connection is not dropped.
     private static let frameWait: Duration = .seconds(10)
-    #endif
 
     private var name: String { model.machine(ref)?.name ?? ref.id }
     /// The agent that opened it waits on the user: there is something to hand back.
     private var waiting: Bool { from.flatMap { model.session($0) }?.state == .needsYou }
-    #if os(iOS) || os(visionOS)
     @Environment(\.verticalSizeClass) private var verticalSize
     /// An iPhone on its side (#3075): the bars become rails down either side, so the Mac's picture gets the whole height.
     private var railed: Bool { verticalSize == .compact }
-    #else
-    private let railed = false
-    #endif
 
     var body: some View {
         // One layout either way round: the picture (and the keyboard's catcher) stay the same views as the phone turns.
@@ -92,10 +86,8 @@ struct VNCPage: View {
                 TimelineView(.periodic(from: .now, by: 1)) { ctx in
                     if let a = model.computerActivities[ref], a.shown(at: ctx.date) { stepLine(a) }
                 }
-                #if os(iOS) || os(visionOS)
                 if let f = fallback { fallbackBanner(f) }
                 if session?.askedForSmoothScrolling == true, model.screenInput(ref)?.granted != true { smoothScrollingLine }
-                #endif
                 #if os(iOS) && canImport(PersonaScreenKit)
                 if mobileDataCard || session?.video.askMobileData == true {
                     ScreenMobileDataCard(hotspot: session?.video.onHotspot == true) { choice in
@@ -115,7 +107,6 @@ struct VNCPage: View {
                 ZStack {
                     Color.black
                     if let s = session { content(s) }
-                    #if os(iOS) || os(visionOS)
                     // Over the picture, not above it: a line that came and went would change the picture's shape, and
                     // with it the display's on the Mac.
                     if activeMode == .phone, let line = phoneLine {
@@ -128,18 +119,13 @@ struct VNCPage: View {
                         ScreenStatsOverlay(stats: stats) { statsOn = false; ScreenStatsPref.set(false, for: ref) }
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     }
-                    #endif
                 }
-                #if os(iOS) || os(visionOS)
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
                     pictureSize = size
                     readPhoneShape(size)
                 }
-                #endif
-                #if os(iOS) || os(visionOS)
                 // Over the keyboard while it is up (the bars ride above it).
                 if typing, let s = session { VNCShortcutBar(session: s, modifiers: modifiers) }
-                #endif
             }
             bottomBar
         }
@@ -155,7 +141,6 @@ struct VNCPage: View {
             #elseif os(visionOS)
             if phone == nil { phone = PhoneScreenLink(ref: ref) }
             #endif
-            #if os(iOS) || os(visionOS)
             display = VNCDisplayChoice.of(ref)
             // Picture defaults to video on a Mac whose node offers it (it falls back to VNC by itself when it can't show);
             // a saved choice always wins.
@@ -172,7 +157,6 @@ struct VNCPage: View {
             // `-showScreenMobileData`: the mobile-data question, for screenshots (#6396).
             #if os(iOS) && canImport(PersonaScreenKit)
             if args.contains("-showScreenMobileData") { mobileDataCard = true }
-            #endif
             #endif
             #endif
             #if os(iOS) && canImport(PersonaScreenKit)
@@ -215,14 +199,11 @@ struct VNCPage: View {
                 unlocked = true
                 session?.unlockWithKeptPassword()
             }
-            #if os(iOS) || os(visionOS)
             if case .closed? = phase, let at = returnedAt, Date.now.timeIntervalSince(at) < Self.returnWindow {
                 returnedAt = nil
                 session?.start()
             }
-            #endif
         }
-        #if os(iOS) || os(visionOS)
         // Back from the background: the suspended app's connection is usually gone. Reconnect instead of waiting on
         // Reconnect being tapped; a sign-in asked for, or a connection still up, is left as it is.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -258,8 +239,6 @@ struct VNCPage: View {
             guard let s = session, s.connection == askedConnection, case .live = s.phase else { return }
             if (s.lastFrame ?? .distantPast) < at { s.reconnect() }
         }
-        #endif
-        #if os(iOS) || os(visionOS)
         // Phone Screen (#9314): on while the mode is and the screen is live, for this connection at the picture's shape.
         .task(id: phoneWant) {
             guard let phone else { return }
@@ -267,12 +246,10 @@ struct VNCPage: View {
             // picture's shape yet: the Mac's display and window stay until it has.
             if let w = phoneWant { phone.start(pair: w.pair, size: w.size) } else if !phoneShapePending { phone.stop() }
         }
-        #endif
         #if os(iOS)
         // The small window shows what the page does in Phone Screen: the portrait display alone, at its own pixels.
         .onChange(of: smallWindowCut) { _, cut in session?.cutSmallWindow(cut?.rect) }
         #endif
-        #if os(iOS) || os(visionOS)
         .onChange(of: phone?.phase) { _, phase in
             // Up for the first time with nothing on it: the window list, to pick what goes there.
             if phase == .on, phone?.placed == nil { phoneWindows = true }
@@ -280,7 +257,6 @@ struct VNCPage: View {
         .sheet(isPresented: $phoneWindows) {
             if let phone { PhoneScreenWindows(link: phone, name: name) }
         }
-        #endif
         .sheet(isPresented: $help) { VNCHelp() }
         #if os(iOS)
         .sheet(isPresented: $pipLog) { VNCPiPDiagnostics() }
@@ -457,8 +433,6 @@ struct VNCPage: View {
 
     private func moreMenu(pipItem: Bool) -> some View {
         Menu {
-            #if os(iOS) || os(visionOS)
-            // On the Mac updateNSView never reads the mode; the picker would only change the iPhone's setting (#3893).
             Picker("Mode", selection: Binding(get: { mode }, set: { mode = $0; VNCMode.set($0, for: ref) })) {
                 Label("Mouse Mode", systemImage: Theme.Icon.pointer).tag(VNCMode.mouse)
                 Label("Trackpad Mode", systemImage: Theme.Icon.trackpad).tag(VNCMode.trackpad)
@@ -520,7 +494,6 @@ struct VNCPage: View {
                 Button { screenView?.zoomIn() } label: { Label("Zoom In", systemImage: Theme.Icon.zoomIn) }
                     .accessibilityIdentifier("vnc-zoom-in")
             }
-            #endif
             Button { centerPointer() } label: { Label("Center Pointer", systemImage: Theme.Icon.pointerCenter) }
             #if os(iOS)
             // Picture in Picture itself is the button right of Close, here only when the row has no room for it.
@@ -533,8 +506,6 @@ struct VNCPage: View {
                 Button { toPictureInPicture() } label: { Label("Picture in Picture", systemImage: Theme.Icon.pictureInPicture) }
             }
             Button { pipLog = true } label: { Label("Picture in Picture Diagnostics", systemImage: Theme.Icon.help) }
-            #else
-            Button { toPictureInPicture() } label: { Label("Picture in Picture", systemImage: Theme.Icon.pictureInPicture) }
             #endif
             #if DEBUG
             if let s = session { Text(String(format: "%.0f 帧/秒 · %.1f Mbit/s", s.fps, s.mbps) + (s.latency.map { String(format: " · %.0f 毫秒", $0) } ?? "")) } // i18n-ignore
@@ -562,7 +533,6 @@ struct VNCPage: View {
             #if os(iOS)
             if AppOrientation.phone { rotateButton }
             #endif
-            #if os(iOS) || os(visionOS)
             if activeMode == .phone {
                 Button { phoneWindows = true } label: {
                     ThemedIcon(Theme.Icon.macWindows).font(Theme.Font.heading).scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -572,7 +542,6 @@ struct VNCPage: View {
                 .accessibilityLabel("Windows")
                 .accessibilityIdentifier("phone-screen-windows-button")
             }
-            #endif
             Spacer(minLength: Theme.Space.s)
             if waiting {
                 Button { handBack() } label: {
@@ -587,18 +556,14 @@ struct VNCPage: View {
                 .accessibilityIdentifier("vnc-done")
                 Spacer(minLength: Theme.Space.s)
             }
-            #if os(iOS) || os(visionOS)
             Button { typing.toggle() } label: {
                 ThemedIcon(Theme.Icon.keyboard).font(Theme.Font.heading).scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
             }
             .themedButton(prominent: typing)
             .accessibilityLabel("Keyboard")
             .accessibilityIdentifier("vnc-keyboard")
-            #endif
         }
-        #if os(iOS) || os(visionOS)
         .background { if let s = session { VNCKeyCatcher(session: s, modifiers: modifiers, typing: $typing).frame(width: Theme.Size.hairline, height: Theme.Size.hairline) } }
-        #endif
     }
 
     #if os(iOS)
@@ -615,11 +580,7 @@ struct VNCPage: View {
     }
     #endif
 
-    #if os(iOS) || os(visionOS)
     static let fromPhone = String(localized: "Paste from iPhone"), toPhone = String(localized: "Copy to iPhone")
-    #else
-    static let fromPhone = String(localized: "Paste from This Mac"), toPhone = String(localized: "Copy to This Mac")
-    #endif
 
     private func stepLine(_ a: ComputerActivity) -> some View {
         Text("Now: \(a.step)").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
@@ -629,7 +590,6 @@ struct VNCPage: View {
             .accessibilityIdentifier("screen-step")
     }
 
-    #if os(iOS) || os(visionOS)
     /// Pixel scrolling (#7775): this connection's first two-finger scroll had the Mac's node ask macOS for Persona Input's
     /// permission, so a window is now on the Mac's screen. Under the bar, as the video's fallback line: what it is for in
     /// a line, the way through it on a tap; it goes once the Mac allows it. Scrolling works meanwhile, by notches.
@@ -821,14 +781,12 @@ struct VNCPage: View {
         return false
         #endif
     }
-    #endif
 
     // MARK: Content
 
     @ViewBuilder private func content(_ s: RFBSession) -> some View {
         switch s.phase {
         case .live:
-            #if os(iOS) || os(visionOS)
             #if os(iOS)
             // The small window's source lies over this picture, and the picture goes into it as it starts (#6333):
             // hidden while the small window has it, also as the page comes back on Restore until it has grown back.
@@ -845,9 +803,6 @@ struct VNCPage: View {
             VNCScreen(session: s, mode: activeMode, interactive: true, region: shownDisplay?.frame, regionID: shownDisplay?.id,
                       fillsWidth: activeMode == .phone && !railed,
                       onView: { v in DispatchQueue.main.async { screenView = v; zoomed = false } }, onZoom: { zoomed = $0 })
-            #endif
-            #else
-            VNCScreen(session: s, mode: mode, interactive: true)
             #endif
         case .signIn(let failed):
             let form = VNCSignIn(name: name, account: Self.account(model.machine(ref)?.home), failed: failed) { account, password, remember in
@@ -876,7 +831,6 @@ struct VNCPage: View {
         }
     }
 
-    #if os(iOS) || os(visionOS)
     /// The Mac's displays to choose from: the server's screens, else the node's arrangement, else none (VNCDisplays).
     private var offeredDisplays: [VNCDisplay] {
         guard let s = session else { return [] }
@@ -972,7 +926,6 @@ struct VNCPage: View {
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("phone-screen-status")
     }
-    #endif
 
     /// The Mac account's short name, from its home directory (/Users/<name>).
     static func account(_ home: String?) -> String {
@@ -1000,18 +953,11 @@ struct VNCPage: View {
     // MARK: Actions
 
     private func centerPointer() {
-        #if os(iOS) || os(visionOS)
         screenView?.centerPointer()
-        #else
-        if let s = session { s.move(to: CGPoint(x: s.size.width / 2, y: s.size.height / 2)) }
-        #endif
     }
 
     private func toPictureInPicture() {
         VNCPiP.shared.start(ref, from: from)
-        #if os(macOS)
-        onClose()
-        #endif
         // iOS: the page goes once the small window has started (VNCPiP), or stays, saying why it could not.
     }
 
@@ -1026,7 +972,6 @@ struct VNCPage: View {
     }
 
     private func pasteFromPhone(andPaste: Bool) async {
-        #if os(iOS) || os(visionOS)
         // Off the main thread: when iOS asks Allow Paste, the read waits for the answer, and the picture and the session
         // must keep going meanwhile (#3075).
         let text = await Task.detached { UIPasteboard.general.string }.value
@@ -1036,9 +981,6 @@ struct VNCPage: View {
             model.toast = Toast(String(localized: "Couldn't read this iPhone's clipboard: tap Allow Paste when asked, or allow Paste from Other Apps for this app in Settings"), style: .error)
             return
         }
-        #else
-        let text = NSPasteboard.general.string(forType: .string)
-        #endif
         guard let text, !text.isEmpty, let s = session else {
             model.toast = Toast(String(localized: "No text on the clipboard"), style: .error)
             return
@@ -1053,12 +995,7 @@ struct VNCPage: View {
             model.toast = Toast(String(localized: "No text on \(name)’s clipboard"), style: .error)
             return
         }
-        #if os(iOS) || os(visionOS)
         UIPasteboard.general.string = text
-        #else
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        #endif
         model.toast = Toast(String(localized: "Copied \(name)’s clipboard"))
     }
 }
@@ -1091,9 +1028,7 @@ private struct VNCSignIn: View {
             }
             TextField(String(localized: "Accounts"), text: $account)
                 .textContentType(.username)
-                #if os(iOS) || os(visionOS)
                 .textInputAutocapitalization(.never)
-                #endif
                 .autocorrectionDisabled()
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("vnc-account")
@@ -1122,13 +1057,9 @@ private struct VNCSignIn: View {
     }
 }
 
-/// 「在这台手机上记住」 on the phone, 「在这台 Mac 上记住」 on the Mac.
+/// The Remember switch's label.
 enum ScreenKeep {
-    #if os(macOS)
-    static let label = String(localized: "Remember on This Mac")
-    #else
     static let label = String(localized: "Remember on This iPhone")
-    #endif
 }
 
 /// Help: how the touches, the keyboard and the clipboard work, and handing the Mac back.
@@ -1139,7 +1070,6 @@ struct VNCHelp: View {
         NavigationStack {
             List {
                 Section("Moving Around") {
-                    #if !os(macOS)
                     row(Theme.Icon.pointer, String(localized: "Mouse mode (default)"), String(localized: "Tap to click there. Drag with one finger to drag. Drag with two fingers to scroll. Two-finger tap or touch and hold to right-click."))
                     row(Theme.Icon.search, String(localized: "Zoom"), String(localized: "In Mouse Mode, pinch to zoom in and out; when zoomed in, dragging with two fingers moves the view instead of scrolling. In either mode, “…” › Zoom In zooms in around the pointer and Zoom to Fit shows the whole screen again. In Trackpad Mode two fingers only scroll, and a zoomed view follows the pointer."))
                     #if os(iOS)
@@ -1149,25 +1079,14 @@ struct VNCHelp: View {
                     #endif
                     row(Theme.Icon.displays, String(localized: "Displays"), String(localized: "When the Mac has more than one display, choose one in “…” › Displays to show only that display. Zooming, taps and the pointer then stay on it."))
                     row(Theme.Icon.phoneScreen, String(localized: "Phone Screen"), String(localized: "Where the Mac offers it, “…” › Phone Screen shows one of its windows on a display shaped like this iPhone, so text is readable without zooming. Pick the window from Windows at the bottom. Tap to click, drag with one finger to scroll, touch and hold then drag to select, and touch and hold to right-click. Switching back to another mode, or closing the screen, puts the Mac's windows back where they were."))
-                    #else
-                    row(Theme.Icon.pointer, String(localized: "Mouse"), String(localized: "Click for the left mouse button; right-click (or Control-click) for the right button; press and hold the mouse button and move to drag."))
-                    row(Theme.Icon.trackpad, String(localized: "Scroll"), String(localized: "Turn the mouse wheel, or swipe with two fingers on a Magic Mouse or trackpad to scroll the view."))
-                    row(Theme.Icon.search, String(localized: "Zoom"), String(localized: "There is no zoom gesture on the Mac; the view always shows the whole screen."))
-                    #endif
                 }
                 Section("Typing and Clipboard") {
-                    #if !os(macOS)
                     row(Theme.Icon.keyboard, String(localized: "Typing"), String(localized: "Tap the keyboard in the bottom bar. The row above the keyboard has Mac shortcuts: tap ⌘ ⌥ ⌃ ⇧ to hold, tap again to release, plus Esc, Tab, arrow keys, and ⌘C ⌘V ⌘Z ⌘Tab ⌘Space. Input methods such as Chinese work as usual; the committed text is pasted over through the clipboard."))
-                    #else
-                    row(Theme.Icon.keyboard, String(localized: "Typing"), String(localized: "Type directly on this Mac's keyboard; text, ⌘ ⌥ ⌃ ⇧ and shortcuts are all sent as-is to the Mac shown in the view."))
-                    #endif
                     row(Theme.Icon.clipboard, String(localized: "Copy and Paste"), String(localized: "Tap the clipboard in the bottom bar: “\(VNCPage.fromPhone)” puts your text on the Mac’s clipboard and pastes it; “\(VNCPage.toPhone)” brings over the text on the Mac’s clipboard."))
                 }
-                #if !os(macOS)
                 Section("When to Use Trackpad Mode") {
                     row(Theme.Icon.trackpad, String(localized: "Trackpad Mode"), String(localized: "Turn it on from “…” in the top-right corner. Move your finger to move the pointer, tap to click at the pointer, and tap then drag right away to drag. If the pointer drifts off, use “Center Pointer”."))
                 }
-                #endif
                 Section("Picture in Picture") {
                     #if os(iOS)
                     row(Theme.Icon.pictureInPicture, String(localized: "Picture in Picture"), String(localized: "The Picture in Picture button next to Close floats the screen over other apps and the Home Screen; tap it to come back here. Picture in Picture is view-only, and closing it disconnects."))
@@ -1180,9 +1099,7 @@ struct VNCHelp: View {
                 }
             }
             .navigationTitle("Using VNC")
-            #if os(iOS) || os(visionOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbar {
                 SheetClose(id: "vnc-help-close") { dismiss() }
             }

@@ -139,7 +139,8 @@ func (n *Node) outsideSource(c claudeProc) string {
 func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePanes map[string]bool) []proto.Session {
 	var out []proto.Session
 	listed := map[string]bool{}
-	var desktop *claudeDesktopIndex // read once, when a desktop session rests
+	var desktop *claudeDesktopIndex // read once, when a desktop session is listed
+	projects := map[string]string{}
 	for _, c := range procs {
 		id := c.SessionID
 		if seen[id] || listed[id] {
@@ -163,13 +164,13 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 		if !ok {
 			status = proto.StatusUnknown
 		}
-		if status == proto.StatusIdle && source == proto.SourceClaudeDesktop {
-			// Its last turn ended while nobody looked: Unread until it is seen (claudedesktop_unread.go).
+		if source == proto.SourceClaudeDesktop {
 			if desktop == nil {
 				d := readClaudeDesktopIndex(n.home)
 				desktop = &d
 			}
-			if n.desktopTurnUnread(id, *desktop) {
+			// Its last turn ended while nobody looked: Unread until it is seen (claudedesktop_unread.go).
+			if status == proto.StatusIdle && n.desktopTurnUnread(id, *desktop) {
 				status = proto.StatusDone
 			}
 		}
@@ -245,10 +246,13 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			s.Queued = m.queue
 		}
 		s.WokeByTask = m.wake
-		n.setBackground(&s, m) // as for a pane's session
-		s.BackgroundWaiting = n.backgroundWaits(&s)
+		n.setBackground(&s, m)  // as for a pane's session
+		n.setBackgroundWait(&s) // bgwait.go (#6045, #13744)
 		s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 		s.Subagents = n.subagents(id)
+		if source == proto.SourceClaudeDesktop {
+			n.decorateClaudeDesktop(&s, *desktop, projects)
+		}
 		n.decorate(&s)
 		out = append(out, s)
 	}

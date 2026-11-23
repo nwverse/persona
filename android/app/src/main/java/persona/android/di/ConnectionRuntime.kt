@@ -234,6 +234,9 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         override suspend fun retry(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.retry(clientMessageId) ?: false
         }
+        override suspend fun retryRefused(session: SessionKey, code: String) = gate.withLock {
+            groupOf(session.machineId)?.data?.messages?.retryRefused(GroupKeys.rawKey(session), code) ?: 0
+        }
         override suspend fun confirm(clientMessageId: String, delivered: Boolean) = gate.withLock {
             owner(clientMessageId)?.messages?.confirm(clientMessageId, delivered) ?: false
         }
@@ -287,7 +290,7 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         paired.value = false
         app.showHub(null)
         mutableState.value = ConnectionState.Revoked
-        scope.launch { runCatching { dataStore.publish(null) } }
+        scope.launch { val _ = runCatching { dataStore.publish(null) } }
     }
 
     /** Opens every group the registry lists (the first read migrates a single pairing); false when there is none. */

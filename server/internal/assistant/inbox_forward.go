@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -958,6 +959,19 @@ func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, 
 	if recordAudit {
 		s.recordTodoForwardAudit(ctx, &snap, curTodo, m.canonicalURL, res.status, res.machineID, res.sessionID, res.reason)
 	}
+	// If the task is in reviewNeedsUser and auto-forward delivered to the bound Agent (not already to the supervisor),
+	// also emit a non-destructive external-info wake so supervision can evaluate superseding the pending ask (#13112).
+	if res.commitLedger && res.status != TodoForwardFallback && needsUserWakeEligible(curTodo) {
+		source, summary := formatInboxExternalInfo(prompts.SuperviseInbox{
+			Item:    snap.ID,
+			Title:   clip(oneLine(snap.Title), 80),
+			Sender:  clip(oneLine(snap.Sender), 40),
+			Preview: clip(oneLine(snap.Preview), 140),
+			Count:   max(snap.Count, 1),
+			URL:     m.canonicalURL,
+		})
+		s.emitNeedsUserExternalInfo(ctx, curTodo, source, summary, "inbox_forward:"+snap.ID+"@"+snap.Last)
+	}
 }
 
 type resolvedBoundAgent struct {
@@ -1077,7 +1091,11 @@ func (s *Service) deliverInboxForwardToTodo(ctx context.Context, it *InboxItem, 
 			supervisorSelf = t.Origin
 		}
 		resumeWhy := fmt.Sprintf("auto-forwarded Inbox event for %s", canonicalURL)
-		if err := s.resumeAllowed(ctx, supervisorSelf, am, c, resumeWhy, nil); err != nil {
+		err := eventMayResume(c)
+		if err == nil {
+			err = s.resumeAllowed(ctx, supervisorSelf, am, c, resumeWhy, nil)
+		}
+		if err != nil {
 			return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, envelope, clip(oneLine(err.Error()), 240))
 		}
 		params := map[string]any{
@@ -1188,6 +1206,9 @@ func (s *Service) retryUncertainInboxForward(ctx context.Context, t Todo, canoni
 			supervisorSelf = t.Origin
 		}
 		resumeWhy := fmt.Sprintf("auto-forwarded Inbox event for %s", canonicalURL)
+		if err := eventMayResume(*matched); err != nil {
+			return stayUncertain(err.Error())
+		}
 		if err := s.resumeAllowed(ctx, supervisorSelf, am, *matched, resumeWhy, nil); err != nil {
 			return stayUncertain(err.Error())
 		}

@@ -258,7 +258,7 @@ func (s *Service) toolMessageSend(ctx context.Context, machine, session string, 
 		len(in.Text) > 16000 || strings.TrimSpace(in.Key) == "" || len(in.Key) > 200 {
 		return "", errors.New("channel larkcli, an exact oc_ target, text (1–16000 bytes), and a stable idempotency_key are required")
 	}
-	if s.inHealth(ctx, session) || s.justMeNow(machine, session) {
+	if s.selfPolicy(ctx, session).ConfirmOutbound || s.justMeNow(machine, session) {
 		return "", errors.New("this conversation cannot send outward messages")
 	}
 	// Read the default under the same lock as identity changes and the grant.

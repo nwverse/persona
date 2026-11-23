@@ -365,6 +365,18 @@ func TestOutboundToolRejectsTextOverUTF8ByteLimit(t *testing.T) {
 	}
 }
 
+func TestOutboundToolRejectsRestrictedSpaceEvenWithGrant(t *testing.T) {
+	h, st, c, _ := outboundTestHub(t)
+	setSettings(t, h.Service, func(v *Settings) { v.MachineID = "server" })
+	h.f.setSessions("server", proto.Session{SessionID: "health1", MachineID: "server", Assistant: true, Space: SpaceHealth})
+	putMessageGrant(t, st, "assistant_message")
+	args := json.RawMessage(`{"channel":"larkcli","target":"oc_example_group","text":"Synthetic update.","idempotency_key":"restricted-space"}`)
+	_, err := h.runTool(t.Context(), "server", "health1", "message_send", args)
+	if err == nil || !strings.Contains(err.Error(), "this conversation cannot send outward messages") || len(c.got) != 0 || len(st.audit) != 0 {
+		t.Fatalf("restricted space must fail before audit or transport: %v", err)
+	}
+}
+
 func TestOutboundManualInboxSenderMismatchPreventsTransport(t *testing.T) {
 	h, _, c, it := outboundTestHub(t)
 	path := "/api/v1/inbox/" + it.ID + "/reply"

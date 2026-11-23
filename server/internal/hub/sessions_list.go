@@ -222,7 +222,7 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root st
 		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane, HiddenByDirectory: row.HiddenByDirectory(),
 		State: row.State, BackgroundWaiting: row.BackgroundWaiting, JustFinished: row.Work != nil && row.Work.JustFinished,
 		Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
-		Fold: indexedFold(mid, row, root, todo, indexed.Fold), Private: healthSession(row), Assistant: row.Assistant,
+		Fold: indexedFold(mid, row, root, todo, indexed.Fold), Private: spaceSession(row), Assistant: row.Assistant,
 	}
 	// What q finds a row by: the fields the apps' own searches read, the branch too (#4770).
 	text := [...]string{row.Title, row.Cwd, row.RepoRoot, row.Branch, row.SpaceName, row.SlotName, row.AgentName, row.LastText}
@@ -445,7 +445,7 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		Title: rowText(s.Title, 256), Cwd: s.Cwd, WorkspaceCwd: s.WorkspaceCwd, RepoRoot: s.RepoRoot, Worktree: s.Worktree, Branch: s.Branch,
 		Status: s.Status, State: s.State, UpdatedAt: s.UpdatedAt, StateSince: s.StateSince, SeenAt: s.SeenAt,
 		LastText: rowText(s.LastText, 180), Activity: rowText(s.Activity, 120), ActivityAt: s.ActivityAt,
-		AwaitsReply: s.AwaitsReply, BackgroundWorking: s.BackgroundWorking, BackgroundWaiting: s.BackgroundWaiting,
+		AwaitsReply: s.AwaitsReply, BackgroundWorking: s.BackgroundWorking, BackgroundWaiting: s.BackgroundWaiting, BackgroundStalledSince: s.BackgroundStalledSince,
 		Agent: s.Agent, AgentLabel: s.AgentLabel, AgentName: s.AgentName, AgentSurface: s.AgentSurface,
 		SourceKind: s.SourceKind, SourceThreadID: s.SourceThreadID, SourceInstanceID: s.SourceInstanceID,
 		ParentThreadID: s.ParentThreadID, ParentSessionID: s.ParentSessionID, RootSessionID: s.RootSessionID, IsSubagent: s.IsSubagent,
@@ -583,7 +583,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		return
 	}
 	opts.Manager = manager
-	opts.NoPrivate = restrictedAgentData(r) // external Agent clients cannot see health-space conversations
+	opts.NoPrivate = h.spacesHidden(r) // external Agent clients cannot see a space's conversations, but the user's own extension (#13246)
 	if values, lookup := r.URL.Query()["session_id"]; lookup {
 		if len(values) != 1 || values[0] == "" || opts.Machine == "" || opts.Since != "" || opts.Cursor != "" {
 			sessionListErr(w, errors.New("exact session lookup requires one nonempty session_id and machine_id, without since or cursor"))
@@ -704,20 +704,27 @@ func (h *Hub) extensionMachines(r *http.Request) (own []string, limited bool) {
 	return own, limited
 }
 
-func (h *Hub) heldNeedsIDs() []string {
+// supervisorHeldCard: a card its task's supervisor holds (assistant/ask_route.go routeAsk): marked delegating and no
+// question (only a question is ever delegated to the assistant's own decision, which stays counted).
+func supervisorHeldCard(ix proto.Interaction) bool {
+	return ix.Delegating && ix.Kind != proto.IxQuestion
+}
+
+// heldNeedsIDs are the list ids of the sessions whose pending cards are all held: held, only P1/P2 cards for push
+// grading (no supervisor's among them counted either way); supervised, only cards their supervisor holds.
+func (h *Hub) heldNeedsIDs() (held, supervised []string) {
 	interactions := h.pendingInteractions()
 	if len(interactions) == 0 {
-		return nil
+		return nil, nil
 	}
 	type flags struct {
-		hasP0   bool
-		hasHeld bool
+		hasP0      bool
+		hasHeld    bool
+		supervisor bool // a card its supervisor holds
+		other      bool // any card that is not
 	}
 	byHome := map[[2]string]flags{}
 	for _, ix := range interactions {
-		if ix.Delegating {
-			continue
-		}
 		home := ix.FoldedUnder
 		if home == "" {
 			home = ix.SessionID
@@ -727,20 +734,27 @@ func (h *Hub) heldNeedsIDs() []string {
 		}
 		k := [2]string{ix.MachineID, home}
 		st := byHome[k]
-		if ix.PushLevel == assistantwire.LevelP1 || ix.PushLevel == assistantwire.LevelP2 {
-			st.hasHeld = true
-		} else {
-			st.hasP0 = true
+		switch {
+		case supervisorHeldCard(ix):
+			st.supervisor = true
+		case ix.Delegating:
+			st.other = true
+		case ix.PushLevel == assistantwire.LevelP1 || ix.PushLevel == assistantwire.LevelP2:
+			st.hasHeld, st.other = true, true
+		default:
+			st.hasP0, st.other = true, true
 		}
 		byHome[k] = st
 	}
-	var ids []string
 	for k, st := range byHome {
-		if st.hasHeld && !st.hasP0 {
-			ids = append(ids, runtimeListID(k[0], k[1]))
+		switch {
+		case st.supervisor && !st.other:
+			supervised = append(supervised, runtimeListID(k[0], k[1]))
+		case st.hasHeld && !st.hasP0:
+			held = append(held, runtimeListID(k[0], k[1]))
 		}
 	}
-	return ids
+	return held, supervised
 }
 
 func (h *Hub) countsWithHeld(index *sessionlist.Index, opts sessionlist.Options, own []string, limited bool) (sessionlist.Counts, error) {
@@ -756,26 +770,34 @@ func (h *Hub) countsWithHeld(index *sessionlist.Index, opts sessionlist.Options,
 	if err != nil {
 		return sessionlist.Counts{}, err
 	}
-	ids := h.heldNeedsIDs()
-	if len(ids) == 0 || counts.State[proto.StateNeedsYou] == 0 {
+	held, supervised := h.heldNeedsIDs()
+	if counts.State[proto.StateNeedsYou] == 0 {
 		return counts, nil
 	}
-	if limited {
+	count := func(ids []string) (int, error) {
+		if len(ids) == 0 {
+			return 0, nil
+		}
+		if !limited {
+			return index.CountMatchingState(opts, proto.StateNeedsYou, ids)
+		}
+		n := 0
 		for _, mid := range own {
 			o := opts
 			o.Machine, o.Cursor = mid, ""
-			n, herr := index.CountMatchingState(o, proto.StateNeedsYou, ids)
-			if herr != nil {
-				return sessionlist.Counts{}, herr
+			c, err := index.CountMatchingState(o, proto.StateNeedsYou, ids)
+			if err != nil {
+				return 0, err
 			}
-			counts.HeldNeeds += n
+			n += c
 		}
-	} else {
-		n, herr := index.CountMatchingState(opts, proto.StateNeedsYou, ids)
-		if herr != nil {
-			return sessionlist.Counts{}, herr
-		}
-		counts.HeldNeeds = n
+		return n, nil
+	}
+	if counts.HeldNeeds, err = count(held); err != nil {
+		return sessionlist.Counts{}, err
+	}
+	if counts.SupervisorHeld, err = count(supervised); err != nil {
+		return sessionlist.Counts{}, err
 	}
 	return counts, nil
 }
@@ -917,7 +939,7 @@ func (h *Hub) sessionListHint(before, revision string) listHint {
 }
 
 // send queues the hint for c: with since and changed when c asked for them in its URL and is not an extension's token
-// (which never sees a health conversation, and so must not see its id change either).
+// (which never sees a space conversation, and so must not see its id change either).
 func (hint listHint) send(c *client) {
 	if hint.detailed != nil && c.urlFeatures[featureSessionsListChanges] && c.role != roleExtension {
 		c.queue(hint.detailed)

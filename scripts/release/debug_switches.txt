@@ -22,6 +22,7 @@ larkTop
 loadAll
 newAssistant
 openAbout
+openAdvancedSettings
 openAgent
 openAgentsFresh
 openAlarms
@@ -189,7 +190,9 @@ openTerminalTips
 openTerminalsPage
 openThreadAt
 openTodoDetail
+openTodoPlace
 openTodoTitled
+openTodosChoice
 openTokenUsage
 openTranslationSettings
 openTriageSettings
@@ -287,6 +290,8 @@ showFromSeq
 showFullOutput
 showGitReload
 showHandOffNewAgent
+showHealthActivityExample
+showHealthHomeTrendsExample
 showHealthTrends
 showHerdrStart
 showHomeState
@@ -309,6 +314,7 @@ showInboxSuggestionEdit
 showInboxSuggestionStale
 showInboxTodo
 showInfo
+showIntakeSyncStatus
 showJumpPerf
 showKeyMods
 showKnowledgeDay
@@ -331,6 +337,8 @@ showLauncherCheck
 showLauncherHelp
 showLiftLines
 showListOffset
+showLocationAlwaysOffer
+showLocationLevel
 showLookBlink
 showLoopDraft
 showMacDropCover
@@ -351,6 +359,7 @@ showMinutesSearch
 showMinutesTab
 showModelConfigSheet
 showModelSearch
+showModules
 showNewAgentPrompt
 showNewChat
 showNewMain
@@ -442,6 +451,7 @@ showUnlockWithoutAuth
 showUpcomingSample
 showUrgentCallSample
 showUrgentCallSampleTitle
+showUsageCardsDemo
 showViewerChromeHidden
 showViewerDecodeDelay
 showViewerDecodeDuringPan

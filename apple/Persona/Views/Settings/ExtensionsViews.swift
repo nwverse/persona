@@ -26,11 +26,7 @@ struct ExtensionsView: View {
                 }
             }
             if let settingsSlots {
-                #if os(macOS)
-                ExtensionCardsSection(link: $cardLink, slots: settingsSlots)
-                #else
                 ExtensionSlotsSettingsSection(link: $cardLink, slots: settingsSlots)
-                #endif
             }
             if let plugins = page.plugins, plugins.isEmpty {
                 Section {
@@ -47,20 +43,7 @@ struct ExtensionsView: View {
                 }
             }
             if let error = page.error {
-                #if os(macOS)
-                // A page's empty state, not the request's error in red (#2113).
-                Section {
-                    EmptyStateView(symbol: Theme.Icon.plugins, title: page.missing ? String(localized: "No Extensions") : String(localized: "Couldn't Load Extensions"),
-                                   message: page.missing
-                                       ? (AppModel.shared.isDemo ? String(localized: "Demo mode has no extensions. Connect your own hub to turn on and set up installed extensions here.")
-                                                                 : String(localized: "This hub's version doesn't support extensions yet. Update the hub and check back."))
-                                       : error,
-                                   action: page.missing ? nil : (String(localized: "Retry [Components b8784c]"), { Task { await page.load() } }))
-                        .listRowBackground(Color.clear)
-                }
-                #else
                 Section { Text(error).font(Theme.Font.label).foregroundStyle(Theme.danger).textSelection(.enabled) }
-                #endif
             }
         }
         .accessibilityIdentifier("extensions-list")
@@ -736,12 +719,7 @@ private struct ExtensionFieldRow: View {
     private func labeled(@ViewBuilder _ content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(title).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(2)
-            #if os(macOS)
-            // A Mac form draws a field's title as its label beside an empty box: the title is the prompt here (#1221).
-            content().labelsHidden()
-            #else
             content()
-            #endif
         }
     }
 
@@ -979,9 +957,6 @@ private struct ExtensionListField: View {
                 }
                 HStack(spacing: Theme.Space.s) {
                     TextField(String(localized: "Add item"), text: $adding)
-                        #if os(macOS)
-                        .labelsHidden() // the title is the prompt (#1221)
-                        #endif
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .onSubmit(add)
@@ -1102,9 +1077,6 @@ private struct ExtensionSecretSheet: View {
             }
         }
         .presentationDetents([.medium])
-        #if os(macOS)
-        .macSheet()
-        #endif
     }
 }
 

@@ -339,6 +339,7 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
         override suspend fun isMuted(session: Session) = of(session).isMuted(session)
         override suspend fun execute(session: Session, action: ChatAction) = of(session).execute(session, action)
         override suspend fun verify(session: Session, action: ChatAction) = of(session).verify(session, action)
+        override suspend fun continueStart(session: Session, choice: String) = of(session).continueStart(session, choice)
         override suspend fun editQueue(session: Session, keep: List<Int>) = of(session).editQueue(session, keep)
         override suspend fun sendQueuedNow(session: Session) = of(session).sendQueuedNow(session)
         override suspend fun retryUndelivered(session: Session, messageId: String) = of(session).retryUndelivered(session, messageId)
@@ -456,7 +457,9 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
             operationsFor(machineId).renameSpace(machineId, workspaceId, name)
         override suspend fun closeSession(key: SessionKey) = operationsFor(key.machineId).closeSession(key)
         override suspend fun attachSession(key: SessionKey) = operationsFor(key.machineId).attachSession(key)
+        override suspend fun interruptSession(key: SessionKey) = operationsFor(key.machineId).interruptSession(key)
         override suspend fun deleteSession(key: SessionKey) = operationsFor(key.machineId).deleteSession(key)
+        override suspend fun forkSession(key: SessionKey) = operationsFor(key.machineId).forkSession(key)
     }
     val assistant = states[chosen].operations?.assistant ?: states.firstNotNullOfOrNull { it.operations?.assistant }
     val creations = states.map { it.creation }

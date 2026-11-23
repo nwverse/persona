@@ -788,7 +788,7 @@ func TestWorkerSignalsGoToTheLeaderAndTheJudgeDoesNotCloseIt(t *testing.T) {
 			proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status, State: state, LastText: text,
 				PendingInteractions: pending, UpdatedAt: time.Now()})
 		if status == proto.StatusWorking {
-			s.taskWorking(ctx, "box", worker)
+			s.taskWorking(ctx, "box", worker, startRow{})
 		} else {
 			s.taskTurnEnded(ctx, "box", worker)
 		}
@@ -1084,8 +1084,7 @@ func TestWorkerCardsStayWithTheUser(t *testing.T) {
 	_ = f
 }
 
-// A task leader planned toward a leader conversation is main-supervised like every other new task (#5732). Its workers
-// still report to the task leader Agent: main → task leader → worker, and no deeper.
+// A task leader explicitly planned under a direction keeps that direction; its workers report to the leader Agent.
 func TestTaskLeaderUnderALeaderConversation(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
@@ -1106,7 +1105,7 @@ func TestTaskLeaderUnderALeaderConversation(t *testing.T) {
 	}
 	waitFor(t, "the leader's link", func() bool { return len(onlyTodo(s).Agents) == 1 })
 	todo := onlyTodo(s)
-	if v := todo.Supervision; v == nil || v.Supervisor != "conv1" || todo.Agents[0].Source != sourceLeader {
+	if v := todo.Supervision; v == nil || v.Supervisor != "lead1" || todo.Agents[0].Source != sourceLeader {
 		t.Fatalf("the task leader's task: %+v %+v", todo.Supervision, todo.Agents)
 	}
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle})
@@ -1118,12 +1117,12 @@ func TestTaskLeaderUnderALeaderConversation(t *testing.T) {
 	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", json.RawMessage(`{"kind":"blocked","text":"leader 的阻塞"}`)); res.IsError {
 		t.Fatalf("%+v", res)
 	}
-	waitFor(t, "main's message", func() bool { return len(f.notices()) == 1 })
-	if n := f.notices()[0]; !strings.Contains(n, "leader 的阻塞") || strings.Contains(n, "worker 的进度") {
-		t.Fatalf("main's message:\n%s", n)
+	waitFor(t, "direction's message", func() bool { return len(f.noticesTo("lead1")) == 1 })
+	if n := f.noticesTo("lead1")[0]; !strings.Contains(n, "leader 的阻塞") || strings.Contains(n, "worker 的进度") {
+		t.Fatalf("direction's message:\n%s", n)
 	}
-	if got := f.noticesTo("lead1"); len(got) != 0 {
-		t.Fatalf("the leader conversation got a second supervision stream: %q", got)
+	if got := f.noticesTo("conv1"); len(got) != 0 {
+		t.Fatalf("main got the direction’s ordinary supervision: %q", got)
 	}
 	if m := gotMessage(t, f, "worker 的进度"); strings.Contains(m, "leader 的阻塞") {
 		t.Fatalf("the task leader's message carries its own report:\n%s", m)
@@ -1146,7 +1145,7 @@ func TestJudgeDoesNotCloseALeadersWorkerThatPassedItsCheck(t *testing.T) {
 	f.mu.Unlock()
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusIdle},
 		proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
-	s.taskWorking(ctx, "box", worker)
+	s.taskWorking(ctx, "box", worker, startRow{})
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusIdle},
 		proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone, State: proto.StateUnread,
 			LastText: "做完了，证据见 PR\n交付：已上线并实测；卡点：无；谁来解：无", UpdatedAt: time.Now()})
@@ -1185,9 +1184,10 @@ func TestWorkerAutomaticSignalsGoToLeader(t *testing.T) {
 				if !strings.Contains(due, "not an overdue judgment") {
 					t.Fatalf("leader's estimate_due lacks its fact: %s", due)
 				}
-				if b, ok := s.briefOfTodo(w.ID); !ok || b.EstimateDueToldAt == nil {
-					t.Fatalf("leader delivery did not persist estimate_due: %+v", b)
-				}
+				waitFor(t, "leader delivery to persist estimate_due", func() bool {
+					b, ok := s.briefOfTodo(w.ID)
+					return ok && b.EstimateDueToldAt != nil
+				})
 			case sigOrphaned:
 				// A session its computer no longer lists: the orphan pass marks it closed, and the worker's signal goes to the leader.
 				f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusIdle})
@@ -1852,7 +1852,6 @@ func TestNeedsUserFromTaskLeaderIsReviewedByMain(t *testing.T) {
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
 	var in map[string]any
 	_ = json.Unmarshal(leaderPlanArgs("leader"), &in)
-	in["supervisor"] = "lead1"
 	raw, _ := json.Marshal(in)
 	res, err := s.toolTaskPlan(ctx, "conv1", raw)
 	if err != nil {
@@ -2003,7 +2002,7 @@ func TestLeaderRetryDeliveredIsNotRedeliveredAfterRestart(t *testing.T) {
 	f.setSessions("box",
 		proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle},
 		proto.Session{SessionID: worker, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
-	s.taskWorking(ctx, "box", worker)
+	s.taskWorking(ctx, "box", worker, startRow{})
 	f.mu.Lock()
 	f.failSend = &rpc.Error{Code: "peer_unconfirmed", Message: "not taken", Data: json.RawMessage(`{"delivered":"unknown"}`)}
 	f.mu.Unlock()

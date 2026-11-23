@@ -1864,7 +1864,7 @@ const TodoListItem = memo(function TodoListItem({
           <div className="mt-1 truncate text-[11.5px] text-ink-3">
             <span className="font-medium text-orange">{t(`todos.delivery_${held.state}`)}</span>
             {held.gate && <> · {t("todos.delivery_gate", { gate: held.gate })}</>}
-            {held.unblock && ["user", "agent", "other"].includes(held.unblock) && <> · {t(`todos.unblock_${held.unblock}`)}</>}
+            {held.unblock && ["user", "agent", "other", "supervisor"].includes(held.unblock) && <> · {t(`todos.unblock_${held.unblock}`)}</>}
           </div>
         )}
 
@@ -2627,7 +2627,7 @@ function TodoDetail({
       <TodoImages todo={todo} owner={owner} />
 
       <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
-        legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} />
+        prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} />
       <PageBoundary page="workspace-naming">
         <Suspense fallback={<Loading />}>
           <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />

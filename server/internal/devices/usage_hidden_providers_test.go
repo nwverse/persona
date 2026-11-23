@@ -1,7 +1,9 @@
 package devices
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,5 +103,25 @@ func TestAdminUsageHiddenProviders(t *testing.T) {
 	}
 	if u, _ := managerJSON(t, d)["usage"].(map[string]any); u["hidden_providers"] != nil {
 		t.Fatalf("cleared setting left in manager.json: %v", u)
+	}
+}
+
+// The answer names the hidden providers (#13179) and is unchanged when nothing is hidden.
+func TestUsageWindowsAnswerHiddenProviders(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	plain := usageWindowsAnswer(nil, nil, now)
+	if _, ok := plain["hidden_providers"]; ok {
+		t.Fatalf("nothing hidden must not add the field: %v", plain)
+	}
+	if acc, _ := plain["accounts"].([]proto.UsageAccount); acc == nil {
+		t.Fatalf("accounts must be an empty list, not null: %v", plain)
+	}
+	got := usageWindowsAnswer(nil, []string{"claude", "codex"}, now)
+	if h, _ := got["hidden_providers"].([]string); len(h) != 2 || h[0] != "claude" || h[1] != "codex" {
+		t.Fatalf("hidden_providers = %v", got["hidden_providers"])
+	}
+	raw, err := json.Marshal(got)
+	if err != nil || !strings.Contains(string(raw), `"hidden_providers":["claude","codex"]`) {
+		t.Fatalf("json = %s (%v)", raw, err)
 	}
 }

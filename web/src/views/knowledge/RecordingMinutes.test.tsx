@@ -148,6 +148,17 @@ describe("recording minutes in Knowledge detail", () => {
     expect(button("Make minutes")).toBeUndefined();
   });
 
+  it.each([
+    ["with how far it is", { mode: "hub", state: "finishing", gaps: [], final_done: 2400, end: 6312.5 }, "Checking the whole recording (40 of 105 min)…"],
+    ["before its pass starts", { mode: "hub", state: "finishing", gaps: [] }, "Checking the whole recording…"],
+    ["and writes them once the transcript is final", { mode: "hub", state: "final", gaps: [] }, "Writing the minutes…"],
+  ])("says the hub is checking the whole recording %s (#13461)", async (_, transcription, said) => {
+    const data = fixture(); delete data.detail.minutes; data.detail.meta!.minutes_state = "pending";
+    data.detail.meta!.transcription = transcription;
+    await load(data);
+    expect(section().querySelector("[role=status]")?.textContent).toBe(said);
+  });
+
   it("refreshes pending minutes only while visible and stops once ready", async () => {
     vi.useFakeTimers();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
