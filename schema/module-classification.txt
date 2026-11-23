@@ -84,6 +84,7 @@ go server/internal/assistantskills core
 go server/internal/assistantwire core
 go server/internal/buildtags core
 go server/internal/buildtags/printtags core
+go server/internal/builtinext core
 go server/internal/bus core
 go server/internal/cachewarm core
 go server/internal/channel core
@@ -230,7 +231,6 @@ go server/plugins core
 # Module code still in core paths.
 go server/internal/voice/... voice
 go server/internal/transcribelive voice
-go server/internal/volc/... volc
 go server/internal/lark lark
 go server/internal/larkcli lark
 go server/internal/feishubot lark
