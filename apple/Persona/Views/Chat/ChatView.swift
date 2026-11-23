@@ -6650,20 +6650,31 @@ struct TerminalCover: View {
         var save: (TabRename.Target, String) async -> Bool
     }
 
-    var body: some View {
-        TerminalPanel(key: key, switchTo: switchTo, resumeOnOpen: resumeOnOpen, grab: TerminalGrab(
+    /// The slim bar's drag, close and rename, apart from `body`: inline, the visionOS build gives up type-checking it.
+    private var grab: TerminalGrab {
+        TerminalGrab(
             dragged: { offset = max(0, $0) },
             released: { distance, predicted in
                 if distance > 140 || predicted > 420 { close() } else { withAnimation(.spring(duration: 0.3)) { offset = 0 } }
             },
             close: close,
-            rename: rename.map { r in { renaming = current(r) } }))
+            rename: rename.map { r in { renaming = current(r) } })
+    }
+
+    /// How much the page under it is dimmed: less as the terminal goes down.
+    private var dim: Double {
+        let down: CGFloat = min(offset / 500, 1)
+        return Double(0.4 * (1 - down))
+    }
+
+    var body: some View {
+        TerminalPanel(key: key, switchTo: switchTo, resumeOnOpen: resumeOnOpen, grab: grab)
             .padding(.horizontal, Theme.Space.xs)
             .padding(.bottom, Theme.Space.xxs)
             .offset(y: offset)
             .background {
                 // The page shows through, dimmed less as the terminal goes down.
-                Color.black.opacity(Double(0.4 * (1 - min(offset / 500, 1)))).ignoresSafeArea()
+                Color.black.opacity(dim).ignoresSafeArea()
             }
             .accessibilityAction(.escape) { close() } // VoiceOver's scrub, as on any sheet (#4328)
             .renameTerminalAlert($renaming) { t, name in
