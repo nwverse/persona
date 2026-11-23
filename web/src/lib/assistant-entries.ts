@@ -3,7 +3,7 @@ import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type T
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
 import { decisionDismissed, linkedParkInteraction, parkInteractionID, reviewState, withoutParkInteraction } from "./supervision";
 import { finishedAt, JUST_DONE_MS, supersededFailedStarts, triage } from "./todo-triage";
-import { awaitsReview, dockAgents, heldDelivery, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
 import type { Interaction, Session } from "./types";
@@ -100,18 +100,21 @@ export function entryStatus(todo: Todo, lookup: SessionLookup, plans: Record<str
   return st === "not_started" && startFailure(todo, plans) ? "failed" : st;
 }
 
-/** The task waits for the user's decision: an open ask (a decided one only while the task is open), or its supervisor's
- *  `needs_user` on an open task. A `pending_review` is its supervisor's to do, however long it has waited (#8678). */
+/** The task waits for the user's decision: an open task's ask, or its supervisor's `needs_user` on an open task. A
+ *  finished task never does, whatever ask it still carries: the hub's To-dos triage files it with the finished ones
+ *  and the tray has nothing to answer, so it would keep the badge up for good (#12974). A `pending_review` is its
+ *  supervisor's to do, however long it has waited (#8678). */
 export function taskAwaitsDecision(todo: Todo): boolean {
-  const ask = openAsk(todo);
-  if (ask) return !(todo.done_at && ask.outcome === "decide");
   if (todo.done_at) return false;
+  if (openAsk(todo)) return true;
   return todo.supervision?.state === "needs_user" || todo.supervision?.state === "user_check";
 }
 
 /** The task waits for its supervisor's review and nothing of it runs: an open `pending_review` whose status is a
- *  finished turn (`awaitsReview`). An agent at work again keeps it In progress. */
+ *  finished turn (`awaitsReview`), or an owner hold its Agent reported that its supervisor has not read yet
+ *  (`heldForSupervisor`). An agent at work again keeps it In progress. */
 function underReview(todo: Todo, status: TodoStatus): boolean {
+  if (heldForSupervisor(todo) && (status === "follow_up" || status === "unread" || status === "not_started")) return true; // #13191
   return !todo.done_at && reviewState(todo) === "pending_review" && awaitsReview(todo, status);
 }
 
@@ -215,8 +218,10 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
       // related to-do finished is history, not news
       const tr = triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
       const ended = finishedAt(todo, tr);
+      const seenAt = Date.parse(todo.seen_at ?? "");
       if ((tr.section === "just_done" || tr.section === "done") && status !== "failed" && todo.origin && ended > 0 && now - ended < JUST_DONE_MS) {
-        finished.push({ kind: "task", key, card, todo, status, fresh: tr.section === "just_done", at: ended });
+        // Closed and accepted work is already Done on the To-dos page (#5732); Finished has its own unseen marker.
+        finished.push({ kind: "task", key, card, todo, status, fresh: Number.isNaN(seenAt) || seenAt < ended, at: ended });
       }
       continue;
     }

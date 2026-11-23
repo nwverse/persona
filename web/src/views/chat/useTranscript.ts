@@ -21,6 +21,8 @@ const lastPulls = new Map<string, number>();
 /** After an older page fails, loadEarlier waits this long before asking again (scrolling at the top calls it on every tick), doubling up to the cap. */
 const EARLIER_RETRY_MS = 3000;
 const EARLIER_RETRY_MAX_MS = 30_000;
+/** Coalesce live push cache writes so WS bursts do not serialize the main-chat cache on every frame. */
+export const FEED_CACHE_SAVE_MS = 1000;
 
 interface EarlierRead {
   controller: AbortController;
@@ -54,6 +56,8 @@ export interface Transcript {
   items: Item[];
   /** Identity of the currently loaded history, independent of how many earlier pages are visible. */
   history?: string;
+  /** Monotonic counter bumped whenever a full-page replacement commits (e.g. history rewrite or gap-fill fallback). */
+  replaceEpoch?: number;
   loading: boolean;
   /** The hub's first page came or failed: until then a cached page says nothing about what went in since. */
   firstRead: boolean;
@@ -114,6 +118,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   }, []);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [earlierPage, setEarlierPage] = useState<symbol>();
+  const [replaceEpoch, setReplaceEpoch] = useState(0);
   const [streaming, setStreaming] = useState("");
   const [streamEnded, setStreamEnded] = useState(false);
   const reread = useRef<() => void>(() => {});
@@ -182,6 +187,20 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     let pendingDelta: string | undefined;
     let pendingEnd = false;
     let handoffTimer: number | undefined;
+    let savePending = false;
+    let saveTimer: number | undefined;
+    let saveIdle: number | undefined;
+    const cancelSave = () => {
+      savePending = false;
+      if (saveTimer !== undefined) {
+        clearTimeout(saveTimer);
+        saveTimer = undefined;
+      }
+      if (saveIdle !== undefined) {
+        window.cancelIdleCallback?.(saveIdle);
+        saveIdle = undefined;
+      }
+    };
     replacing.current = false;
     const ctl = new AbortController();
     // Older pages and folds still on their way were asked for from what is shown now: they must not land on what replaces it.
@@ -193,6 +212,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     const offDeleted = onConversationDeleted((machine, session) => {
       if (machine !== mid || session !== sid) return;
       dead = true;
+      cancelSave();
       clearTimeout(handoffTimer);
       ctl.abort();
       disownReads();
@@ -265,15 +285,39 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       snapshot.current = { scope: cacheScope, page };
       writeFeedCache(cacheScope, page);
     };
+    const flushSave = () => {
+      const pending = savePending;
+      cancelSave();
+      if (!pending || dead || replacing.current || !ready) return;
+      save();
+    };
+    const scheduleSave = () => {
+      savePending = true;
+      if (saveTimer !== undefined || saveIdle !== undefined) return;
+      saveTimer = window.setTimeout(() => {
+        saveTimer = undefined;
+        if (!savePending || dead || replacing.current || !ready) return;
+        if (typeof window.requestIdleCallback === "function") {
+          saveIdle = window.requestIdleCallback(() => {
+            saveIdle = undefined;
+            flushSave();
+          }, { timeout: FEED_CACHE_SAVE_MS });
+        } else {
+          flushSave();
+        }
+      }, FEED_CACHE_SAVE_MS);
+    };
     const remember = (batch: Item[], gap = false) => {
       if (!ready) pendingItems = mergeItems(pendingItems, batch);
       latest = mergeItems(latest, batch);
-      if (ready && !gap) save(); // a page with a hole is not kept: the fill saves once it is closed
+      if (gap) cancelSave();
+      else if (ready) scheduleSave(); // a page with a hole is not kept: the fill saves once it is closed
     };
     // Keep this session's last committed view on screen while the new history is read. Old answers to
     // page, fold and gap reads cannot join it. The socket keeps collecting pushes for the replacement.
     const rewritten = (nextHistory = "") => {
       disownReads();
+      cancelSave();
       replacing.current = true;
       authoritative = false;
       ready = false;
@@ -414,7 +458,12 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         });
     };
     const staleTimer = window.setInterval(checkStale, STALE_TICK_MS);
-    document.addEventListener("visibilitychange", checkStale);
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flushSave();
+      else checkStale();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", flushSave);
 
     const onItems = (e: ItemsEvent) => {
       if (dead) return;
@@ -489,6 +538,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const replace = replacing.current || changed || !batch.length || (!active && skipsCached(batch));
       const gap = active && !replace && batch[0].seq > covered.current + 1;
       if (replace) disownReads();
+      if (replacing.current || changed) setReplaceEpoch((n) => n + 1);
       const pushes = changed && !replacing.current && pendingHistory !== p.history ? [] : pendingItems;
       const refreshed = (have: Item[], page: Item[]) => mergeItems(mergeItems(replace ? [] : withoutFolded(have, page), page), withoutFolded(pushes, page));
       const visible = active ? keepExpanded(batch) : batch;
@@ -504,8 +554,11 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       replacementReplay = undefined;
       pendingItems = [];
       pendingHistory = "";
-      if (gap) queueGapFill();
-      else {
+      if (gap) {
+        cancelSave();
+        queueGapFill();
+      } else {
+        cancelSave();
         save();
         covered.current = Math.max(replace ? 0 : covered.current, p.to_seq ?? Math.max(0, ...batch.map((i) => i.seq)));
       }
@@ -561,6 +614,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     void readPage();
 
     return () => {
+      flushSave();
       dead = true;
       invalidateHistoryReads();
       ctl.abort();
@@ -572,7 +626,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       clearTimeout(gapTimer.current);
       gapTimer.current = undefined; // the next session's first gap starts its own
       clearInterval(staleTimer);
-      document.removeEventListener("visibilitychange", checkStale);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", flushSave);
       clearLive(mid, sid);
       send({ type: "unsubscribe", machine_id: mid, session_id: sid });
     };
@@ -659,5 +714,5 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     [mid, sid, apply],
   );
 
-  return { items, history: history.current, loading, firstRead, error, hasMore, loadingEarlier, earlierPage, loadEarlier, expandFold, streaming, streamEnded, notLive, reload: () => reread.current() };
+  return { items, history: history.current, replaceEpoch, loading, firstRead, error, hasMore, loadingEarlier, earlierPage, loadEarlier, expandFold, streaming, streamEnded, notLive, reload: () => reread.current() };
 }

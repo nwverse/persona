@@ -42,3 +42,44 @@ func StripLeadingMentions(text string, mentions []Mention, keep func(Mention) bo
 	}
 	return t
 }
+
+// StripLeadingMentions uses a post's actual at elements and their IDs, so an adjacent text
+// element needs no literal space. Display names never identify a structured mention.
+// Plain text keeps StripLeadingMentions' whole-word rule.
+func (c Content) StripLeadingMentions(mentions []Mention, keep func(Mention) bool) string {
+	if c.post == nil {
+		return StripLeadingMentions(c.Text, mentions, keep)
+	}
+	p := *c.post
+	if p.Title != "" {
+		return c.Text
+	}
+	stripped := false
+	for row, nodes := range p.Content {
+		for col, node := range nodes {
+			if node.Tag == "text" && strings.TrimSpace(node.Text) == "" {
+				continue
+			}
+			if node.Tag == "at" && node.UserID != "" {
+				matched := false
+				for _, m := range mentions {
+					if node.UserID == m.Key || node.UserID == m.ID.OpenID || node.UserID == m.ID.UserID || node.UserID == m.ID.UnionID {
+						matched = keep == nil || keep(m)
+						break
+					}
+				}
+				if matched {
+					stripped = true
+					continue
+				}
+			}
+			if !stripped {
+				return c.Text
+			}
+			// Stop at the first real word or a mention the caller did not authorize.
+			p.Content = append([][]richNode{nodes[col:]}, p.Content[row+1:]...)
+			return strings.TrimSpace(nameMentionKeys(renderPost(p, mentions).Text, mentions))
+		}
+	}
+	return ""
+}

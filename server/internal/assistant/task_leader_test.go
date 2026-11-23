@@ -286,6 +286,35 @@ func TestTaskLeaderTaskPlanCallEnforcement(t *testing.T) {
 	refused("a closed task's leader", call("s1", workerArgs(nil)))
 }
 
+// A worker whose own supervision ledger cannot be stored never starts. The leader is linked directly so its setup
+// does not depend on the deliberately failing worker ledger.
+func TestTaskLeaderWorkerStopsWhenSupervisionCannotBeStored(t *testing.T) {
+	st := failingSupervisionStore{DB: todoTestDB(t)}
+	s, f := newQuietServiceOn(t, st)
+	ctx := context.Background()
+	leader, err := s.createTaskTodo(ctx, "leader", "", "conv1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgentWithSource(ctx, leader.ID, "box", "s1", "leader", "/code/app", "", "", sourceLeader, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle})
+	res := s.mcpCall(ctx, "box", "s1", "task_plan", workerArgs(nil), false)
+	waitFor(t, "the worker start reservation to settle", func() bool { return s.taskStarting.Load() == 0 })
+	if len(f.starts) != 0 {
+		t.Fatalf("session.start ran for a worker without its supervision ledger: %+v", f.starts)
+	}
+	if res.IsError || !strings.Contains(res.Content[0].Text, "injected supervision write failure") {
+		t.Fatalf("the worker's ledger failure was not reported: %+v", res)
+	}
+	workers := todosOpenedBy(s, "box/s1")
+	if len(workers) != 1 || workers[0].DoneAt == nil || !strings.Contains(workers[0].StartError, "injected supervision write failure") ||
+		workers[0].Supervision != nil || len(workers[0].Agents) != 0 {
+		t.Fatalf("failed worker preparation left an open or unsupervised card: %+v", workers)
+	}
+}
+
 // The room is bounded: a leader cannot keep more than leaderWorkersMost workers open. Workers count by the task they
 // belong to, so a leader started again (a new session) does not get a new allowance.
 func TestTaskLeaderWorkersAreBounded(t *testing.T) {
@@ -375,8 +404,7 @@ func TestWritableTaskPlanNeedsNoExplicitPermission(t *testing.T) {
 	}
 }
 
-// Any conversation may give role leader: the conversation that plans it supervises its task. A made-up role is refused
-// with the rest, and a card edit still cannot change the role.
+// Any conversation may give role leader; main supervises that task while its workers stay with the task leader Agent.
 func TestTaskPlanRoleFromAnyConversation(t *testing.T) {
 	s, f := newQuietService(t)
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
@@ -391,8 +419,8 @@ func TestTaskPlanRoleFromAnyConversation(t *testing.T) {
 	}
 	waitFor(t, "the leader's link", func() bool { return len(onlyTodo(s).Agents) == 1 })
 	todo := onlyTodo(s)
-	if v := todo.Supervision; v == nil || v.Supervisor != "conv2" || todo.Origin != "conv2" {
-		t.Fatalf("the side conversation supervises its own leader: %+v (origin %q)", todo.Supervision, todo.Origin)
+	if v := todo.Supervision; v == nil || v.Supervisor != "conv1" || todo.Origin != "conv2" {
+		t.Fatalf("main does not supervise the side conversation's leader: %+v (origin %q)", todo.Supervision, todo.Origin)
 	}
 	if a := todo.Agents[0]; a.Source != sourceLeader || a.SessionID != "s1" || a.MachineID != "box" {
 		t.Fatalf("the leader's link: %+v", a)
@@ -1056,9 +1084,8 @@ func TestWorkerCardsStayWithTheUser(t *testing.T) {
 	_ = f
 }
 
-// dot (the main conversation) hands a task leader to a leader conversation with task_plan's supervisor: the leader's own
-// task is that leader conversation's to supervise, its report goes there, and its workers still report to the task
-// leader's agent: main → leader conversation → task leader → worker, and no deeper.
+// A task leader planned toward a leader conversation is main-supervised like every other new task (#5732). Its workers
+// still report to the task leader Agent: main → task leader → worker, and no deeper.
 func TestTaskLeaderUnderALeaderConversation(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
@@ -1079,7 +1106,7 @@ func TestTaskLeaderUnderALeaderConversation(t *testing.T) {
 	}
 	waitFor(t, "the leader's link", func() bool { return len(onlyTodo(s).Agents) == 1 })
 	todo := onlyTodo(s)
-	if v := todo.Supervision; v == nil || v.Supervisor != "lead1" || todo.Agents[0].Source != sourceLeader {
+	if v := todo.Supervision; v == nil || v.Supervisor != "conv1" || todo.Agents[0].Source != sourceLeader {
 		t.Fatalf("the task leader's task: %+v %+v", todo.Supervision, todo.Agents)
 	}
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle})
@@ -1091,12 +1118,12 @@ func TestTaskLeaderUnderALeaderConversation(t *testing.T) {
 	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", json.RawMessage(`{"kind":"blocked","text":"leader 的阻塞"}`)); res.IsError {
 		t.Fatalf("%+v", res)
 	}
-	waitFor(t, "the leader conversation's message", func() bool { return len(f.noticesTo("lead1")) == 1 })
-	if n := f.noticesTo("lead1")[0]; !strings.Contains(n, "leader 的阻塞") || strings.Contains(n, "worker 的进度") {
-		t.Fatalf("the leader conversation's message:\n%s", n)
+	waitFor(t, "main's message", func() bool { return len(f.notices()) == 1 })
+	if n := f.notices()[0]; !strings.Contains(n, "leader 的阻塞") || strings.Contains(n, "worker 的进度") {
+		t.Fatalf("main's message:\n%s", n)
 	}
-	if got := f.notices(); len(got) != 0 {
-		t.Fatalf("the main conversation was told: %q", got)
+	if got := f.noticesTo("lead1"); len(got) != 0 {
+		t.Fatalf("the leader conversation got a second supervision stream: %q", got)
 	}
 	if m := gotMessage(t, f, "worker 的进度"); strings.Contains(m, "leader 的阻塞") {
 		t.Fatalf("the task leader's message carries its own report:\n%s", m)
@@ -1290,7 +1317,7 @@ func TestLeaderResumeFailureEscalatesAndRetries(t *testing.T) {
 	f.mu.Unlock()
 	kept := []superviseSignal{{Todo: w.ID, Kind: sigReview, Key: "review@1", Detail: "做完了"}}
 	text := prompts.RenderWorkerSupervise([]prompts.SuperviseEntry{{ID: w.ID, Title: w.Title, Kind: "review"}})
-	s.resumeLeaderForSupervision(lead, text, kept, func(context.Context, error) {}, nil)
+	s.resumeLeaderForSupervision(lead, text, kept, kept, kept, func(context.Context, error) {}, nil)
 	waitFor(t, "the failed resume to go up", func() bool { return len(f.notices()) >= 1 })
 	n := f.notices()[0]
 	if !strings.Contains(n, "改登录页") || !strings.Contains(n, w.ID) || !strings.Contains(n, "联系不上") || strings.Contains(n, "判断要用户决定") {
@@ -1321,7 +1348,7 @@ func TestUndeliveredMessageWithNobodyAboveIsRetried(t *testing.T) {
 	f.mu.Unlock()
 	kept := []superviseSignal{{Todo: w.ID, Kind: sigReview, Key: "review@1", Detail: "做完了"}}
 	const text = "Persona · supervision: undelivered"
-	s.resumeLeaderForSupervision(lead, text, kept, func(context.Context, error) {}, nil)
+	s.resumeLeaderForSupervision(lead, text, kept, kept, kept, func(context.Context, error) {}, nil)
 	time.AfterFunc(150*time.Millisecond, func() { f.mu.Lock(); f.failSend = nil; f.mu.Unlock() })
 	waitFor(t, "the undelivered message to reach the leader after a few tries", func() bool {
 		return slices.Contains(deliveredTo(f, "s1"), text)
@@ -1814,10 +1841,9 @@ func TestRetryNeedsNoPermission(t *testing.T) {
 	}
 }
 
-// main → leader conversation → task leader → worker: the task leader's needs_user reaches the leader conversation (lead1),
-// which reviews the worker with its own task_review (rework, then accepted) without taking the worker over; and when the
-// task leader's own task closes the open worker is rehomed to lead1, which can close it.
-func TestNeedsUserFromTaskLeaderIsReviewedByLeaderConversation(t *testing.T) {
+// main → task leader → worker: the task leader's needs_user reaches main, which can review the worker without taking
+// it over. When the task leader's own task closes, an open worker is rehomed to main (#5732).
+func TestNeedsUserFromTaskLeaderIsReviewedByMain(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
 	f.known["lead1"] = true
@@ -1846,42 +1872,44 @@ func TestNeedsUserFromTaskLeaderIsReviewedByLeaderConversation(t *testing.T) {
 	if r := s.mcpCall(ctx, "box", "s1", "task_review", mustJSON(map[string]any{"todo_id": w.ID, "verdict": "needs_user", "reason": "要不要顺手改注册页", "recommend": "先只改登录页"}), false); r.IsError {
 		t.Fatalf("needs_user: %+v", r)
 	}
-	waitFor(t, "the decision to reach lead1", func() bool { return len(f.noticesTo("lead1")) == 1 })
-	if n := f.noticesTo("lead1")[0]; !strings.Contains(n, "要不要顺手改注册页") {
-		t.Fatalf("lead1's message:\n%s", n)
+	waitFor(t, "the decision to reach main", func() bool { return len(f.notices()) == 1 })
+	if n := f.notices()[0]; !strings.Contains(n, "要不要顺手改注册页") {
+		t.Fatalf("main's message:\n%s", n)
 	}
-	if got := f.notices(); len(got) != 0 {
-		t.Fatalf("the main conversation was told: %q", got)
+	if got := f.noticesTo("lead1"); len(got) != 0 {
+		t.Fatalf("the leader conversation got a second supervision stream: %q", got)
 	}
 	// Not its own to review: another conversation, and a task that no leader of lead1 leads.
 	if _, err := review("conv2", map[string]any{"todo_id": w.ID, "verdict": "accepted"}); err == nil {
 		t.Fatal("a conversation that is not above the task leader reviewed its worker")
 	}
-	if res, err := review("lead1", map[string]any{"todo_id": w.ID, "verdict": "rework", "note": "只改登录页"}); err != nil || !strings.Contains(res, "Rework round 1") {
-		t.Fatalf("lead1's rework: %s %v", res, err)
+	if res, err := review("conv1", map[string]any{"todo_id": w.ID, "verdict": "rework", "note": "只改登录页"}); err != nil || !strings.Contains(res, "Rework round 1") {
+		t.Fatalf("main's rework: %s %v", res, err)
 	}
 	if cur := todoNow(s, w.ID); cur.Supervision.Supervisor != "box/s1" || cur.Supervision.State != reviewRework {
-		t.Fatalf("lead1 took the worker over, or its state: %+v", cur.Supervision)
+		t.Fatalf("main took the worker over, or its state: %+v", cur.Supervision)
 	}
-	if res, err := review("lead1", map[string]any{"todo_id": w.ID, "verdict": "accepted", "note": "好了",
+	if res, err := review("conv1", map[string]any{"todo_id": w.ID, "verdict": "accepted", "note": "好了",
 		"checks": completeReviewChecks(todoNow(s, w.ID))}); err != nil || !strings.Contains(res, "accepted and closed") {
-		t.Fatalf("lead1's accepted: %s %v", res, err)
+		t.Fatalf("main's accepted: %s %v", res, err)
 	}
 	if cur := todoNow(s, w.ID); cur.DoneAt == nil || cur.Supervision.State != reviewAccepted || cur.Supervision.Supervisor != "box/s1" {
 		t.Fatalf("the accepted worker: %+v %+v", cur, cur.Supervision)
 	}
 
-	// H1: another open worker when the task leader's own task closes is rehomed to lead1, which can close it.
+	// H1: another open worker when the task leader's own task closes is rehomed to main, which can close it.
 	w2 := planWorker(t, s, f, map[string]any{"title": "改注册页"})
-	if ok, err := s.autoDoneTodo(ctx, leaderTodo.ID, "done", time.Now().Add(-time.Minute)); err != nil || !ok {
-		t.Fatalf("closing the leader's task: %v %v", ok, err)
+	if res, err := review("conv1", map[string]any{"todo_id": leaderTodo.ID, "verdict": "accepted", "note": "done",
+		"checks": completeReviewChecks(todoNow(s, leaderTodo.ID))}); err != nil ||
+		!strings.Contains(res, "accepted and closed") {
+		t.Fatalf("closing the leader's task: %s %v", res, err)
 	}
 	s.rehomeLeaderlessWorkers(ctx)
-	if cur := todoNow(s, w2.ID); cur.Supervision.Supervisor != "lead1" || cur.DoneAt != nil {
+	if cur := todoNow(s, w2.ID); cur.Supervision.Supervisor != "conv1" || cur.DoneAt != nil {
 		t.Fatalf("the rehomed worker: %+v", cur.Supervision)
 	}
-	if res, err := review("lead1", map[string]any{"todo_id": w2.ID, "verdict": "cancelled", "note": "不用做了"}); err != nil || !strings.Contains(res, "cancelled and closed") {
-		t.Fatalf("lead1's cancel of the rehomed worker: %s %v", res, err)
+	if res, err := review("conv1", map[string]any{"todo_id": w2.ID, "verdict": "cancelled", "note": "不用做了"}); err != nil || !strings.Contains(res, "cancelled and closed") {
+		t.Fatalf("main's cancel of the rehomed worker: %s %v", res, err)
 	}
 }
 

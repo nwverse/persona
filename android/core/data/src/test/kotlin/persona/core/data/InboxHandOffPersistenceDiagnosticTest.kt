@@ -766,6 +766,7 @@ class InboxHandOffPersistenceDiagnosticTest {
 
         suspend fun connect(): ChatComposerService = fixture.sender.connectComposer { transport ->
             HttpChatComposerService(pairing, transport, connection, "test-token",
+                onRetryStart = fixture.sender::beginComposerRetry,
                 onRetryDelivery = fixture.sender::recordComposerDelivery,
                 onPairingExpired = {})
         }

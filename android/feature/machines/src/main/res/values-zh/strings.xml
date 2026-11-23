@@ -49,6 +49,8 @@
     <string name="machines_metric_rx">下行</string>
     <string name="machines_metric_tx">上行</string>
     <string name="machines_metric_load">负载</string>
+    <string name="machines_load_per_core">每核 %1$s</string>
+    <string name="machines_load_definition">负载是过去一分钟内正在运行或等待 CPU 的线程数的平均值（Linux 还计入等待磁盘的线程）。它不是百分比：每核超过 1 时，有线程在等待。Mac 上以后台优先级运行的任务可能只使用部分核心，所以即使 CPU 使用率不高，也可能有线程在等待。</string>
     <string name="machines_metric_disk">磁盘</string>
     <string name="machines_metric_swap">交换</string>
     <string name="machines_metric_battery">电量</string>
@@ -267,4 +269,9 @@
     <string name="machines_link_switch_why_unknown">出了点问题。</string>
     <string name="machines_link_switch_why_unavailable">这台电脑暂时不能切换到 Persona Link。</string>
     <string name="machines_manager_offline">它的助手「%1$s」离线，助手回来后这台电脑会恢复在线。</string>
+    <string name="machines_tokens_today_title">今日文本用量</string>
+    <string name="machines_tokens_total">合计</string>
+    <string name="machines_tokens_now">现在</string>
+    <string name="machines_tokens_cache_hit_rate">缓存命中率</string>
+    <string name="machines_tokens_per_minute">%1$s/分</string>
 </resources>

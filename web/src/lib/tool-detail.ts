@@ -1,7 +1,7 @@
 // What an opened step shows besides its raw input (iOS ToolViews.swift ToolDetail, Android ToolDetails.kt /
 // ContentPresentation.kt): a Codex patch as a diff, the questions an AskUserQuestion or the assistant's ask_user asked
 // (with what the user picked), and the hub's cut texts (full_size) with the mark it adds where it cut them.
-import type { Op } from "./compare";
+import type { Op } from "./diff-lines";
 import { parseDiff, toolFile } from "./files";
 import type { Interaction } from "./types";
 
@@ -56,6 +56,7 @@ export interface HandoffVariable {
 /** A hand-off card's variables, the Agent, the computer, where it runs and the start of what it is asked. */
 export function secretHandoffInput(input: Record<string, unknown> | undefined): {
   variables: HandoffVariable[];
+  store: boolean;
   agent: string;
   machine: string;
   cwd: string;
@@ -68,7 +69,7 @@ export function secretHandoffInput(input: Record<string, unknown> | undefined): 
     const name = s(o.name);
     return name ? [{ name, provider: s(o.provider_name) || s(o.provider), title: s(o.title) }] : [];
   });
-  return { variables, agent: s(input?.agent), machine: s(input?.machine_name), cwd: s(input?.cwd), prompt: s(input?.prompt) };
+  return { variables, store: input?.store_operation === "create" || input?.store_operation === "edit", agent: s(input?.agent), machine: s(input?.machine_name), cwd: s(input?.cwd), prompt: s(input?.prompt) };
 }
 
 /** A password card's computer, purpose and commands, the commands exactly as sent. */

@@ -16,6 +16,7 @@ import persona.core.contracts.JsonCodec
 import persona.core.contracts.api.ExtensionView
 import persona.core.contracts.api.ExtensionViewAction
 import persona.core.contracts.api.ExtensionViewItem
+import persona.core.contracts.generated.ExtensionComponent
 import persona.core.contracts.stream.*
 import persona.core.designsystem.*
 
@@ -48,10 +49,10 @@ class NativeExtensionStreamAdapter(val session: NativeStreamSession, shown: Bool
         local.rejected = true
     }
     companion object {
-        // Tags are the preview vocabulary, not a claim of every optional field. The profile checks before commit.
-        val Components: Set<String> = setOf("text", "metric", "progress", "button", "link", "field", "divider",
-            "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "header", "breadcrumb",
-            "file_tree", "code", "comment_thread", "composer", "row", "diff", "image", "grid", "carousel")
+        // The hub downgrades these newer component types to rows/images for this native client. They are never
+        // accepted into a native stream directly; keep that contract in one place for every new schema type.
+        private val HubDowngradedComponents = setOf("html", "graph", "scene")
+        val Components: Set<String> = ExtensionComponent.TYPES.filterNot { it in HubDowngradedComponents }.toSet()
     }
 }
 
@@ -168,7 +169,7 @@ internal fun NativeExtensionStreamPage(adapter: NativeExtensionStreamAdapter, ti
             commit()
             action.push?.let { push(it); return@launch }
             if (action.pop) { back(); return@launch }
-            action.open?.let { if (ExtensionViewText.isHttps(it)) runCatching { uri.openUri(it) }; return@launch }
+            action.open?.let { if (ExtensionViewText.isHttps(it)) { val _ = runCatching { uri.openUri(it) } }; return@launch }
             if (!session.event(key, action.id, event, value, expectedTree = tree,
                 draftsAtPress = drafts.takeIf { action.submit },
                 onQueued = { queued -> if (done != null && adapter.targets.size < 64) adapter.targets[queued.eventId] = tree to done })) refused()
@@ -206,7 +207,7 @@ internal fun NativeExtensionStreamPage(adapter: NativeExtensionStreamAdapter, ti
             press = { item, action -> press(key, item, action) },
             edit = { name, value -> scope.launch { session.edit(name, JsonPrimitive(value), expectedTree = displayedTree) } },
             choose = { item -> displayedTree?.let { choosing = NativeStreamChoice(item, it) } },
-            open = { url -> if (currentShown && ExtensionViewText.isHttps(url)) runCatching { uri.openUri(url) } },
+            open = { url -> if (currentShown && ExtensionViewText.isHttps(url)) { val _ = runCatching { uri.openUri(url) } } },
             segment = { item, value ->
                 if (item.action?.confirm.isNullOrBlank()) scope.launch { session.edit(key, JsonPrimitive(value), expectedTree = displayedTree) }
                 item.action?.let { press(key, item, it, mapOf(item.name.orEmpty() to value), "change") }

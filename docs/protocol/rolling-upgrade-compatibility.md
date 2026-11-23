@@ -140,6 +140,21 @@ chosen by a `runtime` in the main chat's model binding. Each pair keeps working:
 | Session rows | `runtime` and `runtime_fallback` are no longer produced, and the hub drops them from an older node's report. Clients read their absence as the CLI. |
 | The runtime package | The Agent SDK runtime package (`persona-agent-sdk-runtime`, under its older `jarvis-` name too) is no longer carried. An older node that looks for it finds none and runs the CLI, its existing fallback. Copies already unpacked under a node's `runtime-packages/` are unused and not cleaned up. |
 
+### Inbox AI-twin permission mode (#13245)
+
+The AI twin's own saved mode is authorization metadata, not a caller's model choice. The manager sends it as
+`inbox_permission_mode` on `assistant.send`, `session.send` and `assistant.model`, separately from the ordinary
+`permission_mode`. The dedicated field needs no version negotiation and does not raise the protocol floor:
+
+| Pair | What happens |
+| --- | --- |
+| New manager, new node | The node applies the AI twin's own supported mode to new chats and stopped-process resumes. Plan, unknown values and an unsupported resolved mode stay in `default`; a live process keeps its current mode. |
+| New manager, older node | The older node ignores the dedicated field and retains its previous `default` clamp. The setting takes effect after the node is updated. |
+| Older manager, new node | The dedicated field is absent, so the node stays in `default` even if the older manager supplied an ordinary caller `permission_mode`. That caller value never elevates Inbox. |
+| Rollback after an explicit bypass | A live process keeps the mode it started with. If an older manager or node drives its next stopped-process resume without the dedicated field, that resume returns to `default`. |
+
+Origin attestation, the Inbox MCP/tool gate and Lark outbound policy are unchanged in every combination.
+
 ### Node connection lanes (#10660)
 
 A manager and a node built since #10660 frame their connection on four lanes (protocol.md "Lanes"); any older end

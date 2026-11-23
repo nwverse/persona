@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -612,6 +613,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			continue
 		}
 		elsewhere := false
+		desktopViewOnly := false
 		if n.programRun(id, src, pass) {
 			continue
 		}
@@ -666,6 +668,10 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.Status = proto.StatusDone // as a loaded idle thread on an app-server (codex_remote.go)
 			}
 			s.ReadOnlyReason = holder + " 正在运行，但未提供共享入口；只能同步本地历史"
+		} else if m.turnOpen && !m.turnClosed && !m.turnActivityAt.IsZero() && time.Since(m.turnActivityAt) < codexFreshWorking && time.Since(m.turnActivityAt) >= -5*time.Minute {
+			// liveRollouts refreshes every 30s; when a rollout is actively writing an open turn between scans or on
+			// hosts where lsof misses it, keep StatusWorking instead of misreporting it as stopped (#12389).
+			s.Status = proto.StatusWorking
 		}
 		if c, t, err := n.codexOwner(id); err == nil {
 			elsewhere = true
@@ -704,28 +710,22 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			n.codexRewindRow(id, &s)
 		} else if err != errCodexNoOwner {
 			s.ReadOnlyReason = err.Error()
-		} else if src.path == "" && codexDesktopChatIn(src, pass) {
-			// The App's chat whose rollout is gone: sent to through the App, as one with a rollout.
-			elsewhere = true
+		} else if codexDesktopChatIn(src, pass) {
+			// Retain App identity and grouping when an update removes its bus, including database-only chats.
 			s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
-			s.Capabilities.Send = true
-			s.ReadOnlyReason = ""
+			s.Capabilities.Send = pass.desktopAvailable(src.home)
+			elsewhere, desktopViewOnly = s.Capabilities.Send, !s.Capabilities.Send
+			s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopUnavailableKey)
 			n.placeCodexDesktopIn(&s, src, src.thread, false, pass)
-			n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
+			if s.Capabilities.Send {
+				s.ReadOnlyReason = ""
+				n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
+			}
 		} else if o := codexThreadOrigin(src); o.desktop { // a subagent whose rollout is gone too: its database row (#8191)
-			switch {
-			case o.parent != "":
+			if o.parent != "" {
 				s.AgentName, s.ParentThreadID, s.AgentSurface = "Codex App", o.parent, transcript.SurfaceDesktop
 				s.ReadOnlyReason = "仅查看：这个子 Agent 由父 Agent 驱动"
 				n.placeCodexDesktopIn(&s, src, o.parent, true, pass)
-			case codexDesktopChatIn(src, pass):
-				// The Codex App on this machine runs it (codex_desktop.go): sendable while the App has the thread loaded.
-				elsewhere = true
-				s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
-				s.Capabilities.Send = true
-				s.ReadOnlyReason = ""
-				n.placeCodexDesktopIn(&s, src, src.thread, false, pass)
-				n.codexDesktopEffortRow(&s, src, m)
 			}
 		} else if o.cli {
 			s.AgentName, s.AgentSurface = "Codex CLI", transcript.SurfaceCLI
@@ -742,15 +742,15 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				adopted = append(adopted, adoption{len(out), s.ParentThreadID, root})
 			}
 		}
-		if s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && n.codexResumableIn(context.Background(), id, pass) {
+		if !desktopViewOnly && s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && s.Status == proto.StatusOffline && n.codexResumableIn(context.Background(), id, pass) {
 			// Nothing has it open: a stopped agent, read-only like any (stopped.go, #4754); its terminal page's Resume
 			// brings it back in a new tab (session.start, codex_resume.go).
 			s.Capabilities.Terminal = true
 			s.ReadOnlyReason = stoppedReason
 			s.Capabilities.StopCause = n.stopCause(id)
 		}
-		if s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && !n.codexBlocked(id) {
-			s.Capabilities.Takeover = n.codexTakeoverRow(id, src, m, liveRollouts[id] != "")
+		if !desktopViewOnly && s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && !n.codexBlocked(id) {
+			s.Capabilities.Takeover = n.codexTakeoverRow(id, src, m, liveRollouts[id] != "" || s.Status == proto.StatusWorking)
 		}
 		if n.codexBlocked(id) {
 			markCodexConflict(&s)

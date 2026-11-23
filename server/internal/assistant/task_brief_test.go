@@ -145,6 +145,56 @@ func TestPlanCardCarriesTheBrief(t *testing.T) {
 	}
 }
 
+// A rejected takeover scope aborts the adoption: the new card cannot keep the unapproved criterion or a linked Agent.
+func TestRiskyTakeOverScopeAbortsAdoption(t *testing.T) {
+	s, f, asked := briefService(t, "please fix the login crash before Friday")
+	closed := time.Now().UTC()
+	putTodo(s, Todo{ID: "todo_previous", Title: "fix the login crash", Origin: "conv1", DoneAt: &closed,
+		Supervision: &Supervision{Supervisor: "conv1", DoneWhen: []string{"a test covers landscape"}, ExpectMinutes: 30},
+		Agents:      []TodoAgent{{MachineID: "box", SessionID: "agent-old-1"}}})
+	first := todoNow(s, "todo_previous")
+	if _, err := s.ensureTaskBrief(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	f.setSessions("box", proto.Session{SessionID: "agent-old-1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Title: "fix the login crash", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now()})
+	f.setItems(
+		proto.Item{ID: "m1", Seq: 1, TS: asked, Role: "user", Kind: proto.KindText, Text: "please fix the login crash before Friday"},
+		proto.Item{ID: "m2", Seq: 2, TS: asked.Add(time.Hour), Role: "user", Kind: proto.KindText,
+			Text: prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{{ID: first.ID, Title: first.Title, Kind: sigOrphaned}}})},
+	)
+	res, err := runJSON(t, s, "conv1", "agent_supervise", map[string]any{
+		"machine": "box", "session_id": "agent-old-1",
+		"done_when": []string{"PR merged to main", "deployed to production and checked"}, "expect_minutes": 5,
+	})
+	if err == nil || !strings.Contains(err.Error(), "only the owner may allow") {
+		t.Fatalf("risky takeover was not refused: %s (%v)", res, err)
+	}
+	if got := todoCount(s); got != 2 {
+		t.Fatalf("todos = %d, want the closed original and aborted card", got)
+	}
+	for _, todo := range s.todosOf(context.Background(), "*") {
+		if todo.ID == first.ID {
+			continue
+		}
+		if len(todo.Agents) != 0 {
+			t.Fatalf("aborted takeover linked an Agent: %+v", todo.Agents)
+		}
+		if todo.Supervision != nil && strings.Contains(strings.Join(todo.Supervision.DoneWhen, "\n"), "deployed to production") {
+			t.Fatalf("aborted takeover kept the unapproved scope: %+v", todo.Supervision)
+		}
+		if todo.DoneAt == nil {
+			t.Fatalf("aborted takeover left an open card: %+v", todo)
+		}
+		if _, linked := s.briefOfTodo(todo.ID); linked {
+			t.Fatalf("aborted takeover stayed on the previous task's brief: %+v", todo)
+		}
+	}
+	if lineage := s.taskLineage(first.ID); len(lineage) != 1 || lineage[0].SupersededBy != "" {
+		t.Fatalf("aborted takeover rewrote the previous task's lineage: %+v", lineage)
+	}
+}
+
 // A task taken over twice still has the owner's original message and date, its criteria, and one lineage; each
 // take-over's prompt is its own, and the review is against the original criteria.
 func TestBriefSurvivesTakeOvers(t *testing.T) {
@@ -639,4 +689,34 @@ func TestContinuationUsesAuthorizedScope(t *testing.T) {
 	}
 	t.Logf("synthetic full prompts (runes/bytes): fresh %d/%d, re-scoped continuation %d/%d",
 		len([]rune(fresh)), len(fresh), len([]rune(replacement)), len(replacement))
+}
+
+func TestContinuationSurvivesEstimateUpdate(t *testing.T) {
+	s, _, _ := briefService(t, "check one job")
+	got, failed := tool(t, s, "task_plan", briefTask(map[string]any{"title": "Check job", "goal": "Check one job", "prompt": "Inspect the job", "done_when": []string{"Result reported"}}))
+	if failed {
+		t.Fatal(got)
+	}
+	waitFor(t, "original start", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	todo := onlyTodo(s)
+	tasks := []PlanTask{{Title: "Continue", Machine: "box", Prompt: "Same inspection", Continues: todo.ID, ContinuesWhy: "Agent stopped"}}
+	if err := s.planBriefs(t.Context(), "", "conv1", tasks); err != nil {
+		t.Fatal(err)
+	}
+	rev := tasks[0].Brief.scopeRevision()
+	// Quoting an operation in a schedule note grants no authority to carry it out.
+	b, err := s.applyScope(t.Context(), todo, scopeChange{By: "conv1", Expect: 42, Change: "Waiting for the merge report", Why: "More time needed"})
+	if err != nil || !b.scopeRevision().Equal(rev) || !b.ClockAt.After(rev) || b.Log[len(b.Log)-1].Kind != briefEventEstimate {
+		t.Fatalf("estimate changed authorized scope: %+v, %v", b, err)
+	}
+	if err := s.checkContinuationScope(&tasks[0]); err != nil || tasks[0].ExpectMinutes != 42 {
+		t.Fatalf("pending continuation: %v, estimate %d", err, tasks[0].ExpectMinutes)
+	}
+	got, failed = tool(t, s, "todo_get", map[string]any{"id": todo.ID})
+	if failed || !strings.Contains(got, "scope_revision: "+rev.Format(time.RFC3339Nano)) {
+		t.Fatalf("todo_get: %s", got)
+	}
+	if _, err = s.applyScope(t.Context(), todo, scopeChange{By: "conv1", Change: "Merge the release", DoneWhen: []string{"Merge the release"}, Expect: 42}); err == nil {
+		t.Fatal("adding a risky criterion needs owner approval")
+	}
 }

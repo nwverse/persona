@@ -222,10 +222,29 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 			return true, nil
 		}
 	}
+	codexAgent := false
+	codexExtra := 0
+	if a, ok := n.agent(id); ok && a.PaneID == pane && a.Agent == "codex" {
+		codexAgent = true
+		if !requireFresh {
+			// While mid-turn on an app-server, abort the turn at the protocol level first so Ctrl+C reaches an
+			// idle composer; otherwise keep Ctrl+C-only keys (codex_waiting_test.go) and follow up within Codex's
+			// ~1s "Press Ctrl-C again to exit" window before stopWait expires it (#12389).
+			wireInterrupted := n.interruptCodexActiveTurn(ctx, id)
+			codexExtra = 1
+			if !wireInterrupted && (a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked) {
+				codexExtra = 2
+			}
+		}
+	}
 	_ = n.sendKeys(ctx, pane, "ctrl+c")
 	time.Sleep(200 * time.Millisecond)
 	if err := n.sendKeys(ctx, pane, "ctrl+c"); err != nil {
 		return false, err
+	}
+	extraAt := time.Time{}
+	if codexAgent && codexExtra > 0 && stopWait >= 400*time.Millisecond {
+		extraAt = time.Now().Add(250 * time.Millisecond)
 	}
 	for deadline := time.Now().Add(stopWait); ; {
 		if err := ctx.Err(); err != nil {
@@ -238,8 +257,22 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 			err = n.refreshHosts(ctx)
 		}
 		if err == nil {
-			if a, ok := n.agent(id); !ok || a.PaneID != pane {
+			a, ok := n.agent(id)
+			if !ok || a.PaneID != pane {
 				return true, nil
+			}
+			// If earlier Ctrl+C presses only aborted a turn or cleared a draft, follow up with Ctrl+C while still
+			// inside Codex's short exit-confirmation window (never on non-Codex panes).
+			if codexExtra > 0 && !extraAt.IsZero() && !time.Now().Before(extraAt) {
+				codexExtra--
+				if codexExtra > 0 {
+					extraAt = time.Now().Add(250 * time.Millisecond)
+				} else {
+					extraAt = time.Time{}
+				}
+				if a.Agent == "codex" {
+					_ = n.sendKeys(ctx, pane, "ctrl+c")
+				}
 			}
 		} else if requireFresh {
 			return false, err
@@ -269,6 +302,7 @@ func (n *Node) resumeWith(id string, opts sendOpts) resumed {
 		r.taskID, r.workspaceID, r.workspaceLabel = opts.TaskID, opts.WorkspaceID, opts.WorkspaceLabel
 	}
 	r.launcher, r.execution = n.resumeLauncher(st, id, opts)
+	r.execution.Source = st.ModelSource
 	if r.cwd == "" {
 		if p := n.transcriptPath(id); p != "" {
 			if fi, err := os.Stat(p); err == nil {
@@ -294,6 +328,9 @@ func (n *Node) fillResume(id string, asked resumed) resumed {
 	}
 	r := n.resumeWith(id, sendOpts{})
 	out := asked
+	if out.execution.Source.Role == "" {
+		out.execution.Source = r.execution.Source
+	}
 	out.launcher = cmp.Or(asked.launcher, r.launcher)
 	if out.launcher == r.launcher && asked.execution.Model == "" && asked.execution.Fingerprint == "" {
 		out.execution.Model, out.execution.Fingerprint = r.execution.Model, r.execution.Fingerprint
@@ -405,7 +442,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	defer os.RemoveAll(dir)
 	file := filepath.Join(dir, "start.json")
-	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
+	b, _ := json.Marshal(codexStartFile{Source: sourceSession(st.ModelSource, id), Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return err
 	}

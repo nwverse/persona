@@ -7,6 +7,7 @@ import { addSection, arrangeSessions, assignSection, GROUP_LABEL, isDefaultView,
 import { ago, backgroundWaiting, sessionCan, sessionDisplayTab, sessionPreview, sourceSubtitle, sessionTitle, sessionTitleDetail, stateOf, tabLabel } from "../lib/format";
 import { useHerdrTabName } from "../lib/agents-display";
 import { firstAndCurrent } from "../lib/persona-nav";
+import { pickMainChat } from "../lib/handoff";
 import { href, navigate, routePath, type Route } from "../lib/router";
 import { rememberSessionRow, useStore } from "../lib/store";
 import { draftLine, rowLine } from "../lib/row-line";
@@ -65,7 +66,8 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
     <a
       ref={ref}
       href={href(to)}
-      onClick={go(to)}
+      // set to Full page, picked from another place it opens the page the conversation kept over it (#13164)
+      onClick={go(to, () => pickMainChat(active))}
       {...(onMenu ? contextMenuProps((at, el) => onMenu(el, at)) : {})}
       onMouseEnter={() => hover("persona")}
       onFocus={() => hover("persona")}

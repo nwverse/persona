@@ -169,6 +169,8 @@ struct ChatView: View {
 
     private enum Entry: Equatable {
         case latestAnswer, line(String), message(String)
+        /// The message a task's card is about (#12625), found once the items are in.
+        case card(Interaction)
         #if os(iOS)
         case starred(MessageJump)
         #endif
@@ -221,6 +223,8 @@ struct ChatView: View {
     @State private var footerRoom = FooterRoom()
     /// Where each pending card's message is in the chat, for its View in Chat (#9392).
     @State private var cardSources = CardSources()
+    /// The assistant's pager over the composer and its To Decide entry (#12831).
+    @State private var dock = QuestionDockState()
     @Environment(\.openSpace) private var openSpace
     @State private var link: LinkTarget?
     /// ⋯ › Preview's list of the session's dev servers, and the one picked there, opened once the list is gone (#150).
@@ -833,7 +837,10 @@ struct ChatView: View {
         .onChange(of: model.composerFocus) { _, k in if k == key, pane == .terminal { pane = .chat } }
         #endif
         // A different chat shown in place: its own cards decide whether another conversation needs you (#4348).
-        .onChange(of: key) { _, _ in offeredNext = nil }
+        .onChange(of: key) { _, _ in
+            offeredNext = nil
+            dock = QuestionDockState()
+        }
         // Leaving the conversation (another agent shown in place, the page gone, or hidden in the shell: `onTabVisibility`)
         // leaves the phone's voice chat bound to it with the bar back to it at the top, and coming back takes the bar away
         // (docs/assistant/voice.md 6.5; #9887 one button: it no longer ends there).
@@ -886,9 +893,14 @@ struct ChatView: View {
         return AnyView(activityMiddle)
         #if DEBUG
         // Simulator automation: `-showComposerPhoto YES` puts a made-up picture in the composer, as if picked from
-        // Photos (the UI tests of a sent picture showing in the chat).
+        // Photos (the UI tests of a sent picture showing in the chat); `-showComposerPhoto 22` that many, past the hub's
+        // pictures too (#12973's screenshots: the rest go as files).
         #if os(iOS) || os(visionOS)
-        .task { if UserDefaults.standard.bool(forKey: "showComposerPhoto") { model.composerInbox[key, default: []].append(Self.debugPhoto) } }
+        .task {
+            let d = UserDefaults.standard
+            let count = max(d.bool(forKey: "showComposerPhoto") ? 1 : 0, d.integer(forKey: "showComposerPhoto"))
+            if count > 0 { model.composerInbox[key, default: []].append(contentsOf: Array(repeating: Self.debugPhoto, count: count)) }
+        }
         #endif
         // Simulator automation: `-openFirstImage YES` opens the viewer on the first image once it loads.
         .onChange(of: store.rows.count) { _, _ in
@@ -1101,6 +1113,7 @@ struct ChatView: View {
         builder.childSessions = Dictionary(uniqueKeysWithValues: kids.map { ($0.sessionID, $0) })
         builder.historyComplete = store.loadedOnce && !store.hasMore
         var lines = builder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
+        lines = ModelChanges.mark(lines)
         #if os(iOS)
         // An Agent's long finished answers as several rows: one row many screens tall stuttered whenever it was on
         // screen (#4970). Persona's own conversation keeps its boxed answers whole.
@@ -1594,6 +1607,8 @@ struct ChatView: View {
         case .placeMap(let result): PlaceMapCard(result: result)
         case .day(let date): DayLine(date: date)
         case .modeChange(_, let change): ModeChangeLine(change: change, session: session)
+        case .modelChange(_, let from, let to):
+            if let names = line.modelNames { ModelChangeDivider(names: names, rawFrom: from, rawTo: to) }
         case .apiError(_, let info, _) where turnErrorCard(line, raw: info.raw) != nil:
             turnErrorCard(line, raw: info.raw)
         case .apiError(let item, let info, let count):
@@ -1692,6 +1707,19 @@ struct ChatView: View {
                 entry = nil
             } else if store.backlogBuilt {
                 if store.hasMore, scratch.entryPages < Self.entryPageLimit { searchOlderForEntry() } else { entry = nil }
+            }
+            return
+        case .card(let card):
+            // A task's card opened from the assistant's pager (#12625): the message it is about, then as a link's message.
+            // Not in what is loaded: older pages as for a link; none at all, the chat stays at its newest.
+            guard store.backlogBuilt else { return }
+            if let item = CardSource.source(for: card, in: store.items) {
+                entry = .message(item)
+                landEntry(lines)
+            } else if !(card.toolUseID ?? "").isEmpty, store.hasMore, scratch.entryPages < Self.entryPageLimit {
+                searchOlderForEntry() // a card without an id takes the newest question loaded, never an older page's
+            } else {
+                entry = nil
             }
             return
         #if os(iOS)
@@ -2885,7 +2913,13 @@ struct ChatView: View {
     @ViewBuilder private var taskFooter: some View {
         let conversation = key.sessionID
         let tasks = TasksStore.shared
-        TaskQuestions(conversation: conversation, room: footerRoom)
+        // What waits for the owner, one card at a time behind To Decide (#12831): the conversation's own cards and its tasks'.
+        let own = dockCards
+        QuestionDock(own: own, conversation: conversation, room: footerRoom, state: dock, inCall: VoiceCalls.shared.isLive(on: key))
+            .environment(\.cardSources, cardSources)
+            .task(id: CardSourceInputs(cards: own.map(\.id), count: store.items.count, last: store.items.last?.id)) {
+                if !own.isEmpty { findCardSources() }
+            }
         DraftReader(key: key) { typed in
             if let range = TaskMentionList.mention(in: typed) {
                 TaskMentionList(conversation: conversation) { todo in
@@ -2901,12 +2935,20 @@ struct ChatView: View {
         // Out of the way of a voice call (docs/assistant/voice.md 6.2「通话期间」), back when it ends.
         VoiceCallHides(key: key) {
             // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
-            AssistantActionBar(conversation: conversation, key: key, computer: computerActivity)
+            AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
             RouteChip(conversation: conversation)
             // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
             if model.assistantMain == key { WrapUpChips(key: key) }
         }
     }
+
+    /// The conversation's own cards as the assistant's pager takes them (#12831).
+    private var dockCards: [DockCard] {
+        pendingCards.map { DockCard(interaction: $0.interaction, enabled: $0.enabled, localOnly: $0.localOnly, blocked: $0.blocked, from: $0.from) }
+    }
+
+    /// The assistant's pager holds the conversation's own cards (#12831): the stack under the entries is only an Agent's.
+    private var cardsDocked: Bool { style == .assistant && viewing == nil }
 
     /// The agent's pending cards, and in DEBUG the sample ones the screenshot switches add (`-showSampleQuestion YES`…).
     private var pendingCards: [PendingCards.Card] {
@@ -2988,7 +3030,7 @@ struct ChatView: View {
                 if style == .dev, viewing == nil, ComputerActivityPill.shows(computerActivity) {
                     ComputerActivityPill(activity: computerActivity, from: key).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if !pendingCards.isEmpty {
+                if !cardsDocked, !pendingCards.isEmpty {
                     PendingCards(cards: pendingCards, room: footerRoom)
                         .environment(\.cardSources, cardSources)
                         .task(id: CardSourceInputs(cards: pendingCards.map(\.id), count: store.items.count, last: store.items.last?.id)) {
@@ -4697,6 +4739,10 @@ struct ChatView: View {
             return true
         }
         #endif
+        if let card = j.card {
+            entry = .card(card)
+            return true
+        }
         entry = .message(j.item)
         return true
     }
@@ -5944,12 +5990,12 @@ struct Composer: View, Equatable {
         guard isMainAssistantChat else { return nil }
         // The response cache is unobserved; this small revision is the redraw signal after a fresh hub answer.
         _ = model.assistantLauncherRevision
-        return AssistantModelChoice.effective(session: model.session(key), response: model.cachedAssistantLaunchers(key.machineRef))
+        return AssistantModelChoice.effective(session: model.session(key), response: model.cachedAssistantLaunchers(key.machineRef, main: true))
     }
     /// The model name the composer title and the modes menu row both show for the main chat, from the one effective
     /// setup (#6911 M7): the two surfaces never name different models.
     private var assistantEffectiveName: String? {
-        assistantEffective.flatMap { AssistantModelChoice.displayName($0, response: model.cachedAssistantLaunchers(key.machineRef)) }
+        assistantEffective.flatMap { AssistantModelChoice.displayName($0, response: model.cachedAssistantLaunchers(key.machineRef, main: true)) }
     }
 
     @ViewBuilder private var extensionPrompts: some View {
@@ -6531,7 +6577,9 @@ struct Composer: View, Equatable {
         } message: {
             Text("\(model.session(key)?.agentLabel ?? "Claude") will start a new session. This chat stays in your history, and the page moves to the new session.")
         }
-        .mediaPicker(isPresented: $showPhotos, selection: $picks)
+        // the hub's pictures without the session's agent: reading the session here would redraw the box on every row
+        // update (P5); past them a pick goes as a file anyway
+        .mediaPicker(isPresented: $showPhotos, selection: $picks, limit: model.imageLimits(key.group).perMessage + VideoAttachments.most)
         #if os(iOS)
         .modifier(attachHost)
         .task { if attachOpener != nil { AttachLibrary.prewarm() } }
@@ -6599,7 +6647,7 @@ struct Composer: View, Equatable {
         // request every streaming tick, so the AppModel invalidates the cache from assistant snapshots instead.
         .task(id: "\(key.sessionID)-\(model.assistantLauncherRequestRevision)") {
             guard assistantModelPickAvailable else { return }
-            _ = try? await model.assistantLaunchers(key.machineRef, refresh: true)
+            _ = try? await model.assistantLaunchers(key.machineRef, refresh: true, main: true)
         }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
@@ -6633,7 +6681,9 @@ struct Composer: View, Equatable {
 
     #if os(iOS)
     private var attachHost: AttachSheetHost<AttachMoreRows> {
-        AttachSheetHost(panel: attachPanel, caption: textBinding, photoRoom: max(0, 4 - images.count),
+        // past the hub's pictures a pick goes as a file (`add`), so the panel takes as many as the files have room for too
+        AttachSheetHost(panel: attachPanel, caption: textBinding,
+                        photoRoom: model.imageLimits(key.group).roomLeft(holding: images.count) + max(0, FileAttachments.most - files.items.count),
                         videoRoom: max(0, VideoAttachments.most - videos.items.count),
                         camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                         files: { showFiles = true }, allPhotos: { showPhotos = true }, showsMore: true,
@@ -6697,7 +6747,9 @@ struct Composer: View, Equatable {
         }
     }
 
-    private func addPicked(_ picks: AttachPicks) async { await held.addPicked(picks, machine: key.machineRef, model: model) }
+    private func addPicked(_ picks: AttachPicks) async {
+        await held.addPicked(picks, machine: key.machineRef, model: model, limits: limits, dest: uploadDest)
+    }
     #endif
 
     /// Send, unless the draft is the main conversation's `/clear`, which clears even while a turn runs and past a send gate.
@@ -6786,13 +6838,20 @@ struct Composer: View, Equatable {
         picks = []
     }
 
-    private func add(_ img: UIImage) { MessagePhotos.add(img, to: &images, model: model) }
+    /// The pictures a message to this session may carry (the hub's, by its agent, #12973). Read in actions only: in `body`
+    /// the session's row would redraw the box on every update (P5), so the panel and the picker take the hub's by group.
+    private var limits: ImageLimits { model.imageLimits(key) }
+
+    private func add(_ img: UIImage) {
+        MessagePhotos.add(img, to: &images, model: model, limits: limits,
+                          spill: MessagePhotos.spill(into: files, machine: key.machineRef, model: model, dest: uploadDest))
+    }
 
     /// A scan's pages: the next message's photos while they fit, else one PDF uploaded as a picked file is (#3720).
     private func addScan(_ pages: [UIImage]) {
         #if os(iOS)
         // A PDF goes as the panel's Files do: a card above the box (the app's own copy, deleted once it is there).
-        DocumentScanner.deliver(pages, room: MessagePhotos.limit - images.count, model: model, add: { add($0) }) { urls in
+        DocumentScanner.deliver(pages, room: limits.roomLeft(holding: images.count), model: model, add: { add($0) }) { urls in
             files.start(urls, machine: key.machineRef, model: model, dest: uploadDest, owned: true)
         }
         #endif
@@ -7778,6 +7837,12 @@ struct ChatLine: Identifiable {
     /// A scheduled task's or a follow-up's input in the main conversation while background rounds fold: its source
     /// block shows the one-line notice, never the prompt (`ChatLines.hidesPrompt`).
     var hidesPrompt = false
+    /// Friendly names computed by the model-change factory, never by a row's body.
+    var modelNames: (from: String, to: String)?
+    /// The first visible line of a photo-only or wake exchange (`ChatLines.flatLines`).
+    var startsExchange = false
+    /// A child revealed from a folded supervision/background round; still not a visible reply for model comparison.
+    var inFoldedRound = false
 
     indirect enum Content {
         /// One compact header for the entire quiet round; children are flattened only when it is opened. `source`: the
@@ -7817,6 +7882,8 @@ struct ChatLine: Identifiable {
         /// A permission mode change the hub recorded, at the end of the exchange it happened in (#10297,
         /// `ChatLines.mergeModeChanges`); `id` from its time and kind.
         case modeChange(id: String, change: APIClient.ModeChange)
+        /// The reply models on either side of a visible exchange boundary (#5055, `ModelChanges.mark`).
+        case modelChange(id: String, from: String, to: String)
 
         var id: String {
             switch self {
@@ -7839,6 +7906,7 @@ struct ChatLine: Identifiable {
             case .viewed(let id, _): id
             case .answerPart(let item, _, let index, _): index == 0 ? item.id : item.id + "/part-\(index)"
             case .modeChange(let id, _): id
+            case .modelChange(let id, _, _): id
             }
         }
     }
@@ -7882,6 +7950,11 @@ struct ChatLine: Identifiable {
     static func placeMap(_ result: PlaceMapResult) -> Self { Self(.placeMap(result)) }
     static func day(_ date: Date) -> Self { Self(.day(date)) }
     static func modeChange(id: String, _ change: APIClient.ModeChange) -> Self { Self(.modeChange(id: id, change: change)) }
+    static func modelChange(id: String, from: String, to: String) -> Self {
+        var line = Self(.modelChange(id: id, from: from, to: to))
+        line.modelNames = (replyModelName(from), replyModelName(to))
+        return line
+    }
     static func viewed(id: String, images: [ViewedImage]) -> Self { Self(.viewed(id: id, images: images)) }
     static func answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int) -> Self {
         Self(.answerPart(item: item, part: part, index: index, count: count))

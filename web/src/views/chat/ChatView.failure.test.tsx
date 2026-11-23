@@ -609,6 +609,23 @@ describe("a send whose answer came back in doubt (the hub stopped waiting, the m
     expect(line()?.textContent).toContain(t("lib-outbox.peer_unconfirmed"));
   });
 
+  // The screenshot case (#9025 follow-up): a busy Claude whose Persona plugin is from before busy delivery got the
+  // message through its inbox, which did not take it. The bubble says why and what fixes it, across a reload too.
+  it("an unconfirmed relay to a session with an older Persona plugin says to reopen it on the computer", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    let sending!: Promise<boolean>;
+    act(() => { sending = captured.onSend!({ text: "可以派 subagent 分头处理", images: [] }); });
+    await flush();
+    answer(json({ code: "peer_unconfirmed", error: "not taken", delivered: "unknown", delivered_as: "relayed", relay_reason: "plugin_outdated" }, 409));
+    await act(async () => void (await sending));
+    await flush();
+    const line = () => host.querySelector("[data-outbox] [data-in-doubt]");
+    expect(line()?.getAttribute("data-in-doubt")).toBe("unknown");
+    expect(line()?.textContent).toContain(t("lib-outbox.peer_unconfirmed_old_plugin"));
+    expect(getState().outbox["hub/c1"]![0].relay).toBe("plugin_outdated");
+  });
+
   it("a refusal stays failed even with the same words in the chat", async () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" />));
     await flush();
@@ -1051,6 +1068,12 @@ describe("sending in order, and with no row yet", () => {
       history.replaceState(null, "", "/persona/nope-0000");
       act(() => root.render(<ChatView mid="hub" sid="nope-0000" assistant={assistant} />));
       await flush();
+      // The exact-session read and React.lazy resolution are asynchronous: wait for the visible notice, not a fixed
+      // number of event-loop turns (which still loses under a loaded full suite).
+      await vi.waitFor(async () => {
+        await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+        expect(host.querySelector("[data-chat-not-found]")?.textContent).toContain(t("chat-notfoundnotice.body"));
+      });
       expect(host.querySelector("[data-chat-title]")?.textContent).toBe(t("chat-chatview.not_found_title"));
       expect(host.textContent).not.toContain("nope-0000");
       // The notice is a React.lazy chunk: it suspends once on its first render even when the module is in, so it is
@@ -1346,6 +1369,8 @@ describe("a message to an Agent whose computer is away", () => {
     expect(line?.className).toContain("text-red");
     const buttons = [...bubble!.querySelectorAll<HTMLButtonElement>('[role="alert"] button')];
     expect(buttons.map((b) => b.textContent)).toEqual([t("chat-outboxbubbles.retry"), t("chat-outboxbubbles.delete")]);
+    // The lazy mode-changes watcher may issue its GET after Retry; let it finish before asserting the last request.
+    await act(async () => { await vi.dynamicImportSettled(); }); await flush();
     await act(async () => buttons[0].click()); await flush();
     expect(fetched().at(-1)).toEqual({ url: "/api/v1/sessions/hub/c1/held/k1/retry", method: "POST" });
     // without the manager's words: the plain line in the page's language

@@ -24,6 +24,20 @@ func claudeMDHub(devices ...Device) *fakeHub {
 	return f
 }
 
+// The secretary's instructions never send new task_plan work to a leader for acceptance (#5732).
+func TestAssistantInstructionsKeepNewTaskReviewWithMain(t *testing.T) {
+	f := claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"})
+	s := newTestService(t, f)
+	s.kb.dir = "<hub>/data"
+	text := s.claudeMD(context.Background(), "server", false)
+	if strings.Contains(text, "交给那个主管督办") || strings.Contains(text, "任务的验收和返工由它做") {
+		t.Fatal("the assistant is still told to delegate new task_plan acceptance to a leader")
+	}
+	if !strings.Contains(text, "新任务统一由主对话督办") {
+		t.Fatal("the assistant instructions do not state universal main supervision")
+	}
+}
+
 // The CLAUDE.md the assistant writes into its directory from what the hub tells it (claudeMD, prepare).
 func TestGoldenAssistantClaudeMD(t *testing.T) {
 	ctx := context.Background()
@@ -130,22 +144,47 @@ func TestAssistantMachinesFromWhereItRuns(t *testing.T) {
 		}
 		return out
 	}
-	here, ssh, noCommand := "就是你所在的这台机器", "`ssh box-alias '<命令>'`", "不能直接在它上面执行命令"
+	here, ssh, agent := "就是你所在的这台机器", "SSH 别名 `box-alias`，工作交给 Agent", "交给这台电脑上的 Agent"
 	for _, tc := range []struct {
 		at   string
 		want map[string]string
 	}{
-		{"server", map[string]string{"server": here, "box": ssh, "laptop": noCommand}},
-		{"box", map[string]string{"server": noCommand, "box": here, "laptop": noCommand}},
-		{"laptop", map[string]string{"server": noCommand, "box": noCommand, "laptop": here}},
+		{"server", map[string]string{"server": here, "box": ssh, "laptop": agent}},
+		{"box", map[string]string{"server": agent, "box": here, "laptop": agent}},
+		{"laptop", map[string]string{"server": agent, "box": agent, "laptop": here}},
 	} {
 		got := lines(tc.at)
 		for id, want := range tc.want {
 			if !strings.Contains(got[id], want) {
 				t.Errorf("assistant on %s, line for %s = %q, want %q", tc.at, id, got[id], want)
 			}
-			if tc.at != "server" && strings.Contains(got[id], "ssh ") {
-				t.Errorf("assistant on %s is told to ssh: %q", tc.at, got[id])
+			if strings.Contains(got[id], "`ssh ") {
+				t.Errorf("assistant on %s is given an ssh command: %q", tc.at, got[id])
+			}
+		}
+	}
+}
+
+func TestAssistantClaudeMDDelegationBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		locale   string
+		quick    string
+		dispatch string
+		source   string
+	}{
+		{"", "本机跑命令、读文件只限一两次调用", "改代码或多步工作用 `task_plan`", "到源码所在的电脑和目录查"},
+		{"zh-Hans", "本机跑命令、读文件只限一两次调用", "改代码或多步工作用 `task_plan`", "到源码所在的电脑和目录查"},
+		{"en", "only for quick local checks (one or two calls", "Use `task_plan` for code changes", "Use the computer and directory with the source checkout"},
+		{"ja", "手元で 1〜2 回の呼び出しで済む確認に限る", "`task_plan` で Agent に任せる", "ソースのチェックアウト先のコンピュータとディレクトリを指定する"},
+	} {
+		for _, guide := range []bool{false, true} {
+			got := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{
+				Language: answerLanguage(tc.locale), WorkGuide: guide,
+			})
+			for _, want := range []string{tc.quick, tc.dispatch, "`readonly: true`", tc.source} {
+				if !strings.Contains(got, want) {
+					t.Errorf("locale %q, work guide %t: missing %q", tc.locale, guide, want)
+				}
 			}
 		}
 	}

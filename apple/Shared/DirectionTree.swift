@@ -146,6 +146,62 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
         var displayTitle: String { title.isEmpty ? String(localized: "Untitled To-do") : title }
     }
 
+    /// A session placed in a direction (#11391, docs/assistant/unified-entry.md "The direction tree"): filed there by the
+    /// owner (`source` `owner`) or opened by its leader conversation (`leader`), with the title it was filed with and
+    /// when (`at`). `state` is where it stands: the session's own state as on session rows (`AgentState`'s raw values),
+    /// or one of `Standing`'s, as the single read gives it; the tree lists only `working` and `needs_you`. Decoded
+    /// leniently, as the rest of the tree.
+    nonisolated struct FiledSession: Codable, Hashable, Sendable, Identifiable {
+        var machineID: String
+        var sessionID: String
+        var title: String
+        var source: String
+        var at: Date?
+        var state: String
+
+        /// Rows are keyed by the session (P6), never by their place in the list.
+        var id: String { machineID + "/" + sessionID }
+        /// The owner filed it here (else its leader conversation opened it).
+        var addedByOwner: Bool { source != "leader" }
+
+        init(machineID: String, sessionID: String, title: String = "", source: String = "owner", at: Date? = nil,
+             state: String = "") {
+            self.machineID = machineID
+            self.sessionID = sessionID
+            self.title = title
+            self.source = source
+            self.at = at
+            self.state = state
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            machineID = try c.decodeIfPresent(String.self, forKey: .machineID) ?? ""
+            sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID) ?? ""
+            title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? ""
+            source = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? ""
+            at = try? c.decodeIfPresent(Date.self, forKey: .at)
+            state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? ""
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case title, source, at, state
+            case machineID = "machine_id", sessionID = "session_id"
+        }
+
+        /// The session in `group` (the hub the tree came from).
+        func key(group: String) -> SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
+
+        /// Where it stands besides its own state (#11458): its computer is not connected, has not given its list, gave
+        /// a list without it, or is no longer one of the computers. nil for the session's own state, and for a value
+        /// this app does not know (it draws no standing word and never fails the page).
+        nonisolated enum Standing: String, Sendable { case computerOffline = "computer_offline", listUnknown = "list_unknown",
+                                               notListed = "not_listed", computerRemoved = "computer_removed" }
+        var standing: Standing? { Standing(rawValue: state) }
+        /// The session's own state, when `state` is one (`offline`: stopped on a connected computer).
+        var ownState: AgentState? { standing == nil ? AgentState(rawValue: state) : nil }
+    }
+
     /// A direction: a current leader conversation, an outside reporting direction (#8236), or (`secretary`) the group
     /// of to-dos no leader supervises, whose id is the main conversation's.
     nonisolated struct Direction: Codable, Hashable, Sendable, Identifiable {
@@ -167,9 +223,14 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
         /// Navigation-only coding-Agent target. Only a complete, nonblank pair on an outside direction is usable.
         var machineID: String?
         var sessionID: String?
+        /// The sessions the owner filed here, or its leader conversation opened, that are live now (`working` or
+        /// `needs_you`, #11391): never one of `tasks`' Agents, never the leader itself. They change neither `counts` nor
+        /// `running`. Empty from a hub without `direction_sessions`, which omits the field.
+        var sessions: [FiledSession]
 
         init(id: String, name: String = "", secretary: Bool = false, counts: Counts = Counts(), running: Bool = false,
-             tasks: [TaskNode] = [], external: Bool? = nil, machineID: String? = nil, sessionID: String? = nil) {
+             tasks: [TaskNode] = [], sessions: [FiledSession] = [], external: Bool? = nil, machineID: String? = nil,
+             sessionID: String? = nil) {
             self.id = id
             self.name = name
             self.secretary = secretary
@@ -179,6 +240,7 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
             self.external = external
             self.machineID = machineID
             self.sessionID = sessionID
+            self.sessions = sessions
         }
 
         init(from decoder: Decoder) throws {
@@ -193,10 +255,12 @@ nonisolated struct DirectionTree: Codable, Hashable, Sendable {
             external = (try? c.decodeIfPresent(Bool.self, forKey: .external)) ?? nil
             machineID = (try? c.decodeIfPresent(String.self, forKey: .machineID)) ?? nil
             sessionID = (try? c.decodeIfPresent(String.self, forKey: .sessionID)) ?? nil
+            // A list that does not decode is none: the tree's to-dos still draw (an extra field never fails the tree).
+            sessions = (try? c.decodeIfPresent([FiledSession].self, forKey: .sessions)) ?? []
         }
 
         private enum CodingKeys: String, CodingKey {
-            case id, name, secretary, counts, running, tasks, external
+            case id, name, secretary, counts, running, tasks, sessions, external
             case machineID = "machine_id", sessionID = "session_id"
         }
 

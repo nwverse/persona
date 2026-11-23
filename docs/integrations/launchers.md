@@ -288,7 +288,9 @@ Supported since herdr 0.7.1 (Linux) / 0.7.5 (macOS); ignored by older herdr and 
 
 ## Work agents: pi, the Cursor CLI, the Antigravity CLI
 
-pi, the Cursor CLI (`cursor-agent`) and the Antigravity CLI (`agy`) are agents the user works with, started in a herdr pane the way Claude and Codex are (`server/internal/node/workagent.go`). A machine lists each as a launcher when its program is on the login shell's PATH (`pi`, `cursor-agent`, `agy`), so New Agent and `task_plan` / `agent_start` offer it there and nowhere else. `launcher` is the agent's name (`pi`, `cursor`, `agy`); `model` is passed as `--model` (a provider and model, such as `ag-chat/cursor/grok-4.7` for pi). They take no permission mode or ultracode.
+pi, the Cursor CLI (`cursor-agent`) and the Antigravity CLI (`agy`) are agents the user works with, started in a herdr pane the way Claude and Codex are (`server/internal/node/workagent.go`). A machine lists each as a launcher when its program is on the login shell's PATH (`pi`, `cursor-agent`, `agy`), so New Agent and `task_plan` / `agent_start` offer it there and nowhere else. `launcher` is the agent's name (`pi`, `cursor`, `agy`); `model` is passed as `--model` (a provider and model, such as `ag-chat/cursor/grok-4.7` for pi). pi and Cursor take no permission mode, and none of them takes ultracode.
+
+**agy's permission mode is its start's.** An agy start runs in Allow all (`--dangerously-skip-permissions`) unless it names another mode: `acceptEdits` passes `--mode accept-edits`, `auto` passes `--mode auto`, and `default` passes no flag (agy's own approval). Like Claude Code, an agy worker from `agent_start` or `task_plan` gets Allow all when nothing names a mode (`startAgent.allowAll`), since nobody at the pane answers agy's approval prompt; a mode the call or plan names stays. The row reports the mode it started in as `permission_mode`, and a herdr restart resumes it with the same flag. The mode, effort and model cannot be changed afterwards: `session.modes` on an agy or Cursor pane is refused with `modes_unsupported` (409) and no key reaches the pane, and their rows say `capabilities.modes: false`, so no client offers the chips. agy cycles its own modes with shift+tab, but its footer is not Claude Code's and Allow all is a start flag outside that cycle, so the node does not drive it. Antigravity's runtime (`agy acp`, the companion conversation) keeps its own mode switch.
 
 For herdr starts, the Antigravity model picker reads the local launcher's `models` output and uses the standard catalog cache and refresh. Picking an effort passes `--effort` with one of `low`, `medium`, `high`, `xhigh` or `max`. Leaving an override unset uses the launcher's default. pi and Cursor keep their own effort.
 
@@ -755,3 +757,61 @@ A launcher whose provider reports a prepaid balance rather than an allowance win
   what the label covers, so a client can add entries up: the iPhone's Usage widget shows today's money as the sum of the
   `day` entries' `cost_usd` over the launchers that have a gateway, and no money when none says (`docs/apple/home-widgets.md`).
   Fake hub's `cc_main` and `cc_team` carry quota from two example gateways (`示例网关`, “Example gateway,” and `示例中转`, “Example relay”) for screenshots.
+
+
+## Model request attribution
+
+Gateway accounting can opt in to source headers with `PERSONA_MODEL_SOURCE_HOSTS`. Its default is empty: Persona
+adds no source headers to any destination. Set it in the service environment of the hub/assistant manager and every
+node that makes model requests, for example:
+
+```sh
+PERSONA_MODEL_SOURCE_HOSTS='gateway.example.com,*.relay.example.com'
+```
+
+Entries are comma-separated hostnames, without a scheme, port or path. Exact names match only that host;
+`*.relay.example.com` matches subdomains at any depth, but not `relay.example.com` itself. Matching ignores hostname
+case and the destination port. A bare `*` is unsupported. Use only your gateway hosts; official vendor addresses
+must stay outside the allowlist. Restart the affected services and their model sessions after changing it so existing
+processes and restored terminal commands do not retain an earlier environment or generated settings.
+
+Persona checks the effective Base URL/provider address, never the launcher name. On an allowed destination it adds:
+
+| Header | Value |
+| --- | --- |
+| `X-Persona-Role` | `main` for interactive main/side chats; `leader` for direction conversations; `routine` for scheduled runs and their conversations; `task_agent` for work Agents; `background` for sorting, knowledge helpers, supervision and model health probes |
+| `X-Persona-Todo` | Linked to-do ID, when known |
+| `X-Persona-Routine` | Scheduled-task ID, when known |
+| `X-Persona-Session` | Persona session ID, when known at process start/resume |
+
+Only role enums and validated IDs enter these fields. A routine delivered into an interactive conversation has the
+routine's accounting role for that run; the next interactive message restores the conversation's role. Manager-owned
+records supply the metadata on starts, sends and autonomous resumes. Source changes participate in process reuse,
+and node state preserves attribution through the manager's database boundary.
+
+Claude Code uses newline-separated `Name: Value` pairs in `ANTHROPIC_CUSTOM_HEADERS`. Persona merges its reserved
+source fields into the effective existing headers in a generated, private per-start settings file, preserving other
+headers and settings. The generated settings pin the verified gateway URL with the headers, including for terminal
+restores; user launcher/configuration files are never edited. An unknown endpoint or a launcher whose dynamic
+settings cannot be read is skipped. Administrator-enforced settings can supersede these generated settings.
+
+Codex uses a final CLI helper after normal shell launcher expansion, or after a managed provider is resolved. It adds
+per-invocation `-c` overrides for the selected custom provider's `env_http_headers`. Existing literal headers are carried
+in environment bindings too, so credentials never enter the new arguments. Authentication, provider URL and unrelated
+headers stay intact. These local configuration overrides keep attribution on that process rather than a shared daemon.
+Some Codex traffic cannot carry the fields: the built-in `openai` provider ignores ordinary provider header overrides;
+explicit remote/desktop app-servers and external runtimes own their own HTTP transport; project-level provider choices
+are skipped because only Codex knows whether it trusts that project configuration. Unknown/unreadable provider
+configuration, compact `-c...` / `-p...` options and legacy administrator provider overlays are also skipped.
+Use a Persona-managed or ordinary custom Responses provider on a local CLI when attribution is required. A new Codex session's ID is allocated after startup, so its initial process may omit
+`X-Persona-Session`; a resume with a known ID can include it.
+
+Direct Messages, Responses and Chat Completions helpers use `background`, including helpers sent through a node.
+Cross-origin redirects strip all source fields, even when the next origin is also allowlisted. A gateway should also
+strip these fields before forwarding a request to its vendor.
+
+After deployment, inspect gateway ingress logs for one interactive main chat, one direction conversation, one scheduled
+run, one work Agent from each supported launcher and one background helper. Check the role and available IDs, without
+logging prompts or credentials. Confirm that direct official-vendor requests and an empty allowlist have no source
+headers, and that vendor-bound gateway egress has none. This repository change neither deploys the configuration nor
+changes gateway accounting/enforcement.

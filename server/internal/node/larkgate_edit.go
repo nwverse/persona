@@ -61,7 +61,7 @@ func (n *Node) editableLarkCall(cfg proto.AssistantLark, command, cwd string) (l
 	if !larkLoneGateCall(command, cfg.Gates) {
 		return larkCall{}, larkBodySpan{}, "", false
 	}
-	v := classifyLark(command, cfg.Gates, cwd, n.larkCLIRisk(cfg))
+	v := classifyLarkWith(command, cfg.Gates, cwd, n.larkCLIRisk(cfg), n.larkLoginPATH)
 	if v.deny != "" || v.other || v.unparsed || v.unknown || v.unsure || len(v.calls) != 1 {
 		return larkCall{}, larkBodySpan{}, "", false
 	}
@@ -152,7 +152,7 @@ func (n *Node) applyLarkEdit(ctx context.Context, cfg proto.AssistantLark, sessi
 		return "", fmt.Errorf("the edited command could not be rebuilt")
 	}
 	command = updated
-	v := classifyLark(command, cfg.Gates, cwd, n.larkCLIRisk(cfg))
+	v := classifyLarkWith(command, cfg.Gates, cwd, n.larkCLIRisk(cfg), n.larkLoginPATH)
 	if v.deny != "" || v.other || v.unparsed || v.unknown || v.unsure || len(v.calls) != 1 {
 		return "", fmt.Errorf("the edited command is no longer one standalone gated call")
 	}
@@ -210,7 +210,7 @@ func (n *Node) takeOriginalGrant(cfg proto.AssistantLark, session, id string, c 
 	var body any
 	parsed := json.Unmarshal([]byte(c.Body), &body) == nil
 	p := n.gates()
-	key := gateKey{command: cfg.Gates[c.Gate].Command, session: session, health: p.healthSession(session)}
+	key := gateKey{command: cfg.Gates[c.Gate].Command, session: session, space: p.spaceSession(session)}
 	query := gateQueryKey(c.Query)
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -221,7 +221,7 @@ func (n *Node) takeOriginalGrant(cfg proto.AssistantLark, session, id string, c 
 			g.command != key.command || g.method != strings.ToUpper(c.Method) || g.path != c.Path || g.query != query {
 			continue
 		}
-		if key.health && (key.session == "" || g.session != key.session) {
+		if key.space && (key.session == "" || g.session != key.session) {
 			continue
 		}
 		if g.session != "" && key.session != "" && g.session != key.session {

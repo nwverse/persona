@@ -18,6 +18,7 @@ struct PersonaApp: App {
                 .personaCallCover() // the call to Persona's page and the bar back to it (#9290, CallScreen.swift)
                 .urgentCallCover() // an answered urgent call's page, over everything (UrgentCallView.swift)
                 .overlay { MeetingFloatingWindow() } // a meeting recording with its room put away (#8731 V5)
+                .locationAlwaysOffer() // once, after a location read failed in the background (#13200)
                 #endif
                 #if DEBUG && os(iOS)
                 .task { ProductionContinuityShadow.shared.install() } // Lazy: no core is created until a real input arrives.
@@ -129,10 +130,15 @@ struct PersonaApp: App {
                 // call later can serve it instead of HealthKit's inaccessible-database error.
                 Task { await HealthTool.refreshSnapshot() }
                 SiriCalls.askOnce(paired: model.hub != nil) // a build with app.siri_calls only (#9290)
+                BackgroundLocation.shared.cameToFront() // offers Always once after a read refused in the background
                 #endif
             } else if new == .background {
                 #if os(iOS)
                 ClipboardOfferWatcher.shared.left()
+                // The Live Activity follows the first group's hub (LiveActivityController.report): without a push route
+                // there it would only go stale (#12982).
+                let group = model.links.first?.api.group
+                LiveActivityController.shared.left(pushReaches: group.flatMap { PushHealthStore.shared.health.routes[$0]?.reaches })
                 #endif
                 // A suspended app's socket looks alive to the hub until it times out, and phone_* calls sent to it hang.
                 // Closed, the hub knows the phone is away and wakes it with a silent push instead; and nothing opens it
@@ -181,6 +187,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the
         // reports' small state file this early.
         if WorkoutReports.deliversInBackground { WorkoutReports.shared.observe() }
+        // Here too, for a launch iOS made for a significant location change: the Always session and the service are kept
+        // only a few seconds after a relaunch (#13200). Asks nothing; one manager whose level arrives in a callback.
+        BackgroundLocation.shared.launch()
         // Urgent calls' PushKit registry, when they are on: a VoIP push that launches the app reaches only one made now.
         UrgentCallPush.shared.start()
         #endif

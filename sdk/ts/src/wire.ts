@@ -830,6 +830,11 @@ export interface ChannelCapabilities {
   max_text?: number;
   asks?: string;
   push?: boolean;
+  /**
+   * It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without reply_to;
+   * testing checks connectivity instead of calling channel.send.
+   */
+  reply_only?: boolean;
   typing?: boolean;
   progress?: boolean;
   threads?: boolean;
@@ -1474,6 +1479,51 @@ export interface SecretsResolveResult {
 }
 
 /**
+ * A public field name/type; never a value or source path.
+ */
+export interface SecretStoreField {
+  name: string;
+  type: string;
+}
+
+/**
+ * The canonical public target approved on the secret storage card.
+ */
+export interface SecretStoreTarget {
+  operation: string;
+  vault: string;
+  item?: string;
+  title?: string;
+  category?: string;
+  fields: SecretStoreField[];
+}
+
+/**
+ * secrets.store: describe metadata, prepare an expiring node HPKE key after explicit approval, commit one encrypted
+ * payload.
+ */
+export interface SecretStoreParams {
+  contribution?: string;
+  phase: string;
+  target: SecretStoreTarget;
+  machine: string;
+  session: string;
+  key_id?: string;
+  sealed?: string;
+}
+
+/**
+ * Metadata and a recipient key, or references of written fields. Never values.
+ */
+export interface SecretStoreResult {
+  target: SecretStoreTarget;
+  vault_name?: string;
+  key?: string;
+  key_id?: string;
+  references?: Record<string, string>;
+}
+
+/**
  * secrets.used (an event to the provider, no answer): a reference it resolved was used, for the usage record its own
  * page shows. Never the value.
  */
@@ -1651,9 +1701,10 @@ export type Component =
   | ImageComponent
   | GridComponent
   | CarouselComponent
-  | GraphComponent;
-export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph"] as const;
-export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6, graph: 10 };
+  | GraphComponent
+  | SceneComponent;
+export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene"] as const;
+export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6, graph: 10, scene: 11 };
 
 /**
  * A paragraph.
@@ -2131,6 +2182,158 @@ export const GRAPH_LAYOUTS = ["tree", "layered"] as const;
  */
 export type GraphDirection = "right" | "down" | (string & {});
 export const GRAPH_DIRECTIONS = ["right", "down"] as const;
+
+/**
+ * A small 3D model the person can turn, zoom and tap (UI version 11): a home with its rooms and furniture as simple
+ * shapes, each device pinned where it is with its state, and a light in the model for lamps that are on. The app
+ * builds it with its own engine; the extension sends shapes, never a model file or code. Metres; plan coordinates [x,
+ * y] with x east and y north, heights up from the floor; angles in degrees counter-clockwise from +x seen from above.
+ * Each pin counts as a component of the page; a view has at most one scene. In a card it is a still preview that
+ * opens full screen. An older app gets the poster as an image, or without one a row per pin.
+ */
+export interface SceneComponent {
+  type: "scene";
+  /** Keeps the person's camera across redraws of the page. */
+  key?: string;
+  /** What the model shows, in a sentence: read out first, and shown when it cannot be drawn. */
+  alt: string;
+  caption?: string;
+  /**
+   * A picture of the model for an older app (an image in its place) and for share as image. Without it an older app
+   * gets a row per pin.
+   */
+  poster?: ImageSource;
+  camera?: SceneCamera;
+  shapes: SceneShape[];
+  labels?: SceneLabel[];
+  pins?: ScenePin[];
+}
+
+/**
+ * Where the model is first seen from (UI version 11), orthographic, around the centre of the shapes' bounding box.
+ * Each field has its default when absent.
+ */
+export interface SceneCamera {
+  /**
+   * The camera's direction from the centre, in degrees counter-clockwise from +x (east): 225 (the default) stands
+   * south-west, looking north-east.
+   */
+  yaw?: number;
+  /** Degrees above the floor plane: 35 by default, 90 straight down. */
+  pitch?: number;
+  /** 1 (the default) fits the shapes' bounding box in the view; 2 draws it twice as large. */
+  zoom?: number;
+}
+
+/**
+ * One shape of a scene (UI version 11), told apart by kind: a box, a cylinder or a prism, standing from bottom to top
+ * (metres above the floor, at least 0.005 apart). Without color, the material's own.
+ */
+export type SceneShape =
+  | SceneBox
+  | SceneCylinder
+  | ScenePrism;
+export const SCENE_SHAPE_KINDS = ["box", "cylinder", "prism"] as const;
+
+/**
+ * A box (UI version 11): at yaw 0, size[0] along +x and size[1] along +y. round rounds its corners seen from above
+ * (at most half the smaller size); the app bevels its upright edges no more than half its height. wall says the box
+ * is a wall, for an app's cutaway (#13036): the outer walls between the camera and the rooms are drawn low (a wall
+ * with a floor on the camera's side, between two rooms, keeps its height), what stands in one is cut to that height,
+ * and what stands tall in front of one is drawn see-through; an app without a cutaway draws it as any box.
+ */
+export interface SceneBox {
+  kind: "box";
+  center: number[];
+  size: number[];
+  yaw?: number;
+  round?: number;
+  bottom: number;
+  top: number;
+  color?: string;
+  material?: SceneMaterial;
+  wall?: boolean;
+}
+
+/**
+ * An upright cylinder (UI version 11): a round table's top, a stool, a lamp's stem.
+ */
+export interface SceneCylinder {
+  kind: "cylinder";
+  center: number[];
+  radius: number;
+  bottom: number;
+  top: number;
+  color?: string;
+  material?: SceneMaterial;
+}
+
+/**
+ * A floor plan's polygon raised from bottom to top (UI version 11): a room's floor, an L-shaped counter. The hub
+ * refuses a polygon that is not simple: a point twice, an edge shorter than 0.005, an edge folding back, edges that
+ * touch, an area under 0.0001.
+ */
+export interface ScenePrism {
+  kind: "prism";
+  points: (number[])[];
+  bottom: number;
+  top: number;
+  color?: string;
+  material?: SceneMaterial;
+}
+
+/**
+ * How a shape's surface looks (UI version 11): matte (the default), glass (see-through), metal, screen (dark and
+ * glossy), tile and wood (the app's own pattern, in metres, in the shape's color).
+ */
+export type SceneMaterial = "matte" | "glass" | "metal" | "screen" | "tile" | "wood" | (string & {});
+export const SCENE_MATERIALS = ["matte", "glass", "metal", "screen", "tile", "wood"] as const;
+
+/**
+ * A quiet name on the floor (UI version 11): a room's. Not tappable and not a component of the page; read out after
+ * alt.
+ */
+export interface SceneLabel {
+  text: string;
+  at: number[];
+  height?: number;
+}
+
+/**
+ * A device in the model (UI version 11): a pin at its place with its label and state, in tone's role color or color's
+ * named color (never both); with light on, the model lights up around it. Tapping it does its action, as a tile's.
+ * state is required when a tone other than neutral, a color or a light that is on says something, so it never rides
+ * on color or light alone. A scene has at most 16 pins with a light on.
+ */
+export interface ScenePin {
+  id: string;
+  at: number[];
+  /** Metres above the floor: a ceiling lamp's 2.4, an AC's 2.2. 0 when absent. */
+  height?: number;
+  label: string;
+  /** In plain words: On, Off, 26 °C. */
+  state?: string;
+  icon?: NavIcon;
+  tone?: Tone;
+  color?: Color;
+  light?: SceneLight;
+  action?: Action;
+}
+
+/**
+ * A lamp's light (UI version 11): when on, the model is lit around the pin, warm or cool. Off (the default) adds no
+ * light.
+ */
+export interface SceneLight {
+  on?: boolean;
+  warmth?: SceneWarmth;
+}
+
+/**
+ * warm (the default): a lamp's yellow light; cool: a white one.
+ */
+export type SceneWarmth = "warm" | "cool" | (string & {});
+export const SCENE_WARMTHS = ["warm", "cool"] as const;
 
 /**
  * Where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref the extension
@@ -3750,6 +3953,18 @@ export interface ConnectorCallParams {
   contribution: string;
   name: string;
   args?: unknown;
+  /**
+   * The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+   */
+  track?: string;
+  /** The track's kind; absent when not known (the main track). */
+  track_kind?: string;
+  /**
+   * The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+   * general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+   * confirms a write stays the hub's decision.
+   */
+  categories?: string[];
 }
 
 /**
@@ -3814,6 +4029,18 @@ export interface ConnectorDoParams {
   name: string;
   args?: unknown;
   request_id: string;
+  /**
+   * The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+   */
+  track?: string;
+  /** The track's kind; absent when not known (the main track). */
+  track_kind?: string;
+  /**
+   * The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+   * general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+   * confirms a write stays the hub's decision.
+   */
+  categories?: string[];
 }
 
 /**
@@ -4079,6 +4306,8 @@ export interface ConnectorInboxThing {
   /** Marks the newest move: a different last adds to the open item. */
   last?: string;
   url?: string;
+  /** The observed lifecycle of a GitHub pull request: open, closed or merged. */
+  thread_state?: string;
   /** A link the system opens instead (sms:…). */
   open_url?: string;
   /** Where a reply goes and who sees it. */
@@ -5487,16 +5716,28 @@ export interface TodoEventThread {
 }
 
 /**
+ * An external responsible party on a to-do that is not a Persona-started agent: a long-running session or a person,
+ * with optional machine_id and session_id hints.
+ */
+export interface TodoEventResponsible {
+  kind: string;
+  name: string;
+  machine_id?: string;
+  session_id?: string;
+}
+
+/**
  * event.todo.changed: a to-do was created or deleted, or its title, whether it is done (or failed to start), its
- * supervisor, or the thread it is bound to changed. Changes within about a second of each other are told once, as the
- * to-do is at the end of them. title, thread and done are as after the change (the last ones for a deleted to-do);
- * thread is left out when the to-do has none, done unless the to-do is done (closed, or its task failed to start).
- * supervisor is the conversation that supervises it (the main conversation or a leader, see leaders.schema.json),
- * left out when none does; a change of supervisor (the task moved to another leader) sends it too. kind is concern
- * for something the owner raised in the main conversation and wants an answer to; such a to-do is done only once its
- * outcome was reported to the owner (an event.todo.decision of source reported comes with it), never on its own; kind
- * is left out for a to-do or a task and never changes. Notes, agents and decisions changing do not send it (decisions
- * have event.todo.decision). Read the to-do again if it matters.
+ * supervisor, the thread it is bound to, or its external responsible party changed. Changes within about a second of
+ * each other are told once, as the to-do is at the end of them. title, thread, done and responsible are as after the
+ * change (the last ones for a deleted to-do); thread and responsible are left out when the to-do has none, done
+ * unless the to-do is done (closed, or its task failed to start). supervisor is the conversation that supervises it
+ * (the main conversation or a leader, see leaders.schema.json), left out when none does; a change of supervisor (the
+ * task moved to another leader) sends it too. kind is concern for something the owner raised in the main conversation
+ * and wants an answer to; such a to-do is done only once its outcome was reported to the owner (an
+ * event.todo.decision of source reported comes with it), never on its own; kind is left out for a to-do or a task and
+ * never changes. Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the
+ * to-do again if it matters.
  */
 export interface TodoChangedEvent {
   id: string;
@@ -5505,6 +5746,7 @@ export interface TodoChangedEvent {
   done?: boolean;
   supervisor?: string;
   kind?: string;
+  responsible?: TodoEventResponsible;
   what: string;
 }
 
@@ -5735,9 +5977,10 @@ export interface ModelRefusal {
 
 /**
  * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
- * "assistant.memory.read" for assistant.memory): invalid_params; not_found (assistant.messages: no such conversation
- * in the assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
- * computer is not connected or not set up: try again).
+ * "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list):
+ * invalid_params; not_found (assistant.messages: no such conversation in the assistant's own space);
+ * assistant_offline (the manager is away: try again); machine_offline (the assistant's computer is not connected or
+ * not set up: try again).
  */
 export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | (string & {});
 export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline"] as const;
@@ -5833,6 +6076,11 @@ export interface AssistantMemoryEntry {
   content?: string;
   /** content was cut or left out for its size. */
   truncated?: boolean;
+  /**
+   * The track whose memory it is; absent for the main track's. Another track's is shown only to an extension that may
+   * read what comes from it: the user's own, or one granted every default category of the track.
+   */
+  track?: string;
 }
 
 /**
@@ -5848,6 +6096,91 @@ export interface AssistantMemoryResult {
 export interface AssistantMessagesResult {
   messages: AssistantMessage[];
   next_seq?: number;
+}
+
+/**
+ * An RFC 3339 expiry timestamp, or null when absent.
+ */
+export type AssistantEntryNullableTime = unknown;
+
+/**
+ * Whether the choice is reversible; null means unknown.
+ */
+export type AssistantEntryNullableBool = unknown;
+
+export interface AssistantEntrySource {
+  machine: string;
+  session: string;
+  msg_uuid?: string;
+  card_id?: string;
+  file?: string;
+  line?: number;
+}
+
+export interface AssistantEntryScope {
+  executor: string;
+  machine: string[];
+  project: string[];
+  personal: boolean;
+}
+
+export interface AssistantEntryScopeFilter {
+  executor?: string;
+  machine?: string[];
+  project?: string[];
+  personal?: boolean;
+}
+
+export interface AssistantEntryDecision {
+  options: string[];
+  selected: string[];
+  rejected: string[];
+  reason: string;
+  reversible: unknown;
+}
+
+export interface AssistantLedgerEntry {
+  id: string;
+  type: string;
+  text: string;
+  quote: string;
+  source: AssistantEntrySource;
+  relayed_via: string[];
+  scope: AssistantEntryScope;
+  at: string;
+  expires_at: unknown;
+  supersedes: string;
+  trust: string;
+  status: string;
+  by: string;
+  tag: string[];
+  decision?: AssistantEntryDecision;
+  ext_id?: string;
+  origin_space: string;
+  category: string[];
+}
+
+export interface AssistantEntriesParams {
+  after?: string;
+  limit?: number;
+  by?: string;
+  trust?: string;
+  status?: string;
+  scope?: AssistantEntryScopeFilter;
+  tag?: string;
+  type?: string;
+}
+
+export interface AssistantEntriesResult {
+  entries: AssistantLedgerEntry[];
+  after: string;
+  has_more: boolean;
+}
+
+export interface AssistantEntriesChangedEvent {
+  id: string;
+  record_id: string;
+  status: "wrong";
 }
 
 /**
@@ -5921,6 +6254,50 @@ export interface AssistantDataItem {
 
 export interface AssistantDataStatusResult {
   items: AssistantDataItem[];
+}
+
+/**
+ * browser.machines (browser.run): list computers that have a browser backend enabled.
+ */
+export interface BrowserMachinesParams {
+  /** Optional backend filter (e.g. ego, cdp). Empty returns all backends. */
+  backend?: string;
+}
+
+export interface BrowserMachine {
+  machine_id: string;
+  name: string;
+  /** Browser backend identifier (e.g. ego, cdp). */
+  backend: string;
+  online: boolean;
+  ready: boolean;
+}
+
+export interface BrowserMachinesResult {
+  machines: BrowserMachine[];
+}
+
+/**
+ * browser.run (browser.run): run a script inside an extension-isolated browser task space (ext-<extensionID>-<slot>)
+ * on machine_id.
+ */
+export interface BrowserRunParams {
+  machine_id: string;
+  /** Browser backend to use (default: ego). */
+  backend?: string;
+  /** Logical slot name scoped to this extension (e.g. pac-muse). */
+  slot: string;
+  /** Async JS script body executed inside the isolated task space. */
+  script: string;
+  timeout_ms?: number;
+}
+
+export interface BrowserRunResult {
+  backend: string;
+  /** Raw output / JSON payload returned by the browser backend. */
+  output: string;
+  /** Script error message, if any. */
+  error?: string;
 }
 
 export interface StorageEmptyParams {
@@ -6737,7 +7114,11 @@ export const CALLS: Record<string, Call> = {
   "assistant.conversations": { from: "program", params: "AssistantConversationsParams", result: "AssistantConversationsResult" },
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
   "assistant.memory": { from: "program", params: "AssistantMemoryParams", result: "AssistantMemoryResult" },
+  "assistant.entries.list": { from: "program", params: "AssistantEntriesParams", result: "AssistantEntriesResult" },
+  "event.assistant.entries.changed": { from: "hub", params: "AssistantEntriesChangedEvent", event: true },
   "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
+  "browser.machines": { from: "program", params: "BrowserMachinesParams", result: "BrowserMachinesResult" },
+  "browser.run": { from: "program", params: "BrowserRunParams", result: "BrowserRunResult" },
   "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },
   "storage.get": { from: "program", params: "StorageKeyParams", result: "StorageEntry" },
   "storage.list": { from: "program", params: "StorageListParams", result: "StorageListResult" },
