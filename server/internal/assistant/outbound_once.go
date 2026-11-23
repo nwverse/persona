@@ -23,9 +23,10 @@ type outboundOnce struct {
 }
 
 type outboundFlight struct {
-	done chan struct{}
-	ok   bool
-	err  error
+	done   chan struct{}
+	joined int // calls waiting on this card besides the one asking (under outboundOnce.mu)
+	ok     bool
+	err    error
 }
 
 // outboundKey is a hand-off by who sends it, with which tool, what and where to (summary names the target).
@@ -56,6 +57,7 @@ func (o *outboundOnce) confirm(ctx context.Context, key string, ask func() (bool
 		return true, nil
 	}
 	if f, ok := o.flight[key]; ok {
+		f.joined++
 		o.mu.Unlock()
 		select {
 		case <-f.done:

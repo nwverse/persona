@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 // The same hand-off asked twice while its card waits is one card, answered for both; once allowed it goes again
@@ -25,7 +24,12 @@ func TestOutboundOnceAsksOncePerHandOff(t *testing.T) {
 		go func() { defer wg.Done(); got[i], _ = o.confirm(ctx, key, ask) }()
 	}
 	waitFor(t, "the first card", func() bool { return asked.Load() == 1 })
-	time.Sleep(20 * time.Millisecond) // the second call joins rather than asking
+	waitFor(t, "the second call to join the card", func() bool {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		f := o.flight[key]
+		return f != nil && f.joined == 1
+	})
 	release <- true
 	wg.Wait()
 	if asked.Load() != 1 || !got[0] || !got[1] {
