@@ -46,28 +46,33 @@ import { backgroundWork } from "../lib/background-work";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
 import { personalHideDeps, personalOrder, personalSessions, removeAgentSession, useGoingIds } from "../lib/agents";
 import { BADGE_CLASS, CURRENT_ROW, type GoFn, GroupCount, pageIconStyle, type RegFn, ROW_TITLE_MIN, type RowMenuFn, Section } from "./SidebarParts";
+import { requestDirectWaiting } from "../lib/direct-waiting";
 import type { UIColor } from "../lib/extension-ui-v6";
 
 // The main conversation uses the home symbol (Back to main chat's) and one Main conversation line.
 // The assistant's identity belongs to the sidebar head; a left draft keeps its existing second line.
 // Its menu (Copy session ID, End…: iOS's long press on the main row) opens on a right click, the menu key or its ⋯.
 // Memoized like SessionRow: a push that leaves the main conversation as it was does not render it again.
-export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, main, chord, onMenu: menuOf }: { reg: RegFn; hover: (k: string | null) => void; active: boolean; go: GoFn; main?: Session; /** The "Open Persona" shortcut as bound now ("": none). */ chord?: string; /** The conversation rows' menu, opened on `main`: none without it. */ onMenu?: RowMenuFn }) {
+export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, main, chord, waiting, onMenu: menuOf }: { reg: RegFn; hover: (k: string | null) => void; active: boolean; go: GoFn; main?: Session; /** The "Open Persona" shortcut as bound now ("": none). */ chord?: string; /** The main conversation's exact direct-user waiting count. */ waiting?: number; /** The conversation rows' menu, opened on `main`: none without it. */ onMenu?: RowMenuFn }) {
   const to: Route = { name: "persona" };
   const st = main ? stateOf(main) : undefined;
-  const pending = main?.pending_interactions ?? 0;
+  const pending = waiting ?? main?.pending_interactions ?? 0;
   const onMenu = main && menuOf ? (anchor: HTMLElement, at?: MenuAt) => menuOf(main, anchor, at) : undefined;
   // one ref for the row's life, so a re-render does not let go of it and register it again (useGlide's reg)
   const ref = useMemo(() => reg("persona"), [reg]);
   const aside = onMenu && !active ? "group-hover/row:invisible" : undefined;
   // words left unsent in the main conversation's box, once you are not in it (#5568)
   const draft = draftLine(useLeftDraft(main ? `${main.machine_id}/${main.session_id}` : null));
+  const open = (e: React.MouseEvent) => {
+    // set to Full page, picked from another place it opens the page the conversation kept over it (#13164)
+    go(to, () => pickMainChat(active))(e);
+    if (e.defaultPrevented && main && pending > 0) requestDirectWaiting(main.session_id);
+  };
   const link = (
     <a
       ref={ref}
       href={href(to)}
-      // set to Full page, picked from another place it opens the page the conversation kept over it (#13164)
-      onClick={go(to, () => pickMainChat(active))}
+      onClick={open}
       {...(onMenu ? contextMenuProps((at, el) => onMenu(el, at)) : {})}
       onMouseEnter={() => hover("persona")}
       onFocus={() => hover("persona")}
@@ -85,7 +90,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
       </span>
       {chord && <span aria-hidden data-persona-chord className={cx("hidden sm:inline-flex [@media(hover:none)]:hidden", aside)}><Kbd>{formatChord(chord)}</Kbd></span>}
       {pending > 0 ? (
-        <span className={cx("flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums", aside)}>{pending}</span>
+        <span data-main-waiting={pending} className={cx("flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold text-attention tabular-nums", aside)}>{pending}</span>
       ) : st === "working" || st === "needs_you" || st === "unread" ? (
         <span className={cx("flex", aside)}><StatusMark state={st} /></span>
       ) : null}

@@ -6257,6 +6257,66 @@ export interface AssistantDataStatusResult {
 }
 
 /**
+ * machines.pair_link (machines.pair): request a one-time persona://link?... pairing link for a pending link computer.
+ */
+export interface MachinesPairLinkParams {
+  /**
+   * Optional computer id: re-issues a pairing link when an existing pending link machine matches (with name/os/icon
+   * omitted), or creates a new pending link machine with this id (defaulting name to machine_id when name is
+   * omitted).
+   */
+  machine_id?: string;
+  /**
+   * Display name for a newly added computer (defaults to machine_id when machine_id is given; required when
+   * machine_id is omitted).
+   */
+  name?: string;
+  /** Target OS hint for install commands. */
+  os?: string;
+  /** Optional icon for the computer. */
+  icon?: string;
+}
+
+export interface MachinesPairLinkResult {
+  /** The hub machine id assigned to the computer. */
+  machine_id: string;
+  /** The display name of the computer. */
+  name: string;
+  /** The one-time persona://link?... pairing URL. */
+  link: string;
+  /** When the pairing link expires. */
+  expires_at: string;
+  /** Whether the computer is waiting for the owner's confirmation. */
+  pending: boolean;
+  /** Optional one-line Linux install-and-pair command when the hub knows its publication site. */
+  install_linux?: string;
+}
+
+/**
+ * machines.status (machines.read or machines.pair): read one computer's current connection and confirmation state.
+ */
+export interface MachinesStatusParams {
+  /** The computer's hub machine id. */
+  machine_id: string;
+}
+
+export interface MachinesStatusResult {
+  machine_id: string;
+  name?: string;
+  exists: boolean;
+  /** Whether the computer's link/connection is currently up. */
+  online: boolean;
+  /** Whether the resident node is connected and responding. */
+  node_online: boolean;
+  /** Whether the computer is waiting for the owner's confirmation. */
+  pending: boolean;
+  /** When the computer was last seen online, if ever. */
+  last_seen?: string;
+  /** Last connection error, if any. */
+  error?: string;
+}
+
+/**
  * browser.machines (browser.run): list computers that have a browser backend enabled.
  */
 export interface BrowserMachinesParams {
@@ -7117,6 +7177,8 @@ export const CALLS: Record<string, Call> = {
   "assistant.entries.list": { from: "program", params: "AssistantEntriesParams", result: "AssistantEntriesResult" },
   "event.assistant.entries.changed": { from: "hub", params: "AssistantEntriesChangedEvent", event: true },
   "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
+  "machines.pair_link": { from: "program", params: "MachinesPairLinkParams", result: "MachinesPairLinkResult" },
+  "machines.status": { from: "program", params: "MachinesStatusParams", result: "MachinesStatusResult" },
   "browser.machines": { from: "program", params: "BrowserMachinesParams", result: "BrowserMachinesResult" },
   "browser.run": { from: "program", params: "BrowserRunParams", result: "BrowserRunResult" },
   "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },
