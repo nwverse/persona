@@ -170,7 +170,7 @@ func TestTaskReceipt(t *testing.T) {
 		f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status, LastText: text,
 			UpdatedAt: time.Now()})
 		if status == proto.StatusWorking {
-			s.taskWorking(ctx, "box", "s1")
+			s.taskWorking(ctx, "box", "s1", startRow{})
 		} else {
 			s.taskTurnEnded(ctx, "box", "s1")
 		}
@@ -212,7 +212,7 @@ func TestTaskReceiptWaitsForWorkflow(t *testing.T) {
 	run := proto.Workflow{TaskID: "w1", RunID: "wf_1", Name: "parity-audit", Status: proto.WorkflowRunning, Running: true}
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusWorking,
 		State: proto.StateWorking, UpdatedAt: time.Now()})
-	s.taskWorking(ctx, "box", "s1")
+	s.taskWorking(ctx, "box", "s1", startRow{})
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
 		State: proto.StateWorking, LastText: "审计在后台跑，等它的结果", UpdatedAt: time.Now(), Workflows: []proto.Workflow{run},
 		Background: []proto.BackgroundTask{{ID: "w1", Kind: "workflow", RunID: "wf_1"}}})
@@ -689,7 +689,7 @@ func TestAcceptedTaskReopensOnlyForItsOwnWork(t *testing.T) {
 		f.setSessions("box", proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status,
 			State: state, UpdatedAt: time.Now()})
 		if state == proto.StateWorking {
-			s.taskWorking(ctx, "box", sid)
+			s.taskWorking(ctx, "box", sid, startRow{})
 		}
 	}
 	accept := func() {

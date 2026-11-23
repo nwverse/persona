@@ -771,7 +771,10 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // the kept height and the lazy registration of ViewBody10.tsx (whose chunk name it embeds), and the launcher sections
 // (ExtensionView.tsx's chunk) gain the owner's context provider; the canvas itself (about 8 KB) loads on intent with
 // the first view that has a graph. Main had 1,437 B of room; the budget stays.
-export const IDLE_TIER_BUDGET = 46_063;
+// And 12 B for the Agents list's Filter switch (#13727): the idle Palette's "Filter Agents list" row (palette/
+// SavedSearchesDialog.tsx) draws only while Settings > Agents has the list's Filter on (useShowFilter), which is the
+// tier's whole growth: this tree merged with main measured 46,065 B against the 46,063 B budget, 2 B over. 10 B of room on top.
+export const IDLE_TIER_BUDGET = 46_075;
 
 const gzip = promisify(gzipCompress);
 

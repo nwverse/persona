@@ -2175,6 +2175,37 @@ How often a client reads `GET /api/v1/sessions`, and what kind of read, while it
 - A real hub's `traffic` journal lines count by route template, not query: there a complete list and a delta are told
   apart only by `body_bytes / count`.
 
+## Slow link soak (`server/internal/slowlinksoak`, #13677)
+
+Whether a computer on Persona Link stays online behind a slow, long link while a chat opens a large session of it:
+a transcript of several MB, mostly screenshots, that grew while nobody looked. For a change to the node connection,
+the session's pushes or the heartbeats, run it on the base and on the change and put both results in the PR.
+
+```sh
+cd server
+go build -o <dir>/personad ./cmd/personad && go build -o <dir>/persona-link ./cmd/persona-link
+go run ./internal/slowlinksoak -bin <dir> -pg <directory with initdb, pg_ctl and postgres> -label after
+go run ./internal/slowlinksoak -bin <base dir> -node-bin <a release's dir> -pg <…> -label before
+```
+
+- Everything is throwaway and local: a hub with its built-in manager under a home directory of its own, a Postgres
+  cluster of its own (`initdb` into the working directory, trust on loopback), a resident node (`personad node
+  --attach`) and `persona-link run` under a second home directory. Ports: `-port-base` (18871) for the hub's HTTP,
+  +1 its TLS, +2 the shaping proxy, +3 Postgres. Every process gets an environment made by the soak; the machine's own
+  installation is neither read nor written.
+- The hub advertises its TLS port only through the proxy, and the link's only candidate is the proxy: every
+  connection Persona Link opens goes through a link of its own shaped by `netshape` each way: `-rate` (100 KB/s),
+  `-rtt` (300 ms) and `-queue` (256 KiB the path buffers before a writer waits, the sockets' share). Loss and
+  retransmits are not played, nor one bottleneck shared by the link's connections.
+- An app connection opens the session while it is small and one more line comes (the hub then knows how far it has
+  read), closes it, the transcript grows to `-session-mb` (5) with `-shots` screenshots (20, random bytes), and the
+  app opens it again and reads `items?after_seq=` every 3 s, as the web app does, for `-watch` (3 minutes).
+- `-node-bin` runs the computer's side from other binaries, such as a release, to play a computer that has not been
+  updated.
+- It prints and writes `report.json` (offline transitions and their reasons, dropped connections, timed-out watches,
+  how long until the app had every item, image bytes it was pushed, the reads' outcomes and the slowest, the bytes the
+  computer sent through the proxy) and keeps the logs in the working directory. It ends with one `RESULT` line.
+
 ## Fleet soak (`server/internal/fleetsoak`, #3197)
 
 What a fleet's churn costs the hub and its manager, per minute: bytes and objects allocated, CPU time, live heap.
