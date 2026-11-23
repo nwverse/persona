@@ -14,10 +14,12 @@ import (
 // (opencode/package.json, index.js, companion.mjs, lib/*.js including #12504/#12545; shared runtime-sdk blob reused)
 // measured 248,704 B on 2026-11-21. Session-bound A2A tool bridges bring the generated total to about 251.3 kB.
 // Minifying the remaining non-compat Antigravity lib sources (acp.js, file-links.js, models.js; #12781, #13123)
-// brings the generated total from 254,085 B back to 251,311 B under the unchanged 252,000 B ceiling.
+// brings the generated total from 254,085 B back to 251,311 B under the unchanged 252,000 B ceiling. The Gemini API
+// key provider (#13839, antigravity/lib/provider.js) is code the companion needs: whitespace/syntax-minified like the
+// other lib sources it measures 253,072 B (253,638 B unminified), every other Antigravity source already minified.
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 252_000
+	const budget = 253_500
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
