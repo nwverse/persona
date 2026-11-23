@@ -1937,3 +1937,43 @@ func TestConnectorSecrets(t *testing.T) {
 		t.Fatal("still there after delete")
 	}
 }
+
+// A partially created Codex App conversation keeps requested settings through the manager's typed state.put/load
+// boundary until the desktop confirms them; successful setup then clears that intent durably.
+func TestNodeSessionsDesktopPendingSettingsRoundTrip(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	want := NodeSession{Launcher: "codex-app", Cwd: "/work/project", Model: "confirmed-model",
+		DesktopPendingModel: "requested-model", DesktopPendingEffort: "high",
+		ModelSource: json.RawMessage(`{"kind":"desktop","model":"confirmed-model"}`)}
+	if err := d.PutNodeSession(ctx, "server", "desktop-pending", want); err != nil {
+		t.Fatal(err)
+	}
+	load := func() NodeSession {
+		t.Helper()
+		rows, err := d.NodeSessions(ctx, "server")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := rows["desktop-pending"]
+		if !ok {
+			t.Fatal("desktop session was not restored")
+		}
+		var source struct{ Kind, Model string }
+		if err := json.Unmarshal(got.ModelSource, &source); err != nil || source.Kind != "desktop" || source.Model != want.Model {
+			t.Fatalf("model source was not preserved with pending settings: %s (%v)", got.ModelSource, err)
+		}
+		return got
+	}
+	got := load()
+	if got.Launcher != want.Launcher || got.Cwd != want.Cwd || got.Model != want.Model ||
+		got.DesktopPendingModel != want.DesktopPendingModel || got.DesktopPendingEffort != want.DesktopPendingEffort {
+		t.Fatalf("pending settings round trip = %+v", got)
+	}
+	got.DesktopPendingModel, got.DesktopPendingEffort = "", ""
+	if err := d.PutNodeSession(ctx, "server", "desktop-pending", got); err != nil {
+		t.Fatal(err)
+	}
+	if cleared := load(); cleared.DesktopPendingModel != "" || cleared.DesktopPendingEffort != "" || cleared.Model != want.Model {
+		t.Fatalf("confirmed setup did not clear pending settings: %+v", cleared)
+	}
+}

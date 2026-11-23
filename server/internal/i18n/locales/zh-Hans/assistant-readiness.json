@@ -26,6 +26,8 @@
   "tool_search_unsupported_title": "网关不支持按需加载工具",
   "tool_search_unsupported_detail": "模型网关无法按需加载工具。请重试。",
   "tool_search_unsupported_fallback_detail": "模型网关无法按需加载工具。Persona 今后对这个网关每次都发送全部工具，请重试。",
+  "images_too_large_title": "对话里的图片太多或太大",
+  "images_too_large_detail": "这个对话里的图片太多或太大，超出了模型限制。压缩对话后再重发即可。",
   "model_route_title": "这个模型现在用不了",
   "model_route_launcher_title": "模型没接好：{launcher} 用不了这个模型",
   "model_route_detail": "模型名不对，或者这个模型现在用不了。换一个模型试试。",
