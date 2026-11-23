@@ -72,7 +72,9 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 			continue
 		}
 		m[l.Name] = l
-		if l.Withheld && l.Pushed() {
+		// A pushed provider is kept ahead of a start. So is an agy one whatever its delivery: the Antigravity
+		// companion runs all the time and takes its key at start (agyProviderEnv), so on demand is now (#13871).
+		if l.Withheld && (l.Pushed() || l.AgentType() == "agy") {
 			prefetch = append(prefetch, l.Name)
 		}
 	}

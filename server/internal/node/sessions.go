@@ -276,6 +276,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				} else {
 					n.mergeAgyTranscript(&s, agyConversations[id])
 				}
+				n.agyPaneTitle(&s, agyConversations[id]) // its conversation's title, not the terminal's (agytitle.go)
 			}
 		case otherAgent(a):
 			s.ReadOnlyReason = otherNoReader(a.Agent)
@@ -508,11 +509,12 @@ func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState,
 			s.RequestedModel = &model
 		}
 		// A row without a pane is listed where its record says it started, when that is an assistant or space
-		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
+		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's. A scoped node's
+		// unlisted built-in directory is no such record (unlistedAssistantDir): the row keeps where it started.
 		if sp := identity.SpaceAt(st.Cwd); sp != "" {
 			s.Space = sp
 		}
-		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
+		if (s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd)) && !n.unlistedAssistantDir(st.Cwd) {
 			s.Cwd = st.Cwd
 		}
 	}

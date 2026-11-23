@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The Apple app's core may not name a feature module's types (#13432, part of #13430; docs/apple/ios.md, "Modules").
 
-Each module owns directories under apple/ (MODULES below). The types declared at the top level of those directories are
+Each guarded module owns directories under apple/ (MODULES below, read from schema/module-classification.txt). The types declared at the top level of those directories are
 the module's symbols. Every Swift file of the core (apple/ outside the module directories, outside the module list
 apple/Persona/App/Modules.swift and outside tests) is scanned for those symbols as whole words, with comments and string
 literals blanked out: a comment or a localized "Glasses Photo" is not a reference, `MetaGlasses.shared` is.
@@ -25,14 +25,18 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "i18n"))
 import apple_comments  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import module_classification  # noqa: E402
 
 BASELINE = Path(__file__).resolve().with_name("apple_module_refs_baseline.json")
 
-# Module id (#13430 section 2) -> the directories under the repository root that belong to it. A module whose sources
-# still sit in core directories is not listed until they move into a directory of its own.
-MODULES = {
-    "glasses": ["apple/Persona/Glasses"],
-}
+# The modules this ratchet guards (#13430 section 2). Their directories come from schema/module-classification.txt
+# (#13843), the one list of what is core and what is a module. A module joins here once its references from the core
+# are worth counting; the other classified modules (about 700 references today) would only make every move churn the
+# baseline.
+GUARDED = ("glasses",)
+_DIRS = module_classification.apple_module_dirs()
+MODULES = {module: _DIRS.get(module, []) for module in GUARDED}
 # The one core file allowed to name module types: the module list (the seed of PersonaHostApp).
 MODULE_LIST = "apple/Persona/App/Modules.swift"
 # Tests and tooling are not the core.
@@ -187,6 +191,7 @@ class AppleModuleRefsTests(unittest.TestCase):
     def test_every_module_directory_exists_and_declares_types(self):
         syms = symbols(list(swift_files()))
         for module, dirs in MODULES.items():
+            self.assertTrue(dirs, f"{module} has no Apple directory in schema/module-classification.txt")
             for d in dirs:
                 self.assertTrue((ROOT / d).is_dir(), d)
             self.assertTrue(syms[module], module)

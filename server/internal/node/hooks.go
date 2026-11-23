@@ -664,6 +664,12 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 			_ = json.Unmarshal(in.ToolInput, &input)
 			return permissionDecision(map[string]any{"behavior": "allow", "updatedInput": input}), nil
 		}
+		if assistant && n.readOutsideCall(in) { // a read elsewhere, not of a space or a credential (assistant_read_outside.go)
+			n.logf("assistant %s: %s outside its directory allowed without a card", short(in.SessionID), in.ToolName)
+			var input map[string]any
+			_ = json.Unmarshal(in.ToolInput, &input)
+			return permissionDecision(map[string]any{"behavior": "allow", "updatedInput": input}), nil
+		}
 		rule := map[string]any{"toolName": in.ToolName}
 		if assistant {
 			alwaysKey := "tool:" + in.ToolName

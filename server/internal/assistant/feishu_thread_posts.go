@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -278,7 +278,7 @@ func (s *Service) threadFlush(id string) {
 	err = s.appCall(ctx, AppFeishu, FeishuText, to.params(map[string]any{"reply_to": anchor, "text": text, "uuid": s.threadPostKey(id)}), nil)
 	switch {
 	case err == nil:
-	case feishubot.MessageGone(err):
+	case botcard.MessageGone(err):
 		// The anchor was withdrawn or deleted: the topic has no such message to reply under. This line is lost (a failed
 		// post is not tried again); the next message the owner writes there is the new anchor.
 		s.logf("todo %s: post to its thread: its anchor message is gone; forgetting it", id)
