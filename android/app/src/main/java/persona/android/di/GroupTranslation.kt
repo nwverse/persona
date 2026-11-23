@@ -103,6 +103,8 @@ internal fun ChatAppBindings.inGroup(names: GroupNames): ChatAppBindings {
         mainSender = mainSender.inGroup(names, coroutineScope),
         draftVersions = { key -> source.draftVersions(names.raw(key)) },
         ports = ports?.inGroup(names),
+        // The model panel also uses this provider to read launcher and model lists.
+        worktrees = worktrees?.let { provider -> { provider()?.inGroup(names) } },
         agentShares = agentShares?.let { provider -> AgentSharesProvider { session, manager ->
             if (GroupKeys.namespaceOf(session.machineId) != names.namespace) throw AgentShareFailure("session_conflict")
             val api = provider.forSession(names.raw(session), manager)
