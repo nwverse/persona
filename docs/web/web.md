@@ -2338,7 +2338,7 @@ its sidebar entry does not show. Otherwise it is *off*, and an off module is abs
 An on module's page loads on its first render: its strings first (`i18n` `addCatalogs`; its code may call `t()` at module
 scope), then its code. A module's namespaces (`<id>.json`, `<id>-*.json` under `src/i18n/locales/<lang>/`) stay beside the
 others, so every catalog check covers them, but the build leaves them out of `client-startup` and `client-rest` and makes
-them the module's own catalog (`?catalog=module-<id>`, `web/i18n-catalogs.ts`). A module's sidebar label and page title
+them the module's own catalog (`?catalog=module-<id>`, `web/i18n-catalogs.ts`). A module's sidebar label, page title and Labs description
 are read before its strings load, so their keys live in the shell's namespaces (`sidebar.json`, `app.json`).
 
 **The switch.** Settings › Labs › Features lists every registered module with a switch (`web/src/core/module-labs.ts`,

@@ -31,6 +31,5 @@
   "features_hint": "Turn off a feature you don't use. It disappears from the sidebar and its pages, and nothing of it is loaded in this browser. Your data stays where it is.",
   "features_not_offered": "Your hub doesn't offer this feature.",
   "features_activation": "Right away, in every tab of this browser.",
-  "features_rollback": "Turn it back on. Nothing was deleted, so everything is where you left it.",
-  "features_health_hint": "A separate space for health questions, checkup reports and what the assistant remembers about your health."
+  "features_rollback": "Turn it back on. Nothing was deleted, so everything is where you left it."
 }

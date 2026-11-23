@@ -9,7 +9,7 @@ import type { ModuleDescriptor } from "../../core/module-host";
 export const health: ModuleDescriptor = {
   id: "health",
   title: () => t("sidebar.nav_health"),
-  description: () => t("settings-labs.features_health_hint"),
+  description: () => t("sidebar.nav_health_hint"),
   routes: [{ base: "health", aliases: [["tracks", "health"]], title: () => t("app.title_health") }],
   // right after Inbox, where it always was
   navItems: [{ key: "health", path: "/health", icon: "heart", label: () => t("sidebar.nav_health"), short: () => t("sidebar.nav_health_short"), color: "pink", after: "inbox" }],
