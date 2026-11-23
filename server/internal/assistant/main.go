@@ -429,7 +429,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Timezone: func() string { return svc.userTZ() }})
 	o.Errors.ext.Store(ext)
 	bh = NewBusHub(BusOptions{ID: o.ID, Hub: hub, Token: token, HTTPClient: httpClient, Version: version, Deploy: deploy,
-		ConfigFile: o.ConfigFile, Outbox: database,
+		ConfigFile: o.ConfigFile, Outbox: database, Features: func() []string { return svc.moduleFeatures() },
 		Logf: logf, Devices: devs, Extensions: ext, StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.TokenFirst})
 	// The knowledge base in its directory, kept as its manager.json's kb section says (over the hub's hello). The model
 	// providers' keys are sealed with its own secret.key.
