@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -755,5 +756,40 @@ func TestScopeRiskFollowsDecisionRights(t *testing.T) {
 	}
 	if got := s.ownerStepRoute(ctx, "lead1"); !strings.Contains(got, "main conversation") || strings.Contains(got, "ask_user") {
 		t.Errorf("a lead's route: %s", got)
+	}
+}
+
+// An estimate change is logged as an estimate, which authorizes nothing new, and still reaches the owner in the next
+// digest, as task_scope's reply says (review of #13130). An estimate set through agent_send carries no sentence for
+// the owner and adds no empty line; a lesson learns from either, as a revised estimate also hides an overrun.
+func TestEstimateChangeReachesTheDigestAndLessons(t *testing.T) {
+	s, _, _ := briefService(t, "please fix the login crash before Friday")
+	if got, isErr := tool(t, s, "task_plan", briefTask(nil)); isErr {
+		t.Fatal(got)
+	}
+	waitFor(t, "the agent", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	todo := onlyTodo(s)
+	got, isErr := tool(t, s, "task_scope", map[string]any{"todo_id": todo.ID, "change": "the migration needs another hour",
+		"why": "the backfill is slower than measured", "expect_minutes": 90})
+	if isErr || !strings.Contains(got, "the owner sees it in the next digest") {
+		t.Fatalf("task_scope: %s", got)
+	}
+	b, _ := s.briefOfTodo(todo.ID)
+	if last := b.Log[len(b.Log)-1]; last.Kind != briefEventEstimate || b.ExpectNow != 90 {
+		t.Fatalf("not logged as an estimate: %+v", b)
+	}
+	if _, err := s.rescope(context.Background(), todoNow(s, todo.ID), "conv1", "conv1", "agent_send", nil, 120); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ = s.briefOfTodo(todo.ID); b.ExpectNow != 120 || b.Log[len(b.Log)-1].Kind != briefEventEstimate || b.Log[len(b.Log)-1].Change != "" {
+		t.Fatalf("agent_send's estimate: %+v", b)
+	}
+	now := time.Now()
+	open, _ := s.briefDigest(context.Background(), now, s.briefDigestSince(context.Background(), now), time.UTC)
+	if len(open) != 1 || !slices.Equal(open[0].Scope, []string{"the migration needs another hour"}) {
+		t.Fatalf("digest = %+v", open)
+	}
+	if !lessonFriction(nil, &b, time.Time{}, 0) {
+		t.Fatal("a revised estimate gave a lesson nothing to learn from")
 	}
 }

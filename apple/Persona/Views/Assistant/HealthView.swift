@@ -18,6 +18,9 @@ import SwiftUI
     private(set) var supportsIntake = false
     private(set) var intakeError: String?
     private(set) var intakeBusy = false
+    private(set) var waterImportBusy = false
+    private(set) var isDemo = false
+    var showsWaterMigration: Bool { !isDemo && supportsIntake && intake?.waterExtension == "pending" }
     /// A broadcast arriving during a write is read once the write has settled, by the foreground task.
     private(set) var intakeRefresh = 0
     @ObservationIgnored private var intakeReadPending = false
@@ -30,7 +33,8 @@ import SwiftUI
 
     init(deps: AssistantDeps = .live) { self.deps = deps }
 
-    func load(machine: String, features: Set<String> = []) async {
+    func load(machine: String, features: Set<String> = [], isDemo: Bool = false) async {
+        self.isDemo = isDemo
         guard let api = deps.api() else { return }
         async let today: Void = loadIntake(api: api, supported: features.contains(HealthIntake.feature))
         async let memory = try? api.assistantMemory(space: Session.healthSpace)
@@ -53,6 +57,7 @@ import SwiftUI
             intake = nil
             intakeError = nil
             intakeBusy = false
+            waterImportBusy = false
             intakeOperationID += 1
             intakeReadPending = false
             cupAmount = 250
@@ -129,8 +134,12 @@ import SwiftUI
         else { intake?.protein.today += draft.amount ?? 0 }
         do {
             let result = try await api.recordHealthIntake(draft)
+            deps.intakeChanged()
             guard isCurrent(api) else { return }
             intake?.align(result)
+            #if os(iOS)
+            HomeWidgetData.shared.intakeChanged(on: api, confirmed: intake)
+            #endif
             intakeError = nil
             if result.entry?.deletedAt != nil {
                 deps.toast(Toast(String(localized: "Intake undone"), style: .success))
@@ -162,8 +171,12 @@ import SwiftUI
         intakeRead += 1
         do {
             let result = try await api.undoHealthIntake(id)
+            deps.intakeChanged()
             guard isCurrent(api) else { return }
             intake?.align(result)
+            #if os(iOS)
+            HomeWidgetData.shared.intakeChanged(on: api, confirmed: intake)
+            #endif
             deps.toast(Toast(String(localized: "Intake undone"), style: .success))
         } catch {
             guard isCurrent(api) else { return }
@@ -174,6 +187,41 @@ import SwiftUI
         }
     }
 
+    /// Import is an explicit user action. Share the intake write lane so another drink or invalidation cannot
+    /// replace the result; a second tap is ignored until both import and its authoritative read have settled.
+    func importWaterExtension() async {
+        guard showsWaterMigration, !intakeBusy, let api = deps.api()?.manager(nil) else { return }
+        await enqueueIntake(on: api) {
+            self.waterImportBusy = true
+            defer { if self.isCurrent(api) { self.waterImportBusy = false } }
+            self.intakeRead += 1
+            do {
+                let result = try await api.importWaterExtension()
+                self.deps.intakeChanged()
+                guard self.isCurrent(api) else { return }
+                self.intake?.waterExtension = nil
+                // A failed refresh must not turn an already completed import into a failed import.
+                do {
+                    let value = try await api.healthIntake()
+                    guard self.isCurrent(api) else { return }
+                    self.intake = value
+                    self.intakeError = nil
+                } catch {
+                    guard self.isCurrent(api) else { return }
+                    self.intakeError = error.shown
+                    self.intakeReadPending = true
+                }
+                #if os(iOS)
+                HomeWidgetData.shared.intakeChanged(on: api, confirmed: self.intake)
+                #endif
+                self.deps.toast(Toast(String(localized: "Moved \(result.imported) records; water extension disabled. Replace widgets, watch faces and shortcuts."), style: .success))
+            } catch {
+                guard self.isCurrent(api) else { return }
+                self.deps.toast(Toast(error.shown ?? String(localized: "Couldn't move the water extension into Health"), style: .error))
+            }
+        }?.value
+    }
+
     /// The space's open conversations, newest first: the hub's list, with what the pushes say since (a title, its
     /// last line, a new one) over it. An archived one leaves the list.
     nonisolated static func merge(_ fetched: [Session], live: [Session]) -> [Session] {
@@ -182,25 +230,6 @@ import SwiftUI
         for s in live where s.isHealth { by[s.key] = s }
         return by.values.filter { $0.archived != true }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
-    }
-
-    /// Where entering Health lands (#4329, docs/assistant/health.md "Entering Health"): like Codex, back in the latest
-    /// health conversation with its context; a space with none opens this page, the new conversation page.
-    nonisolated enum Entry: Equatable {
-        case open(SessionKey)
-        case new
-    }
-
-    /// The newest open conversation by last activity (`updatedAt`, the order the page lists them), else `.new`.
-    nonisolated static func entry(_ fetched: [Session], live: [Session]) -> Entry {
-        merge(fetched, live: live).first.map { .open($0.key) } ?? .new
-    }
-
-    /// Reads the space's list, with what the pushes say over it: one that can't be read leaves the pushed ones,
-    /// and with none of those the new conversation page (which says why the list is missing).
-    static func entry(deps: AssistantDeps, live: [Session]) async -> Entry {
-        let fetched = (try? await deps.api()?.healthConversations()) ?? []
-        return entry(fetched, live: live)
     }
 
     /// New Chat from the open conversation: a health one's opens this page, a new health conversation with the space's
@@ -310,9 +339,9 @@ struct HealthView: View {
         .tabActiveTask(id: IntakeRefresh(group: model.hubGroup, hellos: model.hubHellos,
                                         revision: model.healthIntakeRevision, retry: page.intakeRefresh,
                                         supported: model.hubFeatures.contains(HealthIntake.feature))) {
-            await page.load(machine: machine.id, features: model.hubFeatures)
+            await page.load(machine: machine.id, features: model.hubFeatures, isDemo: model.isDemo)
         }
-        .refreshable { await page.load(machine: machine.id, features: model.hubFeatures) }
+        .refreshable { await page.load(machine: machine.id, features: model.hubFeatures, isDemo: model.isDemo) }
         #if os(iOS)
         // Load outside the conditional List row: a hidden empty section has no row to run its task.
         .tabActiveTask(id: trends.range) { await trends.load() }
@@ -322,7 +351,17 @@ struct HealthView: View {
     private func sections(_ list: [Session]) -> some View {
         ScrollViewReader { proxy in
             List {
-                Section { HealthTodaySection(page: page) { intakeDetail = .init(kind: $0) } } header: { Text("Today") }
+                #if os(iOS)
+                if !model.isDemo, page.showsWaterMigration {
+                    Section { HealthWaterMigrationCard(page: page) }
+                }
+                #endif
+                Section {
+                    HealthTodaySection(page: page) { intakeDetail = .init(kind: $0) }
+                    #if os(iOS)
+                    HealthIntakeSyncLink()
+                    #endif
+                } header: { Text("Today") }
                 #if os(iOS)
                 if UIDevice.current.userInterfaceIdiom == .phone {
                     #if DEBUG
@@ -414,7 +453,7 @@ struct HealthView: View {
                 }
                 Section {
                     source(Theme.Brand.iosHealth, String(localized: "Apple Health"), String(localized: "Reads summaries of steps, sleep, heart rate, weight and more through your iPhone. Persona needs to be open on the phone with access granted."))
-                    source(Theme.Icon.edit, String(localized: "Log Data"), String(localized: "Say “I drank 300 ml of water”, or take a photo of a meal in the field below, to log it in Health."))
+                    source(Theme.Icon.edit, String(localized: "Log Data"), String(localized: "Say “I drank 300 ml of water”, or take a photo of a meal in the field below, to log it in Health. When sync is on, it is also written to Apple Health."))
                     source(Theme.Icon.document, String(localized: "Checkup Reports and Lab Results"), String(localized: "Choose Upload a checkup report and pick a PDF or a photo: each item is read out and the ones outside the reference range are marked. The original and its record stay in Health, so years can be compared."))
                 } header: {
                     Text("Data Sources")
@@ -443,11 +482,19 @@ struct HealthView: View {
         }
     }
 
-    private static let privacy = [
-        String(localized: "Health chats stay here: Persona's other chats can't see or read them."),
-        String(localized: "Chats and memory stay on the hub machine and never go into Knowledge."),
-        String(localized: "This offers explanations and suggestions, not a substitute for a doctor's diagnosis or treatment."),
-    ]
+    private static let privacy: [String] = {
+        var lines = [
+            String(localized: "Health chats stay here: Persona's other chats can't see or read them."),
+            String(localized: "Chats and memory stay on the hub machine and never go into Knowledge."),
+        ]
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            lines.append(String(localized: "When sync is on, water and protein records are written to Apple Health on this iPhone."))
+        }
+        #endif
+        lines.append(String(localized: "This offers explanations and suggestions, not a substitute for a doctor's diagnosis or treatment."))
+        return lines
+    }()
 
     /// Apple Health, by its name and the Health app's icon (`PhoneDataSource.health`'s): what Health reads and saves.
     private var appleHealth: some View {

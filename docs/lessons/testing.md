@@ -121,7 +121,7 @@
 
 Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
-- Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel. Taking a sleep out does not need the baseline lowered in the same change: only a rise fails, and with a base a changed file may not rise above its count at the merge base either (`docs/operations/testing.md`, "Count ratchets"). When the strict direction failed a fall too, a forgotten lowering broke `main` again and again (#2761, #5635), and baseline edits were the commonest conflict between parallel PRs.
+- Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero (a file git sees as moved keeps its entry under the new path), and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel. Taking a sleep out does not need the baseline lowered in the same change: only a rise fails, and with a base a changed file may not rise above its count at the merge base either (`docs/operations/testing.md`, "Count ratchets"). When the strict direction failed a fall too, a forgotten lowering broke `main` again and again (#2761, #5635), and baseline edits were the commonest conflict between parallel PRs.
 
 - To keep a fake hub answer out (a press past `cardAnswerWait`), block it on a channel the test closes, not a fixed sleep (2026-11-11, #4274). The assistant's `fakeHub` runs app answers under its lock, so a held answer blocks every other fake call: close the channel before the test touches the hub again, and register the close with `t.Cleanup` so a failed assertion cannot leave it blocked (`heldAnswer` in `server/internal/assistant/feishu_answer_ended_test.go`). Then wait for the last effect of the late path (its note), not for a fixed time.
 
@@ -469,7 +469,7 @@ What a hit would save, measured the same day with the build already cached (110 
 guard packages check-fast runs on every server change took 12 s uncached and 1 s cached, and its guard tests 10 to
 14 s uncached. Only packages the change did not reach can hit at all: the edited package and every package that imports
 it get a new test binary and run again. Caching also changes the run itself: `go test` passes `-test.testlogfile` only
-when the result may be cached, and `internal/office` failed only in that mode, because a test that lowered the file size
+when the result may be cached, and `internal/modules/office/office` failed only in that mode, because a test that lowered the file size
 limit also cut off that log (#8962, fixed by #8968).
 
 - Keep `-count=1` in every command whose result is reported as verification, and in any new entry point. A plain
@@ -516,7 +516,7 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
   `kbEnd` closes for good, and test fixtures register `t.Cleanup(s.kbEnd)`, not `kbClose` (which stays reopenable,
   for the disconnected case and restart tests). A timer that already holds the engine still writes: the meeting
   fixture runs the attending feed on real timers, so its cleanup waits for the looks already running and lets none
-  start after (`trackAttendFeed` in `server/internal/assistant/meeting_live_test.go`).
+  start after (`trackAttendFeed` in `server/internal/modules/recording/fixtures_test.go`).
 - It shows only under load (one in four shuffled package runs on a busy Mac; six processes of `-run '^TestMeeting'
   -count=20 -cpu=1` reproduce it every time). To find such a writer, give the fixture a directory whose cleanup, when
   `os.RemoveAll` fails, lists what is left (with modification times against the cleanup's start) and dumps every
@@ -758,6 +758,11 @@ first, and the old copy's state goes its own way.
 - **With the keyboard up, `app.collectionViews.firstMatch` is not the list** (2026-11-05, #2189). The 44pt candidate/input accessory strip is itself a collection view,
   ordered before the list, outside `app.keyboards` frame (SE keyboard starts at 451, strip is 407–451). `swipeUp` there leaves the list still,
   looking like pinned filters and once described as "keyboard blocks element swipes". Find the list by its elements (`collectionViews.containing(.button, identifier:)`).
+- **A swipe on a system menu that does not scroll chooses the item under the finger** (2026-11-23, #13396). `AgentMenuParityUITests`
+  read the Agent menu with `menu.swipeDown()` between reads, which only scrolled while the menu ran past the screen. Once its top level
+  fit, the swipe became a drag-to-select and chose the last item, Close Agent…, whose confirmation then covered the menu ("no More in
+  the Agent menu"). Read what a menu shows without a swipe; where a submenu runs past the screen, compare what both menus show, the
+  shorter list as a prefix of the longer.
   Element swipes start at whole-frame center and can fail next to the keyboard on small screens; coordinate-drag within the visible row segment (`AgentsListTests.dragListUp`).
 - Simulators and Mac share loopback: an app listening on simulator `127.0.0.1:<port>` conflicts with Mac processes on that port (port forwarding falls back to a random port, testing that path).
 - **Scripts executed by tests really run on the development machine** (2026-11-01). `TestDeployScriptInstallsTheBinary` runs hub deployment, whose final
@@ -811,7 +816,7 @@ Retain strict checks for the complete target set, existing modules, artifact pat
 ## Go tests requiring macOS built-in commands (2026-11-02)
 
 - The Messages connector reads `chat.db` with macOS `/usr/bin/sqlite3` (personad has no cgo). The Linux hub lacks `sqlite3`, so these tests skip there.
-  If the development Mac has no Go, cross-compile on hub: `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c -o x.test ./internal/connector/imessage`,
+  If the development Mac has no Go, cross-compile on hub: `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c -o x.test ./internal/modules/imessage`,
   copy to Mac, and run **in the package directory** (`testdata` is relative). Use the same approach for macOS-dependent `node` tests.
 - `sqlite3 -json` prints nothing for no rows, not `[]`; check empty before parsing.
 

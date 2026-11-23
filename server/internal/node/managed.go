@@ -72,7 +72,9 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 			continue
 		}
 		m[l.Name] = l
-		if l.Withheld && l.Pushed() {
+		// A pushed provider is kept ahead of a start. So is an agy one whatever its delivery: the Antigravity
+		// companion runs all the time and takes its key at start (agyProviderEnv), so on demand is now (#13871).
+		if l.Withheld && (l.Pushed() || l.AgentType() == "agy") {
 			prefetch = append(prefetch, l.Name)
 		}
 	}
@@ -86,6 +88,7 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 	infer := buildManagedInferLaunchers(m)
 	n.managed.byID, n.managed.full, n.managed.infer = m, full, infer
 	n.managed.mu.Unlock()
+	n.syncAgyProvider()
 	if len(prefetch) > 0 {
 		go func() {
 			for _, name := range prefetch {
@@ -95,6 +98,7 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 				}
 				cancel()
 			}
+			n.syncAgyProvider()
 		}()
 	}
 }

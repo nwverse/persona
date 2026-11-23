@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { initI18n } from "../i18n";
 import { onDraftEvent, type DraftEvent } from "../lib/drafts";
-import { PINNED_USAGE_ACCOUNTS_KEY, resetPinnedUsageAccounts, type UsageAccount } from "../lib/usage-windows";
+import { PINNED_USAGE_ACCOUNTS_KEY, resetPinnedUsageAccounts, timelinePosition, type UsageAccount } from "../lib/usage-windows";
 import { UsageBars } from "./UsageBars";
 import { UsagePopover } from "./UsagePopover";
 import { unconnectedUsageProviders } from "./UsageUnconnected";
@@ -49,6 +49,17 @@ describe("the sidebar's usage strip", () => {
     expect(html).toMatch(/bg-orange[^>]*style="width:85%/);
     expect(html).toMatch(/bg-accent[^>]*style="width:60%/);
     expect(html).toContain('aria-expanded="false"');
+  });
+  it("shows Antigravity and Codex by default when the hub has reconciled the quota windows", () => {
+    const html = renderToStaticMarkup(<UsageBars accounts={[
+      account("gemini", 3, 38, { provider: "antigravity", name: "Antigravity · Gemini", machines: ["Computer"], sources: ["External"] }),
+      account("claude", 0, 0, { provider: "antigravity", name: "Antigravity · Claude/GPT" }),
+      account("pro", 20, 23, { name: "Codex Pro" }),
+    ]} now={NOW} />);
+    expect(html.match(/role="progressbar"/g)).toHaveLength(2);
+    expect(html).toContain("Antigravity · Gemini");
+    expect(html).toContain("Codex Pro");
+    expect(html).not.toContain("Antigravity · Claude/GPT");
   });
   it("opens its details on intent, including the gateway's retained-number warning", async () => {
     const host = document.createElement("div");
@@ -125,6 +136,15 @@ describe("a prepaid balance in the sidebar (#11825)", () => {
 });
 
 describe("the popover", () => {
+  it("puts local and external Antigravity aliases in one provider card", () => {
+    const html = renderToStaticMarkup(<UsagePopover accounts={[
+      account("local", 3, 38, { provider: "agy", name: "Antigravity" }),
+      account("external", 0, 0, { provider: "antigravity", name: "Antigravity · Claude/GPT" }),
+    ]} now={NOW} />);
+    expect(html.match(/data-usage-provider=/g)).toHaveLength(1);
+    expect(html).toContain('data-usage-provider="antigravity" aria-label="Antigravity"');
+    expect(html).toContain("Antigravity · Claude/GPT");
+  });
   it("lists every window with percent, countdown, sample age and the pace", () => {
     // 5h window, 2h elapsed = 40% expected: 70% is over; 7d window, 5 days elapsed (~71%): 10% is under
     const html = renderToStaticMarkup(<UsagePopover accounts={[account("a", 70, 10)]} now={NOW} />);
@@ -228,6 +248,16 @@ describe("where the numbers came from (#2595)", () => {
     expect(strip).toContain("Antigravity");
     expect(strip).toContain("75%");
     expect(strip).not.toContain("未接额度数据");
+  });
+  it.each(["agy", "antigravity"])("matches %s usage and visibility for either Antigravity launcher alias", (provider) => {
+    const launchers = [
+      { name: "native-agy", agent: "agy" },
+      { name: "native-antigravity", display_name: "Native quota", agent_type: "antigravity" },
+      { name: "relay", agent: "agy", base_url: "https://relay.example.com" },
+    ];
+    const live = [account("gemini", 3, 38, { provider, name: "Antigravity · Gemini" })];
+    expect(unconnectedUsageProviders(launchers, live).map((p) => p.id)).toEqual(["relay"]);
+    expect(unconnectedUsageProviders(launchers, [], [provider]).map((p) => p.id)).toEqual(["relay"]);
   });
   it("says in plain words whether a provider is not read yet or can only be read through its relay (#12411)", () => {
     const html = renderToStaticMarkup(
@@ -469,6 +499,42 @@ describe("provider cards with a reset timeline (#13173)", () => {
     const chart = html.slice(html.indexOf('data-timeline-row="2"'));
     expect(chart.indexOf('data-timeline-row="2"')).toBeLessThan(chart.indexOf('data-timeline-row="1"'));
   });
+
+  it.each([
+    ["zh-Hans", ["现在", "1 天", "7 天"], ["4.4 小时", "4 天 16 小时", "6 天 24 小时"]],
+    ["en", ["Now", "1d", "7d"], ["4.4h", "4d 16h", "6d 24h"]],
+    ["ja", ["今", "1日", "7日"], ["4.4時間", "4日16時間", "6日24時間"]],
+  ])("lays out sparse ticks and separate countdowns in %s", async (lang, ticks, countdowns) => {
+    await initI18n(lang);
+    try {
+      const a = account("a", 10, 20, { name: "Codex Pro team account", plan: "Team" });
+      a.windows[0].resets_at = iso(4.4 * H);
+      a.windows[1].resets_at = iso(112 * H);
+      a.windows.push({ label: "30d", window_minutes: 43200, used_percent: 10, resets_at: iso(167.75 * H) });
+      const host = document.createElement("div");
+      host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
+      const axis = host.querySelector("[data-usage-timeline]")!.firstElementChild!;
+      expect([...axis.children].map((tick) => tick.textContent)).toEqual(ticks);
+      expect(axis.classList.contains("whitespace-nowrap")).toBe(true);
+
+      const row = host.querySelector("[data-timeline-row]")!;
+      const name = row.querySelector("[title='Codex Pro team account']")!;
+      expect(name.textContent).toBe(a.name);
+      expect(name.classList.contains("truncate")).toBe(true);
+      expect(name.parentElement!.classList.contains("pr-2")).toBe(true);
+      expect(row.getAttribute("aria-label")).toContain(a.name);
+
+      const lanes = [...row.querySelectorAll("[data-timeline-lane]")];
+      expect(lanes.map((lane) => lane.getAttribute("data-timeline-lane"))).toEqual(["5h", "7d", "30d"]);
+      const labels = lanes.map((lane) => lane.querySelector<HTMLElement>("[data-timeline-remaining]")!);
+      expect(labels.map((label) => label.textContent)).toEqual(countdowns);
+      const positions = labels.map((label) => parseFloat(label.parentElement!.style.gridTemplateColumns));
+      expect(positions).toEqual([4.4, 112, 167.75].map((hours) => timelinePosition(hours * H)));
+    } finally {
+      await initI18n("zh-Hans");
+    }
+  });
+
   it("draws no timeline for a card whose accounts have no reset time", () => {
     const a = account("a", 1, 1);
     a.windows.forEach((w) => delete w.resets_at);

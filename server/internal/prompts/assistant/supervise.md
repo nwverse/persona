@@ -12,7 +12,7 @@
    - {{.Title}}（{{.ID}}，{{if eq .Reason "pr_merged"}}PR 已合并{{else}}已完成{{end}}{{with .MergedPRs}}：{{join . "、"}}{{end}}）{{end}}{{end}}{{with .Notes}}
    待办备注 / 启动说明：
 {{chomp (indent "   " .)}}{{end}}{{end}}{{with $e.Asked}}
-   最初的要求（{{$e.AskedAt}} 用户原话{{if $e.AskedCut}}的开头{{end}}）：{{.}}{{if $e.AskedCut}}（全文用 todo_get {{$e.ID}} 看{{with $e.Link}}，或打开 {{.}}{{end}}）{{end}}{{end}}{{with $e.Started}}
+   最初的要求（{{$e.AskedAt}} 用户原话）：{{.}}{{if $e.AskedCut}}（只引了开头，全文见{{if $e.Link}}任务链接或{{end}} todo_get）{{end}}{{end}}{{with $e.Started}}
    这件事的由来（不是用户直接要的）：{{if eq . "leader"}}主管对话{{else if eq . "routine"}}定时任务{{else if eq . "hub"}}Persona 自己{{else}}助手{{end}}发起{{with $e.StartedWhy}}，理由：{{.}}{{end}}{{end}}{{with $e.Dropped}}
    范围调整时已去掉的标准：{{range $j, $c := .}}{{if $j}}；{{end}}{{$c}}{{end}}{{end}}{{if $.Fresh}}{{with $e.LastReview}}
    上次结论（{{.At}}）：{{.Verdict}}{{with .Note}}，{{.}}{{end}}{{end}}{{end}}{{with $e.Inbox}}
@@ -23,7 +23,7 @@
    - 选项「{{.Label}}」：{{.LeadsTo}}{{end}}{{with .Recommend}}
    - 推荐：{{.}}{{end}}{{with .Cost}}
    - 等待的代价：{{.}}{{end}}{{end}}{{range $e.Asks}}
-   - 卡片 interaction_id={{.ID}}（machine={{.Machine}}，{{if eq .Kind "permission"}}权限{{else if eq .Kind "plan"}}计划{{else if eq .Kind "screen"}}终端选项，仅用户能操作；需要用户选择时用 ask_escalate{{else}}问题{{end}}，session_id={{.Session}}{{if .Reminded}}，到时间没人处理；不会自动发给用户，再交给你处理{{else if .Raised}}，下一层没有及时处理，上交到你这里{{end}}）：
+   - 卡片 interaction_id={{.ID}}（machine={{.Machine}}，{{if eq .Kind "permission"}}权限{{else if eq .Kind "plan"}}计划{{else if eq .Kind "screen"}}终端对话框，由你来选：interaction_answer 的 answers 填它的问题→选项名或序号，Yes/No 也可用 allow；信任文件夹、Bypass Permissions、可能删文件或以用户名义对外的归用户，用 ask_escalate{{else}}问题{{end}}，session_id={{.Session}}{{if .Reminded}}，到时间没人处理；不会自动发给用户，再交给你处理{{else if .Raised}}，下一层没有及时处理，上交到你这里{{end}}）：
 {{chomp (indent "     " .Text)}}{{end}}{{with $e.Decisions}}
    这个任务已经定下的事：
 {{chomp (indent "   " .)}}{{end}}{{with $e.Ask}}
