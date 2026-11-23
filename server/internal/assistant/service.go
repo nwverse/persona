@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/kernel"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/saved"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -59,10 +61,17 @@ type Options struct {
 	// RemoteImageCache is where the remote image route keeps the pictures it fetched (remote_image.go; a cache the
 	// directory of which may be deleted at any time); "" keeps them in no file (tests).
 	RemoteImageCache string
+	// Modules are the feature modules to load (modules.go): nil, the built-in ones compiled into this binary
+	// (internal/modules/all); empty, none.
+	Modules []modapi.Module
+	// ModulesOff are the ids of modules switched off (the modules settings row, ReadModuleSwitch).
+	ModulesOff []string
 }
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	// modules are the feature modules loaded (modules.go); nil, none.
+	modules          *kernel.Kernel
 	compactRecovery  compactRecoveryCache
 	logical          logicalDeviceState
 	a2aWake          chan struct{}
@@ -385,6 +394,7 @@ func New(o Options) *Service {
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
 	}
+	s.loadModules(o.Modules, o.ModulesOff) // before anything a module adds to is set up
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()
