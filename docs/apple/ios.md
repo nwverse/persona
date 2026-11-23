@@ -2292,6 +2292,14 @@ be expanded separately, including server-folded ranges. Successful Persona `noti
 `fold.supervision_user` promotes the whole round. A pending live `ask_user` stays visible before its result arrives.
 Failed calls, arguments without success receipts and silent finishes do not establish or reverse promotion.
 
+In the main conversation, a completed, non-live round with a successful silent finish and no promotion instead leaves
+no timeline row and adds no unread count or badge. The split happens before work or supervision rows unfold, so open
+flags cannot bring its tools back. Its `task`, `routed` and `answered` feed cards inside the same half-open round
+interval move with it; plans, message cards, notices and other decisions remain visible. **Background activity** opens
+from both the conversation menu and Inbox, using the same `ChatStore`, paged `loadOlder` / unfold requests and
+`SupervisionRecordLine` / `lineView` rendering to retain the complete round and those feed cards. It creates no
+InboxItem and calls no `markSeen`. Full-history APIs are unchanged.
+
 The separate streaming answer stays hidden inside a closed quiet record, including text waiting for its transcript
 item after a turn stops. Frozen history uses its captured live turn, not a later turn's activity. Retained promotion survives overlapping
 page merges and cache serialization; the chat cache schema changes with these fields. Tests: `ChatSupervisionLinesTests`,
