@@ -548,12 +548,23 @@ func usageRowID(provider, key string) string {
 func (d *Devices) usageWindowRoutes(api *http.ServeMux) {
 	api.HandleFunc("GET /api/v1/usage/windows", func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
-		accounts := hideUsageProviders(d.usageWin.poll(r.Context(), d.usageSources(), now), d.usageGW.config().HiddenProviders)
-		if accounts == nil {
-			accounts = []proto.UsageAccount{}
-		}
-		writeJSON(w, map[string]any{"accounts": accounts, "checked_at": now.UTC()})
+		hidden := d.usageGW.config().HiddenProviders
+		writeJSON(w, usageWindowsAnswer(hideUsageProviders(d.usageWin.poll(r.Context(), d.usageSources(), now), hidden), hidden, now))
 	})
+}
+
+// usageWindowsAnswer is the body of GET /api/v1/usage/windows. hidden_providers (#13179) names the providers the owner
+// left out of the bars, so a client does not list them some other way (the web's "not connected" rows); it is left
+// out when nothing is hidden, so the answer is what it was before.
+func usageWindowsAnswer(accounts []proto.UsageAccount, hidden []string, now time.Time) map[string]any {
+	if accounts == nil {
+		accounts = []proto.UsageAccount{}
+	}
+	out := map[string]any{"accounts": accounts, "checked_at": now.UTC()}
+	if len(hidden) > 0 {
+		out["hidden_providers"] = hidden
+	}
+	return out
 }
 
 // hideUsageProviders drops the accounts of the providers the owner chose to hide from the usage bars (#11753). It

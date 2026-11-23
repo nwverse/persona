@@ -84,6 +84,15 @@ func TestLarkLiteralPrefixIndependentReadSafety(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(directoryRoot, "sub"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	nestedDirectory := filepath.Join(directoryRoot, "a", "b", "c")
+	if err := os.MkdirAll(nestedDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Reach the filesystem root without assuming how many components t.TempDir contains.
+	rootAscent, err := filepath.Rel(nestedDirectory, string(filepath.Separator))
+	if err != nil {
+		t.Fatal(err)
+	}
 	directoryFile := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(directoryFile, []byte("fixture"), 0o600); err != nil {
 		t.Fatal(err)
@@ -164,7 +173,7 @@ func TestLarkLiteralPrefixIndependentReadSafety(t *testing.T) {
 		{"joined bin directory stays unknown", `cd /; READER=./bin/cat; lark-cli docs +fetch --doc-id example | $READER`, 1},
 		{"joined usr bin directory stays unknown", `cd /usr; READER=./bin/cat; lark-cli docs +fetch --doc-id example | $READER`, 1},
 		{"joined root usr bin directory stays unknown", `cd /; READER=./usr/bin/cat; lark-cli docs +fetch --doc-id example | $READER`, 1},
-		{"nested cwd system directory stays unknown", `cd /tmp/a/b/c/d; bash -c 'cd ../../..; READER=./usr/bin/cat; lark-cli docs +fetch --doc-id example | $READER'`, 1},
+		{"nested cwd system directory stays unknown", `cd ` + nestedDirectory + `; bash -c 'cd ` + rootAscent + `; READER=./usr/bin/cat; lark-cli docs +fetch --doc-id example | $READER'`, 1},
 		{"parent relative gate read stays unknown", `cd /tmp; REQUEST=../example/scripts/ex.sh; $REQUEST GET /health`, 1},
 		{"nested relative CLI stays unknown", `cd /tmp; READER=./sub/lark-cli; $READER docs +fetch --doc-id example`, 1},
 		{"pushd stays unknown", `pushd /tmp; READER=./reader.sh; $READER list`, 1},

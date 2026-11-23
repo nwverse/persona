@@ -1,8 +1,9 @@
-import { byAttention, stateOf } from "./format";
+import { baseName, byAttention, pathSlashes, stateOf } from "./format";
 import { summaryState, type ChildStates } from "./herdr-tree";
 import type { Machine, Session } from "./types";
 import { byWorkspacePin, workspaceKey, workspacePinTime, workspaceTarget, type HostWorkspace, type WorkspaceTarget } from "./workspace-catalog";
 import { sessionHost } from "./agent-groups";
+import { directoryKey } from "./workspace-directory";
 
 /** Where a session's cwd sits: the repository it belongs to and the working tree inside it. */
 export type Repo = { repo: string; name: string; worktree: string; main: boolean };
@@ -59,8 +60,17 @@ export interface RepoMachine {
 // last one name the repository, everything from there on is the tree.
 const WORKTREE_SEGMENTS = [["/.worktrees/"], ["/.claude/worktrees/"], ["/.herdr/worktrees/"]];
 
-const segments = (path: string) => path.split("/").filter(Boolean);
-const baseName = (path: string) => segments(path).pop() ?? "";
+const trimmed = (value?: string) => {
+  const path = pathSlashes(value ?? "");
+  if (/^[a-z]:\/+$/i.test(path)) return `${path.slice(0, 2)}/`;
+  return path.replace(/\/+$/, "") || (path.startsWith("/") ? "/" : "");
+};
+// Keep display spelling, but compare Windows directory identities without case or separator differences.
+const pathKey = (value?: string) => {
+  const path = trimmed(value);
+  return /^(?:[a-z]:\/|\/\/)/i.test(path) ? path.toLowerCase() : path;
+};
+const withinPath = (path: string, root: string) => path === root || path.startsWith(root.endsWith("/") ? root : `${root}/`);
 
 /**
  * The repository and working tree a cwd belongs to. The host may name the repository (the session's repo_root, #2840:
@@ -70,14 +80,17 @@ const baseName = (path: string) => segments(path).pop() ?? "";
  */
 export function repoOf(cwd: string, repoRoot?: string): Repo {
   if (!cwd) return { repo: "", name: "", worktree: "", main: true };
-  const path = cwd.replace(/\/+$/, "");
-  const root = (repoRoot ?? "").replace(/\/+$/, "");
+  const path = trimmed(cwd);
+  const root = trimmed(repoRoot);
   if (root) {
-    const inside = path === root || path.startsWith(`${root}/`);
+    const inside = withinPath(pathKey(path), pathKey(root));
     return { repo: root, name: baseName(root), worktree: inside ? root : path, main: inside };
   }
   for (const [marker] of WORKTREE_SEGMENTS) {
-    const at = path.indexOf(marker);
+    // Search the display path itself: Unicode lowercasing can change string length and invalidate slice offsets.
+    const at = /^(?:[a-z]:\/|\/\/)/i.test(path)
+      ? path.search(new RegExp(marker.replaceAll(".", "\\."), "i"))
+      : path.indexOf(marker);
     if (at <= 0) continue;
     const rest = path.slice(at + marker.length).split("/").filter(Boolean);
     const repo = path.slice(0, at);
@@ -94,10 +107,10 @@ export function repoOf(cwd: string, repoRoot?: string): Repo {
  *  folder holding it instead, so it never reads like the repository: the Codex app keeps
  *  `~/.codex/worktrees/<name>/<repository>` (#12800). */
 function worktreeName(path: string, repo: string): string {
-  if (path === repo) return baseName(repo);
-  const parts = segments(path);
+  if (pathKey(path) === pathKey(repo)) return baseName(repo);
+  const parts = trimmed(path).split("/").filter(Boolean);
   const own = parts.pop() ?? "";
-  return own === baseName(repo) ? (parts.pop() ?? own) : own;
+  return baseName(pathKey(path)) === baseName(pathKey(repo)) ? (parts.pop() ?? own) : own;
 }
 
 /** The name the host gave the place a working tree's sessions run in (#4497: Paseo sends its workspace's title as
@@ -114,15 +127,13 @@ function hostPlaceName(sessions: readonly Session[]): string | undefined {
   return name;
 }
 
-const trimmed = (path: string | undefined) => (path ?? "").replace(/\/+$/, "");
-
 /** Where the node placed a session in git (#1805): its project (repo_root, else the working tree itself) and the
  *  working tree; undefined from an older node, which leaves the path inference above. */
 export function gitPlaceOf(s: Pick<Session, "repo_root" | "worktree">): Repo | undefined {
   const worktree = trimmed(s.worktree);
   if (!worktree) return undefined;
   const repo = trimmed(s.repo_root) || worktree;
-  return { repo, name: baseName(repo), worktree, main: worktree === repo };
+  return { repo, name: baseName(repo), worktree, main: pathKey(worktree) === pathKey(repo) };
 }
 
 /** How many folders below the top of its Git working tree a session runs, when the node says. The top is its reported
@@ -146,7 +157,7 @@ function orcaSpace(s: Session): OrcaWorktree | undefined {
   const at = s.space_id.indexOf("::");
   if (at <= 0) return undefined;
   const repoId = s.space_id.slice(0, at);
-  const path = s.space_id.slice(at + 2).replace(/\/+$/, "");
+  const path = trimmed(s.space_id.slice(at + 2));
   return repoId && path ? { repoId, spaceId: s.space_id, path } : undefined;
 }
 
@@ -156,13 +167,13 @@ function containingOrcaWorktree(s: Session, known: ReadonlyMap<string, OrcaWorkt
   const cwds = [s.cwd ?? ""];
   if (s.workspace_cwd && s.workspace_cwd !== s.cwd) cwds.push(s.workspace_cwd);
   for (const value of cwds) {
-    const cwd = value.replace(/\/+$/, "");
+    const cwd = pathKey(value);
     if (!cwd) continue;
     let deepest: OrcaWorktree | undefined;
     for (const [path, worktree] of known) {
-      if (deepest && path.length <= deepest.path.length) continue;
-      if (cwd !== path && !cwd.startsWith(`${path}/`)) continue;
-      const below = cwd === path ? "" : cwd.slice(path.length + 1);
+      if (deepest && path.length <= pathKey(deepest.path).length) continue;
+      if (!withinPath(cwd, path)) continue;
+      const below = cwd === path ? "" : cwd.slice(path.length + (path.endsWith("/") ? 0 : 1));
       if (WORKTREE_SEGMENTS.some(([marker]) => below.startsWith(marker.slice(1)))) continue;
       deepest = worktree;
     }
@@ -194,7 +205,7 @@ function placementOf(s: Session, known: ReadonlyMap<string, OrcaWorktree>): Plac
 /** Prefer the repository name a member session's repo_root supplies. Without one Orca does not send the project name:
  *  guess it from distinct worktree folder names, preferring the most frequent, then the shortest, then alphabetical. */
 function orcaProjectName(worktrees: readonly RepoWorktree[]): string {
-  const roots = worktrees.flatMap((w) => w.sessions.map((s) => (s.repo_root ?? "").replace(/\/+$/, "")).filter(Boolean));
+  const roots = worktrees.flatMap((w) => w.sessions.map((s) => trimmed(s.repo_root)).filter(Boolean));
   if (roots.length) {
     const counts = new Map<string, number>();
     for (const root of roots) counts.set(root, (counts.get(root) ?? 0) + 1);
@@ -268,12 +279,12 @@ function buildRepos(sessions: Session[], machineId: string): RepoTree[] {
   const known = new Map<string, OrcaWorktree>();
   for (const s of sessions) {
     const worktree = orcaSpace(s);
-    if (worktree && !known.has(worktree.path)) known.set(worktree.path, worktree);
+    if (worktree && !known.has(pathKey(worktree.path))) known.set(pathKey(worktree.path), worktree);
   }
   const repos = new Map<string, RepoBucket>();
   for (const s of sessions) {
     const where = placementOf(s, known);
-    const key = `${machineId}\u0000${where.repo}`;
+    const key = `${machineId}\u0000${pathKey(where.repo)}`;
     let bucket = repos.get(key);
     if (!bucket) {
       bucket = {
@@ -285,7 +296,7 @@ function buildRepos(sessions: Session[], machineId: string): RepoTree[] {
       repos.set(key, bucket);
     }
     const { tree } = bucket;
-    const identity = where.spaceId ?? where.worktree;
+    const identity = where.spaceId ?? pathKey(where.worktree);
     const worktreeKey = `${key}\u0000${identity}`;
     let worktree = tree.worktrees.find((w) => w.key === worktreeKey);
     if (!worktree) {
@@ -316,7 +327,7 @@ function buildRepos(sessions: Session[], machineId: string): RepoTree[] {
     const orcaTrees = new Set(bucket.bySpace.values());
     for (const w of tree.worktrees) {
       w.sessions.sort(byAttention);
-      if (bucket.orca && !bucket.git) w.main = w.sessions.some((s) => (s.repo_root ?? "").replace(/\/+$/, "") === w.path);
+      if (bucket.orca && !bucket.git) w.main = w.sessions.some((s) => pathKey(s.repo_root) === pathKey(w.path));
       // A linked tree takes the name its host gave it (#4497), its branch staying beside it; its key stays its path.
       // The main checkout keeps its name (several workspaces can share it), and Orca's trees keep Orca's naming.
       if (!w.main && !orcaTrees.has(w)) w.name = hostPlaceName(w.sessions) ?? w.name;
@@ -352,24 +363,42 @@ export interface RepoCatalogOptions {
  *  through to a different runtime at the same path. */
 export function sessionWorkspace(s: Session, catalog: readonly HostWorkspace[], manager?: string): HostWorkspace | undefined {
   if (manager && s.manager && s.manager !== manager) return undefined;
-  const local = catalog.filter((w) => w.machine_id === s.machine_id);
+  let local = catalog.filter((w) => w.machine_id === s.machine_id);
   const host = s.space_kind || s.host || sessionHost(s);
   const bound = s.workspace_id || s.space_id;
+  let inferredProjectRoot: string | undefined;
   if (bound) {
     const exact = local.filter((w) => w.source_id === bound && (!host || w.source === host));
     if (exact.length === 1) return exact[0];
+    if (exact.length > 1) {
+      // An explicit desktop project may own several roots. Only those roots can resolve its current directory or Git root.
+      return ["codex_app", "claude_desktop"].includes(host) ? directoryWorkspace([s.cwd, s.workspace_cwd, s.repo_root], exact, true) : undefined;
+    }
     // Desktop project ids describe an editor project, not a terminal workspace binding.
-    if (exact.length > 1 || s.workspace_id || host !== "codex_app") return undefined;
+    if (s.workspace_id || !["codex_app", "claude_desktop"].includes(host)) return undefined;
+    const directoryPrefixes = host === "codex_app" ? ["codex-project:"] : ["codex-project:", "claude-project:"];
+    const directoryPrefix = directoryPrefixes.find((prefix) => bound.startsWith(prefix));
+    const directoryRoot = directoryPrefix ? bound.slice(directoryPrefix.length) : "";
+    if (directoryKey(directoryRoot) !== null) inferredProjectRoot = directoryRoot;
+    // An unavailable saved project may use a generic directory, never another host's workspace at the same path.
+    // Older, directory-derived desktop placement has no saved identity and can still resolve a unique matching project.
+    if (!inferredProjectRoot) local = local.filter((w) => w.source === "directory");
   }
   if (["herdr", "herdr-core", "botmux", "orca", "paseo"].includes(host)) return undefined;
   const depth = gitTreeDepth(s);
-  for (const raw of [s.cwd, s.workspace_cwd]) {
+  return directoryWorkspace([s.cwd, s.workspace_cwd, inferredProjectRoot], local, false, [depth, depth, depth === undefined ? undefined : 0]);
+}
+function directoryWorkspace(paths: readonly (string | undefined)[], workspaces: readonly HostWorkspace[], boundProject = false, depths?: readonly (number | undefined)[]): HostWorkspace | undefined {
+  for (const [index, raw] of paths.entries()) {
     const cwd = catalogPath(raw);
     if (!cwd) continue;
-    const candidates = local.filter((w) => {
+    const depth = depths?.[index];
+    const candidates = workspaces.filter((w) => {
       const path = catalogPath(w.cwd);
-      if (!path || !within(cwd, path) || (depth !== undefined && depthOf(cwd) - depthOf(path) > depth)) return false;
-      const below = cwd === path ? "" : cwd.slice(path === "/" ? 1 : path.length + 1);
+      if (!path || !within(cwd, path)) return false;
+      if (boundProject) return true;
+      if (depth !== undefined && depthOf(cwd) - depthOf(path) > depth) return false;
+      const below = cwd === path ? "" : cwd.slice(path.length + (path.endsWith("/") ? 0 : 1));
       return !WORKTREE_SEGMENTS.some(([marker]) => below.startsWith(marker.slice(1)));
     });
     const length = Math.max(0, ...candidates.map((w) => catalogPath(w.cwd).length));
@@ -385,13 +414,9 @@ export function hasWorkspacePin(s: Session, catalog: readonly HostWorkspace[], m
   if (s.archived || !s.workspace_id || !(s.space_kind || s.host || s.pane_id)) return false;
   return workspacePinTime(sessionWorkspace(s, catalog, manager)) !== undefined;
 }
-const catalogPath = (value?: string) => {
-  const path = (value ?? "").replaceAll("\\", "/");
-  const clean = path.replace(/\/+$/, "") || (path.startsWith("/") ? "/" : "");
-  return /^[a-z]:/i.test(clean) ? clean[0].toLowerCase() + clean.slice(1) : clean;
-};
+const catalogPath = (value?: string) => directoryKey(value ?? "") ?? pathKey(value);
 /** Whether `path` is `dir` or below it, both already normalized by catalogPath. */
-const within = (path: string, dir: string) => path === dir || (dir === "/" ? path.startsWith("/") : path.startsWith(`${dir}/`));
+const within = withinPath;
 /** How many folders deep a path normalized by catalogPath is: 0 at the root. */
 const depthOf = (path: string) => (path === "/" ? 0 : path.split("/").length - 1);
 

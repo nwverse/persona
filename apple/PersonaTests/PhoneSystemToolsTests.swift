@@ -1,5 +1,8 @@
 #if os(iOS) && canImport(AlarmKit)
+import ActivityKit
 import AlarmKit
+import SwiftUI
+import UIKit
 #endif
 import Foundation
 import MapKit
@@ -314,18 +317,209 @@ struct PhoneSystemToolsTests {
     }
 
     #if os(iOS) && canImport(AlarmKit)
-    /// The DEBUG sample requests its activity itself, where ActivityKit takes at most 4 KB of attributes; a timer's
-    /// with both states don't fit (~5.7 KB), so it keeps the one it draws (#11058). AlarmKit gets both.
+    /// The delivered fields of ActivityContent: the wrapper itself is not Codable, so the test carries both unchanged
+    /// values through one Codable transport rather than silently reducing the assertion to ContentState alone.
+    @available(iOS 26.0, *)
+    private struct TimerActivityTransport: Codable {
+        var state: AlarmPresentationState
+        var staleDate: Date?
+
+        init(_ content: ActivityContent<AlarmPresentationState>) {
+            state = content.state
+            staleDate = content.staleDate
+        }
+
+        var content: ActivityContent<AlarmPresentationState> {
+            .init(state: state, staleDate: staleDate)
+        }
+    }
+
+    private struct TintTransport: Codable {
+        let tintColor: String
+    }
+
+    /// Compare the original transport archive with the archive inside the decoded Color. Encoding the decoded object
+    /// again can normalize a malformed archive and make a tint assertion pass without testing the transport.
+    @available(iOS 26.0, *)
+    private func requirePreservedTint<Metadata: AlarmMetadata>(
+        _ original: AlarmAttributes<Metadata>, _ decoded: AlarmAttributes<Metadata>, context: String
+    ) throws {
+        let originalTransport = try #require(try? JSONDecoder().decode(TintTransport.self, from: JSONEncoder().encode(original)),
+                                             "\(context): original transport")
+        let originalTint = originalTransport.tintColor
+        let decodedJSON = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as? [String: Any])
+        let decodedTint = try #require(decodedJSON["tintColor"] as? String, "\(context): decoded tint archive")
+        #expect(originalTint == decodedTint, "\(context): tint archive must survive encoding and decoding")
+        let originalData = try #require(Data(base64Encoded: originalTint), "\(context): original tint base64")
+        let decodedData = try #require(Data(base64Encoded: decodedTint), "\(context): decoded tint base64")
+        let originalColorValue = try NSKeyedUnarchiver.unarchivedObject(ofClass: UIColor.self, from: originalData)
+        let originalColor = try #require(originalColorValue)
+        let decodedColorValue = try NSKeyedUnarchiver.unarchivedObject(ofClass: UIColor.self, from: decodedData)
+        let decodedColor = try #require(decodedColorValue)
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        var decodedRed: CGFloat = 0, decodedGreen: CGFloat = 0, decodedBlue: CGFloat = 0, decodedAlpha: CGFloat = 0
+        #expect(originalColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+        #expect(decodedColor.getRed(&decodedRed, green: &decodedGreen, blue: &decodedBlue, alpha: &decodedAlpha))
+        #expect((red, green, blue, alpha) == (decodedRed, decodedGreen, decodedBlue, decodedAlpha),
+                "\(context): tint RGBA must survive encoding and decoding")
+    }
+
+    /// iOS 26.0 requires the Alert Stop field. From iOS 26.1 Apple deprecates it and the newer AlarmKit encoder omits
+    /// it; Xcode 27.2 / iOS 27.0 demonstrates that omission. No other version may substitute Pause/Resume for Stop.
+    @available(iOS 26.0, *)
+    private func requireEncodedStop(
+        alert: [String: Any], tintArchive: String, expectedText: LocalizedStringResource, state: String
+    ) throws {
+        #if compiler(>=6.4)
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion > 26 ||
+            (ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 26 &&
+             ProcessInfo.processInfo.operatingSystemVersion.minorVersion >= 1) {
+            if alert["stopButton"] == nil {
+                return
+            }
+        }
+        #endif
+        let stop = try #require(alert["stopButton"] as? [String: Any],
+                                "\(state): iOS 26.0 requires the Alert Stop configuration")
+        #expect(stop["systemImageName"] as? String == Theme.Icon.interrupt, "\(state): actual Stop symbol")
+        #expect(stop["textColor"] as? String == tintArchive, "\(state): actual Stop tint archive")
+        let text = try #require(stop["text"] as? [String: Any], "\(state): actual Stop text")
+        let defaultValue = try #require(text["defaultValue"] as? [String: Any], "\(state): Stop default value")
+        let arguments = try #require(defaultValue["arguments"] as? [Any], "\(state): Stop arguments")
+        #expect(arguments.isEmpty)
+        #expect(text["key"] as? String == expectedText.key, "\(state): actual Stop resource key")
+        #expect(defaultValue["key"] as? String == String(localized: expectedText),
+                "\(state): actual Stop visible text")
+    }
+
+    /// An app-requested ActivityKit activity takes at most 4 KB of attributes. The sample's resources carry no app
+    /// bundle lookup data, while the title, action marker, icon and tint stay complete for the custom widget.
     @Test func theTimerSampleFitsInsideActivityKitsLimit() throws {
         guard #available(iOS 26.0, *) else { return }
-        let running = AlarmsTool.attributes(label: "Focus", timer: true, only: .countdown)
-        let paused = AlarmsTool.attributes(label: "Focus", timer: true, only: .paused)
-        #expect(try JSONEncoder().encode(running).count < 4096)
-        #expect(try JSONEncoder().encode(paused).count < 4096)
-        #expect(running.presentation.countdown?.pauseButton != nil && running.presentation.paused == nil)
-        #expect(paused.presentation.paused != nil && paused.presentation.countdown == nil)
-        let timer = AlarmsTool.attributes(label: "Focus", timer: true).presentation
-        #expect(timer.countdown != nil && timer.paused != nil)
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let runningAttributes = AlarmsTool.sampleAttributes(label: "Focus", paused: false)
+        let pausedAttributes = AlarmsTool.sampleAttributes(label: "Focus", paused: true)
+        let resource = AlarmsTool.sampleTitle(key: "sample.unused.key", defaultValue: "Different visible label")
+        let resourceData = try encoder.encode(resource)
+        let decodedResource = try decoder.decode(LocalizedStringResource.self, from: resourceData)
+        #expect(decodedResource.key == "sample.unused.key")
+        #expect(decodedResource.defaultValue == String.LocalizationValue("Different visible label"))
+        #expect(String(localized: decodedResource) == "Different visible label")
+        print("timer resource sentinel: key=\(decodedResource.key), defaultValue=\(String(localized: decodedResource))")
+        #expect(decodedResource.key != String(localized: decodedResource))
+        var decodedRunning = runningAttributes
+        var decodedPaused = pausedAttributes
+        for sample in [runningAttributes, pausedAttributes] {
+            let data = try encoder.encode(sample)
+            let state = sample.presentation.countdown == nil ? "paused" : "running"
+            #expect(data.count < 4096, "\(state) sample attributes bytes: \(data.count)")
+            print("timer sample \(state): attributes=\(data.count) bytes")
+            let decoded = try decoder.decode(AlarmAttributes<PersonaAlarmData>.self, from: data)
+            if state == "running" {
+                decodedRunning = decoded
+            } else {
+                decodedPaused = decoded
+            }
+            #expect(decoded.metadata?.label == "Focus")
+            #expect(decoded.presentation.alert.title.key == "sample.title")
+            #expect(decoded.presentation.alert.title.defaultValue == String.LocalizationValue("Focus"))
+            #expect(String(localized: decoded.presentation.alert.title) == "Focus")
+            print("timer sample \(state): title=\(decoded.presentation.alert.title.key), defaultValue=\(String(localized: decoded.presentation.alert.title))")
+            let encoded = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let presentation = try #require(encoded["presentation"] as? [String: Any])
+            let alert = try #require(presentation["alert"] as? [String: Any])
+            let archived = try #require(encoded["tintColor"] as? String)
+            try requireEncodedStop(alert: alert, tintArchive: archived, expectedText: decoded.presentation.alert.title,
+                                   state: "sample \(state)")
+            try requirePreservedTint(sample, decoded, context: "sample \(state)")
+        }
+        // The widget's Pause gate reads decoded countdown.pauseButton, not the original builder. Neither state may
+        // acquire the opposite presentation during the round trip; Resume is required in the decoded paused state.
+        let runningPause = try #require(decodedRunning.presentation.countdown?.pauseButton,
+                                        "decoded running countdown.pauseButton must remain available")
+        #expect(runningPause.systemImageName == Theme.Icon.pause)
+        #expect(decodedRunning.presentation.paused == nil)
+        #expect(decodedPaused.presentation.countdown == nil)
+        #expect(decodedPaused.presentation.paused?.resumeButton.systemImageName == Theme.Icon.run,
+                "decoded paused paused.resumeButton must remain available")
+
+        // These are the exact ActivityContent values requested with the sample, including the wrapper's staleDate.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let running = AlarmsTool.sampleContent(paused: false, now: now)
+        let paused = AlarmsTool.sampleContent(paused: true, now: now)
+        let runningTransport = TimerActivityTransport(running)
+        let pausedTransport = TimerActivityTransport(paused)
+        let runningData = try encoder.encode(runningTransport)
+        let pausedData = try encoder.encode(pausedTransport)
+        #expect(runningData.count < 4096, "running ActivityContent bytes: \(runningData.count)")
+        #expect(pausedData.count < 4096, "paused ActivityContent bytes: \(pausedData.count)")
+        let runningContent = try decoder.decode(TimerActivityTransport.self, from: runningData).content
+        let pausedContent = try decoder.decode(TimerActivityTransport.self, from: pausedData).content
+        #expect(runningContent.staleDate == nil && pausedContent.staleDate == nil)
+        #expect(runningContent.state.alarmID == running.state.alarmID)
+        #expect(pausedContent.state.alarmID == paused.state.alarmID)
+        #expect(runningContent.state.alarmID != pausedContent.state.alarmID)
+
+        // AlarmButtons's gates: the decoded sample has Pause or Resume; each button carries this sample's ID. The
+        // sample-only alarmID identifies this visual ActivityKit sample, not an AlarmManager timer (tracked separately).
+        if case .countdown = runningContent.state.mode {
+            #expect(decodedRunning.presentation.countdown?.pauseButton != nil)
+        } else {
+            Issue.record("running must expose Pause")
+        }
+        if case .paused = pausedContent.state.mode {
+            #expect(decodedPaused.presentation.paused?.resumeButton.systemImageName == Theme.Icon.run)
+        } else {
+            Issue.record("paused must expose Resume")
+        }
+        // Stop is unconditional in AlarmButtons, with each sample's preserved original tint archive.
+        try requirePreservedTint(runningAttributes, decodedRunning, context: "running Stop")
+        try requirePreservedTint(pausedAttributes, decodedPaused, context: "paused Stop")
+        // AlarmButtons owns its Stop symbol; the app target maps the same meaning to Theme.Icon.interrupt.
+        #expect(Theme.Icon.interrupt == "stop.fill")
+        #expect(PauseAlarmIntent(alarmID: runningContent.state.alarmID).alarmID == runningContent.state.alarmID.uuidString)
+        #expect(ResumeAlarmIntent(alarmID: pausedContent.state.alarmID).alarmID == pausedContent.state.alarmID.uuidString)
+        #expect(StopAlarmIntent(alarmID: runningContent.state.alarmID).alarmID == runningContent.state.alarmID.uuidString)
+        #expect(StopAlarmIntent(alarmID: pausedContent.state.alarmID).alarmID == pausedContent.state.alarmID.uuidString)
+
+        guard case .countdown(let countdown) = runningContent.state.mode else {
+            Issue.record("the running sample must count down")
+            return
+        }
+        #expect(countdown.startDate == now && countdown.fireDate == now.addingTimeInterval(1500))
+        #expect(countdown.totalCountdownDuration == 1500 && countdown.previouslyElapsedDuration == 0)
+        guard case .paused(let pause) = pausedContent.state.mode else {
+            Issue.record("the paused sample must keep the time left")
+            return
+        }
+        #expect(pause.totalCountdownDuration == 1500 && pause.previouslyElapsedDuration == 301)
+
+        // Real timers keep both states and the complete AlarmKit presentation, unlike the custom widget's sample.
+        let real = AlarmsTool.attributes(label: "Focus", timer: true)
+        let timer = real.presentation
+        #expect(timer.countdown?.pauseButton != nil && timer.paused?.resumeButton != nil)
+        #expect(timer.countdown?.pauseButton?.systemImageName == Theme.Icon.pause)
+        #expect(timer.paused?.resumeButton.systemImageName == Theme.Icon.run)
+        // Encode/decode the real builder, never a reconstructed button. Newer SDKs omit the unused Alert Stop;
+        // Pause/Resume still serialize, and AlarmButtons supplies Stop from the real tint and ContentState alarm ID.
+        let realData = try encoder.encode(real)
+        let decodedReal = try decoder.decode(AlarmAttributes<PersonaAlarmData>.self, from: realData)
+        #expect(decodedReal.metadata?.label == "Focus")
+        #expect(decodedReal.presentation.countdown?.pauseButton?.systemImageName == Theme.Icon.pause)
+        #expect(decodedReal.presentation.paused?.resumeButton.systemImageName == Theme.Icon.run)
+        #expect(decodedReal.presentation.countdown?.title.key == "Focus")
+        #expect(decodedReal.presentation.paused?.title.key == "Focus")
+        let realEncoded = try #require(JSONSerialization.jsonObject(with: realData) as? [String: Any])
+        let realPresentation = try #require(realEncoded["presentation"] as? [String: Any])
+        let realAlert = try #require(realPresentation["alert"] as? [String: Any])
+        let realTint = try #require(realEncoded["tintColor"] as? String)
+        try requireEncodedStop(alert: realAlert, tintArchive: realTint, expectedText: real.presentation.alert.stopButton.text,
+                               state: "real timer")
+        try requirePreservedTint(real, decodedReal, context: "real timer")
+        #expect(decodedReal.presentation.alert.stopButton.systemImageName.isEmpty == false)
+        #expect(decodedReal.presentation.alert.title.defaultValue == real.presentation.alert.title.defaultValue)
+        #expect(String(localized: decodedReal.presentation.alert.title) == String(localized: real.presentation.alert.title))
     }
     #endif
 
