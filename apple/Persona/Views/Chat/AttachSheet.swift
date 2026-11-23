@@ -272,8 +272,8 @@ private enum AttachWarmSlot {
 @Observable
 private final class AttachSheetState<More: View> {
     var caption = ""
-    var photoRoom = 4
-    var videoRoom = 4
+    var photoRoom = ImageLimits.standard.perMessage
+    var videoRoom = VideoAttachments.most
     var hasCamera = false
     var showsMore = true
     var initialWidth: CGFloat = Theme.Space.flush
@@ -416,7 +416,7 @@ private struct AttachSheet<More: View>: View {
         panel.edited[id] = edit.edits.isEmpty ? nil : edit
         if !panel.picked.contains(id) {
             guard AttachGrid<More>.hasRoom(for: asset, picked: panel.picked, photoRoom: state.photoRoom, videoRoom: state.videoRoom) else {
-                AppModel.shared.toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
+                AppModel.shared.toast = Toast(AttachGrid<More>.noRoom(for: asset), style: .error)
                 return
             }
             panel.picked.append(id)
@@ -701,7 +701,7 @@ private struct AttachGrid<More: View>: View {
         let id = asset.localIdentifier
         if let i = panel.picked.firstIndex(of: id) { panel.picked.remove(at: i); return }
         guard hasRoom(for: asset, picked: panel.picked, photoRoom: state.photoRoom, videoRoom: state.videoRoom) else {
-            AppModel.shared.toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
+            AppModel.shared.toast = Toast(noRoom(for: asset), style: .error)
             return
         }
         panel.picked.append(id)
@@ -713,6 +713,13 @@ private struct AttachGrid<More: View>: View {
         let video = asset.mediaType == .video
         let same = picked.compactMap(AttachLibrary.asset).filter { ($0.mediaType == .video) == video }.count
         return same < (video ? videoRoom : photoRoom)
+    }
+
+    /// The word when `asset` has no room: the videos' own limit, or no more room for pictures (a picture's room is the
+    /// hub's pictures and the files the rest go as, #12973, so no one number says it).
+    static func noRoom(for asset: PHAsset) -> String {
+        asset.mediaType == .video ? String(localized: "Up to \(VideoAttachments.most) videos at a time")
+                                  : String(localized: "No room for more pictures in this message")
     }
 }
 
@@ -1640,14 +1647,15 @@ extension AttachMoreSection {
 }
 
 extension ComposerAttachments {
-    /// What was picked in the panel, into the box: pictures as its photos (at most `MessagePhotos.limit`), the ones
-    /// edited there as edited (and still editable in the strip), videos uploaded to `machine` as files; a toast says how
-    /// many could not be read.
-    func addPicked(_ picks: AttachPicks, machine: MachineRef, model: AppModel) async {
+    /// What was picked in the panel, into the box: pictures as its photos while they fit `limits` (the hub's, #12973) and
+    /// as files to `machine` past them, the ones edited there as edited (and still editable in the strip), videos uploaded
+    /// to `machine` as files; a toast says how many could not be read.
+    func addPicked(_ picks: AttachPicks, machine: MachineRef, model: AppModel, limits: ImageLimits, dest: String? = nil) async {
         var failed = 0
+        let spill = MessagePhotos.spill(into: files, machine: machine, model: model, dest: dest)
         for id in picks.ids {
             if let edit = picks.edited[id] {
-                add(edit, model: model)
+                add(edit, model: model, limits: limits, spill: spill)
                 continue
             }
             guard let asset = AttachLibrary.asset(id) else { failed += 1; continue }
@@ -1656,7 +1664,7 @@ extension ComposerAttachments {
                 videos.start(staged: url, machine: machine, model: model)
             } else {
                 guard let picture = await AttachLibrary.picture(asset) else { failed += 1; continue }
-                MessagePhotos.add(picture, to: &images, model: model)
+                MessagePhotos.add(picture, to: &images, model: model, limits: limits, spill: spill)
             }
         }
         if failed > 0 {

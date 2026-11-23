@@ -56,17 +56,24 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	n.mu.Lock()
 	agents := make(map[string]host.Agent, len(n.agents))
-	agyRuntimeIDs := map[string]string{}
 	for id, agent := range n.agents {
 		agents[id] = agent
-		if agent.Agent == agyAgent && agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
-			if conversation := n.agyConversationLocked(id, agent.PaneID); conversation != "" {
-				agyRuntimeIDs[id] = agyAgent + "-" + conversation
-			}
-		}
 	}
 	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
 	n.mu.Unlock()
+
+	agyConversations := map[string]string{}
+	agyRuntimeIDs := map[string]string{}
+	for id, agent := range agents {
+		if agent.Agent == agyAgent {
+			if conversation := n.agyConversation(id, agent.PaneID); conversation != "" {
+				agyConversations[id] = conversation
+				if agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+					agyRuntimeIDs[id] = agyAgent + "-" + conversation
+				}
+			}
+		}
+	}
 
 	// One slice for the whole list, sized from the last one, filtered where it is (#2826): grown from nil and copied again
 	// into the rows kept, with the runtimes' rows in a third, a list of 300 rows (1,520 bytes each) took about 4.8 MB.
@@ -160,8 +167,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil {
 				m := n.meta(p, st)
-				if identity.InHealthSpace(m.cwd) {
-					s.Space = identity.SpaceHealth
+				if sp := identity.SpaceAt(m.cwd); sp != "" {
+					s.Space = sp
 				}
 				rolloutPath = p
 				textAt = m.lastTextAt
@@ -239,12 +246,35 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.mergeOpencodeRow(&s) // its conversation is the plugin's (opencode.go)
 		case a.Agent == cursorAgent || a.Agent == agyAgent:
 			// Herdr drives the pane (agent.prompt, the keys). Agy can also read its verified conversation (workagent.go).
+			// Its mode, effort and model are its start's, so no chips (session.modes refuses, workAgentCalls); every other
+			// operation stays as for a terminal row that says none. Not on a stopped one, which says none (stoppedAgent).
+			if s.Capabilities == nil && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
+				s.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Interrupt: true, Approve: true, Terminal: true, Modes: proto.CanModes(false)}
+			}
+			hasRuntimeRow := false
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
-				if s.Model == "" {
-					if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+				if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+					hasRuntimeRow = true
+					if s.Model == "" {
 						s.Model = runtimeRow.Model
 					}
+					if s.ContextTokens == 0 && runtimeRow.ContextTokens > 0 {
+						s.ContextTokens = runtimeRow.ContextTokens
+					}
+					if s.ContextWindow == 0 && runtimeRow.ContextWindow > 0 {
+						s.ContextWindow = runtimeRow.ContextWindow
+					}
+					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
+						s.OutputTokens = runtimeRow.OutputTokens
+					}
+				}
+			}
+			if a.Agent == agyAgent {
+				if hasRuntimeRow {
+					n.resolveAgyContextWindow(&s)
+				} else {
+					n.mergeAgyTranscript(&s, agyConversations[id])
 				}
 			}
 		case otherAgent(a):
@@ -305,6 +335,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 				s.SetAliases(aliases)
 			}
+		} else if s.Agent == agyAgent {
+			n.resolveAgyContextWindow(s)
 		}
 		seen[s.SessionID] = true
 		if j != i {
@@ -362,7 +394,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.observedRunning(s.SessionID)
 			n.noteGatewayRunning(s)
 		}
-		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
+		if earlier[s.SessionID] || n.isRoundFork(s.SessionID) || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
 		if n.listBlocked(s.SessionID, s.Cwd) {
@@ -466,6 +498,7 @@ func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState,
 	if ok {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
+		s.SetCreationID(st.CreationID)
 		s.OffLauncher = n.offLauncher(s.SessionID) // its claude not started by Persona's command (offlauncher.go)
 		if st.TaskExecution {
 			classifyTaskTurnFailure(s)
@@ -474,10 +507,10 @@ func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState,
 			model := st.Model
 			s.RequestedModel = &model
 		}
-		// A row without a pane is listed where its record says it started, when that is an assistant or health
+		// A row without a pane is listed where its record says it started, when that is an assistant or space
 		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
-		if identity.InHealthSpace(st.Cwd) {
-			s.Space = identity.SpaceHealth
+		if sp := identity.SpaceAt(st.Cwd); sp != "" {
+			s.Space = sp
 		}
 		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
 			s.Cwd = st.Cwd

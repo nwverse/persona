@@ -94,9 +94,15 @@ type Placement struct {
 	// SupervisionBatchMinutes is manager.json's administrator-pinned routine supervision interval. Nil leaves the
 	// assistant's saved setting in effect; an explicit zero pins immediate delivery through the legacy cadence.
 	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
+	// TaskExecutionWaitSeconds bounds pre-delivery waits for a node with scheduled execution support (default 600).
+	TaskExecutionWaitSeconds *int `json:"task_execution_wait_seconds,omitempty"`
+	// TaskExecutionLegacyFallback permits only attested inherited ordinary tasks to omit task_execution on old nodes.
+	TaskExecutionLegacyFallback *bool `json:"task_execution_legacy_fallback,omitempty"`
+	// NodeUpdateHandoffGraceSeconds bounds natural-idle update waits before new headless turns are refused (default 60).
+	NodeUpdateHandoffGraceSeconds *int `json:"node_update_handoff_grace_seconds,omitempty"`
 }
 
-// DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList.
+// DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList and fleet-wide DeviceInteractionsList.
 type DeviceCall struct {
 	Device string          `json:"device"`
 	Method string          `json:"method"`
@@ -128,7 +134,7 @@ const (
 	// DeviceDevicesList (on DeviceAll): {} → {devices: [Device], phone_online, apps: [ClientApp]}, the user's machines
 	// and the Persona apps that last said their version (apps: absent from a hub from before).
 	DeviceDevicesList = "devices.list"
-	// DeviceInteractionsList (on DeviceAll): {} → {interactions}, what the machines' agents wait on the user for.
+	// DeviceInteractionsList (on DeviceAll or a machine id): {} → {interactions}, what the machines' agents wait on the user for.
 	DeviceInteractionsList = "interactions.list"
 	// DeviceSessionsList: {} → {sessions}, the machine's sessions as the apps get them (state, titles).
 	DeviceSessionsList = "sessions.list"
@@ -296,6 +302,8 @@ type Notification struct {
 	LongMS int64 `json:"long_ms,omitempty"`
 	// Todo is a NotifyDecide push's to-do and the round of its decision.
 	Todo *NotifyTodo `json:"todo,omitempty"`
+	// Health is a NotifyHealthWater reminder's button context.
+	Health *NotifyHealth `json:"health,omitempty"`
 	// LinkCovered: a NotifyInput push's card is what the manager's Persona Link summary shows for its agent and rings
 	// for (the card that stands for it, notifying, among the listed items), so a Persona Link desktop of the manager's
 	// may stand in for the phone's push ("Phone Muted", docs/operations/link.md "Presence"). Older managers leave it
@@ -310,6 +318,11 @@ type Notification struct {
 	// RelatedKey links the push to what it is about (a to-do id, a PR URL, a subject): in low-distraction mode the same key pushes
 	// at most once in 12 hours, and same-minute P1 conclusion pushes with it merge into one intercepted entry.
 	RelatedKey string `json:"related_key,omitempty"`
+	// Depth is how long the owner needs for it (attention.go): DepthQuick ("" too) or DepthDeep, which fragment mode
+	// keeps for a block of time instead of interrupting. Track is the track the push comes from ("" for none), which
+	// immersive mode lets through when it is the track in focus. Older hubs drop both.
+	Depth string `json:"depth,omitempty"`
+	Track string `json:"track,omitempty"`
 }
 
 // Push levels a Notification may carry (hub low-distraction mode, docs/server/server.md "Push policy").

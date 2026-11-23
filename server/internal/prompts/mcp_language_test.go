@@ -10,8 +10,9 @@ import (
 	"testing"
 )
 
-// Recorded from the unlocalized upstream tool inventory. This covers the
-// description and schema of every tool, not only a representative golden.
+// Recorded from the unlocalized upstream tool inventory, including task_plan
+// ownership (#13362) and agent_supervise leader adoption (#13357). This covers the description and
+// schema of every tool, not only a representative golden.
 func TestMCPLegacyBytes(t *testing.T) {
 	raw, err := os.ReadFile("testdata/mcp_legacy.json")
 	if err != nil {
@@ -21,7 +22,14 @@ func TestMCPLegacyBytes(t *testing.T) {
 	if err := json.Unmarshal(raw, &expected); err != nil {
 		t.Fatal(err)
 	}
-	if len(expected) != len(mcpTools()) {
+	// Unified-ledger tools were introduced after the frozen legacy inventory.
+	newTools := []string{"decision_record", "decisions_query", "space_state_update"}
+	for _, name := range newTools {
+		if _, exists := expected[name]; exists {
+			t.Fatalf("%s is not a legacy tool", name)
+		}
+	}
+	if len(expected)+len(newTools) != len(mcpTools()) {
 		t.Fatal("legacy inventory changed; classify new tools explicitly")
 	}
 	for name, want := range expected {

@@ -130,6 +130,32 @@ function before trusting it.
 - The system's CPU and memory kills leave no `Persona-…` crash log: ask for the `cpu_resource` or `JetsamEvent` entry
   under Analytics Data instead.
 
+## A freeze only the device has: sample it on the device (2026-11-22, #12318)
+
+An iPhone Duo froze, then was killed (`0x8BADF00D`, scene-update), when Persona was dragged from split screen to full
+screen while an Agent's reply streamed. The report's one main-thread stack was SwiftUI layout under the live resize
+(`_computeMetricsAndCrossFadeInLiveResize` → the transition's alongside block → `layoutBelowIfNeeded`), with no app frame.
+
+- **Hours on simulators did not reproduce it.** Duo fold / unfold / turn and an iPad's windowed live resize all
+  finished; no simulator has both the phone idiom and an in-place live resize.
+- **Measure main-thread CPU, not wall time, on a loaded Mac.** At load ~130 the watchdog's "blocks" of several seconds
+  were the thread waiting for a core. `ps -M -p <pid>`: the first row is the main thread; its STIME and UTIME are the
+  7th and 8th columns (reading the 6th and 7th dropped the user time and made every change look free).
+- **The report's CPU line says loop or wait.** "Elapsed application CPU time" close to the 10 s window means the main
+  thread spun; it did here.
+- **What found it:** a Debug build whose main-thread watchdog keeps sampling while blocked and appends the stacks to
+  Documents (they survive the kill), pulled with `devicectl device copy from --domain-type appDataContainer`. A
+  second build logged each `UICollectionView` layout pass and each cell's self-sizing while blocked (swizzled, never
+  committed). The block lasted 88 s, then a CPU-limit kill. The log showed the sidebar's Agents `List` given a
+  different frame on every pass (331.67 / 72.3 pt left safe area, then 322.67 / 81.7, a three-pass cycle), cell heights
+  unchanged, `AssistantSidebar` re-rendering each time: a value written from layout moving the layout (P7).
+- **The fix, checked the same way.** The line the rows stand on (`rowsLeading`) is measured inside the list and pads the
+  head and the main row above it; under the Duo's side safe area it briefly read 89.67 pt. The head and main row now
+  take the column's width and no more, and the write is guarded against echoes (`LayoutEchoGuard`). On the device the
+  drag no longer blocked, and the guard never had to refuse a write: the cap is what broke the loop.
+- Symbolicate system frames from Xcode's DeviceSupport copy (`…/iOS DeviceSupport/<device> <os>/…/Symbols`) with
+  `atos -l <__TEXT vmaddr>` and `vmaddr + offset`; Objective-C UIKit methods resolve, Swift internals of SwiftUI do not.
+
 ## A device's freeze report names its build: check it before reproducing (#9173)
 
 An iPhone Duo froze scrolling up an Agent chat, at the same answer each time, until the watchdog killed it
@@ -181,6 +207,29 @@ the fix and 448 KB after; the Assistant page went from 906 to 573 KB and a conve
   `AnyView` at its stage boundaries, and lift heavy members (a big struct, a binding to a big value) out of the chain
   into a view or modifier of their own. Lower the ceiling or the baseline in the same change when a page or function
   improves; never raise one.
+
+## A closure as a lock's whole state grows on every read (2026-11-22, #12624)
+
+A TestFlight iPhone with Developing Persona on crashed in the stack guard of a URLSession delegate-queue thread: ICU and
+Foundation frames on top, under `DevRecorder`, under two reabstraction thunks for
+`(NSURLSessionTask, NSURLSessionTaskMetrics) -> ()` that alternated down to `@objc HubRedirects.urlSession(_:task:didFinishCollecting:)`.
+`HubRedirects.finished` kept its closure as the bare state of `OSAllocatedUnfairLock<(@Sendable (…) -> Void)?>`.
+`withLock` passes the state `inout`, and a function type in a generic's storage sits at the most general abstraction.
+So Swift copies it into a concrete temporary and writes it back on return, wrapped in two more thunks, on a read
+(`withLock { $0 }`) too. Each finished request read it once, so each request made the next call two frames deeper.
+A few thousand requests in one launch made a call deeper than the thread's 512 KB, and the crash landed wherever the
+stack ran out.
+
+- Never make a function type (or an optional, or a tuple holding one) the whole state of `OSAllocatedUnfairLock`,
+  `Mutex` or any other generic `inout` container that is read often: put it in a struct
+  (`struct Observer { var finished: … }`) and read the field. Measured with Xcode 27.2: bare state, 1,000 reads add
+  ~80 KB to one call, at `-Onone` and `-O` alike; in a struct, nothing. `HubRedirectsObserverTests` checks it.
+- MetricKit's call stacks drop the repeating middle of a deep stack. Two frames alternating with nothing between them,
+  under an `@objc` delegate thunk, can be a chain of closures rather than recursion in the code.
+- No dSYM for the build (the archive was not kept): a Release rebuild of the same commit gets another UUID, and its
+  addresses drift by tens of KB, so `atos` gives plausible wrong names. Use it to find the neighborhood, then match the
+  structure: which module's code is there, functions that sit next to each other, the calls each return address
+  follows. Then prove the mechanism by disassembling the rebuild and with a standalone repro.
 
 ## Keep a control's accessibility identifier off its surrounding container (#7033)
 
@@ -472,6 +521,14 @@ pushing on that stack. Mac also needs an attached presenter for `detailTask`, no
 full task cards with compact dispatch links, stop filtering hand-offs as though the removed card still drew its
 instruction list, or Persona's messages silently disappear. Keep those messages as folded feed lines.
 
+## A fallback response can arrive after the authoritative one (#8236)
+
+Two endpoints that describe the same object need an arrival-order rule, not last-response-wins for the merged object. The
+flat `/assistant/leaders` answer supplies outside-direction names and targets but no counts; a slower flat answer landing
+after `/assistant/directions/tree` replaced the tree entry and intermittently removed the row's counts and running mark.
+Merge newly announced fallback rows with the held tree rows, and let the tree win per direction. Test the inverted order
+with a gated FakeHub response: a fixed sleep makes this race look random and misses the actual state transition.
+
 ## Example-domain labels must be generic too (#3593)
 
 An `example.com` suffix does not make its hostname label anonymous: the label can still match a configured private machine value and block both app and web prebuild privacy scans. Use neutral fixture labels and change the expected route together, preserving trimming, encoding and forwarding assertions. Do not exempt a private value just because it appears in test data.
@@ -503,6 +560,16 @@ wrapper before doing any work. An `upload_started` checkpoint with no remote bui
 or is not visible yet: retry that same commit and build number. An already visible build is only processed and checked,
 never uploaded a second time. A locked login screen can leave extension `codesign` waiting indefinitely for keychain
 authorization; that is not archive success or a TestFlight upload.
+
+## App Review wants HealthKit named Apple Health where it is used (2026-11-22, #13118)
+
+Guideline 2.5.1 rejected 1.0.0: "The app uses the HealthKit or CareKit APIs but does not clearly identify the HealthKit
+and CareKit functionality in the app's user interface." The app called the source only "Health" in Settings › Connectors
+› This iPhone and said "Apple Health" in Health's Data Sources, below the chats and memory; the reviewer, on an iPad in
+Demo Mode, found neither. Name it **Apple Health** with the Health app's icon (`Theme.Brand.iosHealth`) wherever the
+data is read or saved, near the top of the page that uses it, and tell App Review in the review notes where to look (the
+Health page's Works with Apple Health row, then the switch it opens). The rejection itself is readable only in App Store
+Connect's Resolution Center (the web, or `asc web review show` with a web session), not through the API key.
 
 ## Device names in Siri intent descriptions (#3113)
 
@@ -2125,6 +2192,12 @@ Screenshots miss user-reported instability and probes can report false jumps; fr
 - Sidebar `NavigationLink(value:)` does not populate bound `path` on iOS 26: when `NavigationSplitView` pushes into detail, `NavigationColumnState.ejectAll` clears `path`,
   leaving the opened page absent. `RootView` width-switching between shell and tabs cannot restore from `path`;
   reopen from separately recorded `dev.openChat`. Shared model paths also fail because the incoming split tree clears them too.
+- The page such a link opens cannot push either (#12035): on the iPad's Settings sheet Appearance & Display opened, `settingsPath` stayed empty, and none of its
+  rows opened anything (the iPhone's one stack was fine). A list in a split opens its pages through `path` (`splitOpen`) with buttons, as the Agents list does
+  (`SettingsListLink`). Two ways of keeping the system's highlight on the open row failed: plain rows with a `tag` in a `List(selection:)` were not
+  selectable in the sheet's list column (VoiceOver read them as text); links of `AnyHashable(page)` in a `List(selection: AnyHashable?)` selected natively,
+  but then the split cleared every path a link or a launch switch set, so those pages opened and went at once (`testLegacySettingsPathsStillOpen` on an
+  iPad). Pushed onto the path, a first page inherits the root's title mode: Settings' root asks for large titles.
 
 ## PiP sources must survive their window, be normally sized, and start on user taps (2026-11-05, #1839)
 
@@ -3182,3 +3255,58 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
   Cancel the loser by its owner, so a late completion cannot install a route or close the next recovery's tunnel.
 - Test a server that accepts TCP but never sends its SSH greeting, and use controlled route continuations. Killing
   an established test sshd session alone does not exercise pending-dial cancellation or foreground request ordering.
+
+## The To-dos foot toolbar and its list (2026-11-22, #10465)
+
+- **A list row's traits belong on its outermost view.** The To-dos rows set `listRowInsets` inside their cell view,
+  under `.swipeActions` and `.contextMenu`, with `.onAppear`, `.onGeometryChange` and `.id` added outside it by the list.
+  The list never read them: every row kept the system's margins on every side, 20 to 30 pt taller than drawn on paper
+  and, on iOS 18 and 27, 20 pt inside the card instead of 16 (iOS 26.3's own 16 hid it sideways). Set last, after the
+  `.id`, the rows came out at the spec's height (a two-line row 101 → 71 pt). The fold line, a `Button` with the
+  modifier on it directly, had honored it all along, which is how the difference showed: measure a row against a
+  line whose insets are known. `TodosV1ListTests.testTheRowsAreCompact` checks the cell's height against its words.
+- **A bottom-bar item whose label changes kind can draw empty.** One `ToolbarItem(placement: .bottomBar)` whose label
+  switched from a `Label` (the Filter at rest) to an `HStack` of the glyph and a `Text` (a choice on) was drawn empty on
+  iOS 26.3. Two items, one per form, chosen on the view, draw both.
+- **A list row does not say it went under a bar.** `onScrollVisibilityChange` never reported the guard line as gone
+  while the navigation bar covered it. Compare the row's `frame(in: .scrollView)` with the list's top inset from
+  `onScrollGeometryChange` instead; a reused cell reports nothing more once off screen, so the last value stands.
+- **Menus on iOS 26 and later carry no accessibility identifiers on their items.** A UI test finds an item of a menu
+  with a fixed order (`.menuOrder(.fixed)`) by its place in the menu's collection view, its identifier first where the
+  OS keeps it.
+- **iOS 18 sets a row's insets only all four at once** (`listRowInsets(.horizontal, …)` is iOS 26):
+  `SystemCompat.listRowHorizontalInsets` leaves iOS 18's headers at the system's.
+- **Back from a page without the foot toolbar, a list at its very end sat lower** (iOS 27.2, 52 pt in the UI test):
+  while the pushed page is in front the list's foot inset loses the toolbar, the list is held to that shorter end, and
+  the toolbar's inset comes back without moving it up again. `TodoListView.backToTheEnd` scrolls a list that rested at
+  its end to its last row's top for a second after the pop, which the list cannot reach, so it stops at its end;
+  `testTheListStaysWhereItRested` swipes to the end and fails without it. Where the list rested is read when a scroll
+  phase ends; a move the page makes itself (`scrollTo`, a search narrowing the list) ends none, so it clears the value
+  (`TodoListSight.moved`), or Back would pull a list the page had moved to its end.
+- **A section header's id scrolls its rows to the top, not the header.** `ScrollViewProxy.scrollTo(<header id>,
+  anchor: .top)` in an inset grouped `List` left the header under the navigation bar. To put a list at its top, scroll
+  its first row to the foot of what is in sight (`anchor: .bottom`): the list cannot go that far up and stops at its top.
+- **Under an inline title, iOS 18's search drawer starts hidden** until a pull (the placement `pageSearchable` picks),
+  so a calm list showed no way to search. `.navigationBarDrawer(displayMode: .always)` keeps it shown.
+
+## Deleting a never-compiled branch moves the source-reading tests (2026-11-23, #13399)
+
+- The tests and scripts that read Swift source as text count lines inside every `#if` branch, compiled or not:
+  `TokenRatchetTests` (literal design values), `ContinuousMotionTests` (its loop registry) and the perf and isolation
+  baselines. So deleting dead `os(macOS)` branches lowered a file's `rawSymbol` count and left a registry entry whose
+  only loop was the Mac's: both tests fail until the baseline or registry is lowered in the same PR. `SheetCloseTests`
+  is the one that already skipped Mac-only branches (`iPhoneSource`).
+- A mechanical deletion can still leave a compiler warning behind: a `var` that only the removed branch mutated
+  (`ExtensionPageView.updateVisibility`). Read the build's warnings for the changed files, not only its errors.
+- `scripts/test/test_apple_no_macos_branches.py` keeps new `os(macOS)` and `canImport(AppKit)` branches and
+  `import AppKit` out of the app targets, `Shared/` and the tests. Packages whose `Package.swift` declares a macOS
+  platform are left out: the Persona Link helper builds `PersonaScreenCore` for macOS, so a branch there is live.
+- A condition is decided by the platforms its folder builds for, not by the platforms Apple has: `apple/Persona/` builds
+  for iOS and visionOS only (the Vision app compiles it too), `Shared/` for those and watchOS, the tests for iOS. So
+  `#if os(iOS) || os(visionOS)` in `apple/Persona/` is always true and its `#else` never compiles, and
+  `canImport(UIKit)` is true everywhere; write no such branch. Check a folder's platforms in `apple/project.yml`
+  (every target's `sources`) before assuming: `LiveActivity/`, `PersonaShare/` and `PersonaNotify/` build for visionOS
+  too.
+- Members a deletion leaves constant (a `Bool { false }`, a modifier that returns `self`, a parameter only ever passed
+  its default) go with it, or the next reader keeps working around a Mac that is not there (#13399's last PR removed
+  `MacHover`, `MacSelectingList`, `DeferredDefaults`, `StyleSpec.MacChrome` and `kbOpenEntry`, which nothing set).

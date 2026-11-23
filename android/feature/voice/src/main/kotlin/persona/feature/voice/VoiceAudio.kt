@@ -177,7 +177,7 @@ internal class AndroidVoiceAudio(context: Context) : VoiceAudio {
                     if (chunk != null) output.write(chunk, 0, chunk.size)
                 }
             } finally {
-                runCatching { output.pause(); output.flush(); output.stop() }
+                val _ = runCatching { output.pause(); output.flush(); output.stop() }
                 output.release()
                 if (speaking) listener.onSpeaking(false)
             }
@@ -195,7 +195,7 @@ internal class AndroidVoiceAudio(context: Context) : VoiceAudio {
         effects = listOfNotNull(
             if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(input.audioSessionId) else null,
             if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(input.audioSessionId) else null,
-        ).onEach { effect -> runCatching { effect.enabled = true } }
+        ).onEach { effect -> val _ = runCatching { effect.enabled = true } }
         input.startRecording()
         if (input.recordingState != AudioRecord.RECORDSTATE_RECORDING) { input.release(); return null }
         recorder = input
@@ -230,7 +230,7 @@ internal class AndroidVoiceAudio(context: Context) : VoiceAudio {
             } catch (error: Exception) {
                 if (!closed) { Log.w(Tag, "microphone stopped", error); listener.onMicrophoneLost() }
             } finally {
-                runCatching { input.stop() }
+                val _ = runCatching { input.stop() }
                 input.release()
             }
         }, "voice-mic").apply { start() }
@@ -257,7 +257,7 @@ internal class AndroidVoiceAudio(context: Context) : VoiceAudio {
         }
         queue.clear()
         threads.forEach { it.interrupt() }
-        held.forEach { runCatching { it.release() } }
+        held.forEach { val _ = runCatching { it.release() } }
         // The player and the microphone release their own device when their threads end; one never started is ours.
         if (player == null) track?.release()
         if (mic == null) recorder?.release()

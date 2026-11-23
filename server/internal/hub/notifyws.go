@@ -36,7 +36,7 @@ func (w pushWants) fn() func(NotifyPrefs) bool {
 // devices: a member's computers are the center's machines. owner is the manager that asked for it: the devices that
 // turned its pushes off get none (NotifyPrefs.MutedManagers).
 func (h *Hub) notifyDone(owner, kind, machineID, machine, sessionID, title, text string, wants pushWants) {
-	h.notifyDoneUnder(owner, kind, machineID, machine, sessionID, title, text, wants, "", "", pushPolicy{level: levelFor(kind, "")})
+	h.notifyDoneUnder(owner, kind, machineID, machine, sessionID, title, text, wants, "", "", pushPolicy{level: levelFor(kind, ""), done: kind == assistantwire.NotifyDone})
 }
 
 // pushOutcome is where one push went: the devices it was handed to now (a push route, a ws_notify connection or a
@@ -77,7 +77,10 @@ func (h *Hub) notifyDoneUnder(owner, kind, machineID, machine, sessionID, title,
 	}
 	policy.manager, policy.title, policy.body = owner, title, text
 	pushSelected, pushReachable, heldReason := h.push.sendFromPolicy(owner, policy, build, collapseID, wants.fn(), wants.quiet(), nil, nil)
-	ws := h.notifyWSFrom(owner, kind, build, wants.fn(), wants.quiet())
+	var ws wsReach
+	if heldReason == "" {
+		ws = h.notifyWSFrom(owner, kind, build, wants.fn(), wants.quiet())
+	}
 	return pushOutcome{devices: pushSelected + ws.selected, reachable: pushReachable + ws.reachable, kept: ws.kept, held: heldReason}
 }
 
@@ -115,8 +118,9 @@ func (h *Hub) notifyReplyKeyed(owner, machineID, machine, sessionID, title, text
 	build := func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }
 	wants := pushWants{Kind: "input"}
 	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: replyKey(sessionID, text, key), title: title, body: text}
-	h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil)
-	h.notifyWSFrom(owner, "reply", build, wants.fn(), wants.quiet())
+	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil); heldReason == "" {
+		h.notifyWSFrom(owner, "reply", build, wants.fn(), wants.quiet())
+	}
 }
 
 // replyKey is the related key of a reply reminder: the manager's when it named one, else the session and a digest of
@@ -144,8 +148,9 @@ func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text str
 	// One key a round: the same decision does not ring twice in 12 hours, but a new round of it (asked again) does.
 	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: "todo:" + todo.ID + "@" + todo.AskedAt.UTC().Format(time.RFC3339Nano),
 		title: title, body: text}
-	h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, nil)
-	h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
+	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, nil); heldReason == "" {
+		h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
+	}
 }
 
 // notifyInteraction pushes a new card. linkCovered: owner says its Persona Link summary rings for this card
@@ -158,6 +163,12 @@ func (h *Hub) notifyInteraction(owner string, ix proto.Interaction, machine stri
 // "" is a card's own, P0 keyed by the card. A supervisor's escalation names P1 when what it asks is not the owner's
 // alone, and low-distraction mode then holds it for the "Needs you" list instead of alerting.
 func (h *Hub) notifyInteractionAt(owner string, ix proto.Interaction, machine string, linkCovered bool, level, key string) {
+	h.notifyInteractionHinted(owner, ix, machine, linkCovered, level, key, "", "")
+}
+
+// notifyInteractionHinted is notifyInteractionAt with what an attention mode reads of the card (push_attention.go): its
+// depth (assistantwire.DepthDeep for a plan or a long review) and the track it comes from ("" for none).
+func (h *Hub) notifyInteractionHinted(owner string, ix proto.Interaction, machine string, linkCovered bool, level, key, depth, track string) {
 	switch level {
 	case assistantwire.LevelP0, assistantwire.LevelP1, assistantwire.LevelP2:
 	default:
@@ -179,17 +190,19 @@ func (h *Hub) notifyInteractionAt(owner string, ix proto.Interaction, machine st
 	if ix.Kind == proto.IxElicitation {
 		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,
 		// the push has no buttons) and the connections that declared it.
-		policy := pushPolicy{level: level, relatedKey: key, title: summary}
-		h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation)
-		h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
+		policy := pushPolicy{level: level, relatedKey: key, title: summary, depth: depth, track: track}
+		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation); heldReason == "" {
+			h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
+		}
 	} else {
 		// A card owner's Persona Link summary rings for: "Phone Muted" holds it back while one of owner's Persona Link
 		// desktops is there too (desktops.go); which cards those are is owner's to say. The desktop app's online check
 		// follows in sendCard and notifyWSFrom.
 		fn := alertWanted(wants.fn(), linkCovered && h.linkDesktopOnline(owner))
-		policy := pushPolicy{level: level, relatedKey: key, title: summary}
-		h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil)
-		h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
+		policy := pushPolicy{level: level, relatedKey: key, title: summary, depth: depth, track: track}
+		if heldReason := h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil); heldReason == "" {
+			h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
+		}
 	}
 }
 
@@ -241,6 +254,7 @@ func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(Not
 	if rule != quietNone && h.push != nil {
 		now, loc = h.push.now(), h.userLocation()
 	}
+	hushAll := rule == quietHushAll || h.push.attentionHushes() // the stricter of quiet mode and quiet hours
 	// wantsOn is whether device's settings take it, and whether inside its quiet hours (posted without a sound).
 	wantsOn := func(device string) (ok, quiet bool) {
 		prefs := defaultPrefs()
@@ -251,6 +265,10 @@ func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(Not
 			return false, false
 		}
 		quiet = rule != quietNone && prefs.Quiet.activeAt(now, loc)
+		if hushAll {
+			// Quiet attention mode, or a push it already hushed: posted without a sound, never skipped for it.
+			return !(quiet && rule == quietSkip), true
+		}
 		return !(quiet && rule == quietSkip), quiet
 	}
 	var reach wsReach
@@ -307,6 +325,9 @@ func notifyMessage(kind string, payload map[string]any) map[string]any {
 	}
 	if td, ok := payload["todo"]; ok { // a decision's push (decidePayloadIn)
 		msg["todo"] = td
+	}
+	if health, ok := payload["health"]; ok {
+		msg["health"] = health
 	}
 	if id, ok := payload["recording_id"]; ok { // a meeting's minutes (notifyDoneUnder)
 		msg["recording_id"] = id

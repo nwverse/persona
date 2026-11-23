@@ -24,6 +24,7 @@ newAssistant
 openAbout
 openAgent
 openAgentsFresh
+openAlarms
 openAllWork
 openAppearance
 openAssistant
@@ -188,7 +189,9 @@ openTerminalTips
 openTerminalsPage
 openThreadAt
 openTodoDetail
+openTodoPlace
 openTodoTitled
+openTodosChoice
 openTokenUsage
 openTranslationSettings
 openTriageSettings
@@ -330,6 +333,8 @@ showLauncherCheck
 showLauncherHelp
 showLiftLines
 showListOffset
+showLocationAlwaysOffer
+showLocationLevel
 showLookBlink
 showLoopDraft
 showMacDropCover
@@ -441,6 +446,7 @@ showUnlockWithoutAuth
 showUpcomingSample
 showUrgentCallSample
 showUrgentCallSampleTitle
+showUsageCardsDemo
 showViewerChromeHidden
 showViewerDecodeDelay
 showViewerDecodeDuringPan

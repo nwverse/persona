@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/nodeproto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // pluginSocket serves n's node socket at a short path of its own (the node's own path is the user's), and gives a
@@ -60,27 +62,35 @@ func pluginPost(t *testing.T, c *http.Client, what string, body map[string]any) 
 
 // fakePlugin is Persona's plugin in a session: it polls, and does with each message what its mode says. "submit"
 // writes the prompt into the transcript as Claude Code does for a plugin's asUser prompt, then says submitted;
-// "refuse" says it did not submit; "silent" takes the message and does nothing.
+// "queue" writes the queue entry Claude Code writes for one submitted while a turn runs or a dialog waits, then says
+// submitted; "refuse" says it did not submit; "silent" takes the message and does nothing.
 type fakePlugin struct {
 	t          *testing.T
 	c          *http.Client
 	session    string
 	transcript string
 
-	mu   sync.Mutex
-	mode string
-	got  []map[string]any
+	mu    sync.Mutex
+	mode  string
+	got   []map[string]any
+	ready chan struct{} // the first authenticated HTTP poll completed
 }
 
 func startFakePlugin(t *testing.T, c *http.Client, session, transcript, mode string) *fakePlugin {
-	p := &fakePlugin{t: t, c: c, session: session, transcript: transcript, mode: mode}
+	return startFakePluginAs(t, c, session, transcript, mode, "0.1.0", nil)
+}
+
+// startFakePluginAs is startFakePlugin for a plugin of version with capabilities (0.2.0: busy_input, interrupt).
+func startFakePluginAs(t *testing.T, c *http.Client, session, transcript, mode, version string, caps []string) *fakePlugin {
+	p := &fakePlugin{t: t, c: c, session: session, transcript: transcript, mode: mode, ready: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	t.Cleanup(func() { cancel(); <-done })
 	go func() {
 		defer close(done)
+		var ready sync.Once
 		for ctx.Err() == nil {
-			b, _ := json.Marshal(map[string]any{"session_id": session, "plugin_version": "0.1.0", "engine_version": "2.1.308", "wait_ms": 1000})
+			b, _ := json.Marshal(map[string]any{"session_id": session, "plugin_version": version, "engine_version": "2.1.308", "capabilities": caps, "wait_ms": 1000})
 			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://persona/claude-plugin/v1/poll", strings.NewReader(string(b)))
 			res, err := c.Do(req)
 			if err != nil {
@@ -93,8 +103,11 @@ func startFakePlugin(t *testing.T, c *http.Client, session, transcript, mode str
 			var answer struct {
 				Messages []map[string]any `json:"messages"`
 			}
-			_ = json.NewDecoder(res.Body).Decode(&answer)
+			decodeErr := json.NewDecoder(res.Body).Decode(&answer)
 			res.Body.Close()
+			if res.StatusCode == http.StatusOK && decodeErr == nil {
+				ready.Do(func() { close(p.ready) })
+			}
 			for _, m := range answer.Messages {
 				p.take(m)
 			}
@@ -114,6 +127,15 @@ func (p *fakePlugin) take(m map[string]any) {
 		line, _ := json.Marshal(map[string]any{"type": "user", "uuid": newUUID(), "sessionId": p.session,
 			"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "message": map[string]any{"role": "user", "content": text},
 			"origin": map[string]any{"kind": "plugin", "name": "persona", "asUser": true}, "promptSource": "system"})
+		f, err := os.OpenFile(p.transcript, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err == nil {
+			_, _ = f.Write(append(line, '\n'))
+			_ = f.Close()
+		}
+		pluginPost(p.t, p.c, "ack", map[string]any{"session_id": p.session, "id": m["id"], "submitted": true})
+	case "queue":
+		line, _ := json.Marshal(map[string]any{"type": "queue-operation", "operation": "enqueue", "sessionId": p.session,
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "content": text})
 		f, err := os.OpenFile(p.transcript, os.O_APPEND|os.O_WRONLY, 0o600)
 		if err == nil {
 			_, _ = f.Write(append(line, '\n'))
@@ -209,15 +231,17 @@ func TestCCPluginOnlyForTheOwner(t *testing.T) {
 }
 
 // When the plugin route does not go, the owner's message goes through the inbox and the answer says why: a session
-// at work, no plugin, a plugin that will not submit it, one that takes it and shows nothing before its deadline.
+// at work whose plugin is one from before busy_input, a state the plugin does not deliver in, no plugin, a plugin that
+// will not submit it, one that takes it and shows nothing before its deadline.
 func TestCCPluginFallsBackToTheInbox(t *testing.T) {
 	for _, c := range []struct {
 		name, status, mode string // mode "": no plugin
 		reason             string
 		pluginGets         int
 	}{
-		{"busy", "busy", "submit", relayBusy, 0},
-		{"behind a dialog", "waiting", "submit", relayBusy, 0},
+		{"busy, a plugin from before busy_input", "busy", "submit", relayOutdated, 0},
+		{"behind a dialog, a plugin from before busy_input", "waiting", "submit", relayOutdated, 0},
+		{"a state the plugin does not deliver in", "starting", "submit", relayBusy, 0},
 		{"no plugin", "idle", "", relayNoPlugin, 0},
 		{"refused", "idle", "refuse", relayRefused, 1},
 		{"silent", "idle", "silent", relayUnconfirmed, 1},
@@ -234,6 +258,10 @@ func TestCCPluginFallsBackToTheInbox(t *testing.T) {
 			var plugin *fakePlugin
 			if c.mode != "" {
 				plugin = startFakePlugin(t, pluginSocket(t, n), sidA, p, c.mode)
+				if c.mode == "refuse" {
+					// Finish transport setup and authentication before measuring the short acknowledgement window.
+					<-plugin.ready
+				}
 				waitPolling(t, n, sidA)
 			}
 			res, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "merge it", "client_msg_id": "m-1", "owner_input": true})
@@ -494,5 +522,149 @@ func TestPeerSessionClassHonorsNewerProcessPermissionMode(t *testing.T) {
 	}
 	if got := peerSessionClass(n, proc, sidA); got != peerModeBypass {
 		t.Fatalf("peerSessionClass = %q, want %q", got, peerModeBypass)
+	}
+}
+
+// A session waiting on a permission prompt or a plan to approve takes the owner's message through a busy_input plugin
+// too: Claude Code queues the prompt behind the dialog (measured with 2.1.329), so it goes in as the person's words
+// once the dialog is answered, and the answer says it is queued and waits on the computer. Before, it went through the
+// inbox, which a bypass session can drop without a trace.
+func TestCCPluginQueuesBehindADialog(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 2*time.Second)
+	shortPluginWaits(t)
+	p := bgTranscript(t, home, home, sidA, "plan")
+	inbox := newFakeInbox(t, p)
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "waiting", inbox, map[string]any{"waitingFor": "permission prompt"})
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	plugin := startFakePluginAs(t, pluginSocket(t, n), sidA, p, "queue", "0.2.0", []string{"busy_input", "interrupt"})
+	waitPolling(t, n, sidA)
+
+	res, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "use the staging bucket", "client_msg_id": "m-1", "owner_input": true})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if res["ok"] != true || res["delivered_as"] != "user_input" || res["queued"] != true || res["waits_on_computer"] != true {
+		t.Errorf("answer %v", res)
+	}
+	if got := plugin.messages(); len(got) != 1 || got[0]["text"] != "use the staging bucket" {
+		t.Errorf("the plugin got %v", got)
+	}
+	if len(inbox.users()) != 0 {
+		t.Errorf("the inbox got %v as well", inbox.users())
+	}
+}
+
+// A message the inbox read and the session did not take still says how it went (delivered_as relayed, relay_reason):
+// the app can tell the owner the session's plugin is one from before busy_input, which only a new start of the
+// session replaces, instead of only "not sure it arrived".
+func TestCCPluginUnconfirmedRelaySaysWhy(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 300*time.Millisecond)
+	shortPluginWaits(t)
+	p := bgTranscript(t, home, home, sidA, "plan")
+	inbox := newFakeInbox(t, p)
+	inbox.setMode("discard") // read, then nothing: dropped, refused or expired there
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "busy", inbox, nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	startFakePlugin(t, pluginSocket(t, n), sidA, p, "submit")
+	waitPolling(t, n, sidA)
+
+	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "dispatch the measurements", "client_msg_id": "m-1", "owner_input": true})
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != peerUnconfirmed {
+		t.Fatalf("send: %v", err)
+	}
+	data := map[string]any{}
+	_ = json.Unmarshal(re.Data, &data)
+	if data["delivered"] != deliveredUnknown || data["delivered_as"] != deliveredRelayed || data["relay_reason"] != relayOutdated {
+		t.Errorf("error data %s", re.Data)
+	}
+	// Anyone else's message says nothing of a way it went.
+	_, err = request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "a note from the assistant", "client_msg_id": "m-2"})
+	if !errors.As(err, &re) || re.Code != peerUnconfirmed || strings.Contains(string(re.Data), "relay_reason") {
+		t.Errorf("a message that is not the owner's: %v %s", err, re.Data)
+	}
+}
+
+// Right after the node starts, a session whose claude can have the plugin gets a moment for the plugin's first poll
+// (its backoff after the node went away) before the owner's message goes through the inbox as no_plugin.
+func TestCCPluginWaitsForARestartedNodesPlugin(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		installed, fresh   bool
+		as, reason         string
+		pluginGets, inboxN int
+	}{
+		{"plugin installed, node just started", true, true, deliveredUserInput, "", 1, 0},
+		{"plugin not installed there", false, true, deliveredRelayed, relayNoPlugin, 0, 1},
+		{"node running for a while", true, false, deliveredRelayed, relayNoPlugin, 0, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			n, f, home := herdrNode(t)
+			noPaneEnv(t)
+			shortPeerWait(t, 2*time.Second)
+			shortPluginWaits(t)
+			oldWait, oldInstalled := ccPluginRejoinWait, ccPluginInstalledFor
+			ccPluginRejoinWait = 3 * time.Second
+			entered := make(chan struct{})
+			var installed sync.Once
+			ccPluginInstalledFor = func(_ *Node, dir string) bool {
+				present := c.installed && sameDir(dir, filepath.Join(home, ".claude"))
+				if present {
+					installed.Do(func() { close(entered) })
+				}
+				return present
+			}
+			t.Cleanup(func() { ccPluginRejoinWait, ccPluginInstalledFor = oldWait, oldInstalled })
+			n.bootAt = time.Now()
+			if !c.fresh {
+				n.bootAt = time.Now().Add(-time.Hour)
+			}
+			p := bgTranscript(t, home, home, sidA, "plan")
+			inbox := newFakeInbox(t, p)
+			writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "idle", inbox, nil)
+			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+			client := pluginSocket(t, n)
+			var plugin *fakePlugin
+			params := map[string]any{"session_id": sidA, "text": "carry on", "client_msg_id": "m-1", "owner_input": true}
+			var res map[string]any
+			var err error
+			if c.fresh && c.installed {
+				type result struct {
+					res map[string]any
+					err error
+				}
+				finished := make(chan result, 1)
+				go func() {
+					answer, sendErr := request(t, n, "session.send", params)
+					finished <- result{answer, sendErr}
+				}()
+				select {
+				case <-entered:
+				case early := <-finished:
+					t.Fatalf("send finished before waiting for the returning plugin: %v, %v", early.res, early.err)
+				}
+				plugin = startFakePlugin(t, client, sidA, p, "submit")
+				answer := <-finished
+				res, err = answer.res, answer.err
+			} else {
+				res, err = request(t, n, "session.send", params)
+				// A plugin arriving after a non-rejoining send must not receive that earlier message.
+				plugin = startFakePlugin(t, client, sidA, p, "submit")
+				waitPolling(t, n, sidA)
+			}
+			if err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			if res["delivered_as"] != c.as || (c.reason != "" && res["relay_reason"] != c.reason) {
+				t.Errorf("answer %v", res)
+			}
+			if len(plugin.messages()) != c.pluginGets || len(inbox.users()) != c.inboxN {
+				t.Errorf("plugin %v, inbox %d", plugin.messages(), len(inbox.users()))
+			}
+		})
 	}
 }

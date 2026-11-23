@@ -71,7 +71,7 @@ func (s *Service) feishuRead(ev feishubot.MessageEvent, st FeishuStatus) {
 	if content.Forward {
 		return
 	}
-	task, ok := feishubot.ReadCommand(openingWords(ev, content))
+	task, ok := feishubot.ReadCommand(openingCommandWords(ev, content))
 	if !ok {
 		s.logf("bots: a message marked as a /read was not one: dropped")
 		return

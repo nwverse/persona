@@ -91,7 +91,7 @@ class InboxReportedDetailTest {
         val nodes = rule.onAllNodesWithText(text, useUnmergedTree = true).fetchSemanticsNodes()
         assertEquals("The full original must occur in exactly one exact-text node", 1, nodes.size)
         val layouts = mutableListOf<TextLayoutResult>()
-        nodes.single().config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
+        val _ = nodes.single().config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
         return layouts.single()
     }
 

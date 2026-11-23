@@ -7,7 +7,7 @@
     <string name="app_show_list">显示列表</string>
     <string name="app_tab_settings">设置</string>
     <string name="app_demo_badge">体验</string>
-    <string name="app_try_demo">没有 hub？先体验一下</string>
+    <string name="app_try_demo">体验</string>
     <string name="app_back">返回</string>
     <string name="app_unavailable_phone_tools">当前模式没有可用的手机工具</string>
     <string name="app_demo_no_terminal">体验模式没有终端数据</string>

@@ -1,5 +1,5 @@
 {
-  "name_assistant": "Main chat",
+  "name_assistant": "Conversation defaults",
   "name_agent_new": "Agents",
   "name_kb": "Processing",
   "name_inbox_triage": "Sorting",
@@ -7,6 +7,8 @@
   "name_lark_agent": "Lark /agent",
   "name_inbox_judge": "AI twin judge",
   "name_agent_triage": "Session triage",
+  "name_info_tag": "Information tagging",
+  "name_capture_sort": "Quick capture sorting",
   "name_agent_delegate": "Answering agents' questions",
   "name_inbox_draft": "Draft replies",
   "name_translate": "Text and mail translation",
@@ -28,7 +30,7 @@
   "name_assistant_supervise": "Background supervisor",
   "name_meeting_room": "In-meeting conversation",
   "name_meeting_minutes": "Meeting minutes",
-  "desc_assistant": "Talks with you, splits work into tasks and hands them out. The one conversation you wait on for a reply.",
+  "desc_assistant": "Defaults for new conversations and other Assistant uses unless they have their own settings.",
   "desc_agent_new": "The agents that do the tasks on your computers. A task can still be given its own model when it starts.",
   "desc_kb": "Text work nobody waits on: translation, reply drafts, titles and organizing the knowledge base.",
   "desc_inbox_triage": "Sorts and summarizes what comes into the Inbox and judges its importance. The same model reads why an agent stopped and judges what the AI twin takes up. Many small calls.",
@@ -37,6 +39,8 @@
   "desc_lark_agent": "Agents you start by sending /agent in Lark.",
   "desc_inbox_judge": "Judges whether the AI twin should take up an Inbox item.",
   "desc_agent_triage": "Reads why an agent stopped: finished, waiting on something, or needing you.",
+  "desc_info_tag": "Tags what a conversation says with categories such as health or money, so it is used only where it fits.",
+  "desc_capture_sort": "Sorts what you jot down quickly into one of your spaces and tags its categories, in one short call.",
   "desc_inbox_draft": "Drafts a reply for you to review and send.",
   "desc_translate": "Translates text and mail on its own model, using a low-cost default.",
   "desc_kb_compress": "Compresses long chats and tags them for the knowledge base.",
@@ -150,5 +154,7 @@
   "candidate_not_direct": "{provider} cannot be called directly",
   "candidate_provider_gone": "the provider {provider} is gone or cannot be called directly",
   "err_permission_mode_launcher_only": "Permission mode can only be set on launcher-backed model uses",
-  "err_permission_mode_unsupported": "This launcher does not support the selected permission mode"
+  "err_permission_mode_unsupported": "This launcher does not support the selected permission mode",
+  "name_assistant_main": "Main chat",
+  "desc_assistant_main": "Talks with you and hands out tasks. These settings apply only to the main conversation; new conversations keep their defaults."
 }

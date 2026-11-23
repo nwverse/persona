@@ -12,6 +12,7 @@ import gzip
 import hashlib
 import json
 import os
+import posixpath
 from pathlib import Path, PurePosixPath
 import re
 import ntpath
@@ -202,7 +203,7 @@ def native_digest(path):
 
 def absolute_metadata_path(value):
     return (isinstance(value, str) and value.startswith("/") and
-            "\\" not in value and "\x00" not in value and ".." not in PurePosixPath(value).parts)
+            "\x00" not in value and ".." not in PurePosixPath(value).parts)
 
 
 def read_manifest(path):
@@ -359,13 +360,33 @@ def extract_history(path, destination):
             os.utime(destination / member.name, (member.mtime, member.mtime))
 
 
+def has_new_backslash_component(path):
+    current = path
+    while True:
+        try:
+            os.lstat(current)
+            return False
+        except FileNotFoundError:
+            if "\\" in current.name:
+                return True
+            parent = current.parent
+            if parent == current:
+                return False
+            current = parent
+        except OSError:
+            return False
+
+
 def backup_store(request):
     # The Web UI's folder (already canonical) or hub.json's advanced setting;
     # absent: the recommended directory the Hub has always used.
     directory = request["config"]["backup"].get("directory")
     if directory:
         if (not isinstance(directory, str) or not directory.startswith("/") or
-                "\\" in directory or "\x00" in directory or ".." in PurePosixPath(directory).parts):
+                "\x00" in directory or ".." in PurePosixPath(directory).parts):
+            raise ValueError("invalid backup directory")
+        if "\\" in directory and (posixpath.normpath(directory) != directory or
+                                  has_new_backslash_component(Path(directory))):
             raise ValueError("invalid backup directory")
         store = Path(directory)
     else:
@@ -523,7 +544,13 @@ def snapshot(request):
     # The Hub pauses its own writers and says so (builtin); otherwise the
     # configured hooks must pause every writer this snapshot includes.
     builtin = backup.get("builtin") is True
-    if not builtin and (not backup.get("quiesce") or not backup.get("resume")):
+    if builtin:
+        if backup.get("extra_databases") or backup.get("extra_roots"):
+            raise ValueError("built-in writer pause cannot coordinate extra_databases or extra_roots; configure quiesce and resume commands")
+        manager_root = runtime / "managers"
+        if manager_root.exists() and any(f.parent.name != "assistant" for f in manager_root.glob("*/manager.json")):
+            raise ValueError("built-in writer pause cannot coordinate other local managers; configure quiesce and resume commands")
+    elif not backup.get("quiesce") or not backup.get("resume"):
         raise ValueError("configure writer quiesce and resume commands before updating")
     retain = backup.get("retain") or 3
     if type(retain) is not int or not 1 <= retain <= 50:

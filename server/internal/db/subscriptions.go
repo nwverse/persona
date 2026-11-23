@@ -141,10 +141,11 @@ func (d *DB) SubscriptionSeen(ctx context.Context, id string, uids []string) (ma
 	return out, rows.Err()
 }
 
-// CommitSubscriptionRun writes a run of subscription id at once: merge turns the stored row's data and revision into
-// the data to keep, the new dedup keys and items are added, the held items of read (uids) marked seen, the old keys
-// pruned, and the lease released. A subscription deleted meanwhile keeps nothing.
-func (d *DB) CommitSubscriptionRun(ctx context.Context, id string, merge func(data []byte, revision int64) ([]byte, error),
+// CommitSubscriptionRun writes a run of subscription id at once: after locking the subscription row, it inserts the
+// candidate dedup keys and calls merge with the UIDs actually claimed so its data, new counts and items agree. The
+// held items of read (uids) are marked seen, the old keys pruned, and the lease released. A subscription deleted
+// meanwhile keeps nothing.
+func (d *DB) CommitSubscriptionRun(ctx context.Context, id string, merge func(data []byte, revision int64, claimed map[string]bool) ([]byte, error),
 	seen []SubscriptionSeenRow, items []SubscriptionItemRow, read []string, now time.Time) error {
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
@@ -160,23 +161,51 @@ func (d *DB) CommitSubscriptionRun(ctx context.Context, id string, merge func(da
 	if err != nil {
 		return err
 	}
-	kept, err := merge(data, revision)
-	if err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE subscriptions SET data = $2, lease_until = NULL WHERE id = $1`, id, kept); err != nil {
-		return err
-	}
+	claimed := map[string]bool{}
 	if len(seen) > 0 {
 		uids, hashes := make([]string, len(seen)), make([]string, len(seen))
 		for i, s := range seen {
 			uids[i], hashes[i] = s.UID, s.ContentHash
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO subscription_seen (subscription_id, uid, content_hash, first_seen_at)
+		rows, err := tx.Query(ctx, `INSERT INTO subscription_seen (subscription_id, uid, content_hash, first_seen_at)
 			SELECT $1, u, h, $4 FROM unnest($2::text[], $3::text[]) AS t(u, h)
-			ON CONFLICT (subscription_id, uid) DO NOTHING`, id, uids, hashes, now); err != nil {
+			ON CONFLICT (subscription_id, uid) DO NOTHING RETURNING uid`, id, uids, hashes, now)
+		if err != nil {
 			return err
 		}
+		for rows.Next() {
+			var uid string
+			if err := rows.Scan(&uid); err != nil {
+				rows.Close()
+				return err
+			}
+			claimed[uid] = true
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		candidates := make(map[string]bool, len(seen))
+		for _, k := range seen {
+			candidates[k.UID] = true
+		}
+		// Only candidate UIDs this transaction claimed may produce held items. Callers can still prefilter as a
+		// read optimization, but that stale read is never authoritative across service processes. Low-level items
+		// without a seen candidate keep their legacy behavior (including validation and rollback).
+		fresh := make([]SubscriptionItemRow, 0, len(items))
+		for _, it := range items {
+			if !candidates[it.UID] || claimed[it.UID] {
+				fresh = append(fresh, it)
+			}
+		}
+		items = fresh
+	}
+	kept, err := merge(data, revision, claimed)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE subscriptions SET data = $2, lease_until = NULL WHERE id = $1`, id, kept); err != nil {
+		return err
 	}
 	if len(items) > 0 {
 		// One statement for the run's items: ORDER BY the array position keeps seq in the run's order.

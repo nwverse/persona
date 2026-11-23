@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 )
 
 // When herdr's server restarts it restores its panes and, once a client attaches, resumes the agents in them with its
@@ -33,12 +34,15 @@ const resumeSource = "custom:persona"
 
 // agentLaunch is what an agent in a pane was started with, to start it again the same way.
 type agentLaunch struct {
+	Source modelhttp.Source `json:"model_source,omitzero"`
+
 	AdditionalDirs                   []string `json:"additional_dirs,omitempty"`
 	TaskInstructionFile              string
 	TaskInstructions                 string
 	Agent                            string // "claude" (empty means claude), "codex", "traex", "pi"
 	Launcher, Settings, Hooks, Model string
 	Effort                           string // a work agent's explicit effort, empty for its default
+	Mode                             string // an agy's permission mode (agyModeFlags), empty in a record from before it
 	Display                          string // the live replies plugin's directory, "" for none (liveRepliesPlugin)
 	Plugins                          bool   // claude loads plugins: Persona's plugin directory and office rule
 	ID                               string
@@ -173,7 +177,7 @@ func (n *Node) agentResumeArgv(spec agentLaunch, id string) (argv []string, ok b
 			launcher = n.launcherCommandQ(launcher, dquote)
 			resumeID = spec.AgyConversation
 		}
-		cmd = withHerdrAgent(resumeHerdrAgent(kind), workAgentResume(kind, workAgentCommand(launcher, program, spec.Model, spec.Effort), resumeID))
+		cmd = withHerdrAgent(resumeHerdrAgent(kind), workAgentResume(kind, workAgentCommand(launcher, program, spec.Model, spec.Effort, spec.Mode), resumeID))
 	}
 	cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
 	if !resumeSayable(cmd) || (!validID(id) && !runtimeIDRe.MatchString(id)) {
@@ -200,9 +204,13 @@ func (n *Node) holdResume(ctx context.Context, launch host.Launcher, pane, id st
 		return
 	}
 	spec.ID = id
+	var agyConv string
+	if spec.Agent == agyAgent {
+		agyConv = n.agyConversation(id, pane)
+	}
 	n.mu.Lock()
 	if spec.Agent == agyAgent {
-		spec.AgyConversation = n.agyConversationLocked(id, pane)
+		spec.AgyConversation = agyConv
 	}
 	if n.launches == nil {
 		n.launches = map[string]claudeLaunch{}
@@ -225,20 +233,22 @@ func (n *Node) reportResume(ctx context.Context, h *herdrHost, pane string, spec
 	if cur, ok := n.launches[pane]; ok {
 		spec = cur
 	}
+	n.mu.Unlock()
 	reportID := spec.ID
 	if spec.Agent == agyAgent {
-		spec.AgyConversation = n.agyConversationLocked(spec.ID, pane)
+		spec.AgyConversation = n.agyConversation(spec.ID, pane)
 		if spec.AgyConversation != "" {
 			reportID = spec.AgyConversation
 		}
+		n.mu.Lock()
 		if cur, ok := n.launches[pane]; ok && cur.ID == spec.ID {
 			// What is reported is what the pane resumes: kept, so the server is recorded below and backfill does not
 			// report the same conversation again.
 			cur.AgyConversation = spec.AgyConversation
 			n.launches[pane] = cur
 		}
+		n.mu.Unlock()
 	}
-	n.mu.Unlock()
 	argv, ok := n.agentResumeArgv(spec, spec.ID)
 	if !ok {
 		if spec.Agent == ompAgent && n.ompKnownFile(spec.ID) == "" {
@@ -323,6 +333,12 @@ func (n *Node) backfillResume(agents []host.Agent) {
 	var work []todo
 	var recheck []held
 	var reports []string
+	agyByPane := map[string]string{}
+	for _, a := range agents {
+		if a.Agent == agyAgent && a.PaneID != "" && host.ParsePane(a.PaneID).Kind == host.Herdr {
+			agyByPane[a.PaneID] = n.agyConversation(otherSession(a), a.PaneID)
+		}
+	}
 	n.mu.Lock()
 	for _, a := range agents {
 		if a.PaneID == "" || host.ParsePane(a.PaneID).Kind != host.Herdr {
@@ -335,7 +351,7 @@ func (n *Node) backfillResume(agents []host.Agent) {
 		var agy string
 		if a.Agent == agyAgent {
 			id = otherSession(a)
-			agy = n.agyConversationLocked(id, a.PaneID)
+			agy = agyByPane[a.PaneID]
 		} else if !validID(id) {
 			continue
 		}

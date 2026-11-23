@@ -208,12 +208,8 @@ extension AppModel {
 
     /// Settings, on the page `settingsPath` names, where the caller has no way of its own to it.
     func showSettings() {
-        #if os(macOS)
-        MacShellState.shared.go(.settings, self)
-        #else
         selectedTab = .settings
         if tabRouter != nil { shellSettings = true }
-        #endif
     }
 
     /// Whether `api` was made for the Persona page as it is now (its group and manager): what it read lands.

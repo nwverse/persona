@@ -166,6 +166,10 @@ func (ps *extensions) assistantGates(ctx context.Context, userRules func(connect
 			g := proto.CommandGate{Plugin: p.Record.ID, Command: gf.Command, Script: gf.Script, Title: gf.Title, BaseEnv: gf.BaseEnv,
 				Secret: gf.Secret, AllowedEnv: gf.AllowedEnv, Headers: gf.Headers, PathPrefix: gf.PathPrefix, Actions: gf.Actions, Tool: gf.Tool,
 				Auth: gf.ProxyAuth()}
+			if gf.SocketEnv != "" {
+				// Relayed (#12904): no Auth, so a node from before still runs it on the socket where that is here.
+				g.Relay, g.SocketEnv, g.Auth = true, gf.SocketEnv, nil
+			}
 			if gf.Connector != "" && userRules != nil {
 				g.Rules = append(g.Rules, userRules(gf.Connector)...)
 			}
@@ -226,7 +230,7 @@ func (ps *extensions) assistantCredentials(ctx context.Context, id, contribution
 	out := map[string]string{}
 	for _, n := range names {
 		if v, ok := res.Env[n]; ok {
-			out[n] = v
+			out[n] = extension.HostLoopbackURL(v) // a sandboxed program says host.persona.internal; a gate outside it dials 127.0.0.1 (#13540)
 		}
 	}
 	return out
@@ -283,7 +287,11 @@ func (h *Manager) assistantLark(ctx context.Context) (proto.AssistantLark, error
 	larkRules := append(connector.LarkRules(h.cfg.ConnectorGate, h.cfg.LarkGate), connector.LarkRules(h.connectors.UserRules(), nil)...)
 	out := proto.AssistantLark{Rules: larkRules, Prefer: lc.Prefer}
 	if lc.CLI != nil {
-		out.CLI = &proto.LarkCLI{Bin: lc.CLI.Bin, Profile: h.effectiveLarkCLIProfile(ctx)}
+		profile, err := h.larkCLIExecutionProfile(ctx)
+		if err != nil {
+			return proto.AssistantLark{}, err
+		}
+		out.CLI = &proto.LarkCLI{Bin: lc.CLI.Bin, Profile: profile}
 	}
 	out.Gates = h.extensions.assistantGates(ctx, func(id string) []proto.LarkRule {
 		if id == connector.Lark {

@@ -32,6 +32,12 @@ export type Route =
   // the health space (docs/assistant/health.md): `/health` opens its latest conversation (#4329), `/health/new` its new
   // conversation page (with its past ones), `/health/<id>` one of them
   | { name: "health"; sid?: string; fresh?: boolean }
+  // a domain space (docs/web/web.md "Domain spaces", #13500): `/tracks/<slug>` opens its latest conversation, `/tracks/<slug>/new`
+  // its home (its conversations, SPACE.md, a box to start one), `/tracks/<slug>/<id>` one of them. The health space keeps
+  // its own page: `/tracks/health…` opens /health…
+  | { name: "track"; slug: string; sid?: string; fresh?: boolean }
+  // the new space form (`/tracks/new`)
+  | { name: "track-new" }
   | { name: "profile" }
   // `manager`: whose item it is when that is another manager than the default (`?manager=`, docs/assistant/managers.md
   // "Clients"): two managers may list the same id
@@ -98,6 +104,12 @@ export function parse(path: string, search = ""): Route {
   if (p[0] === "overview") return { name: "home" };
   if (p[0] === "history") return p[1] ? { name: "history", origin: p[1] } : { name: "history" };
   if (p[0] === "health") return p[1] === "new" && !p[2] ? { name: "health", fresh: true } : { name: "health", sid: p[1] || undefined };
+  if (p[0] === "tracks" && p[1] === "new" && !p[2]) return { name: "track-new" };
+  if (p[0] === "tracks" && p[1]) {
+    const fresh = p[2] === "new" && !p[3];
+    if (p[1] === "health") return fresh ? { name: "health", fresh: true } : { name: "health", sid: p[2] || undefined };
+    return fresh ? { name: "track", slug: p[1], fresh: true } : { name: "track", slug: p[1], sid: p[2] || undefined };
+  }
   if (p[0] === "assistant") return { name: "profile" };
   if (p[0] === "inbox") {
     const manager = p[1] ? new URLSearchParams(search).get("manager") : null;
@@ -180,6 +192,12 @@ export function routePath(r: Route): string {
       return r.origin ? `/history/${encodeURIComponent(r.origin)}` : "/history";
     case "health":
       return r.sid ? `/health/${encodeURIComponent(r.sid)}` : r.fresh ? "/health/new" : "/health";
+    case "track-new":
+      return "/tracks/new";
+    case "track": {
+      const base = `/tracks/${encodeURIComponent(r.slug)}`;
+      return r.sid ? `${base}/${encodeURIComponent(r.sid)}` : r.fresh ? `${base}/new` : base;
+    }
     case "profile":
       return "/assistant";
     case "inbox":
@@ -251,12 +269,15 @@ export function withWorkView(r: Route, work: boolean): Route {
 }
 
 const listeners = new Set<() => void>();
+// A replace can change a page's history state without changing its address (#12055): route readers still draw again.
+let revision = 0;
 // The address Back / Forward last landed on, until a page takes it (takeReturn) or the app navigates on: a page that
 // remembers where it was scrolled puts it back only on a return, and a fresh visit starts at the top (#5133).
 let returnedTo = "";
 if (typeof addEventListener !== "undefined") {
   addEventListener("popstate", () => {
     returnedTo = location.pathname + location.search;
+    revision++;
     listeners.forEach((l) => l());
   });
 }
@@ -272,8 +293,9 @@ export function takeReturn(): boolean {
  *  (history.state), so Back / Forward to it bring it back and other ways to the same page do not have it. */
 export function navigate(r: Route | string, replace = false, state: Record<string, unknown> | null = null) {
   const to = typeof r === "string" ? BASE + r : href(r);
-  // the query is part of the address (/s/…?view=term): the same page with another view is somewhere else
-  if (to === location.pathname + location.search) return;
+  // the query is part of the address (/s/…?view=term): the same page with another view is somewhere else.
+  // A replace still applies at the same address: reselecting a drill-down as a root clears its entry state (#12055).
+  if (to === location.pathname + location.search && !replace) return;
   returnedTo = "";
   // From inside an open overlay (a drawer's link, a sheet's action): the new page takes the overlay's entry, so Back
   // from it goes to the page under the overlay, not to a dead copy of it (#1996). A replace keeps the entry's state:
@@ -281,6 +303,7 @@ export function navigate(r: Route | string, replace = false, state: Record<strin
   if (replace) history.replaceState(state ?? history.state, "", to);
   else if (takeOverlayEntry()) history.replaceState(state, "", to);
   else history.pushState(state, "", to);
+  revision++;
   listeners.forEach((l) => l());
 }
 
@@ -290,14 +313,16 @@ export function showsSession(r: Route, mid: string, sid: string): boolean {
 }
 
 export function useRoute(): Route {
-  // The query is part of the route (/todos?id=…): a change to it alone must re-render too.
-  const at = useSyncExternalStore(
+  // The query is part of the route (/todos?id=…): a change to it alone must re-render too. The revision also covers
+  // replacing the current entry's state at an unchanged address (#12055).
+  useSyncExternalStore(
     (l) => {
       listeners.add(l);
       return () => listeners.delete(l);
     },
-    () => location.pathname + location.search,
+    () => revision,
   );
+  const at = location.pathname + location.search;
   const [path, ...query] = at.split("?");
   return parse(stripBase(path!), query.join("?"));
 }

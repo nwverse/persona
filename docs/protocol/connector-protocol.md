@@ -127,6 +127,16 @@ Group-capable connectors submit each thread's new messages as a **batch awaiting
 - **Old hubs**: before #1680, unknown group rejects **entire connector registration**, unknown capability, and `meta_description` prevents manifest load. Extension `engines.persona` must require hub build containing #1680 (`">=YYYYMMDDHHMM"`, build UTC time at merge), so old hubs reject install / upgrade rather than lose connector afterward. Development build 0 skips check.
 - **Future capabilities**: since #1680, unknown **extension-provided** connector capabilities log once per extension / capability, remove that capability, keep running. Built-in connectors remain strict. Future capability additions no longer drop entire connector on old hubs with #1680, but already deployed pre-#1680 hubs still do.
 
+### Call context (#13246)
+
+`tools.call`, `actions.describe` and `actions.do` also say where the call comes from, so a connector can apply limits of its own:
+
+- `track`: the calling conversation's track, its slug (`main` for the main track); absent when the hub cannot tell.
+- `track_kind`: the track's kind; absent when not known (the main track).
+- `categories`: the conversation's information categories (`health`, `finance`, `relationships`, `emotion`, `legal_id`; `docs/assistant/health.md` "Information categories"), `[]` for general. **Absent means not known** (an older hub, a turn not tagged yet): take it for sensitive.
+
+All three are optional and additive (no version change): a program that ignores them works as before. Whether the phone confirms a write stays the hub's decision, never the connector's. A connector built on `server/internal/connector/serve` reads them with `connector.CallContextOf(ctx)` inside `Call`, `Describe` and `Write`; an SDK program reads them from the params (`ConnectorCallParams`, `ConnectorDoParams`).
+
 ### Pictures in a tool's answer (#8484)
 
 A read tool can hand the model pictures to look at (frames of a video, the pictures of a post): `tools.call` answers `{text, images: [{mime, data, caption?}]}` (`ConnectorToolImage` in the schema; the Go SDK's `ext.ToolImage(data, caption)`).

@@ -15,6 +15,34 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+type a2aIdleKey struct{}
+
+func a2aBusy() error {
+	return refusal("a2a_session_busy", "A2A delivery is waiting for a live, idle session", nil)
+}
+
+func (n *Node) a2aIdleSession(ctx context.Context, id string, wake, refresh bool) bool {
+	for _, sess := range n.sessionList(ctx, refresh) {
+		if sess.SessionID != id || sess.Archived || sess.Starting || len(sess.Queued) != 0 {
+			continue
+		}
+		if sess.Status == proto.StatusIdle || sess.Status == proto.StatusDone {
+			return true
+		}
+		caps := sess.Capabilities
+		return wake && sess.Status == proto.StatusOffline && sess.SourceKind == proto.SourceRuntime && caps != nil &&
+			caps.Send && caps.A2AWakeOnSend && (caps.StopCause == "" || caps.StopCause == proto.StopIdle || caps.StopCause == proto.StopRestart)
+	}
+	return false
+}
+
+func (n *Node) a2aSendReady(ctx context.Context, id string) error {
+	if wake, a2a := ctx.Value(a2aIdleKey{}).(bool); a2a && !n.a2aIdleSession(ctx, id, wake, false) {
+		return a2aBusy()
+	}
+	return nil
+}
+
 // paneFor returns the pane hosting a live session, refreshing herdr state once if needed.
 func (n *Node) paneFor(ctx context.Context, id string) (string, error) {
 	if a, ok := n.agent(id); ok {
@@ -56,6 +84,9 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 
 // sendLocked sends to the agent with its input lock held.
 func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.Image, opts sendOpts) error {
+	if err := n.a2aSendReady(ctx, id); err != nil {
+		return err
+	}
 	if opts.WaitForEffort {
 		if change := n.switches().effortChange(id); change.target != "" {
 			if n.effortPaneStillLive(ctx, id, change.pane) {
@@ -74,6 +105,9 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 			return err
 		}
 		opts.ApplySwitch = true
+	}
+	if handled, err := n.sendCreatedCodexApp(ctx, id, text, images); handled {
+		return err
 	}
 	if n.externalCodex(id) {
 		if n.codexResumable(ctx, id) { // nothing runs it: a stopped agent takes no messages (stopped.go, #4754)
@@ -183,8 +217,8 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 			return r
 		}
 		// A stopped agent takes no messages; its terminal page's Resume brings it back (stopped.go, #4754). Only a
-		// branch nothing has started yet (fork.go) is started by its first message, with the launcher it came from,
-		// and a session of Claude's desktop app the app could not take is resumed as before.
+		// branch nothing has started yet (fork.go) is started by its first message, with the launcher it came from.
+		// Desktop-owned sessions return through sendThroughDesktopApp above, including an import or opening failure.
 		if !n.freshFork(id) && !n.desktopSession(id) {
 			return n.stoppedRefusal(id)
 		}

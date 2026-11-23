@@ -25,9 +25,9 @@ type todoRepositoryStore interface {
 
 var _ todoRepositoryStore = (*repositorystore.Store)(nil)
 
-// todoRepositoryRoleStore persists a full repository set whose link roles were rewritten, bumping the revision.
+// todoRepositoryRoleStore persists a single link role rewrite the manager classified, bumping the revision.
 type todoRepositoryRoleStore interface {
-	SetTodoRepositoryLinkRoles(ctx context.Context, id string, rows []repository.TaskRepository) (repository.TaskSet, error)
+	SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL, role string) (repository.TaskSet, error)
 }
 
 var _ todoRepositoryRoleStore = (*repositorystore.Store)(nil)
@@ -288,7 +288,7 @@ func (s *Service) toolTodoRepositories(ctx context.Context, machine, self, name 
 	if !ok {
 		return "", db.ErrTodoNotFound
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, name, todo.Title, args); err != nil || !ok {
+	if ok, err := s.confirmOutbound(ctx, machine, self, name, "", todo.Title, args); err != nil || !ok {
 		return todoNotAllowed(err)
 	}
 	var set repository.TaskSet

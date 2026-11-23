@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -516,29 +517,34 @@ func TestAutoFinishLeavesAReopenedTask(t *testing.T) {
 	if todoNow(s, "todo_r").DoneAt != nil || todoNow(s, "todo_h").DoneAt != nil || f.judged != 0 {
 		t.Fatalf("closed: %+v %+v, %d judgments", todoNow(s, "todo_r"), todoNow(s, "todo_h"), f.judged)
 	}
-	// Work after the reopen is judged, and closes it.
+	// Work after the reopen is judged and delivered for review, not closed again (#5732).
 	s.autoFinishTask(todoNow(s, "todo_r"), time.Now(), true)
-	if got := todoNow(s, "todo_r"); got.DoneAt == nil || got.DoneBy != db.DoneByAuto || f.judged != 1 {
-		t.Fatalf("not closed after new work: %+v, %d judgments", got, f.judged)
+	if got := todoNow(s, "todo_r"); got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictDone || f.judged != 1 {
+		t.Fatalf("not judged after new work: %+v, %d judgments", got, f.judged)
 	}
 }
 
-// The agent of a task the judge closed is sent more (agent_send resumes it) and works again: the task is open again
-// while it does, and the turn's end is followed as ever — cut off by the model service, an interrupted receipt; a
-// finished one, a done receipt and the judge, which may close it again (#5892).
+// The agent of a task the supervisor accepted is sent more on its card and works again: the task is open again while
+// again while it does, and the turn's end is followed as ever — cut off by the model service, an interrupted receipt; a
+// finished one, a done receipt and a new delivery judgment, still without automatic closure (#5892, #5732).
 func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 	s, f := newTaskService(t)
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	todo := startedTask(t, s, f)
 	ctx := context.Background()
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "设计稿写好了", 0)
-	if ok, err := s.autoDoneTodo(ctx, todo.ID, "做完了", time.Now().Add(-time.Minute)); err != nil || !ok {
-		t.Fatalf("auto done: %v %v", ok, err)
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "做完了"})
+	if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
+		t.Fatalf("accept before more work: %v", err)
 	}
 	if _, ok := s.taskOf(ctx, "box", "s1"); ok {
 		t.Fatal("a closed task still follows its agent")
 	}
 	time.Sleep(5 * time.Millisecond)
+	if _, err := s.routeToTask(ctx, "conv1", todo.ID, "Please continue with the remaining cases"); err != nil {
+		t.Fatalf("send more after acceptance: %v", err)
+	}
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	got := todoNow(s, todo.ID)
 	if got.DoneAt != nil || got.ReopenedAt == nil || got.DoneBy != "" || got.DoneReason != "" {
@@ -578,7 +584,7 @@ func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 	if rb := lastReceipt(); rb.State != "done" {
 		t.Fatalf("a finished turn of the reopened task: receipt = %+v", rb)
 	}
-	if got := todoNow(s, todo.ID); got.DoneAt == nil || got.DoneBy != db.DoneByAuto {
+	if got := todoNow(s, todo.ID); got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictDone {
 		t.Fatalf("the work after the reopen is not judged: %+v", got)
 	}
 }
@@ -1572,4 +1578,63 @@ func TestSnapshotShowsTheAgentsPlan(t *testing.T) {
 		Unread:  []prompts.SnapshotAgent{{Label: "整理文档", Machine: "mac-a", Session: "a9b8c7d6", Plan: idle}},
 		Working: []prompts.SnapshotAgent{{Label: "修横屏崩溃", Plan: planned.Plan}, {Label: "没有计划"}},
 		Tasks:   []prompts.SnapshotTask{planned, older, newer, none}}))
+}
+
+// Don't Start on a card that is no longer open (withdrawn by its conversation, or started meanwhile) answers 200 with
+// the plan as it is: a client that missed the event shows what happened. It used to answer 409, and an iOS app that
+// held the card from an old read kept it in Needs You, refusing every tap, until it was restarted.
+func TestTaskPlanDismissOfAPlanNoLongerOpen(t *testing.T) {
+	s, _ := newTaskService(t)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
+	plan := func() string {
+		t.Helper()
+		if _, err := s.toolTaskPlan(ctx, "main1", planArgs(false)); err != nil {
+			t.Fatal(err)
+		}
+		items, _, _ := s.feed(ctx, "main1", time.Time{})
+		return items[len(items)-1].Ref
+	}
+	dismiss := func(id string) (int, TaskPlan) {
+		t.Helper()
+		w := request(s, http.MethodPost, "/api/v1/task-plans/"+id+"/dismiss", "")
+		var out struct {
+			Plan TaskPlan `json:"plan"`
+		}
+		if w.Code == http.StatusOK {
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return w.Code, out.Plan
+	}
+
+	withdrawn := plan()
+	if _, err := runJSON(t, s, "main1", "task_plan_withdraw", map[string]any{"plan_id": withdrawn, "reason": "done elsewhere"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ { // tapped again: the same answer
+		if code, p := dismiss(withdrawn); code != http.StatusOK || p.ID != withdrawn || p.State != planDismissed {
+			t.Fatalf("dismissing a withdrawn plan: %d %+v", code, p)
+		}
+	}
+
+	started := plan()
+	if _, err := s.startPlan(ctx, started, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if code, p := dismiss(started); code != http.StatusOK || p.State != planStarted {
+		t.Fatalf("dismissing a started plan: %d %+v", code, p)
+	}
+	if cur, err := s.loadPlan(ctx, started); err != nil || cur.State != planStarted {
+		t.Fatalf("the started plan moved: %+v %v", cur, err)
+	}
+
+	if code, _ := dismiss("plan_nope"); code != http.StatusNotFound {
+		t.Fatalf("an unknown plan: %d", code)
+	}
+	open := plan()
+	if code, p := dismiss(open); code != http.StatusOK || p.State != planDismissed {
+		t.Fatalf("dismissing an open plan: %d %+v", code, p)
+	}
 }

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -40,6 +41,8 @@ type fakeHub struct {
 	readHooks          receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
 	itemReads          int                       // session.items reads since the hooks were set
 	onDevicesList      func()                    // runs once, then clears, before the next devices.list; no lock held
+	watcherGets        map[int]string            // index in calls of a session.get a run watcher made -> its goroutine
+	onTell             func()                    // runs after each snapshot or event the service gave the hub was recorded; no lock held
 	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
 	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list made
 	// with a listHooked context was answered. No lock held. sendHangs: session.send is never answered while the link
@@ -75,6 +78,7 @@ type fakeHub struct {
 	modelExts      []assistantwire.ModelExtension // plugins.models: the extensions granted models (model_rpc.go)
 	needTriage     []string
 	ownModels      bool                         // the test sets hello.Models itself: no fake model
+	infoTagModel   bool                         // the service tags with information categories (Service.noInfoTag off)
 	devices        []Device                     // devices.list answers these when set (else one per machine with sessions)
 	devicesFull    bool                         // devices.list says its list is complete (a machine not in it was removed)
 	devicesOther   []string                     // devices.list's ids kept out of it (pending, leaving, absorbed)
@@ -113,6 +117,8 @@ type fakeHub struct {
 	liveEvents     []map[string]any // the meeting_live events as sent
 	snaps          []Snapshot
 
+	sessionsContextCheck bool // sessions.list rejects an expired caller context, as a real RPC does
+
 	// Agents a task starts (session.start a1, a2…) and what was sent to them; a machine offline, a node refusing.
 	starts       []map[string]any
 	agentSent    []map[string]any
@@ -131,6 +137,7 @@ type fakeHub struct {
 	judged       int                       // the done judge's calls to the model
 	judge        string                    // what they answer ("": an error)
 	judgeFails   int                       // the done judge's next calls that fail before f.judge answers
+	judgeDelay   time.Duration             // how long the done judge waits before answering (its caller can time out)
 	judgeAsked   []string                  // what the done judge was given (its input)
 	judgeBy      func(input string) string // when set, what the done judge answers to its input (instead of f.judge)
 	outcome      string                    // what the outcome model answers (todo_outcome.go; "": an error)
@@ -153,6 +160,13 @@ type fakeHub struct {
 	// were asked; the sessions whose pushes are off, by machine.
 	triage      string
 	triageAsked []modelCall
+	// infoTag answers the information tagging (info_tag.go): {"categories":[]} when empty; infoTagFails fails it.
+	infoTag      string
+	infoTagFails bool
+	infoTagAsked []modelCall
+	// captureSort answers sorting a quick capture (capture_sort.go): it fails when empty.
+	captureSort      string
+	captureSortAsked []modelCall
 	// The Progress row's paraphrase of a report (report_line.go): its answer (none: an error), and what was asked.
 	reportLine      string
 	reportLineAsked []modelCall
@@ -265,6 +279,14 @@ func listHooked(ctx context.Context) context.Context {
 }
 
 func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceSessionsList {
+		f.mu.Lock()
+		check := f.sessionsContextCheck
+		f.mu.Unlock()
+		if check && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
 	if p.Method == DeviceSessionGet {
 		f.mu.Lock()
 		hook := f.beforeSessionGet
@@ -364,6 +386,14 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, p)
+	if p.Method == DeviceSessionGet { // the fake answers on the caller's goroutine: note a run watcher's poll
+		if g, ok := runWatcherGoroutine(); ok {
+			if f.watcherGets == nil {
+				f.watcherGets = map[int]string{}
+			}
+			f.watcherGets[len(f.calls)-1] = g
+		}
+	}
 	if trace, ok := ctx.Value(deviceCallsForTest{}).(*[]DeviceCall); ok {
 		*trace = append(*trace, p)
 	}
@@ -841,7 +871,7 @@ func (f *fakeHub) NotifyRequest(_ context.Context, p NotifyRequest) (NotifyResul
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch p.Notification.Kind {
-	case NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyInput, assistantwire.NotifyReply, assistantwire.NotifyDecide:
+	case NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyInput, assistantwire.NotifyReply, assistantwire.NotifyDecide, assistantwire.NotifyHealthWater:
 	default:
 		return NotifyResult{}, fmt.Errorf("kind %q", p.Notification.Kind)
 	}
@@ -904,8 +934,12 @@ func (f *fakeHub) InboxChanged(ctx context.Context, c assistantwire.InboxChanged
 
 func (f *fakeHub) Snapshot(_ context.Context, s Snapshot) (SnapshotResult, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.snaps = append(f.snaps, s)
+	hook := f.onTell
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return SnapshotResult{OK: true, Seq: s.Seq}, nil
 }
 
@@ -999,6 +1033,30 @@ func (f *fakeHub) itemsReadAfter(from int) bool {
 	return false
 }
 
+// watcherReadAfter is the goroutine ("goroutine N") of the first run watcher (watchScheduledRun, through
+// waitTurnEnd's poll) that read sid's session after the first `from` calls, or "" when none did yet. Calls are logged
+// under the lock the sessions are, so that read saw every change made before `from` was taken.
+func (f *fakeHub) watcherReadAfter(from int, sid string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := min(from, len(f.calls)); i < len(f.calls); i++ {
+		var a map[string]any
+		_ = json.Unmarshal(f.calls[i].Params, &a)
+		if g := f.watcherGets[i]; g != "" && f.calls[i].Method == DeviceSessionGet && a["session_id"] == sid {
+			return g
+		}
+	}
+	return ""
+}
+
+// runWatcherGoroutine is the calling goroutine ("goroutine N") when it runs a scheduled run's watcher.
+func runWatcherGoroutine() (string, bool) {
+	buf := make([]byte, 1<<14)
+	stack := string(buf[:runtime.Stack(buf, false)])
+	header, _, _ := strings.Cut(stack, " [")
+	return header, strings.Contains(stack, ".watchScheduledRun(")
+}
+
 func (f *fakeHub) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1015,9 +1073,10 @@ func (f *fakeHub) eventTypes() string {
 // in memory, as Service does with no store).
 type memStore struct {
 	noPlans
-	mu   sync.Mutex
-	vals map[string][]byte
-	puts int
+	mu      sync.Mutex
+	vals    map[string][]byte
+	outside map[string]db.OutsideDirection
+	puts    int
 	// failSetting: what reading a setting fails with (nil: it reads; set through setFailSetting).
 	failSetting error
 	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
@@ -1175,6 +1234,53 @@ func (m *memStore) PutSettings(ctx context.Context, values map[string]any) error
 	return nil
 }
 
+func (m *memStore) OutsideDirections(_ context.Context) (map[string]db.OutsideDirection, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failSetting != nil {
+		return nil, m.failSetting
+	}
+	out := make(map[string]db.OutsideDirection, len(m.outside))
+	for id, ref := range m.outside {
+		out[id] = ref
+	}
+	return out, nil
+}
+
+func (m *memStore) CreateOutsideDirection(ctx context.Context, id string, ref db.OutsideDirection, values map[string]any) error {
+	encoded := make(map[string][]byte, len(values))
+	for key, value := range values {
+		b, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		encoded[key] = b
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.failPut != nil {
+		return m.failPut
+	}
+	if _, exists := m.outside[id]; exists {
+		return errors.New("outside direction already exists")
+	}
+	if m.vals == nil {
+		m.vals = map[string][]byte{}
+	}
+	if m.outside == nil {
+		m.outside = map[string]db.OutsideDirection{}
+	}
+	for key, b := range encoded {
+		m.vals[key] = b
+	}
+	m.outside[id] = ref
+	m.puts += len(encoded) + 1
+	return nil
+}
+
 // newTestService is an assistant on f with an in-memory store.
 // testLogf is t.Logf until the test ends, nothing after: the service's goroutines (a run's watcher, a snapshot being
 // published) can still log when the test is over, and t.Logf then panics and fails the whole package.
@@ -1270,6 +1376,8 @@ func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	// And about what a supervisor does with its tasks, told to the main conversation: the background supervisor that
 	// takes them by default is supervise_background_test.go's, which turns this off.
 	s.noBackground = true
+	// And with no information tagging (info_tag.go), as before it: its tests turn it on (f.infoTagModel).
+	s.noInfoTag = !f.infoTagModel
 	if f.settings != nil {
 		setSettings(t, s, func(v *Settings) { *v = *f.settings })
 	}
@@ -1442,8 +1550,12 @@ func (f *fakeHub) Tell(event string, params any) error {
 		return err
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.told = append(f.told, told{event, b})
+	hook := f.onTell
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 
@@ -1497,6 +1609,12 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case in.System == tabName:
 			f.tabAsked = append(f.tabAsked, in.System+"\n---\n"+user)
 			reply = f.tabReply
+		case strings.HasPrefix(in.System, "You tag a piece of text"): // information tagging (info_tag.go)
+			f.infoTagAsked = append(f.infoTagAsked, modelCall{in.System, user})
+			reply, fail = cmp.Or(f.infoTag, `{"categories":[]}`), f.infoTagFails
+		case strings.HasPrefix(in.System, "You sort a note the owner jotted down"): // quick capture (capture_sort.go)
+			f.captureSortAsked = append(f.captureSortAsked, modelCall{in.System, user})
+			reply, fail = f.captureSort, f.captureSort == ""
 		case strings.Contains(in.System, "起一个待办标题"): // a task's todo (todo_titles.go): none unless the test gives one
 			f.todoTitleAsked = append(f.todoTitleAsked, modelCall{in.System, user})
 			reply, fail = f.todoTitleReply, f.todoTitleErr != nil
@@ -1518,7 +1636,7 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case strings.HasSuffix(strings.TrimSpace(in.System), jsonOnly):
 			f.judged++
 			f.judgeAsked = append(f.judgeAsked, user)
-			reply, fail = f.judge, f.judge == ""
+			reply, fail, delay = f.judge, f.judge == "", f.judgeDelay
 			if f.judgeBy != nil {
 				reply = f.judgeBy(user)
 				fail = reply == ""

@@ -9,6 +9,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
@@ -42,6 +43,7 @@ import persona.core.designsystem.AgentMarkKind
 import persona.core.designsystem.AgentMarkSpec
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.LocalHubFeatures
+import persona.core.designsystem.JLoadable
 import persona.core.designsystem.ModelPillWidth
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.models.AgentModelPanel
@@ -61,6 +63,47 @@ class ModelPillTest {
     @get:Rule val rule = createComposeRule()
     private val res = ApplicationProvider.getApplicationContext<Context>().resources
     private val agent = Session("box", "s1", agent = "claude", launcher = "example", status = "idle", state = "idle", paneId = "p1", rev = 7)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun mainAndSharedCatalogCachesStaySeparateAcrossRefreshFailure() = kotlinx.coroutines.test.runTest {
+        val lists = ModelLists(this) { it.message.orEmpty() }
+        val shared = AssistantLaunchers(default = LauncherDefault("claude", "shared", "low"))
+        val main = AssistantLaunchers(default = LauncherDefault("claude", "main", "high"))
+        lists.readAssistantCatalog("box") { shared }
+        lists.readAssistantCatalog("box", main = true) { main }
+        testScheduler.advanceUntilIdle()
+        assertEquals(shared, (lists.assistantCatalog("box") as JLoadable.Loaded<AssistantLaunchers>).value)
+        assertEquals(main, (lists.assistantCatalog("box", main = true) as JLoadable.Loaded<AssistantLaunchers>).value)
+        lists.readAssistantCatalog("box", main = true) { throw SocketTimeoutException("main temporarily unavailable") }
+        testScheduler.advanceUntilIdle()
+        val retained = lists.assistantCatalog("box", main = true) as JLoadable.Loaded<AssistantLaunchers>
+        assertEquals(main, retained.value)
+        assertTrue(retained.failure != null)
+        assertEquals(shared, (lists.assistantCatalog("box") as JLoadable.Loaded<AssistantLaunchers>).value)
+    }
+
+    @Test fun mainPillReadsItsOwnDefaultAndNewChatKeepsTheSharedDefault() {
+        var mainReads = 0
+        val hub = object : Hub() {
+            override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers {
+                mainReads++
+                return assistantLauncherList(machineId, refresh).copy(default = LauncherDefault("team", "sonnet", "low"))
+            }
+        }
+        var showMain by mutableStateOf(true)
+        val main = agent.copy(sessionId = "main", assistant = true, launcher = "claude", model = "opus")
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
+                PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
+                    PersonaModelPill(if (showMain) main else null, "box", hub, ModelPillWidth.Wide,
+                        pagePick = null, onPagePick = {}, onNotice = {})
+                }
+            }
+        }
+        rule.onNodeWithTag("model-pill").assertContentDescriptionContains("Sonnet", substring = true)
+        rule.runOnIdle { assertTrue(mainReads > 0); showMain = false }
+        rule.onNodeWithTag("model-pill").assertContentDescriptionContains("Opus", substring = true)
+    }
 
     @Test fun onlyTheUsersMessageOnGlassCarriesAWaitingSwitchOut() {
         val waiting = agent.copy(pendingSwitch = PendingSwitch("work"))
@@ -149,9 +192,16 @@ class ModelPillTest {
     private open class Hub : AssistantManagement {
         val asked = mutableListOf<String>()
         val launcherListRefreshes = mutableListOf<Boolean>()
+        var configReads = 0
+            private set
         var launcherListReads = 0
             private set
-        override suspend fun config() = AssistantConfig(machineId = "box", launcher = "claude", main = "main")
+        override suspend fun config(): AssistantConfig {
+            configReads++
+            return AssistantConfig(machineId = "box", launcher = "claude", main = "main")
+        }
+        override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers =
+            assistantLauncherList(machineId, refresh)
         override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
             launcherListReads++
             return AssistantLaunchers(
@@ -328,6 +378,71 @@ class ModelPillTest {
         assertEquals("DELETE main", hub.asked.last())
     }
 
+    @Test fun theModelRouteRemedyOpensAndClearsANonMainPersonaPicker() {
+        val hub = Hub()
+        val chat = JsonCodec.decodeFromString<Session>("""{"machine_id":"box","session_id":"leader","assistant":true,"agent":"claude","status":"idle",
+            "launcher":"team","model":"sonnet","model_pick":{"launcher":"team","model":"sonnet"},"rev":3}""")
+        var open by mutableStateOf(false)
+        var clear by mutableStateOf(false)
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
+                PersonaTheme(reduceMotion = true, style = AppStyle.Glass) {
+                    Box { PersonaModelPill(chat, "box", hub, ModelPillWidth.Wide, pagePick = null, onPagePick = {}, onNotice = {},
+                        openRequested = open, onOpenHandled = { open = false }, clearRequested = clear, onClearHandled = { clear = false }) }
+                }
+            }
+        }
+        rule.onNodeWithTag("model-pill").assertDoesNotExist()
+        rule.runOnIdle { open = true }
+        rule.waitUntil(5_000) { rule.onAllNodes(hasDialogText("Sonnet 4.5"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        assertFalse(open)
+        assertTrue(hub.asked.isEmpty())
+        rule.runOnIdle { clear = true }
+        rule.waitUntil(5_000) { hub.asked.contains("DELETE leader") }
+        assertFalse(clear)
+        assertEquals(listOf("DELETE leader"), hub.asked)
+    }
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi")
+    @Test fun aSavedAliasSelectsTheFoldedRowInLightAndDark() = aliasPanelScene(false)
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi", fontScale = 2f)
+    @Test fun aSavedAliasSelectsTheFoldedRowWithLargeText() = aliasPanelScene(true)
+
+    private fun aliasPanelScene(largeText: Boolean) {
+        org.robolectric.RuntimeEnvironment.setFontScale(if (largeText) 2f else 1f)
+        val base = Hub()
+        val folded = AgentModel("claude-opus-5-5", "Opus 5.5", aliases = listOf("opus", "fable"), efforts = listOf("low", "high"))
+        val hub = object : AssistantManagement by base {
+            override suspend fun launcherModels(machineId: String, launcher: String) = LauncherModels("claude",
+                listOf(folded, AgentModel("claude-sonnet-4-5", "Sonnet 4.5", efforts = listOf("low", "high"))))
+        }
+        val chat = JsonCodec.decodeFromString<Session>("""{"machine_id":"box","session_id":"main","assistant":true,"agent":"claude","status":"idle",
+            "launcher":"claude","model":"claude-opus-5-5","model_pick":{"launcher":"claude","model":"opus","effort":"high"},"rev":3}""")
+        var open by mutableStateOf(false)
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            CompositionLocalProvider(LocalHubFeatures provides setOf("assistant_model_pick")) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                    Box { PersonaModelPill(chat, "box", hub, ModelPillWidth.Wide, pagePick = null, onPagePick = {}, onNotice = {},
+                        openRequested = open, onOpenHandled = { open = false }) }
+                }
+            }
+        }
+        rule.runOnIdle { open = true }
+        rule.waitUntil(5_000) { rule.onAllNodes(hasDialogText("Sonnet 4.5"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        val out = File(System.getProperty("persona.shots") ?: "build/model-alias-shots").apply { mkdirs() }
+        for (night in listOf(false, true)) {
+            rule.runOnIdle { dark = night }
+            rule.waitForIdle()
+            val bitmap = rule.onNode(isDialog()).captureToImage().asAndroidBitmap()
+            File(out, "model-alias-${if (largeText) "large" else "default"}-${if (night) "dark" else "light"}.png")
+                .outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+    }
+
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
     @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi")
     @Test fun aPersonaChatsAllListNamesItsLauncher() {
@@ -367,7 +482,7 @@ class ModelPillTest {
                 }
             }
         }
-        rule.waitUntil(5_000) { hub.launcherListReads >= 1 } // the config is read, but the picker is never drawn
+        rule.waitUntil(5_000) { hub.configReads >= 1 } // the role is known; no picker is drawn for another assistant chat
         rule.onNodeWithTag("model-pill").assertDoesNotExist()
         assertTrue("nothing is written for a conversation without a pick", hub.asked.isEmpty())
     }

@@ -29,8 +29,10 @@ import { firstAndCurrent } from "../lib/persona-nav";
 import { recentConversations } from "../lib/conversation-origins";
 import { isBackgroundSupervisor } from "../lib/background-supervisor";
 import { setRecentMore, useRecentCount, useRecentMore } from "../lib/sidebar-recent";
-import { countsLabel, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
+import { countsLabel, directionExternal, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
+import type { ExternalDirection } from "../lib/direction-tree";
 import { SidebarDirectionRow } from "./SidebarDirections";
+import { SidebarSpaces } from "./SidebarSpaces";
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
@@ -72,7 +74,9 @@ import { ListError } from "../ui/ListError";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { RUNTIME_AGENTS_PATH, supportsPagedAgents, runtimeActiveAt, runtimeAgents, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval } from "../lib/runtime-list";
 import { SESSIONS_CATALOG_FEATURE, SESSIONS_JUST_FINISHED_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
-import { type ListFilters } from "../lib/session-list";
+import { SESSIONS_LIST_FEATURE, type ListCounts, type ListFilters } from "../lib/session-list";
+import { heldCounts } from "../lib/seen-outbox";
+import { heldSidesOf, useHeldVersion } from "../lib/use-child-sessions";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, pageIconStyle, pageLabel, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
@@ -84,6 +88,7 @@ import { scoped, useScope, useScoped, useScopedInteractions, useScopedMachines, 
 import { AssistantSwitcher } from "./AssistantSwitcher";
 import { sidebarPending } from "./sidebar-pending";
 import { usePendingWorkSessions } from "./sidebar-pending-sessions";
+import { useMainWaiting } from "./assistant/use-main-waiting";
 // Declared in the files split out of this one; re-exported so the files that import them from here stay as they are.
 export { useNavPages, type NavPage } from "./SidebarParts";
 export { AgentRow, PersonaRow, SessionRow } from "./SidebarRows";
@@ -284,6 +289,7 @@ function GlideHighlight({ box }: { box: ReturnType<typeof glideStore> }) {
 const MORE_BUTTON = "whitespace-nowrap rounded-[7px] px-2 py-1 text-left text-[12px] text-ink-3 hover:text-ink-2 [@media(pointer:coarse)]:min-h-11";
 
 const NO_CONVERSATIONS: Session[] = [];
+type DirectionEntry = { id: string; conversation?: Session; external?: ExternalDirection };
 
 export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions }) {
   const bindings = useBindings();
@@ -298,6 +304,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
     [assistant?.conversations, liveChats, manager],
   );
   const { phase, online, total, main: mainConversation, sections, more } = useNavPages();
+  const mainWaiting = useMainWaiting(mainConversation);
   // a phone's drawer has the pages as two rows of icons, so its first screen reaches the Agents (#1996)
   const narrow = useMedia(NARROW);
   const activeKey = useActiveKey(route);
@@ -309,7 +316,13 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // The background supervisor is neither: it is built in, listed with the scheduled tasks' chats under 全部对话 (#5082).
   const leaders = (assistant?.leaders ?? []).filter((id) => id !== assistant?.main && !isBackgroundSupervisor(assistant, id));
   const isLeader = (id: string) => leaders.includes(id);
-  const directions = leaders.map((id) => assistant?.conversations.find((c) => c.session_id === id)).filter((c): c is Session => !!c);
+  const conversationOf = (id: string) => assistant?.conversations.find((c) => c.session_id === id);
+  const directions = leaders.map((id): DirectionEntry | null => {
+    const conversation = conversationOf(id);
+    if (conversation) return { id, conversation };
+    const external = directionExternal(id);
+    return external ? { id, external } : null;
+  }).filter((d): d is DirectionEntry => !!d);
   const recentCount = useRecentCount();
   const recentMore = useRecentMore();
   const ownChats = recentConversations(assistant?.conversations ?? [], assistant?.main, leaders, assistant?.background_supervisor, assistant?.recent_task_chats === true, assistant?.conversation_order);
@@ -317,7 +330,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const recent = ownChats.slice(0, recentCount * (1 + recentMore));
   const recentLeft = ownChats.length - recent.length;
   const recentLess = recentMore > 0 && ownChats.length > recentCount;
-  const directionNames = useDirectionNames(directions.map((c) => `${c.session_id}\u0000${c.title ?? ""}`).join("\u0001"));
+  // Every direction id belongs in the key: with only conversationless directions there is still a `/leaders` fallback ask.
+  const directionNames = useDirectionNames(leaders.map((id) => `${id}\u0000${conversationOf(id)?.title ?? ""}`).join("\u0001"));
   const baseCounts = useLeaderCounts();
   const plans = useFeed((s) => s.plans);
   useEffect(() => { if (assistant?.main) void loadFeed(assistant.main); }, [assistant?.main, manager]);
@@ -333,7 +347,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const [convMenu, setConvMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
   // one function for the sidebar's life: the conversation rows and the main row keep their memo across pushes
   const onConvMenu = useCallback<RowMenuFn>((s, anchor, at) => setConvMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
-  const [personaFolded, togglePersona] = useFolded("persona", false, { holds: activeKey === "history" || activeKey === "j:new" || [...directions, ...recent].some((c) => activeKey === `j:${c.session_id}`) });
+  const [personaFolded, togglePersona] = useFolded("persona", false, { holds: activeKey === "history" || activeKey === "j:new" || directions.some((d) => activeKey === `j:${d.id}`) || recent.some((c) => activeKey === `j:${c.session_id}`) });
   // 最近 folds on its own too (#6228): the choice is kept in this browser, and it opens by itself while it holds the
   // open conversation, so folding never hides where a message lands. The Agents block's Recent uses another key.
   const [recentFolded, toggleRecent] = useFolded("recent-chats", false, { holds: recent.some((c) => activeKey === `j:${c.session_id}`) });
@@ -341,11 +355,28 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   useStickyTop(nav);
   const go = useGo(onNavigate);
 
-  // A lead's row is an ordinary conversation row under the 常驻 heading (#6214): no pin glyph of its own, so it never
-  // reads as a button. Its "等你 N" stays on hover and the ⋯ has its own reserved end slot (keepTrailing).
-  const directionRow = (c: Session) => (
-    <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionLabel(directionNames, c.session_id, conversationTitle(c))} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={counts.get(c.session_id)?.running ?? false} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
-  );
+  // A conversation-backed lead's row is unchanged. An external one reuses that row, but opens only its actual outside
+  // Agent (never a fabricated `/persona/<direction-id>`), has no conversation menu, and is a plain row without a pair.
+  const directionName = (d: DirectionEntry) => directionLabel(directionNames, d.id, d.conversation ? conversationTitle(d.conversation) : t("lib-format.untitled_session"));
+  const directionRow = (d: DirectionEntry) => {
+    if (d.conversation) {
+      const c = d.conversation;
+      return <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionName(d)} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={counts.get(c.session_id)?.running ?? false} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />;
+    }
+    const { machine_id: mid, session_id: sid } = d.external ?? {};
+    const key = mid && sid ? `s:${mid}/${sid}` : `j:${d.id}`;
+    const label = directionName(d);
+    const s: Session = {
+      machine_id: mid ?? assistant?.machine_id ?? "",
+      session_id: sid ?? d.id,
+      title: label,
+      cwd: "",
+      status: "idle",
+      state: "idle",
+      assistant: !mid || !sid,
+    };
+    return <SessionRow key={d.id} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={mid && sid ? { name: "session", mid, sid } : null} go={go} label={label} hint={countsLabel(counts.get(d.id), t) || undefined} hintFull showState={false} workingMark={counts.get(d.id)?.running ?? false} keepTrailing />;
+  };
 
   const recentRow = (c: Session) => (
     <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={conversationTitle(c)} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull keepTrailing showState={false} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
@@ -375,7 +406,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         {/* the main conversation is the column's first row, Main chat with the home symbol, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), with a solid divider above the sticky groups */}
         <div data-sidebar-sticky className="sticky top-0 z-30 flex flex-col gap-px bg-canvas pt-1">
-          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} onMenu={onConvMenu} />
+          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} waiting={mainWaiting.count} onMenu={onConvMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
         </div>
         {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}
@@ -383,6 +414,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         {sections
           .filter((g) => (g.id ? g.pages.length > 0 : !narrow))
           .map((g, i) => <PageGroup key={g.id || "pages"} group={g} more={g.id ? [] : more} first={i === 0 && !narrow} reg={reg} hover={hover} activeKey={activeKey} go={go} />)}
+        {/* the user's domain spaces (#13500), under the pages and their Health */}
+        {chats && <SidebarSpaces reg={reg} hover={hover} activeKey={activeKey} go={go} />}
 
         {chats && (
           <Section
@@ -411,7 +444,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
                 <>
                   <SubHeading label={t("sidebar.directions")} />
                   <div className="sidebar-indent">
-                    {directions.map((c) => <SidebarDirectionRow key={c.session_id} id={c.session_id} name={directionLabel(directionNames, c.session_id, conversationTitle(c))} row={directionRow(c)} reg={reg} hover={hover} go={go} onNavigate={onNavigate} />)}
+                    {directions.map((d) => <SidebarDirectionRow key={d.id} id={d.id} name={directionName(d)} row={directionRow(d)} reg={reg} hover={hover} go={go} onNavigate={onNavigate} />)}
                   </div>
                 </>
               )}
@@ -758,6 +791,13 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   }, [todos]);
   const quickFilters = useStore((s) => s.features.includes(SESSIONS_QUICK_FILTERS_FEATURE));
   const botmuxHidden = useBotmuxHidden();
+  // an agent opened here is seen at once in the chips' numbers and By state's sections too, not only on its row, while
+  // the list's last read still counts it Unread (lib/seen-outbox.ts heldCounts)
+  const seenMarks = useStore((s) => s.seen);
+  // and a parent whose unread side sessions were all seen here (the side rows held for its row, lib/use-child-sessions.ts)
+  const heldAt = useHeldVersion();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- heldAt: heldSidesOf reads the held rows, which it versions
+  const holdCounts = useCallback((counts: ListCounts, rows: readonly Session[]) => heldCounts(counts, rows, seenMarks, Date.now(), heldSidesOf), [seenMarks, heldAt]);
   const [savedFilter, setFilter] = useState(() => agentFilter(storedValue("persona.agentFilter")));
   const [larkCount, setLarkCount] = useState<number>();
   const reportCounts = useCallback((counts: FilterCounts | undefined) => setLarkCount(counts?.feishu), []);
@@ -813,7 +853,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     </Section>}
     <PagedSessionList root={runtimeAgents} path={RUNTIME_AGENTS_PATH} identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={sideFold ? undefined : runtimeParentIdentity} excludeIdentities={inFlightLaunchIds} event="sessions_list" grouping={pagedGrouping}
       activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
-      catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed}
+      catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed} holdCounts={holdCounts}
       machineOrder={machineOrder} label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
       renderRow={(s, within) => {
         const k = `s:${s.machine_id}/${s.session_id}`;
@@ -857,6 +897,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [ownIds, sidebarMachines]);
   const rowOrder = useMemo(() => machineSessionOrder(machines), [machines]);
   const { sessions: every, loaded, error: listError } = useFullAgentSessions();
+  const summaryAgents = useAgentSessions();
+  const pagedTransport = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   const allLaunches = useStore((s) => s.launches);
   const launches = useMemo(() => Object.values(allLaunches).filter((launch) => launch.phase !== "ready"), [allLaunches]);
   // A session whose launch is still actively starting/sending is already listed under "Starting": keep it out of the
@@ -868,8 +910,12 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     }
     return keys;
   }, [launches]);
-  const agents = useMemo(() => every.filter((s) => isSidebarAgent(s) && (!inFlightLaunchKeys.size || !inFlightLaunchKeys.has(`${s.machine_id}\u0000${s.session_id}`))), [every, inFlightLaunchKeys]);
+  const [agents, previewAgents] = useMemo(() => {
+    const visible = (rows: Session[]) => rows.filter((s) => isSidebarAgent(s) && (!inFlightLaunchKeys.size || !inFlightLaunchKeys.has(`${s.machine_id}\u0000${s.session_id}`)));
+    return [visible(every), pagedTransport ? visible(summaryAgents) : []];
+  }, [every, summaryAgents, pagedTransport, inFlightLaunchKeys]);
   const all = useScoped(agents);
+  const previewAll = useScoped(previewAgents);
   const mutes = useStore((s) => s.mutes);
   const pins = useStore((s) => s.pins);
   const interactions = useStore((s) => s.interactions);
@@ -911,6 +957,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set());
   const botmuxHidden = useBotmuxHidden();
   const listed = useMemo(() => withoutBotmux(all, botmuxHidden), [all, botmuxHidden]);
+  const previewListed = useMemo(() => [...withoutBotmux(previewAll, botmuxHidden)].sort(rowOrder), [previewAll, botmuxHidden, rowOrder]);
   const facets = useMemo(() => buildAgentFacets(listed, machines, pins), [listed, machines, pins]);
   const dimActive = hasActiveDimensionFilters(dimFilters);
   const clock = useNow(60_000, dimActive);
@@ -957,6 +1004,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   // the todos puts every agent under No to-do for a moment, then moves them under their todos (#2812); the chat list's
   // rows are drawn at once
   const todosPending = !chatList && shownGrouping === "todo" && !todosLoaded;
+  // The first summary page can orient the owner while the complete baseline is read. By to-do still waits for its
+  // grouping input; neutral rows never invent provisional groups or counts, and the complete tree replaces them at once.
+  const loadingPreview = !loaded && !todosPending && !chatList && !filtered && !hubUnreachable && !listError && previewListed.length > 0;
   // Keep showing progress until the grouping inputs and session list are ready. On an older hub the socket's rows
   // can already be shown while the first GET /sessions is still in flight (#2812).
   const listNote = hubUnreachable ? <p className="px-2 py-1 text-xs leading-normal text-ink-3">{t("sidebar.agents_offline")}</p>
@@ -1150,7 +1200,14 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         {launches.map((launch) => <NavRow key={launch.id} k={`s:${launch.machineId}/${launch.id}`} reg={reg} hover={hover} active={activeKey === `s:${launch.machineId}/${launch.id}`} to={{ name: "session", mid: launch.machineId, sid: launch.id }} go={go} icon={launch.phase === "failed" ? "retry" : "agent"} agent={launch.phase === "failed" ? undefined : launchDisplayEngine(launch)} label={launch.text || baseName(launch.cwd) || t("sidebar.launch_untitled")} hint={launch.phase === "failed" ? t("sidebar.launch_failed") : t("sidebar.launch_background")} />)}
       </Section>}
 
-      {listNote ?? (chatList ? (
+      {loadingPreview ? <>
+        {listNote}
+        <div data-agents-preview className="mt-1 flex flex-col gap-px">
+          <WindowedRows items={previewListed} holds={(s) => rowKey(s) === activeKey} render={(s) => (
+            <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} />
+          )} />
+        </div>
+      </> : listNote ?? (chatList ? (
         <div className="mt-1 flex flex-col gap-1" data-testid="agent-chatlist-section">
           <WindowedRows items={chatListUnpinned} holds={(s) => rowKey(s) === activeKey} render={(s) => {
             const key = `s:${s.machine_id}/${s.session_id}`;
