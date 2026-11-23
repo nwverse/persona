@@ -144,6 +144,12 @@ func (s *Service) redactedNotice(ctx context.Context, l i18n.Lang, space string)
 // its own categories and its track's default categories).
 func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text, summary string, input json.RawMessage) (bool, error) {
 	space, _ := s.selfSpace(ctx, self)
+	if leadOwnAgentTools[tool] && s.isLeader(ctx, self) && !s.trackPolicy(ctx, space).ConfirmOutbound {
+		// A direction lead driving its own Agents on the owner's computers: the owner confirmed the work once, when it
+		// reached the lead (a2a_send, the main conversation's hand-off). A track whose rules confirm every hand-off
+		// (health) still asks.
+		return true, nil
+	}
 	if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok {
 		text = "" // the owner just confirmed these very words: only the track decides, as before tagging
 	}
@@ -164,6 +170,9 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 	}
 	return r.Allow != nil && *r.Allow, nil
 }
+
+// leadOwnAgentTools are the tools a direction lead drives its own Agents with: no phone card for them (confirmOutbound).
+var leadOwnAgentTools = map[string]bool{"agent_start": true, "agent_send": true, "agent_interrupt": true, "agent_switch": true, "agents_switch": true}
 
 // ownerConfirmedKey marks a tool call carrying words the owner confirmed on the phone just before (an Inbox
 // suggestion's instruction): confirmOutbound does not ask about them again by what they say.
