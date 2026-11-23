@@ -131,6 +131,10 @@ func TestTokenWaitLeaderRecovery(t *testing.T) {
 			unblock := func() { once.Do(func() { close(release) }) }
 			var fetches, active, peak, calls atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/" { // a local node's port probe (node/ports.go)
+					http.NotFound(w, r)
+					return
+				}
 				if r.URL.Path == tokenPath {
 					n := fetches.Add(1)
 					current := active.Add(1)
