@@ -1,0 +1,333 @@
+package persona.feature.chat
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import org.junit.After
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
+import persona.core.contracts.*
+import persona.core.designsystem.AppFeedback
+import persona.core.designsystem.FeedbackAction
+import persona.core.designsystem.FeedbackStyle
+import persona.core.designsystem.LocalAppFeedback
+import persona.core.designsystem.PersonaTheme
+import persona.core.hub.HubError
+import persona.core.hub.HubFailure
+
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [35], qualifiers = "en-rUS-w400dp-h800dp-xhdpi")
+class CodexTakeoverCoordinatorTest {
+    @get:Rule val rule = createComposeRule()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+    private val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+
+    @After fun tearDown() = scope.cancel()
+
+    private fun codexSession(canResume: Boolean = true, running: Boolean = true) = Session(
+        machineId = "m1",
+        sessionId = "codex-1",
+        title = "Codex CLI",
+        cwd = "/work",
+        status = if (running) "working" else "offline",
+        agent = "codex",
+        sourceKind = "codex_history",
+        readOnlyReason = if (running) "Codex is running in Terminal" else "Exited",
+        capabilities = SessionCapabilities(
+            read = true,
+            send = false,
+            takeover = CodexTakeoverCapability(running = running, canResume = canResume),
+        ),
+        todo = SessionTodo(id = "todo-1", title = "Ship"),
+    )
+
+    private fun plan(running: Boolean = true, canResume: Boolean = true, reason: String? = null, token: String = "tok-1") =
+        CodexTakeoverInfo(
+            running = running,
+            canResume = canResume,
+            reason = reason,
+            token = token,
+            cwd = "/work",
+            transcriptPath = "/tmp/rollout.jsonl",
+            continuationPrompt = "Continue from transcript",
+        )
+
+    @Test fun exitedSessionTakesOverDirectlyWithoutDialogAndShowsToast() {
+        val calls = mutableListOf<String>()
+        val adopted = mutableListOf<Session>()
+        val toasts = mutableListOf<String>()
+        val source = codexSession(canResume = true, running = false)
+        val live = source.copy(sourceKind = "codex_app_server", capabilities = SessionCapabilities(read = true, send = true))
+        val client = object : CodexTakeoverClient {
+            override suspend fun takeoverInfo(session: Session): CodexTakeoverInfo {
+                calls += "GET"
+                return plan(running = false, canResume = true)
+            }
+            override suspend fun takeover(session: Session, token: String, confirmStop: Boolean): Session {
+                calls += "POST:$token:$confirmStop"
+                return live
+            }
+            override suspend fun startContinuation(session: Session, info: CodexTakeoverInfo): Session = error("unused")
+        }
+        val coordinator = CodexTakeoverCoordinator(
+            res = context.resources,
+            client = client,
+            scope = scope,
+            onAdopted = { _, next -> adopted += next },
+            onFailure = { msg, _, _ -> fail("Unexpected failure: $msg") },
+            onSuccessToast = { toasts += it },
+        )
+
+        coordinator.takeOver(source)
+        assertEquals(listOf("GET", "POST:tok-1:false"), calls)
+        assertNull(coordinator.pending)
+        assertFalse(coordinator.inFlight)
+        assertEquals(listOf(live), adopted)
+        assertEquals(listOf("Taken over"), toasts)
+    }
+
+    @Test fun runningSessionRequiresConfirmationAndAllowsContinueInstead() {
+        val calls = mutableListOf<String>()
+        val adopted = mutableListOf<Session>()
+        val source = codexSession(canResume = true, running = true)
+        val newSession = Session(machineId = "m1", sessionId = "new-1", status = "working", agent = "codex")
+        val client = object : CodexTakeoverClient {
+            override suspend fun takeoverInfo(session: Session): CodexTakeoverInfo {
+                calls += "GET"
+                return plan(running = true, canResume = true)
+            }
+            override suspend fun takeover(session: Session, token: String, confirmStop: Boolean): Session {
+                calls += "POST:$token:$confirmStop"
+                return source.copy(capabilities = SessionCapabilities(read = true, send = true))
+            }
+            override suspend fun startContinuation(session: Session, info: CodexTakeoverInfo): Session {
+                calls += "START:${info.cwd}:${session.todo?.id}"
+                return newSession
+            }
+        }
+        val coordinator = CodexTakeoverCoordinator(
+            res = context.resources,
+            client = client,
+            scope = scope,
+            onAdopted = { _, next -> adopted += next },
+            onFailure = { msg, _, _ -> fail("Unexpected failure: $msg") },
+            onSuccessToast = {},
+        )
+
+        coordinator.takeOver(source)
+        assertEquals(listOf("GET"), calls)
+        assertTrue(coordinator.pending is CodexTakeoverCoordinator.Pending.Takeover)
+
+        // Switching to "Continue in a new session instead" starts the continuation without posting takeover.
+        coordinator.continueFromPending()
+        assertEquals(listOf("GET", "START:/work:todo-1"), calls)
+        assertNull(coordinator.pending)
+        assertEquals(listOf(newSession), adopted)
+    }
+
+    @Test fun continueOnly409TransitionsToEncryptedContinuationWithoutRetryingToken() {
+        val calls = mutableListOf<String>()
+        val adopted = mutableListOf<Session>()
+        val source = codexSession(canResume = true, running = false)
+        val continued = Session(machineId = "m1", sessionId = "new-2", status = "working", agent = "codex")
+        val client = object : CodexTakeoverClient {
+            override suspend fun takeoverInfo(session: Session): CodexTakeoverInfo {
+                calls += "GET"
+                return plan(running = false, canResume = true, token = "tok-once")
+            }
+            override suspend fun takeover(session: Session, token: String, confirmStop: Boolean): Session {
+                calls += "POST:$token:$confirmStop"
+                throw HubFailure(HubError.Server, "continue only", status = 409, code = CODEX_TAKEOVER_CONTINUE_ONLY)
+            }
+            override suspend fun startContinuation(session: Session, info: CodexTakeoverInfo): Session {
+                calls += "START:${info.continuationPrompt}"
+                return continued
+            }
+        }
+        val coordinator = CodexTakeoverCoordinator(
+            res = context.resources,
+            client = client,
+            scope = scope,
+            onAdopted = { _, next -> adopted += next },
+            onFailure = { msg, _, _ -> fail("Unexpected failure: $msg") },
+            onSuccessToast = {},
+        )
+
+        coordinator.takeOver(source)
+        assertEquals(listOf("GET", "POST:tok-once:false"), calls)
+        val pending = coordinator.pending as CodexTakeoverCoordinator.Pending.Continuation
+        assertFalse(pending.info.canResume)
+        assertEquals(CodexTakeoverCoordinator.REASON_ENCRYPTED_CONTEXT, pending.info.reason)
+
+        coordinator.confirm()
+        assertEquals(listOf("GET", "POST:tok-once:false", "START:Continue from transcript"), calls)
+        assertNull(coordinator.pending)
+        assertEquals(listOf(continued), adopted)
+    }
+
+    @Test fun failedPostDismissesDialogAndRetryStartsFreshGet() {
+        var gets = 0
+        val calls = mutableListOf<String>()
+        var retryCallback: (() -> Unit)? = null
+        val source = codexSession(canResume = true, running = true)
+        val live = source.copy(capabilities = SessionCapabilities(read = true, send = true))
+        val client = object : CodexTakeoverClient {
+            override suspend fun takeoverInfo(session: Session): CodexTakeoverInfo {
+                gets++
+                calls += "GET:$gets"
+                return plan(running = gets == 1, canResume = true, token = "tok-$gets")
+            }
+            override suspend fun takeover(session: Session, token: String, confirmStop: Boolean): Session {
+                calls += "POST:$token:$confirmStop"
+                if (token == "tok-1") throw HubFailure(HubError.Server, "temporary", status = 503)
+                return live
+            }
+            override suspend fun startContinuation(session: Session, info: CodexTakeoverInfo): Session = error("unused")
+        }
+        val coordinator = CodexTakeoverCoordinator(
+            res = context.resources,
+            client = client,
+            scope = scope,
+            onAdopted = { _, _ -> },
+            onFailure = { _, retryLabel, retry ->
+                assertTrue(retryLabel.isNotBlank())
+                retryCallback = retry
+            },
+            onSuccessToast = {},
+        )
+
+        coordinator.takeOver(source)
+        assertTrue(coordinator.pending is CodexTakeoverCoordinator.Pending.Takeover)
+        coordinator.confirm()
+        assertNull("Dialog must dismiss on POST failure", coordinator.pending)
+        assertNotNull("Failure must expose retry action", retryCallback)
+
+        retryCallback!!.invoke()
+        assertEquals(listOf("GET:1", "POST:tok-1:true", "GET:2", "POST:tok-2:false"), calls)
+    }
+
+    @Test fun inFlightGuardBlocksDuplicateTapsAndKeepsDialogOpenWhileConfirming() {
+        val getGate = CompletableDeferred<CodexTakeoverInfo>()
+        val postGate = CompletableDeferred<Session>()
+        var getCount = 0
+        val source = codexSession(canResume = true, running = true)
+        val client = object : CodexTakeoverClient {
+            override suspend fun takeoverInfo(session: Session): CodexTakeoverInfo {
+                getCount++
+                return getGate.await()
+            }
+            override suspend fun takeover(session: Session, token: String, confirmStop: Boolean): Session = postGate.await()
+            override suspend fun startContinuation(session: Session, info: CodexTakeoverInfo): Session = error("unused")
+        }
+        val coordinator = CodexTakeoverCoordinator(
+            res = context.resources,
+            client = client,
+            scope = scope,
+            onAdopted = { _, _ -> },
+            onFailure = { msg, _, _ -> fail("Unexpected failure: $msg") },
+            onSuccessToast = {},
+        )
+
+        coordinator.takeOver(source)
+        assertTrue(coordinator.busy)
+        assertTrue(coordinator.isBusyFor(source))
+        coordinator.takeOver(source)
+        coordinator.continueInNewSession(source)
+        assertEquals(1, getCount)
+
+        getGate.complete(plan(running = true, canResume = true))
+        assertFalse(coordinator.busy)
+        assertTrue(coordinator.pending is CodexTakeoverCoordinator.Pending.Takeover)
+
+        coordinator.confirm()
+        assertTrue(coordinator.confirming)
+        assertNotNull("Dialog stays open while confirm POST is in flight", coordinator.pending)
+        coordinator.dismiss()
+        assertNotNull("Dismiss is blocked while confirm POST is in flight", coordinator.pending)
+
+        postGate.complete(source.copy(capabilities = SessionCapabilities(read = true, send = true)))
+        assertFalse(coordinator.confirming)
+        assertNull(coordinator.pending)
+    }
+
+    @Test fun chatSourceNoteShowsSingleLineAndOverflowMenuForResumableAndHidesMoreForContinueOnly() {
+        val calls = mutableListOf<String>()
+        val resumable = codexSession(canResume = true, running = true)
+        val client = object : CodexTakeoverClient {
+            override suspend fun takeoverInfo(session: Session): CodexTakeoverInfo {
+                calls += "GET:${session.sessionId}"
+                return plan(running = true, canResume = true)
+            }
+            override suspend fun takeover(session: Session, token: String, confirmStop: Boolean): Session = resumable
+            override suspend fun startContinuation(session: Session, info: CodexTakeoverInfo): Session = resumable
+        }
+        val coordinator = CodexTakeoverCoordinator(
+            res = context.resources,
+            client = client,
+            scope = scope,
+            onAdopted = { _, _ -> },
+            onFailure = { _, _, _ -> },
+            onSuccessToast = {},
+        )
+        val feedback = object : AppFeedback {
+            override fun failure(error: Throwable, operation: Boolean) = true
+            override fun notice(message: String) = true
+            override fun notice(message: String, action: FeedbackAction, style: FeedbackStyle) = true
+        }
+
+        rule.setContent {
+            PersonaTheme {
+                CompositionLocalProvider(LocalAppFeedback provides feedback) {
+                    Box(Modifier.width(380.dp)) {
+                        ChatSourceNote(session = resumable, takeover = coordinator)
+                        CodexTakeoverDialogs(coordinator)
+                    }
+                }
+            }
+        }
+        rule.onNodeWithTag("chat-takeover-primary").assertIsDisplayed().assertTextEquals("Take over")
+        rule.onNodeWithTag("chat-takeover-more").assertIsDisplayed().performClick()
+        rule.onNodeWithText("Continue in a new session").assertIsDisplayed()
+
+        // Tap Take over -> shows running confirmation JDialog with destructive Take over + Continue instead.
+        rule.onNodeWithTag("chat-takeover-primary").performClick()
+        rule.onNodeWithText("Take over this session?").assertIsDisplayed()
+        rule.onNodeWithText("This will end the turn currently running in the terminal.").assertIsDisplayed()
+        rule.onNodeWithText("Continue in a new session instead").assertIsDisplayed()
+    }
+
+    @Test fun chatSourceNoteContinueOnlyHidesOverflowAndStacksCleanlyOnNarrowWidth() {
+        val continueOnly = codexSession(canResume = false, running = false)
+        val coordinator = CodexTakeoverCoordinator(
+            res = context.resources,
+            client = null,
+            scope = scope,
+            onAdopted = { _, _ -> },
+            onFailure = { _, _, _ -> },
+            onSuccessToast = {},
+        )
+        rule.setContent {
+            PersonaTheme {
+                Box(Modifier.width(200.dp)) {
+                    ChatSourceNote(session = continueOnly, takeover = coordinator)
+                }
+            }
+        }
+        rule.onNodeWithTag("chat-takeover-primary").assertIsDisplayed().assertTextEquals("New session")
+        rule.onAllNodesWithTag("chat-takeover-more").assertCountEquals(0)
+    }
+}

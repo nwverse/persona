@@ -424,4 +424,66 @@ class HttpChatActionsTest {
             assertFalse(prices.containsKey("left-out"))
         }
     }
+
+    @Test fun codexTakeoverEndpointsEncodePathsUseSlowPostAndPreserve409Code() = runBlocking {
+        MockWebServer().use { server ->
+            val http = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+            val slow = mutableListOf<String>()
+            val fast = mutableListOf<String>()
+            val actions = HttpChatActions({ path, method, body ->
+                slow += "$method $path"
+                http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
+            }) { path, method, body ->
+                fast += "$method $path"
+                http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
+            }
+            val session = Session(
+                machineId = "mac one",
+                sessionId = "thread/1",
+                todo = SessionTodo(id = "todo-9", title = "Task"),
+            )
+            val expectedPath = "/api/v1/machines/mac%20one/codex/thread%2F1/takeover"
+            server.enqueue(MockResponse().setBody("""{"running":false,"can_resume":true,"token":"tok-1","cwd":"/work","transcript_path":"/tmp/t","continuation_prompt":"Continue here"}"""))
+            val info = actions.codexTakeoverInfo(session)
+            assertFalse(info.running)
+            assertTrue(info.canResume)
+            assertEquals("tok-1", info.token)
+            assertEquals("/work", info.cwd)
+            assertEquals("Continue here", info.continuationPrompt)
+            val getReq = server.takeRequest()
+            assertEquals("GET", getReq.method)
+            assertEquals(expectedPath, getReq.path)
+            assertEquals(listOf("GET $expectedPath"), fast)
+
+            server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"","session_id":"thread/1","title":"Codex","status":"working"}}"""))
+            val adopted = actions.codexTakeover(session, info.token, confirmStop = true)
+            assertEquals(SessionKey("mac one", "thread/1"), adopted.key)
+            val postReq = server.takeRequest()
+            assertEquals("POST", postReq.method)
+            assertEquals(expectedPath, postReq.path)
+            val postJson = JsonCodec.parseToJsonElement(postReq.body.readUtf8()).jsonObject
+            assertEquals("tok-1", postJson["token"]?.jsonPrimitive?.content)
+            assertEquals(true, postJson["confirm_stop"]?.jsonPrimitive?.boolean)
+
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"continue only","code":"codex_takeover_continue_only"}"""))
+            val conflict = runCatching { actions.codexTakeover(session, info.token, confirmStop = false) }.exceptionOrNull() as HubFailure
+            assertEquals(409, conflict.status)
+            assertEquals(CODEX_TAKEOVER_CONTINUE_ONLY, conflict.code)
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"mac one","session_id":"new-thread","status":"working"}}"""))
+            val continued = actions.startCodexContinuation(session, info)
+            assertEquals(SessionKey("mac one", "new-thread"), continued.key)
+            val startReq = server.takeRequest()
+            assertEquals("POST", startReq.method)
+            assertEquals("/api/v1/sessions", startReq.path)
+            val startJson = JsonCodec.parseToJsonElement(startReq.body.readUtf8()).jsonObject
+            assertEquals("codex", startJson["launcher"]?.jsonPrimitive?.content)
+            assertEquals("Continue here", startJson["prompt"]?.jsonPrimitive?.content)
+            assertEquals(false, startJson["async"]?.jsonPrimitive?.boolean)
+            assertEquals("todo-9", startJson["todo_id"]?.jsonPrimitive?.content)
+            assertTrue(slow.contains("POST $expectedPath"))
+            assertTrue(slow.contains("POST /api/v1/sessions"))
+        }
+    }
 }

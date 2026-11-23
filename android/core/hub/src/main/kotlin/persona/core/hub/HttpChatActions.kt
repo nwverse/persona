@@ -7,6 +7,7 @@ import persona.core.contracts.api.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -191,6 +192,47 @@ class HttpChatActions internal constructor(
                     put(id, if (price == null || price is JsonNull) null else JsonCodec.decodeFromJsonElement<ModelPrice>(price))
                 }
             }
+        }
+    }
+
+    override suspend fun codexTakeoverInfo(session: Session): CodexTakeoverInfo {
+        require(session.machineId.isNotBlank() && session.sessionId.isNotBlank())
+        return request(api("machines", session.machineId, "codex", session.sessionId, "takeover"), "GET", null).use { response ->
+            if (!response.isSuccessful) throw HubFailure.from(response)
+            JsonCodec.decodeFromString<CodexTakeoverInfo>(response.body?.string().orEmpty())
+        }
+    }
+
+    override suspend fun codexTakeover(session: Session, token: String, confirmStop: Boolean): Session {
+        require(session.machineId.isNotBlank() && session.sessionId.isNotBlank())
+        val body = JsonCodec.encodeToString(CodexTakeoverRequest(token = token, confirmStop = confirmStop))
+            .toRequestBody("application/json; charset=utf-8".toMediaType())
+        return slow(api("machines", session.machineId, "codex", session.sessionId, "takeover"), "POST", body).use { response ->
+            if (!response.isSuccessful) throw HubFailure.from(response)
+            val adopted = JsonCodec.decodeFromString<CodexTakeoverResponse>(response.body?.string().orEmpty()).session
+            if (adopted.machineId.isBlank()) adopted.copy(machineId = session.machineId) else adopted
+        }
+    }
+
+    override suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo): Session {
+        require(session.machineId.isNotBlank() && info.cwd.isNotBlank())
+        val payload = AgentStartRequest(
+            machineId = session.machineId,
+            cwd = info.cwd,
+            launcher = "codex",
+            prompt = info.continuationPrompt,
+            agentType = "codex",
+            async = false,
+            todoId = session.todo?.id,
+        )
+        val body = compatibleRequestBody(
+            "/api/v1/sessions",
+            JsonCodec.encodeToString(payload).toRequestBody("application/json; charset=utf-8".toMediaType()),
+        )!!
+        return slow(api("sessions"), "POST", body).use { response ->
+            if (!response.isSuccessful) throw HubFailure.from(response)
+            val created = JsonCodec.decodeFromString<CodexTakeoverResponse>(response.body?.string().orEmpty()).session
+            if (created.machineId.isBlank()) created.copy(machineId = session.machineId) else created
         }
     }
 

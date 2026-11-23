@@ -201,6 +201,11 @@ internal fun ChatActions.inGroup(names: GroupNames): ChatActions {
         override suspend fun catalogPrices(ids: List<String>) = source.catalogPrices(ids)
         override suspend fun fork(session: Session, atItemId: String) = source.fork(names.rawSession(session), atItemId)
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = source.rewind(names.rawSession(session), target, restore)
+        override suspend fun codexTakeoverInfo(session: Session) = source.codexTakeoverInfo(names.rawSession(session))
+        override suspend fun codexTakeover(session: Session, token: String, confirmStop: Boolean) =
+            names.session(source.codexTakeover(names.rawSession(session), token, confirmStop))
+        override suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo) =
+            names.session(source.startCodexContinuation(names.rawSession(session), info))
     }
 }
 
@@ -416,6 +421,11 @@ internal fun AgentOperations.inGroup(names: GroupNames): AgentOperations {
         override suspend fun interruptSession(key: SessionKey) = source.interruptSession(names.raw(key))
         override suspend fun deleteSession(key: SessionKey) = source.deleteSession(names.raw(key))
         override suspend fun forkSession(key: SessionKey) = source.forkSession(names.raw(key))
+        override suspend fun codexTakeoverInfo(key: SessionKey) = source.codexTakeoverInfo(names.raw(key))
+        override suspend fun codexTakeover(key: SessionKey, token: String, confirmStop: Boolean) =
+            names.session(source.codexTakeover(names.raw(key), token, confirmStop))
+        override suspend fun startCodexContinuation(key: SessionKey, info: CodexTakeoverInfo, todoId: String?) =
+            names.session(source.startCodexContinuation(names.raw(key), info, todoId))
     }
 }
 

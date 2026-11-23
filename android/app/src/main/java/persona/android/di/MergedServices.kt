@@ -460,6 +460,11 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         override suspend fun interruptSession(key: SessionKey) = operationsFor(key.machineId).interruptSession(key)
         override suspend fun deleteSession(key: SessionKey) = operationsFor(key.machineId).deleteSession(key)
         override suspend fun forkSession(key: SessionKey) = operationsFor(key.machineId).forkSession(key)
+        override suspend fun codexTakeoverInfo(key: SessionKey) = operationsFor(key.machineId).codexTakeoverInfo(key)
+        override suspend fun codexTakeover(key: SessionKey, token: String, confirmStop: Boolean) =
+            operationsFor(key.machineId).codexTakeover(key, token, confirmStop)
+        override suspend fun startCodexContinuation(key: SessionKey, info: persona.core.contracts.CodexTakeoverInfo, todoId: String?) =
+            operationsFor(key.machineId).startCodexContinuation(key, info, todoId)
     }
     val assistant = states[chosen].operations?.assistant ?: states.firstNotNullOfOrNull { it.operations?.assistant }
     val creations = states.map { it.creation }

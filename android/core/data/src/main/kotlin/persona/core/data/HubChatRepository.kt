@@ -294,6 +294,9 @@ class HubChatRepository(
             return delegate.fork(session, entry?.lock?.withLock { entry.realtime.canonicalId(atItemId) } ?: atItemId)
         }
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = delegate.rewind(session, target, restore)
+        override suspend fun codexTakeoverInfo(session: Session) = delegate.codexTakeoverInfo(session)
+        override suspend fun codexTakeover(session: Session, token: String, confirmStop: Boolean) = delegate.codexTakeover(session, token, confirmStop)
+        override suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo) = delegate.startCodexContinuation(session, info)
     }
 
     /** The composer shares interruption state with menu actions. Failed requests leave it unchanged. */

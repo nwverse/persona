@@ -48,6 +48,11 @@ import persona.core.domain.answer.askingLine
 import persona.core.domain.showsStarCard
 import persona.core.domain.showsStarPill
 import persona.core.navigation.*
+import persona.feature.chat.ChatSourceNote
+import persona.feature.chat.CodexTakeoverClient
+import persona.feature.chat.CodexTakeoverDialogs
+import persona.feature.chat.codexTakeoverMenuActions
+import persona.feature.chat.rememberCodexTakeoverCoordinator
 import kotlinx.coroutines.delay
 import java.time.Instant
 
@@ -293,6 +298,19 @@ internal fun AgentsScreen(
     /** Whether a request can be answered now: through its own group's connection when there are several groups. */
     fun reachable(request: Interaction) = groups.stateFor(request.machineId, connection) == ConnectionState.Online
     fun open(session: SessionKey) { navigator.navigate(ChatRoute(session.machineId, session.sessionId)) }
+    val takeoverOps = model.operationsApi ?: LocalAgentsOperations.current?.operations
+    val takeoverClient = remember(takeoverOps) { takeoverOps?.let(CodexTakeoverClient::of) }
+    val takeoverCoordinator = rememberCodexTakeoverCoordinator(
+        client = takeoverClient,
+        sessions = model.sessions,
+        onOpenSession = null,
+        fallbackToast = toast,
+        onCompleted = { _, adopted ->
+            historyMachine = null
+            historySession = null
+            open(adopted.key)
+        },
+    )
     fun connectionSettings() { navigator.navigate(ConnectionSettingsRoute) }
     // The title while the hub is out of reach opens why, since when and "Retry now" in place (iOS ConnectionTitle).
     val haptics = persona.core.designsystem.rememberHaptics()
@@ -324,18 +342,24 @@ internal fun AgentsScreen(
                 icon = PhIcons.Archive, enabled = archiveState.busy == null && !archiveState.loading && !operations.busy) { archiveTarget = row.session } else null
         val forkOnline = groups.stateFor(row.session.machineId, connection) == ConnectionState.Online &&
             page.machines.firstOrNull { it.id == row.session.machineId }?.online != false
+        val takeoverActions = if (takeoverClient != null && !row.session.archived) {
+            codexTakeoverMenuActions(row.session, takeoverCoordinator, enabled = !operations.busy && forkOnline)
+        } else emptyList()
         val forkAction: (() -> Unit)? = if (row.session.canFork && !row.session.archived && model.hasOperations) ({
             model.fork(row.session) { forked -> open(forked) }
         }) else null
-        if (!row.session.isLive) listOfNotNull(
-            JAction(stringResource(R.string.agents_action_open_read_only), onClick = { openRow(row) }),
+        if (!row.session.isLive) buildList {
+            add(JAction(stringResource(R.string.agents_action_open_read_only), onClick = { openRow(row) }))
+            addAll(takeoverActions)
             forkAction?.let {
-                JAction(stringResource(persona.feature.chat.R.string.chat_menu_fork), PersonaIcons.forkChat,
-                    enabled = !operations.busy && forkOnline, onClick = it)
-            },
-            archiveAction,
-            JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !operations.busy) { operationDialog = AgentOperationDialog.Delete(row.session) }
-                .takeIf { row.session.canDelete })
+                add(JAction(stringResource(persona.feature.chat.R.string.chat_menu_fork), PersonaIcons.forkChat,
+                    enabled = !operations.busy && forkOnline, onClick = it))
+            }
+            archiveAction?.let(::add)
+            if (row.session.canDelete) add(JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !operations.busy) {
+                operationDialog = AgentOperationDialog.Delete(row.session)
+            })
+        }
         else AgentSessionMenuItems(row, row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row), operations.busy,
             onOpen = { openRow(row) }, onPin = { model.pin(row) }, onMute = { model.mute(row) },
             onRead = { model.markRead(listOf(row)) }, onRename = { operationDialog = AgentOperationDialog.Rename(row.session) },
@@ -349,6 +373,7 @@ internal fun AgentsScreen(
             onAttach = if (row.session.canAttach) ({ model.attach(row.session) }) else null,
             onFork = forkAction,
             forkOnline = forkOnline,
+            takeoverActions = takeoverActions,
             onInterrupt = { model.interrupt(row.session) },
             onLinkTodo = { pickingTodoForSession = row.session },
             onUnlinkTodo = row.session.todo?.let { todo -> { model.unlinkTodo(todo.id, row.session) } },
@@ -1016,7 +1041,14 @@ internal fun AgentsScreen(
             persona.feature.chat.ChatDestination(ChatRoute(requireNotNull(historyMachine), requireNotNull(historySession)), navigator,
                 historyReadOnly = true, onHistoryBack = { historyMachine = null; historySession = null },
                 historyFooter = {
-                    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    if (target != null && target.canContinueCodex && takeoverClient != null) {
+                        ChatSourceNote(
+                            session = target,
+                            modifier = Modifier.navigationBarsPadding(),
+                            takeover = takeoverCoordinator,
+                            takeoverEnabled = connection == ConnectionState.Online && page.machines.any { it.id == target.machineId && it.online },
+                        )
+                    } else Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                         creation?.error?.let { Text(it.resolve(), style = PersonaTheme.type.caption) }
                         // A Codex history thread or a runtime's session is not resumed in a terminal from the phone.
                         val sourced = target?.takeIf { it.hasSource }
@@ -1037,6 +1069,7 @@ internal fun AgentsScreen(
                 })
         }
     }
+    if (takeoverClient != null) CodexTakeoverDialogs(takeoverCoordinator)
     operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId], creationModel?.service,
         page.machines.firstOrNull { m -> m.id == it.session.machineId }) { operationDialog = null } }
     pickingTodoForSession?.let { targetSession ->
@@ -1373,6 +1406,8 @@ internal fun AgentSessionMenuItems(
     onAttach: (() -> Unit)? = null,
     onFork: (() -> Unit)? = null,
     forkOnline: Boolean = true,
+    /** Explicit Codex takeover / continuation actions, placed as a group right after terminal items. */
+    takeoverActions: List<JAction> = emptyList(),
     /** Stops its turn; offered while it works or needs you and can be interrupted (iOS `AgentRowMenu`). */
     onInterrupt: (() -> Unit)? = null,
     onLinkTodo: (() -> Unit)? = null,
@@ -1413,6 +1448,7 @@ internal fun AgentSessionMenuItems(
         if (row.unseen) add(JAction(stringResource(R.string.agents_action_mark_read), PhIcons.Check, onClick = onRead))
         // Only a session in a terminal resumes there; a Codex thread by its own thread id.
         session.resumeCommand()?.let { command -> add(JAction(stringResource(R.string.agents_action_copy_resume), onClick = { copy(command, null) })) }
+        if (takeoverActions.isNotEmpty()) addAll(takeoverActions)
         add(JAction(stringResource(R.string.agents_action_copy_directory), enabled = session.cwd.isNotBlank(), onClick = { copy(session.cwd, null) }))
         add(JAction(stringResource(R.string.agents_action_open_session), onClick = onOpen))
         // Its pane quits, or a runtime's session ends where its node says it can (#6294).

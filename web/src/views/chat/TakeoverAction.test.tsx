@@ -153,4 +153,41 @@ describe("TakeoverAction interactions", () => {
     render({ ...baseSession, source_kind: "codex_app_server", capabilities: undefined } as Session);
     expect(host.querySelectorAll("button")).toHaveLength(0);
   });
+
+  it("compact variant renders primary Take over plus overflow menu for Continue in a new session", async () => {
+    state.api.mockResolvedValue(plan());
+    act(() => root.render(<TakeoverAction session={baseSession} variant="compact" />));
+    expect(button(host, t("chat-takeover.takeover"))).toBeTruthy();
+    expect(button(host, t("chat-takeover.takeover_new"))).toBeFalsy();
+    const more = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`);
+    expect(more).toBeTruthy();
+    await act(async () => more!.click());
+    const menuItem = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) => el.textContent?.includes(t("chat-takeover.takeover_new")));
+    expect(menuItem).toBeTruthy();
+    await act(async () => menuItem!.click());
+    await flush();
+    expect(state.launch).toHaveBeenCalledTimes(1);
+  });
+
+  it("compact variant with can_resume false renders single short button without overflow menu", async () => {
+    state.api.mockResolvedValue(plan({ can_resume: false, reason: "unavailable" }));
+    const continueOnly = { ...baseSession, capabilities: { takeover: { running: false, can_resume: false } } } as Session;
+    act(() => root.render(<TakeoverAction session={continueOnly} variant="compact" />));
+    expect(button(host, t("chat-takeover.takeover"))).toBeFalsy();
+    expect(button(host, t("chat-takeover.takeover_new_short"))).toBeTruthy();
+    expect(host.querySelector(`button[aria-label="${t("chat-chatview.more_actions")}"]`)).toBeNull();
+    await act(async () => button(host, t("chat-takeover.takeover_new_short")).click());
+    await flush();
+    expect(document.body.textContent).toContain(t("chat-takeover.reason_unavailable"));
+  });
+
+  it("continueSignal triggers continuation and reports pending state across SSE updates", async () => {
+    const pendingChanges: boolean[] = [];
+    state.api.mockResolvedValue(plan({ can_resume: false, reason: "encrypted_context" }));
+    act(() => root.render(<TakeoverAction session={baseSession} variant="compact" continueSignal={0} onPendingChange={(p) => pendingChanges.push(p)} />));
+    act(() => root.render(<TakeoverAction session={baseSession} variant="compact" continueSignal={1} onPendingChange={(p) => pendingChanges.push(p)} />));
+    await flush();
+    expect(pendingChanges.at(-1)).toBe(true);
+    expect(document.body.textContent).toContain(t("chat-takeover.reason_encrypted_context"));
+  });
 });

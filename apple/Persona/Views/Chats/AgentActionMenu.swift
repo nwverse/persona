@@ -70,7 +70,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
                   hosted: hosted, showsSpace: showsSpace,
                   terminalResume: session.status == .offline || session.status == .unknown
                     ? session.terminalResume(on: model.machine(session.key.machineRef)) : .hidden,
-                  phone: AgentMenuFacts.isPhone, moveChoices: moveChoices)
+                  phone: AgentMenuFacts.supportsTakeover, moveChoices: moveChoices)
     }
 
     /// Test and preview construction needs no live hub. Production uses the model initializer above.
@@ -175,9 +175,10 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
 }
 
 enum AgentMenuFacts {
-    @MainActor static var isPhone: Bool {
+    /// Takeover and continuation are available on iOS (iPhone and iPad); retired native Mac stays excluded.
+    nonisolated static var supportsTakeover: Bool {
         #if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .phone
+        true
         #else
         false
         #endif

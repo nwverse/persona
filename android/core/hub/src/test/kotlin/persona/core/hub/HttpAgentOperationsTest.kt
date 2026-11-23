@@ -85,4 +85,35 @@ class HttpAgentOperationsTest {
             catch (e: AgentOperationFailure) { assertFalse(e.uncertain) }
         }
     }
+
+    @Test fun codexTakeoverEndpointsPreserve409CodeAndStartContinuation() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAgentOperations("scope", server.url("/").toString(), "test-token", OkHttpClient())
+            val key = SessionKey("mac one", "thread/2")
+            val expectedPath = "/api/v1/machines/mac%20one/codex/thread%2F2/takeover"
+            server.enqueue(MockResponse().setBody("""{"running":true,"can_resume":true,"token":"tok-2","cwd":"/work","transcript_path":"/tmp/t","continuation_prompt":"Resume"}"""))
+            val info = api.codexTakeoverInfo(key)
+            assertTrue(info.running && info.canResume && info.token == "tok-2")
+            assertEquals(expectedPath, server.takeRequest().path)
+
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"sealed","code":"codex_takeover_continue_only"}"""))
+            val conflict = runCatching { api.codexTakeover(key, "tok-2", confirmStop = true) }.exceptionOrNull() as HubFailure
+            assertEquals(409, conflict.status)
+            assertEquals(persona.core.contracts.CODEX_TAKEOVER_CONTINUE_ONLY, conflict.code)
+            val postReq = server.takeRequest()
+            assertEquals("POST", postReq.method)
+            assertEquals(expectedPath, postReq.path)
+
+            server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"","session_id":"continued-1","status":"working"}}"""))
+            val created = api.startCodexContinuation(key, info, todoId = "todo-7")
+            assertEquals(SessionKey("mac one", "continued-1"), created.key)
+            val startReq = server.takeRequest()
+            assertEquals("POST", startReq.method)
+            assertEquals("/api/v1/sessions", startReq.path)
+            val startJson = JsonCodec.parseToJsonElement(startReq.body.readUtf8()).jsonObject
+            assertEquals("codex", startJson["launcher"]?.jsonPrimitive?.content)
+            assertEquals("todo-7", startJson["todo_id"]?.jsonPrimitive?.content)
+            assertEquals(false, startJson["async"]?.jsonPrimitive?.boolean)
+        }
+    }
 }

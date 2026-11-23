@@ -36,6 +36,10 @@ import java.time.Instant
 import persona.core.designsystem.FeedbackNotice
 import persona.core.designsystem.FeedbackStyle
 import persona.core.designsystem.rememberToastState
+import persona.feature.chat.CodexTakeoverClient
+import persona.feature.chat.CodexTakeoverDialogs
+import persona.feature.chat.codexTakeoverMenuActions
+import persona.feature.chat.rememberCodexTakeoverCoordinator
 
 /**
  * The space page as a destination of its own ([SpaceRoute]): in a wide window it opens beside the Agents list (the
@@ -138,7 +142,21 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
         model.opened(row)
         navigator.navigate(ChatRoute(row.session.machineId, row.session.sessionId))
     }
+    val takeoverOps = model.operationsApi ?: LocalAgentsOperations.current?.operations
+    val takeoverClient = remember(takeoverOps) { takeoverOps?.let(CodexTakeoverClient::of) }
+    val takeoverCoordinator = rememberCodexTakeoverCoordinator(
+        client = takeoverClient,
+        sessions = model.sessions,
+        onOpenSession = null,
+        fallbackToast = toast,
+        onCompleted = { _, adopted -> navigator.navigate(ChatRoute(adopted.machineId, adopted.sessionId)) },
+    )
     val rowMenu: @Composable (AgentSession) -> List<JAction> = { row ->
+        val onlineForRow = groups.stateFor(row.session.machineId, connection) == ConnectionState.Online &&
+            page.machines.firstOrNull { it.id == row.session.machineId }?.online != false
+        val takeoverActions = if (takeoverClient != null && !row.session.archived) {
+            codexTakeoverMenuActions(row.session, takeoverCoordinator, enabled = !operations.busy && onlineForRow)
+        } else emptyList()
         AgentSessionMenuItems(row, row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row), operations.busy,
             onOpen = { openRow(row) }, onPin = { model.pin(row) }, onMute = { model.mute(row) },
             onRead = { model.markRead(listOf(row)) }, onRename = { operationDialog = AgentOperationDialog.Rename(row.session) },
@@ -150,7 +168,8 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
             onFork = if (row.session.canFork && !row.session.archived && model.hasOperations) ({
                 model.fork(row.session) { forked -> navigator.navigate(ChatRoute(forked.machineId, forked.sessionId)) }
             }) else null,
-            forkOnline = groups.stateFor(row.session.machineId, connection) == ConnectionState.Online && page.machines.firstOrNull { it.id == row.session.machineId }?.online != false,
+            forkOnline = onlineForRow,
+            takeoverActions = takeoverActions,
             onInterrupt = { model.interrupt(row.session) },
             onClose = { operationDialog = AgentOperationDialog.Close(row.session) },
             onDelete = { operationDialog = AgentOperationDialog.Delete(row.session) })
@@ -176,6 +195,7 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
         val machine = page.machines.firstOrNull { it.id == dialog.session.machineId }
         AgentOperationDialog(dialog, model, machine?.displayName, creationModel?.service, machine) { operationDialog = null }
     }
+    if (takeoverClient != null) CodexTakeoverDialogs(takeoverCoordinator)
     confirmRead?.let { rows -> MarkAllReadDialog(rows.size, onDismiss = { confirmRead = null }) { model.markRead(rows) } }
     if (newAgent) {
         if (creationModel != null) NewAgentDialog(creationModel, page.machines, connection == ConnectionState.Online,

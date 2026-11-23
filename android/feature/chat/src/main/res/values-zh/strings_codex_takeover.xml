@@ -1,0 +1,13 @@
+<resources>
+    <string name="chat_takeover_action">接管</string>
+    <string name="chat_takeover_continue_short">新会话继续</string>
+    <string name="chat_takeover_continue_long">另开新会话继续</string>
+    <string name="chat_takeover_continue_instead">改为新会话继续</string>
+    <string name="chat_takeover_running_reason">Codex 正在终端运行</string>
+    <string name="chat_takeover_confirm_title">接管此会话？</string>
+    <string name="chat_takeover_running_confirm">会结束终端里正在跑的这一轮。</string>
+    <string name="chat_takeover_continue_title">另开新会话继续？</string>
+    <string name="chat_takeover_reason_encrypted_context">此对话的上下文已加密封装，无法直接恢复，请另开新会话继续。</string>
+    <string name="chat_takeover_reason_unavailable">此会话无法安全恢复，请另开新会话继续。</string>
+    <string name="chat_takeover_done">已接管</string>
+</resources>

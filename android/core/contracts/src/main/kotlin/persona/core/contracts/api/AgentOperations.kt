@@ -1,5 +1,7 @@
 package persona.core.contracts.api
 
+import persona.core.contracts.CodexTakeoverInfo
+import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 
 /** Hub preferences use machine/space-name keys, while renaming uses workspace IDs. */
@@ -26,6 +28,15 @@ interface AgentOperations {
     suspend fun deleteSession(key: SessionKey): Unit = throw UnsupportedOperationException("Delete session unavailable")
     /** "Branch to new chat" (POST /sessions/{mid}/{sid}/fork with empty at_item_id): copies the session into a new one and returns its id. */
     suspend fun forkSession(key: SessionKey): String = throw UnsupportedOperationException("Fork session unavailable")
+    /** Inspect whether a read-only Codex CLI session can be resumed or continued (`GET /api/v1/machines/{mid}/codex/{sid}/takeover`). */
+    suspend fun codexTakeoverInfo(key: SessionKey): CodexTakeoverInfo =
+        throw UnsupportedOperationException("Codex takeover unavailable")
+    /** Explicitly take over a read-only Codex CLI session (`POST /api/v1/machines/{mid}/codex/{sid}/takeover`). */
+    suspend fun codexTakeover(key: SessionKey, token: String, confirmStop: Boolean): Session =
+        throw UnsupportedOperationException("Codex takeover unavailable")
+    /** Start an independent Codex continuation session carrying the source transcript extract and linked to-do. */
+    suspend fun startCodexContinuation(key: SessionKey, info: CodexTakeoverInfo, todoId: String? = null): Session =
+        throw UnsupportedOperationException("Codex continuation unavailable")
 }
 
 /** An ambiguous write must be verified before repeating a one-shot action. */
