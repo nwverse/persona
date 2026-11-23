@@ -58,6 +58,9 @@ type remoteThread struct {
 	// provisional marks an in-flight coldResume pre-registration: incoming requests and notifications for the thread
 	// are accepted, while codexOwner does not advertise ownership until thread/resume succeeds.
 	provisional bool
+	// ready is closed when an in-flight provisional coldResume finishes (success or rollback), so early approval
+	// responses wait for ownership confirmation before forwarding their reply.
+	ready chan struct{}
 	// pinnedSeq is the refreshSeq when coldResume registered or completed this thread; refreshes started with an
 	// older snapshot sequence must preserve it instead of dropping it as unloaded.
 	pinnedSeq uint64
@@ -439,7 +442,16 @@ func (c *codexRemote) refresh() error {
 			continue
 		}
 		t := c.threads[raw]
-		known[raw], seenRevision[raw] = t, t.revision
+		seenRevision[raw] = t.revision
+		if t.provisional {
+			// Keep provisional coldResume state out of refresh's server-confirmed copy so a rolled-back
+			// provisional thread is never resurrected as provisional or joined.
+			t.provisional = false
+			t.joined = false
+			t.pinnedSeq = 0
+			t.ready = nil
+		}
+		known[raw] = t
 		if c.seen[raw].ephemeral {
 			// Read once and found to be the app-server's own background job: never a session, so not read again
 			// while it stays loaded.
@@ -606,13 +618,23 @@ dispatch:
 	c.slow, c.seen = slow, seen
 	// Preserve events that arrived during metadata RPCs; metadata never overwrites a joined thread's current turn.
 	for raw, t := range next {
-		if old, ok := c.threads[raw]; ok && old.revision != seenRevision[raw] {
-			t.joined, t.turn, t.partial, t.files, t.status, t.revision, t.buffer, t.lastDelta = old.joined, old.turn, old.partial, old.files, old.status, old.revision, old.buffer, old.lastDelta
-			t.failure, t.failureKind, t.ended = old.failure, old.failureKind, old.ended
-			t.serviceTier, t.serviceTierRevision = old.serviceTier, old.serviceTierRevision
-			t.model, t.effort = old.model, old.effort // an effort just set (codex_effort.go) over a read from before it
-			t.path = old.path
-			t.provisional, t.pinnedSeq = old.provisional, old.pinnedSeq
+		if old, ok := c.threads[raw]; ok {
+			if old.revision != seenRevision[raw] || old.provisional {
+				t.joined, t.turn, t.partial, t.files, t.status, t.revision, t.buffer, t.lastDelta = old.joined, old.turn, old.partial, old.files, old.status, old.revision, old.buffer, old.lastDelta
+				t.failure, t.failureKind, t.ended = old.failure, old.failureKind, old.ended
+				t.serviceTier, t.serviceTierRevision = old.serviceTier, old.serviceTierRevision
+				t.model, t.effort = old.model, old.effort // an effort just set (codex_effort.go) over a read from before it
+				t.path = old.path
+				t.provisional, t.pinnedSeq, t.ready = old.provisional, old.pinnedSeq, old.ready
+				next[raw] = t
+			}
+		} else if t.provisional || t.joined || t.ready != nil {
+			// A provisional pre-registration rolled back while this refresh was in flight: keep only the
+			// server-confirmed loaded thread as non-provisional and unjoined.
+			t.provisional = false
+			t.joined = false
+			t.pinnedSeq = 0
+			t.ready = nil
 			next[raw] = t
 		}
 	}
@@ -761,6 +783,7 @@ func (c *codexRemote) coldResume(ctx context.Context, id string, src codexSource
 	}
 	// Pre-register the subscription before thread/resume so immediate approval requests and turn events emitted
 	// before the RPC returns are received instead of dropped, and concurrent refreshes cannot erase it.
+	var readyCh chan struct{}
 	c.mu.Lock()
 	c.refreshSeq++
 	preSeq := c.refreshSeq
@@ -775,6 +798,7 @@ func (c *codexRemote) coldResume(ctx context.Context, id string, src codexSource
 		}
 		c.threads[src.thread] = cur
 	} else {
+		readyCh = make(chan struct{})
 		c.threads[src.thread] = remoteThread{
 			id:          src.thread,
 			publicID:    id,
@@ -783,6 +807,7 @@ func (c *codexRemote) coldResume(ctx context.Context, id string, src codexSource
 			status:      proto.StatusDone,
 			joined:      true,
 			provisional: true,
+			ready:       readyCh,
 			pinnedSeq:   preSeq,
 			revision:    1,
 			files:       map[string][]string{},
@@ -791,16 +816,22 @@ func (c *codexRemote) coldResume(ctx context.Context, id string, src codexSource
 	preRev := c.threads[src.thread].revision
 	c.mu.Unlock()
 
+	var readyOnce sync.Once
+	closeReady := func() {
+		if readyCh != nil {
+			readyOnce.Do(func() { close(readyCh) })
+		}
+	}
+
 	rollback := func() {
 		var cancelAsks []*remoteAsk
 		c.mu.Lock()
 		if cur, ok := c.threads[src.thread]; ok {
-			if cur.provisional {
-				delete(c.threads, src.thread)
-			} else if !wasLoaded {
+			if cur.provisional || !wasLoaded {
 				delete(c.threads, src.thread)
 			} else {
 				cur.joined = false
+				cur.ready = nil
 				cur.revision++
 				c.threads[src.thread] = cur
 			}
@@ -818,6 +849,7 @@ func (c *codexRemote) coldResume(ctx context.Context, id string, src codexSource
 			}
 			ask.cancel()
 		}
+		closeReady()
 	}
 
 	var reply struct {
@@ -847,6 +879,7 @@ func (c *codexRemote) coldResume(ctx context.Context, id string, src codexSource
 	t.publicID = id
 	t.joined = true
 	t.provisional = false
+	t.ready = nil
 	t.pinnedSeq = doneSeq
 	if title := firstNonEmpty(d.Name, d.Preview); title != "" {
 		t.title = title
@@ -884,6 +917,7 @@ func (c *codexRemote) coldResume(ctx context.Context, id string, src codexSource
 	t.revision++
 	c.threads[src.thread] = t
 	c.mu.Unlock()
+	closeReady()
 	c.n.codices.mu.Lock()
 	if c.n.codices.config.Joined == nil {
 		c.n.codices.config.Joined = map[string]string{}

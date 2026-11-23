@@ -273,8 +273,9 @@ func (n *Node) codexQuitHostPane(ctx context.Context, h host.Host, ref host.Pane
 	}
 	readSource := "visible"
 	if ref.Kind == host.Herdr {
-		// Herdr's visible source returns scrolled-up history when the user scrolled back; read live output tail instead.
-		readSource = "recent"
+		// Herdr's visible source returns scrolled-up history, and recent scrollback can hit macOS herdr's 8 KB
+		// socket truncation limit; detection reads the live bottom grid directly.
+		readSource = "detection"
 	}
 	checkComposer := func() error {
 		text, err := h.Read(ctx, ref, host.ReadOpts{Source: readSource, Lines: 120})

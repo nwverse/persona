@@ -349,7 +349,7 @@ func TestCodexTakeoverSafeQuitHerdrHerdrCoreAndTernPanes(t *testing.T) {
 			}
 			wantSrc := "visible"
 			if tc.kind == host.Herdr {
-				wantSrc = "recent"
+				wantSrc = "detection"
 			}
 			if len(fh.readSources) < 2 {
 				t.Fatalf("readSources = %v, want >=2 reads", fh.readSources)
@@ -398,12 +398,12 @@ func TestCodexTakeoverSafeQuitHerdrHerdrCoreAndTernPanes(t *testing.T) {
 		})
 	}
 
-	t.Run("herdr scrolled viewport cannot mask live draft in recent tail", func(t *testing.T) {
+	t.Run("herdr scrolled viewport cannot mask live draft in detection grid", func(t *testing.T) {
 		fh := &fakeTakeoverLauncherHost{
 			kind: host.Herdr,
 			readBySrc: map[string]string{
-				"visible": emptyComposer,
-				"recent":  draftComposer,
+				"visible":   emptyComposer,
+				"detection": draftComposer,
 			},
 			pids: []int{writer.PID},
 		}

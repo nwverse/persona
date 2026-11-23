@@ -896,3 +896,260 @@ func TestCodexTakeoverRowReusesListPassDesktopProbe(t *testing.T) {
 		t.Fatalf("prepare should perform live desktop probe, got (%+v, %v)", plan, err)
 	}
 }
+
+func TestCodexTakeoverColdResumeRollbackNotResurrectedByConcurrentRefresh(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	cwd := t.TempDir()
+	path := writeCodexTestRollout(t, home, remoteRaw, cwd, "codex-tui", "cli", time.Now().Add(-time.Minute))
+	id := n.registerCodex(home, remoteRaw, path)
+
+	resumeEntered := make(chan struct{})
+	releaseResume := make(chan struct{})
+	readEntered := make(chan struct{})
+	releaseRead := make(chan struct{})
+	var mu sync.Mutex
+	loaded := []string{}
+	blockRead := false
+	var writeMu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		send := func(v any) {
+			b, _ := json.Marshal(v)
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			wctx, cancel := context.WithTimeout(r.Context(), time.Second)
+			defer cancel()
+			_ = c.Write(wctx, websocket.MessageText, b)
+		}
+		for {
+			_, b, err := c.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var m codexMessage
+			if json.Unmarshal(b, &m) != nil || len(m.ID) == 0 {
+				continue
+			}
+			go func(m codexMessage) {
+				var p map[string]any
+				_ = json.Unmarshal(m.Params, &p)
+				tid, _ := p["threadId"].(string)
+				switch m.Method {
+				case "initialize":
+					send(map[string]any{"id": m.ID, "result": map[string]any{"codexHome": home}})
+				case "thread/loaded/list":
+					mu.Lock()
+					ids := slices.Clone(loaded)
+					mu.Unlock()
+					send(map[string]any{"id": m.ID, "result": map[string]any{"data": ids}})
+				case "thread/read":
+					mu.Lock()
+					shouldBlock := tid == remoteRaw && blockRead
+					if shouldBlock {
+						blockRead = false
+					}
+					mu.Unlock()
+					if shouldBlock {
+						close(readEntered)
+						<-releaseRead
+					}
+					send(map[string]any{"id": m.ID, "result": map[string]any{
+						"thread": map[string]any{"id": tid, "name": "Server Loaded", "cwd": cwd, "status": map[string]any{"type": "idle"}},
+					}})
+				case "thread/resume":
+					close(resumeEntered)
+					<-releaseResume
+					send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32600, "message": "thread already has an active writer"}})
+				default:
+					send(map[string]any{"id": m.ID, "result": map[string]any{}})
+				}
+			}(m)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	rctx, rcancel := context.WithCancel(context.Background())
+	t.Cleanup(rcancel)
+	spec := proto.CodexServer{ID: "shared-rollback", Home: canonicalCodexHome(home, n.home), Endpoint: "ws" + strings.TrimPrefix(srv.URL, "http")}
+	n.ensureCodexRemote(rctx, spec)
+	var remote *codexRemote
+	waitFor(t, "rollback remote connected", func() bool {
+		n.codices.mu.Lock()
+		c := n.codices.remotes[spec.ID]
+		n.codices.mu.Unlock()
+		if c == nil {
+			return false
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !c.ready {
+			return false
+		}
+		remote = c
+		return true
+	})
+
+	n.takeovers.writers = func(codexSource) ([]codexWriter, error) { return nil, nil }
+	n.takeovers.lockHeld = func(codexSource) bool { return false }
+
+	plan, err := n.prepareCodexTakeover(context.Background(), id)
+	if err != nil || !plan.CanResume {
+		t.Fatalf("prepare = (%+v, %v)", plan, err)
+	}
+	commitDone := make(chan error, 1)
+	go func() {
+		_, err := n.commitCodexTakeover(context.Background(), id, plan.Token, false)
+		commitDone <- err
+	}()
+	<-resumeEntered
+
+	// Server now reports remoteRaw loaded while coldResume is still provisional; start refresh and pause it mid-read.
+	mu.Lock()
+	loaded = []string{remoteRaw}
+	blockRead = true
+	mu.Unlock()
+	refreshDone := make(chan error, 1)
+	go func() {
+		refreshDone <- remote.refresh()
+	}()
+	<-readEntered
+
+	// Now fail & rollback coldResume before refresh merges next into c.threads.
+	close(releaseResume)
+	if err := <-commitDone; refusalCode(err) != "codex_takeover_writer_busy" {
+		close(releaseRead)
+		t.Fatalf("commit err = %v, want codex_takeover_writer_busy", err)
+	}
+	close(releaseRead)
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("refresh err = %v", err)
+	}
+
+	// Thread loaded on the server must be visible to codexOwner as non-provisional and unjoined.
+	owner, thread, err := n.codexOwner(id)
+	if err != nil || owner != remote || thread.provisional || thread.joined {
+		t.Fatalf("rolled-back provisional state resurrected: owner=%v thread=%+v err=%v", owner, thread, err)
+	}
+}
+
+func TestCodexTakeoverColdResumeDeliversApprovalAnsweredBeforeResumeReply(t *testing.T) {
+	n := remoteTestNode(t)
+	hub := withFakeHub(t, n)
+	home := n.codexHome()
+	cwd := t.TempDir()
+	path := writeCodexTestRollout(t, home, remoteRaw, cwd, "codex-tui", "cli", time.Now().Add(-time.Minute))
+	id := n.registerCodex(home, remoteRaw, path)
+
+	releaseResume := make(chan struct{})
+	replyGot := make(chan codexMessage, 1)
+	var writeMu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		send := func(v any) {
+			b, _ := json.Marshal(v)
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			wctx, cancel := context.WithTimeout(r.Context(), time.Second)
+			defer cancel()
+			_ = c.Write(wctx, websocket.MessageText, b)
+		}
+		for {
+			_, b, err := c.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var m codexMessage
+			if json.Unmarshal(b, &m) != nil {
+				continue
+			}
+			if m.Method == "" {
+				select {
+				case replyGot <- m:
+				default:
+				}
+				continue
+			}
+			if len(m.ID) == 0 {
+				continue
+			}
+			go func(m codexMessage) {
+				var p map[string]any
+				_ = json.Unmarshal(m.Params, &p)
+				tid, _ := p["threadId"].(string)
+				switch m.Method {
+				case "initialize":
+					send(map[string]any{"id": m.ID, "result": map[string]any{"codexHome": home}})
+				case "thread/loaded/list":
+					send(map[string]any{"id": m.ID, "result": map[string]any{"data": []string{}}})
+				case "thread/resume":
+					// Emit the pending approval request BEFORE replying to thread/resume, so fakeHub answers while
+					// the thread is still provisional.
+					send(map[string]any{
+						"id":     77,
+						"method": "item/commandExecution/requestApproval",
+						"params": map[string]any{"threadId": tid, "itemId": "cmd-early", "command": "echo early"},
+					})
+					<-releaseResume
+					send(map[string]any{"id": m.ID, "result": map[string]any{
+						"thread": map[string]any{"id": tid, "name": "Early Ask Thread", "cwd": cwd, "path": path, "status": map[string]any{"type": "active"}},
+					}})
+				default:
+					send(map[string]any{"id": m.ID, "result": map[string]any{}})
+				}
+			}(m)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	rctx, rcancel := context.WithCancel(context.Background())
+	t.Cleanup(rcancel)
+	spec := proto.CodexServer{ID: "shared-early-ask", Home: canonicalCodexHome(home, n.home), Endpoint: "ws" + strings.TrimPrefix(srv.URL, "http")}
+	n.ensureCodexRemote(rctx, spec)
+	waitFor(t, "early-ask remote connected", func() bool {
+		n.codices.mu.Lock()
+		c := n.codices.remotes[spec.ID]
+		n.codices.mu.Unlock()
+		if c == nil {
+			return false
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.ready
+	})
+
+	n.takeovers.writers = func(codexSource) ([]codexWriter, error) { return nil, nil }
+	n.takeovers.lockHeld = func(codexSource) bool { return false }
+
+	plan, err := n.prepareCodexTakeover(context.Background(), id)
+	if err != nil || !plan.CanResume {
+		t.Fatalf("prepare = (%+v, %v)", plan, err)
+	}
+	commitDone := make(chan error, 1)
+	go func() {
+		_, err := n.commitCodexTakeover(context.Background(), id, plan.Token, false)
+		commitDone <- err
+	}()
+	// Wait until the hub received & answered the approval while thread/resume is still blocked!
+	waitFor(t, "early approval created on hub", func() bool { return len(hub.interactions()) == 1 })
+	close(releaseResume)
+	if err := <-commitDone; err != nil {
+		t.Fatalf("commit err = %v", err)
+	}
+	select {
+	case rep := <-replyGot:
+		if string(rep.ID) != "77" {
+			t.Fatalf("unexpected approval reply id: %s", rep.ID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("user approval answered before thread/resume returned was dropped")
+	}
+}
