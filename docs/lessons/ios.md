@@ -2834,7 +2834,7 @@ The watch only prunes by age. Segments the phone has not confirmed stay up to `u
   `setDeactivatedKeyboard … reason: setDisableBecomeFirstResponder`). The page got taller, the rail's `ViewThatFits` picked a roomier
   child, and since each child is its own subtree, the `Menu`'s button was replaced while the menu morphed out of it.
 - Anything that picks views by the space the keyboard leaves (`ViewThatFits` by height, `if` on a measured height, a size class) must not
-  hold a `Menu`, or must keep it the same view. The VNC rails (`fittingRail` in `apple/Persona/Screen/VNCPage.swift`) measure hidden copies
+  hold a `Menu`, or must keep it the same view. The VNC rails (`fittingRail` in `apple/Modules/ScreenShare/VNCPage.swift`) measure hidden copies
   of their ways in a `ViewThatFits`. The copy shown says which one it is (`onAppear`), and the visible rail is one set of views that only
   changes its spacing, which buttons it shows and whether it scrolls (a `ScrollView` always there, `scrollDisabled` when it fits).
 - The crash needs the menu's morph (iOS 26 and later) and a layout that changes when the keyboard goes. Upright, the VNC top row's
