@@ -4,8 +4,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { parseCommentBlock } from "../../lib/comments";
-import { splitQuotes, setQuotes } from "../../lib/drafts";
+import { sendDraft, splitQuotes, setQuotes } from "../../lib/drafts";
+import { closePanel, getPanel } from "../../lib/panel";
 import { Composer, type Outgoing } from "../chat/Composer";
+import { QuoteStack } from "../chat/Quote";
+import { SidePanel } from "../SidePanel";
 import { FileViewerPanel } from "./FileViewer";
 
 vi.hoisted(() => {
@@ -73,6 +76,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  closePanel();
   document.getSelection()?.removeAllRanges();
   host.remove();
   vi.restoreAllMocks();
@@ -168,6 +172,35 @@ function expected(kind: Kind, n: number, note: string) {
 }
 
 describe("selection comments from the Agent's file panel", () => {
+  it("reopens the selected HTML source line from a sent comment, even after switching back to Preview", async () => {
+    await pick("html");
+    act(() => pill()!.click());
+    writeNote(1, "Check this heading.");
+    const text = await send();
+    await act(async () => root.render(<><QuoteStack blocks={splitQuotes(text)!.quotes} mid={MID} sid={SID} /><SidePanel /></>));
+    const jump = host.querySelector<HTMLButtonElement>('[data-comment-block="1"] button')!;
+    expect(jump).not.toBeNull();
+    await act(async () => jump.click());
+    await vi.waitFor(() => expect(sourceText(2)).not.toBeNull());
+    expect(getPanel()).toMatchObject({ kind: "file", path: "/work/page.html", mid: MID, sid: SID, line: 2, to: 2 });
+    expect(sourceText(2).parentElement?.classList.contains("bg-accent-tint")).toBe(true);
+    await act(async () => buttonNamed(t("session-files-fileview.mode_preview")).click());
+    await vi.waitFor(() => expect(frame()).not.toBeNull());
+    await act(async () => jump.click());
+    await vi.waitFor(() => expect(sourceText(2)).not.toBeNull());
+    expect(frame()).toBeNull();
+  });
+
+  it("restores a sent file comment's line range in the edit composer", async () => {
+    await pick("source");
+    act(() => pill()!.click());
+    writeNote(1, "Review these lines.");
+    const text = await send();
+    act(() => { sendDraft(KEY, { type: "replace", text }); });
+    act(() => host.querySelector<HTMLButtonElement>('[data-comment-card="1"] button')!.click());
+    expect(getPanel()).toMatchObject({ kind: "file", path: "/work/example.ts", mid: MID, sid: SID, line: 2, to: 3 });
+  });
+
   it.each(["markdown", "source", "html"] as const)("sends the selection and location from the %s preview", async (kind) => {
     await pick(kind);
     act(() => pill()!.click());

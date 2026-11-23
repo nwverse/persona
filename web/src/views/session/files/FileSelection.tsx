@@ -6,7 +6,7 @@ import { addQuote } from "../../../lib/drafts";
 import { mediaMatches, NARROW } from "../../../lib/viewport";
 import { CommentPill, isCommentShortcut } from "../../chat/CommentPill";
 
-export type FileCommentTarget = Omit<Extract<Panel, { kind: "file" }>, "kind" | "line" | "to">;
+export type FileCommentTarget = Omit<Extract<Panel, { kind: "file" }>, "kind" | "line" | "to" | "navigationId">;
 
 function codeEdge(node: Node, offset: number) {
   const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;

@@ -5,7 +5,9 @@
 import { useLayoutEffect, useRef } from "react";
 import { jumpToComment } from "../../lib/comment-marks";
 import { codePreview, diffLabel, MAX_COMMENT_CHARS, openSpot, rangeLabel, type CodeSpot, type ElementSpot } from "../../lib/comments";
-import { openPanel } from "../../lib/panel";
+import { openPanel, type Panel } from "../../lib/panel";
+import { getSession } from "../../lib/store";
+import { uuid } from "../../lib/format";
 import { addressOf } from "../../lib/preview";
 import { cancelNote, editNote, setNote, type DraftQuote } from "../../lib/drafts";
 import { cx, EASE, toast } from "../../ui/atoms";
@@ -72,12 +74,30 @@ function Excerpt({ q, lines }: { q: DraftQuote; lines: number }) {
   );
 }
 
+/** Recover the viewer target from a sent comment in its Agent session. Drafts already carry the original target. */
+export function fileCommentPanel(file: NonNullable<DraftQuote["comment"]>["file"], mid?: string, sid?: string): Extract<Panel, { kind: "file" }> | undefined {
+  if (!file || file.panel) return file?.panel;
+  if (!mid || !sid) return;
+  const cwd = getSession(mid, sid)?.cwd;
+  const range = /^(.+):([1-9]\d*)(?:-([1-9]\d*))?$/.exec(file.location);
+  if (range) {
+    const line = Number(range[2]);
+    const to = Number(range[3] ?? range[2]);
+    if (Number.isSafeInteger(line) && Number.isSafeInteger(to) && to >= line) {
+      return { kind: "file", mid, sid, cwd, path: range[1], line, to };
+    }
+  }
+  return { kind: "file", mid, sid, cwd, path: file.location };
+}
+
 /** Goes back to where the comment was made: the words in the transcript, or the file / diff at its lines. */
-export function goToComment(q: DraftQuote): boolean {
+export function goToComment(q: DraftQuote, mid?: string, sid?: string): boolean {
   const c = q.comment;
   if (!c) return false;
-  if (c.file?.panel) {
-    openPanel(c.file.panel);
+  const file = fileCommentPanel(c.file, mid, sid);
+  if (file) {
+    // Jump again even if the same file is open and the viewer has switched modes or scrolled away.
+    openPanel({ ...file, navigationId: uuid() });
     return true;
   }
   if (c.element) {
@@ -145,7 +165,10 @@ export function CommentCard({ draftKey, quote, n, editing, onRemove }: { draftKe
       <div className="flex min-w-0 flex-1 flex-col gap-1 py-px">
         <button
           type="button"
-          onClick={() => goToComment(quote)}
+          onClick={() => {
+            const [mid, ...sid] = draftKey.split("/");
+            goToComment(quote, mid, sid.join("/"));
+          }}
           title={t("chat-comments.jump")}
           className="flex min-w-0 flex-col gap-0.5 rounded-[6px] text-left transition-colors hover:bg-hover-2 focus-visible:outline-2 focus-visible:outline-accent"
         >

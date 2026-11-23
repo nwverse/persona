@@ -41,7 +41,7 @@ export type Panel =
   /** The transcript's own edits, by exchange or session: `turn` scopes the exchange and `at` selects a file / call. */
   | { kind: "changes"; mid: string; sid: string; turn?: string; at?: { path: string; call?: string } }
   /** `sid`: the session whose message box takes the comments made in it (else the one last used). */
-  | { kind: "file"; mid: string; path: string; cwd?: string; line?: number; to?: number; sid?: string }
+  | { kind: "file"; mid: string; path: string; cwd?: string; line?: number; to?: number; sid?: string; navigationId?: string }
   /** `manager`: the chat's it was opened from, which reads it (none: the default's). */
   | { kind: "link"; url: string; title?: string; manager?: string }
   /** A task of a conversation, opened from it while Agents open in the side panel (lib/agent-open.ts, #5424): its
