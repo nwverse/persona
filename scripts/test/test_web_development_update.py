@@ -87,9 +87,17 @@ if args == ['tool', 'dist', 'list']:
         self.tool("npm", fixture)
         work = self.root / "build"
         work.mkdir()
+        events = []
         with patch.object(webdev, "HISTORY_LIMIT", 1):
             built = webdev.build({"platforms":["linux-amd64", "linux-riscv64", "darwin-arm64", "windows-amd64"], "work":str(work), "candidate":selected,
-                                  "version":"web-dev-fixture", "build":202611130001, "platform":"linux-amd64"})
+                                  "version":"web-dev-fixture", "build":202611130001, "platform":"linux-amd64"},
+                                 webdev.Progress("building", events.append))
+        self.assertEqual(list(dict.fromkeys(event["step"] for event in events)),
+                         ["fetch", "npm_install", "web_build", "runtime_packages", "go_build", "manifest"])
+        targets = [event for event in events if event.get("item_label")]
+        self.assertEqual(targets[0]["item_label"], "personad (darwin-arm64)")
+        self.assertEqual((targets[0]["item_done"], targets[0]["item_total"]), (0, 13))
+        self.assertNotIn(str(self.root), json.dumps(events))
         self.assertEqual(built["ancestors"], [selected["commit"]])
         self.assertEqual(subprocess.check_output(["git", "-C", str(work/"source"), "rev-list", "--count", "HEAD"], text=True).strip(), "1")
         self.assertEqual((work / "personad-linux-amd64").read_text().strip(), selected["commit"])
@@ -137,6 +145,51 @@ if args == ['tool', 'dist', 'list']:
         hook = self.tool("writer-hook", "import pathlib,sys\np=pathlib.Path(sys.argv[1]);p.write_text((p.read_text() if p.exists() else '')+sys.argv[2]+'\\n')\n")
         return {"runtime": str(runtime), "hub_database":"effective-fixture-database", "executables":{"personad":str(binary)}, "candidate":{"commit":"a"*40}, "config":{"backup":{
             "quiesce":[hook,str(events),"pause"], "resume":[hook,str(events),"resume"]}}}
+
+    def test_history_progress_counts_regular_files_and_skips_excluded_trees(self):
+        root = self.root / "history"
+        root.mkdir()
+        (root / "keep").write_bytes(b"a" * (2 * 1024 * 1024))
+        (root / "empty").touch()
+        (root / "link").symlink_to("keep")
+        (root / "skip").mkdir()
+        (root / "skip/excluded").write_bytes(b"discard")
+        os.mkfifo(root / "fifo")
+        elapsed = iter(range(100))
+        events = []
+        with patch.object(webdev.time, "monotonic", side_effect=lambda: next(elapsed)):
+            progress = webdev.Progress("backing_up", events.append)
+            progress.step("archive_files")
+            archive = self.root / "files.tar.gz"
+            webdev.archive_history([root], {root / "skip"}, archive, progress)
+        first = next(event for event in events if "bytes_total" in event)
+        self.assertEqual((first["bytes_done"], first["bytes_total"], first["item_total"]), (0, 2 * 1024 * 1024, 2))
+        self.assertTrue(any(0 < event.get("percent", 0) < 100 and event["bytes_per_second"] > 0 for event in events))
+        self.assertEqual((events[-1]["item_done"], events[-1]["percent"]), (2, 100))
+        self.assertNotIn(str(root), json.dumps(events))
+        with tarfile.open(archive) as stream:
+            self.assertEqual(stream.getnames(), ["root-0", "root-0/empty", "root-0/keep", "root-0/link"])
+
+    def test_progress_throttles_counters_and_resets_metrics_on_step_change(self):
+        elapsed = 0
+        events = []
+        with patch.object(webdev.time, "monotonic", side_effect=lambda: elapsed):
+            progress = webdev.Progress("backing_up", events.append)
+            progress.step("database_dump", item_done=0, item_total=2, bytes_done=0)
+            elapsed = 0.5
+            progress.add_bytes(200)
+            self.assertEqual(len(events), 1)
+            elapsed = 0.75
+            progress.add_bytes(100)
+            self.assertEqual(events[-1]["bytes_per_second"], 400)
+            self.assertNotIn("percent", events[-1])
+            elapsed = 1.5
+            progress.emit()
+            self.assertEqual(events[-1]["bytes_per_second"], 260)
+            progress.step("archive_files")
+        self.assertEqual(events[-1]["elapsed_seconds"], 1)
+        self.assertNotIn("bytes_done", events[-1])
+        self.assertNotIn("item_total", events[-1])
 
     def wait_file(self, path, process):
         deadline = time.monotonic() + 10
@@ -394,10 +447,21 @@ pathlib.Path({str(resumed)!r}).touch()
         # Preparation must neither restore a database nor pause current writers.
         self.tool("pg_restore", "raise SystemExit('must not restore data')\n")
         events = (self.root/"events").read_bytes()
-        built = webdev.prepare_backup(dict(request, work=str(work), backup_id=receipt["id"],
-                                           candidate={"commit":"b"*40}, version="web-dev-old", build=202611120001,
-                                           platforms=["linux-amd64", "linux-arm64"]))
+        progress = []
+        clock = iter(range(100))
+        with patch.object(webdev.time, "monotonic", side_effect=lambda: next(clock)):
+            built = webdev.prepare_backup(dict(request, work=str(work), backup_id=receipt["id"],
+                                               candidate={"commit":"b"*40}, version="web-dev-old", build=202611120001,
+                                               platforms=["linux-amd64", "linux-arm64"]),
+                                          webdev.Progress("applying_backup", progress.append))
         artifacts = Path(built["artifacts"])
+        self.assertEqual({p["step"] for p in progress}, {"verify_snapshot", "prepare_artifacts"})
+        self.assertGreater(max(p.get("bytes_per_second", 0) for p in progress if p["step"] == "prepare_artifacts"), 0)
+        self.assertEqual(progress[-1]["item_total"], 2)
+        self.assertEqual(progress[-1]["item_done"], 2)
+        self.assertEqual(progress[-1]["bytes_done"], sum(p.stat().st_size for p in artifacts.iterdir()))
+        self.assertEqual(progress[-1]["bytes_done"], progress[-1]["bytes_total"])
+        self.assertNotIn(str(self.root), json.dumps(progress))
         self.assertEqual(gzip.decompress((artifacts/"personad-linux-amd64.gz").read_bytes()), b"fixture installed program")
         self.assertEqual(gzip.decompress((artifacts/"personad-linux-arm64.gz").read_bytes()), b"old arm64 node")
         self.assertEqual((self.root/"events").read_bytes(), events)

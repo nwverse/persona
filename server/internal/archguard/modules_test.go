@@ -18,6 +18,7 @@ import (
 // only Windows, compiles is checked as well as any other.
 
 const (
+	repoPath   = "github.com/nwverse/persona/"
 	modulesDir = "internal/modules"
 	modulesAll = "internal/modules/all"
 	modulesDoc = `see docs/architecture/core-and-modules.md "Guards"`
@@ -71,8 +72,9 @@ func scanGoFiles(t *testing.T, root string) []goFile {
 
 // coreModuleImports are the core's imports of a module, as "<package> <module package>" (a test file's as
 // "<package> (test) <module package>"), and the roots that import internal/modules/all. A root's code may import
-// internal/modules/all; so may any core package's tests, to run as the manager does; nothing else outside
-// internal/modules imports a module.
+// internal/modules/all; so may any core package's tests, to run as the manager does, and a module's stand-in
+// (internal/modules/<id>/<id>test, standIn), to play the outside service the module's program talks to; nothing else
+// outside internal/modules imports a module.
 func coreModuleImports(files []goFile, roots []string) (violations []string, rootsUsed map[string]bool) {
 	rootsUsed = map[string]bool{}
 	for _, f := range files {
@@ -86,6 +88,7 @@ func coreModuleImports(files []goFile, roots []string) (violations []string, roo
 			}
 			switch {
 			case rel == modulesAll && f.test:
+			case f.test && standIn(rel): // a fake of the outside service a module talks to (standInProblems)
 			case rel == modulesAll && slices.Contains(roots, f.pkg):
 				rootsUsed[f.pkg] = true
 			case f.test:
@@ -133,9 +136,10 @@ type moduleManifest struct {
 
 // moduleImportProblems checks the modules under root/internal/modules: each directory but all has a module.json whose
 // id is its name, and every file in it (tests and every build constraint included) imports only the standard library,
-// internal/modapi and the other contract packages, its own packages, and the modules its manifest needs. A module it
-// only wants may be left out of the build (persona_without_<id>), so it is reached through the kernel, never imported.
-func moduleImportProblems(t *testing.T, root string, files []goFile, contracts []string) (problems []string, checked int) {
+// third-party packages, internal/modapi and the other contract packages, the leaf libraries (testdata/libraries.txt),
+// its own packages, and the modules its manifest needs. A module it only wants may be left out of the build
+// (persona_without_<id>), so it is reached through the kernel, never imported.
+func moduleImportProblems(t *testing.T, root string, files []goFile, contracts, libraries []string) (problems []string, checked int) {
 	t.Helper()
 	entries, err := os.ReadDir(filepath.Join(root, modulesDir))
 	if err != nil {
@@ -169,11 +173,13 @@ func moduleImportProblems(t *testing.T, root string, files []goFile, contracts [
 				rel, inServer := strings.CutPrefix(imp, modulePath)
 				switch {
 				case !inServer && !strings.Contains(strings.SplitN(imp, "/", 2)[0], "."): // the standard library
-				case !inServer && slices.Contains(contracts, imp):
+				case !inServer && (slices.Contains(contracts, imp) || slices.Contains(libraries, imp)):
+				case !inServer && !strings.HasPrefix(imp, repoPath): // a third-party package: not Persona's core
 				case !inServer:
-					problems = append(problems, "module "+id+" ("+f.pkg+"/"+f.name+") imports "+imp+", outside the standard library: "+
-						"a module uses only modapi, the contract packages and the modules it needs")
-				case slices.Contains(contracts, rel), slices.ContainsFunc(allowed, func(a string) bool { return under(rel, a) }):
+					problems = append(problems, "module "+id+" ("+f.pkg+"/"+f.name+") imports "+imp+": of Persona's own packages "+
+						"outside the server a module uses only the listed contracts and libraries")
+				case slices.Contains(contracts, rel), slices.Contains(libraries, rel),
+					slices.ContainsFunc(allowed, func(a string) bool { return under(rel, a) }):
 				default:
 					problems = append(problems, "module "+id+" ("+f.pkg+"/"+f.name+") imports "+rel+": a module reaches the core only "+
 						"through internal/modapi (add what it needs to modapi.Host) and imports another module only when its "+
@@ -189,7 +195,7 @@ func moduleImportProblems(t *testing.T, root string, files []goFile, contracts [
 // A module uses only the module API (moduleImportProblems).
 func TestModulesUseOnlyTheSPI(t *testing.T) {
 	root := filepath.Join("..", "..")
-	problems, checked := moduleImportProblems(t, root, scanGoFiles(t, root), readList(t, "contracts.txt"))
+	problems, checked := moduleImportProblems(t, root, scanGoFiles(t, root), readList(t, "contracts.txt"), readList(t, "libraries.txt"))
 	for _, p := range problems {
 		t.Errorf("%s; %s", p, modulesDoc)
 	}
@@ -199,7 +205,8 @@ func TestModulesUseOnlyTheSPI(t *testing.T) {
 }
 
 // The guards see files no default build compiles: a core file only persona_core_only builds that imports a module,
-// a Windows-only module file that imports the core, and a module that imports one it only wants are each caught.
+// a Windows-only module file that imports the core, and a module that imports one it only wants are each caught. A
+// core test may use a module's stand-in but not the module, and a stand-in that imports its module is caught.
 func TestModuleGuardsSeeEveryBuild(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel, body string) {
@@ -216,6 +223,9 @@ func TestModuleGuardsSeeEveryBuild(t *testing.T) {
 	write("internal/assistant/core_only.go", "//go:build persona_core_only\n\npackage assistant\n\nimport _ "+imp("internal/modules/briefing")+"\n")
 	write("internal/assistant/x_test.go", "package assistant\n\nimport _ "+imp("internal/modules/all")+"\n")
 	write("internal/manager/modules.go", "package manager\n\nimport _ "+imp("internal/modules/all")+"\n")
+	write("internal/extmgr/v_test.go", "package extmgr\n\nimport _ "+imp("internal/modules/voice/voicetest")+"\n")
+	write("internal/extmgr/w_test.go", "package extmgr\n\nimport _ "+imp("internal/modules/voice")+"\n")
+	write("internal/modules/voice/voicetest/fake.go", "package voicetest\n\nimport _ "+imp("internal/modules/voice")+"\n")
 	write("internal/modules/briefing/module.json", `{"id":"briefing","api":1,"origin":"builtin","wants":["voice"]}`)
 	write("internal/modules/briefing/b_windows.go", "package briefing\n\nimport _ "+imp("internal/assistant")+"\n")
 	write("internal/modules/briefing/b.go", "package briefing\n\nimport (\n\t_ \"encoding/json\"\n\t_ "+imp("internal/modapi")+
@@ -225,12 +235,79 @@ func TestModuleGuardsSeeEveryBuild(t *testing.T) {
 	files := scanGoFiles(t, root)
 
 	violations, used := coreModuleImports(files, []string{"internal/manager"})
-	if want := []string{"internal/assistant internal/modules/briefing"}; !slices.Equal(violations, want) || !used["internal/manager"] {
+	if want := []string{"internal/assistant internal/modules/briefing", "internal/extmgr (test) internal/modules/voice"}; !slices.Equal(violations, want) || !used["internal/manager"] {
 		t.Fatalf("core imports %v (roots %v), want %v", violations, used, want)
 	}
-	problems, checked := moduleImportProblems(t, root, files, []string{"internal/modapi"})
+	problems, checked := moduleImportProblems(t, root, files, []string{"internal/modapi"}, nil)
 	if checked != 2 || len(problems) != 2 || !strings.Contains(problems[0]+problems[1], "imports internal/assistant") ||
 		!strings.Contains(problems[0]+problems[1], "imports internal/modules/voice") {
 		t.Fatalf("checked %d modules, problems %q", checked, problems)
+	}
+	if p := standInProblems(files, []string{"internal/modapi"}, nil); len(p) != 1 || !strings.Contains(p[0], "voicetest") {
+		t.Fatalf("stand-in problems %q", p)
+	}
+}
+
+// standIn says whether rel (a path under the server module) is a module's stand-in: internal/modules/<id>/<id>test, a
+// fake of the outside service the module's program talks to (the Volcengine service, a realtime voice upstream).
+func standIn(rel string) bool {
+	rest, ok := strings.CutPrefix(rel, modulesDir+"/")
+	id, sub, nested := strings.Cut(rest, "/")
+	return ok && nested && id != "all" && sub == id+"test"
+}
+
+// standInProblems checks that a stand-in holds none of its module's code: it imports only the standard library,
+// third-party packages, the contracts and the leaf libraries. That is what lets a core package's tests use it (the
+// extension host's tests run a module's program against it) without reaching into the module.
+func standInProblems(files []goFile, contracts, libraries []string) (problems []string) {
+	for _, f := range files {
+		if !standIn(f.pkg) || f.test {
+			continue
+		}
+		for _, imp := range f.imports {
+			rel, inServer := strings.CutPrefix(imp, modulePath)
+			switch {
+			case !inServer && !strings.HasPrefix(imp, repoPath):
+			case !inServer && (slices.Contains(contracts, imp) || slices.Contains(libraries, imp)):
+			case inServer && (slices.Contains(contracts, rel) || slices.Contains(libraries, rel)):
+			default:
+				problems = append(problems, "stand-in "+f.pkg+" ("+f.name+") imports "+imp+": a stand-in fakes the outside "+
+					"service and holds none of the module's code, so core tests may use it")
+			}
+		}
+	}
+	return problems
+}
+
+// A module's stand-in holds none of its code (standInProblems).
+func TestStandInsHoldNoModuleCode(t *testing.T) {
+	root := filepath.Join("..", "..")
+	for _, p := range standInProblems(scanGoFiles(t, root), readList(t, "contracts.txt"), readList(t, "libraries.txt")) {
+		t.Errorf("%s; %s", p, modulesDoc)
+	}
+}
+
+// Every leaf library (testdata/libraries.txt), the packages of the core a module may use, depends only on the standard
+// library, third-party packages, the contracts and the other libraries: no manager, no hub, no node, no module, no
+// store. A module that uses one so reaches no business logic of the core and nothing stateful of it.
+func TestLibrariesAreLeaves(t *testing.T) {
+	contracts, libraries := readList(t, "contracts.txt"), readList(t, "libraries.txt")
+	for _, l := range libraries {
+		if slices.Contains(contracts, l) {
+			t.Errorf("testdata/libraries.txt lists %s, which is a contract: delete the line", l)
+		}
+		for _, dep := range goList(t, "{{if not .Standard}}{{.ImportPath}}{{end}}", true, l) {
+			rel, inServer := strings.CutPrefix(dep, modulePath)
+			switch {
+			case dep == importPath(l):
+			case !inServer && !strings.HasPrefix(dep, repoPath):
+			case !inServer && (slices.Contains(contracts, dep) || slices.Contains(libraries, dep)):
+			case inServer && (slices.Contains(contracts, rel) || slices.Contains(libraries, rel)):
+			default:
+				t.Errorf("library %s depends on %s, which is neither a contract nor a listed library: a module may import "+
+					"%s, so it must stay a leaf; move what it needs into a library or a contract, or take %s off the "+
+					"list; %s", l, dep, l, l, modulesDoc)
+			}
+		}
 	}
 }

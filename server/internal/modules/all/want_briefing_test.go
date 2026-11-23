@@ -2,4 +2,4 @@
 
 package all
 
-var wantModules = []string{"briefing"}
+func init() { wantModules = append(wantModules, "briefing") }

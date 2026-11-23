@@ -8,7 +8,7 @@ import (
 )
 
 // The list has each module its build tags keep, and the kernel loads exactly that list. Run with -tags
-// persona_core_only or persona_without_briefing as well (scripts/ci/server.sh).
+// persona_core_only or persona_without_<id> as well (scripts/ci/server.sh).
 func TestBuiltinFollowsTheBuildTags(t *testing.T) {
 	var ids []string
 	for _, m := range Builtin() {
