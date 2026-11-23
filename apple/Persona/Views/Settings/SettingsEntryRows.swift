@@ -1,7 +1,8 @@
 import SwiftUI
 
 // The rows Settings' lists draw from the registry (#13395, `SettingsCatalog.core` / `advanced`): Settings home and
-// Settings › Advanced draw an entry the same way, wherever its tier puts it. A value that changes on its own (the hub's
+// Settings › Advanced draw an entry the same way, wherever its tier puts it, as a `SettingsListLink` (#12035: in the
+// iPad's split, Settings home's rows open their page through `settingsPath`; on Advanced, a page of the path, they push). A value that changes on its own (the hub's
 // link, its version, the space used) is read in a row of its own, so it redraws that row alone
 // (docs/apple/performance.md, P5).
 
@@ -14,7 +15,7 @@ struct SettingsEntryRow: View {
     var body: some View {
         switch entry.id {
         case "computers":
-            NavigationLink(value: MachineListRoute()) { MachinesSettingsRow() }
+            SettingsListLink(value: MachineListRoute()) { MachinesSettingsRow() }
                 .settingsListRow(MachineListRoute())
                 .accessibilityIdentifier(entry.rowID)
         case "plugins": SettingsEntryLink(entry: entry, value: extensions)
@@ -29,7 +30,7 @@ struct SettingsEntryRow: View {
             SettingsModelRow(entry: entry) { MeetingAttendees.offered($0) ? MeetingAttendees.defaultRole($0).title : "" }
         case "live-screen": LiveScreenSettingsRow()
         case "phoneData":
-            NavigationLink(value: entry.page) { SettingsRow(title: entry.title, symbol: entry.symbol, tint: Theme.accent) }
+            SettingsListLink(value: entry.page) { SettingsRow(title: entry.title, symbol: entry.symbol, tint: Theme.accent) }
                 .settingsListRow(entry.page)
                 .accessibilityIdentifier(entry.rowID)
         #endif
@@ -44,7 +45,7 @@ private struct SettingsEntryLink: View {
     let value: String
 
     var body: some View {
-        NavigationLink(value: entry.page) {
+        SettingsListLink(value: entry.page) {
             SettingsRow(title: entry.title, symbol: entry.symbol, tint: Theme.accent, value: value, look: .oneLine)
         }
         .settingsListRow(entry.page)

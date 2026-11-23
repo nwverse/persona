@@ -88,7 +88,8 @@ struct SettingsRegistryTests {
         let start = try #require(source.range(of: "// MARK: Settings home's rows"))
         let end = try #require(source.range(of: "// MARK: End of Settings home's rows"))
         let home = String(source[start.upperBound..<end.lowerBound])
-        #expect(!home.contains("NavigationLink("), "a row on Settings home outside SettingsCatalog: add it to the registry")
+        #expect(!home.contains("NavigationLink(") && !home.contains("SettingsListLink("),
+                "a row on Settings home outside SettingsCatalog: add it to the registry")
         #expect(home.components(separatedBy: "SettingsCatalog.rows(.core,").count - 1 == 3)
         // `SettingsRow(` itself, not `ChecklistSettingsRow(` (the steps still to go, a prompt rather than a setting).
         let rows = try NSRegularExpression(pattern: #"(?<![A-Za-z])SettingsRow\("#)

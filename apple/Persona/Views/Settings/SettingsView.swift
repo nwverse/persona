@@ -35,7 +35,8 @@ struct SettingsView: View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("SettingsView")
         #endif
-        // By value, every page: in the split (iPhone Duo open) they open beside the list, not inside its column.
+        // By value, every page: in the split (the iPad's sheet) they open beside the list, not inside its column, through
+        // `settingsPath` (`SettingsListLink`, #12035).
         SplitNavigation(path: Bindable(model).settingsPath, destinations: SettingsDestinations()) {
             List {
                 if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -46,7 +47,7 @@ struct SettingsView: View {
                 } else {
                     Section {
                         ForEach(searchResults) { entry in
-                            NavigationLink(value: entry.page) {
+                            SettingsListLink(value: entry.page) {
                                 SettingsRow(title: entry.title, symbol: entry.symbol, tint: Theme.accent)
                             }
                             .settingsListRow(entry.page)
@@ -94,12 +95,15 @@ struct SettingsView: View {
                 Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
-            #if os(iOS) || os(visionOS)
             .pluginLinks($pluginLink)
             .extensionPushes(ExtensionSlots.shared.cardPages)
-            #endif
         } empty: {
             SplitPlaceholder(symbol: Theme.Icon.settings, title: String(localized: "Settings"), message: String(localized: "Choose an item on the left."))
+                #if os(iOS)
+                // Under the pages the list opens (#12035): they keep their large titles, as on the phone, unless a page
+                // asks for an inline one.
+                .navigationBarTitleDisplayMode(.large)
+                #endif
         }
     }
 
@@ -127,9 +131,7 @@ struct SettingsView: View {
             if model.showsPage(of: api) {
                 plugins = loaded.map { ManagerRoster.settingsItems($0, roster: model.managerRoster, manager: context.managerID, stamped: { $0.manager }) }
             }
-            #if os(iOS) || os(visionOS)
             await ExtensionSlots.shared.reload()
-            #endif
         }
     }
 
@@ -175,7 +177,7 @@ struct SettingsView: View {
     /// Settings › Advanced (#13395): the rest of Settings, under the same scopes. A hub update waiting there says so here.
     private var advancedSection: some View {
         Section {
-            NavigationLink(value: SettingsPage.advanced) {
+            SettingsListLink(value: SettingsPage.advanced) {
                 SettingsRow(title: String(localized: "Advanced"), symbol: Theme.Icon.options, tint: Theme.accent,
                             value: SettingsHubVersion.update(model.hubUpdate), look: .oneLine)
             }
@@ -480,11 +482,7 @@ private struct SettingsDestinations: ViewModifier {
         case .navigation: EmptyView()
         case .knowledgeSelection: EmptyView()
         #endif
-        #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()
-        #else
-        case .colorScheme: EmptyView()
-        #endif
         case .assistant: AssistantProfileView()
         case .claude: ClaudeSettingsView()
         case .codex: ClaudeSettingsView(agent: .codex)
@@ -830,11 +828,7 @@ struct AppGlyph: View {
 
     /// Under Match System the page's look (read here so the glyph redraws when the system's changes); else the screen's.
     private var systemLook: ColorScheme {
-        #if os(iOS) || os(visionOS)
         model.colorScheme == .system ? pageLook : AppIconChoice.systemLook
-        #else
-        pageLook
-        #endif
     }
 
     private struct GlyphFrame: ViewModifier {
@@ -998,14 +992,12 @@ struct PairView: View {
                     Section {
                         Label("This code has expired or was already used; get a new one", systemImage: Theme.Icon.error)
                             .font(Theme.Font.secondaryStrong).foregroundStyle(Theme.danger)
-                        #if os(iOS) || os(visionOS)
                         Button {
                             expired = false
                             error = nil
                             scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable
                         } label: { Label("Scan again", systemImage: Theme.Icon.scanCode).lineLimit(1) }
                         .accessibilityIdentifier("pair.rescan")
-                        #endif
                     } footer: {
                         Text("Get a new code on the screen from setting up the hub, or on a connected device in Settings › Devices › Connect a new device.")
                     }
@@ -1013,17 +1005,11 @@ struct PairView: View {
                 if !passwordMode && scanning && !other {
                     Section {
                         QRScanner { code in accept(code) }
-                        #if os(iOS) || os(visionOS)
                         .scaledFrame(height: Theme.Size.box280)
                         .clipShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
                         .listRowInsets(EdgeInsets())
-                        #endif
                     } footer: {
-                        #if os(iOS) || os(visionOS)
                         Text("Scan the QR code shown when the hub was set up, or the one from Settings › Devices › Connect a new device on a connected device.")
-                        #else
-                        Text("Copy the pairing link (given when the hub was set up, or from Settings › Devices › Connect a new device on a connected device), then click Paste pairing link.")
-                        #endif
                     }
                 }
                 #if os(iOS)
@@ -1304,7 +1290,6 @@ nonisolated enum PairingPhoto {
 }
 #endif
 
-#if os(iOS) || os(visionOS)
 struct QRScanner: UIViewControllerRepresentable {
     var onCode: (String) -> Void
 
@@ -1335,7 +1320,6 @@ struct QRScanner: UIViewControllerRepresentable {
         }
     }
 }
-#endif
 
 /// Settings' Machines row: N / M online. Its own view: the page read `model.machines` for it, and a machine's heartbeat (on every
 /// push of a busy hub) drew the whole page and its list again (#1495); now only this row.
@@ -1458,6 +1442,40 @@ extension View {
     /// (`MacSettingsRowSelection`, #2318). Nothing elsewhere.
     @ViewBuilder func settingsListRow(_ value: some Hashable) -> some View {
         self
+    }
+}
+
+/// A row of Settings' own list that opens the page `value` (#12035). In one stack (an iPhone, an iPad window at compact
+/// width) a `NavigationLink(value:)`, which pushes the page. In the split (the iPad's Settings sheet), where the list is a
+/// column beside the page, a button that opens the page through `settingsPath` (`splitOpen`), as the Agents list's rows
+/// do: a value link there showed its page by the split's own selection, outside the path, and no row on that page
+/// opened anything; a `List(selection:)` instead cleared the paths links and launch switches set.
+struct SettingsListLink<Value: Hashable, Label: View>: View {
+    #if os(iOS)
+    @Environment(\.splitOpen) private var splitOpen
+    #endif
+    let value: Value
+    let label: Label
+
+    init(value: Value, @ViewBuilder label: () -> Label) {
+        self.value = value
+        self.label = label()
+    }
+
+    var body: some View {
+        #if os(iOS)
+        if let splitOpen {
+            // The label as a link draws it, and the whole width of the row to tap.
+            Button { splitOpen.open(value) } label: {
+                label.frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: value) { label }
+        }
+        #else
+        NavigationLink(value: value) { label }
+        #endif
     }
 }
 
