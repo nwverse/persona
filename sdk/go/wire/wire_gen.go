@@ -6664,6 +6664,75 @@ type RepoPRStatusResult struct {
 	ViewerIsAuthor *bool `json:"viewer_is_author,omitempty"`
 }
 
+// MemoryErrorCode: error.code a memory source answers besides the base ErrorCode: not_ready (its entries are not
+// loaded yet; the manager uses none of them this time and asks again at the next assembly), failed (anything else,
+// say why in message).
+const (
+	MemoryErrorCodeNotReady = "not_ready"
+	MemoryErrorCodeFailed   = "failed"
+)
+
+// MemoryErrorCodes are the values of MemoryErrorCode, in order.
+var MemoryErrorCodes = []string{"not_ready", "failed"}
+
+// MemoryEntriesParams: memory.entries: one page of the contribution's entries, most important first (standing ones
+// first, then by rank, then newest). Read-only: answering changes nothing in the program's state.
+type MemoryEntriesParams struct {
+	// The memory_sources item's id.
+	Contribution string `json:"contribution"`
+	// At most this many entries on the page (the manager asks 200). Only a cap: the program ends a page early, with
+	// has_more and after, so the answer stays within 1 MB.
+	Limit int `json:"limit"`
+	// The previous page's after, to read on; empty for the first page.
+	After string `json:"after,omitempty"`
+}
+
+// MemoryEntriesResult: one page of entries. tagged is the program's promise for the whole page: it writes
+// origin_space and categories on every entry and leaves them out only when empty, so a missing origin_space means the
+// main space and missing categories mean general. A program that cannot promise that answers tagged false, and the
+// manager then takes none of its entries for its own track (each is in no track, not known, so the strictest rule
+// holds).
+type MemoryEntriesResult struct {
+	Entries []MemoryEntry `json:"entries"`
+	Tagged  bool          `json:"tagged"`
+	// Another page follows; ask again with after. When true, after must be set: true with an empty after counts as the
+	// end of the entries.
+	HasMore bool `json:"has_more"`
+	// Opaque: what to send as after for the next page; required in practice whenever has_more is true.
+	After string `json:"after,omitempty"`
+}
+
+// MemoryEntry: one entry as the program keeps it. Only an active entry is carried; the others may be answered (so a
+// page's order stays the program's) and are skipped. An entry that breaks a rule here is dropped alone, never the
+// page.
+type MemoryEntry struct {
+	// Stable across pages and answers: a to-do's brief names the entries it carried by it (prefixed memory-extension:).
+	ID string `json:"id"`
+	// What the entry says, as the program would render it, on one or a few lines.
+	Text string `json:"text"`
+	// The program's own grouping (preferences, workflow, people…). Informational: the hub neither filters nor orders by
+	// it.
+	Facet string `json:"facet,omitempty"`
+	// active: the program would use it today, whatever it calls that state itself (a program with its own stable or
+	// shifting states answers active for both); candidate: not borne out yet; dormant: not seen lately; retired: no
+	// longer true. Only active entries are carried; an entry with any other value is dropped.
+	Status string `json:"status"`
+	// The slug of the space the entry was first said in; left out for the main space.
+	OriginSpace string `json:"origin_space,omitempty"`
+	// Its information categories (health, finance, relationships, emotion, legal_id); left out for a general entry. A
+	// category the hub does not know makes the entry not known.
+	Categories []string `json:"categories,omitempty"`
+	// The program kept it in every conversation (always in context). Only a standing entry goes to a standing channel
+	// (usage still decides); the others come in only by relevance (their subjects or text) in a recall, a hand-off or
+	// the Inbox.
+	Standing bool `json:"standing,omitempty"`
+	// The program's order among entries alike in standing: higher first. Left out: 0.
+	Rank int `json:"rank,omitempty"`
+	// The names whose mention brings the entry in (a person, a project, a place): what a task's or a message's words are
+	// matched with, besides its text.
+	Subjects []string `json:"subjects,omitempty"`
+}
+
 // requiredJSONComponent preserves required fields only inside stream payloads.
 type requiredJSONComponent Component
 
@@ -7721,6 +7790,9 @@ var newDef = map[string]func() any{
 	"RepoDescribeResult":            func() any { return new(RepoDescribeResult) },
 	"RepoPRStatusParams":            func() any { return new(RepoPRStatusParams) },
 	"RepoPRStatusResult":            func() any { return new(RepoPRStatusResult) },
+	"MemoryEntriesParams":           func() any { return new(MemoryEntriesParams) },
+	"MemoryEntriesResult":           func() any { return new(MemoryEntriesResult) },
+	"MemoryEntry":                   func() any { return new(MemoryEntry) },
 }
 
 // Call is one call or event of an extension point's protocol (the schemas' x-methods and x-events): who
@@ -7832,4 +7904,5 @@ var Calls = map[string]Call{
 	"repo.link":                       {Name: "repo.link", From: "hub", Params: "RepoLinkParams", Result: "RepoLinkResult"},
 	"repo.describe":                   {Name: "repo.describe", From: "hub", Params: "RepoDescribeParams", Result: "RepoDescribeResult"},
 	"repo.pr_status":                  {Name: "repo.pr_status", From: "hub", Params: "RepoPRStatusParams", Result: "RepoPRStatusResult"},
+	"memory.entries":                  {Name: "memory.entries", From: "hub", Params: "MemoryEntriesParams", Result: "MemoryEntriesResult"},
 }

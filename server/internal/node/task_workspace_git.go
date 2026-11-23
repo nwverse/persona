@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"unicode"
@@ -152,8 +153,8 @@ func (e *workspaceExecutor) materialize(ctx context.Context, r *taskworkspace.In
 		if r.State != "materializing" || tip != r.ResolvedCommit {
 			return "branch_conflict"
 		}
-		listing, err := workspaceReadGit(ctx, r.CommonDir, "worktree", "list", "--porcelain", "-z")
-		if err != nil || strings.Contains("\x00"+listing+"\x00", "\x00branch refs/heads/"+r.TaskBranch+"\x00") {
+		fields, err := workspaceWorktreeList(ctx, r.CommonDir)
+		if err != nil || slices.Contains(fields, "branch refs/heads/"+r.TaskBranch) {
 			return "branch_conflict"
 		}
 		// Git may create the branch before checkout fails. Resume that exact
@@ -219,12 +220,12 @@ func (e *workspaceExecutor) checkRegistration(ctx context.Context, r *taskworksp
 	if err != nil || filepath.Clean(top) != r.Path {
 		return "git_layout_mismatch"
 	}
-	registered, err := workspaceReadGit(ctx, r.CommonDir, "worktree", "list", "--porcelain", "-z")
+	registered, err := workspaceWorktreeList(ctx, r.CommonDir)
 	if err != nil {
 		return "git_layout_mismatch"
 	}
 	found := false
-	for _, field := range strings.Split(registered, "\x00") {
+	for _, field := range registered {
 		if strings.TrimSpace(field) == "worktree "+r.Path {
 			found = true
 		}
@@ -276,14 +277,32 @@ func workspaceBranchTip(ctx context.Context, dir, ref string) (string, error) {
 	return tip, err
 }
 
+// workspaceWorktreeList is `git worktree list --porcelain` split into its fields. Git before 2.36 (Debian 11 ships
+// 2.30) refuses -z as a usage error (exit 129); there the newline-separated listing is read instead, which differs only
+// for a path with a newline in it.
+func workspaceWorktreeList(ctx context.Context, common string) ([]string, error) {
+	listing, err := workspaceReadGit(ctx, common, "worktree", "list", "--porcelain", "-z")
+	if err == nil {
+		return strings.Split(listing, "\x00"), nil
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 129 {
+		return nil, err
+	}
+	if listing, err = workspaceReadGit(ctx, common, "worktree", "list", "--porcelain"); err != nil {
+		return nil, err
+	}
+	return strings.Split(listing, "\n"), nil
+}
+
 // A detached worktree may still reserve a branch while rebasing or bisecting.
 // Git keeps these names in the linked worktree's private administration directory.
 func workspaceBranchInUse(ctx context.Context, common, ref string) (bool, error) {
-	listing, err := workspaceReadGit(ctx, common, "worktree", "list", "--porcelain", "-z")
+	fields, err := workspaceWorktreeList(ctx, common)
 	if err != nil {
 		return false, err
 	}
-	if strings.Contains("\x00"+listing+"\x00", "\x00branch "+ref+"\x00") {
+	if slices.Contains(fields, "branch "+ref) {
 		return true, nil
 	}
 	admin := filepath.Join(common, "worktrees")
@@ -336,8 +355,8 @@ func (e *workspaceExecutor) cleanup(ctx context.Context, req taskworkspace.Reque
 			r := &j.Repositories[i]
 			if !r.Removed && r.State == "ready" {
 				if _, err := os.Lstat(r.Path); errors.Is(err, os.ErrNotExist) && e.owned(r.CommonDir) {
-					listing, err := workspaceReadGit(ctx, r.CommonDir, "worktree", "list", "--porcelain", "-z")
-					if err == nil && !strings.Contains("\x00"+listing+"\x00", "\x00worktree "+r.Path+"\x00") {
+					fields, err := workspaceWorktreeList(ctx, r.CommonDir)
+					if err == nil && !slices.Contains(fields, "worktree "+r.Path) {
 						r.Removed = true
 					}
 				}

@@ -138,6 +138,12 @@ type Service struct {
 	hub         Hub
 	store       func() Store
 	entriesDial func(context.Context, any) ([]byte, error)
+	// memoryEntries is where the memory assembler reads the ledger in tests; nil reads the manager database
+	// (memory_assemble_entry.go).
+	memoryEntries memoryEntrySource
+	// memoryExtension hands the assembler the memory extension's entries, its second source; nil hands none
+	// (memory_assemble_entry.go).
+	memoryExtension memoryExtensionSource
 	// trustSrc is Options.Trust.
 	trustSrc MachineTrust
 	logf     func(format string, args ...any)
@@ -175,6 +181,8 @@ type Service struct {
 	rules ruleSuggestState
 	// setupMu serializes the reads and the one write of the weekly setup block's book (setup_suggest.go).
 	setupMu sync.Mutex
+	// intakeMu serializes intake settings, reminder state and local intake mutations.
+	intakeMu sync.Mutex
 
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
@@ -427,6 +435,7 @@ func New(o Options) *Service {
 	s.startRoutes()
 	s.skillRoutes()
 	s.workoutRoutes()
+	s.intakeRoutes()
 	s.scheduleRoutes()
 	s.scheduleGrantRoutes()
 	s.placeRoutes()
