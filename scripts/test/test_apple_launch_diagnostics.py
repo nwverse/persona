@@ -759,6 +759,74 @@ class LiveLaunchTests(unittest.TestCase):
         self.assertIn("command-failure", (self.destination / "live-launch.status.txt").read_text())
         self.assertFalse((self.destination / "live-launch.json").exists())
 
+    def test_omitted_deadline_keeps_scope_window_for_filter_and_watchdog(self):
+        """`deadline=None` must not clamp the live end to startup.
+
+        Regression guard for the P1 finding on PR #13333: with the previous
+        `end = min(end, deadline or current)` an omitted deadline collapsed the
+        live-event filter to the startup instant and shrank the watchdog
+        lifetime to ~10 seconds. The fix preserves the scope-derived end so
+        later events still pass the filter and the reaper covers the whole
+        observation window.
+        """
+        # Substitute the Linux `/usr/bin/log` invocation only; clock, Popen and
+        # reader stay real. The child emits one event at startup, then a
+        # second event later so the live filter has to advance past startup.
+        # Each event anchors the simulator UDID through CoreSimulatorService
+        # so `relevant` accepts it without needing `correlate`.
+        def entry(message, stamp):
+            return {"timestamp": stamp,
+                    "processImagePath": "/System/Library/CoreSimulatorService",
+                    "eventMessage": f"{message} for {UDID}"}
+        first = entry("initial scoped launch line", "2026-01-01 12:01:00.000000+0000")
+        later = entry("later scoped launch line", "2026-01-01 12:05:00.000000+0000")
+        child = ("import json, os, signal, sys, time\n"
+                 "def send(entry):\n"
+                 "    print(json.dumps(entry), flush=True)\n"
+                 f"send({first!r})\n"
+                 "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+                 f"send({later!r})\n"
+                 "signal.pause()\n")
+
+        def spawn(command, **kwargs):
+            actual = [sys.executable, "-c", child] if command[0] == "/usr/bin/log" else command
+            return subprocess.Popen(actual, **kwargs)
+
+        # `now` is 1 minute after the scope started; the scope window still
+        # extends to `started_at + READINESS_SECONDS` (well past 15 minutes).
+        self.live = launch.start_live_log(self.output, self.destination,
+                                          deadline=None,
+                                          now=lambda: START + timedelta(minutes=1),
+                                          popen=spawn)
+        self.assertIsNotNone(self.live.reaper,
+                             (self.destination / "live-launch.status.txt").read_text())
+        # The live end must equal the scope end (START + READINESS_SECONDS),
+        # not the startup instant `current = START + 1 minute`.
+        expected_end = START + timedelta(seconds=launch.READINESS_SECONDS)
+        self.assertEqual(self.live.deadline, expected_end,
+                         "live end was clamped to startup instead of the scope window")
+        # The watchdog lifetime must cover the scope window (plus the 10s
+        # margin), not collapse to ~10 seconds as in the regression.
+        reaper_cmdline = Path(f"/proc/{self.live.reaper.pid}/cmdline").read_bytes()
+        lifetime_arg = float(reaper_cmdline.split(b"\x00")[-2])
+        expected_lifetime = (expected_end - (START + timedelta(minutes=1))).total_seconds() + 10
+        self.assertGreater(lifetime_arg, 60,
+                           f"watchdog lifetime {lifetime_arg}s collapsed to the startup margin")
+        self.assertAlmostEqual(lifetime_arg, expected_lifetime, delta=1.0)
+
+        # Both the startup-time and the post-startup events must survive the
+        # live filter, because `start <= stamp <= end` covers the whole window.
+        deadline_mono = time.monotonic() + 5
+        while len(self.live.kept) < 2 and time.monotonic() < deadline_mono:
+            time.sleep(0.005)
+        self.live.stop()
+        self.assertEqual(self.live.status, "captured",
+                         (self.destination / "live-launch.status.txt").read_text())
+        messages = [item["eventMessage"] for item in
+                    json.loads((self.destination / "live-launch.json").read_text())]
+        self.assertEqual(messages, [f"initial scoped launch line for {UDID}",
+                                    f"later scoped launch line for {UDID}"])
+
 
 if __name__ == "__main__":
     unittest.main()

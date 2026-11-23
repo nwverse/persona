@@ -469,8 +469,16 @@ def start_live_log(scope_root, destination, deadline=None, popen=subprocess.Pope
     """Start before the test child; leave the owned shell process group intact."""
     current = now()
     # The regular fixture has its own context file in the same explicit output root.
-    context, start, end = observation_scope(scope_root, current, regular=regular)
-    end = min(end, deadline or current)
+    context, start, _ = observation_scope(scope_root, current, regular=regular)
+    # Live observation runs forward from now, so it must not inherit the
+    # `observation_scope` end, which is already clamped to `now` for the
+    # historical collector. The live window closes at the scope's readiness
+    # horizon, optionally narrowed by an explicit caller deadline. Falling
+    # back to `current` here would freeze the live filter at startup and
+    # shrink the watchdog lifetime to ~10 seconds.
+    end = start + timedelta(seconds=READINESS_SECONDS)
+    if deadline is not None:
+        end = min(end, deadline)
     destination.mkdir(parents=True, exist_ok=True)
     live = LiveLog(live_command(), destination, end, context["udid"], context["bundle_id"])
     publish(destination / "live-launch.status.txt", "unavailable: live-log-collection-incomplete; no launch cause established\n")
