@@ -108,6 +108,13 @@ The confirm call follows the trust boundary of the paired hub; HTTP deploy permi
 
 The update manager belongs to the resident process and is shared by all attach connections. Ending one RPC connection only closes that stream; it cannot stand in for restarting the whole resident node. A normal switch first replies to the commit request, then closes connections and listeners, drains the resident service, and starts the new executable with the original arguments and environment.
 
+When a co-located Hub update has already replaced the shared executable, the resident node can adopt the file if it is
+executable and its SHA-256 matches the verified target under the node's signing policy. It removes the redundant upload
+and follows the same reload and exact-version confirmation flow. Its confirmation record carries no rollback backup and
+keeps startup signing from modifying the shared executable while confirmation is pending. A different executable on disk
+still causes the commit to fail with `node executable was replaced by another deployment`. Older targets confirm by
+running version and are eligible for adoption when their startup can use the verified file with its existing signature.
+
 Before draining, the resident checks the installed replacement by running its `node-update-check`. Endpoint protection
 on some Macs holds a new executable's first start until its scan ends (about 30 s) and then caches the verdict by
 content (#12528), so the first run of a file the process has not seen pass gets up to 60 s; once that file passed, its
