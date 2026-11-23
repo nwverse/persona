@@ -182,7 +182,7 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 		if ai.IsNotConfigured(err) {
 			detail = "判定模型未配置" // i18n-ignore: the supervision message is the assistant's prompt
 		}
-		s.signal(superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: detail})
+		s.signal(superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: detail, JudgeDown: true})
 		return
 	}
 	detail := verdictWords[c.Verdict]

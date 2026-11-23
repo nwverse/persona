@@ -144,6 +144,9 @@ type superviseSignal struct {
 	BreakerNote string `json:"breaker_note,omitempty"`
 	// ExternalSource names the source of external information arriving during reviewNeedsUser (#13112).
 	ExternalSource string `json:"external_source,omitempty"`
+	// JudgeDown: an unjudged stop because the judge itself failed (no model set up, or the service kept failing), not
+	// because it read the turn and could not tell. It is not urgent (urgent): such stops are told together.
+	JudgeDown bool `json:"judge_down,omitempty"`
 }
 
 // breakerFallback is what a circuit-breaker fallback note says (prompts.BreakerNote): its kind and their facts.
@@ -215,7 +218,12 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigUnjudged:
+		// A stop the judge could not look at because it is down (no model set up, or it kept failing) is not news
+		// that needs the supervisor soon: every stopped task says the same until the model is back, and each used to
+		// wake the main conversation on its own. They go out together, on the ordinary schedule.
+		return !g.JudgeDown
+	case sigNeedsYou, sigIdle, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
 		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
 		return true
