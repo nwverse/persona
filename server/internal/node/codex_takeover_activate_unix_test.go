@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -69,6 +70,30 @@ func TestCodexHeldSharedAppServerReportsSocketGone(t *testing.T) {
 	want := i18n.T(i18n.Default, "codex-history.shared_socket_gone")
 	if s.ReadOnlyReason != want {
 		t.Fatalf("ReadOnlyReason = %q, want %q", s.ReadOnlyReason, want)
+	}
+
+	// A separate custom listener in the same home must NOT inherit the broken default daemon's socket_gone diagnosis.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedAddr := ln.Addr().String()
+	_ = ln.Close()
+	customEP := "ws://" + closedAddr
+	n.codices.scan = func() []codexProcess {
+		return []codexProcess{{pid: os.Getpid(), home: home, endpoint: customEP}}
+	}
+	n.discoverCodex()
+	n.ensureCodexRemote(t.Context(), proto.CodexServer{ID: "srv-custom", Home: canonicalCodexHome(home, n.home), Endpoint: customEP})
+	waitFor(t, "custom listener unreachable diagnostic", func() bool {
+		n.codices.mu.Lock()
+		defer n.codices.mu.Unlock()
+		return n.codices.remoteDiags[customEP] == codexDiagUnreachable
+	})
+	s = byID(n.codexSessions(map[string]bool{}))[id]
+	wantUnreachable := i18n.T(i18n.Default, "codex-history.shared_unreachable")
+	if s.ReadOnlyReason != wantUnreachable {
+		t.Fatalf("custom listener ReadOnlyReason = %q, want %q", s.ReadOnlyReason, wantUnreachable)
 	}
 }
 
@@ -232,6 +257,55 @@ esac
 			}
 		})
 	}
+
+	t.Run("writer exiting during tmux capture-pane blocks ctrl+d", func(t *testing.T) {
+		dir := t.TempDir()
+		calls := filepath.Join(dir, "calls")
+		screenFile := filepath.Join(dir, "screen")
+		if err := os.WriteFile(screenFile, []byte("\u203a Ask Codex to do anything\n  ? for shortcuts\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		bin := filepath.Join(dir, "tmux")
+		script := `#!/bin/sh
+[ "$1" = "-S" ] && shift 2
+case "$1" in
+display-message) printf '%s\t/dev/ttys005\t0\t0\n' "` + strconv.Itoa(writer.PID) + `" ;;
+capture-pane) cat ` + screenFile + ` ;;
+send-keys) echo "$@" >> ` + calls + ` ;;
+esac
+`
+		if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		n := remoteTestNode(t)
+		n.hosts = host.NewRegistry(&tmuxHost{c: tmux.Client{Bin: bin}})
+		oldRead := readCodexWriterProcess
+		oldFG := checkTmuxWriterForeground
+		readCodexWriterProcess = func(pid int) (codexProcess, bool) {
+			return codexProcess{pid: pid, tmuxPane: "%11"}, true
+		}
+		// Prepare calls verifyOwner (#1 -> true), send calls pre-read verifyOwner (#2 -> true),
+		// then post-read verifyOwner (#3 -> false, simulating exit during capture-pane).
+		fgCalls := 0
+		checkTmuxWriterForeground = func(int, int, string) bool {
+			fgCalls++
+			return fgCalls <= 2
+		}
+		t.Cleanup(func() {
+			readCodexWriterProcess = oldRead
+			checkTmuxWriterForeground = oldFG
+		})
+		send, err := n.prepareCodexWriterQuit(context.Background(), writer)
+		if err != nil {
+			t.Fatalf("prepare err = %v", err)
+		}
+		if err := send(); refusalCode(err) != "codex_takeover_changed" {
+			t.Fatalf("send err = %v, want codex_takeover_changed (fgCalls=%d)", err, fgCalls)
+		}
+		if b, err := os.ReadFile(calls); err == nil && len(b) > 0 {
+			t.Fatalf("send-keys ran despite exit during capture-pane: %q", b)
+		}
+	})
 }
 
 func TestCodexTakeoverSafeQuitHerdrHerdrCoreAndTernPanes(t *testing.T) {
@@ -273,6 +347,18 @@ func TestCodexTakeoverSafeQuitHerdrHerdrCoreAndTernPanes(t *testing.T) {
 			if len(fh.keysSent) != 1 || !slices.Equal(fh.keysSent[0], []string{"ctrl+d"}) {
 				t.Fatalf("keysSent = %v, want [[ctrl+d]]", fh.keysSent)
 			}
+			wantSrc := "visible"
+			if tc.kind == host.Herdr {
+				wantSrc = "recent"
+			}
+			if len(fh.readSources) < 2 {
+				t.Fatalf("readSources = %v, want >=2 reads", fh.readSources)
+			}
+			for _, src := range fh.readSources {
+				if src != wantSrc {
+					t.Fatalf("%s used read source %q, want %q", tc.kind, src, wantSrc)
+				}
+			}
 
 			// Draft appearing before send refuses without pressing ctrl+d.
 			fh.keysSent = nil
@@ -295,8 +381,44 @@ func TestCodexTakeoverSafeQuitHerdrHerdrCoreAndTernPanes(t *testing.T) {
 			if err := send(); refusalCode(err) != "codex_takeover_changed" || len(fh.keysSent) != 0 {
 				t.Fatalf("changed pane owner did not block ctrl+d: err=%v keys=%v", err, fh.keysSent)
 			}
+
+			// Process exiting DURING the screen-read RPC right before SendKeys must refuse without sending ctrl+d to a shell.
+			fh.pids = []int{writer.PID}
+			send, err = n.prepareCodexWriterQuit(context.Background(), writer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fh.onRead = func(host.ReadOpts) {
+				fh.pids = []int{writer.PID + 99}
+			}
+			if err := send(); refusalCode(err) != "codex_takeover_changed" || len(fh.keysSent) != 0 {
+				t.Fatalf("exit during screen read sent ctrl+d to shell: err=%v keys=%v", err, fh.keysSent)
+			}
+			fh.onRead = nil
 		})
 	}
+
+	t.Run("herdr scrolled viewport cannot mask live draft in recent tail", func(t *testing.T) {
+		fh := &fakeTakeoverLauncherHost{
+			kind: host.Herdr,
+			readBySrc: map[string]string{
+				"visible": emptyComposer,
+				"recent":  draftComposer,
+			},
+			pids: []int{writer.PID},
+		}
+		n := remoteTestNode(t)
+		n.hosts = host.NewRegistry(fh)
+		oldRead := readCodexWriterProcess
+		readCodexWriterProcess = func(int) (codexProcess, bool) {
+			return codexProcess{pid: writer.PID, pane: "w1:p2"}, true
+		}
+		t.Cleanup(func() { readCodexWriterProcess = oldRead })
+
+		if _, err := n.prepareCodexWriterQuit(context.Background(), writer); refusalCode(err) != "codex_takeover_unavailable" {
+			t.Fatalf("scrolled herdr viewport masked live draft: err=%v sources=%v", err, fh.readSources)
+		}
+	})
 }
 
 func TestCodexTakeoverExternalTerminalNeverSignalsAndOffersContinue(t *testing.T) {

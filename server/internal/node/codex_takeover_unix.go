@@ -243,6 +243,10 @@ func (n *Node) codexQuitTmux(ctx context.Context, writer codexWriter, pane, sock
 		if err := checkComposer(); err != nil {
 			return err
 		}
+		// Re-verify immediately before Ctrl+D so a Codex that exited during the screen RPC cannot send Ctrl+D to a shell.
+		if _, err := verifyOwner(true); err != nil {
+			return err
+		}
 		if err := h.SendKeys(ctx, ref, "ctrl+d"); err != nil {
 			return takeoverRefusal("unavailable")
 		}
@@ -267,8 +271,13 @@ func (n *Node) codexQuitHostPane(ctx context.Context, h host.Host, ref host.Pane
 		}
 		return true, nil
 	}
+	readSource := "visible"
+	if ref.Kind == host.Herdr {
+		// Herdr's visible source returns scrolled-up history when the user scrolled back; read live output tail instead.
+		readSource = "recent"
+	}
 	checkComposer := func() error {
-		text, err := h.Read(ctx, ref, host.ReadOpts{Source: "visible", Lines: 120})
+		text, err := h.Read(ctx, ref, host.ReadOpts{Source: readSource, Lines: 120})
 		if err != nil || !codexQuitComposer(text) {
 			return takeoverRefusal("unavailable")
 		}
@@ -286,6 +295,10 @@ func (n *Node) codexQuitHostPane(ctx context.Context, h host.Host, ref host.Pane
 			return err
 		}
 		if err := checkComposer(); err != nil {
+			return err
+		}
+		// Re-verify immediately before Ctrl+D so a Codex that exited during the screen RPC cannot send Ctrl+D to a shell.
+		if _, err := verifyOwner(true); err != nil {
 			return err
 		}
 		if err := h.SendKeys(ctx, ref, "ctrl+d"); err != nil {
@@ -413,6 +426,9 @@ func codexQuitTerminal(ctx context.Context, writer codexWriter, pane string) (fu
 					if err := check(); err != nil {
 						return err
 					}
+					if !sameProcess(writer.PID, writer.Start) {
+						return takeoverRefusal("changed")
+					}
 					return c.Send(ctx, target, "\x04")
 				}, nil
 			}
@@ -503,6 +519,9 @@ func codexQuitTerminal(ctx context.Context, writer codexWriter, pane string) (fu
 		}
 		if err := checkComposer(); err != nil {
 			return err
+		}
+		if !sameProcess(writer.PID, writer.Start) {
+			return takeoverRefusal("changed")
 		}
 		call := exec.CommandContext(ctx, command, "terminal", "send", "--terminal", handle, "--text", "\x04", "--json")
 		call.Env = env

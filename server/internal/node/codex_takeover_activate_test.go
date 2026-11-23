@@ -19,15 +19,18 @@ import (
 )
 
 type fakeTakeoverLauncherHost struct {
-	kind      string
-	readText  string
-	readErr   error
-	pids      []int
-	pidsErr   error
-	keysSent  [][]string
-	keysErr   error
-	paneEnv   string
-	workspace string
+	kind        string
+	readText    string
+	readBySrc   map[string]string
+	readErr     error
+	readSources []string
+	onRead      func(host.ReadOpts)
+	pids        []int
+	pidsErr     error
+	keysSent    [][]string
+	keysErr     error
+	paneEnv     string
+	workspace   string
 }
 
 func (h *fakeTakeoverLauncherHost) Kind() string                   { return h.kind }
@@ -40,7 +43,16 @@ func (h *fakeTakeoverLauncherHost) Agents(context.Context) ([]host.Agent, error)
 func (h *fakeTakeoverLauncherHost) Agent(context.Context, host.PaneRef) (*host.Agent, error) {
 	return nil, host.ErrNoAgent
 }
-func (h *fakeTakeoverLauncherHost) Read(context.Context, host.PaneRef, host.ReadOpts) (string, error) {
+func (h *fakeTakeoverLauncherHost) Read(_ context.Context, _ host.PaneRef, opts host.ReadOpts) (string, error) {
+	h.readSources = append(h.readSources, opts.Source)
+	if h.onRead != nil {
+		h.onRead(opts)
+	}
+	if h.readBySrc != nil {
+		if text, ok := h.readBySrc[opts.Source]; ok {
+			return text, h.readErr
+		}
+	}
 	return h.readText, h.readErr
 }
 func (h *fakeTakeoverLauncherHost) SendText(context.Context, host.PaneRef, string) error { return nil }
@@ -693,4 +705,124 @@ func TestCodexProcessArgsExtractsTerminalEnvs(t *testing.T) {
 			t.Fatalf("expected plain terminal without takeover env, got %+v (ok=%v)", p, ok)
 		}
 	})
+}
+
+func TestCodexTakeoverColdResumeSurvivesConcurrentRefresh(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	cwd := t.TempDir()
+	path := writeCodexTestRollout(t, home, remoteRaw, cwd, "codex-tui", "cli", time.Now().Add(-time.Minute))
+	id := n.registerCodex(home, remoteRaw, path)
+
+	f, remote := connectRemoteFixture(t, n, home, "shared-race", remoteOther)
+	readEntered := make(chan struct{})
+	releaseRead := make(chan struct{})
+	blockNextRead := true
+	f.mu.Lock()
+	f.response = func(method string, p map[string]any) (any, bool) {
+		tid, _ := p["threadId"].(string)
+		switch method {
+		case "thread/read":
+			if tid == remoteOther && blockNextRead {
+				blockNextRead = false
+				close(readEntered)
+				<-releaseRead
+			}
+		case "thread/resume":
+			return map[string]any{
+				"thread": map[string]any{
+					"id":     tid,
+					"name":   "Cold Resumed Thread",
+					"cwd":    cwd,
+					"path":   path,
+					"status": map[string]any{"type": "idle"},
+				},
+			}, true
+		}
+		return nil, false
+	}
+	f.mu.Unlock()
+	n.takeovers.writers = func(codexSource) ([]codexWriter, error) { return nil, nil }
+	n.takeovers.lockHeld = func(codexSource) bool { return false }
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		refreshDone <- remote.refresh()
+	}()
+	<-readEntered
+
+	plan, err := n.prepareCodexTakeover(context.Background(), id)
+	if err != nil || !plan.CanResume {
+		close(releaseRead)
+		t.Fatalf("prepare = (%+v, %v)", plan, err)
+	}
+	activated, err := n.commitCodexTakeover(context.Background(), id, plan.Token, false)
+	if err != nil {
+		close(releaseRead)
+		t.Fatalf("commit cold activation failed: %v", err)
+	}
+	close(releaseRead)
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("concurrent refresh failed: %v", err)
+	}
+
+	owner, thread, err := n.codexOwner(id)
+	if err != nil || owner != remote || !thread.joined || !activated.Capabilities.Send {
+		t.Fatalf("cold-resumed thread lost after concurrent refresh: owner=%v thread=%+v err=%v", owner, thread, err)
+	}
+}
+
+func TestCodexTakeoverColdResumeReceivesImmediateApprovalRequest(t *testing.T) {
+	n := remoteTestNode(t)
+	hub := withFakeHub(t, n)
+	home := n.codexHome()
+	cwd := t.TempDir()
+	path := writeCodexTestRollout(t, home, remoteRaw, cwd, "codex-tui", "cli", time.Now().Add(-time.Minute))
+	id := n.registerCodex(home, remoteRaw, path)
+
+	f, _ := connectRemoteFixture(t, n, home, "shared-ask")
+	f.mu.Lock()
+	f.resumeRequest = true
+	f.mu.Unlock()
+	n.takeovers.writers = func(codexSource) ([]codexWriter, error) { return nil, nil }
+	n.takeovers.lockHeld = func(codexSource) bool { return false }
+
+	plan, err := n.prepareCodexTakeover(context.Background(), id)
+	if err != nil || !plan.CanResume {
+		t.Fatalf("prepare = (%+v, %v)", plan, err)
+	}
+	if _, err := n.commitCodexTakeover(context.Background(), id, plan.Token, false); err != nil {
+		t.Fatalf("commit cold activation failed: %v", err)
+	}
+	waitFor(t, "immediate approval request delivered on cold resume", func() bool {
+		return f.replyCount() == 1 && len(hub.interactions()) == 1
+	})
+}
+
+func TestCodexTakeoverRowReusesListPassDesktopProbe(t *testing.T) {
+	n, _, cwd := codexHistoryNode(t)
+	home := n.codexHome()
+	if err := os.WriteFile(filepath.Join(home, ".codex-global-state.json"), []byte(`{"projectless-thread-ids":["`+remoteOther+`"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Add(-time.Minute)
+	path := writeCodexTestRollout(t, home, remoteOther, cwd, "Codex Desktop", "vscode", at, codexEventAt("task_started", at), codexEventAt("task_complete", at))
+	id := n.registerCodex(home, remoteOther, path)
+	src, _ := n.codexSource(id)
+	n.takeovers.writers = func(codexSource) ([]codexWriter, error) { return nil, nil }
+	n.takeovers.lockHeld = func(codexSource) bool { return false }
+
+	// Seed the pass cache with desktop available=true (no live socket on disk) to verify codexTakeoverRowIn reuses pass.
+	pass := newCodexListPass()
+	pass.desktop[src.home] = true
+	got := n.codexTakeoverRowIn(id, src, quickMeta{}, false, pass)
+	if got == nil || got.CanResume || got.Reason != "unavailable" {
+		t.Fatalf("pass-cached desktop probe was bypassed: got %+v", got)
+	}
+
+	// prepareCodexTakeover always performs a fresh live probe (sees no bus) and permits idle activation.
+	plan, err := n.prepareCodexTakeover(context.Background(), id)
+	if err != nil || !plan.CanResume {
+		t.Fatalf("prepare should perform live desktop probe, got (%+v, %v)", plan, err)
+	}
 }

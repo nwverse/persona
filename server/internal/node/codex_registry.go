@@ -87,6 +87,14 @@ func (r *codexRegistry) setRemoteDiag(endpoint string, diag codexRemoteDiag) {
 	r.remoteDiags[endpoint] = diag
 }
 
+// codexControlEndpoint is the default Unix control socket endpoint for home.
+func codexControlEndpoint(home string) string {
+	if home == "" {
+		return ""
+	}
+	return "unix://" + filepath.Join(home, "app-server-control", "app-server-control.sock")
+}
+
 // codexResolvedEndpoint normalizes a process's --listen endpoint for home; returns "" for standalone CLIs,
 // stdio app-servers, or disabled listeners.
 func codexResolvedEndpoint(home, endpoint string) string {
@@ -94,10 +102,7 @@ func codexResolvedEndpoint(home, endpoint string) string {
 		return ""
 	}
 	if endpoint == "unix://" {
-		if home == "" {
-			return ""
-		}
-		return "unix://" + filepath.Join(home, "app-server-control", "app-server-control.sock")
+		return codexControlEndpoint(home)
 	}
 	return endpoint
 }
@@ -539,7 +544,7 @@ func heldTurnStalled(m quickMeta, path string, pass *codexListPass) bool {
 
 // codexSharedReadOnlyReason explains why a rollout held by a shared --listen app-server could not be joined live.
 func (n *Node) codexSharedReadOnlyReason(home, endpoint string) string {
-	if codexDaemonSocketGone(home) != nil {
+	if endpoint == codexControlEndpoint(home) && codexDaemonSocketGone(home) != nil {
 		return i18n.T(i18n.Default, "codex-history.shared_socket_gone")
 	}
 	diag := codexDiagNone
@@ -911,7 +916,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			s.Capabilities.StopCause = n.stopCause(id)
 		}
 		if s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && !n.codexBlocked(id) {
-			s.Capabilities.Takeover = n.codexTakeoverRow(id, src, m, liveRollouts[id] != "" || s.Status == proto.StatusWorking)
+			s.Capabilities.Takeover = n.codexTakeoverRowIn(id, src, m, liveRollouts[id] != "" || s.Status == proto.StatusWorking, pass)
 		}
 		if n.codexBlocked(id) {
 			markCodexConflict(&s)

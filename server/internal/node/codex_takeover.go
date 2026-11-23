@@ -81,11 +81,16 @@ func (n *Node) codexLiveCannotQuit(id string) bool {
 }
 
 // codexDesktopConflict reports whether a Codex App process could still own or write threads in src.home.
-func (n *Node) codexDesktopConflict(src codexSource, fresh bool) bool {
+// When fresh is false and pass is non-nil, desktop bus availability is reused from the per-home list pass cache.
+func (n *Node) codexDesktopConflict(src codexSource, fresh bool, pass *codexListPass) bool {
 	if src.home == "" {
 		return true
 	}
-	if codexDesktopAvailable(src.home) {
+	if !fresh && pass != nil {
+		if pass.desktopAvailable(src.home) {
+			return true
+		}
+	} else if codexDesktopAvailable(src.home) {
 		return true
 	}
 	if n == nil || n.codices == nil {
@@ -198,6 +203,10 @@ func (n *Node) canContinueCodex(ctx context.Context) bool {
 
 // The listing is advisory. Preparation and commit both inspect the actual writer and lock again.
 func (n *Node) codexTakeoverRow(id string, src codexSource, m quickMeta, running bool) *proto.CodexTakeover {
+	return n.codexTakeoverRowIn(id, src, m, running, nil)
+}
+
+func (n *Node) codexTakeoverRowIn(id string, src codexSource, m quickMeta, running bool, pass *codexListPass) *proto.CodexTakeover {
 	o := readCodexOrigin(src.path)
 	if src.path == "" || src.thread == "" || !o.interactive() {
 		return nil
@@ -217,7 +226,7 @@ func (n *Node) codexTakeoverRow(id string, src codexSource, m quickMeta, running
 		state.CanResume, state.Reason = false, "encrypted_context"
 	case !canResumeTarget:
 		state.CanResume, state.Reason = false, "unavailable"
-	case o.desktop && (running || n.codexDesktopConflict(src, false) || n.codexWriterLockHeld(src)):
+	case o.desktop && (running || n.codexDesktopConflict(src, false, pass) || n.codexWriterLockHeld(src)):
 		state.CanResume, state.Reason = false, "unavailable"
 	case !running && n.codexWriterLockHeld(src):
 		state.Running = true
@@ -268,7 +277,7 @@ func (n *Node) prepareCodexTakeover(ctx context.Context, id string) (*codexTakeo
 		state.Running = true
 		state.CanResume, state.Reason = false, "unavailable"
 	}
-	if o.desktop && (state.Running || n.codexDesktopConflict(src, true)) {
+	if o.desktop && (state.Running || n.codexDesktopConflict(src, true, nil)) {
 		state.CanResume, state.Reason = false, "unavailable"
 	}
 	if state.Running && runtime.GOOS == "windows" {
@@ -333,7 +342,7 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 		return nil, takeoverRefusal("changed")
 	}
 	o := readCodexOrigin(src.path)
-	if o.desktop && n.codexDesktopConflict(src, true) {
+	if o.desktop && n.codexDesktopConflict(src, true, nil) {
 		return nil, takeoverRefusal("writer_busy")
 	}
 	hostCtx, hostErr := n.takeoverHost(ctx)
@@ -382,18 +391,18 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	if current, err = n.takeoverWriters(src); err != nil || len(current) != 0 {
 		return nil, takeoverRefusal("writer_busy")
 	}
-	if n.codexWriterLockHeld(src) || (o.desktop && n.codexDesktopConflict(src, true)) {
+	if n.codexWriterLockHeld(src) || (o.desktop && n.codexDesktopConflict(src, true, nil)) {
 		return nil, takeoverRefusal("writer_busy")
 	}
 	if err := settledCodexRollout(ctx, src.path); err != nil {
 		return nil, err
 	}
-	if current, err = n.takeoverWriters(src); err != nil || len(current) != 0 || n.codexWriterLockHeld(src) || (o.desktop && n.codexDesktopConflict(src, true)) {
+	if current, err = n.takeoverWriters(src); err != nil || len(current) != 0 || n.codexWriterLockHeld(src) || (o.desktop && n.codexDesktopConflict(src, true, nil)) {
 		return nil, takeoverRefusal("writer_busy")
 	}
 	if hostErr != nil {
 		// No terminal engine launcher is available: cold-activate directly on the shared app-server.
-		if err := sharedRemote.coldResume(ctx, id, src); err != nil {
+		if err := sharedRemote.coldResume(ctx, id, src, p.Cwd); err != nil {
 			return nil, err
 		}
 		for _, s := range n.codexSessions(map[string]bool{}) {
