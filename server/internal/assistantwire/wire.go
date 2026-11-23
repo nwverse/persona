@@ -302,6 +302,8 @@ type Notification struct {
 	LongMS int64 `json:"long_ms,omitempty"`
 	// Todo is a NotifyDecide push's to-do and the round of its decision.
 	Todo *NotifyTodo `json:"todo,omitempty"`
+	// Health is a NotifyHealthWater reminder's button context.
+	Health *NotifyHealth `json:"health,omitempty"`
 	// LinkCovered: a NotifyInput push's card is what the manager's Persona Link summary shows for its agent and rings
 	// for (the card that stands for it, notifying, among the listed items), so a Persona Link desktop of the manager's
 	// may stand in for the phone's push ("Phone Muted", docs/operations/link.md "Presence"). Older managers leave it
