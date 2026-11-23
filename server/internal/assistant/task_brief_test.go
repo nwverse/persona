@@ -722,8 +722,8 @@ func TestContinuationSurvivesEstimateUpdate(t *testing.T) {
 	if failed || !strings.Contains(got, "scope_revision: "+rev.Format(time.RFC3339Nano)) {
 		t.Fatalf("todo_get: %s", got)
 	}
-	if _, err = s.applyScope(t.Context(), todo, scopeChange{By: "conv1", Change: "Merge the release", DoneWhen: []string{"Merge the release"}, Expect: 42}); err == nil {
-		t.Fatal("adding a risky criterion needs owner approval")
+	if _, err = s.applyScope(t.Context(), todo, scopeChange{By: "conv1", Change: "Send the release note to the customers", DoneWhen: []string{"Send the release note to the customers"}, Expect: 42}); err == nil {
+		t.Fatal("adding an owner-only criterion needs owner approval")
 	}
 }
 
