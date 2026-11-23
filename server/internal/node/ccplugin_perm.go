@@ -384,7 +384,6 @@ func (n *Node) ccPluginPermission(ctx context.Context, pid int, claude claudePro
 	if isNew {
 		n.rememberTranscript(in)
 		go n.runCCPluginPermission(entry, claude, in)
-		n.notifySessions()
 	}
 
 	entry.enterWait()
@@ -468,7 +467,6 @@ func ccPluginPermKey(in hookInput) string {
 
 func (n *Node) runCCPluginPermission(entry *ccPluginPerm, claude claudeProc, in hookInput) {
 	defer n.hookFlights.enter(in.SessionID)()
-	defer n.notifySessions()
 
 	askCtx, cancel := context.WithTimeout(context.Background(), ccPluginPermTTL)
 	defer cancel()
@@ -661,11 +659,8 @@ func (n *Node) ccPluginPermissionDone(pid int, claude claudeProc, body []byte) (
 		return http.StatusBadRequest, map[string]any{"error": "invalid"}
 	}
 	cancelled := n.ccPlugins.completePerm(req, pid)
-	if len(cancelled) > 0 {
-		for _, p := range cancelled {
-			p.cancelAsPassthrough()
-		}
-		n.notifySessions()
+	for _, p := range cancelled {
+		p.cancelAsPassthrough()
 	}
 	return http.StatusOK, map[string]any{"ok": true}
 }

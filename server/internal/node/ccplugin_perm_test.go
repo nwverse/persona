@@ -106,6 +106,7 @@ func TestCCPluginPollAuthorizesPermissionsAndBlocksPersonaHooks(t *testing.T) {
 	if status != http.StatusOK || out["permissions"] != true {
 		t.Fatalf("re-authorize poll: %d %v", status, out)
 	}
+	// Managed non-ReportOnly hook dynamically revokes permissions.
 	managedRaw, _ := json.Marshal(hookInput{HookEventName: "SessionStart", SessionID: sidA, Cwd: home})
 	if _, err := n.handleHook(context.Background(), sockRequest{Input: managedRaw, ReportOnly: false, AgentPID: os.Getpid()}); err != nil {
 		t.Fatal(err)
@@ -122,6 +123,28 @@ func TestCCPluginPollAuthorizesPermissionsAndBlocksPersonaHooks(t *testing.T) {
 	})
 	if status != http.StatusOK || out["action"] != "passthrough" || len(fh.interactions()) != 0 {
 		t.Fatalf("managed hook /permission: %d %v (cards=%d)", status, out, len(fh.interactions()))
+	}
+
+	// External tmux session keeps tmux screen cards instead of plugin permissions (avoids scr_ + ix_ double cards).
+	writeOutsideClaude(t, home, sidB, "cli", "waiting", inbox, map[string]any{"tmux": "main:@1.%1"})
+	status, out = pluginPost(t, c, "poll", map[string]any{
+		"session_id":     sidB,
+		"plugin_version": "0.3.0",
+		"capabilities":   []string{"busy_input", "interrupt", "settings", "permissions"},
+		"wait_ms":        50,
+	})
+	if status != http.StatusOK || out["permissions"] == true {
+		t.Fatalf("external tmux /poll got permissions: %d %v", status, out)
+	}
+	status, out = pluginPost(t, c, "permission", map[string]any{
+		"session_id": sidB,
+		"req_id":     "req-blocked-tmux",
+		"tool_name":  "Bash",
+		"tool_input": map[string]any{"command": "ls"},
+		"wait_ms":    200,
+	})
+	if status != http.StatusOK || out["action"] != "passthrough" || len(fh.interactions()) != 0 {
+		t.Fatalf("external tmux /permission: %d %v (cards=%d)", status, out, len(fh.interactions()))
 	}
 }
 
@@ -309,6 +332,7 @@ func TestCCPluginPermissionLongPollRenewalAndDecisions(t *testing.T) {
 func TestCCPluginPermissionConcurrentAlsoWaitingAndDoneWithdrawal(t *testing.T) {
 	n, f, home := herdrNode(t)
 	noPaneEnv(t)
+	t.Cleanup(func() { <-n.notifySessionsSoon() })
 	h := withCancelHub(t, n)
 	p := bgTranscript(t, home, home, sidA, "default")
 	inbox := newFakeInbox(t, p)
@@ -513,6 +537,7 @@ func TestCCPluginPermissionIdleAbandonmentCancelsCard(t *testing.T) {
 
 	n, f, home := herdrNode(t)
 	noPaneEnv(t)
+	t.Cleanup(func() { <-n.notifySessionsSoon() })
 	h := withCancelHub(t, n)
 	p := bgTranscript(t, home, home, sidA, "default")
 	inbox := newFakeInbox(t, p)

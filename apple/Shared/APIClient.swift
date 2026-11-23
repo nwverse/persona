@@ -684,6 +684,37 @@ nonisolated struct APIClient: Sendable {
         var machineID: String
         enum CodingKeys: String, CodingKey { case launcher, model, effort, machineID = "machine_id" }
     }
+
+    /// The optimistic-concurrency token for an explicit logical-conversation switch.
+    struct ConversationSwitchState: Decodable, Sendable {
+        var enabled: Bool
+        var epoch: Int
+        var supervisionRequired: Bool?
+        enum CodingKeys: String, CodingKey {
+            case enabled, epoch
+            case supervisionRequired = "supervision_required"
+        }
+    }
+
+    /// One idempotent switch operation. Retrying after an uncertain answer keeps this exact body.
+    struct ConversationSwitchRequest: Encodable, Sendable, Equatable {
+        var operationID: String
+        var expectedEpoch: Int
+        var sourceMachineID: String
+        var machineID: String
+        var launcher: String
+        var model: String?
+        var effort: String?
+        var permissionMode: String?
+        enum CodingKeys: String, CodingKey {
+            case launcher, model, effort
+            case operationID = "operation_id"
+            case expectedEpoch = "expected_epoch"
+            case sourceMachineID = "source_machine_id"
+            case machineID = "machine_id"
+            case permissionMode = "permission_mode"
+        }
+    }
     nonisolated struct SessionsResponse: Decodable, Sendable { var sessions: [Session] }
     struct SessionResponse: Decodable { var session: Session }
     struct ItemsResponse: Decodable, Sendable {
@@ -900,6 +931,19 @@ nonisolated struct APIClient: Sendable {
     /// The conversation follows Model configuration › Main chat again (DELETE …/conversations/{id}/model, #5033).
     func deleteConversationModel(machine: String, conversation: String) async throws {
         try await delete("/api/v1/assistant/conversations/\(conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation)/model")
+    }
+    private func conversationSwitchPath(_ conversation: String, suffix: String) -> String {
+        let id = conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation
+        return "/api/v1/assistant/conversations/\(id)/\(suffix)"
+    }
+    /// Reads the current epoch without writing or sending a message to either engine.
+    func conversationSwitchState(machine: String, conversation: String) async throws -> ConversationSwitchState {
+        try await get(conversationSwitchPath(conversation, suffix: "segments"), query: ["machine_id": machine],
+                      as: ConversationSwitchState.self)
+    }
+    /// Submits the explicit operation prepared from `conversationSwitchState`; the response may only acknowledge staging.
+    func switchConversation(machine: String, conversation: String, request body: ConversationSwitchRequest) async throws {
+        _ = try await post(conversationSwitchPath(conversation, suffix: "switch"), body: body, timeout: 60)
     }
     /// The models the launcher's agent lists in its /model menu (New Agent's model picker). The node starts the CLI to
     /// ask (a few seconds, kept 10 minutes); refresh asks it again. Assistant purpose asks the shell launcher's list,
