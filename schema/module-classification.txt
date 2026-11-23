@@ -177,6 +177,7 @@ go server/internal/node/nodekit core
 go server/internal/node/transcripttail core
 go server/internal/nodeclient core
 go server/internal/nodecmd core
+go server/internal/nodecmd/commandport core
 go server/internal/nodeproto core
 go server/internal/nodesign core
 go server/internal/nodeupdate core
@@ -247,7 +248,6 @@ go server/plugins core
 # Module code still in core paths.
 go server/internal/transcribelive voice
 go server/internal/lark lark
-go server/internal/office office
 go server/internal/screen screen-share
 go server/internal/screenlink screen-share
 go server/internal/iphone phone-extra

@@ -469,7 +469,7 @@ What a hit would save, measured the same day with the build already cached (110 
 guard packages check-fast runs on every server change took 12 s uncached and 1 s cached, and its guard tests 10 to
 14 s uncached. Only packages the change did not reach can hit at all: the edited package and every package that imports
 it get a new test binary and run again. Caching also changes the run itself: `go test` passes `-test.testlogfile` only
-when the result may be cached, and `internal/office` failed only in that mode, because a test that lowered the file size
+when the result may be cached, and `internal/modules/office/office` failed only in that mode, because a test that lowered the file size
 limit also cut off that log (#8962, fixed by #8968).
 
 - Keep `-count=1` in every command whose result is reported as verification, and in any new entry point. A plain
