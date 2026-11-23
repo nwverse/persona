@@ -18,6 +18,7 @@ import (
 // own prompt, a relay's, a node too old to say and a replayed event from before the batch leave it; so does any prompt
 // to a Persona chat, whose user's messages the hub tells (UserSpoke).
 func TestMeetingTurnAgentUserPrompt(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	ft := newFleetTestNoStore(t)
 	fastDone(ft)
 	s, ctx := ft.s, context.Background()
@@ -104,6 +105,7 @@ func TestMeetingSendKeepsSupervisionHold(t *testing.T) {
 // A meeting turn in the fleet: no finished push and nothing of it left in the turn tracker, so the next turn of the
 // user's is timed and pushed as ever; no triage, no channel mirror, never the task's.
 func TestMeetingTurnIsSideExchange(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	ft := newFleetTestNoStore(t)
 	fastDone(ft)
 	s := ft.s
@@ -160,6 +162,7 @@ func TestTaskTurnSourceMeeting(t *testing.T) {
 // During a meeting turn of the calling session only the reading tools work; every other hub tool says it needs the
 // user's own message. Another session, or the same once the turn ended, is not affected.
 func TestMeetingTurnToolsOnlyRead(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	f := newFakeHub()
 	f.hello.Locale = "en"
 	s := newTestService(t, f)
@@ -198,6 +201,7 @@ func TestMeetingTurnToolsOnlyRead(t *testing.T) {
 // gets only the reading tools, mail_save_attachment's bytes included. Nothing changes with no Agent's meeting turn
 // running: none, a Persona chat's (its calls name it), another machine's, or one that ended.
 func TestMeetingTurnSessionlessAgentCalls(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	f := newFakeHub()
 	f.hello.Locale = "en"
 	s := newTestService(t, f)
@@ -269,6 +273,7 @@ func TestMeetingTurnSessionlessAgentCalls(t *testing.T) {
 // interrupted, or stopped on a card; and none runs past meetingTurnRunMax. A row from before the batch, or one still
 // waiting on a card, ends nothing.
 func TestMeetingTurnStuckEnds(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	ft := newFleetTest(t)
 	fastDone(ft)
 	s, ctx := ft.s, context.Background()

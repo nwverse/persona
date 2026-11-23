@@ -396,6 +396,7 @@ func TestEveningFactsDayBoundsEverything(t *testing.T) {
 // minutes where each action item stands now: a suggestion only, or its to-do open (and when due), done, cancelled or
 // deleted.
 func TestMinutesPastMeetingTools(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	f := newFakeHub()
 	s := kbServiceOn(t, f, newKBStore(), t.TempDir(), func(string, ...any) {}) // the push's goroutines log late
 	setSettings(t, s, func(v *Settings) { v.Timezone = "Asia/Shanghai" })
@@ -600,6 +601,7 @@ func TestAudioSocketRefusedBeforeTheUpgrade(t *testing.T) {
 // next ordinary turn drops the mark (#3862, docs/assistant/meeting-minutes.md "Just me"). The delayed checks run by
 // hand here: their timers are an hour.
 func TestJustMeMarkHoldsThroughBackgroundWork(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	ft := newFleetTestNoStore(t)
 	ft.f.mu.Lock()
 	ft.f.hello.Notify = assistantwire.NotifyTimings{DoneDelayMS: 3_600_000, LongTurnMS: 60_000}

@@ -18,6 +18,7 @@ import (
 // summary card's overview too, #6563), the reconciliation and kb_get / kb_list; confirmed action items become to-dos
 // once, however often the app asks, the overview kept as it was.
 func TestMinutesHTTP(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	f := newFakeHub()
 	// The push also goes to the Lark bot and the channels from goroutines of their own: they must not log into a
 	// finished test.

@@ -126,6 +126,7 @@ func TestQuoteExactWordsAndItemIDs(t *testing.T) {
 }
 
 func TestQuoteMeetingBoundary(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	d := newDispatchPolicyHarness(t)
 	now := time.Now()
 	recClock(d.s, func() time.Time { return now })
@@ -280,6 +281,7 @@ func TestQuotePartsShareOneRelayAllowance(t *testing.T) {
 }
 
 func TestQuoteChecksMeetingMarkAfterTranscriptRead(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	d := newDispatchPolicyHarness(t)
 	d.f.setItems(ownerItem("trail-map", "prepare the trail map"))
 	d.f.hookReads(receiptHooks{after: func(read int) {

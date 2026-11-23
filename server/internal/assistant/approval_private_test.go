@@ -11,6 +11,7 @@ import (
 )
 
 func TestPrivateApprovalRenewsJustMeForAnswerAndResultTurns(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	ft := newFleetTest(t)
 	preparedTestConversation(ft)
 	ft.s.justMeSent("mac", "s1")
@@ -48,6 +49,7 @@ func TestPrivateApprovalRenewsJustMeForAnswerAndResultTurns(t *testing.T) {
 }
 
 func TestPrivateApprovalQueuedResultRenewsJustMeAfterRestart(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	ft := newFleetTest(t)
 	preparedTestConversation(ft)
 	ft.s.justMeSent("mac", "s1")
@@ -100,6 +102,7 @@ func TestPrivateApprovalQueuedResultRenewsJustMeAfterRestart(t *testing.T) {
 }
 
 func TestPrivateApprovalRecoveredJournalKeepsJustMe(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	ft := newFleetTest(t)
 	preparedTestConversation(ft)
 	ft.f.mu.Lock()
