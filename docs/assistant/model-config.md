@@ -667,3 +667,10 @@ An explicit conversation or message pick takes precedence over the main default.
 A launcher of another engine still requires the explicit logical-conversation switch operation from phase 2; saving a model setting is not permission to reinterpret the existing engine's transcript. A switched conversation's explicit segment choice remains ahead of inherited defaults. Resetting the main default does not undo an explicit segment switch or discard its history.
 
 Rollback to a build without main-only settings ignores the extra record and uses `assistant`; the stored main binding is retained for re-enable. A conversation already switched between engines still requires a segment-aware manager for rollback. No deployment or production acceptance is implied by this setting.
+
+
+## Gateway source accounting
+
+`PERSONA_MODEL_SOURCE_HOSTS` optionally enables role and task/session ID headers only for matching gateway hosts.
+It is empty by default. Configuration, launcher support limits and gateway-log verification are documented in
+[Model request attribution](../integrations/launchers.md#model-request-attribution).

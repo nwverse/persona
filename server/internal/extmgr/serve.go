@@ -477,6 +477,11 @@ func (h *Manager) authorize(a extwire.Authorize) extwire.Authorized {
 		}
 	}
 	out.OK, out.Scope = e.opens(pattern, a.Path)
+	// Ledger grants are checked live, even for a credential issued before revocation.
+	if out.Scope == extwire.ScopeAssistantEntriesRead {
+		allowed, _ := h.EntriesReadAccess(e.extension)
+		out.OK = out.OK && allowed
+	}
 	return out
 }
 

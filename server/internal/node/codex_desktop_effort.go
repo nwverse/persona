@@ -200,6 +200,9 @@ func (n *Node) setCodexDesktopSettings(ctx context.Context, id string, src codex
 	if model == "" && effort == "" {
 		return nil
 	}
+	if !codexDesktopAvailable(src.home) {
+		return codexDesktopUnavailable(ctx)
+	}
 	if model != "" && !proto.ValidModelID(model) {
 		return fmt.Errorf("invalid model %q", model)
 	}
@@ -252,7 +255,7 @@ func (n *Node) setCodexDesktopSettings(ctx context.Context, id string, src codex
 	defer cancel()
 	c, err := dialCodexDesktop(ctx, src.home)
 	if err != nil {
-		return refusal("codex_read_only", "连不上电脑上的 Codex App："+err.Error(), nil)
+		return codexDesktopUnavailable(ctx)
 	}
 	defer c.close()
 	owner, err := c.loadedOwner(ctx, src.thread)

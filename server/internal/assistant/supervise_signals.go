@@ -217,7 +217,7 @@ func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
-		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -1256,6 +1256,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		}
 		if !ownerEvidencePending { // a stored or unreadable answer must not be replaced with another question
 			if g, ok := s.undecidableSignal(ctx, t, now); ok {
+				s.signal(g)
+			}
+			if g, ok := s.cardlessWaitSignal(ctx, t, agents, lists, now); ok { // a review the owner cannot answer (#12648)
 				s.signal(g)
 			}
 		}

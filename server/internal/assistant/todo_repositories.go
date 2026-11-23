@@ -288,7 +288,7 @@ func (s *Service) toolTodoRepositories(ctx context.Context, machine, self, name 
 	if !ok {
 		return "", db.ErrTodoNotFound
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, name, todo.Title, args); err != nil || !ok {
+	if ok, err := s.confirmOutbound(ctx, machine, self, name, "", todo.Title, args); err != nil || !ok {
 		return todoNotAllowed(err)
 	}
 	var set repository.TaskSet
