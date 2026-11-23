@@ -5580,7 +5580,7 @@ struct Composer: View, Equatable {
     @State private var picks: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var showCamera = false
-    @State private var showGlasses = false // Glasses Photo (Persona/Glasses), only when MetaGlasses.isBuiltIn
+    @State private var moduleSheet: ModuleComposerAction? // a module's composer action whose sheet is up (Glasses Photo)
     @State private var showScan = false // Scan Document (#3720), only where the device can scan
     #if os(iOS)
     /// Add as Context › (#3721): the kind whose picker is open.
@@ -5640,6 +5640,14 @@ struct Composer: View, Equatable {
         if VoicePlatform.current == .phone {
             Button { startVoice() } label: { Label("Voice Chat", systemImage: Theme.Icon.voiceChannel) }
                 .accessibilityIdentifier("composer-menu-voice")
+        }
+    }
+
+    /// The active modules' composer actions (Glasses Photo) in the + menus that list their rows themselves, after Take
+    /// Photo; each opens its sheet (`ComposerCaptureSheets`). `Modules.registry` is built once at launch: a plain read.
+    @ViewBuilder private var moduleMenuItems: some View {
+        ForEach(Modules.registry.composerActions) { action in
+            Button { moduleSheet = action } label: { Label(String(localized: action.title), systemImage: action.symbol).lineLimit(1) }
         }
     }
 
@@ -6077,9 +6085,7 @@ struct Composer: View, Equatable {
                     if CameraPicker.isAvailable {
                         Button { showCamera = true } label: { Label("Take Photo [Chat View 6e3a10]", systemImage: Theme.Icon.camera) }
                     }
-                    if MetaGlasses.isBuiltIn {
-                        Button { showGlasses = true } label: { Label("Glasses Photo", systemImage: Theme.Icon.glasses).lineLimit(1) }
-                    }
+                    moduleMenuItems
                     Button { showFiles = true } label: { Label("Files", systemImage: Theme.Icon.file) }
                     mentionMenuItem
                     voiceMenuItem
@@ -6100,7 +6106,7 @@ struct Composer: View, Equatable {
                                text: textBinding, selection: $selection, focused: $focused,
                                hasAttachments: hasAttachments,
                                stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
-                               attach: PromptItems.attachments(camera: CameraPicker.isAvailable, glasses: MetaGlasses.isBuiltIn)
+                               attach: PromptItems.attachments(camera: CameraPicker.isAvailable, modules: Modules.registry.composerActions)
                                    + (VoicePlatform.current == .phone ? [PromptItems.voice] : []),
                                mentions: mentions,
                                commands: promptCommands,
@@ -6119,10 +6125,10 @@ struct Composer: View, Equatable {
                                },
                                onAttach: { source in
                                    // A PhotosPicker cannot present from inside the menu: these sheets hang off the composer.
+                                   if let action = Modules.registry.composerAction(id: source.id) { moduleSheet = action; return }
                                    switch source.id {
                                    case "photo": showPhotos = true
                                    case "camera": showCamera = true
-                                   case "glasses": showGlasses = true
                                    case PromptItems.voice.id: startVoice()
                                    default: showFiles = true
                                    }
@@ -6174,9 +6180,7 @@ struct Composer: View, Equatable {
                     if CameraPicker.isAvailable {
                         Button { showCamera = true } label: { Label("Take Photo [Chat View 6e3a10]", systemImage: Theme.Icon.camera) }
                     }
-                    if MetaGlasses.isBuiltIn {
-                        Button { showGlasses = true } label: { Label("Glasses Photo", systemImage: Theme.Icon.glasses).lineLimit(1) }
-                    }
+                    moduleMenuItems
                     Button { showFiles = true } label: { Label("Files", systemImage: Theme.Icon.file) }
                     voiceMenuItem
                     extensionPrompts
@@ -6309,7 +6313,7 @@ struct Composer: View, Equatable {
             }
         }
         #endif
-        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses, scan: $showScan, pages: { addScan($0) }) { add($0) })
+        .modifier(ComposerCaptureSheets(camera: $showCamera, module: $moduleSheet, scan: $showScan, pages: { addScan($0) }) { add($0) })
         .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: model.session(key)) }
         // `/permissions` (#6513): the pick goes through the page once the sheet is gone, where its confirmation can show.
         .sheet(isPresented: $showPermissions, onDismiss: {
@@ -6366,7 +6370,7 @@ struct Composer: View, Equatable {
     private var attachMoreSections: [AttachMoreSection] {
         var sections = AttachMoreSection.common(camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                                                 scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
-                                                glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil,
+                                                modules: Modules.registry.composerActions, open: { moduleSheet = $0 },
                                                 // As the sidebar's (#3723): records the meeting with Recordings open, or opens the one running.
                                                 meeting: isMain ? { Task { await MeetingRecorder.shared.startMeeting(inForeground: true) } } : nil,
                                                 mention: { typeMention() }, context: { contextPick = $0 })

@@ -68,6 +68,10 @@ packages:
   # it with `#if canImport`.
   PersonaInputKit:
     path: Packages/PersonaInputKit
+  # The module contract and registry (#13432, docs/apple/ios.md「Modules」): the iOS and Vision apps, which compile the
+  # module list (Persona/App/Modules.swift). Nothing in Shared/ imports it, so the watch, widgets and extensions never link it.
+  PersonaModuleAPI:
+    path: Packages/PersonaModuleAPI
   # The composer's glow while a reply is generating (Settings › Appearance › Glow While Replying, `ComposerGlow`): the iOS
   # app only. Vision compiles the same sources and skips it with `#if os(iOS) && canImport`.
   MarqueeGlow:
@@ -122,6 +126,7 @@ targets:
       - package: MarqueeGlow
       - package: PersonaScreenKit
       - package: PersonaInputKit
+      - package: PersonaModuleAPI
     # app-entitlements.yml or a later opt-in include selects the file. XcodeGen writes these properties there and derives
     # CODE_SIGN_ENTITLEMENTS from the same path.
     entitlements:
@@ -291,6 +296,7 @@ targets:
       - package: BeautifulUI
       - package: PersonaSSH
       - package: PersonaKit
+      - package: PersonaModuleAPI
     entitlements:
       path: Vision/Resources/PersonaVision.entitlements
       properties:
@@ -693,6 +699,7 @@ targets:
       - path: ../android/refract/about/AboutVersionRow.swift
     dependencies:
       - package: PersonaWire
+      - package: PersonaModuleAPI
       - target: Persona
       # The test bundle directly imports LiveCommunicationKit too; keep its symbols weak on a Mac.
       - sdk: LiveCommunicationKit.framework
