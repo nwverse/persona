@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
@@ -152,7 +153,7 @@ func TestBotSourceReportLongReplyRetriesSameAttachment(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := assistantwire.AppCall{AppID: assistantwire.AppFeishu, Method: assistantwire.FeishuText, Params: raw}
-	if _, handled, err := w.h.AppCall(t.Context(), req); !handled || !feishubot.Transient(err) {
+	if _, handled, err := w.h.AppCall(t.Context(), req); !handled || !botcard.Transient(err) {
 		t.Fatalf("expected an uncertain reply, handled %v, error %v", handled, err)
 	}
 
@@ -224,7 +225,7 @@ func TestBotSourceReportLongReplyRetriesAfterBotRestart(t *testing.T) {
 	}
 	req := assistantwire.AppCall{AppID: assistantwire.AppFeishu, Method: assistantwire.FeishuText, Params: raw}
 	_, handled, err := w.h.AppCall(t.Context(), req)
-	if !handled || err == nil || err == errBotSourceReply || !feishubot.Transient(err) {
+	if !handled || err == nil || err == errBotSourceReply || !botcard.Transient(err) {
 		t.Fatalf("a restart during the upload must fail for now, handled %v, error %v", handled, err)
 	}
 	if got := replies.Load(); got != 0 {

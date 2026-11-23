@@ -434,8 +434,8 @@ Since #10365 (`assistant/start_retry_launcher.go`):
   failed plan task's `error_args.launcher` (the node's coded refusal already names it for `launcher_missing`; the hub adds
   it otherwise, also with no `error_code`), and a retry compares with that: asking for another launcher pins it on the
   task and drops the tier, so the policy or the tier does not pick the failed one again; `launcher_from` and
-  `task_retry`'s answer name the one that ran. Only the launcher the task names itself, with no tier and no model, is
-  "the same" and changes nothing.
+  `task_retry`'s answer name the one that ran. Only the launcher the task names itself, with no tier, keeps the launcher;
+  a launcher-only retry still selects and saves that launcher's native default model unless the caller supplies one.
 - **Nothing started, said so**: when another start of the task is on its way (the owner's Retry, `task_retry`, a plan
   taking the to-do over) or it started since, a retry asked for on a launcher starts nothing on it: the route answers 409
   with why (`assistant-tasks.retry_launcher_not_started`) rather than 200, and `task_retry` answers an error, records no
