@@ -98,7 +98,7 @@ func (r BotmuxTurnsResponse) HasCapability(cap string) bool {
 }
 
 // ApplyBotmuxTurns overlays structured BotMux turn records onto transcript items.
-// Each user turn is matched by anchor.cliEntryId first, then anchor.inputSha256.
+// User items are matched by anchor.cliEntryId first, all of them, then the rest by an unambiguous anchor.inputSha256.
 // Matched turns populate Item.Botmux for the user message and for the turn's `botmux send` replies
 // (including file/card replies whose text was not on the command line). Unmatched turns are left
 // untouched so wrapper parsing from markBotmux acts as a per-turn fallback.
@@ -154,31 +154,63 @@ func ApplyBotmuxTurns(items []proto.Item, turns []BotmuxTurn, transcriptSessionI
 		}
 	}
 
-	matchTurn := func(it proto.Item) int {
-		if it.ID != "" {
-			if idx, ok := byEntry[it.ID]; ok && !used[idx] {
-				return idx
-			}
-			if prefix, _, found := strings.Cut(it.ID, "#"); found && prefix != "" {
-				if idx, ok := byEntry[prefix]; ok && !used[idx] {
-					return idx
-				}
+	entryKeys := func(id string) []string {
+		if id == "" {
+			return nil
+		}
+		if prefix, _, found := strings.Cut(id, "#"); found && prefix != "" {
+			return []string{id, prefix}
+		}
+		return []string{id}
+	}
+
+	// Entry IDs are matched first for every user item, so a turn that names its own entry is never claimed through
+	// an earlier item's identical input hash.
+	matched := make([]int, len(userIdx))
+	loadedEntries := map[string]bool{}
+	for ui, start := range userIdx {
+		matched[ui] = -1
+		for _, key := range entryKeys(items[start].ID) {
+			loadedEntries[key] = true
+			if idx, ok := byEntry[key]; ok && !used[idx] && matched[ui] < 0 {
+				matched[ui] = idx
+				used[idx] = true
 			}
 		}
-		for _, candidate := range itemInputHashCandidates(it) {
-			if idxs := byHash[candidate]; len(idxs) == 1 && !used[idxs[0]] {
-				return idxs[0]
+	}
+	// The hash fallback only takes a turn whose entry is not loaded here, and only when both the turn and the
+	// unmatched user item are the single ones with that hash; anything else keeps the wrapper decoding.
+	unmatchedByHash := map[string]int{}
+	for ui, start := range userIdx {
+		if matched[ui] < 0 {
+			for _, candidate := range itemInputHashCandidates(items[start]) {
+				unmatchedByHash[candidate]++
 			}
 		}
-		return -1
+	}
+	for ui, start := range userIdx {
+		if matched[ui] >= 0 {
+			continue
+		}
+		for _, candidate := range itemInputHashCandidates(items[start]) {
+			idxs := byHash[candidate]
+			if len(idxs) != 1 || used[idxs[0]] || unmatchedByHash[candidate] != 1 {
+				continue
+			}
+			if entry := strings.TrimSpace(turns[idxs[0]].Anchor.CLIEntryID); entry != "" && loadedEntries[entry] {
+				continue
+			}
+			matched[ui] = idxs[0]
+			used[idxs[0]] = true
+			break
+		}
 	}
 
 	for ui, start := range userIdx {
-		tIdx := matchTurn(items[start])
+		tIdx := matched[ui]
 		if tIdx < 0 {
 			continue // per-turn fallback: keep wrapper-parsed Botmux as is
 		}
-		used[tIdx] = true
 		turn := turns[tIdx]
 
 		end := len(items)

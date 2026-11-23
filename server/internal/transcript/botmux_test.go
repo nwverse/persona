@@ -539,32 +539,45 @@ func TestBotmuxSendShellGlobs(t *testing.T) {
 }
 
 func TestBotmuxInputHashRequiresCompatibleAnchor(t *testing.T) {
-	item := proto.Item{ID: "entry#0", Role: "user", Kind: proto.KindText, Text: "ok"}
+	user := func(id, text string) proto.Item {
+		return proto.Item{ID: id, Role: "user", Kind: proto.KindText, Text: text}
+	}
 	makeTurn := func(session, entry, text string) BotmuxTurn {
 		return BotmuxTurn{
-			Anchor:  &BotmuxTurnAnchor{CLISessionID: session, CLIEntryID: entry, InputSha256: sha256Hex(item.Text)},
+			Anchor:  &BotmuxTurnAnchor{CLISessionID: session, CLIEntryID: entry, InputSha256: sha256Hex("ok")},
 			Inbound: []BotmuxTurnInbound{{Text: text}},
 		}
 	}
 	for _, test := range []struct {
 		name  string
+		items []proto.Item
 		turns []BotmuxTurn
-		want  string
+		want  []string // decoded text per item, "" for none
 	}{
-		{"another session", []BotmuxTurn{makeTurn("session-two", "", "wrong")}, ""},
-		{"another entry falls back to hash", []BotmuxTurn{makeTurn("session-one", "earlier", "matched")}, "matched"},
-		{"session match", []BotmuxTurn{makeTurn("session-two", "", "wrong"), makeTurn("session-one", "", "matched")}, "matched"},
-		{"entry prefix", []BotmuxTurn{makeTurn("session-one", "earlier", "wrong"), makeTurn("session-one", "entry", "matched")}, "matched"},
-		{"ambiguous hash", []BotmuxTurn{makeTurn("session-one", "", "first"), makeTurn("session-one", "", "second")}, ""},
+		{"another session", []proto.Item{user("entry#0", "ok"), user("earlier", "other")},
+			[]BotmuxTurn{makeTurn("session-two", "", "wrong")}, []string{"", ""}},
+		{"a loaded entry keeps its turn", []proto.Item{user("entry#0", "ok"), user("earlier", "ok")},
+			[]BotmuxTurn{makeTurn("session-one", "earlier", "matched")}, []string{"", "matched"}},
+		{"an earlier identical item without a record", []proto.Item{user("old", "ok"), user("new", "ok")},
+			[]BotmuxTurn{makeTurn("session-one", "new", "matched")}, []string{"", "matched"}},
+		{"an unloaded entry falls back to hash", []proto.Item{user("entry#0", "ok"), user("earlier", "other")},
+			[]BotmuxTurn{makeTurn("session-one", "positional-7", "matched")}, []string{"matched", ""}},
+		{"session match", []proto.Item{user("entry#0", "ok"), user("earlier", "other")},
+			[]BotmuxTurn{makeTurn("session-two", "", "wrong"), makeTurn("session-one", "", "matched")}, []string{"matched", ""}},
+		{"entry prefix", []proto.Item{user("entry#0", "ok"), user("earlier", "ok")},
+			[]BotmuxTurn{makeTurn("session-one", "earlier", "second"), makeTurn("session-one", "entry", "matched")}, []string{"matched", "second"}},
+		{"ambiguous turns", []proto.Item{user("entry#0", "ok"), user("earlier", "other")},
+			[]BotmuxTurn{makeTurn("session-one", "", "first"), makeTurn("session-one", "", "second")}, []string{"", ""}},
+		{"ambiguous items", []proto.Item{user("entry#0", "ok"), user("earlier", "ok")},
+			[]BotmuxTurn{makeTurn("session-one", "", "matched")}, []string{"", ""}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			items := ApplyBotmuxTurns([]proto.Item{item, {ID: "earlier", Role: "user", Kind: proto.KindText, Text: item.Text}}, test.turns, "session-one")
-			got := items[0].Botmux
-			if test.want == "" && got != nil || test.want != "" && (got == nil || got.Text != test.want) {
-				t.Fatalf("matched %+v, want %q", got, test.want)
-			}
-			if test.name == "another entry falls back to hash" && items[1].Botmux != nil {
-				t.Fatalf("matched the same turn twice: %+v", items[1].Botmux)
+			items := ApplyBotmuxTurns(test.items, test.turns, "session-one")
+			for i, want := range test.want {
+				got := items[i].Botmux
+				if want == "" && got != nil || want != "" && (got == nil || got.Text != want) {
+					t.Fatalf("item %d matched %+v, want %q", i, got, want)
+				}
 			}
 		})
 	}
