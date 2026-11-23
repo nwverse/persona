@@ -61,7 +61,9 @@ import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.HubConnection
 import persona.core.contracts.api.TasksApi
 import persona.core.designsystem.AppStyle
+import persona.core.designsystem.InterfaceFontScaleCap
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.currentTextDensities
 import persona.core.domain.tasks.TASK_RETRY_LAUNCHER_FEATURE
 import persona.core.domain.tasks.TasksStore
 
@@ -136,6 +138,7 @@ class AssistantTaskRemediesTest {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
         var renderedFontScale = 0f
+        var chosenFontScale = 0f
         var dismissed = false
 
         init {
@@ -145,6 +148,7 @@ class AssistantTaskRemediesTest {
                 CompositionLocalProvider(LocalDensity provides Density(base.density, if (large) 2f else 1f)) {
                     PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
                         renderedFontScale = LocalDensity.current.fontScale
+                        chosenFontScale = currentTextDensities().readingDensity?.fontScale ?: renderedFontScale
                         Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag(SHOT_TAG)) {
                             key(surface) {
                                 when (surface) {
@@ -160,7 +164,9 @@ class AssistantTaskRemediesTest {
                 }
             }
             settle()
-            assertEquals(if (large) 2f else 1f, renderedFontScale, 0f)
+            // The 2.0 input reaches the theme, whose interface text stops at the cap (#7321); reading text keeps 2.0.
+            assertEquals(if (large) 2f else 1f, chosenFontScale, 0f)
+            assertEquals(if (large) InterfaceFontScaleCap else 1f, renderedFontScale, 0f)
         }
 
         fun show(which: Surface, newStyle: AppStyle = style, newDark: Boolean = dark) {
