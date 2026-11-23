@@ -444,10 +444,11 @@ final class AssistantModelPanelModel {
             return true
         } catch {
             let uncertain = submitted && (error as? APIError)?.fields["delivered"] != "none"
+            let problem = error.shown ?? error.localizedDescription
             switchUncertain = uncertain
             switchError = uncertain
-                ? String(localized: "The switch result is unconfirmed. Retrying uses the same request; it will not start another switch. \(error.shown)")
-                : error.shown
+                ? String(localized: "The switch result is unconfirmed. Retrying uses the same request; it will not start another switch. \(problem)")
+                : problem
             return false
         }
     }

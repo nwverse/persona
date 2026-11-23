@@ -167,6 +167,8 @@ struct AssistantModelPanelModelTests {
 
         let first = await panel.confirmSwitch(session: try session())
         #expect(!first && panel.switchUncertain && panel.switchPick != nil)
+        #expect(panel.switchError?.contains("response unconfirmed") == true)
+        #expect(panel.switchError?.contains("Optional(") == false)
         #expect(recorder.kept == nil && recorder.segmentReads == 1 && recorder.switchRequests.count == 1)
         let request = try #require(recorder.switchRequests.first)
         #expect(request.expectedEpoch == 8 && request.sourceMachineID == "box" && request.machineID == "box")
