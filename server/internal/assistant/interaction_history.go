@@ -128,7 +128,7 @@ func (s *Service) extensionHiddenCards(ctx context.Context, ext bool, recs []db.
 	machines := map[string]*listed{}
 	for i, rec := range recs {
 		ix := rec.Interaction
-		if ix.Private || s.trackPolicy(ctx, identity.SpaceAt(ix.Cwd)).HideFromExtensions {
+		if ix.Private || s.extensionHides(ctx, identity.SpaceAt(ix.Cwd)) {
 			hidden[i] = true
 			continue
 		}
@@ -138,8 +138,8 @@ func (s *Service) extensionHiddenCards(ctx context.Context, ext bool, recs []db.
 			if list, err := s.sessions(ctx, ix.MachineID); err == nil {
 				l.ok = true
 				for _, c := range list {
-					l.hide[c.SessionID] = s.trackPolicy(ctx, spaceOf(c)).HideFromExtensions ||
-						s.trackPolicy(ctx, identity.SpaceAt(c.Cwd)).HideFromExtensions
+					l.hide[c.SessionID] = s.extensionHides(ctx, spaceOf(c)) ||
+						s.extensionHides(ctx, identity.SpaceAt(c.Cwd))
 				}
 			}
 			machines[ix.MachineID] = l

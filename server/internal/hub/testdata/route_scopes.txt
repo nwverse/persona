@@ -145,6 +145,7 @@ assistant.ask        GET /api/v1/assistant
 -                    GET /api/v1/assistant/calls/{id}
 assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/conversations/{id}/always
+-                    GET /api/v1/assistant/conversations/{id}/categories
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/conversations/{id}/segments
 -                    GET /api/v1/assistant/conversations/{id}/switch/{operation}
@@ -154,6 +155,7 @@ assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 dispatch.guard       GET /api/v1/assistant/dispatch-guard
 assistant.dispatch_policy GET /api/v1/assistant/dispatch-policy
 assistant.entries.read GET /api/v1/assistant/entries
+-                    GET /api/v1/assistant/extension-trust
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
 -                    GET /api/v1/assistant/history
@@ -722,12 +724,14 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    PUT /api/v1/agents/prefs
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
+-                    PUT /api/v1/assistant/conversations/{id}/categories
 -                    PUT /api/v1/assistant/conversations/{id}/model
 -                    PUT /api/v1/assistant/conversations/{id}/tags
 -                    PUT /api/v1/assistant/directions/{id}/name
 -                    PUT /api/v1/assistant/directions/{id}/notes
 dispatch.guard       PUT /api/v1/assistant/dispatch-guard
 assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
+-                    PUT /api/v1/assistant/extension-trust/{id}
 -                    PUT /api/v1/assistant/feishu/companions
 -                    PUT /api/v1/assistant/history
 -                    PUT /api/v1/assistant/memory/{name}

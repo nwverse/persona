@@ -6051,6 +6051,11 @@ export interface AssistantMemoryEntry {
   content?: string;
   /** content was cut or left out for its size. */
   truncated?: boolean;
+  /**
+   * The track whose memory it is; absent for the main track's. Another track's is shown only to an extension that may
+   * read what comes from it: the user's own, or one granted every default category of the track.
+   */
+  track?: string;
 }
 
 /**

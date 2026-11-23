@@ -212,6 +212,8 @@ type Meta struct {
 	// turn_duration / an interrupt), no turn started after it. Unlike !TurnOpen it is false when the lines say nothing
 	// (a tail read from mid-turn).
 	TurnClosed bool
+	// CodexClosedTurnID is the id on the closing record, when the rollout supplies it.
+	CodexClosedTurnID string
 	// The closing record, even when it produces no visible item (e.g. Codex without a duration).
 	turnEndedAt time.Time
 	turnEndSeq  int
@@ -507,8 +509,8 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 			it.SourceFingerprint = fingerprint
 		}
-		if it.Role != "system" && !it.TS.IsZero() && it.TS.After(meta.LastActivity) {
-			meta.LastActivity = it.TS
+		if !meta.Codex {
+			meta.observeActivity(*it)
 		}
 		meta.trackActivity(*it)
 		meta.trackPlan(*it)
@@ -541,6 +543,12 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 	}
 	return items
+}
+
+func (m *Meta) observeActivity(it proto.Item) {
+	if it.Role != "system" && !it.TS.IsZero() && it.TS.After(m.LastActivity) {
+		m.LastActivity = it.TS
+	}
 }
 
 func (m *Meta) endTurn(seq int, at time.Time) {
