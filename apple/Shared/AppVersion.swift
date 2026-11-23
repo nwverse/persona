@@ -38,8 +38,6 @@ nonisolated struct AppVersion: Equatable, Sendable {
         "visionOS"
         #elseif os(iOS)
         UIDevice.current.userInterfaceIdiom == .pad ? "iPadOS" : "iOS"
-        #elseif os(macOS)
-        "macOS"
         #else
         "unknown"
         #endif
