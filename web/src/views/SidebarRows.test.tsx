@@ -37,69 +37,82 @@ describe("an agent's row", () => {
     expect(link(html)).not.toContain("bg-hover-2");
   });
   it("keeps its ⋯ shown when open, on hover only otherwise", () => {
-    expect(more(renderToStaticMarkup(<SessionRow {...rowProps} active />))).toMatch(/class="[^"]*\bflex\b/);
-    expect(more(renderToStaticMarkup(<SessionRow {...rowProps} active={false} />))).toMatch(/class="[^"]*\bhidden\b/);
+    expect(more(renderToStaticMarkup(<SessionRow {...rowProps} active />))).toContain("opacity-100");
+    expect(more(renderToStaticMarkup(<SessionRow {...rowProps} active={false} />))).toContain("opacity-0 group-hover/row:opacity-100");
   });
 });
 
-describe("where an agent was opened, as a mark at its row's end (#2526)", () => {
+describe("an agent row's identity and stable trailing content", () => {
   const render = (patch: Partial<Session>, extra = {}) => renderToStaticMarkup(<SessionRow {...rowProps} s={{ ...session, ...patch }} active={false} {...extra} />);
-  const mark = (html: string) => html.match(/<span data-source="[^"]*"[^>]*>.*?<\/span>/)?.[0];
-  it("draws a terminal pane's as the terminal icon, named but without words", () => {
-    const html = render({ pane_id: "w1:p1" });
-    expect(mark(html)).toMatch(/aria-label="终端"/);
-    expect(mark(html)).toMatch(/title="终端"/);
-    expect(mark(html)).toContain("text-source-terminal");
-    expect(mark(html)).toContain("<svg");
-    expect(mark(html)).not.toMatch(/>终端</); // no visible word any more
-    expect(link(html)).toMatch(/title="整理文档\n终端/); // the row's tooltip names it too: the mark hides while hovered
-  });
-  it("draws a desktop app's own chat as a window, in its own color", () => {
-    for (const patch of [{ space_kind: "codex_app", source_kind: "codex_history" }, { host: "paseo", source_kind: "runtime", source_instance_id: "paseo" }]) {
-      const html = render(patch);
-      expect(mark(html)).toMatch(/aria-label="桌面端"/);
-      expect(mark(html)).toContain("text-source-desktop");
-      expect(mark(html)).not.toContain("text-source-terminal");
+
+  it("draws one agent mark, no CLI badge, and no idle or unknown state badge", () => {
+    for (const state of ["idle", "unknown"] as const) {
+      const html = render({ state, status: state, pane_id: "w1:p1" });
+      expect(html.match(/data-agent-mark=/g)).toHaveLength(1);
+      expect(html).not.toContain('data-agent-badge="cli"');
+      expect(html).not.toContain("data-state-badge");
     }
   });
-  it("draws Lark's mark for a Lark group, a link to its topic when it has one", () => {
-    expect(mark(render({ pane_id: "botmux:oc_1/t1" }))).toMatch(/^<span data-source="feishu" role="img"[^>]*aria-label="飞书群"/);
-    const linked = mark(render({ pane_id: "botmux:oc_1/t1", external_url: "https://example.com/topic" }));
-    expect(linked).toMatch(/^<span data-source="feishu" role="link" tabindex="0"[^>]*aria-label="飞书群 · 在飞书里打开这个话题"/);
-    expect(linked).toContain("<img");
+
+  it("puts working, needs-you, unread and offline on the agent mark's corner", () => {
+    for (const state of ["working", "needs_you", "unread", "offline"] as const) {
+      const html = render({ state, status: state });
+      expect(html).toContain("data-state-badge");
+      expect(html).toContain(`data-state="${state}"`);
+      expect(html.match(/data-agent-mark=/g)).toHaveLength(1);
+    }
   });
-  it("draws none for other sources, Persona's conversations and a tab with several panes", () => {
-    expect(mark(render({}))).toBeUndefined();
-    expect(mark(render({ source_kind: "runtime", source_instance_id: "dsh" }))).toBeUndefined();
-    expect(mark(render({ pane_id: "w1:p1", assistant: true }))).toBeUndefined();
-    expect(mark(render({ pane_id: "w1:p1" }, { endRoom: true }))).toBeUndefined();
-    expect(link(render({ pane_id: "w1:p1" }, { endRoom: true }))).not.toMatch(/\n终端/);
+
+  it("does not add a corner badge for idle awaiting-reply, but keeps Just finished", () => {
+    const awaiting = render({ state: "idle", status: "idle", awaits_reply: true });
+    expect(awaiting).not.toContain("data-state-badge");
+    expect(awaiting).toContain(t("lib-state-labels.awaits_reply"));
+    const finished = render({ state: "idle", status: "idle", work: { phase: "done", just_finished: true } });
+    expect(finished).toContain("data-state-badge");
+    expect(finished).toContain('data-state="just_finished"');
+    expect(finished).toContain(t("lib-state-labels.just_finished"));
   });
-  it("steps aside for the hover ⋯ like the rest of the row's end, and stays on the open row", () => {
-    expect(mark(render({ pane_id: "w1:p1" }))).toContain("group-hover/row:invisible");
-    expect(mark(renderToStaticMarkup(<SessionRow {...rowProps} s={{ ...session, pane_id: "w1:p1" }} active />))).not.toContain("invisible");
+
+  it("keeps source and associated-tab details out of the row and its native tooltip", () => {
+    const html = render({ pane_id: "botmux:oc_1/t1", slot_id: "w1:t2", slot_name: "Release Review", external_url: "https://example.com/topic" });
+    expect(html).not.toContain("data-source=");
+    expect(html).not.toContain(t("sidebar.tab_named", { label: "Release Review" }));
+    expect(link(html)).not.toContain("title=");
+    expect(html).not.toContain("role=\"link\"");
   });
-  it("tells terminal and desktop apart by shape too: a bare prompt, and a framed window", () => {
-    const svg = (html: string) => mark(html)!.match(/<svg[^>]*>(.*?)<\/svg>/)![1];
-    const terminal = svg(render({ pane_id: "w1:p1" }));
-    const desktop = svg(render({ space_kind: "codex_app", source_kind: "codex_history" }));
-    expect(terminal).not.toContain("<rect"); // no frame: a prompt chevron and an underscore
-    expect(desktop).toContain("<rect");
-    expect(terminal).not.toBe(desktop);
+
+  it("hides only the age on hover; context, pending count and the in-flow menu keep their places", () => {
+    const html = render({ updated_at: "2026-11-14T09:00:00Z", pending_interactions: 2 }, { hint: "Project" });
+    expect(html.match(/<span data-row-age[^>]*>/)![0]).toContain("group-hover/row:invisible");
+    expect(html.match(/<span data-row-context[^>]*>/)![0]).not.toContain("invisible");
+    expect(html.match(/<span data-pending-count[^>]*>/)![0]).not.toContain("invisible");
+    expect(more(html)).toContain("opacity-0 group-hover/row:opacity-100");
+    expect(more(html)).toContain("[@media(hover:none)]:my-0");
+    expect(more(html)).not.toContain("absolute");
+    const active = renderToStaticMarkup(<SessionRow {...rowProps} s={{ ...session, updated_at: "2026-11-14T09:00:00Z" }} active />);
+    expect(active.match(/<span data-row-age[^>]*>/)![0]).not.toContain("invisible");
+    expect(more(active)).toContain("opacity-100");
   });
-  it("drops a writable desktop runtime's name from the row's end, where its marks already say it", () => {
-    const paseo = { host: "paseo", source_kind: "runtime", source_instance_id: "paseo", agent_label: "Paseo" };
-    const writable = render({ ...paseo, capabilities: { read: true, send: true } });
-    expect(writable).not.toMatch(/>Paseo</);
-    expect(link(writable)).toContain("Paseo"); // still in the row's tooltip
-    // read-only: the end still says why
-    expect(render({ ...paseo, capabilities: { read: true, send: false } })).toMatch(/>[^<]*Paseo[^<]*</);
+
+  it("puts an optional machine chip before the existing second line", () => {
+    const plain = render({}, { showMachine: true });
+    expect(plain).toContain("data-machine-chip");
+    expect(plain).toContain(">mac</span>");
+    expect(render({})).not.toContain("data-machine-chip");
+    const withLine = render({ state: "unread", last_text: "Read the release notes" }, { showMachine: true });
+    expect(withLine).toContain("data-row-line");
+    expect(withLine.indexOf("data-machine-chip")).toBeLessThan(withLine.indexOf("data-row-line"));
   });
-  it("keeps the title's width first when words sit at the row's end", () => {
-    const html = render({ space_kind: "codex_app", source_kind: "codex_history", agent_name: "Codex App" });
+
+  it("keeps the title's width first only when a real hint sits at the row's end", () => {
+    const html = render({ space_kind: "codex_app", source_kind: "codex_history" }, { hint: "Project" });
     expect(html).toMatch(/<span class="[^"]*flex-1 truncate[^"]*basis-auto[^"]*">整理文档<\/span>/);
-    expect(html).toMatch(/<span class="[^"]*min-w-6 shrink-\[20\][^"]*">[^<]*Codex/);
-    expect(render({ pane_id: "w1:p1" })).not.toContain("basis-auto"); // nothing at the end: as before
+    expect(html).toMatch(/<span data-row-context[^>]*>Project<\/span>/);
+    expect(render({ pane_id: "w1:p1" })).not.toContain("basis-auto");
+  });
+
+  it("keeps the multi-pane tab's separate count overlay", () => {
+    expect(more(render({}, { endRoom: true }))).toContain("absolute");
   });
 });
 
@@ -200,52 +213,37 @@ describe("a 常驻 lead row (#6214 keepTrailing)", () => {
     const busy = { ...named, showState: true, s: { ...lead, last_text: "整理了三条进展" } };
     expect(renderToStaticMarkup(<SessionRow {...busy} active={false} />).match(/>Persona 产品</g)).toHaveLength(1);
   });
-  it("an ordinary row still overlays its ⋯ and hides its tail on hover", () => {
-    const html = renderToStaticMarkup(<SessionRow {...rowProps} active={false} />);
-    expect(more(html)).toMatch(/class="[^"]*\bhidden\b/);
-    expect(more(html)).toContain("absolute");
+  it("an ordinary row uses the same stable in-flow menu and keeps its tail on hover", () => {
+    const html = renderToStaticMarkup(<SessionRow {...rowProps} hint="Project" active={false} />);
+    expect(more(html)).toContain("opacity-0 group-hover/row:opacity-100");
+    expect(more(html)).not.toContain("absolute");
+    expect(html.match(/<span data-row-context[^>]*>/)![0]).not.toContain("invisible");
   });
 });
 
-describe("a session's associated tab name (#7595)", () => {
+describe("a session's associated tab name (#7595, #9769)", () => {
   const named: Session = { ...session, slot_id: "w1:t2", slot_name: "Release Review", pane_id: "w1:p1", updated_at: "2026-11-14T09:00:00Z" };
   const render = (patch: Partial<Session>, extra = {}) => renderToStaticMarkup(<SessionRow {...rowProps} s={{ ...session, ...patch }} hint="Project" active={false} {...extra} />);
   const tabName = (label: string) => t("sidebar.tab_named", { label });
 
-  it("stays visible beside an aged terminal row and follows a rename", () => {
-    const first = render(named);
-    expect(first).toContain(tabName("Release Review"));
-    expect(first).toContain("Project");
-
-    const renamed = render({ ...named, slot_name: "Triage" });
-    expect(renamed).toContain(tabName("Triage"));
-    expect(renamed).not.toContain(tabName("Release Review"));
+  it("leaves the tab to the structured details card while the project hint stays", () => {
+    for (const patch of [named, { ...named, slot_name: "Triage" }, { ...named, status: "offline", state: "offline" } as Partial<Session>]) {
+      const html = render(patch);
+      expect(html.match(/<span data-row-context[^>]*>([^<]*)</)![1]).toBe("Project");
+      expect(html).toContain("Project");
+      expect(html).not.toContain(tabName("Release Review"));
+      expect(html).not.toContain(tabName("Triage"));
+    }
   });
 
-  it("keeps the session title and the existing fallbacks", () => {
-    const numeric = render({ ...named, slot_name: "2" });
-    expect(numeric).toContain("整理文档");
-    expect(numeric).toContain(tabName("#2"));
-
-    const missing = render({ ...named, slot_id: undefined, slot_name: undefined, pane_id: undefined });
-    expect(missing).not.toContain(tabName("Release Review"));
-    expect(missing).toContain("整理文档");
-
-    const unassociated = render({ ...named, slot_id: undefined, tab_id: undefined, slot_name: "Workspace name" });
-    expect(unassociated).not.toContain(tabName("Workspace name"));
-    expect(unassociated).toContain("整理文档");
-
-    expect(render(named, { endRoom: true })).toContain(tabName("Release Review"));
-    expect(render({ ...named, status: "offline", state: "offline" })).toContain(tabName("Release Review"));
+  it("keeps the old tab identity on non-agent row variants", () => {
+    const html = render(named, { showState: false });
+    expect(html).toContain(tabName("Release Review"));
+    expect(html).toContain("整理文档");
+    expect(html).toContain("Project");
   });
 
-  it("keeps the index-only fallback with a real association", () => {
-    const indexOnly = render({ ...named, slot_name: undefined, slot_index: 2 });
-    expect(indexOnly).toContain(tabName("#2"));
-    expect(indexOnly).toContain("整理文档");
-  });
-
-  it("does not mint a localized identity from an unassociated structural fallback", () => {
+  it("keeps an unassociated structural fallback without minting a localized identity", () => {
     const html = render({ ...named, slot_id: undefined, tab_id: undefined, slot_name: "Workspace name", updated_at: undefined }, { tab: true, hint: undefined });
     expect(html).toContain("Workspace name");
     expect(html).not.toContain(tabName("Workspace name"));

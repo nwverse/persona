@@ -1,6 +1,7 @@
 // The mark of the agent that runs in a row, a header, a pane or a launcher (#3391): drawn as the owner publishes it, like
 // BrandMark (CLAUDE.md: brand marks are not redrawn), in a fixed box so a column of rows lines up, centred, at the share
-// of the box its shape takes. Next to the state dot, never in its place. The one-color marks are templates drawn in
+// of the box its shape takes. Callers keep their own state marks; a sidebar Agent row supplies its state as a corner
+// badge instead. The one-color marks are templates drawn in
 // the text color, so they read in light and dark and in a selected button; Claude keeps its coral (Anthropic's mark is
 // coral on neutral). An agent with no mark of its own (a compatible CLI, a runtime, whatever else herdr reports) draws its first
 // letter on a plain tile of the same box.
@@ -17,6 +18,7 @@
 //   grok, agy  Lobe Icons 1.104.0 Grok and Antigravity monochrome marks
 //   dsh, kimi, copilot  SI 16.36.0 DeepSeek, Kimi and GitHub Copilot marks
 // viewBoxes of opencode, cursor and trae are cropped to the glyph (CLAUDE.md: assets carry no padding); nothing else is changed.
+import type { ReactNode } from "react";
 import { t } from "../i18n";
 import { agentLetter, agentName, isMarked, markId, sessionAgent, type AgentSurface, type MarkedAgent } from "../lib/agent-kind";
 import { cx } from "./atoms";
@@ -57,7 +59,7 @@ const MARKS: Record<MarkedAgent, { src: string; template?: boolean; fit: number 
  * none. `size` is the box. The mark says what it is (role=img, "Claude Code, command line"); `decorative` for a place
  * that names the agent in text right beside it.
  */
-export function AgentMark({ agent, label, surface, size = 14, decorative, className, remote }: { agent?: string; label?: string; surface?: AgentSurface; size?: number; decorative?: boolean; className?: string; /** It runs on another computer: a signal arc at the mark's upper right (RemoteSignal). */ remote?: boolean }) {
+export function AgentMark({ agent, label, surface, size = 14, decorative, className, remote, badge: customBadge }: { agent?: string; label?: string; surface?: AgentSurface; size?: number; decorative?: boolean; className?: string; /** It runs on another computer: a signal arc at the mark's upper right (RemoteSignal). */ remote?: boolean; /** Replaces the default CLI badge. Other callers keep their existing badges. */ badge?: ReactNode }) {
   const id = markId(agent, label);
   const agentNamed = agentName(agent, label);
   const name = markName(id, agent, label, surface);
@@ -65,7 +67,7 @@ export function AgentMark({ agent, label, surface, size = 14, decorative, classN
   const box = cx("relative inline-flex shrink-0 items-center justify-center", className ?? "text-ink-2");
   const badge = (
     <>
-      {surface === "cli" && <CliBadge size={size} />}
+      {customBadge === undefined && surface === "cli" ? <CliBadge size={size} /> : customBadge}
       {remote && <RemoteSignal size={size} />}
     </>
   );
