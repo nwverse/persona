@@ -74,7 +74,13 @@ const sections = () => host.querySelector<HTMLElement>('[data-testid="todos-sect
 // (lib/todo-triage.ts hubNeedsYou), switches or not, so the badge, the tray and the hub keep one number.
 const drawn = () => {
   const s = sections()?.cloneNode(true) as HTMLElement | undefined;
-  s?.querySelectorAll('[data-testid="todo-owner-mark"], [data-testid="todo-owner-count"]').forEach((m) => m.remove());
+  s?.querySelectorAll('[data-testid="todo-owner-mark"], [data-testid="todo-owner-count"]').forEach((m) => {
+    const holder = m.parentElement;
+    m.remove();
+    // a title the mark was set beside is drawn in a holder of its own: without the mark it is the bare title again
+    const title = holder?.firstElementChild;
+    if (holder && holder.childElementCount === 1 && title?.getAttribute("data-testid") === "todo-title") holder.replaceWith(title);
+  });
   return s?.outerHTML;
 };
 const marks = () => Object.fromEntries([...host.querySelectorAll<HTMLElement>('[data-testid="todo-owner-mark"]')].map((m) => [m.closest<HTMLElement>("[data-todo]")?.dataset.todo, m.dataset.need]));
