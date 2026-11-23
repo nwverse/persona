@@ -21,7 +21,10 @@ permissions:
 
 concurrency:
   group: release-schedule-${{ inputs.channel || 'automatic' }}
-  cancel-in-progress: false
+  # A stale scheduled environment wait must not hold the automatic group forever: each later schedule cancels its
+  # predecessor, and the newest run selects current main only after approval. Manual stable/beta dispatches stay
+  # independent and never cancel a different channel. This only replaces unstarted planning, never merge/publication.
+  cancel-in-progress: ${{ github.event_name == 'schedule' }}
 
 jobs:
   channel:

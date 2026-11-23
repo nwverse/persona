@@ -239,6 +239,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("missing RELEASE_PR_TOKEN", text)
         self.assertIn("git diff --cached --quiet", text)
         schedule = yaml.load(text, Loader=yaml.BaseLoader)
+        self.assertEqual(schedule["concurrency"]["group"], "release-schedule-${{ inputs.channel || 'automatic' }}")
+        self.assertEqual(schedule["concurrency"]["cancel-in-progress"], "${{ github.event_name == 'schedule' }}")
         self.assertEqual(schedule["jobs"]["plan"]["needs"], "channel")
         for step in schedule["jobs"]["plan"]["steps"]:
             if "env" in step and "CHANNEL" in step["env"]:
