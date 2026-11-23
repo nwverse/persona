@@ -53,6 +53,27 @@ stay stored, its routine facts are gone (the routine opens with none), and its t
 yet. Routes, tools, feature flags and loops are not served yet, so no module adds any; a module that declares one is
 not loaded. Each of those parts of the contract holds from the PR that serves its slot.
 
+## Classification
+
+`schema/module-classification.txt` (#13843) is the one list of what is Persona Core and what belongs to a module. It
+classifies every unit as `core` or a module id: each Go package directory under `server/` and `sdk/go/`, each Apple
+directory `apple/<name>`, `apple/Persona/<name>` and `apple/Packages/<name>`, each Gradle project
+`android/settings.gradle.kts` includes, and each directory under `web/src` one and two levels deep. A unit that is a
+module's future home gets the module id even while it still lives in a core path (`server/internal/mail` is `mail`), so
+the list shows how far each module is from its own directory.
+
+One line per unit, `<kind> <unit> <core|module id>`, with `module <id>` lines declaring the ids (#13430 section 2 plus
+the modules already built). The most specific line wins. `<dir>/... <id>` gives a whole subtree to a module, and the
+module roots (`server/internal/modules/*/...`, `web/src/modules/*`, `:module:*`) give each directory below them the
+module its name says. Core is never inherited: each core unit has its own line, so nothing becomes core without
+someone writing it down. A line may also name a directory deeper than the units (`apple/Persona/Views/Mail mail`).
+
+`scripts/test/test_module_classification.py` (run by `scripts/ci/scripts.sh`) fails on a unit no line classifies and on
+a line that matches nothing. To add a package, directory or Gradle project, add its line; to move one into a module
+root, delete its old line (the root's line classifies the new place); `--print` lists every unit with its class. The
+Apple module ratchet (`scripts/test/test_apple_module_refs.py`) takes the directories of the modules it guards from the
+file; the server, web and Android guards still key on their module roots.
+
 ## Server
 
 | Piece | Where | What it is |
