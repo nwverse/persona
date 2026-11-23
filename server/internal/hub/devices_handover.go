@@ -54,6 +54,20 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 		out.LinkSwitch = h.linkPairable() // and it answers devices.link_switch.* (link_switch.go)
 	}
 	out.NodePackagesURL, out.NodePackagesProxy = h.nodePackages()
+	if h.upd != nil {
+		target, hold := h.upd.confirmedDevelopment()
+		if target != nil && id != devicesOwner {
+			if h.managerCan(id, devicewire.DevelopmentPackagesCapability) {
+				out.DevelopmentTarget = target
+			} else {
+				hold = true
+			}
+		}
+		if hold {
+			out.DevelopmentHold = true
+			out.AutoUpdateNodes, out.HubVersion, out.NodePackagesURL = false, "", ""
+		}
+	}
 	if every, timeout, set := h.linkPingTimes(); set {
 		out.LinkPingMS, out.LinkPingTimeoutMS = int(every.Milliseconds()), int(timeout.Milliseconds())
 	}
