@@ -91,8 +91,12 @@ type PlanTask struct {
 	Readonly  bool  `json:"readonly,omitempty"`
 	// UserRequested: the user asked for this very task in the turn that planned it (#2559); with
 	// assistant.start_requested_tasks on it starts without the card's "Start".
-	UserRequested bool   `json:"user_requested,omitempty"`
-	Why           string `json:"why,omitempty"`
+	UserRequested bool `json:"user_requested,omitempty"`
+	// OwnerStep: the task spends money (money), speaks outward as the owner (outward) or takes an irreversible step
+	// they have not agreed to (irreversible), as the planner says; "" for none. Any of them keeps the plan waiting for
+	// the owner's Start even when its supervisor releases it (task_plan, decision rights).
+	OwnerStep string `json:"owner_step,omitempty"`
+	Why       string `json:"why,omitempty"`
 	// OwnerStarted: the owner tapped Start on the plan's card (POST …/start), as against the hub starting it without
 	// asking; the hub's, never what a tool call or an edit says. What a suggested rule counts (rule_suggest.go, #4929).
 	OwnerStarted bool `json:"owner_started,omitempty"`
