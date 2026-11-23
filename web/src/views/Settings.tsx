@@ -19,7 +19,7 @@ import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
-import { FontRows, RecentChatsRow, SidebarIconsRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { FontRows, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
@@ -662,6 +662,7 @@ function General({ onModel }: { onModel: () => void }) {
           <Switch on={starred} onChange={setStarredEnabled} label={t("settings.starred_messages")} />
         </Row>
         <SidebarIconsRow />
+        <SidebarUsageRow />
       </Group>
 
       <DesktopSettings />

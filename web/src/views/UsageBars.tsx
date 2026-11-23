@@ -1,6 +1,7 @@
 // The sidebar's bottom (#2432, docs/server/usage-windows.md): the two fullest subscription accounts as thin bars; a click opens
 // a popover with every window of every account, its reset countdown, when it was sampled and whether use is ahead of or
 // behind an even pace. Hidden entirely while the hub has no data.
+import { useSidebarUsageShown } from "../lib/sidebar-usage";
 import { type ComponentType, useEffect, useRef, useState } from "react";
 import { t as tr } from "../i18n";
 import { fullest, isWarn, liveAccounts, selectSidebarUsageAccounts, sourceNames, usePinnedUsageAccounts, useUsageWindows, type UnconnectedProvider, type UsageAccount } from "../lib/usage-windows";
@@ -117,6 +118,11 @@ function BalanceRow({ a }: { a: UsageAccount }) {
 
 /** The sidebar mounts. */
 export function SidebarUsage() {
+  // Off in Settings (lib/sidebar-usage.ts): nothing mounts, so the usage windows are not even read.
+  return useSidebarUsageShown() ? <SidebarUsageShown /> : null;
+}
+
+function SidebarUsageShown() {
   return <SidebarUsageInner accounts={useUsageWindows()} />;
 }
 
