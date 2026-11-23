@@ -17,10 +17,10 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Messages (connector/imessage, docs/plans/plan-connectors.md "5"): the app reads one Mac's Messages through that Mac's node;
+// Messages (modules/imessage, docs/plans/plan-connectors.md "5"): the app reads one Mac's Messages through that Mac's node;
 // the hub passes the pages along and keeps none of them. With "Hand to Persona" on (the user's switch, on by default,
 // imessageAIKey) the real conversations also go to the knowledge base, the inbox and the assistant's tools
-// (connector/imessage/persona.go). No number or message is logged (only the connector, the Mac and the kind of failure).
+// (modules/imessage/persona.go). No number or message is logged (only the connector, the Mac and the kind of failure).
 
 // imessageAIKey is the settings key of "Hand to Persona": absent means on.
 const imessageAIKey = "imessage.ai"

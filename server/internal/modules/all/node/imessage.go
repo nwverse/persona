@@ -3,7 +3,7 @@
 package node
 
 import (
-	"github.com/nwverse/persona/server/internal/connector/imessage"
+	"github.com/nwverse/persona/server/internal/modules/imessage"
 	"github.com/nwverse/persona/server/internal/node/imessageport"
 )
 
