@@ -248,6 +248,18 @@ describe("where the numbers came from (#2595)", () => {
     expect(html).toContain("不能直接读这家服务商的额度");
     expect(html).not.toMatch(/statusLine|网关/);
   });
+  it("leaves out a provider the owner hid from the bars, as a row too (#13179)", () => {
+    const launchers = [{ name: "claude" }, { name: "codex", agent: "codex" }, { name: "agy", agent: "agy" }, { name: "deepseek", display_name: "DeepSeek", agent: "claude", base_url: "https://relay.example.com" }];
+    // nothing hidden: the rows are what they were
+    expect(unconnectedUsageProviders(launchers, [], []).map((p) => p.id)).toEqual(["claude", "codex", "agy", "deepseek"]);
+    // Claude hidden: no "Claude Code" row, but a launcher that runs through Claude Code against another service stays
+    expect(unconnectedUsageProviders(launchers, [], ["claude"]).map((p) => p.id)).toEqual(["codex", "agy", "deepseek"]);
+    // Codex hidden but not Claude: only Claude's row (and the others) remain
+    expect(unconnectedUsageProviders(launchers, [], ["codex"]).map((p) => p.id)).toEqual(["claude", "agy", "deepseek"]);
+    // hidden by the launcher's own name, and "antigravity" is agy
+    expect(unconnectedUsageProviders(launchers, [], ["deepseek", "agy"]).map((p) => p.id)).toEqual(["claude", "codex"]);
+    expect(unconnectedUsageProviders([{ name: "ag", agent: "antigravity" }], [], ["agy"])).toEqual([]);
+  });
   it("lists active providers without usage data and hands setup off to the assistant on click", () => {
     const live = [account("c", 40, 75, { provider: "codex", name: "Codex Pro", local: true })];
     const unconnected = unconnectedUsageProviders(

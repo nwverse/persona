@@ -1567,19 +1567,32 @@ internal fun AssistantDrawer(
                     JSectionHeader(stringResource(R.string.assistant_directions), count = groups.directions.size)
                 }
                 itemsIndexed(groups.directions, key = { _, session -> "arrange-direction-" + session.key.path }) { index, session ->
+                    val external = groups.externalDirections[session.sessionId]
+                    val target = external?.target
+                    val open: (() -> Unit)? = when {
+                        external == null -> {{ controller.done(); onOpen(session.key) }}
+                        target != null && onOpenAgent != null -> {{ controller.done(); onOpenAgent(target) }}
+                        else -> null
+                    }
                     DirectionLeadRows(groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary },
                         groups.names[session.sessionId] ?: session.conversationTitle(conversationWords()),
                         GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent, shadedPlace.takeIf { merged == null }) { position, disclosure ->
-                        ConversationRow(session, selected = shadeConversations && session.key == active,
+                        ConversationRow(session, selected = when {
+                            external == null -> shadeConversations && session.key == active
+                            target == null || merged != null -> false
+                            shadedPlace != null -> shadedPlace == AssistantSidebarShade.agent(target)
+                            else -> shadeConversations && target == active
+                        },
                             position = position,
-                            onOpen = { controller.done(); onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
+                            onOpen = open, onEnd = onEnd?.let { action -> { action(session) } },
                             onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
                             onRename = onRename?.let { action -> { action(session) } },
                             onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
                             leader = true, onLeader = onLeader?.let { action -> { action(session) } },
                             counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
                             working = groups.counts[session.sessionId]?.running == true,
-                            named = groups.names[session.sessionId], disclosure = disclosure)
+                            named = groups.names[session.sessionId], disclosure = disclosure,
+                            menuEnabled = external == null, showState = external == null)
                     }
                 }
                 val arranged = orderConversations(groups.others, arrangeUi.drag?.order ?: arrangeUi.order)
@@ -1596,12 +1609,24 @@ internal fun AssistantDrawer(
             } else if (found != null) {
                 val rows = found.filter { groups.main == null || it.session.key != groups.main.key }
                 itemsIndexed(rows, key = { _, row -> "found-" + row.session.key.path }) { index, row ->
-                    ConversationRow(row.session, selected = shadeConversations && row.session.key == active,
-                        position = GroupPosition.of(index, rows.size),
-                        onOpen = {
+                    val external = groups.externalDirections[row.session.sessionId]
+                    val target = external?.target
+                    val open: (() -> Unit)? = when {
+                        external == null -> {{
                             row.hit?.let { MessageJumps.request(row.session.machineId, row.session.sessionId, it.itemId) }
                             onOpen(row.session.key)
-                        },
+                        }}
+                        target != null && onOpenAgent != null -> {{ onOpenAgent(target) }}
+                        else -> null
+                    }
+                    ConversationRow(row.session, selected = when {
+                        external == null -> shadeConversations && row.session.key == active
+                        target == null || merged != null -> false
+                        shadedPlace != null -> shadedPlace == AssistantSidebarShade.agent(target)
+                        else -> shadeConversations && target == active
+                    },
+                        position = GroupPosition.of(index, rows.size),
+                        onOpen = open,
                         onEnd = onEnd?.let { action -> { action(row.session) } },
                         onCopy = { onCopy(row.session) },
                         onArchive = onArchive?.let { action -> { action(row.session) } },
@@ -1611,7 +1636,9 @@ internal fun AssistantDrawer(
                         onDiagnostics = onDiagnostics?.let { action -> { action(row.session) } },
                         onLeader = onLeader?.let { action -> { action(row.session) } },
                         onArrange = onArrange,
-                        said = row.hit?.let(::markedSnippet))
+                        menuEnabled = external == null,
+                        showState = external == null,
+                        said = row.hit?.takeIf { external == null }?.let(::markedSnippet))
                 }
                 if (rows.isEmpty()) item {
                     JEmptyState(stringResource(R.string.assistant_no_match), stringResource(R.string.assistant_no_match_detail))
@@ -1623,20 +1650,34 @@ internal fun AssistantDrawer(
                 JSectionHeader(stringResource(R.string.assistant_directions), count = groups.directions.size)
             }
             itemsIndexed(groups.directions, key = { _, session -> "direction-" + session.key.path }) { index, session ->
+                val external = groups.externalDirections[session.sessionId]
+                val target = external?.target
+                val open: (() -> Unit)? = when {
+                    external == null -> {{ onOpen(session.key) }}
+                    target != null && onOpenAgent != null -> {{ onOpenAgent(target) }}
+                    else -> null
+                }
+                val selected = when {
+                    external == null -> shadeConversations && session.key == active
+                    target == null || merged != null -> false
+                    shadedPlace != null -> shadedPlace == AssistantSidebarShade.agent(target)
+                    else -> shadeConversations && target == active
+                }
                 // With the hub's direction tree a lead folds open to its to-dos and their Agents (#4352, DirectionRows.kt).
                 DirectionLeadRows(groups.tree?.direction(session.sessionId)?.takeUnless { it.secretary },
                     groups.names[session.sessionId] ?: session.conversationTitle(conversationWords()),
                     GroupPosition.of(index, groups.directions.size), onOpenTodo, onOpenAgent, shadedPlace.takeIf { merged == null }) { position, disclosure ->
-                    ConversationRow(session, selected = shadeConversations && session.key == active,
+                    ConversationRow(session, selected = selected,
                         position = position,
-                        onOpen = { onOpen(session.key) }, onEnd = onEnd?.let { action -> { action(session) } },
+                        onOpen = open, onEnd = onEnd?.let { action -> { action(session) } },
                         onCopy = { onCopy(session) }, onArchive = onArchive?.let { action -> { action(session) } },
                         onRename = onRename?.let { action -> { action(session) } },
                         onDiagnostics = onDiagnostics?.let { action -> { action(session) } },
                         leader = true, onLeader = onLeader?.let { action -> { action(session) } },
                         counts = leaderCountsLabel(groups.counts[session.sessionId], resources),
                         working = groups.counts[session.sessionId]?.running == true,
-                        named = groups.names[session.sessionId], disclosure = disclosure)
+                        named = groups.names[session.sessionId], disclosure = disclosure,
+                        menuEnabled = external == null, showState = external == null)
                 }
             }
             // The newest eligible chats (#4922, #5196), the same rows and menu; All chats below still lists everything.
@@ -1837,7 +1878,7 @@ private const val ConversationLiftScale = 0.02f
  */
 @Composable
 private fun ConversationRow(
-    session: Session, selected: Boolean, onOpen: () -> Unit, onEnd: (() -> Unit)?,
+    session: Session, selected: Boolean, onOpen: (() -> Unit)?, onEnd: (() -> Unit)?,
     modifier: Modifier = Modifier, position: GroupPosition = GroupPosition.Single,
     leader: Boolean = false, onLeader: (() -> Unit)? = null, onCopy: () -> Unit = {}, onArchive: (() -> Unit)? = null,
     onArrange: (() -> Unit)? = null,
@@ -1849,6 +1890,10 @@ private fun ConversationRow(
     working: Boolean = false,
     /** The sentence a search found, its match marked. Replaces the last message (and, on the compact drawer, the counts). */
     said: AnnotatedString? = null,
+    /** Outside directions are presentation only: no conversation swipe, long press, overflow or action sheet. */
+    menuEnabled: Boolean = true,
+    /** A direction without a Persona conversation has no read / working state of its own to label. */
+    showState: Boolean = true,
 ) {
     var menu by remember { mutableStateOf(false) }
     // What opened an automatic chat takes precedence; a user's own chat keeps its latest message's channel mark (#5196).
@@ -1875,10 +1920,13 @@ private fun ConversationRow(
     // A hub title's day and kind ("1101 | Fix | ") in the quiet ink, so the topic is what the eye finds (iOS `titleText`); Glass.
     val dated = if (PersonaTheme.style == AppStyle.Glass) ConversationTitle.parse(title) else null
     val resources = androidx.compose.ui.platform.LocalResources.current
-    val swipe = onArchive?.let { SwipeAction(stringResource(R.string.assistant_archive), PersonaIcons.archive, Status.Working, it) }
+    val swipe = onArchive?.takeIf { menuEnabled }?.let {
+        SwipeAction(stringResource(R.string.assistant_archive), PersonaIcons.archive, Status.Working, it)
+    }
+    val openMenu: (() -> Unit)? = if (menuEnabled) ({ menu = true }) else null
     if (LocalHomeDrawer.current) JSwipeActions(modifier, end = swipe) {
         Column {
-            JSidebarHistoryRow(dated?.topic ?: title, ownStatus, selected, onOpen, { menu = true },
+            JSidebarHistoryRow(dated?.topic ?: title, ownStatus, selected, onOpen, openMenu,
                 stringResource(R.string.assistant_conversation_actions), hint = if (said == null) counts else null, hintMark = said,
                 titleAccessory = accessory, titleLead = dated?.head, trailingAccessory = disclosure, working = leadActive)
             ConversationTagLabels(session, Modifier.padding(horizontal = Tokens.Space.l).padding(bottom = Tokens.Space.xs))
@@ -1886,7 +1934,7 @@ private fun ConversationRow(
     } else JSwipeActions(modifier, end = swipe) { JGroupItem(position) {
         // The time goes on the line under the title, with the state: beside the title it left the title two or three
         // characters in the wide window's 300dp list (2026-11-02), and a narrow drawer cut it short too.
-        JRow(dated?.topic ?: title, onClick = onOpen, onLongClick = { menu = true },
+        JRow(dated?.topic ?: title, onClick = onOpen, onLongClick = openMenu,
             titleAccessory = accessory, titleLead = dated?.head,
             subtitle = if (said == null) session.lastText?.takeIf { it.isNotBlank() } else null,
             subtitleMark = said,
@@ -1897,13 +1945,13 @@ private fun ConversationRow(
             },
             trailing = {
                 disclosure?.invoke()
-                JIconButton(PhIcons.DotsThree, stringResource(R.string.assistant_conversation_actions), { menu = true })
+                openMenu?.let { JIconButton(PhIcons.DotsThree, stringResource(R.string.assistant_conversation_actions), it) }
             }, chevron = false)
         ConversationTagLabels(session, Modifier.padding(start = rowTitleStart, end = rowPadding, bottom = Tokens.Space.xs))
         // Under the title, not the icon: a fixed 16dp put it under the icon in glass and board and past it in brief.
         Row(Modifier.padding(start = rowTitleStart, end = rowPadding, bottom = 10.dp.dense),
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-            StatusLabel(ownStatus)
+            if (showState) StatusLabel(ownStatus)
             counts?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1) }
             historyTime(session.updated, resources)?.let { time ->
                 Text(time, Modifier.weight(1f), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
@@ -1911,7 +1959,7 @@ private fun ConversationRow(
             }
         }
     } }
-    if (menu) JActionSheet(
+    if (menu && menuEnabled) JActionSheet(
         title = title, onDismiss = { menu = false },
         actions = conversationActions(androidx.compose.ui.platform.LocalResources.current, leader, session.isLive, onLeader, onCopy, onEnd,
             onArchive, onRename = onRename, onEditTags = onEditTags, onDiagnostics = onDiagnostics, onArrange = onArrange,

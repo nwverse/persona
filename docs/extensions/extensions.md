@@ -137,6 +137,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `auth_relay` (version 1, #5644) | `auth_relay.` | `id`, `name?`, `hosts` (exact lowercase host names, 1–16), `paths` (exact paths, 1–16; a trailing `/` is ignored) | Process speaks the protocol, permission `auth_relay`; **starts off** at install and when an upgrade adds it, whatever `off_by_default` says | Authorization links the user's Agents stop at, on these hosts and paths and printed by the Agent's own command, handed to the program as `auth_relay.complete` to complete with the account it is signed in with; see [auth-relay.md](../operations/auth-relay.md) |
 | `secret_providers` (version 1, #3962) | `secrets.` | `id`, `name` (1–80 characters: the settings say "From <name>"), `schemes` (1–4 of `^[a-z][a-z0-9+.-]{0,15}$`, not `http`, `https`, `file`, `data`, `persona`, `about`, `javascript`) | Process speaks the protocol; a scheme another installed extension claims fails the install | Values for references of its schemes (`op://vault/item/field`), asked by the manager only (`secrets.describe`, `secrets.resolve`, the event `secrets.used`), each resolution recorded on it; see [secret-providers.md](secret-providers.md) |
 | `repository_providers` (version 1, #10330) | `repo.` | `id`, `name` (1–80 characters: what the catalog and a to-do's repositories call the source), `hosts` (1–16 exact lowercase host names, no IP address; not `github.com`, `gitlab.com` or the other hosts the built-in providers read), `link_kinds?` (`[{kind: issue / pull_request, label}]`, each kind once, a label of 1–24 characters; only relabels), `capabilities?` (`["pr_status"]`: it answers `repo.pr_status`, #11584) | Process speaks the protocol; a host another installed extension claims (even one that is off), or one host in two items, fails the install | A code-hosting source for **Settings › Repositories** and a to-do's repositories and links on its hosts, asked by the manager only (`repo.parse`, `repo.check`, `repo.link`, the optional `repo.describe` and `repo.pr_status`; `schema/extension/repository.schema.json`), each answer re-checked; the install page lists its hosts, and they are in the permission digest |
+| `memory_sources` (version 1, #13532; defined, not registered yet) | `memory.` | `id`, `name` (1–80 characters: what settings call the source); one per extension | Process speaks the protocol | Not wired yet: the hub lists the point as unknown and never calls it. Once registered, the manager reads the entries with `memory.entries` (`schema/extension/memory.schema.json`) and grades them by scene itself; see "Memory sources" below |
 
 Extension points the hub doesn't know: the extension still installs (it may be written for a newer hub), that item has no effect, and the preview and list show a warning. When adding extension points later (knowledge base sources, link recognition…), add a row to this table.
 
@@ -485,7 +486,8 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed`; never the health space's chats, nor what a feed holds of a to-do it is not shown (see "Never shown to extensions") |
 | `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}`, `GET /api/v1/todos/places`, `GET /api/v1/todos/{id}/decisions`, `GET /api/v1/todos/{id}/repositories`, `GET /api/v1/todos/{id}/timeline`. From a manager naming `todo_timeline`, the to-do's conversation too: the timeline, and on `GET /api/v1/todos/{id}` its latest rounds, recap and results (what the owner told its runs and their turn summaries), less what "Never shown to extensions" leaves out. Never a to-do it is not shown (same section): it is not listed, and every route of it answers 404 |
-| `leaders.read` | See leader conversations (directions) and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events") |
+| `leaders.read` | See directions and what they report | `GET /api/v1/assistant/leaders`; the events `leader.changed` and `leader.report` (see "Leader events"). Does not permit writes |
+| `leaders.write` | Create directions and report their progress | `POST /api/v1/assistant/directions` and `POST /api/v1/assistant/directions/{id}/progress` only. Does not imply `leaders.read`; direction names, notes, ends and to-do aggregation are unchanged |
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
 | `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`, `POST /api/v1/assistant/start-defaults/preview` (read-only: what a policy would do for a task, nothing stored or started); a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
 | `dispatch.guard` | Read and change the explicit-target dispatch guard and narrow the affected conversations' tools | `GET` / `PUT /api/v1/assistant/dispatch-guard`; an extension-written enabled policy must expire within one hour ([assistant.md](../assistant/assistant.md) "Explicit dispatch guard"). Granted by name only, not by the legacy every-scope grant |
@@ -788,6 +790,67 @@ The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ex
 {"permissions":{"hub":["assistant.memory.read"]}}
 ```
 
+### Memory sources
+
+A memory extension keeps entries about the user in its own state. The hub, not the extension, decides which of them
+reach which scene (a conversation's standing channel, a recall, a dispatched task, the Inbox's helper;
+`docs/assistant/health.md` "Memory by scene"), so the rule lives in one place for every memory extension. For that the
+extension offers one read-only call that answers its entries one by one, with what the hub's assembler needs to grade
+them; the hub filters. Design and decision: #13532.
+
+**Status: protocol defined, not wired.** The contribution is not registered yet: until a later change registers it, a
+manifest that declares it installs with the unknown-extension-point warning, the hub never calls it, and nothing an
+extension delivers changes. The wire types are generated from `schema/extension/memory.schema.json`
+(`wire.MemoryEntriesParams`, `wire.MemoryEntriesResult`, `wire.MemoryEntry`); the manager's mapping to its assembler
+is `memoryExtensionBatchOf` in `server/internal/assistant/memory_extension_wire.go`.
+
+The contribution (extension point `memory_sources`, version 1, namespace `memory.`; the program speaks the protocol):
+
+```json
+"contributes": {"memory_sources": [{"id": "memory", "name": "My memory"}]}
+```
+
+- `id` is the usual contribution id, `name` (1 to 80 characters) what settings call the source. One contribution per extension.
+- Declaring it is how the hub knows the extension offers `memory.entries`; there is no separate capability flag.
+
+| Method | Parameters → answer | Notes |
+| --- | --- | --- |
+| `memory.entries` | `{contribution, limit, after?}` → `{entries, tagged, has_more, after?}` | One page, most important first: standing entries, then by `rank`, then newest. `limit` is 1 to 500 (the manager asks 200) and only caps the page: end it early, with `has_more` and `after`, so the answer stays within 1 MB (200 entries of 4096 CJK characters would not). `after` is the previous page's opaque cursor; `has_more` true needs an `after`, and true with an empty one is read as the end of the entries. Read-only: answering changes nothing in the program's state. |
+
+Each entry (`MemoryEntry`):
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Required, `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, stable across pages and answers. The manager carries it as `memory-extension:<id>`, which a to-do's brief names. |
+| `text` | Required, 1 to 4096 characters: what the entry says, as the extension would render it. |
+| `status` | Required: `active` (the extension would use it today, whatever it calls that state itself: an extension with its own stable and shifting states answers `active` for both), `candidate` (not borne out yet), `dormant` (not seen lately), `retired` (no longer true). Only `active` is carried; any other value drops the entry. |
+| `facet` | The extension's own grouping (`^[a-z][a-z0-9_]{0,31}$`). Informational: the hub neither filters nor orders by it. |
+| `origin_space` | The slug of the space the entry was first said in; left out for the main space. |
+| `categories` | Up to 8 information categories (`health`, `finance`, `relationships`, `emotion`, `legal_id`); left out for a general entry. One the hub does not know makes the entry not known. |
+| `standing` | The extension kept it in every conversation (its own always-in-context entries). Only a standing entry goes to a standing channel (usage still decides); an entry without it comes in only by relevance, its `subjects` or text matched in a recall, a hand-off or the Inbox, as the extension's own "included when named" entries did. Until the source is wired in, the flag only orders entries among the extension's own. |
+| `rank` | 0 to 1000, higher first, among entries alike in `standing`; left out means 0. |
+| `subjects` | Up to 16 names (1 to 80 characters each) whose mention brings the entry in (its own "included when named" entries): a task's or a message's words are matched with them as well as with the text. |
+
+- **`tagged`** is a promise for the whole page: the extension writes `origin_space` and `categories` on every entry and
+  leaves them out only when empty. The manager reads a batch as tagged only when every page says so. Untagged, a missing
+  field means nothing is known: each entry is in no track and taken for sensitive everywhere, so no assembly carries it.
+- **Not filtered by scene**: answer every entry the extension would otherwise put in its text outlets. Grading by scene
+  is the hub's; an extension that pre-filters only hides entries the user's rules would have let through.
+- **Bounds**: 5 seconds per call, at most 1 MB per answer, at most 5 pages and 1000 entries per assembly (past them the
+  rest are left, less important by the extension's own order). An entry that breaks a rule above (an unknown `status`
+  included) is dropped alone, never repaired, and an id seen before is dropped too; the rest of the page is kept.
+- **Errors**: the base error codes, or `not_ready` (the entries are not loaded yet) and `failed` with a one-line
+  message. A timeout, an answer that is too large, a page whose own fields (`entries` as an array, `tagged`, `has_more`,
+  `after`) do not hold to the schema, and every error mean the assembly uses
+  none of the extension's entries this time and logs why. It never falls back to the extension's text.
+- **Who calls**: the manager only, for the owner's personal assemblies; no other extension, device or token can.
+
+**Transition.** Until an extension declares `memory_sources`, its four text outlets reach the assistant exactly as
+today: its `instructions` prompt, its `project_context` for new Agents, its `inbox_context` for the Inbox, and its own
+recall tool. Once the hub registers the point and the extension declares it, a later change makes the hub read the
+entries through `memory.entries` and stops delivering those four outlets of that extension directly, so no entry
+reaches a scene around the filter. Extensions that do not declare it keep the text outlets unchanged.
+
 ### Unified entries ledger
 
 The assistant manager owns one append-only ledger for facts, preferences, rules and structured decisions. It serves
@@ -928,7 +991,11 @@ the run that went wrong without reading any tool output, then opens only that ru
 
 ### Never shown to extensions
 
-Whatever scopes it was granted, an extension's token never sees:
+Whatever scopes it was granted, an extension's token never sees what follows, with one exception (#13246): an extension the
+user marked as their own (`PUT /api/v1/assistant/extension-trust/{id}` with `trust: owner`, such as their memory extension) reads
+the tracks' conversations and cards on the read routes below, and the manager's reads by the user's grants
+(docs/assistant/health.md "Using information by scene"). It still never controls a track's session or sees a private card,
+and the extensions' `agent.needs_you` / `agent.finished` events still leave the tracks out.
 
 - **The health space's conversations** (`docs/assistant/health.md`): not in `GET /api/v1/sessions` (the full list, the paged list, its
   totals and counts) or `/sessions/archived`, and their items, images, info and screen answer 404 as for a chat that does not exist.
@@ -937,7 +1004,7 @@ Whatever scopes it was granted, an extension's token never sees:
   read grant. Session controls (a message, interrupt, queue changes, rename, modes, seen) require a listed session outside
   the health space; a resume is decided as "Resuming a chat" says. Extension tokens cannot start sessions in the health
   space. `assistant.conversations` and `assistant.messages` leave health sessions out, and `assistant.memory` reads only
-  the assistant's own memory. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling
+  the memory of tracks the extension may read. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling
   conversation's space to filter their targets. `GET /api/v1/assistant` lists none of them (`?space=health` lists
   nothing), and a chat's feed (`GET …/conversations/{id}/feed`) answers 404 for one of them, or for one whose space
   cannot be told. `agent.finished` is not sent of such a chat either.
@@ -1105,6 +1172,7 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
     So from the sandbox, always use `host.persona.internal` to reach services on the hub machine (local SSH tunnels, locally started APIs).
   - Only the proxy knows this name: sandboxed extensions get through via the proxy; resolving it directly without the proxy fails (DNS has no such name), which is expected.
     Extensions with the sandbox off don't go through the proxy (see above) and still connect to `127.0.0.1` directly.
+  - **Settings the user fills in are rewritten for the sandbox**: an address a `format: "uri"` setting holds (fixed fields and entry-list fields alike) is handed to the program as `host.persona.internal` when its loopback egress is permitted, both in the configuration the program reads and in what `initialize` carries; an address the permissions don't permit stays as written. The manifest and the user's saved value do not change. Gate credentials a plugin returns for the hub's own machine are mapped back to `127.0.0.1` where the node dials them, outside the sandbox.
 - **Who it recognizes**: on the local TCP port, extensions are identified by proxy credentials (`HTTP(S)_PROXY=http://ext:<credential>@127.0.0.1:<port>`, renewed at every start, invalid once disabled or uninstalled); the Linux sandbox also has one unix socket per extension
   (`~/.persona/extensions/run/<id>/proxy.sock`), and the socket itself says who it is. A settings check's own credential (`settings.check`'s `proxy`, "Settings the user fills in") is recognized on both, for that extension only.
 - **Hosts the owner allowed** (#5697): in the admin UI (an installed extension's details › Network and isolation), and only there (the admin session; device credentials have no route), the owner can allow a sandboxed extension more hosts than its `permissions.network` lists: a self-hosted RSSHub, Sentry or GitHub Enterprise, a proxy. Each is one specific host, as typed or taken from an http(s) URL: `rss.example.org` (any port, like `permissions.network`) or `rss.example.org:8443` (that port only); no wildcard, path or account. The proxy reaches them the way it reaches a `config:` settings address: no subdomain, https or plain http, the name resolved by the proxy and **every** answer checked on each connection, only checked addresses dialled. Private LAN addresses (10/8, 172.16/12, 192.168/16, fc00::/7) pass, which is the usual case for a service at home; loopback, link-local, unspecified, multicast and metadata addresses refuse the name, so a name that later resolves to loopback (DNS rebinding) is refused. This machine's own services are not allowed here (`127.0.0.1`, `localhost` and the like are refused with the hint to use `host.persona.internal`, which the manifest asks for). Allowing is immediate with no question (the toast offers Undo); revoking closes the extension's open proxy connections. Each change is audited (`egress_allow` / `egress_revoke`, actor `admin UI`). They are stored in the hub setting `extension_egress_allow` by extension, at most 32 each, and dropped when the extension is uninstalled. Endpoints: `POST /api/v1/admin/extensions/{id}/egress/allow` `{"host": "…"}` and `DELETE /api/v1/admin/extensions/{id}/egress/allow?host=…`, both answering with the extension (400 `invalid_host` with the reason). The proxy also keeps, in memory, the last 5 different hosts it refused each extension (`sandbox.egress.recent_denied`: `target`, `count`, `at`), which the admin UI lists with **Allow**.
@@ -2105,7 +2173,7 @@ The [source handler contract](source-api-handlers.md) defines the separate typed
     So commands the gate cannot parse (loops, scripts, `$(…)`) are denied outright if they contain a write, with a hint to send it as a separate command. A resident node's proxy is process-wide: chats that survive a hub reconnect keep using the original address, and calls allowed on the new connection still pass.
     Once the extension is disabled, both the command and the credentials are gone. Gates with no `auth` that do not meet the default condition (several secrets, no `base_env`) still put credentials into the assistant's environment, as do gates provided by older hubs (before #1317).
   - **Card**: the confirmation card's title is `title`; the extension can answer `assistant.summary {contribution, summary}` → `{summary}` to replace ids in the card with names (left as-is if they cannot be resolved).
-  - **Space** (#6003): every assistant process has `PERSONA_SPACE` in its environment: `health` in the health space (`docs/assistant/health.md`), `main` everywhere else, decided by the conversation's directory when the node starts the process (`assistantSpace` in `node/larkgate_env.go`). An extension's skills and commands reach every space; a command meant for one space checks this rather than its working directory, which a `cd` in front of the command changes without a confirmation. Overriding it takes `PERSONA_SPACE=… <command>`, which the gate does not let through unless the gate lists the variable in `allowed_env`, so it goes to the normal permission prompt.
+  - **Space** (#6003): every assistant process has `PERSONA_SPACE` in its environment: `health` in the health space (`docs/assistant/health.md`), `main` everywhere else, decided by the conversation's directory when the node starts the process (`assistantSpace` in `node/larkgate_env.go`). An extension's skills and commands reach every space; a command meant for one space checks this rather than its working directory, which a `cd` in front of the command changes without a confirmation. Overriding it takes `PERSONA_SPACE=… <command>`, which the gate does not let through unless the gate lists the variable in `allowed_env`, so it goes to the normal permission prompt. Next to it, `PERSONA_TRACK_KIND` names the kind of the conversation's track (#13472, `docs/assistant/health.md` "Tracks and kinds"): `orchestration` in the main space, `space` in the health space and a domain space, a user's kind in a track of that kind; a command may serve some kinds only. It is missing when the node was not told the kind (an older node or manager, or a process resumed before its directory was prepared since the node started), which such a command takes as unknown.
   - The gate file is read in strict mode and checked at install time (the script must be inside a skill); credentials cannot start with `PERSONA_` / `PERSONA_` or be `PATH`.
 
 ### Assistant content from the data directory (#5770)
@@ -3414,8 +3482,8 @@ Extensions contribute `events` to subscribe to things happening on the hub. Thes
 | `todo.changed` | `id`, `title`, `thread?`, `responsible?`, `done?`, `supervisor?`, `kind?`, `what`: a to-do was created, deleted, or its title, whether it is done, its supervisor, its responsible party, or the thread it is bound to changed (needs `todos.read`, see below; never of a to-do it is not shown, "Never shown to extensions") |
 | `assistant.entries.changed` | `id`, `record_id`, `status:"wrong"`: an entry was marked wrong; needs `assistant.entries.read` (see "Unified entries ledger") |
 | `todo.decision` | `id`, `title`, `thread?`, `decision`: a decision was written on a to-do (needs `todos.read`, see below; never of a to-do it is not shown) |
-| `leader.changed` | `id`, `title`, `project?`, `ended?`: a leader conversation was made, retitled, filed under another project, ended or made a leader again (needs `leaders.read`, see "Leader events") |
-| `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a leader's task reached its goal, needs the owner's decision or is stuck (needs `leaders.read`) |
+| `leader.changed` | `id`, `title`, `project?`, `ended?`: a direction was made, retitled, filed under another project, ended or made current again (needs `leaders.read`, see "Leader events") |
+| `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a direction's task reached its goal, needs the owner's decision or is stuck, or the direction reported progress (needs `leaders.read`) |
 
 SDK programs receive them in `Namespaces["event"]` (method name is the event name).
 
@@ -3437,8 +3505,9 @@ SDK programs receive them in `Namespaces["event"]` (method name is the event nam
 ### Leader events (#3484, #3485)
 
 `leader.changed` and `leader.report` let a work-log extension keep one record per direction of the owner's work and write
-its result lines (`docs/design/proposals/owner-at-a-glance.md` "Contract with a work-log extension"). A *leader* is a
-side conversation in `assistant.leaders`; one leader is one direction. Schema: `schema/extension/leaders.schema.json`
+its result lines (`docs/design/proposals/owner-at-a-glance.md` "Contract with a work-log extension"). A direction is
+usually a side conversation in `assistant.leaders`; since #8236 it can instead be an outside reporting direction with
+no Persona conversation. Either kind has one stable direction id. Schema: `schema/extension/leaders.schema.json`
 (`wire.LeaderChangedEvent`, `wire.LeaderReportEvent`).
 
 ```json
@@ -3446,8 +3515,8 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
  "contributes":{"events":[{"id":"leaders","subscribe":["leader.changed","leader.report","todo.changed"]}]}}
 ```
 
-- **Who is told**: as for the to-do events, with `leaders.read` (or the legacy full access); `todos.read` is not enough.
-- **`leader.changed {id, title, name, project?, ended?}`**: `id` is the leader conversation's session id, the key to keep a
+- **Who is told**: as for the to-do events, with `leaders.read` (or the legacy full access); `todos.read` and `leaders.write` alone are not enough.
+- **`leader.changed {id, title, name, project?, ended?}`**: `id` is the stable direction id (the leader conversation's session id, or an outside direction's server-generated `dir_…` id), the key to keep a
   record by; `title` its title as the apps show it; `name` what the direction is called, **the one to show** (#3679): the
   name the owner (`PUT /api/v1/assistant/directions/{id}/name`) or the secretary (`direction_name`) gave it, else its
   knowledge-base project's name, else `title` without its `MMDD | kind | ` prefix (and when that starts `你是「X」`, a role given in the first message, just `X`, #3744); a new name is a change, told once; `project` the knowledge-base project's slug it is filed under (left
@@ -3463,11 +3532,20 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
   twice; `text` is at most 300 characters in the owner's language; `link` the task's PR when it has one. Progress is
   never reported. Besides those, `kind: "progress"` (#3679) is the
   leader's own summary of its direction at the goal level, sent with its `leader_progress` tool (each reached task, each
-  report cycle): `reached` (what was reached), `doing` (what is being done, and where it is stuck), `needs_you` (what the
+  report cycle), or an authorized outside caller's `POST /api/v1/assistant/directions/{id}/progress` /
+  `personad write-progress`: `reached` (what was reached), `doing` (what is being done, and where it is stuck), `needs_you` (what the
   owner has to do) and `links` (evidence, at most 5; `link` is the first), each part at most 200 characters; `text` puts
   the parts together in the owner's language (「达成：…」「在做：…」「要你做：…」, one per line); `todo` is `""`. A work-log
   card renders one line per direction from the day's latest `progress`. `GET /api/v1/assistant/leaders` lists each
   direction's `name` and latest `progress` (`{reached?, doing?, needs_you?, links?, at}`).
+- **Writing from outside (#8236)**: `leaders.write` allows `POST /api/v1/assistant/directions` with a required
+  `name`, required existing knowledge-base `project` and optional complete coding-Agent `machine_id` / `session_id`
+  pair, and the progress route above for any current direction. The create returns a leader with `external: true` and a
+  generated `dir_…` id, not a Persona conversation id. The Agent remains an optional navigation target only: it does
+  not become the supervisor, and its linked to-dos are not newly aggregated. A targetless direction is allowed. The
+  scope opens no read, event, rename, notes, end or to-do route; request `leaders.read` separately when the extension
+  also needs this section's read model. The local `personad` commands use the same-user node socket instead of an
+  extension token (`docs/integrations/script-cli.md`).
 - **Leaders made before the extension**: `GET /api/v1/assistant/leaders` (`leaders.read`) lists every direction as
   `leader.changed` would tell it now, with `by` (`assistant` or `user`), `at` and `ended_at?`; current leaders first.
 - They share the to-do events' queue and its limits.
