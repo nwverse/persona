@@ -168,7 +168,7 @@ def main():
         cfg.write_text(json.dumps({"listen": f"127.0.0.1:{port}", "token": token, "public_url": f"http://127.0.0.1:{port}",
                                    "database_url": database, "machines": []}))
         cfg.chmod(0o600)
-        # A clean environment: no PERSONA_HOME / JARVIS_HOME or other settings of this machine's own hub.
+        # A clean environment: no PERSONA_HOME (or its older name) or other settings of this machine's own hub.
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "TMPDIR": str(work), "LANG": "C.UTF-8",
                "PERSONA_LOCAL_NODE": "0"}
         with open(log, "w") as out:

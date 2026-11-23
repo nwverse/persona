@@ -2,8 +2,8 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 lane="${1:-all}"
-[ "$#" -le 1 ] || { printf 'Usage: scripts/ci/server.sh [all|node|managers|other|build]\n' >&2; exit 2; }
-case "$lane" in all|node|managers|other|build) ;; *) printf 'Unknown server lane: %s\n' "$lane" >&2; exit 2 ;; esac
+[ "$#" -le 1 ] || { printf 'Usage: scripts/ci/server.sh [all|node|managers|other|build|core-node|core-managers|core-other]\n' >&2; exit 2; }
+case "$lane" in all|node|managers|other|build|core-node|core-managers|core-other) ;; *) printf 'Unknown server lane: %s\n' "$lane" >&2; exit 2 ;; esac
 # Go's build cache key holds each package's directory unless -trimpath is set: add it, so checkouts and worktrees
 # share compiled packages (#10614). The helper keeps the caller's GOFLAGS; vet clears -ldflags on its command line.
 GOFLAGS=$(sh scripts/test/go_trimpath.sh)
@@ -34,6 +34,9 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # The core alone runs (#13978): a persona_core_only hub and manager start against a disposable Postgres, the manager
   # loads no module, every module's program, extension and route is absent, and both stop cleanly.
   ci_run 'Core-only hub smoke' 900 python3 scripts/ci/core-only-smoke.py
+  # Each module left out on its own (server/internal/modules/<id>/module.json, so a module that moves is covered with no
+  # edit here): the server builds, and the module list and the guards pass.
+  ci_run 'Builds without each module' 900 bash -c 'cd server && for m in internal/modules/*/module.json; do id="$(basename "$(dirname "$m")")" && go build -tags "persona_without_$id" ./... && go test -tags "persona_without_$id" -count=1 -timeout=4m ./internal/modules/all/... ./internal/archguard/... || exit 1; done'
   ci_run 'Extension schema and SDK bundle' 300 bash -c 'python3 scripts/test/test_extension_schema.py && python3 scripts/test/test_module_schema.py && python3 scripts/test/test_sdk_bundle.py'
   ci_run 'Go SDK tests' 300 bash -c 'cd sdk/go && go test -count=1 -timeout=4m ./...'
 fi
@@ -58,12 +61,18 @@ ci_run 'Postgres 18 fixture' 180 docker run --detach --name "$container" \
   -p 127.0.0.1::5432 postgres:18-alpine \
   -c fsync=off -c synchronous_commit=off -c full_page_writes=off
 ci_run 'Postgres readiness' 90 python3 scripts/ci/postgres.py "$container" "$fixture/database.json"
-if [ "$lane" = all ] || [ "$lane" = node ]; then
+if [ "$lane" = all ] || [ "$lane" = node ] || [ "$lane" = core-node ]; then
   # The real-browser package has its own hosted runner, without build or other-package contention.
   ci_run 'Browser runner resources' 60 bash -e -o pipefail -c 'google-chrome --version; getconf _NPROCESSORS_ONLN; free -m; df -h /dev/shm'
 fi
 for shard in node managers other; do
   if [ "$lane" = all ] || [ "$lane" = "$shard" ]; then
     ci_run "Server $shard tests with Postgres" 600 python3 scripts/ci/server-shards.py "$shard" --database-file "$fixture/database.json"
+  fi
+  # Persona Core alone (#13978): the same shard's every package with every module left out (persona_core_only); tests
+  # of a module's own behaviour skip without it (needsBriefingModule, needsVoiceModule, needsVolcModule).
+  if [ "$lane" = all ] || [ "$lane" = "core-$shard" ]; then
+    GOFLAGS="$GOFLAGS -tags=persona_core_only" ci_run "Server $shard tests with Postgres, core only" 600 \
+      python3 scripts/ci/server-shards.py "$shard" --database-file "$fixture/database.json"
   fi
 done

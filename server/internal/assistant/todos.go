@@ -467,6 +467,7 @@ func (s *Service) todosLoaded() bool {
 // todosChanged tells the apps to read the todos again ({"type":"todos"}), once the rest of the write is in
 // (todosPushSoon).
 func (s *Service) todosChanged(ctx context.Context) {
+	s.trevision.changed() // seen/restored/Someday come through here too, without moving updated_at
 	s.todosPushSoon()
 	s.todoChangedSoon()
 	s.remindSoon()        // a reminder set, moved or done (todo_plan.go)
@@ -1001,6 +1002,7 @@ func (s *Service) todoRoutes() {
 	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
 	// (todo_scope.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
+		writes := s.trevision.writes.Load()
 		list, p, err := s.todosViewed(r.Context(), true)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
@@ -1008,9 +1010,12 @@ func (s *Service) todoRoutes() {
 		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			list = s.extensionRows(r.Context(), list, p)
+		} else {
+			s.tagTodoRevision(w, writes, p)
 		}
 		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
 	})
+	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
 
 	// POST /api/v1/todos: create todo {title, notes, due_at | due_date, remind_at, priority, project, kind}; kind concern
 	// records one of the owner's concerns (concerns.go): it closes only once its outcome is reported (…/decisions

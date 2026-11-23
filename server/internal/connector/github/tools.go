@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -57,9 +57,9 @@ func (c *Connector) Call(ctx context.Context, name string, args json.RawMessage)
 	return a.text(), nil
 }
 
-var _ connector.ReadJSON = (*Connector)(nil)
+var _ connectorwire.ReadJSON = (*Connector)(nil)
 
-// CallJSON is connector.ReadJSON: every read tool's answer for subscriptions, as JSON with an id on each item
+// CallJSON is connectorwire.ReadJSON: every read tool's answer for subscriptions, as JSON with an id on each item
 // (tools_json.go). The models get the text Call writes from the same answer.
 func (c *Connector) CallJSON(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, bool, error) {
 	if !slices.Contains(readTools, name) {
