@@ -73,8 +73,9 @@ func TestLarkSupervisedTerminalDialog(t *testing.T) {
 		return p != nil && p.ix.CreatedAt.After(first) && p.route.at() == "lead1"
 	})
 	e.f.withQueue(e.lastShown(id))
-	if _, err := runJSON(t, e.s, "lead1", "interaction_answer", map[string]any{"machine": "mac", "session_id": sess.SessionID, "interaction_id": id, "answers": map[string]string{dialog.Question: "Pocket"}}); err == nil || !strings.Contains(err.Error(), "only the user") || len(e.d.callsTo("mac", "session.keys")) != 0 {
-		t.Fatalf("terminal choices are the user's: %v", err)
+	// The supervisor could pick Pocket itself (ask_route_screen_test.go); here it hands the choice to the owner.
+	if _, err := runJSON(t, e.s, "lead2", "interaction_answer", map[string]any{"machine": "mac", "session_id": sess.SessionID, "interaction_id": id, "answers": map[string]string{dialog.Question: "Pocket"}}); err == nil || !strings.Contains(err.Error(), "only the user") || len(e.d.callsTo("mac", "session.keys")) != 0 {
+		t.Fatalf("a conversation the dialog was not handed to answered it: %v", err)
 	}
 	e.s.askTick(time.Now().Add(24 * time.Hour))
 	e.s.askTick(time.Now().Add(48 * time.Hour))
