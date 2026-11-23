@@ -305,11 +305,13 @@ class ListTapMotion {
     }
 
     /**
-     * Call before or immediately after a programmatic scroll (`scrollToItem`, `requestScrollToItem`,
-     * `animateScrollToItem`) that bypasses [NestedScrollConnection]. Cancels active row shifts and
-     * resets content-relative baselines so rows never spring across a viewport jump.
+     * Cancels active row shifts and resets content-relative scroll baselines without disarming a
+     * pending tap that is still waiting for its page (for automatic reading-position corrections
+     * such as `KeepAgentReadingPosition`, which may fire on an older throttled page before the
+     * tap's own `tapEpoch` arrives). If a tap diff has already been captured, disarms it so rows
+     * never spring from pre-jump coordinates.
      */
-    fun onProgrammaticScroll() {
+    fun cancelShiftsAndResetBaseline() {
         cancelAllShifts()
         layoutY.clear()
         shiftedEpoch.clear()
@@ -317,6 +319,17 @@ class ListTapMotion {
         scrollAccum = 0f
         prunedToken = Long.MIN_VALUE
         eligible = emptySet()
+        if (captured || diffReady) disarm()
+    }
+
+    /**
+     * Call before or immediately after an explicit programmatic scroll (`scrollToItem`,
+     * `requestScrollToItem`, `animateScrollToItem`) that bypasses [NestedScrollConnection].
+     * Cancels active row shifts, resets content-relative baselines, and disarms any armed tap so
+     * rows never spring across a viewport jump.
+     */
+    fun onProgrammaticScroll() {
+        cancelShiftsAndResetBaseline()
         if (kind != null || plainKind != null || diffReady) disarm()
     }
 
@@ -558,6 +571,9 @@ class ListTapMotion {
         val previous = composed
         val stale = awaitPage && kind != null && epoch >= 0 && epoch != armedEpoch
         if (stale) {
+            // This older page is now what is laid out on screen before [armedEpoch] arrives;
+            // rebase [armedBaseline] so an earlier hub insert cannot cancel out the tap's index diff.
+            armedBaseline = keys
             holdKeys(keys, epoch)
             return
         }

@@ -1426,6 +1426,87 @@ class ListTapMotionTest {
         assertEquals("unrelated stationary row was invalidated by another row's tick", 0, stayPlaced[0])
     }
 
+    @Test fun readingPositionCorrectionPreservesPendingTapAwaitingEpoch() {
+        rule.mainClock.autoAdvance = false
+        var rows by mutableStateOf((0 until 20).map { "r$it" })
+        var epoch by mutableStateOf(0)
+        val state = LazyListState(firstVisibleItemIndex = 8)
+        val motion = ListTapMotion()
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = false, style = AppStyle.Glass) {
+                BindListTapMotion(motion)
+                LazyColumn(
+                    Modifier
+                        .width(411.dp)
+                        .height(320.dp)
+                        .nestedScroll(listTapScroll(motion)),
+                    state = state,
+                ) {
+                    val tap = ListTapLazyScope(this, motion, state, epoch = epoch)
+                    with(tap) {
+                        items(rows, key = { it }) { title ->
+                            Box(Modifier.height(56.dp).fillMaxWidth().testTag("row-$title"))
+                        }
+                    }
+                    tap.commit()
+                }
+            }
+        }
+        settle()
+
+        // User taps while scrolled down; waiting for throttled tapEpoch = 2.
+        motion.arm(ListTapMotionKind.State, awaitPage = true, epoch = 2)
+        // Before epoch 2 lands, an older hub page (epoch 1) inserts a row above the viewport and
+        // KeepAgentReadingPosition corrects the scroll offset without disarming the pending tap.
+        rows = listOf("Hub") + rows
+        epoch = 1
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeByFrame()
+        rule.runOnIdle {
+            motion.cancelShiftsAndResetBaseline()
+            state.requestScrollToItem(9, 0)
+        }
+        Snapshot.sendApplyNotifications()
+        repeat(3) { rule.mainClock.advanceTimeByFrame() }
+
+        assertEquals("reading correction disarmed pending tap awaiting epoch 2", ListTapMotionKind.State, motion.kind)
+        assertFalse("stale epoch should not have captured the tap", motion.captured)
+        assertEquals(0, motion.shiftPx("r10"))
+
+        val beforeTap = top("row-r10")
+        // Now the tap's own epoch 2 lands, removing r8 above r10.
+        rows = rows.filterNot { it == "r8" }
+        epoch = 2
+        Snapshot.sendApplyNotifications()
+        motion.land(2)
+        val trace = (1..8).map {
+            rule.mainClock.advanceTimeByFrame()
+            top("row-r10")
+        }
+        rule.mainClock.advanceTimeBy(400)
+        val afterTap = top("row-r10")
+        val low = minOf(beforeTap, afterTap) - 2f
+        val high = maxOf(beforeTap, afterTap) + 2f
+        assertTrue(
+            "r10 did not spring smoothly after pending tap survived reading correction ($beforeTap -> $afterTap via $trace)",
+            abs(beforeTap - afterTap) > 8f &&
+                trace.all { it in low..high } &&
+                trace.any { y -> (y - beforeTap) * (y - afterTap) < 0f && abs(y - beforeTap) > 4f && abs(y - afterTap) > 4f },
+        )
+
+        // Contrast: once a tap diff IS already captured, cancelShiftsAndResetBaseline cancels shifts AND disarms.
+        motion.arm(ListTapMotionKind.State, awaitPage = true, epoch = 3)
+        rows = rows.filterNot { it == "r9" }
+        epoch = 3
+        Snapshot.sendApplyNotifications()
+        motion.land(3)
+        repeat(2) { rule.mainClock.advanceTimeByFrame() }
+        assertTrue("expected epoch 3 tap to be captured", motion.captured)
+        motion.cancelShiftsAndResetBaseline()
+        assertNull("captured tap should disarm on reading-position correction", motion.kind)
+        assertFalse(motion.hasActiveShifts())
+    }
+
     @Test fun staleShiftSafetyNetClearsAfterDisarm() {
         rule.mainClock.autoAdvance = false
         var rows by mutableStateOf(listOf("A", "B"))

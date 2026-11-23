@@ -141,6 +141,8 @@ internal fun AgentsScreen(
     val window = androidx.compose.ui.platform.LocalConfiguration.current
     // Tap-driven row motion only (#9600). Hub pushes change [tree] with the flag clear, so they stay put.
     val listTapMotion = remember { ListTapMotion() }
+    val tapMotionScope = rememberCoroutineScope()
+    val reduceMotion = PersonaTheme.reduceMotion
     // The pill counts what the Needs You section of a page would draw, from the requests the screen shows for that page.
     val feed = rememberAgentsFeed(latestPage, { p ->
         agentsFeedNeedsYou(p, shownRequests(everyRequest, group, assistant, p.sessions, p.hiddenSessions)) { key -> model.operationState.value.sessions[key]?.closed == true }
@@ -449,7 +451,7 @@ internal fun AgentsScreen(
             controls.folded, controls.expandedIdle, controls.expandedQuiet, controls.expandedAll, page.preferences.foldedTabs, expandedTasks,
             page.preferences.range, page.preferences.display, PersonaTheme.style),
         restoring = restoring,
-        onProgrammaticScroll = listTapMotion::onProgrammaticScroll)
+        onProgrammaticScroll = listTapMotion::cancelShiftsAndResetBaseline)
     // Rows outside the tree name their computer while the list mixes computers, By To-do's their host while it mixes
     // hosts (iOS `rowMachine`, `mixedHosts`; #4338 A9). By Machine's sections are the computers, so rows omit the name
     // (iOS `rowMachine` skips `.machine`).
@@ -854,9 +856,21 @@ internal fun AgentsScreen(
                         val slot = repoSlots[entry.key]
                         AgentSpaceHeader(stringResource(R.string.agents_child_tasks, entry.count), !entry.expanded,
                             onToggle = {
-                                // Codex subtasks (ChatsView.swift:3289).
-                                listTapMotion.arm(ListTapMotionKind.State)
-                                expandedTasks = if (entry.expanded) expandedTasks - entry.parent.id else expandedTasks + entry.parent.id
+                                // Codex subtasks (ChatsView.swift:3289). Arm one frame ahead of mutating
+                                // `expandedTasks` so `exitFade` attaches `fadeOutSpec` before rows leave
+                                // composition while idle rows keep null specs and zero GraphicsLayers.
+                                val parentId = entry.parent.id
+                                val collapse = entry.expanded
+                                if (reduceMotion) {
+                                    expandedTasks = if (collapse) expandedTasks - parentId else expandedTasks + parentId
+                                } else {
+                                    listTapMotion.arm(ListTapMotionKind.State)
+                                    androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+                                    tapMotionScope.launch {
+                                        androidx.compose.runtime.withFrameNanos { }
+                                        expandedTasks = if (collapse) expandedTasks - parentId else expandedTasks + parentId
+                                    }
+                                }
                             },
                             modifier = if (slot != null) Modifier.repoCard(slot.first, slot.last) else Modifier,
                             depth = slot?.level ?: entry.depth, kind = stringResource(R.string.agents_child_tasks_kind))
