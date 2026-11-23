@@ -14,7 +14,7 @@ With a separate directory, Claude Code's per-directory auto memory, CLAUDE.md an
 | What ChatGPT Health does | What Persona v1 does | Later |
 | --- | --- | --- |
 | A separate Health entry in the sidebar (desktop) / menu (phone), opening an independent space ([1]) | A separate **Health** entry in the web sidebar, `/health`; **Health** in the iOS, Mac and Android assistant sidebar | Android: the rest of the Health home (memory, reports, sources) |
-| Health home: recent data and trends, synced records, suggested questions, past health chats, connected accounts ([2]) | `/health` page: a one-line privacy note, data sources (Apple Health / Health Connect via the phone), suggested questions, past health chats, health memory | Recent trend cards on the home page (using the structured cards from #886) |
+| Health home: recent data and trends, synced records, suggested questions, past health chats, connected accounts ([2]) | Health home: Today with water and protein, Activity rings on iPhone, trends on iPhone and iPad with Apple Health data, data sources, suggested questions, past health chats and health memory | More connected data sources |
 | Health memory is stored separately and does not flow back into regular chats; users can view and delete it ([3]) | The Health space has its own directory and its auto memory belongs only to it; viewable and deletable on the web; the main chat's tools cannot see health chats | Give the Health space only health-related tools |
 | Talking about health in a regular chat suggests moving to Health ([4]) | Not done | Suggest "Continue in Health" when the main chat touches on health |
 | Connected data is not used for training, with extra encryption and isolation ([5]) | All data stays on your own hub and computers; `kb_update` from a health chat is rejected (blocked in code); not sending to other chats relies on chat tools only accepting the same space; push and `phone_notify` notifications carry no health content; handing to an Agent, sending email and Lark each need confirmation on the phone ("outbound") | More data sources: medical records, checkup report uploads, heart rate / HRV from recordings (#1950) |
@@ -243,6 +243,25 @@ A content-free `health_intake` WebSocket event makes open apps reload. The hub w
 iPhone widgets for intake changes at most once per 15 minutes, without changing Live Activity
 content. Clients show these capabilities only when hello includes `health_intake`.
 
+**Today on the Health home.** iPhone, iPad and the web show separate water and protein
+rings with today's amount and goal. Water offers **Drank a Glass** (the configured cup)
+and **Other Amount**; protein offers **Log Grams**. Logging updates the total locally at
+once, then reconciles it with the hub. A successful log offers Undo; a failed write rolls
+back and offers Retry with the same record UUID. A record already undone elsewhere stays
+undone on retry. These totals come from Persona's intake records in the default manager,
+not from Apple Health or other apps. Goals and the day boundary come from the same intake
+response. Open pages reload after a `health_intake` event, a reconnect and a return to the
+foreground, waiting for pending writes to settle.
+
+Tapping either ring opens its detail page: a sheet with a close button on iPhone and iPad,
+or a full page on the web using the existing extension-page route. iPhone also shows
+Activity rings and health trends; iPad shows trends when Apple Health data can be read,
+without Activity rings. The web shows neither Activity rings nor Apple Health trends.
+Without the `health_intake` feature, iOS shows **Update your hub first** in Today and the
+web omits the block without requesting intake data. Demo mode supplies sample intake
+records and both detail pages through the in-app demo hub; page actions return sample
+pages rather than saving detail-page edits.
+
 **Details.** Water and Protein reuse the Subscriptions page's declarative renderer under
 reserved extension id `-health-intake`, page `pages`. Initial state selects `kind:"water"`
 or `kind:"protein"`. The pages show today's entries with Delete (protein includes what was
@@ -277,6 +296,28 @@ Request and response fields, reserved page state, category action identifiers an
 are in [protocol.md](../protocol/protocol.md) ("Health intake"). No language model is involved
 in the pages, settings or scheduling, and none of these routes grants an extension access to
 Health chats or memory.
+
+## Activity rings
+
+On iPhone, the Health home shows an **Activity** section between Today and health trends
+when HealthKit is available. It reads today's local Apple Health activity summary,
+including Move, Exercise and Stand values and goals. Apple's Activity ring view draws the
+rings on black with their standard colors. When both Exercise and Stand goals are absent, only Move is
+shown; a paused summary is identified. The tile does not open another app.
+
+The foreground **Allow Reading** button requests only the activity-summary read type when
+it has not yet been requested. Loading the page checks whether a request is needed but
+never opens the authorization sheet itself. The type is also part of the existing health
+tool's read-permission set. Background readers do not request permission. When HealthKit
+is unavailable the section is hidden. An empty result says there may be no data or reading
+may not be allowed, and points to iOS Settings > Health > Data Access & Devices > Persona;
+a query error says today's summary could not be read. An empty result is never treated as
+proof that access was denied.
+
+Activity rings are absent on iPad, Vision Pro and the web. Demo mode supplies intake data,
+not a simulated activity summary: the iPhone tile follows the device's HealthKit availability
+and authorization state. DEBUG screenshot examples can supply Allow Reading, unreadable,
+Move-only and three-ring states without reading real health data.
 
 ## Dietary intake and resting energy
 
@@ -388,13 +429,12 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
 ## Health trends on iOS (#3272)
 
 - `apple/Persona/Views/Health/HealthTrendsSection.swift`: **Health Trends**, steps (`bar`), sleep and weight (`line`; `stat` when there is only one day) over the last 7 / 30 days, drawn as `persona-card` with the same renderer as cards in health answers (`AssistantViewCard`).
-- Data is read from Apple Health directly on the phone (`HealthTool.daily`, the same queries as `phone_health_summary`), not via the hub. If health permission has not been requested, it shows **Allow Access**; if it cannot read, it explains where to turn it on.
-- It is just a component; the Health space entry point and past chats are in #2901, whose Health home page includes this section directly.
+- Data is read directly from Apple Health on the iPhone or iPad (`HealthTool.daily`, the same queries as `phone_health_summary`), not via the hub. The reusable section can offer **Allow Access** before permission has been requested, or explain how to allow reading when it has no data; the home hides these empty states as described below.
+- On the Health home, trends follow Today and, on iPhone, Activity rings. iPhone and iPad show the section only when at least one metric has data; unavailable, unreadable or not-yet-authorized data leaves it hidden. Home reads do not request access. Vision Pro and the web do not include this section.
 - Screenshots: `-showHealthTrends sample` (the simulator has no health data, so sample data is used), `empty`, `ask`, `YES` (reads the device).
 
 ## Later
 
-- A Health tab on the phone (#2901), with **Health Trends** above on its home page.
 - Suggest "Continue in Health" when the main chat touches on health.
 - diet-advice push notifications go into the Health space.
 - The main chat reading the health directory via Bash or via Codex: block it fully with a sandbox or OS-level isolation (after #3282).
