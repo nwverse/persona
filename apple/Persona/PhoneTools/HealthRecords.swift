@@ -423,10 +423,11 @@ enum HealthRecords {
 
     @concurrent nonisolated static func activitySummaries(start: Date, end: Date, store: HKHealthStore) async throws -> [JSONValue] {
         let calendar = Calendar.current
-        var from = calendar.dateComponents([.era, .year, .month, .day], from: start)
-        var to = calendar.dateComponents([.era, .year, .month, .day], from: end)
-        from.calendar = calendar
-        to.calendar = calendar
+        var fromDay = calendar.dateComponents([.era, .year, .month, .day], from: start)
+        var toDay = calendar.dateComponents([.era, .year, .month, .day], from: end)
+        fromDay.calendar = calendar
+        toDay.calendar = calendar
+        let from = fromDay, to = toDay
         return try await HealthQueryExecution<[JSONValue]>(store: store).result { gate in
             HKActivitySummaryQuery(predicate: HKQuery.predicate(forActivitySummariesBetweenStart: from, end: to)) { @Sendable _, summaries, error in
                 if let error {
