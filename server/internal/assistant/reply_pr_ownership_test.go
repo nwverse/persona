@@ -100,10 +100,13 @@ func TestTaskDoneDeliveryDoesNotUseMentionedPR(t *testing.T) {
 			forge.mu.Lock()
 			checked := slices.Clone(forge.checked)
 			forge.mu.Unlock()
-			if state != tc.wantState || c.WouldClose != (tc.wantState == deliveryLive) ||
-				!slices.Equal(checked, tc.wantChecks) {
-				t.Fatalf("delivery=%+v, closes=%v, checked PRs=%v; want state=%q, checked PRs=%v",
-					c.Delivery, c.WouldClose, checked, tc.wantState, tc.wantChecks)
+			wantVerdict := verdictUndelivered
+			if tc.ownDeployed {
+				wantVerdict = verdictDone
+			}
+			if state != tc.wantState || c.Verdict != wantVerdict || c.WouldClose || !slices.Equal(checked, tc.wantChecks) {
+				t.Fatalf("delivery=%+v, verdict=%q, closes=%v, checked PRs=%v; want state=%q, verdict=%q, no close, checked PRs=%v",
+					c.Delivery, c.Verdict, c.WouldClose, checked, tc.wantState, wantVerdict, tc.wantChecks)
 			}
 		})
 	}
@@ -111,15 +114,14 @@ func TestTaskDoneDeliveryDoesNotUseMentionedPR(t *testing.T) {
 
 func TestTaskDoneDeliveryRequiresStateAfterExcludingMentionedPR(t *testing.T) {
 	for _, tc := range []struct {
-		name, text, judgment, state string
-		closes                      bool
+		name, text, judgment, state, verdict string
 	}{
-		{"omitted", replyOtherPR + " is merged.", `{"verdict":"done"}`, "", false},
-		{"invalid", replyOtherPR + " is merged.", `{"verdict":"done","delivery":"unknown"}`, "", false},
+		{"omitted", replyOtherPR + " is merged.", `{"verdict":"done"}`, "", verdictUndelivered},
+		{"invalid", replyOtherPR + " is merged.", `{"verdict":"done","delivery":"unknown"}`, "", verdictUndelivered},
 		{"suppressed delivery mark", replyOtherPR + " is deployed.\n<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\n" +
-			"artifact: pr " + replyOtherPR + "\ndelivery: live\n</closeout>", `{"verdict":"done"}`, "", false},
-		{"explicit none", "The report cites " + replyOtherPR, `{"verdict":"done","delivery":"none"}`, deliveryNone, true},
-		{"ordinary research", "The investigation is complete.", `{"verdict":"done"}`, deliveryNone, true},
+			"artifact: pr " + replyOtherPR + "\ndelivery: live\n</closeout>", `{"verdict":"done"}`, "", verdictUndelivered},
+		{"explicit none", "The report cites " + replyOtherPR, `{"verdict":"done","delivery":"none"}`, deliveryNone, verdictDone},
+		{"ordinary research", "The investigation is complete.", `{"verdict":"done"}`, deliveryNone, verdictDone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := newTaskService(t)
@@ -132,8 +134,8 @@ func TestTaskDoneDeliveryRequiresStateAfterExcludingMentionedPR(t *testing.T) {
 			if check.Delivery != nil {
 				state = check.Delivery.State
 			}
-			if err != nil || check.WouldClose != tc.closes || state != tc.state {
-				t.Fatalf("check=%+v, state=%q, err=%v; want closes=%v, state=%q", check, state, err, tc.closes, tc.state)
+			if err != nil || check.Verdict != tc.verdict || check.WouldClose || state != tc.state {
+				t.Fatalf("check=%+v, state=%q, err=%v; want verdict=%q, no close, state=%q", check, state, err, tc.verdict, tc.state)
 			}
 		})
 	}
