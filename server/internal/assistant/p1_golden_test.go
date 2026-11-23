@@ -86,7 +86,7 @@ func TestContextNamesTheDirections(t *testing.T) {
 		t.Fatal(err)
 	}
 	main := e.s.Context(context.Background(), ContextParams{SessionID: "conv_main"}).Text
-	for _, want := range []string{"- conv_lead_a：基建", "- conv_lead_b：conv_lead_b", "supervisor 不会把督办交给主管", "所有 task_plan 新任务统一由主对话督办"} {
+	for _, want := range []string{"- conv_lead_a：基建", "- conv_lead_b：conv_lead_b", "主管派的任务由该主管督办", "只接 needs_user 升级"} {
 		if !strings.Contains(main, want) {
 			t.Fatalf("the main context lacks %q:\n%s", want, main)
 		}

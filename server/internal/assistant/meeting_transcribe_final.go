@@ -248,7 +248,8 @@ func (s *Service) finalPass(ctx context.Context, e *kb.Engine, id string, st *fi
 	billed := st.billed
 	s.hubTr.mu.Unlock()
 	var je *jobError
-	unreachable := errors.As(err, &je) && je.code == extwire.TEUpstreamUnavailable && !billed
+	// A busy service (#13446) that billed nothing was never reached either, as when busy was upstream_unavailable.
+	unreachable := errors.As(err, &je) && (je.code == extwire.TEUpstreamUnavailable || je.code == extwire.TEUpstreamBusy) && !billed
 	if unreachable {
 		u, uerr := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 			t.FinalUnreachable++
