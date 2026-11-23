@@ -262,7 +262,7 @@ esac
 		dir := t.TempDir()
 		calls := filepath.Join(dir, "calls")
 		screenFile := filepath.Join(dir, "screen")
-		if err := os.WriteFile(screenFile, []byte("\u203a Ask Codex to do anything\n  ? for shortcuts\n"), 0o600); err != nil {
+		if err := os.WriteFile(screenFile, []byte("\u203a Ask Codex to do anything\n\n  gpt-6 low \u00b7 /work/example\n  ? for shortcuts\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		bin := filepath.Join(dir, "tmux")

@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -714,37 +716,105 @@ func TestCodexTakeoverColdResumeSurvivesConcurrentRefresh(t *testing.T) {
 	path := writeCodexTestRollout(t, home, remoteRaw, cwd, "codex-tui", "cli", time.Now().Add(-time.Minute))
 	id := n.registerCodex(home, remoteRaw, path)
 
-	f, remote := connectRemoteFixture(t, n, home, "shared-race", remoteOther)
 	readEntered := make(chan struct{})
 	releaseRead := make(chan struct{})
-	blockNextRead := true
-	f.mu.Lock()
-	f.response = func(method string, p map[string]any) (any, bool) {
-		tid, _ := p["threadId"].(string)
-		switch method {
-		case "thread/read":
-			if tid == remoteOther && blockNextRead {
-				blockNextRead = false
-				close(readEntered)
-				<-releaseRead
-			}
-		case "thread/resume":
-			return map[string]any{
-				"thread": map[string]any{
-					"id":     tid,
-					"name":   "Cold Resumed Thread",
-					"cwd":    cwd,
-					"path":   path,
-					"status": map[string]any{"type": "idle"},
-				},
-			}, true
+	var mu sync.Mutex
+	blockNextRead := false
+	loaded := []string{remoteOther}
+	var writeMu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
 		}
-		return nil, false
-	}
-	f.mu.Unlock()
+		defer c.CloseNow()
+		send := func(v any) {
+			b, _ := json.Marshal(v)
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			wctx, cancel := context.WithTimeout(r.Context(), time.Second)
+			defer cancel()
+			_ = c.Write(wctx, websocket.MessageText, b)
+		}
+		for {
+			_, b, err := c.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var m codexMessage
+			if json.Unmarshal(b, &m) != nil || len(m.ID) == 0 {
+				continue
+			}
+			go func(m codexMessage) {
+				var p map[string]any
+				_ = json.Unmarshal(m.Params, &p)
+				tid, _ := p["threadId"].(string)
+				switch m.Method {
+				case "initialize":
+					send(map[string]any{"id": m.ID, "result": map[string]any{"codexHome": home}})
+				case "thread/loaded/list":
+					mu.Lock()
+					ids := slices.Clone(loaded)
+					mu.Unlock()
+					send(map[string]any{"id": m.ID, "result": map[string]any{"data": ids}})
+				case "thread/read":
+					mu.Lock()
+					shouldBlock := tid == remoteOther && blockNextRead
+					if shouldBlock {
+						blockNextRead = false
+					}
+					mu.Unlock()
+					if shouldBlock {
+						close(readEntered)
+						<-releaseRead
+					}
+					send(map[string]any{"id": m.ID, "result": map[string]any{
+						"thread": map[string]any{"id": tid, "name": "Other", "cwd": cwd, "status": map[string]any{"type": "idle"}},
+					}})
+				case "thread/resume":
+					mu.Lock()
+					if !slices.Contains(loaded, tid) {
+						loaded = append(loaded, tid)
+					}
+					mu.Unlock()
+					send(map[string]any{"id": m.ID, "result": map[string]any{
+						"thread": map[string]any{"id": tid, "name": "Cold Resumed Thread", "cwd": cwd, "path": path, "status": map[string]any{"type": "idle"}},
+					}})
+				default:
+					send(map[string]any{"id": m.ID, "result": map[string]any{}})
+				}
+			}(m)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	rctx, rcancel := context.WithCancel(context.Background())
+	t.Cleanup(rcancel)
+	spec := proto.CodexServer{ID: "shared-race", Home: canonicalCodexHome(home, n.home), Endpoint: "ws" + strings.TrimPrefix(srv.URL, "http")}
+	n.ensureCodexRemote(rctx, spec)
+	var remote *codexRemote
+	waitFor(t, "concurrent remote connected", func() bool {
+		n.codices.mu.Lock()
+		c := n.codices.remotes[spec.ID]
+		n.codices.mu.Unlock()
+		if c == nil {
+			return false
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !c.ready {
+			return false
+		}
+		remote = c
+		return true
+	})
+
 	n.takeovers.writers = func(codexSource) ([]codexWriter, error) { return nil, nil }
 	n.takeovers.lockHeld = func(codexSource) bool { return false }
 
+	mu.Lock()
+	blockNextRead = true
+	mu.Unlock()
 	refreshDone := make(chan error, 1)
 	go func() {
 		refreshDone <- remote.refresh()
