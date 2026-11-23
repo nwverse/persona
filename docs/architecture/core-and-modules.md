@@ -227,6 +227,9 @@ an extension's GitHub connector can still take the id (`TestManagerWithoutGitHub
 (`server/internal/prompts/mcp/github`, `prompts/inbox/kinds/github.md`) stay in the core's trees as mail's do.
 `scripts/ci/server.sh build` runs "Builds without the connector modules" with both tags, and
 `scripts/ci/core-only-smoke.py` checks that a core-only hub lists no GitHub connector.
+Its `module.json` declares `feature` = `module.github`, so a hub whose manager loaded the module announces it. The
+run-time `modules` switch drops the flag, but the extension manager still registers the connector until it reads the
+switch too (only a build without the module leaves the connector out today).
 
 ### Guards
 
