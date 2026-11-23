@@ -66,14 +66,16 @@ type a2aCaller struct {
 
 type a2aEvent struct {
 	// Seq is the position in the task's append-only conversation.
-	Seq       int       `json:"seq"`
-	ID        string    `json:"message_id"`
-	Kind      string    `json:"kind"`
-	Text      string    `json:"text,omitempty"`
-	State     string    `json:"state,omitempty"`
-	At        time.Time `json:"at"`
-	Delivery  string    `json:"delivery,omitempty"`
-	Attempted time.Time `json:"attempted,omitzero"`
+	Seq            int       `json:"seq"`
+	ID             string    `json:"message_id"`
+	Kind           string    `json:"kind"`
+	Text           string    `json:"text,omitempty"`
+	State          string    `json:"state,omitempty"`
+	At             time.Time `json:"at"`
+	Delivery       string    `json:"delivery,omitempty"`
+	Attempted      time.Time `json:"attempted,omitzero"`
+	WaitingSince   time.Time `json:"waiting_since,omitzero"`
+	DeliveryReason string    `json:"delivery_reason,omitempty"`
 }
 
 type a2aBody struct {
