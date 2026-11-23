@@ -23,7 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/node"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
-	"github.com/nwverse/persona/server/internal/office"
+	"github.com/nwverse/persona/server/internal/modules/office/office"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/procs"
 	"github.com/nwverse/persona/server/internal/scriptcli"
