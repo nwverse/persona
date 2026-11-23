@@ -39,7 +39,7 @@ import {
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
 import { workflowCounts } from "../../lib/workflows";
-import { dockAgents, type DockAgent, isRemovable, mostUrgentAgent, openAsk, orphanedLine, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { acceptedAtRest, dockAgents, type DockAgent, isRemovable, mostUrgentAgent, openAsk, orphanedLine, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { openAgent, openTask } from "../../lib/handoff";
 import { navigate } from "../../lib/router";
@@ -68,7 +68,7 @@ const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)
 underCard.line = ruleLine;
 import { SentLine } from "./Sent";
 import { feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
-import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
+import { acceptanceStands, latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager, useShownManager } from "../../lib/manager-choice";
 import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
@@ -812,7 +812,7 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const feed = useFeed((s) => s.feeds[conversation] ?? EMPTY_FEED);
   const planned = card.plan_id !== undefined && card.index !== undefined ? plans[card.plan_id]?.tasks[card.index] : undefined;
   const title = todo?.title ?? planned?.title ?? t("assistant-tasks.task_fallback");
-  const accepted = !!todo?.done_at && todo.supervision?.state === "accepted";
+  const accepted = !!todo && ((!!todo.done_at && todo.supervision?.state === "accepted") || acceptedAtRest(todo, task?.status ?? "not_started"));
   let state = task?.status ?? (card.state === "followup" ? "follow_up" : card.state);
   if (todo && accepted) state = "accepted";
   else if (todo?.done_at && todo.supervision?.state === "cancelled") state = "cancelled";
@@ -826,8 +826,8 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const pr = todo?.pr_url ?? (receipt && field(receipt, "pr"));
   const prNumber = pr ? /\/(\d+)\/?$/.exec(pr)?.[1] : undefined;
   const toStart = !todo && !!card.plan_id && plans[card.plan_id]?.state === "open";
-  // Starting only while an Agent is being started for it; a to-do nobody dispatched says Not started (#7552)
-  const starting = !todo || startInFlight(todo, plans);
+  // Starting only while an Agent is being started for it; an accepted concern still waits for its report, not a start.
+  const starting = !todo || (!(todo.kind === "concern" && acceptanceStands(todo)) && startInFlight(todo, plans));
   const liveWork = !finished && state !== "cancelled" ? activity : undefined;
   const liveLine = backgroundWorkLine(liveWork);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did

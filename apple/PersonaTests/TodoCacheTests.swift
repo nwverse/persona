@@ -891,9 +891,9 @@ struct TodoCacheTests {
     @Test func aRowFiledByTheRulesMovesWithTheClock() async throws {
         let hub = FakeHub()
         var now = Date()
-        // Closed a minute less than Just finished lasts, by the store's clock.
-        let closed = ISO8601DateFormatter().string(from: now.addingTimeInterval(-TodoTriageLogic.justDone + 60))
-        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list([TodoViewJSON.row("old", extra: #""done_at":"\#(closed)""#)]))
+        // A concern closed a minute less than Just finished lasts, by the store's clock.
+        let closed = ISO8601DateFormatter().string(from: now.addingTimeInterval(-TodoTriageLogic.justDoneAfter + 60))
+        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list([TodoViewJSON.row("old", extra: #""done_at":"\#(closed)","kind":"concern""#)]))
         hub.on("GET", "/api/v1/todos/places", json: #"{"places":[],"counts":{}}"#)
         var v1 = TodoStore.V1.on()
         v1.now = { now }

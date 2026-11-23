@@ -144,6 +144,7 @@ type turnSignal struct {
 	Key     string     `json:"key"`
 	Machine string     `json:"machine,omitempty"`
 	Detail  string     `json:"detail,omitempty"`
+	Handoff bool       `json:"handoff,omitempty"`
 	Told    *time.Time `json:"told,omitempty"`
 }
 
@@ -164,7 +165,7 @@ func (s *Service) replayTurnSignal(todo string, expected taskTurn) {
 	}
 	// Keep the ledger lock until queued, so an obsolete replay cannot replace a newer pending signal.
 	// The digest releases its mutex before consulting or marking the turn ledger.
-	s.queueSignal(superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Detail: sig.Detail})
+	s.queueSignal(superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Detail: sig.Detail, Handoff: sig.Handoff})
 }
 
 // settled: nothing is left to do for the turn: it is judged (or has nothing to judge) and what it raised was told.
@@ -323,8 +324,18 @@ func turnRetryIn(n int) time.Duration {
 }
 
 // turnsLocked reads the ledger once; b.mu is held. False when the database could not be read: nothing is taken from
-// the ledger then, and completion goes on as it does without one.
+// the ledger then, and completion goes on as it does without one. A fresh ledger records its starting time immediately.
 func (s *Service) turnsLocked(ctx context.Context) bool {
+	return s.turnsLoadLocked(ctx, true)
+}
+
+// turnsReadLocked loads the ledger for a read-only decision without writing an empty fresh ledger. A later matching
+// state change still saves through saveTurnsLocked; no match means no unnecessary write.
+func (s *Service) turnsReadLocked(ctx context.Context) bool {
+	return s.turnsLoadLocked(ctx, false)
+}
+
+func (s *Service) turnsLoadLocked(ctx context.Context, persistFresh bool) bool {
 	b := &s.tasks.turns
 	if b.loaded {
 		return true
@@ -347,7 +358,7 @@ func (s *Service) turnsLocked(ctx context.Context) bool {
 	}
 	b.doc, b.loaded = doc, true
 	s.restoreQuietTurns(doc.Turns)
-	if fresh && st != nil { // since when it is kept must outlive this manager
+	if fresh && persistFresh && st != nil { // since when it is kept must outlive this manager
 		if err := st.PutSetting(ctx, taskTurnsKey, b.doc); err != nil {
 			s.logf("task turns: %v", err)
 		}
@@ -591,8 +602,8 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 		}
 		return true
 	}
-	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key {
-		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail}
+	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key || sig.Handoff != g.Handoff {
+		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail, Handoff: g.Handoff}
 		b.doc.Turns[g.Todo] = e
 		s.saveTurnsLocked(ctx)
 	}
@@ -601,8 +612,67 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 
 // turnsTold keeps on the ledger that the turn signals in list need no telling any more: a supervision message carried
 // them (sent, or queued where a restart keeps it), said the same within the deduplication window, or they no longer
-// hold. A manager started again does not tell them a second time; until then it tells them from the ledger.
+// hold. A manager started again does not tell them a second time; until then it tells them from the ledger. An ordinary
+// receipt does not load an untouched ledger; recovery loads it through its ordinary read path.
 func (s *Service) turnsTold(ctx context.Context, list []superviseSignal) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.loaded {
+		s.turnsToldLocked(ctx, list)
+	}
+}
+
+// turnsToldDurably is the strict form used before a confirmed start or a resumed stretch discards its durable signals.
+// False leaves every form available for retry: neither an unreadable ledger nor a failed told-mark write may make the
+// only remaining copy disappear.
+func (s *Service) turnsToldDurably(ctx context.Context, list []superviseSignal) bool {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.turnsReadLocked(ctx) {
+		return false
+	}
+	return s.turnsToldLocked(ctx, list)
+}
+
+// turnsToldLocked writes matching receipts and rolls their in-memory marks back when persistence fails; b.mu is held.
+func (s *Service) turnsToldLocked(ctx context.Context, list []superviseSignal) bool {
+	b := &s.tasks.turns
+	changed := false
+	previous := map[string]*turnSignal{}
+	for _, g := range list {
+		if !turnSignalKind(g) {
+			continue
+		}
+		e, ok := b.doc.Turns[g.Todo]
+		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil {
+			old := *sig
+			previous[g.Todo] = &old
+			next, now := *sig, time.Now().UTC()
+			next.Told = &now
+			e.Signal = &next
+			b.doc.Turns[g.Todo] = e
+			changed = true
+		}
+	}
+	if !changed {
+		return true
+	}
+	if s.saveTurnsLocked(ctx) == nil {
+		return true
+	}
+	for id, sig := range previous {
+		e := b.doc.Turns[id]
+		e.Signal = sig // the write did not land: a later confirmation or watch must retry the told-mark
+		b.doc.Turns[id] = e
+	}
+	return false
+}
+
+// turnsUntold releases the ledger reservation for a signal whose durable queued copy was removed before delivery.
+// Matching kind and key prevents an old queued copy from clearing a newer turn's receipt.
+func (s *Service) turnsUntold(ctx context.Context, list []superviseSignal) {
 	b := &s.tasks.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -615,9 +685,9 @@ func (s *Service) turnsTold(ctx context.Context, list []superviseSignal) {
 			continue
 		}
 		e, ok := b.doc.Turns[g.Todo]
-		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil {
-			next, now := *sig, time.Now().UTC()
-			next.Told = &now
+		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told != nil {
+			next := *sig
+			next.Told = nil
 			e.Signal = &next
 			b.doc.Turns[g.Todo] = e
 			changed = true
@@ -777,8 +847,9 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 		}
 		candidates = append(candidates, last)
 	}
+	e, known := b.doc.Turns[t.ID]
 	var tell *taskTurn
-	if e, known := b.doc.Turns[t.ID]; known && e.Signal != nil && e.Signal.Told == nil {
+	if known && e.Signal != nil && e.Signal.Told == nil {
 		for _, row := range candidates {
 			if e.Machine == row.MachineID && e.Session == row.SessionID && e.Rev == row.Rev {
 				tell = &e
@@ -786,13 +857,37 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 			}
 		}
 	}
+	confirmed := known && e.Signal != nil && e.Signal.Told != nil
+	for _, c := range agents {
+		confirmed = confirmed || c.Status != proto.StatusOffline && c.CreationID() == t.ID
+	}
+	startUnknown := known && e.Signal != nil && e.Signal.Kind == sigUnjudged && e.Signal.Key == "start-unknown@"+t.ID && confirmed
 	busy := b.recovering[t.ID] || len(b.recovering) >= turnRecoverMost
 	if !busy {
 		b.recovering[t.ID] = true
 	}
 	b.mu.Unlock()
-	if tell != nil { // the ledger's untold notice does not need a transcript-read slot
-		s.replayTurnSignal(t.ID, *tell)
+	if startUnknown {
+		// Only the exact creation id or an already persisted told receipt confirms the start. Retry retraction even when
+		// that receipt landed already: a crash before queue/outbox cleanup must not restore the confirmed signal.
+		if !s.retractStartUnknown(ctx, t.ID) {
+			if !busy {
+				b.mu.Lock()
+				delete(b.recovering, t.ID) // this look never started; leave the next sweep free to retry the retraction
+				b.mu.Unlock()
+			}
+			return
+		}
+		tell = nil
+	}
+	if tell != nil {
+		if t.Supervision.state(t) == reviewParked {
+			// Parking supersedes the old stop. Acknowledge its exact turn signal so this and every later sweep leave it
+			// untold no longer, rather than reviving the idle/review wait that the parking decision replaced (#7671).
+			s.turnsTold(ctx, []superviseSignal{{Todo: t.ID, Kind: tell.Signal.Kind, Key: tell.Signal.Key, Machine: tell.Signal.Machine}})
+		} else { // the ledger's untold notice does not need a transcript-read slot
+			s.replayTurnSignal(t.ID, *tell)
+		}
 	}
 	if busy {
 		return

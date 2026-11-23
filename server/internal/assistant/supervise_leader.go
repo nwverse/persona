@@ -16,13 +16,12 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Leader conversations (#3133, docs/assistant/unified-entry.md "Leader conversations"). By default only the main
-// conversation supervises (supervise.go). The user can make side conversations leaders (assistant.leaders, off while
-// the list is empty), one per repository or long-running project: a task a leader hands out with task_plan has the
-// leader as its supervisor, so its supervision messages go to the leader, which reviews it with task_review. What still
-// needs the main conversation goes there: a leader's needs_user (escalated, with the user's decision card as ever) and
-// anything about a task waiting for the user. A failed start goes to its current leader too, which has the same start
-// remedies as the main conversation for its own task; a successful retry's started signal still goes to the main one.
+// Leader conversations (#3133, docs/assistant/unified-entry.md "Leader conversations"). Since #5732 the main
+// conversation supervises every new assistant-dispatched task. The two specialized topologies remain: a manually
+// started Agent the owner explicitly put under a leader keeps that leader for ordinary signals and failed starts, and
+// a task leader's workers keep their leader Agent until it closes. Needs_user and anything about a task waiting for
+// the user still go to main. Every other new assistant-dispatched failed start goes to main; a successful retry's
+// started signal always goes there too.
 //
 // Depth is bounded: an agent handed out as a task's agent (a worker) hands out no Persona tasks itself (task_plan,
 // agent_start); it uses its own in-session subagents. Leaders and the main conversation are not limited.
@@ -36,18 +35,16 @@ func (s *Service) isLeader(ctx context.Context, id string) bool {
 	return id != cfg.Main && slices.Contains(cfg.Leaders, id)
 }
 
-// supervises: conversation id supervises the tasks it hands out with task_plan: the main conversation or a leader.
+// supervises: conversation id may hand out tasks rather than being a worker: the main conversation or a leader.
+// The main conversation supervises those new tasks even here; the leader exception is for explicit manual Agents.
 func (s *Service) supervises(ctx context.Context, id string) bool {
 	return s.isMain(ctx, id) || s.isLeader(ctx, id)
 }
 
-// defaultPlanSupervisor is who supervises a task conversation hands out with task_plan when conversation does not supervise
-// (supervises): that conversation itself, so a side conversation follows up and reviews the work it dispatched. None for
-// a task leader's worker (parent set: its leader's agent supervises it), a reporting conversation's task (its notices
-// go back to it, #4101) or a plan with no conversation. A planning conversation that is not a live assistant
-// conversation cannot be told anything, so its task stays the main conversation's (#4669), and so does what the
-// background supervisor hands out: nothing is written on a task for it (supervise_background.go). digestTo sends the
-// main conversation's own to the background supervisor while there is one.
+// defaultPlanSupervisor is the main conversation for every ordinary task a conversation hands out (#5732). A task
+// leader's worker keeps its leader Agent, an active reporting conversation keeps its existing unsupervised notice route,
+// and a plan with no conversation has no supervisor to assign. The planning conversation remains the todo's origin and
+// hears the outcome; supervision and acceptance for ordinary work stay in main.
 func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, parent string) (string, bool) {
 	if parent != "" || conversation == "" {
 		return "", false
@@ -55,31 +52,27 @@ func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, paren
 	if _, reports := s.reporterOf(ctx, conversation); reports {
 		return "", false
 	}
-	if s.supervises(ctx, conversation) {
-		return "", false // the main conversation and leaders supervise their own (supervises)
-	}
-	if c, ok := s.session(ctx, s.settings(ctx).MachineID, conversation); ok && c.Assistant && !s.isBackground(ctx, conversation) {
-		return conversation, true
-	}
 	main := s.settings(ctx).Main
-	return main, main != "" && main != conversation
+	return main, main != ""
 }
 
-// planTaskSupervisor resolves the reviewer before a plan starts. A runtime-backed conversation can dispatch work,
-// but the main conversation's supervision route must take over when the intended reviewer cannot receive policy.
+// planTaskSupervisor resolves the reviewer before a plan starts. Ordinary new tasks stay with main (#5732). A runtime
+// side chat that explicitly supports supervision_policy can supervise its own plan; an incompatible one uses main's
+// durable ledger and the compatible delivery route rather than receiving a policy channel it would refuse.
 func (s *Service) planTaskSupervisor(ctx context.Context, conversation string, task PlanTask) (string, error) {
 	if task.Parent != "" {
 		return conversation, nil
 	}
-	supervisor := conversation
-	if s.supervises(ctx, conversation) {
-		if s.isLeader(ctx, task.Supervisor) {
-			supervisor = task.Supervisor
-		}
-	} else {
-		supervisor, _ = s.defaultPlanSupervisor(ctx, conversation, "")
-	}
 	cfg := s.settings(ctx)
+	supervisor, _ := s.defaultPlanSupervisor(ctx, conversation, "")
+	if conversation != cfg.Main {
+		if c, ok := s.session(ctx, cfg.MachineID, conversation); ok && c.Assistant && runtimeSessionSupportsSupervisionPolicy(c) && !s.isBackground(ctx, conversation) {
+			supervisor = conversation
+		}
+	}
+	if supervisor == "" {
+		return "", nil
+	}
 	machine := cfg.MachineID
 	if supervisor == cfg.Main {
 		machine = cfg.mainRouteMachine()
@@ -87,33 +80,225 @@ func (s *Service) planTaskSupervisor(ctx context.Context, conversation string, t
 	if !s.runtimeWithoutSupervisionPolicy(ctx, machine, supervisor) {
 		return supervisor, nil
 	}
-	if cfg.Main == "" {
-		return "", planInvalid{i18n.Err("assistant-conversations.supervision_reviewer_required")}
-	}
-	if supervisor != cfg.Main && !s.runtimeWithoutSupervisionPolicy(ctx, cfg.mainRouteMachine(), cfg.Main) {
+	if !s.runtimeWithoutSupervisionPolicy(ctx, cfg.mainRouteMachine(), cfg.Main) {
 		return cfg.Main, nil
 	}
-	if background := s.ownSupervisor(cfg); background != cfg.Main && !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, background) {
+	if background := s.runtimeSupervisorFallback(ctx, cfg); background != cfg.Main {
 		return cfg.Main, nil
 	}
 	return "", planInvalid{i18n.Err("assistant-conversations.supervision_reviewer_required")}
 }
 
-// digestTo is the conversation signal g goes to, with cfg the settings in effect: the one it names (To), else its task's
-// supervisor when that is a leader or another side conversation, unless the main conversation handles it (its needs_user,
-// a task waiting for the user, or a failed start with no current leader); else, for a task whose ledger names the main
-// conversation, the background supervisor, or the main conversation while there is none (ownSupervisor,
-// supervise_background.go). A successful retry remains one of the main conversation's started signals.
-func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
+// legacyLeaderPlanSupervision reports whether t's saved pre-#5732 plan explicitly assigned its current leader.
+// That topology is not the manual-Agent exception and rehomes to main. An unavailable or non-matching plan proves
+// nothing, so an explicit leader assignment is left alone rather than guessed away.
+func (s *Service) legacyLeaderPlanSupervision(ctx context.Context, t Todo) bool {
+	if t.PlanID == "" || t.Supervision == nil || !s.isLeader(ctx, t.Supervision.Supervisor) {
+		return false
+	}
+	p, err := s.loadPlan(ctx, t.PlanID)
+	if err != nil {
+		return false
+	}
+	for _, task := range p.Tasks {
+		if task.TodoID == t.ID && (task.Supervisor == t.Supervision.Supervisor || p.Conversation == t.Supervision.Supervisor) {
+			return true
+		}
+	}
+	return false
+}
+
+// rehomeSupervisedTodos brings open legacy side-supervised tasks under main without rewriting their review state or
+// criteria. Explicit leader assignments and task-leader workers are the two specialized topologies to keep (#5732).
+// A legacy background ledger also stays: that conversation may still accept the old task it already supervised.
+func (s *Service) rehomeSupervisedTodos(ctx context.Context) {
+	main := s.settings(ctx).Main
+	if main == "" {
+		return
+	}
+	todos := s.todosOf(ctx, "*")
+	web := s.webBase(ctx)
+	// A crash may have persisted Supervisor=main without reaching the queue reconciliation below. Recover those
+	// orphaned queued signals first; the candidate loop alone would now skip the task as already rehomed.
+	s.rehomeMainQueuedSignals(ctx, main, todos, web)
+	rehomed := map[string]map[string]bool{} // old conversation → the tasks taken from its queued supervision
+	for _, t := range todos {
+		if t.DoneAt != nil || t.Supervision == nil {
+			continue
+		}
+		sup := t.Supervision.Supervisor
+		_, _, worker := parseLeaderRef(sup)
+		manualLeader := s.isLeader(ctx, sup) && !s.legacyLeaderPlanSupervision(ctx, t)
+		capableRuntime := sup != "" && t.Origin == sup && s.runtimeWithSupervisionPolicy(ctx, s.settings(ctx).MachineID, sup)
+		if sup == main || worker || manualLeader || capableRuntime || s.isBackground(ctx, sup) {
+			continue
+		}
+		if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+			if v.Supervisor == main {
+				return false
+			}
+			v.Supervisor = main
+			return true
+		}); err != nil {
+			s.logf("task %s: rehome supervision: %v", t.ID, err)
+			continue
+		}
+		if rehomed[sup] == nil {
+			rehomed[sup] = map[string]bool{}
+		}
+		rehomed[sup][t.ID] = true
+		if t.Origin != main {
+			s.taskCard(ctx, main, t.ID, "")
+		}
+	}
+	if len(rehomed) > 0 {
+		for sup, ids := range rehomed {
+			s.rehomeQueuedSupervision(ctx, sup, ids, todos, web)
+		}
+	}
+}
+
+// rehomeMainQueuedSignals recovers queue entries left behind when a previous process stopped after the supervisor write.
+// Structured signals name their tasks directly; a pre-structured message uses the same text-id fallback as normal rehome.
+func (s *Service) rehomeMainQueuedSignals(ctx context.Context, main string, todos []Todo, web string) {
+	mainTasks := map[string]bool{}
+	for _, t := range todos {
+		if t.DoneAt == nil && t.Supervision != nil && t.Supervision.Supervisor == main {
+			mainTasks[t.ID] = true
+		}
+	}
+	if len(mainTasks) == 0 {
+		return
+	}
+	r := &s.relays
+	r.mu.Lock()
+	if !s.relayLocked(ctx) {
+		r.mu.Unlock()
+		return
+	}
+	byConversation := map[string]map[string]bool{}
+	for conversation, queue := range r.st.Queue {
+		if conversation == main || s.isBackground(ctx, conversation) {
+			// An entry explicitly queued for the configured legacy background is intentional compatibility delivery,
+			// not an orphaned side signal left by the supervisor write.
+			continue
+		}
+		for _, msg := range queue {
+			if msg.Tool != superviseTool {
+				continue
+			}
+			if signals, structured := decodeDigestSignals(msg.Signals); structured {
+				for _, g := range signals {
+					if mainTasks[g.Todo] {
+						if byConversation[conversation] == nil {
+							byConversation[conversation] = map[string]bool{}
+						}
+						byConversation[conversation][g.Todo] = true
+					}
+				}
+				continue
+			}
+			for id := range mainTasks {
+				if strings.Contains(msg.Text, id) {
+					if byConversation[conversation] == nil {
+						byConversation[conversation] = map[string]bool{}
+					}
+					byConversation[conversation][id] = true
+				}
+			}
+		}
+	}
+	r.mu.Unlock()
+	for old, ids := range byConversation {
+		s.rehomeQueuedSupervision(ctx, old, ids, todos, web)
+	}
+}
+
+// rehomeQueuedSupervision takes the rehomed tasks' signals out of an old side conversation's durable queue and gathers
+// them again under their new supervisor. Queue admission already acknowledged their outbox entries, and their old dedup
+// reservation would otherwise acknowledge the replay without delivering it. Other tasks in a mixed digest are regathered
+// too, exactly as dropQueuedSupervisionTasks preserves them for /stop (#5732).
+func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids map[string]bool, known []Todo, web string) {
+	b := &s.supervise
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	b.mu.Lock()
+	b.init()
+	var memory, remaining []superviseSignal
+	for _, g := range b.queued[old] {
+		if ids[g.Todo] {
+			memory = append(memory, g)
+		} else {
+			remaining = append(remaining, g)
+		}
+	}
+	var replay []superviseSignal
+	_, _ = s.dropQueuedSupervisionTasksAtomic(old, ids, known, func(pending map[string]superviseSignal, queued, regather []superviseSignal) bool {
+		replay = mergeSignals(regather, remaining)
+		replay = mergeSignals(replay, queued)
+		replay = mergeSignals(replay, memory)
+		for _, g := range pending { // an earlier attempt may already have committed the replay before its supervisor write
+			if ids[g.Todo] {
+				replay = mergeSignals(replay, []superviseSignal{g})
+			}
+		}
+		dirty := false
+		for _, g := range replay {
+			cur, ok := b.pending[g.id()]
+			if !ok {
+				// First-load rehoming precedes the normal outbox restore. A newer durable stretch with the same id
+				// must win over this older queued replay rather than being overwritten before that restore reads it.
+				cur, ok = pending[g.id()]
+			}
+			if !ok {
+				cur = g
+			}
+			if old, exists := pending[g.id()]; !exists || old.Key != cur.Key {
+				dirty = true
+			}
+			b.pending[g.id()] = cur
+			pending[g.id()] = cur
+		}
+		return dirty
+	})
+	if len(memory) > 0 {
+		b.setQueuedLocked(old, nil)
+	}
+	for _, g := range replay {
+		delete(b.sent, g.id())
+	}
+	b.mu.Unlock()
+
+	if len(replay) > 0 {
+		s.forgetSupervision(ctx, replay, web)
+		b.mu.Lock()
+		s.scheduleDigestLocked(time.Now())
+		b.mu.Unlock()
+	}
+}
+
+// digestTo routes assistant-dispatched task supervision to the main conversation (#5732). Explicit card rungs (g.To)
+// keep their special target; a manually started Agent the owner explicitly put under a leader keeps that leader. Task
+// leaders' Agent-supervised workers are handled by leaderRoute before this function.
+func (s *Service) digestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
 	own := s.ownSupervisor(cfg)
+	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
+		// Dependent readiness and parent closeout wakes go to the owning supervisor conversation (Leader or Main chat),
+		// never to the background supervisor.
+		if g.To != "" && g.To != cfg.BackgroundSupervisor {
+			return g.To
+		}
+		return cfg.Main
+	}
 	if g.To != "" {
 		switch {
 		case (g.Kind == sigDecide || g.Kind == sigCheck) && g.To == cfg.Main:
-			// A task leader's decision, or the owner's answer to a check's decision on its worker, for the conversation
-			// above it, whose task is one no leader conversation supervises.
+			// A task leader's decision, or the owner's answer to a check's decision on its worker, goes to the conversation
+			// above it. ownSupervisor is main for new work (#5732); only legacy queued work keeps a background route.
 			return own
-		case g.To == cfg.BackgroundSupervisor && g.To != own:
-			return cfg.Main // named the background supervisor, which was switched off or moved meanwhile
+		case g.To == cfg.BackgroundSupervisor && g.To != own &&
+			(cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks || cfg.BackgroundSupervisorMachineID != cfg.MachineID):
+			return cfg.Main // a legacy card named a background supervisor that was switched off or moved
 		}
 		return g.To
 	}
@@ -121,49 +306,65 @@ func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 	case sigEscalated, sigStarted, sigLeaderStuck:
 		return cfg.Main
 	}
-	t, ok := s.todoNow(g.Todo)
-	if !ok || t.Supervision == nil {
-		return cfg.Main
-	}
-	lead := t.Supervision.Supervisor
-	// A supervisor is the conversation that handed the task out: the main conversation, a leader, or any other
-	// conversation (sendDigest falls back to the main one when that conversation is gone). The main conversation's own
-	// go to the background supervisor while there is one. A task leader's agent never reaches this: leaderRoute takes
-	// its workers' signals first.
-	if lead == "" || lead == cfg.Main {
+	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil {
+		sup := t.Supervision.Supervisor
+		if sup != cfg.Main && slices.Contains(cfg.Leaders, sup) && !s.legacyLeaderPlanSupervision(ctx, t) {
+			if t.Supervision.state(t) == reviewNeedsUser {
+				return cfg.Main
+			}
+			return sup
+		}
 		if g.Kind == sigFailed {
+			// Only an explicitly assigned manual leader keeps this route. New task_plan work, including a capable-runtime
+			// side chat's, still uses main's failed-start remedies (#5732).
 			return cfg.Main
 		}
-		return own
-	}
-	if t.Supervision.state(t) == reviewNeedsUser && g.Kind != sigAllStopped {
-		return cfg.Main
-	}
-	if g.Kind == sigFailed {
-		if lead != cfg.Main && slices.Contains(cfg.Leaders, lead) {
-			return lead
+		// The explicit capable-runtime topology is the one side-chat exception to universal main supervision.
+		if sup != cfg.Main && sup == t.Origin && !s.isLeader(ctx, sup) && s.runtimeWithSupervisionPolicy(ctx, cfg.MachineID, sup) {
+			return sup
 		}
-		return cfg.Main
 	}
-	return lead
+	return cfg.Main
 }
 
-// digestTarget is digestTo, except that a conversation hosted by a runtime without supervision_policy is never the
-// target: it has no separate policy channel, so a supervision message to it would be refused (CodeSupervisionRuntime)
-// and only end in a "did not send" notice. What it supervises from before its tasks went to the main conversation's
-// route (planTaskSupervisor) is followed up by that route now: the background supervisor while it is on, else the main
-// conversation (ownSupervisor).
-func (s *Service) digestTarget(ctx context.Context, cfg Settings, g superviseSignal) string {
-	to := s.digestTo(cfg, g)
-	if to == "" || to == cfg.Main || to == cfg.BackgroundSupervisor || !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, to) {
+// runtimeSupervisorFallback is the existing background/main compatibility route for work whose runtime supervisor
+// cannot receive policy. It is not the supervisor for ordinary new tasks: ownSupervisor deliberately keeps those on main.
+func (s *Service) runtimeSupervisorFallback(ctx context.Context, cfg Settings) string {
+	if id := cfg.BackgroundSupervisor; s.backgroundOn(cfg) && id != "" && id != cfg.Main &&
+		cfg.BackgroundSupervisorMachineID == cfg.MachineID && !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, id) {
+		return id
+	}
+	return cfg.Main
+}
+
+// digestRuntimeTarget applies the runtime policy boundary to a target chosen by digestTo or recheckDigestTo. A main
+// target moves to the compatibility route only for a task handed out by an incompatible runtime; ordinary main work
+// never inherits the legacy background route.
+func (s *Service) digestRuntimeTarget(ctx context.Context, cfg Settings, g superviseSignal, to string) string {
+	if to == "" || to == cfg.BackgroundSupervisor {
 		return to
 	}
-	if g.Kind == sigFailed {
-		return cfg.Main // the background supervisor has no start remedies; keep the legacy fallback for a failed start
+	runtimeOrigin := false
+	if t, ok := s.todoNow(g.Todo); ok {
+		runtimeOrigin = s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, t.Origin)
 	}
-	own := s.ownSupervisor(cfg)
+	if to == cfg.Main && !runtimeOrigin {
+		return to
+	}
+	if to != cfg.Main && !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, to) {
+		return to
+	}
+	if g.Kind == sigFailed || g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
+		return cfg.Main // the background supervisor has no start remedies and never receives todo_ready or parent_closeout wakes
+	}
+	own := s.runtimeSupervisorFallback(ctx, cfg)
 	s.logf("supervise: %s runs on a runtime that cannot take supervision policy: its signal goes to %s", short(to), short(own))
 	return own
+}
+
+// digestTarget is digestTo with the runtime policy boundary applied at delivery time.
+func (s *Service) digestTarget(ctx context.Context, cfg Settings, g superviseSignal) string {
+	return s.digestRuntimeTarget(ctx, cfg, g, s.digestTo(ctx, cfg, g))
 }
 
 // escalatedIn: one of the entries is a leader's needs_user.
@@ -253,8 +454,8 @@ func (s *Service) setLeaders(ctx context.Context, v json.RawMessage) (*ownChange
 				return "", err
 			}
 			s.settingsChanged(ctx)
-			return fmt.Sprintf("assistant.leaders is %q: tasks these conversations hand out with task_plan from now on are theirs to "+
-				"supervise (tasks handed out before keep their supervisor).", list), nil
+			return fmt.Sprintf("assistant.leaders is %q: a manually started Agent the owner explicitly puts under one keeps its ordinary "+
+				"supervision there. New task_plan work remains supervised by the main conversation, including task_plan(supervisor=leader).", list), nil
 		}}, nil
 }
 
@@ -376,14 +577,19 @@ func (s *Service) stopCancelledAgent(ctx context.Context, id, machine, session s
 			return
 		}
 	}
-	if err := s.noteAgentArchive(ctx, row, true); err != nil {
+	changedAt, err := s.noteAgentArchiveAt(ctx, row, true)
+	if err != nil {
 		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
 		return
 	}
-	if err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC()); err != nil { // what it writes as it goes is not new work
+	row.ArchiveChangedAt = archiveChangedAt(changedAt)
+	publishMark, err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), false) // what it writes as it goes is not new work
+	if err != nil {
 		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
+		s.publishList(row.MachineID) // the archive itself committed; secondary metadata failure must not hide it
+	} else if publishMark != 0 {
+		s.publishListAtArchiveMark(row.MachineID, publishMark)
 	}
-	s.publishList(row.MachineID)
 	s.logf("task %s cancelled: closed and archived agent %s/%s", id, machine, short(session))
 }
 

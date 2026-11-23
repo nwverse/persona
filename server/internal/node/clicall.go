@@ -154,8 +154,9 @@ func (n *Node) mcpSession(c net.Conn, req sockRequest) (string, bool, *runtimeCo
 // Any other caller is not the assistant. The runtime is the one that vouches (nil: a process of this node's).
 func (n *Node) mcpAssistantOf(pid int, err error, parent func(int) (int, error), session string) (string, *runtimeConn, bool) {
 	if errors.Is(err, errNoPeer) {
-		if n.assistantSession(session) {
-			return session, nil, true
+		canonical := n.canonicalAssistantSession(session)
+		if n.assistantSession(canonical) {
+			return canonical, nil, true
 		}
 		if h, _, _ := n.runtimes.belongs(session); n.runtimeAssistantChat(h, session) {
 			return session, h, true
@@ -250,7 +251,7 @@ func (n *Node) mayCall(cwd, tool string) bool {
 func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.ToolResult {
 	if slices.Contains(callerTools, req.Name) {
 		session, assistant := n.cliAgentCaller(req), false
-		if assistantwire.IsA2ATool(req.Name) {
+		if assistantwire.IsA2ATool(req.Name) || req.Name == "secret_store" || strings.HasPrefix(req.Name, "resource_") {
 			session, assistant = n.a2aCaller(c, req, session)
 			if session == "" {
 				return proto.ErrorResult(proto.ToolErrorUnavailable, "A2A requires a verified local session", 0)

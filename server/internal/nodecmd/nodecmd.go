@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/iphone"
+	"github.com/nwverse/persona/server/internal/machineops"
 	"github.com/nwverse/persona/server/internal/mcpserver"
 	"github.com/nwverse/persona/server/internal/node"
 	"github.com/nwverse/persona/server/internal/nodeclient"
@@ -33,7 +34,9 @@ type Build struct {
 }
 
 // Usage is the device commands' part of the usage text (the node part is NodeUsage).
-const Usage = `  personad hook             Claude Code hook entry (reads hook JSON on stdin)
+const Usage = `  personad resource status [resource]  shared runner status as JSON
+  personad gate <project> <ref> [groups...]  join or reuse identical gate work
+  personad hook             Claude Code hook entry (reads hook JSON on stdin)
   personad mcp              Claude Code MCP server (stdio)
   personad ask "question" [--options a,b,c] [--timeout 10m] [--require-remote]
                            block until the question is answered on the phone; exit 0 allowed / option chosen (printed),
@@ -48,6 +51,8 @@ const Usage = `  personad hook             Claude Code hook entry (reads hook JS
   personad office docx|pptx|xlsx|check …
                            write a Word document or a deck from Markdown, a workbook from JSON / CSV, or say what is in
                            one (the office skill): personad office --help
+  personad ops storage|hotspots|toolchain|network|ports|processes|services|service-logs|mcp|skill …
+                           on-demand read-only machine diagnostics CLI, stdio MCP server, and opt-in skill manager: personad ops --help
   personad claude-plugin status|install|uninstall|on|off
                            the Persona plugin for Claude Code on this computer, as JSON (persona-link plugin says it in
                            words; docs/operations/link.md "Claude Code plugin")
@@ -72,6 +77,10 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 	}
 	rest := args[1:]
 	switch args[0] {
+	case "resource":
+		return true, resourceCommand(ctx, rest)
+	case "gate":
+		os.Exit(gateCommand(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
 	case sandbox.AgentExecCommand:
 		stop()
 		return true, sandbox.RunAgentExec(rest)
@@ -88,6 +97,8 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		return true, runLaunch(stop, ticket, rest[0], rest[1:]) // launch.go: bounded wait for the node, Ctrl-C ends it
 	case "assistant-tui": // an assistant conversation's interactive Claude Code, as claude -p to the node (node/assistant_tui.go)
 		os.Exit(node.AssistantTUI(rest, os.Stdin, os.Stdout, os.Stderr))
+	case "model-source": // final Codex provider attribution, after launcher expansion
+		return true, node.ModelSourceLaunch(rest)
 	case "codex-start": // a Codex launcher with the phone's first message, read from a file (node/codex_start.go)
 		return true, node.CodexStart(rest)
 	case "tab-start": // a command a runtime gave to resume its session in a new tab (`pi --session …`, node/pi.go)
@@ -104,6 +115,8 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(scriptcli.Decision(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "office":
 		os.Exit(office.Main(rest, os.Stdout, os.Stderr))
+	case "ops":
+		os.Exit(machineops.Main(ctx, b.Version, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "claude-plugin": // the Persona plugin for Claude Code here, as JSON (node/claudeplugin.go; persona-link plugin)
 		os.Exit(node.ClaudePluginCommand(ctx, rest, os.Stdout, os.Stderr))
 	case "iphone": // this computer's paired iPhones for phone control (internal/iphone)

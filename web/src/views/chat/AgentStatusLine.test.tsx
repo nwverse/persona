@@ -35,4 +35,23 @@ describe("Agent status line", () => {
     expect(sessionQuota([claude], session, now)).toBeNull();
     expect(sessionQuota([{ ...quota, stale: true }], session, now)).toBeNull();
   });
+
+  it("shows ContextMeter in Assistant chats without folder/repo when context or item usage is known", () => {
+    const asst: Session = { ...session, assistant: true, context_tokens: 40_000, context_window: 200_000 };
+    const html = renderToStaticMarkup(<AgentStatusLine session={asst} assistant />);
+    expect(html).toContain("data-composer-usage");
+    expect(html).toContain('aria-valuenow="20"');
+    expect(html).not.toContain("data-composer-source");
+
+    const usageOnly = renderToStaticMarkup(
+      <AgentStatusLine
+        session={{ ...session, assistant: true }}
+        assistant
+        items={[{ id: "a1", seq: 1, role: "assistant", kind: "text", usage: [{ in: 1200, out: 800 }] }]}
+      />,
+    );
+    expect(usageOnly).toContain("2.0k tok");
+
+    expect(renderToStaticMarkup(<AgentStatusLine session={{ ...session, assistant: true }} assistant />)).toBe("");
+  });
 });

@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func writeTaskExecutionError(w http.ResponseWriter, err error) {
@@ -73,25 +74,26 @@ func (s *Service) checkTaskSourceRestore(ctx context.Context, previous, next Tas
 	return nil
 }
 
-// A health task may choose its computer and model, but its directory and instructions belong to the space.
+// A space's task may choose its computer and model, but its directory and instructions belong to the space.
 // Check both edited candidates and stored tasks; validation in the editor alone cannot protect old records.
 func checkTaskExecutionSpace(t Task) error {
-	if t.Space == SpaceHealth && t.Cwd != "" {
+	if t.Space != "" && t.Cwd != "" {
 		return i18n.Err("assistant-schedule.execution_health_directory")
 	}
 	return nil
 }
 
-// Before continuing a Health assistant, verify its actual cwd against the node's canonical Health directory.
+// Before continuing a space's assistant, verify its actual cwd against the node's canonical directory of the space
+// (a space without one fails: prepareSpace refuses it).
 func (s *Service) taskSourceCwd(ctx context.Context, t Task) (string, bool) {
-	if t.Space != SpaceHealth {
+	if t.Space == "" {
 		return "", true
 	}
 	c, known := s.session(ctx, t.MachineID, t.SessionID)
-	if !known || !c.Assistant || c.Space != SpaceHealth {
+	if !known || !c.Assistant || c.Space != t.Space {
 		return "", false
 	}
-	cwd, err := s.prepareSpace(ctx, t.MachineID, SpaceHealth)
+	cwd, err := s.prepareSpace(ctx, t.MachineID, t.Space)
 	return cwd, err == nil && cwd != "" && c.Cwd == cwd
 }
 
@@ -118,10 +120,7 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 		ex.Agent = s.launcherAgent(withUnhidden(ctx, ex.Launcher), machine, ex.Launcher)
 		if ex.Cwd == "" {
 			if d, ok := s.device(ctx, machine); ok {
-				ex.Cwd = s.assistantCwd(d)
-				if t.Space == SpaceHealth {
-					ex.Cwd = s.healthCwd(d)
-				}
+				ex.Cwd = s.spaceCwd(d, t.Space) // "" for a space without a directory, never the assistant's
 			}
 		}
 		return ex, nil
@@ -160,6 +159,9 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 			Cwd string `json:"cwd"`
 		}
 		if err := s.call(ctx, machine, assistantwire.DeviceAssistantDirectory, map[string]any{"path": ex.Cwd}, &result); err != nil {
+			if errors.Is(err, rpc.ErrNotSent) && strings.Contains(err.Error(), "task_execution_wait_timeout") {
+				return ex, err
+			}
 			return ex, i18n.Err("assistant-schedule.execution_directory", i18n.Args{"error": err.Error()})
 		}
 		if result.Cwd == "" {
@@ -188,8 +190,10 @@ func (s *Service) prepareTaskExecutionEdit(ctx context.Context, previous Task, t
 
 func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[string]json.RawMessage, old modelRecord, wasFresh bool) (*modelRecord, error) {
 	changed := false
+	destinationChanged := false
 	for key, dst := range map[string]*string{"execution_machine_id": &t.ExecutionMachineID, "cwd": &t.Cwd} {
 		if v, ok := raw[key]; ok {
+			previous := *dst
 			if err := json.Unmarshal(v, dst); err != nil {
 				return nil, err
 			}
@@ -199,6 +203,7 @@ func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[strin
 			if strings.ContainsAny(*dst, "\x00\r\n") {
 				return nil, i18n.Err("assistant-models.err_field_invalid")
 			}
+			destinationChanged = destinationChanged || *dst != previous
 			changed = true
 		}
 	}
@@ -255,7 +260,9 @@ func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[strin
 	if taskExecutionNeedsOwnChat(*t, b) || source && b != (ModelBinding{}) && (wasFresh || b != old.Binding) {
 		return nil, i18n.Err("assistant-schedule.execution_own_chat")
 	}
-	if !changed {
+	// Echoing the stored execution fields with a selected prompt leaves its
+	// destination and model unchanged, even if the computer is offline.
+	if !changed || (t.PromptSelections && !destinationChanged && b == old.Binding) {
 		return nil, nil
 	}
 	if source {
@@ -387,6 +394,25 @@ func taskEditConfig(t Task) Task {
 		t.At = time.Time{} // due runs advance At; ArmedAt records a deliberate retime
 	}
 	return t
+}
+
+// A saved selection can be paused or renamed without contacting its node.
+func taskInputEditNeedsValidation(before, after Task) bool {
+	if (!before.Enabled && after.Enabled) || !reflect.DeepEqual(before.StateNote, after.StateNote) {
+		return true
+	}
+	config := func(t Task) Task {
+		t = taskEditConfig(t)
+		t.Title, t.Enabled, t.DisabledAt = "", false, time.Time{}
+		// Execution bindings are compared through the canonical model record.
+		t.Launcher, t.Model, t.Effort = "", "", ""
+		t.At, t.ArmedAt, t.Until = t.At.UTC(), t.ArmedAt.UTC(), t.Until.UTC()
+		if len(t.Weekdays) == 0 {
+			t.Weekdays = nil
+		}
+		return t
+	}
+	return !reflect.DeepEqual(config(before), config(after))
 }
 
 func mergeTaskEditRuntime(task *Task, before, current Task) error {

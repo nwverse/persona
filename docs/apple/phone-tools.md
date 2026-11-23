@@ -94,7 +94,7 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_reminders_update {id, title?, due?, notes?, priority?, list?, location?}` | Reminders | **Yes** | Changes only the fields given; `due: null` removes the due date, `notes` replaces the notes (`null` removes them), `list` moves it, `location: null` stops it going off at a place; the card lists every field that changes (#2277) |
 | `phone_reminders_complete {id}` | Reminders | **Yes** | Marks complete (using the id returned by `phone_reminders_list`) |
 | `phone_reminders_delete {id}` | Reminders | **Yes** | Deletes a reminder the user no longer needs |
-| `phone_location_current {}` | Location (while in use) | No | One-shot location, waits up to 15 seconds; returns latitude/longitude, accuracy, altitude, time, time zone, and reverse-geocoded address |
+| `phone_location_current {}` | Location (While Using; Always also while Persona isn't open, "Location when Persona isn't open") | No | One-shot location, waits up to 15 seconds; returns latitude/longitude, accuracy, altitude, time, time zone, and reverse-geocoded address |
 | `phone_location_search {query, limit?}` | Location | No | Finds a place by name or address (MapKit): name, address, latitude, longitude, up to 10 |
 | `phone_maps_search_nearby {query, latitude?, longitude?, radius_meters?, limit?}` | Location | No | Places around the current fix (or the given point), nearest first: name, address, coordinates, distance, category, phone, website and the source (#2281). MapKit gives apps no opening hours; the result says so |
 | `phone_maps_navigate {latitude, longitude, name?, mode?}` | None (foreground) | No | Opens directions in Apple Maps (`driving` / `walking` / `transit`) and returns `opened: maps`: navigation runs in Maps, not in Persona |
@@ -105,7 +105,7 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_workout_detail {id}` | Health (read) | No | One workout by id: the same row plus per-kilometre splits (pauses left out) and minute-average heart rate |
 | `phone_photos_recent {limit?, days?, screenshots_only?}` | Photos (read) | No | Recent photo/video metadata: local id, time, type, dimensions, screenshot/favorite flags, duration, latitude/longitude |
 | `phone_photo_get {id, max_size?}` | Photos (read) | No | Returns the JPEG image itself (default longest edge 1280, quality 0.7) + metadata |
-| `phone_device_info {}` | None | No | Model identifier, iOS version, battery and charging state, Low Power Mode, storage, network type, time zone, language, thermal state, the app's `app_version`, `app_build` and `app_channel` (`debug` / `release`; the app carries no commit) |
+| `phone_device_info {}` | None | No | Model identifier, iOS version, battery and charging state, Low Power Mode, storage, network type, time zone, language, thermal state, the app's `app_version`, `app_build` and `app_channel` (`debug` / `release`); on iOS also `build` (`commit`, `dirty`, `branch`, `built_at`, `builder`, `xcode`, `swift`, `configuration`, `bundle_id`: a Debug build has them all, a Release build the commit) and `runtime` (`hub_host`, `hub_version`, `hub_connection`, `launched_at`). `build` and `runtime` are `AppDebugInfo` (`apple/Persona/App/BuildInfo.swift`), the same value Settings › About › Debug Info shows and copies (#12926); any field may be missing (older apps, Android), and the hub relays the result as it is |
 | `phone_clipboard_get {}` | None (foreground; system paste prompt) | No | Reads clipboard text |
 | `phone_clipboard_set {text}` or `{file, trim?}` | None (foreground) | No | Replaces clipboard text; `file` copies a text file from the agent's computer without the model reading it (see "Copying a file to the clipboard") |
 | `phone_notify {title, body, delay_seconds?}` | Notifications | No | Local notification, optionally delayed up to 24 hours |
@@ -408,7 +408,7 @@ actual use of a tool (#7659).
 | Contacts | `NSContactsUsageDescription` | `requestAccess(for: .contacts)`, full or limited |
 | Calendar | `NSCalendarsFullAccessUsageDescription` | iOS 17+ `requestFullAccessToEvents()` |
 | Reminders | `NSRemindersFullAccessUsageDescription` | iOS 17+ `requestFullAccessToReminders()` |
-| Location | `NSLocationWhenInUseUsageDescription` | `requestWhenInUseAuthorization()` |
+| Location | `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription` | `requestWhenInUseAuthorization()`; Always with `requestAlwaysAuthorization()`, only after the owner taps Allow (below) |
 | Health | `NSHealthShareUsageDescription`, `NSHealthUpdateUsageDescription` (+ entitlement) | `requestAuthorization(toShare: five write types, read: …)` |
 | Photos | `NSPhotoLibraryUsageDescription` | `.readWrite`, possibly limited (only user-selected photos are readable) |
 | Notifications | None (runtime authorization) | `requestAuthorization([.alert, .sound, .badge])` |
@@ -426,6 +426,41 @@ Android's `phone_health_summary` (implemented in #278, omitted when #632 merged 
 "read permission is never reported to the app," because the hub stores a single tool catalog). The difference: Health Connect tells the app which read permissions were granted,
 so settings can show "Only some data allowed," and unauthorized metrics appear in `not_granted`; if none are granted, return an error rather than an empty result.
 Health Connect is built into Android 14 and later; on 8–13 it must be installed separately (usually absent on phones without Google services), in which case the tool returns "This phone has no Health Connect."
+
+### Location when Persona isn't open
+
+`phone_location_current` reaches a phone that is not in front through the hub's silent push ("iOS limitations"). With
+While Using, iOS gives an app its location only while it is in use: in front, and a few seconds after it leaves, so a
+push-woken read usually fails. With Always it works (#13200, `apple/Persona/PhoneTools/BackgroundLocation.swift`):
+
+- **Asked once, when it explains itself** (the owner's call, 2026-11-23). A read that fails while Persona is not in front
+  with While Using answers the model "open Persona and try again" (`LocationTool.whileUsingRefusal`) and is remembered.
+  The next time Persona comes to the front it shows `LocationAlwaysSheet` once: why now, when the location is read, that
+  nothing records where the user goes, then Allow and Not Now. Only Allow calls `requestAlwaysAuthorization()`, and iOS
+  shows its own Keep Only While Using / Change to Always Allow, once ever. Nothing asks at launch, and a first use still
+  asks for When In Use (no provisional Always, whose second dialog iOS times).
+- **Settings › Connectors › This iPhone**, under Location while it is on: "Only while Persona is open" with **Allow
+  Always** while iOS can still ask, **Open Settings** after; "Also when Persona isn't open" with **Open Settings**. Not
+  asked yet and refused show no line: the switch says those, as for every source. No new switch.
+- **The Always session**: from iOS 18 Always is effective only while the app holds `CLServiceSession(authorization:
+  .always)` (WWDC24 10212), and a session with that goal asks iOS for Always whenever the app is in front. So Persona
+  holds one only once iOS says Always and Location is on (`BackgroundLocationPolicy.runs`), never for an owner who
+  hasn't chosen it; `BackgroundLocationTests` pins it.
+- **A launch after a long move**: with Always and Location on, the significant-change service runs (about 500 m, at most
+  every 5 minutes; cell and Wi-Fi, no GPS). Its only job is that iOS launches Persona again after it was ended, so a later
+  push finds it; the fix is not kept or sent, and a launch in the background opens no hub connection
+  (`AppModel.start`). `BackgroundLocation.launch()` runs first thing in `didFinishLaunching`, because Core Location keeps a
+  relaunched app's session and service only a few seconds. No `location` background mode, no continuous updates, no
+  blue indicator.
+- **Swiped away**: a silent push never launches an app the user swiped away. Whether a significant change does, and
+  whether pushes reach the app again after it, Apple's engineers have answered both ways, and there are reports that
+  iOS 26.4 doesn't: checked on a device after release. Not done: the hub keeping the latest fix to answer from, a
+  separate privacy decision.
+- **Battery**: estimated under 0.1% a day for the reads and about 0.05–0.3% on a day of ordinary travel for the
+  significant-change launches (#13200 has the sources); measured on a device from the iOS Battery page's daily use and
+  background time.
+- A few days after Always is given, iOS itself reminds the owner that Persona used the location in the background,
+  with a map, and offers While Using again.
 
 ## Implementation notes
 
@@ -445,7 +480,7 @@ Health Connect is built into Android 14 and later; on 8–13 it must be installe
 - **The app must be connected to the hub**: the hub can send `tool_call` only to a phone that has sent `register_phone`. In the foreground or just after entering the background, the WebSocket
   remains available to receive calls; when iOS suspends the iPhone app, the hub first sends a silent push to wake it in the background and waits up to 20 seconds for connection (`hub.go`, `wakePhone`). Only the most recently registered device is woken; if it was woken within 30 seconds, skip the push but still wait 20 seconds. Hub push configuration is required; Android is not woken.
   If waking fails, return an error asking the model to have the user open Persona and retry. The clipboard tools are never woken for: they answer that at once ("Foreground restrictions"). A call waits at most 2 minutes for the phone (a confirmed write 30 minutes, see "Confirmation flow"); timeout also returns an error.
-- **Background location is unavailable**: only "While Using" permission is requested, so location fails outside the foreground.
+- **Location outside the foreground needs Always**: with While Using, a push-woken `phone_location_current` usually gets no fix. Always is asked only after the owner agrees ("Location when Persona isn't open").
 - **Clipboard reads trigger a system prompt**: when reading content copied in another app, iOS asks "Allow Paste?" and the user must allow it.
 - **Health data is aggregated by day only**: no individual-record queries; steps/energy are totals, heart rate is daily average/minimum/maximum, and sleep is daily time asleep
   (the `asleep` types, excluding "In Bed").

@@ -166,11 +166,13 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	}
 
 	var resp any
+	var recoveryDelivered *compactRecoveryHookOutput
 	var waitID string
 	var wait *pendingMCPWait
 	switch req.Kind {
 	case "hook":
 		out, err := n.handleHook(ctx, req)
+		recoveryDelivered, _ = out.(*compactRecoveryHookOutput)
 		if errors.Is(err, errNodeGone) {
 			// This node is going away under a pending question: the hook asks the next one (runHook).
 			resp = map[string]any{"retry": true}
@@ -186,7 +188,14 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "claude-plugin.status": // which sessions' Persona plugin polls this node (ccplugin.go): installers, doctor
 		resp = n.ccPluginStatusNow()
 	case "ping": // personad node doctor, persona-link node switch: a round trip that changes nothing
-		resp = map[string]any{"ok": true, "program": n.Program, "version": n.Version}
+		n.mu.Lock()
+		machine := n.machineID
+		n.mu.Unlock()
+		pong := map[string]any{"ok": true, "program": n.Program, "version": n.Version}
+		if machine != "" {
+			pong["machine_id"] = machine
+		}
+		resp = pong
 	case "update.inventory":
 		var target nodeclient.UpdateInventoryTarget
 		if err := json.Unmarshal(req.Input, &target); err != nil {
@@ -218,6 +227,9 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		var res map[string]any
 		// The assistant's only when the node says so too (clicall.go mcpSession).
 		session, assistant, rt := n.mcpSession(c, req)
+		if assistant {
+			session = n.canonicalAssistantSession(session)
+		}
 		if session == "" && !assistant {
 			session = n.paneCaller(req.Pane) // an agent's: the hub tells a task leader's tools from any other's by it
 		}
@@ -257,8 +269,11 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		}
 		var res proto.ToolResult
 		session, assistant, rt := n.mcpSession(c, req)
+		if assistant {
+			session = n.canonicalAssistantSession(session)
+		}
 		sid := n.mcpCaller(req.Name, session, req.Pane, assistant)
-		if assistantwire.IsA2ATool(req.Name) {
+		if assistantwire.IsA2ATool(req.Name) || req.Name == "secret_store" {
 			sid, assistant = n.a2aCaller(c, req, sid)
 			if sid == "" {
 				resp = proto.TextResult("A2A requires a verified local session", true)
@@ -302,7 +317,9 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		return
 	}
 	b, _ := json.Marshal(resp)
-	_, _ = c.Write(append(b, '\n'))
+	if written, err := c.Write(append(b, '\n')); err == nil && written == len(b)+1 && recoveryDelivered != nil {
+		n.compactRecoveryHookDelivered(recoveryDelivered)
+	}
 }
 
 type hookInput struct {
@@ -484,6 +501,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 
 	switch {
 	case in.HookEventName == "SessionStart":
+		if recovery := n.compactRecoveryStart(ctx, req, in); recovery != nil {
+			return recovery, nil
+		}
 		// Reported and bound above; what is left is the closeout's form as its starting context (closeout_start.go).
 		if brief := n.closeoutStart(ctx, req, in); brief != nil {
 			return brief, nil
@@ -989,7 +1009,7 @@ func toolSummary(name string, input json.RawMessage) string {
 // leader's task_plan and task_review (assistant/task_leader.go) and task_spawn. The manager's come from the list it
 // reads itself, so a tool it adds there gets its caller here too (#9089: the repository tools were added to one list
 // only, and every agent's call of them reached the hub with no session).
-var callerTools = slices.Concat(assistantwire.AgentToolNames, assistantwire.A2AToolNames, []string{"dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"})
+var callerTools = slices.Concat(assistantwire.AgentToolNames, assistantwire.A2AToolNames, []string{"resource_status", "resource_acquire", "resource_get", "resource_renew", "resource_release", "resource_cancel", "dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn", "secret_store"})
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with

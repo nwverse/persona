@@ -128,16 +128,16 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	s.reviewDismissals.actions.acquire(t.ID)
 	defer s.reviewDismissals.actions.release(t.ID)
 	t, _ = s.todoNow(t.ID)
-	// The main conversation may review any supervised task: after the main conversation changes, the old tasks'
-	// supervision messages come to the new one, which has to be able to close them (#4262).
-	// The background supervisor reviews the tasks no leader supervises, whose ledgers name the main conversation
-	// (supervise_background.go); the main conversation may still review them, as it may a leader's.
+	// Main supervises ordinary conversation-dispatched tasks (#5732). Origin alone never lets a side conversation
+	// accept one. Delegated reviewers are an explicitly assigned manual leader, a task leader for its worker, the legacy
+	// background with durable evidence, or the explicit capable-runtime side topology introduced with policy support.
 	isMain := s.isMain(ctx, self)
 	background := s.backgroundSupervises(ctx, self, t)
-	if t.Origin == "" || t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self && !isMain) {
-		if !background && !s.mayReviewForLeader(ctx, self, t) {
-			return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
-		}
+	manualLeader := t.Supervision != nil && t.Supervision.Supervisor == self && s.isLeader(ctx, self)
+	capableRuntime := t.Supervision != nil && t.Supervision.Supervisor == self && t.Origin == self && s.runtimeWithSupervisionPolicy(ctx, s.settings(ctx).MachineID, self)
+	allowed := isMain || background || manualLeader || capableRuntime || s.mayReviewForLeader(ctx, self, t)
+	if t.Origin == "" || !allowed {
+		return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
 	}
 	if t.DoneAt != nil && (a.Verdict == reviewRework || a.Verdict == reviewNeedsUser || a.Verdict == reviewParked) {
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new task for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
@@ -204,11 +204,12 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return "", errors.New(acceptGuardRefusal(matched))
 		}
 	}
-	// A conversation supervises what it handed out (task_plan, quietAgentTask): a task without a ledger
-	// gets none here either, or its signals would go into the main conversation's supervision messages (#4262). It can still
-	// be closed; rework, needs_user and parked are what supervision is for.
-	ledger := t.Supervision != nil || isMain || a.UserCheck
-	if !ledger && (verdict == reviewRework || verdict == reviewNeedsUser || verdict == reviewParked) {
+	// An explicit main acceptance records its verdict even for a legacy task without a ledger: accepted prerequisites
+	// use that durable receipt to release their dependents. user_check likewise persists the owner's personal verification.
+	// Dispatch-time topology is decided where the task is created, and nonterminal reviews still require an existing
+	// supervised task. Cancellation needs no such receipt ledger.
+	ledger := t.Supervision != nil || isMain && verdict == reviewAccepted || a.UserCheck
+	if t.Supervision == nil && (verdict == reviewRework || verdict == reviewNeedsUser || verdict == reviewParked) {
 		return "", fmt.Errorf("task %s is not supervised: send what is missing to its agent with agent_send, or ask the user in your answer", t.ID)
 	}
 	if verdict == reviewParked && s.agentSupervised(t) {
@@ -238,6 +239,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	parks := 0
 	var waiting *OwnerWait // accepted while the work stopped on the owner's decision: refused, nothing written (#1277)
 	judgedDone := false    // it was waiting for review: the judge had found it done
+	wasNeedsUser := false  // transitioning out of (or updating) a pending needs_user decision (#13112)
+	var supersededReason string
 	var criteriaErr error
 	var v Supervision
 	var reviewedAt time.Time
@@ -254,6 +257,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				}
 			}
 			judgedDone = v.State == reviewPending
+			wasNeedsUser = v.state(t) == reviewNeedsUser
 			if isMain && !s.isLeader(ctx, v.Supervisor) && !s.isLeaderRef(v.Supervisor) {
 				v.Supervisor = self // the main conversation takes over an old main conversation's task, not a leader's
 			} else if v.Supervisor == "" {
@@ -303,6 +307,10 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				r.Evidence = park.Evidence.clone()
 				r.Evidence.RecordedBy = self
 			}
+			if wasNeedsUser {
+				supersededReason = reviewSupersededReason(verdict, a.Reason, note, decision.Reason, checks)
+				r.SupersededReason = supersededReason
+			}
 			v.State, v.Waits = verdict, nil // reviewed: the supervisor answered what the judge found
 			if verdict == reviewAccepted && a.UserCheck {
 				v.State = reviewUserCheck
@@ -351,21 +359,35 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
-		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
+	var keys []string
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigAllStopped, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigParkedDue, sigCardlessWait} {
+		key := t.ID + "|" + k
+		delete(b.pending, key) // reviewed: what waited is answered
+		keys = append(keys, key)
 	}
 	if verdict == reviewAccepted || verdict == reviewCancelled {
 		// Closed: a decision that ended a parking has nothing left to move. A review that leaves the task open, parking
 		// it again included, does not say its supervisor heard of the decision: that waits for its message (decidedPark).
-		delete(b.pending, t.ID+"|"+sigParkDecided)
+		key := t.ID + "|" + sigParkDecided
+		delete(b.pending, key)
+		keys = append(keys, key)
 	}
+	extPrefix := t.ID + "|" + sigNeedsUserExternalInfo + "@"
+	for k := range b.pending {
+		if strings.HasPrefix(k, extPrefix) {
+			delete(b.pending, k)
+		}
+	}
+	s.forgetSupervisePending(keys...)
+	s.forgetSupervisePendingPrefix(extPrefix)
 	b.mu.Unlock()
+	s.resetBackgroundBreakerForTodo(t.ID)
 	// How it ended against what was asked (task_brief_result.go): each criterion of the brief, as scope changes left them.
 	var result *BriefResult
 	if verdict == reviewAccepted || verdict == reviewCancelled {
 		result = s.recordBriefResult(ctx, t, checks, a.AlsoDone, "", verdict)
 	}
-	body := reviewFeedBody{Title: t.Title, Verdict: verdict, Round: v.Round, Note: note, Checks: checks, Result: result}
+	body := reviewFeedBody{Title: t.Title, Verdict: verdict, Round: v.Round, Note: note, Checks: checks, Result: result, SupersededReason: supersededReason}
 	if verdict == reviewRework {
 		body.ReworkKind = a.ReworkKind
 	}
@@ -376,8 +398,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		body.By = reviewByBackground
 	}
 	_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, body)
-	if verdict != reviewNeedsUser && verdict != reviewAccepted {
-		s.dropDecision(ctx, t.ID) // the review moved on: a decision still waiting on the owner is over (conclusion.go)
+	if wasNeedsUser && !(verdict == reviewNeedsUser && priorReply != nil) {
+		// Supersede and clear any previous pending needs_user card across clients before posting any replacement card (#13112).
+		s.supersedeDecision(ctx, t.ID, supersededReason)
+	} else if verdict != reviewNeedsUser && verdict != reviewAccepted {
+		s.supersedeDecision(ctx, t.ID, supersededReason) // the review moved on: a decision still waiting on the owner is over (conclusion.go)
 	}
 	conclusion := conclusionInput{Outcome: cmp.Or(a.Outcome, outcomeDone), Reason: a.Reason, Link: a.Link, Note: note, Checks: checks}
 	switch verdict {
@@ -645,6 +670,36 @@ type reviewFeedBody struct {
 	// Result: an accepted or cancelled review against the task's brief (task_brief_result.go): each criterion met,
 	// not_met, unchecked or dropped, then what was done beyond it.
 	Result *BriefResult `json:"result,omitempty"`
+	// SupersededReason records why this review superseded an earlier pending needs_user decision (#13112).
+	SupersededReason string `json:"superseded_reason,omitempty"`
+}
+
+// reviewSupersededReason extracts the supervisor's natural-language reason when task_review supersedes a pending needs_user.
+func reviewSupersededReason(verdict, reason, note, decisionReason string, checks []ReviewCheck) string {
+	reason = strings.TrimSpace(reason)
+	switch verdict {
+	case reviewRework:
+		if note != "" {
+			return clip(oneLine(note), 300)
+		}
+		for _, c := range checks {
+			if !c.Met {
+				if c.Evidence != "" {
+					return clip(oneLine(c.Criterion+": "+c.Evidence), 300)
+				}
+				return clip(oneLine(c.Criterion), 300)
+			}
+		}
+	case reviewNeedsUser:
+		if s := cmp.Or(note, decisionReason, reason); s != "" {
+			return clip(oneLine(s), 300)
+		}
+	default:
+		if s := cmp.Or(reason, note); s != "" {
+			return clip(oneLine(s), 300)
+		}
+	}
+	return ""
 }
 
 // reviewDoneTodo closes todo id after its review (done_by review or cancelled, with reason); false when it was done already. An
@@ -700,6 +755,11 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 			if cur, ok := s.todoNow(id); ok {
 				s.createPRFollowups(ctx, cur)
 			}
+		}
+		s.onTodoWorkspaceReleased(ctx, before, accepted)
+		if accepted && row.DoneAt != nil {
+			s.evaluateTodoAfterDependents(ctx, id)
+			s.evaluateParentCloseoutForChild(ctx, id)
 		}
 		if t, now := s.todoNow(id); ok && now {
 			// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).

@@ -54,6 +54,8 @@ type scopeChange struct {
 	DoneWhen        []string
 	Expect          int
 	Approval        *BriefRequest
+	eventID         string // in-memory identity of an aborted continuation's own event
+	afterCommit     func() // test synchronization after the brief commit and before ledger propagation; nil in production
 }
 
 // errScopeNothing: the change changes nothing (the same criteria and time, no words).
@@ -65,6 +67,11 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 	if t.DoneAt != nil {
 		return TaskBrief{}, fmt.Errorf("task %s is done already: its brief is closed; hand out a new task for what is left", t.ID)
 	}
+	// A scope's brief commit and its ledger propagation are one ordered transition. Otherwise an older writer paused
+	// after its commit can write older criteria after a newer scope has already reached the ledgers.
+	b := &s.tbriefs
+	b.writeMu.Lock()
+	defer b.writeMu.Unlock()
 	brief, err := s.ensureTaskBrief(ctx, t)
 	if err != nil {
 		return TaskBrief{}, err
@@ -95,7 +102,14 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 	if brief.Request != nil {
 		known += "\n" + brief.Request.Text
 	}
-	risk := scopeRisk(c.Change+"\n"+strings.Join(added, "\n"), known)
+	kind := briefEventScope
+	var risk []string
+	if expect > 0 && c.DoneWhen == nil {
+		// Estimate explanations are audit data and never extend the authorized work.
+		kind = briefEventEstimate
+	} else {
+		risk = scopeRisk(c.Change+"\n"+strings.Join(added, "\n"), known)
+	}
 	if words := risk; len(words) > 0 && c.Approval == nil {
 		return TaskBrief{}, fmt.Errorf("this change adds a step only the owner may allow (%s): it was not applied. Ask the owner "+
 			"(ask_user, or task_review needs_user with what you recommend), and call task_scope again in the turn their answer starts",
@@ -103,7 +117,7 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 	}
 	scopes := 0
 	for _, e := range brief.Log {
-		if e.Kind == briefEventScope {
+		if e.Kind == briefEventScope || e.Kind == briefEventEstimate {
 			scopes++
 		}
 	}
@@ -114,8 +128,8 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 	if expect > 0 && brief.EstimateSourceNow != "" {
 		estimateSource = briefEstimateOverride
 	}
-	ev := BriefEvent{At: time.Now().UTC(), Kind: briefEventScope, Todo: t.ID, By: c.By, Change: clip(oneLine(c.Change), 300),
-		Why: clip(oneLine(c.Why), 300), Added: added, Dropped: dropped, ExpectMinutes: expect, EstimateSource: estimateSource}
+	ev := BriefEvent{At: time.Now().UTC(), Kind: kind, Todo: t.ID, By: c.By, Change: clip(oneLine(c.Change), 300),
+		Why: clip(oneLine(c.Why), 300), Added: added, Dropped: dropped, ExpectMinutes: expect, EstimateSource: estimateSource, eventID: c.eventID}
 	if len(added)+len(dropped) > 0 {
 		ev.DoneWhen = next
 		if ev.DoneWhen == nil {
@@ -125,12 +139,15 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 	if len(risk) > 0 { // the owner's message that allowed it stays on the entry
 		ev.Approval = c.Approval
 	}
-	brief, _, err = s.changeBrief(ctx, brief.ID, func(tb *taskBrief) bool {
+	brief, _, err = s.changeBriefLocked(ctx, brief.ID, func(tb *taskBrief) bool {
 		tb.st.Log = append(tb.st.Log, ev)
 		return true
 	})
 	if err != nil {
 		return TaskBrief{}, err
+	}
+	if c.afterCommit != nil {
+		c.afterCommit()
 	}
 	for _, id := range s.briefTodos(brief.ID) {
 		o, ok := s.todoNow(id)
@@ -157,11 +174,17 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 }
 
 // rescope is what agent_supervise and agent_send with a task do to a task of conversation self that exists already:
-// self supervises it, and new criteria or a new expected time (none: kept) go through the brief's log as a scope
-// change made through via. Its ledger as it is then.
-func (s *Service) rescope(ctx context.Context, t Todo, self, via string, doneWhen []string, expect int) (Supervision, error) {
+// self authors the scope change, an existing ledger keeps its supervisor (supervisor is the default for one without
+// a ledger), and new criteria or a new expected time (none: kept) go through the brief's log as a scope change made
+// through via. Its ledger as it is then.
+func (s *Service) rescope(ctx context.Context, t Todo, self, supervisor, via string, doneWhen []string, expect int) (Supervision, error) {
+	return s.rescopeWithEvent(ctx, t, self, supervisor, via, doneWhen, expect, "")
+}
+
+// rescopeWithEvent marks a continuation's scope event with an in-memory identity for its exact rollback.
+func (s *Service) rescopeWithEvent(ctx context.Context, t Todo, self, supervisor, via string, doneWhen []string, expect int, eventID string) (Supervision, error) {
 	if len(doneWhen) > 0 || expect > 0 {
-		c := scopeChange{By: self, Why: "set through " + via, Expect: expect} // the tool is named in why, which is not read for risky words
+		c := scopeChange{By: self, Why: "set through " + via, Expect: expect, eventID: eventID} // the tool is named in why, which is not read for risky words
 		if len(doneWhen) > 0 {
 			c.DoneWhen = doneWhen
 			c.Change = "done_when replaced"
@@ -173,11 +196,14 @@ func (s *Service) rescope(ctx context.Context, t Todo, self, via string, doneWhe
 			return Supervision{}, err
 		}
 	}
-	// self supervises it from now on, by the criteria in effect (a task of self's that had no ledger gets one, as before).
+	// The dispatching conversation need not be its supervisor: a repeated side hand-off leaves main in charge (#5732).
 	brief, briefed := s.briefOfTodo(t.ID)
 	v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-		same := v.Supervisor == self
-		v.Supervisor = self
+		before := v.Supervisor
+		if before == "" {
+			v.Supervisor = supervisor
+		}
+		same := before == v.Supervisor
 		if briefed && (!slices.Equal(v.DoneWhen, brief.Criteria) || v.ExpectMinutes != brief.ExpectNow) {
 			v.DoneWhen, v.ExpectMinutes, same = slices.Clone(brief.Criteria), brief.ExpectNow, false
 		}
@@ -222,6 +248,11 @@ func (s *Service) toolTaskScope(ctx context.Context, self string, args json.RawM
 	if supervisor != self && !(s.isMain(ctx, self) && !s.isLeader(ctx, supervisor)) && !s.backgroundSupervises(ctx, self, t) {
 		return "", fmt.Errorf("task %s is supervised by another conversation: only its supervisor changes its scope", t.ID)
 	}
+	// A card-less owner wait must not be pushed further out by an estimate extension or scope change (#12648); the
+	// refusal happens before the brief is written.
+	if err := s.cardlessOwnerWaitGuard(ctx, t); err != nil {
+		return "", err
+	}
 	c := scopeChange{By: self, Change: a.Change, Why: a.Why, Expect: a.ExpectMinutes}
 	if a.DoneWhen != nil {
 		c.DoneWhen = cleanDoneWhen(*a.DoneWhen)
@@ -243,7 +274,7 @@ func (s *Service) toolTaskScope(ctx context.Context, self string, args json.RawM
 	var b strings.Builder
 	fmt.Fprintf(&b, "Logged on task %s's brief (the owner sees it in the next digest). Scope revision: %s. "+
 		"Original brief goal: %q. Original criteria: %s. Effective criteria: %s. Dropped criteria: ",
-		t.ID, brief.ClockAt.Format(time.RFC3339Nano), brief.Goal, criteriaWords(brief.DoneWhen, nil), criteriaWords(brief.Criteria, nil))
+		t.ID, brief.scopeRevision().Format(time.RFC3339Nano), brief.Goal, criteriaWords(brief.DoneWhen, nil), criteriaWords(brief.Criteria, nil))
 	dropped := (&taskBrief{rec: brief.briefRecord, st: briefState{Log: brief.Log}}).dropped()
 	for i, criterion := range dropped {
 		if i > 0 {
@@ -407,6 +438,7 @@ func (s *Service) clearOverdue(todoID string) {
 	b.mu.Lock()
 	b.init()
 	delete(b.pending, todoID+"|"+sigOverdue)
+	s.forgetSupervisePending(todoID + "|" + sigOverdue)
 	b.mu.Unlock()
 	s.clearEstimateDue(todoID)
 }

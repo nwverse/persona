@@ -261,5 +261,9 @@ Scheduled Tasks are not navigation destinations on Android; picking them shows t
 meeting, a Persona conversation's card set to Full page) is a new entry naming that page, so Back returns to it and the
 Agent's page offers "Came from … · click to return"; the sidebar keeps that page's row lit while the Agent is shown
 (`web/src/lib/persona-nav.ts` `sidebarRoute`, `docs/web/web.md` "An Agent opened from inside a page is a drill-down"). An
-Agent picked in the sidebar is a root and lights its own row.
+Agent picked in the sidebar is a root and lights its own row. Reselecting the open Agent replaces its drill-down entry
+without adding a history entry, clearing the origin and the way-back strip at the same address. Set to Full page, the
+main conversation keeps the page it opened last while another place is in front (#13164, `pickMainChat` in
+`web/src/lib/handoff.ts`): Main Chat picked from there opens it again over the conversation, so Back returns to the
+conversation; picked while the conversation or its page is in front, it goes to the bare conversation.
 

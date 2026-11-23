@@ -29,17 +29,24 @@ func remedyingTask(t *testing.T, s *Service, f *fakeHub, failure error) (Todo, *
 
 func remedyingTaskAs(t *testing.T, s *Service, f *fakeHub, failure error, supervisor, planID string) (Todo, *TaskPlan) {
 	t.Helper()
+	return remedyingTaskFrom(t, s, f, failure, supervisor, supervisor, planID)
+}
+
+// remedyingTaskFrom starts a task from origin's plan under an explicitly assigned supervisor. Keeping those two facts
+// separate models a main-created task later put under a manual leader without rewriting its persisted plan (#5732).
+func remedyingTaskFrom(t *testing.T, s *Service, f *fakeHub, failure error, origin, supervisor, planID string) (Todo, *TaskPlan) {
+	t.Helper()
 	ctx := context.Background()
 	f.mu.Lock()
 	f.failStart = failure
 	f.mu.Unlock()
-	todo, err := s.createTodo(ctx, "修登录", "修登录", supervisor, planID)
+	todo, err := s.createTodo(ctx, "修登录", "修登录", origin, planID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.superviseTodo(ctx, todo.ID, supervisor, []string{"PR 合并"}, 0)
 	task := PlanTask{Title: "修登录", Prompt: "修登录", Machine: "box", Cwd: "/code/app", Permission: "bypassPermissions", TodoID: todo.ID}
-	p := &TaskPlan{ID: planID, Conversation: supervisor, State: planStarted, Tasks: []PlanTask{task}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	p := &TaskPlan{ID: planID, Conversation: origin, State: planStarted, Tasks: []PlanTask{task}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	if err := s.savePlan(ctx, p); err != nil {
 		t.Fatal(err)
 	}

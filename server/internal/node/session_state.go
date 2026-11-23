@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -31,6 +32,8 @@ type stateFile struct {
 }
 
 type sessionState struct {
+	ModelSource modelhttp.Source `json:"model_source,omitzero"`
+
 	SegmentRetired          bool            `json:"segment_retired,omitempty"`
 	SegmentOperation        string          `json:"segment_operation,omitempty"`
 	TaskInstructions        string          `json:"task_instructions,omitempty"`
@@ -77,6 +80,10 @@ type sessionState struct {
 	Tasks []string `json:"tasks,omitempty"`
 	// Compaction: the last compaction the user asked for (assistant_compact.go).
 	Compaction *proto.Compaction `json:"compaction,omitempty"`
+	// RecoveryPending survives restarts until an input carrying this checkpoint is delivered.
+	RecoveryPending     string `json:"recovery_pending,omitempty"`
+	RecoveryHookPending bool   `json:"recovery_hook_pending,omitempty"`
+	CompactInstructions string `json:"compact_instructions,omitempty"`
 	// IdleCompaction is the main chat's user-idle clock and unattended compaction latch.
 	IdleCompaction *idleCompactionState `json:"idle_compaction,omitempty"`
 	// Guest: a guest conversation's tools (assistant_guest.go): every process it runs in has no built-in tools and
@@ -114,6 +121,10 @@ type sessionState struct {
 	// extension's resume of a conversation its computer does not list passes on such a record alone, with no transcript
 	// (resumeOutsideHealth, #10941).
 	EngineRuntime string `json:"engine_runtime,omitempty"`
+	// RoundForkOf names the base background supervisor session when a supervision round's process forked a separate
+	// Claude session id (assistant_round.go). Forked round branches inherit assistant identity and stay hidden from
+	// the ordinary Agents list across node restarts.
+	RoundForkOf string `json:"round_fork_of,omitempty"`
 }
 
 func newState() *stateFile { return &stateFile{Sessions: map[string]sessionState{}} }
@@ -299,6 +310,7 @@ func (s *stateFile) adoptSwitch(id string, v sessionState) {
 	defer s.persistMu.Unlock()
 	s.mu.Lock()
 	if cur, ok := s.Sessions[id]; ok {
+		cur.ModelSource = v.ModelSource
 		cur.Launcher, cur.Model, cur.ModelFingerprint, cur.ModelEffort = v.Launcher, v.Model, v.ModelFingerprint, v.ModelEffort
 		cur.Cwd, cur.StartedAt, cur.PlanThen, cur.Pane, cur.PendingSwitch = v.Cwd, v.StartedAt, v.PlanThen, v.Pane, v.PendingSwitch
 		cur.EngineHistory, cur.PendingHandoff = v.EngineHistory, v.PendingHandoff // a switch to another engine (engine_switch.go)

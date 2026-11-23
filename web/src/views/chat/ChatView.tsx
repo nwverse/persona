@@ -23,7 +23,6 @@ import { isPinned } from "../../lib/pins";
 import { acknowledgeLaunch } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
-import { REVIEW_FEATURE } from "../../lib/session-review";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, upsertSession, useStore, viewSession } from "../../lib/store";
 import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
@@ -49,6 +48,7 @@ import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import { foldsBackgroundRounds } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
+import { REVIEW_FEATURE } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
@@ -139,7 +139,7 @@ import { codedFailure, knownAction, refreshReadiness, type CodedFailure } from "
 import { FALLBACK_UNAVAILABLE, recoveryExhausted } from "../../lib/model-fallback";
 import { BASE } from "../../lib/base";
 import { usageLimitLabel } from "../../lib/usage-limit";
-import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
+import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type DisplayLine, type FeedItem } from "../../lib/feed";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark, sessionMarkName } from "../../ui/AgentMark";
 import { sessionAgentName } from "../../lib/agent-kind";
@@ -168,6 +168,7 @@ const PlanPill = lazy(() => import("./PlanCard").then((m) => ({ default: m.PlanP
 const LazyWrapUpChips = lazy(() => import("../assistant/HandoffCard").then((m) => ({ default: m.WrapUpChips })));
 // a chat that is nowhere (a stale or mistyped link): rare, so its notice and words are a chunk of their own
 const LazyNotFoundNotice = lazy(() => import("./NotFoundNotice").then((m) => ({ default: m.NotFoundNotice })));
+const ContextRestartNotice = lazyPage(() => import("./ContextRestartNotice").then((m) => m.ContextRestartNotice));
 // a start stopped on its tab's shell question, answered from here (#10365): only then
 const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 // only in a conversation that moved between Claude Code and Codex (#5054): its earlier sessions, read above the live one
@@ -181,6 +182,7 @@ const SessionReviewMenuItem = lazyPage(() => import("./SessionReviewMenuItem").t
 const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
 
 const NO_FEED: FeedItem[] = [];
+const NO_DISPLAY_LINES: DisplayLine[] = [];
 // A worker's card as its own conversation shows it (#5180): without the fold that makes it "From worker" on its lead's page.
 // One copy per card object, so a push that leaves the card alone leaves its copy alone too.
 const ownCopies = new WeakMap<Interaction, Interaction>();
@@ -1354,6 +1356,16 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const sendNow = useRef(onSend);
   sendNow.current = onSend;
   const send = useCallback((out: Outgoing) => sendNow.current(out), []);
+  // Keep one-click /compact aligned with the composer's send preconditions (no active task route, no setup gate block).
+  const hasTaskRoute = useFeed((s) => Boolean(s.routes[sid]));
+  const compactSession = useCallback(async (): Promise<boolean> => {
+    if (blockedRef.current) {
+      blockedRef.current.onClick?.();
+      return false;
+    }
+    if (getFeedState().routes[sid]) return false;
+    return send({ text: "/compact", images: [] });
+  }, [send, sid]);
   // The assistant's tasks (docs/assistant/unified-entry.md): the conversation's feed, and the main one's "Today" card.
   const taskFeed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
   useEffect(() => {
@@ -1501,6 +1513,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const chatRows: ChatRowWithModes[] = useMemo(
     () => (modes?.scope === `${mid}/${sid}` ? modes.kit.withModeChanges(dayRows, modes.changes, tr.hasMore || earlier.stretches.length > 0 ? earlier.liveItems : undefined) : dayRows),
     [modes, mid, sid, dayRows, tr.hasMore, earlier.stretches.length, earlier.liveItems],
+  );
+  const feedFrom = useMemo(() => (assistant && tr.hasMore ? loadedFrom(tr.items) : undefined), [assistant, tr.hasMore, tr.items]);
+  const assistantLines = useMemo(
+    () => (assistant ? displayLines(lines, feed, feedFrom) : NO_DISPLAY_LINES),
+    [assistant, lines, feed, feedFrom],
   );
   // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
   // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
@@ -2166,6 +2183,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     : undefined, [overviewId, overviewOpen, showOverview]);
   // Its background detail takes the side panel's space, rather than squeezing the mounted overview and losing its place.
   const overviewDetail = panelDrawn && backgroundPanelOf(panel, mid, sid)?.from === "overview";
+  const isAssistant = Boolean(assistant || session?.assistant);
+  const composerDisabled = Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"));
+  const composerBlocked = gate.blocked ?? noRowBlock;
+  const agentCompactBlocked = Boolean(composerDisabled || composerBlocked || hasTaskRoute);
+  // Assistant compaction calls the hub HTTP endpoint directly, so composer send disables (e.g. offlineLine) do not gate it.
+  const compactBlocked = isAssistant ? Boolean(gate.blocked) : agentCompactBlocked;
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
@@ -2198,7 +2221,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
       {!embedded && banner}
-      {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack from={cameFrom} onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
+      {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
       {archivedHere ? <ArchivedNotice session={archivedHere} /> : notFound ? <Suspense fallback={null}><LazyNotFoundNotice assistant={Boolean(assistant)} retry={retryDetail} /></Suspense> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
 
@@ -2261,7 +2284,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
               <CardConversation.Provider value={assistant ? sid : ""}>
               {earlier.host && <Suspense fallback={null}><EarlierStretches {...earlier.host} offscreen={offscreen} /></Suspense>}
               {assistant
-                ? displayLines(lines, feed, tr.hasMore ? loadedFrom(tr.items) : undefined).flatMap((d) => [
+                ? assistantLines.flatMap((d) => [
                     ...failedBefore(d.kind === "chat" ? d.id : ""),
                     d.kind === "feed" ? (
                       <FeedLineView key={d.id} item={d.item} simplified />
@@ -2390,6 +2413,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {pendingCards}
         {!assistant && session?.model_fallback && <Suspense fallback={null}><ModelFallbackCard session={session} headless={false} /></Suspense>}
         {assistant && session && <CompactionStrip session={session} />}
+        {session?.context_restart_recommended && !archivedHere && (
+          <Suspense fallback={null}>
+            <ContextRestartNotice key={JSON.stringify([session.manager, mid, sid])} session={session} assistant={assistant} isMain={isMain} />
+          </Suspense>
+        )}
         {/* the failed bubble above has the one Retry; the card says what to set up first */}
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
@@ -2449,12 +2477,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           draftKey={draftKey}
           placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
+          agent={session?.agent}
           uploadDest={session?.space === "health" ? "health" : undefined}
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
           onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || (session.agent === "claude" && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
-          disabled={Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"))}
+          disabled={composerDisabled}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
           loadingDraft={editingLast}
@@ -2468,7 +2497,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           autoFocus
           carryDraft={Boolean(assistant)}
           onFocusChange={setTyping}
-          blocked={gate.blocked ?? noRowBlock}
+          blocked={composerBlocked}
           leading={leading}
           trailing={trailing}
           planMode={planMode}
@@ -2477,13 +2506,17 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         />
         )}
         {!stoppedLine && session && (
-          assistant
-            ? sourceSubtitle(session) && <div data-composer-usage className="px-2 pt-0.5"><ComposerSource session={session} assistant /></div>
-            : (
-              <Suspense fallback={null}>
-                <AgentStatusLine key={draftKey} session={session} source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined} />
-              </Suspense>
-            )
+          <Suspense fallback={null}>
+            <AgentStatusLine
+              key={draftKey}
+              session={session}
+              assistant={isAssistant}
+              items={earlier.liveItems}
+              compactBlocked={compactBlocked}
+              onCompact={isAssistant || agentCompactBlocked ? undefined : compactSession}
+              source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined}
+            />
+          </Suspense>
         )}
         </div>
       </div>

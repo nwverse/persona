@@ -269,4 +269,9 @@
     <string name="machines_link_switch_why_unknown">問題が発生しました。</string>
     <string name="machines_link_switch_why_unavailable">このコンピューターは今はPersona Linkに切り替えられません。</string>
     <string name="machines_manager_offline">アシスタント「%1$s」がオフラインです。アシスタントが戻ると、このコンピューターもオンラインに戻ります。</string>
+    <string name="machines_tokens_today_title">今日のトークン使用量</string>
+    <string name="machines_tokens_total">合計</string>
+    <string name="machines_tokens_now">現在</string>
+    <string name="machines_tokens_cache_hit_rate">キャッシュヒット率</string>
+    <string name="machines_tokens_per_minute">%1$s/分</string>
 </resources>

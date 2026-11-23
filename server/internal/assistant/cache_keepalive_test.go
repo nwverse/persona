@@ -113,3 +113,76 @@ func TestCacheKeepaliveEligibilityDoesNotReadTheNode(t *testing.T) {
 		t.Fatalf("eligibility added %d sessions.list calls", got-listsBefore)
 	}
 }
+
+// The manager's own sends (a leader's supervision digest, a relay, an A2A delivery, an Inbox continuation) are often
+// what starts a main or lead process, and the node mounts the refresh proxy only at a start. Each carries the role as
+// sendModel's messages do; other conversations' sends carry none, and a value a caller set is never passed on (#12786).
+func TestCacheKeepaliveGoesWithEveryManagerSend(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub().withMachine()
+	s := newTestService(t, f)
+	sessions := []proto.Session{
+		{SessionID: "main", Assistant: true}, {SessionID: "lead", Assistant: true},
+		{SessionID: "background", Assistant: true}, {SessionID: "side", Assistant: true},
+		{SessionID: "worker"}, {SessionID: "child", Assistant: true, IsSubagent: true},
+	}
+	f.setSessions("server", sessions...)
+	// The node's retained inventory, which revokes a registered id that is not a root assistant conversation.
+	d := newFleetDevs()
+	d.add("server", "Computer")
+	d.setSessions("server", sessions)
+	s.devs = d
+	setSettings(t, s, func(v *Settings) {
+		v.Main = "main"
+		v.Leaders = []string{"lead", "worker", "child", "background"}
+		v.BackgroundSupervisor = "background"
+	})
+	last := func(method string) map[string]any {
+		t.Helper()
+		if raw := d.callsTo("server", method); len(raw) > 0 { // the call went to the devices
+			var p map[string]any
+			if err := json.Unmarshal(raw[len(raw)-1], &p); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for i := len(f.calls) - 1; i >= 0; i-- {
+			if f.calls[i].Method == method {
+				var p map[string]any
+				if err := json.Unmarshal(f.calls[i].Params, &p); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			}
+		}
+		t.Fatalf("no %s", method)
+		return nil
+	}
+	forged := assistantwire.CacheKeepalive{Enabled: true, IntervalMinutes: 1, MaxRequests: 144}
+	for _, method := range []string{DeviceSessionSend, DeviceSessionSendOnce, DeviceAssistantSend} {
+		for _, id := range []string{"main", "lead", "background", "side", "worker", "child"} {
+			t.Run(method+"/"+id, func(t *testing.T) {
+				if err := s.call(ctx, "server", method, map[string]any{"session_id": id, "text": "A task finished.", "cache_keepalive": forged}, nil); err != nil {
+					t.Fatal(err)
+				}
+				got, ok := last(method)["cache_keepalive"].(map[string]any)
+				if want := id == "main" || id == "lead"; ok != want {
+					t.Fatalf("policy %v, want one: %v", got, want)
+				}
+				if ok && (got["enabled"] != true || got["interval_minutes"] != float64(55) || got["max_requests"] != float64(24)) {
+					t.Fatalf("caller's value passed on: %v", got)
+				}
+			})
+		}
+	}
+	// Switched off: the role still goes, saying off (the node then mounts nothing and stops refreshing).
+	setSettings(t, s, func(v *Settings) { v.CacheKeepalive = ptr(false) })
+	if err := s.call(ctx, "server", DeviceSessionSend, map[string]any{"session_id": "lead", "text": "x"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := last(DeviceSessionSend)["cache_keepalive"].(map[string]any); p == nil || p["enabled"] != false {
+		t.Fatalf("switched off: %v", p)
+	}
+}
