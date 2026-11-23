@@ -49,5 +49,6 @@ func (f *sendFanout) admit(sender, target string, now time.Time) bool {
 
 // fanoutNote is what conversation_send answers when admit kept a message for its receiver instead of waking it.
 const fanoutNote = " It was not woken: this conversation woke %d or more conversations in the last %d minutes, so the rest are kept " +
+	// i18n-ignore: a tool answer to the model; the Chinese is how leaders name that rule, kept beside the English.
 	"for their next message instead. A rule for every leader belongs in LEAD-COMMON (规矩请写进 LEAD-COMMON), not in a message to each; " +
 	"to wake one now, send it again after the window or quote the owner's request."

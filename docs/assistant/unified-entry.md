@@ -1113,11 +1113,19 @@ supervisor first. Without leaders these go directly to the owner. A parsed termi
 to its supervising conversation in either configuration (#11195). Code: `server/internal/assistant/ask_route.go`.
 
 - **What goes up**: a card raised by an agent of a supervised task (not waiting for the user, not closed): a question
-  (not `ask_user`, not a form or a password card), a tool permission or a plan. For a terminal choice, the supervisor
-  receives the agent, machine, question and option labels. Only an explicit `ask_escalate` rings the owner about that
-  terminal choice. The supervisor cannot press its keys. Unparsed screens, password or private input, command approvals
-  and dialogs with warnings or deadlines keep their existing owner route. The conversations' own cards stay the user's. The card is shown on the apps marked `delegating` (an answer given
-  there still wins) and rings nothing: no push, no bot card, no Persona Link notification.
+  (not `ask_user`, not a form or a password card), a tool permission or a plan, and a parsed terminal dialog
+  (`supervisedScreen`): an ordinary choice, or a command approval Claude Code asks on its own screen, warnings and
+  countdowns included ("Dangerous rmdir operation on working directory or its ancestor": Claude Code asks it even in
+  `bypassPermissions`, so no start mode avoids it). For a terminal dialog the supervisor receives the agent, machine,
+  question, command, warning and option labels, and picks the option itself (`interaction_answer`: answers keyed by the
+  question, or `allow` for Yes/No), kept as the assistant's answer and the task's decision; a dialog that trusts a
+  folder, accepts Bypass Permissions, may delete files (`Risk: delete`) or acts in the owner's name is the owner's
+  (`userScreen`), and only an explicit `ask_escalate` rings the owner about it. Unparsed screens and password or private
+  input keep their existing owner route. The conversations' own cards stay the user's. The card is shown on the apps
+  marked `delegating` and rings nothing: no push, no bot card, no Persona Link notification. A card the supervisor
+  holds (any kind but a question) is not the owner's: the apps count no session that waits only on such cards in Needs
+  you (the hub's `supervisor_held` count) and offer no buttons to answer it (2026-11-23, D11 of
+  `docs/plans/plan-derived-counts.md`).
 - **Who gets it**: the task’s assigned supervisor as an `ask` entry in its "📋 督办" message (the planning lead or main;
   legacy background assignments retain their compatibility route). An unavailable current lead keeps its queue, with the card's `interaction_id`, what it asks and the
   task's decisions in effect. Concurrent cards of one task are one entry. The agent's `needs_you` signal is not sent

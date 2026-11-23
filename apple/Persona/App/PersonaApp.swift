@@ -666,8 +666,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     AppDelegate.inBackground("take-recommendation", done: done) { await NotificationActions.take(decision, group: key?.group ?? ref?.group) }
                     return
                 }
-                if let ixID, let resolution = NotificationActions.resolution(action: action, text: text) {
-                    // A button on the notification: settle it in the background, the app stays where it is.
+                if let ixID, let resolution = NotificationActions.resolution(action: action, text: text),
+                   NotificationActions.answerable(ixID, among: AppModel.shared.pendingInteractions) {
+                    // A button on the notification: settle it in the background, the app stays where it is. A card its
+                    // task's supervisor holds is not settled from here: the tap opens its session below, as a plain tap does.
                     AppDelegate.resolveFromNotification(ixID, group: key?.group ?? ref?.group, resolution, action: action, done: done)
                     return
                 }

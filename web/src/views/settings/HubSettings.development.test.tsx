@@ -12,18 +12,12 @@ let machines: Machine[] = [];
 let roster: ManagerList | null = null;
 const saved: unknown[] = [];
 let backupReads = 0;
+let updateReads = 0;
+let readUpdate: (() => Promise<HubUpdateStatus>) | undefined;
 const events = new Map<string, (message: { update?: HubUpdateStatus }) => void>();
 vi.mock("../../lib/hub-update", async (original) => ({
   ...await original<typeof import("../../lib/hub-update")>(),
-  hubUpdate: async () => status,
-  hubUpdateHistory: async () => [],
-  hubUpdateBackups: async () => { backupReads++; return [{ id: "snapshot-fixture", version: "web-dev-backup", build: 202611120001,
-    commit: "c".repeat(40), updated_at: "2026-11-12T10:00:00Z", created_at: "2026-11-13T10:00:00Z" }]; },
-  applyHubUpdateBackup: async (id: string) => {
-    saved.push({ backup: id });
-    status = { ...status, state: "applying_backup", auto: false };
-    return status;
-  },
+  hubUpdate: async () => { updateReads++; return readUpdate ? readUpdate() : status; },
   setHubUpdateSettings: async (input: { source?: "release" | "beta" | "web-dev"; development_backup_directory?: string }) => {
     saved.push(input);
     status = { ...status, ...input, auto: false };
@@ -40,6 +34,17 @@ vi.mock("../../lib/hub-update", async (original) => ({
         backup_directory_is_default: isDefault,
         backup_retain: (input as { development_backup_retain?: number }).development_backup_retain ?? status.development!.backup_retain } };
     }
+    return status;
+  },
+}));
+vi.mock("../../lib/hub-update-settings", async (original) => ({
+  ...await original<typeof import("../../lib/hub-update-settings")>(),
+  hubUpdateHistory: async () => [],
+  hubUpdateBackups: async () => { backupReads++; return [{ id: "snapshot-fixture", version: "web-dev-backup", build: 202611120001,
+    commit: "c".repeat(40), updated_at: "2026-11-12T10:00:00Z", created_at: "2026-11-13T10:00:00Z" }]; },
+  applyHubUpdateBackup: async (id: string) => {
+    saved.push({ backup: id });
+    status = { ...status, state: "applying_backup", auto: false };
     return status;
   },
 }));
@@ -61,6 +66,7 @@ let host: HTMLDivElement;
 afterEach(() => {
   act(() => root?.unmount()); host?.remove();
   saved.length = 0; machines = []; roster = null; backupReads = 0; events.clear();
+  updateReads = 0; readUpdate = undefined; vi.useRealTimers();
 });
 
 async function mount(state = "available", overrides: Partial<HubUpdateStatus> = {}) {
@@ -80,6 +86,57 @@ async function mount(state = "available", overrides: Partial<HubUpdateStatus> = 
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   await act(async () => root!.render(<HubSettings />));
 }
+
+it("polls active development phases and replaces the step and metrics", async () => {
+  vi.useFakeTimers();
+  await mount("building", { development_progress: {
+    phase: "building", step: "npm_install", step_index: 2, step_total: 6, elapsed_seconds: 10,
+  } });
+  expect(host.textContent).toContain("2/6 · Install Web dependencies");
+  expect(host.querySelector('[role="progressbar"]')).toBeNull();
+
+  status = { ...status, state: "backing_up", development_progress: {
+    phase: "backing_up", step: "archive_files", step_index: 3, step_total: 5, elapsed_seconds: 24,
+    bytes_done: 182 * 1024 ** 2, bytes_total: 460 * 1024 ** 2, bytes_per_second: 21.5 * 1024 ** 2, percent: 39,
+    item_done: 20, item_total: 45,
+  } };
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("39");
+  expect(host.textContent).toContain("182 MB / 460 MB");
+  expect(host.textContent).toContain("21.5 MB/s");
+  expect(host.textContent).toContain("Files 20/45");
+  expect(host.textContent).toContain("Elapsed 24 sec");
+
+  status = { ...status, state: "applying_backup", development_progress: {
+    phase: "applying_backup", step: "prepare_artifacts", step_index: 2, step_total: 2, elapsed_seconds: 32,
+    item_done: 0, item_total: 2, percent: 0,
+  } };
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(host.textContent).toContain("Stage programs and computer packages");
+  expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("0");
+
+  status = { ...status, state: "downloading", progress: "hub 75%" };
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(host.textContent).toContain("hub 75%");
+  expect(host.textContent).not.toContain("Stage programs and computer packages");
+  const reads = updateReads;
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  expect(updateReads).toBe(reads);
+});
+
+it("ignores a delayed poll after a newer state push", async () => {
+  vi.useFakeTimers();
+  await mount("backing_up");
+  let respond!: (value: HubUpdateStatus) => void;
+  readUpdate = () => new Promise(resolve => { respond = resolve; });
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  expect(updateReads).toBe(2); // No overlapping requests while a poll is pending.
+  await act(async () => {
+    events.get("hub_update")?.({ update: { ...status, state: "failed", error: "The snapshot failed." } });
+    respond(status);
+  });
+  expect(host.textContent).toContain("The snapshot failed.");
+});
 
 it("selects Web development with independent computers and shows each assistant’s reported deployment", async () => {
   roster = { default: "studio", managers: [
