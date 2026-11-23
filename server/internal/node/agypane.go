@@ -32,10 +32,14 @@ func reportedAgyConversation(a host.Agent) string {
 // agyConversationLocked checks the latest raw herdr snapshot as well as the pane row.
 // The row ID is pane-derived. Cwd and previously bound session IDs cannot identify
 // a native conversation, and ambiguous reports do not authorize a read or resume.
+// While herdr reports none, a conversation Persona proved for its own start counts (agyproof.go).
 func (n *Node) agyConversationLocked(id, pane string) string {
 	a := n.agents[id]
 	conversation := reportedAgyConversation(a)
-	if conversation == "" || a.PaneID != pane || id != otherSession(a) || host.ParsePane(pane).Kind != host.Herdr {
+	if conversation == "" {
+		return n.agyProvenLocked(id, pane)
+	}
+	if a.PaneID != pane || id != otherSession(a) || host.ParsePane(pane).Kind != host.Herdr {
 		return ""
 	}
 	matches := 0

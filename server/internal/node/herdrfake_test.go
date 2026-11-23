@@ -370,6 +370,7 @@ func herdrNode(t *testing.T, concurrent ...bool) (*Node, *fakeHerdr, string) {
 	t.Cleanup(func() {
 		cancel()           // assertions are finished; do not wait out recovery on a fake that never writes a transcript
 		n.firstWait.Wait() // before restoring waits or closing the socket used by an in-flight check
+		n.proving.Wait()   // an agy start's look for its conversation (agyproof.go) ends with cancel too
 	})
 	t.Cleanup(n.starts.close) // before firstWait, caches and the fake socket: starts can still use all of them
 	return n, f, home

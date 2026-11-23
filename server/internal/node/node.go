@@ -206,6 +206,8 @@ type Node struct {
 	engLists  sync.WaitGroup             // new engines' session lists being built in the background (useEngine)
 	lostFirst lostPrompts                // session id -> why its first message did not go in (firstprompt.go)
 	workSent  workSent                   // Cursor / agy pane -> when a message last went in (worksent.go)
+	agyProofs map[string]agyProof        // herdr pane -> the agy conversation a Persona start proved there (agyproof.go)
+	proving   sync.WaitGroup             // agy starts whose conversation is being looked for (agyproof.go)
 	events    *herdrEvents               // herdr's event stream (herdrevents.go)
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)

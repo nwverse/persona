@@ -157,6 +157,7 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 		command = n.launcherCommand(launcher)
 	}
 	cmd := withHerdrAgent(typedHerdrAgent(launch, herdrName, shells...), workAgentCommand(command, program, model, effort, mode))
+	began := time.Now() // what a conversation of this start is no older than (agyproof.go)
 	// The command goes through the start file, so a line break in it cannot meet a shell that runs each line on its
 	// own (typedstart.go).
 	done, err := n.runWorkAgentCommand(ctx, launch, created, ws, "", n.agentStartCommand(cmd, shellQuote, shells...), shells...)
@@ -188,6 +189,9 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 		// Typed once, then checked in the background until the agent is seen taking it (workagent_first.go, #11345).
 		if err := n.workAgentFirst(ctx, pane, id, herdrName, prompt); err != nil {
 			return nil, fmt.Errorf("send first message: %w", err)
+		}
+		if kind == agyAgent { // its conversation, should herdr's hook not report it (agyproof.go, #13463)
+			n.proveAgyPane(pane, id, cwd, prompt, began)
 		}
 	}
 	session := n.sessionFor(id, agent)

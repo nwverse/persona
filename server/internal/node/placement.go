@@ -691,6 +691,7 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 		}
 	}
 	n.agents = m
+	n.pruneAgyProofsLocked(heard) // a proof holds only for the agy row it was made for (agyproof.go)
 	n.onAgentsList = onList
 	if n.lastPanes == nil {
 		n.lastPanes = map[string]string{}
