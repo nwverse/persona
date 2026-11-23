@@ -26,6 +26,11 @@ import (
 // prepared process. Nothing here sends input or interrupts a running turn.
 const conversationSwitchesKey = "assistant.conversation_switches"
 
+var (
+	errConversationSwitchBatchNotFound = errors.New("conversation switch batch not found")
+	errConversationSwitchInvalid       = errors.New("invalid conversation switch")
+)
+
 const (
 	conversationSwitchReady     = "ready"
 	conversationSwitchQueued    = "queued"
@@ -246,7 +251,7 @@ func checkConversationSwitchUnique(items []conversationSwitchItem) error {
 	for _, item := range items {
 		key := item.Machine + "\x00" + item.ConversationID
 		if seen[key] {
-			return fmt.Errorf("conversation %s resolves to the same conversation more than once", item.ConversationID)
+			return fmt.Errorf("%w: conversation %s resolves to the same conversation more than once", errConversationSwitchInvalid, item.ConversationID)
 		}
 		seen[key] = true
 	}
@@ -276,7 +281,7 @@ func (s *Service) planConversationSwitches(ctx context.Context, state conversati
 		}
 	}
 	if original == nil {
-		return nil, fmt.Errorf("conversation switch batch not found")
+		return nil, errConversationSwitchBatchNotFound
 	}
 	items := make([]conversationSwitchItem, 0, len(original.Items))
 	for _, old := range original.Items {
@@ -579,7 +584,7 @@ func (s *Service) conversationSwitchStatus(ctx context.Context, id string, space
 			}
 		}
 	}
-	return conversationSwitchReport{}, fmt.Errorf("conversation switch batch not found")
+	return conversationSwitchReport{}, errConversationSwitchBatchNotFound
 }
 
 func (s *Service) wakeConversationSwitches() {
@@ -616,6 +621,17 @@ func (s *Service) wakeConversationSwitches() {
 	}()
 }
 
+func writeConversationSwitchError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errConversationSwitchBatchNotFound):
+		apierr.Write(w, http.StatusNotFound, err)
+	case errors.Is(err, errConversationSwitchInvalid):
+		apierr.Write(w, http.StatusBadRequest, err)
+	default:
+		apierr.Call(w, err)
+	}
+}
+
 func (s *Service) conversationSwitchRoutes() {
 	s.handle("POST /api/v1/assistant/conversation-switches", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -650,7 +666,7 @@ func (s *Service) conversationSwitchRoutes() {
 		if a.Preview {
 			report, err := s.previewConversationSwitches(r.Context(), a, resolve)
 			if err != nil {
-				apierr.Call(w, err)
+				writeConversationSwitchError(w, err)
 				return
 			}
 			apierr.WriteJSON(w, report)
@@ -658,7 +674,7 @@ func (s *Service) conversationSwitchRoutes() {
 		}
 		report, _, err := s.executeConversationSwitches(r.Context(), a, "", resolve, nil)
 		if err != nil {
-			apierr.Call(w, err)
+			writeConversationSwitchError(w, err)
 			return
 		}
 		apierr.WriteJSON(w, report)
@@ -670,7 +686,7 @@ func (s *Service) conversationSwitchRoutes() {
 		}
 		report, err := s.conversationSwitchStatus(r.Context(), r.PathValue("batch"), nil)
 		if err != nil {
-			apierr.Write(w, 404, err)
+			writeConversationSwitchError(w, err)
 			return
 		}
 		apierr.WriteJSON(w, report)

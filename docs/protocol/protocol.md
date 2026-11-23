@@ -6463,7 +6463,7 @@ For an explicit multi-conversation operation, a full-access client sends
 permission_mode?, preview?}`. A preview is read-only and creates no batch, operation or confirmation. Execution returns a
 batch ID, per-item before/target images, expected epochs, operation IDs and outcomes. `ready`, `queued`, `switching`,
 `switched` and `refused` distinguish the plan and its progress. `GET /api/v1/assistant/conversation-switches/{batch}`
-reconciles and reads the durable batch. Items at most 50 are independent: one refusal does not roll back the others.
+reconciles and reads the durable batch. A batch has at most 50 items; items are independent: one refusal does not roll back the others.
 The MCP tool `conversations_switch` exposes the same operation with the caller's conversation-space isolation and one
 existing outbound confirmation for the whole actionable batch; `batch_id` reads status.
 
