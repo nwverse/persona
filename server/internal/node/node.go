@@ -1356,9 +1356,15 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// ExtraPath: directories at the front of the node's PATH (hub.json machines[].extra_path, toolpath.go);
 			// nil (an older hub, a call that says nothing of it) leaves PATH as it is, [] takes them out.
 			ExtraPath *[]string `json:"extra_path"`
+			// PrivateNetwork: the hub is in office network mode (hub.json security.private_network_only), so this node's
+			// tailcat endpoint stops (tailcat.go stopTailcat); nil or false (an older hub) leaves it as it is.
+			PrivateNetwork *bool `json:"private_network"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
+		}
+		if c.PrivateNetwork != nil && *c.PrivateNetwork {
+			stopTailcat()
 		}
 		if c.ExtraPath != nil { // before herdr_autostart: a herdr server the node starts next has them too
 			n.setExtraPath(*c.ExtraPath)
