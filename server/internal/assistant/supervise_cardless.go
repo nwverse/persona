@@ -168,7 +168,7 @@ func (s *Service) signalCardlessWait(ctx context.Context, t Todo, agents []proto
 	if ctx.Err() != nil || !s.supervisePendingDurably([]superviseSignal{g}) {
 		return // no stamp until the pending signal has survived its durable write
 	}
-	if _, _, err := s.updateSupervisionLockedAt(ctx, t.ID, now, func(v *Supervision) bool {
+	if _, _, err := s.updateSupervisionLockedAt(ctx, t.ID, time.Now().UTC(), func(v *Supervision) bool {
 		stamped := now.UTC()
 		if _, claimStamp, legacy := legacyCardlessClaim(g); legacy {
 			stamped = claimStamp

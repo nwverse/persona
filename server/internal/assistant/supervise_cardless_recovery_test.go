@@ -99,6 +99,20 @@ func flushCardlessClaim(s *Service) {
 	holdDigest(s)
 }
 
+// deliverCardlessDigest supplies the caller locks that sendDigest holds around deliverDigest. Keep the real
+// timer enabled in the acknowledgment tests: it must serialize with this explicit delivery through the same locks.
+func deliverCardlessDigest(s *Service, list []superviseSignal) bool {
+	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+	b.routingMu.RLock()
+	defer b.routingMu.RUnlock()
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	ctx := context.Background()
+	return s.deliverDigest(ctx, s.settings(ctx), "conv1", list, "", time.Now(), time.Time{})
+}
+
 func cardlessNotices(f *fakeHub) int {
 	count := 0
 	for _, text := range f.notices() {
@@ -301,35 +315,64 @@ func TestCardlessClaimLegacyRetryDuringRecovery(t *testing.T) {
 	now := time.Now()
 	s.superviseWatch(context.Background(), now)
 	g := pendingCardlessSignal(t, s, todo.ID)
-	entered, resume := make(chan struct{}), make(chan struct{})
-	var resumeOnce sync.Once
-	release := func() { resumeOnce.Do(func() { close(resume) }) }
-	defer release()
-	blocked := false // accessed only with the fake hub's mutex, as nodeAnswer requires
+	watchEntered, watchResume := make(chan struct{}), make(chan struct{})
+	digestEntered, digestResume := make(chan struct{}), make(chan struct{})
+	var watchOnce, digestOnce sync.Once
+	releaseWatch := func() { watchOnce.Do(func() { close(watchResume) }) }
+	releaseDigest := func() { digestOnce.Do(func() { close(digestResume) }) }
+	defer releaseWatch()
+	defer releaseDigest()
+	reads := 0 // accessed only with the fake hub's mutex, as nodeAnswer requires
 	f.answerNode(DeviceSessionsList, func(machine string, _ json.RawMessage) (any, error) {
-		if machine == "box" && !blocked {
-			blocked = true
-			f.mu.Unlock()
-			close(entered)
-			<-resume
-			f.mu.Lock()
+		if machine == "box" {
+			reads++
+			var entered, resume chan struct{}
+			switch reads {
+			case 1:
+				entered, resume = watchEntered, watchResume
+			case 2:
+				entered, resume = digestEntered, digestResume
+			}
+			if entered != nil {
+				f.mu.Unlock()
+				close(entered)
+				<-resume
+				f.mu.Lock()
+			}
 		}
 		return map[string]any{"sessions": f.sessions[machine]}, nil
 	})
-	done := make(chan bool, 1)
+	// Let the second watch pass pruneAllStoppedDedup before the old digest acquires dedupMu. Their worker reads
+	// then overlap without bypassing either production caller's locks or changing the pending-review fixture.
+	watchDone := make(chan struct{})
 	go func() {
-		done <- s.deliverDigest(context.Background(), s.settings(context.Background()), "conv1", []superviseSignal{g}, "", time.Now(), time.Time{})
+		s.superviseWatch(context.Background(), now.Add(time.Minute))
+		close(watchDone)
 	}()
 	select {
-	case <-entered: // the old digest checked its durable claim and is now reading its worker
+	case <-watchEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second watch never reached its worker read")
+	}
+	done := make(chan bool, 1)
+	go func() {
+		done <- deliverCardlessDigest(s, []superviseSignal{g})
+	}()
+	select {
+	case <-digestEntered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the old digest never reached its worker read")
 	}
-	s.superviseWatch(context.Background(), now.Add(time.Minute))
+	releaseWatch()
+	select {
+	case <-watchDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second watch did not finish after its worker read resumed")
+	}
 	store.mu.Lock()
 	store.failMarker = false
 	store.mu.Unlock()
-	release()
+	releaseDigest()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -361,14 +404,14 @@ func TestCardlessClaimRetrySurvivesDigestAcknowledgment(t *testing.T) {
 				sibling := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "review-sibling", At: time.Now()}
 				s.queueSignal(sibling)
 				if mode == "deduplicated_sibling" {
-					if !s.deliverDigest(context.Background(), s.settings(context.Background()), "conv1", []superviseSignal{sibling}, "", time.Now(), time.Time{}) {
+					if !deliverCardlessDigest(s, []superviseSignal{sibling}) {
 						t.Fatal("the sibling's first real delivery failed")
 					}
 					s.queueSignal(sibling)
 				}
 				list = append(list, sibling)
 			}
-			s.deliverDigest(context.Background(), s.settings(context.Background()), "conv1", list, "", time.Now(), time.Time{})
+			deliverCardlessDigest(s, list)
 			if _, ok := storedSupervisePending(t, s)[g.id()]; !ok {
 				t.Fatal("digest acknowledged a marker failure that it should retry")
 			}
