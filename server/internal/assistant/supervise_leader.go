@@ -129,9 +129,11 @@ func (s *Service) plannedLead(ctx context.Context, t Todo) string {
 // backfillPlanSupervisors gives the tasks a direction lead handed out before #13346 back to that lead, once: the ones
 // it planned and the ones whose origin is the lead (handed out without a plan: agent_start, todo_create), open or done
 // (a done one keeps the right supervisor on record for a reopen and the history). The ledger records the lead with
-// source plan, so routing, remedies and task_review read the lead from then on and a later load skips them. Signals already queued for the former supervisor (main, as the removed rehome left them)
-// are gathered again for the lead. Task leaders' workers, explicit transfers and tasks other conversations planned
-// keep their recorded supervisor.
+// source plan, so routing, remedies and task_review read the lead from then on and a later load skips them. A lead's
+// unmarked no-plan task with an Agent needs that source even when its supervisor is already the lead: without it,
+// needs_user keeps the legacy main route (#13619). A direction to-do with no Agent yet stays unmarked. Signals already
+// queued for the former supervisor (main, as the removed rehome left them) are gathered again for the lead. Task
+// leaders' workers, explicit transfers and tasks other conversations planned keep their recorded supervisor.
 func (s *Service) backfillPlanSupervisors(ctx context.Context) {
 	cfg := s.settings(ctx)
 	todos := s.todosOf(ctx, "*")
@@ -145,8 +147,8 @@ func (s *Service) backfillPlanSupervisors(ctx context.Context) {
 			continue
 		}
 		lead := s.plannedLead(ctx, t)
-		if lead == "" || t.PlanID == "" && old == lead {
-			continue // a task the lead handed out without a plan and already supervises needs nothing
+		if lead == "" || t.PlanID == "" && old == lead && len(t.Agents) == 0 {
+			continue // a direction to-do with no Agent yet stays unmarked; no-plan Agent work still needs its source
 		}
 		if s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, lead) {
 			s.logf("task %s: backfill supervision: lead %s cannot receive supervision; left with %s", t.ID, short(lead), short(old))
