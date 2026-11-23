@@ -9,7 +9,7 @@ import (
 
 func TestSpeakable(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
-		{"改了 `server/internal/voice/runs.go` 和 docs/assistant/voice.md", "改了 文件 runs.go 和 文件 voice.md"},
+		{"改了 `server/internal/modules/voice/runs.go` 和 docs/assistant/voice.md", "改了 文件 runs.go 和 文件 voice.md"},
 		{"见 runs.go:42 和 /etc/hosts", "见 文件 runs.go 第 42 行 和 文件 hosts"},
 		{"运行 `npm test`，**全部**通过", "运行 npm test，全部通过"},
 		{"看 https://example.com/a?b=1。然后", "看 （一个链接）。然后"},
@@ -23,9 +23,9 @@ func TestSpeakable(t *testing.T) {
 		{"`" + strings.Repeat("x", inlineCodeMost+1) + "`", "（一段代码）"},
 		// Link text is read as text: what it holds is said as everywhere else, never a mark.
 		{"见 [`npm test`](https://example.com/x) 的输出", "见 npm test 的输出"},
-		{"- [`runs.go`](server/internal/voice/runs.go)：跟踪一轮", "runs.go：跟踪一轮"},
+		{"- [`runs.go`](server/internal/modules/voice/runs.go)：跟踪一轮", "runs.go：跟踪一轮"},
 		{"见 [`abc1234`](https://example.com/commit/abc1234) 的改动", "见 （一串哈希） 的改动"},
-		{"[server/internal/voice/runs.go](https://example.com/x) 和 [Login.tsx:42](src/Login.tsx#L42)", "文件 runs.go 和 文件 Login.tsx 第 42 行"},
+		{"[server/internal/modules/voice/runs.go](https://example.com/x) 和 [Login.tsx:42](src/Login.tsx#L42)", "文件 runs.go 和 文件 Login.tsx 第 42 行"},
 		{"[`a/b.go`](x) 里的 [**粗体**](y)", "文件 b.go 里的 粗体"},
 		{"不是标记：\uE0000\uE001", "不是标记：0"},
 	} {

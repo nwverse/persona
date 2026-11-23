@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/extwire"
-	"github.com/nwverse/persona/server/internal/voice/voicetest"
+	"github.com/nwverse/persona/server/internal/modules/voice/voicetest"
 )
 
 func getInfo(t *testing.T, srv *httptest.Server, cid, role string) (int, extwire.TranscriptionInfo) {
