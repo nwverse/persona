@@ -34,7 +34,15 @@ func newLeaderService(t *testing.T) (*Service, *fakeHub, Todo) {
 
 func newLeaderServiceOn(t *testing.T, st Store) (*Service, *fakeHub, Todo) {
 	t.Helper()
+	return newLeaderServiceFromAgentNumberOn(t, st, 0)
+}
+
+// Public agent tools require at least eight characters of the session id. A seeded fake counter lets those tests
+// exercise the real tool without relaxing its lookup contract; older fixtures keep their usual s1, s2 ids.
+func newLeaderServiceFromAgentNumberOn(t *testing.T, st Store, agentNumber int) (*Service, *fakeHub, Todo) {
+	t.Helper()
 	s, f := newQuietServiceOn(t, st)
+	f.agents = agentNumber
 	f.judge = `{"verdict":"done","reason":"PR 已合并"}`
 	f.known["lead1"] = true
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},

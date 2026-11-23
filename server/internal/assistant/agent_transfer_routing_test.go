@@ -24,7 +24,7 @@ func transferPlannedTask(t *testing.T, s *Service, f *fakeHub, task Todo, destin
 // to that same lead. The saved plan must no longer be evidence of a legacy assignment after this move.
 func TestAgentTransferPlanSignalsAndReload(t *testing.T) {
 	database := todoTestDB(t)
-	s, f, task := newLeaderServiceOn(t, database)
+	s, f, task := newLeaderServiceFromAgentNumberOn(t, database, 999999)
 	if task.Origin != "lead1" || task.PlanID == "" || task.Supervision.Supervisor != "conv1" || task.Supervision.SupervisorSource != "" {
 		t.Fatalf("new lead plan changed its default: %+v", task)
 	}
@@ -222,7 +222,7 @@ func TestAgentTransferDeliversIssueSignalsOnlyOnceAcrossRestart(t *testing.T) {
 	for _, kind := range []string{sigEstimateDue, sigReport, sigIdle, sigReview, sigUndecidable} {
 		t.Run(kind, func(t *testing.T) {
 			database := todoTestDB(t)
-			s, f, task := newLeaderServiceOn(t, database)
+			s, f, task := newLeaderServiceFromAgentNumberOn(t, database, 999999)
 			settleService(t, s)
 			transferPlannedTask(t, s, f, task, "lead1")
 			g := superviseSignal{Todo: task.ID, Kind: kind, Key: "transferred-" + kind, Detail: "Evidence for the transferred supervisor"}
