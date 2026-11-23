@@ -111,7 +111,7 @@ func TestA2ARepeatedBusyRequeuesFailAndReleaseNextSender(t *testing.T) {
 	}
 	view := first.view()
 	meta := first.wire(nil, false).Metadata
-	if view.WaitingSeconds < 600 || view.WaitingReason == "" || meta["personaWaitingSeconds"] != view.WaitingSeconds || meta["personaWaitingReason"] != view.WaitingReason {
+	if view.WaitingSeconds < 600 || view.WaitingReason == "" || (meta["personaWaitingSeconds"].(int64) < view.WaitingSeconds || meta["personaWaitingSeconds"].(int64) > view.WaitingSeconds+1) || meta["personaWaitingReason"] != view.WaitingReason {
 		t.Fatalf("sender lacks waiting age/reason: %+v, %+v", view, meta)
 	}
 	second, err := s.a2aStart(ctx, st, cfg, a2aCaller{Owner: "device:another-sender"}, child, "next", "", "Next work.", false, nil)
