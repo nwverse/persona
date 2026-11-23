@@ -156,8 +156,12 @@ type hubSentence struct {
 	Text       string
 }
 
-// The problems of hub transcription (the socket's problem frame, transcription.problem).
+// The problems of hub transcription (the socket's problem frame, transcription.problem; an open set). The upstream's
+// kinds (#13446): refused (a key or model the service won't take, a quota it says is gone), busy or rate-limited, out
+// of reach (or no job opens), anything else.
 const (
+	problemUpstreamForbidden   = "upstream_forbidden"
+	problemUpstreamBusy        = "upstream_busy"
 	problemUpstreamUnavailable = "upstream_unavailable"
 	problemUpstreamFailed      = "upstream_failed"
 	problemNoInterim           = "no_interim"
@@ -240,7 +244,7 @@ func newHubRun(s *Service, e *kb.Engine, id string) *hubRun {
 	switch t.Problem {
 	case problemNoInterim:
 		r.noInterim = true
-	case problemUpstreamUnavailable, problemUpstreamFailed:
+	case problemUpstreamForbidden, problemUpstreamBusy, problemUpstreamUnavailable, problemUpstreamFailed:
 		r.upstream, r.upstreamAt = t.Problem, time.Now()
 	}
 	for _, sg := range l.Segments {

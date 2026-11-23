@@ -160,11 +160,13 @@ type Node struct {
 	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
 	// projectGlobs counts globProjects calls, each a read of every projects directory: one per row looked up again
 	// was a few hundred a list on a computer with many parked sessions, past the half minute a found path is trusted for.
-	projectGlobs atomic.Int64
-	listPush     listPush // the list pushes sends ask for, one build at a time (notifySessionsSoon)
-	watches      map[string]*watch
-	agyRevisions *lru[string, agyRevision]
-	agyMetas     *lru[string, agyMetaEntry]
+	projectGlobs  atomic.Int64
+	listPush      listPush // the list pushes sends ask for, one build at a time (notifySessionsSoon)
+	watches       map[string]*watch
+	agyRevisions  *lru[string, agyRevision]
+	agyMetas      *lru[string, agyMetaEntry]
+	agyParentSubs *lru[string, agyParentSubagentInfo]
+	agyBound      map[string]agyPaneBinding // herdr pane -> last accepted non-subagent agy conversation (agypane.go)
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).

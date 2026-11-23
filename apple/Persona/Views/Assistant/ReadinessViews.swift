@@ -426,11 +426,7 @@ private struct ReadinessPoller: View {
     @Environment(AppModel.self) private var model
     @Environment(\.tabIsActive) private var tabActive
     @Environment(\.scenePhase) private var phase
-    #if os(macOS)
-    @State private var appActive = NSApp?.isActive ?? true
-    #else
     private let appActive = true
-    #endif
 
     var body: some View {
         let key = ReadinessPoll.key(model.readiness.current)
@@ -448,15 +444,6 @@ private struct ReadinessPoller: View {
                     await model.refreshReadiness(force: false)
                 }
             }
-            #if os(macOS)
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                appActive = true
-                Task { await model.refreshReadiness(force: false) }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-                appActive = false
-            }
-            #endif
     }
 }
 
