@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // AgyFlag marks the entries Persona puts in the Antigravity CLI's own hooks file (node/agyhooks.go):
@@ -28,7 +29,7 @@ type AgyReport struct {
 	TranscriptPath string `json:"transcript_path,omitempty"`
 }
 
-var agyUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var agyUUID = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // agyInputLimit bounds what the hook reads from agy: the fields it needs are a few hundred bytes.
 const agyInputLimit = 1 << 20
