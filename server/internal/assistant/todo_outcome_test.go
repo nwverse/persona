@@ -21,6 +21,8 @@ func outcomeEnv(t *testing.T, st Store, reply string) (*Service, *fakeHub, Todo)
 	t.Helper()
 	f := newFakeHub().withMachine()
 	f.setSessions("box", proto.Session{SessionID: "s1", Title: "修登录", Cwd: "/code/weather/ios"})
+	// The conversation that hands the task out, outside the health space: its outcome goes to a project (todo_scope.go).
+	f.setSessions("server", proto.Session{SessionID: "conv1", Title: "Persona", Assistant: true})
 	f.setItems(proto.Item{Kind: proto.KindText, Role: "assistant", Text: reply})
 	var s *Service
 	if st == nil {
@@ -194,6 +196,7 @@ func TestReviewAcceptedRecordsOutcome(t *testing.T) {
 				s, f, todo := outcomeEnv(t, st, outcomeReply)
 				f.outcome = `{"outcome":"修好了","links":[],"decisions":[],"pitfalls":[]}`
 				ctx := context.Background()
+				setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 				s.superviseTodo(ctx, todo.ID, "conv1", []string{"PR 合并"}, 0)
 				args := map[string]any{"todo_id": todo.ID, "verdict": c.verdict, "note": "看过了"}
 				if c.verdict == reviewAccepted {

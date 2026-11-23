@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -54,6 +55,7 @@ func TestRelayFailureClassification(t *testing.T) {
 		{"the manager's own localized refusal", i18n.Err("external-adapter.scope_required"), relayFailedLocal},
 
 		{"assistant_supervision_runtime", coded(assistantwire.CodeSupervisionRuntime), relayFailedRefused},
+		{"account not enabled", coded(assistantwire.CodeSupervisionAccount), relayFailedRefused},
 		{"conversation_deleted", coded("conversation_deleted"), relayFailedRefused},
 		{"an unknown code", coded("unheard_of"), relayFailedRefused},
 	}
@@ -323,6 +325,7 @@ func TestRefusedForGoodPushSaysWhy(t *testing.T) {
 		name, tool, from, code, body string
 	}{
 		{"supervision, runtime", superviseTool, superviseTool, runtime, "assistant-conversations.supervision_delivery_failed"},
+		{"supervision, account", superviseTool, superviseTool, assistantwire.CodeSupervisionAccount, "rpc-errors.assistant_supervision_account"},
 		{"supervision, other", superviseTool, superviseTool, "unheard_of", "assistant-conversations.supervision_delivery_refused"},
 		{"task end, runtime", taskEndTool, "todo_1", runtime, "rpc-errors.assistant_supervision_runtime"},
 		{"task end, other", taskEndTool, "todo_1", "unheard_of", "assistant-conversations.notice_delivery_refused"},
@@ -344,7 +347,7 @@ func TestRefusedForGoodPushSaysWhy(t *testing.T) {
 					t.Fatal("the refusal did not end the message")
 				}
 				waitFor(t, "the owner's push", func() bool { return len(f.pushList()) == 1 })
-				want := i18n.T(i18n.En, tc.body)
+				want := i18n.T(i18n.En, tc.body, s.supervisionLauncherArgs(ctx, "server", i18n.En))
 				if p := f.pushList()[0]; p.SessionID != "side1" || p.Body != want || p.Title != i18n.T(i18n.En, "assistant-conversations.relay_delivery_failed") {
 					t.Fatalf("push %q / %q about %s, want %q about side1", p.Title, p.Body, p.SessionID, want)
 				}
@@ -355,8 +358,8 @@ func TestRefusedForGoodPushSaysWhy(t *testing.T) {
 			})
 		}
 	}
-	if len(texts) != 4 {
-		t.Fatalf("%d different texts, want the four kinds of refusal told apart", len(texts))
+	if len(texts) != 5 {
+		t.Fatalf("%d different texts, want the five kinds of refusal told apart", len(texts))
 	}
 }
 
@@ -528,11 +531,16 @@ func TestQuietNoticeRefusedForGoodSendsItsPush(t *testing.T) {
 			lark := proto.Session{SessionID: "lark1", MachineID: "server", Assistant: true, Status: proto.StatusWorking}
 			f.setSessions("server", main, lark)
 			s.markReporter(ctx, "server", "lark1")
-			if _, err := s.runTool(ctx, "server", "lark1", "agent_start",
-				json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"看看 CI"}`)); err != nil {
+			// Build the legacy unsupervised quiet task directly: new agent_start work is main-supervised (#5732),
+			// while this test exercises the refusal fallback for an already-existing legacy notification route.
+			todo, err := s.newTodo(ctx, "看看 CI", "看看 CI", "lark1", "", true)
+			if err != nil {
 				t.Fatal(err)
 			}
-			todo := onlyTodo(s)
+			if err := s.linkTodoAgent(ctx, todo.ID, "box", "s1", todo.Title, "/code/app", ""); err != nil {
+				t.Fatal(err)
+			}
+			todo = onlyTodo(s)
 			if !todo.Quiet || todo.Supervision != nil || todo.Origin != "lark1" {
 				t.Fatalf("not a quiet task told in lark1: %+v", todo)
 			}
@@ -682,6 +690,7 @@ func TestEveryDevicesLayerRefusalWaits(t *testing.T) {
 	known := map[string]string{
 		"proto.CodeNodeOutdated":         proto.CodeNodeOutdated,
 		"proto.CodeStartGoalUnsupported": proto.CodeStartGoalUnsupported,
+		"nodeproto.CodeRestarting":       nodeproto.CodeRestarting,
 		"devicewire.CodeNoDevice":        devicewire.CodeNoDevice,
 		"devicewire.CodeDeadline":        devicewire.CodeDeadline,
 		"devicewire.CodeMachineOffline":  devicewire.CodeMachineOffline,

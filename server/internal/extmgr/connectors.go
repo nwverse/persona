@@ -71,7 +71,8 @@ const subscriptionKickWait = 10 * time.Second
 // callConnector runs a connector's tool for an agent or assistant conversation (by: none when the user acts in a
 // connector's thread); a write the gate leaves to the user is asked on the phone like mail_send, in that conversation.
 func (h *Manager) callConnector(ctx context.Context, by asker, name string, args json.RawMessage) proto.ToolResult {
-	if inHealth(h.askerCwd(by)) { // a health conversation's writes: on the phone each time (assistant.go inHealth)
+	h.requestLarkCLIRecovery(ctx)
+	if inSpace(h.askerCwd(by)) { // a space conversation's writes: on the phone each time (hubglue.go inSpace)
 		ctx = connector.ConfirmEach(ctx)
 	}
 	// The ledger of what went out (sent_ledger.go) is told of the write with this ctx: who asked, and the card the user answered.
@@ -372,6 +373,18 @@ func (h *Manager) setConnectorOptions(ctx context.Context, id string, raw json.R
 
 // applyConnectorOptions is setConnectorOptions without the mutes.
 func (h *Manager) applyConnectorOptions(ctx context.Context, id string, raw json.RawMessage) error {
+	if id == "larkcli" && h.larkCLIRecovery.preferencesUnread.Load() {
+		h.requestLarkCLIRecovery(ctx)
+		return errBotSettingsUnread
+	}
+
+	if id == "larkcli" {
+		h.larkCLIRefreshMu.Lock()
+		defer h.larkCLIRefreshMu.Unlock()
+		if h.larkCLIRecovery.preferencesUnread.Load() {
+			return errBotSettingsUnread
+		}
+	}
 	o, ok := connector.As[connector.Options](h.connectors.Get(id))
 	if !ok {
 		return fmt.Errorf("%s has no settings", id)
@@ -400,6 +413,19 @@ func (h *Manager) applyConnectorOptions(ctx context.Context, id string, raw json
 // extension's connector restarts that extension (connectorSwitched): its program learns which connectors are on only
 // at initialize.
 func (h *Manager) setConnectorEnabled(ctx context.Context, id string, on bool) error {
+	if id == "larkcli" && h.larkCLIRecovery.preferencesUnread.Load() {
+		h.requestLarkCLIRecovery(ctx)
+		return errBotSettingsUnread
+	}
+
+	if id == "larkcli" {
+		h.larkCLIRefreshMu.Lock()
+		defer h.larkCLIRefreshMu.Unlock()
+		if h.larkCLIRecovery.preferencesUnread.Load() {
+			return errBotSettingsUnread
+		}
+	}
+
 	h.kbPostsMu.Lock()
 	was := h.connectors.Enabled(id)
 	err := h.connectors.SetEnabled(id, on)
@@ -437,6 +463,19 @@ func (h *Manager) setConnectorEnabled(ctx context.Context, id string, on bool) e
 // setConnectorFeed turns one of a connector's feeds on or off and keeps the choice for the next start; turned on, the
 // inbox or the archive goes again soon.
 func (h *Manager) setConnectorFeed(ctx context.Context, id string, f connector.Feed, on bool) error {
+	if id == "larkcli" && h.larkCLIRecovery.preferencesUnread.Load() {
+		h.requestLarkCLIRecovery(ctx)
+		return errBotSettingsUnread
+	}
+
+	if id == "larkcli" {
+		h.larkCLIRefreshMu.Lock()
+		defer h.larkCLIRefreshMu.Unlock()
+		if h.larkCLIRecovery.preferencesUnread.Load() {
+			return errBotSettingsUnread
+		}
+	}
+
 	h.kbPostsMu.Lock()
 	was := h.connectors.Feeds(id, f)
 	err := h.connectors.SetFeed(id, f, on)
@@ -475,19 +514,42 @@ func (h *Manager) setConnectorFeed(ctx context.Context, id string, f connector.F
 // restoreConnectorSwitches applies the user's switches before the connectors start. One the user never switched is
 // on, unless it was added to start off (addConnectorOff: a built-in plugin's waits for the user to turn it on).
 func (h *Manager) restoreConnectorSwitches(ctx context.Context) {
-	cs := h.connectorSettings(ctx)
+	cs, err := h.readConnectorSettings(ctx)
+	if err != nil {
+		h.logf("connectors: settings: %v", err)
+	}
 	for _, c := range h.connectors.All() {
+		if c.ID() == "larkcli" {
+			h.larkCLIRecovery.preferencesUnread.Store(err != nil)
+			if err != nil {
+				h.deferLarkCLIRecovery()
+				_ = h.connectors.SetEnabled(c.ID(), false)
+				_ = h.connectors.SetFeed(c.ID(), connector.FeedInbox, false)
+				continue
+			}
+		}
 		h.restoreSwitchesOf(c, cs)
 	}
 }
 
-// connectorSettings are the user's connector switches and settings.
-func (h *Manager) connectorSettings(ctx context.Context) connectorSettings {
+// readConnectorSettings distinguishes missing/default preferences from an unread
+// record. Decode only into a temporary value and bound database I/O.
+func (h *Manager) readConnectorSettings(ctx context.Context) (connectorSettings, error) {
 	var cs connectorSettings
 	if h.store != nil {
-		if _, err := h.store.Setting(ctx, connectorSettingsKey, &cs); err != nil {
-			h.logf("connectors: settings: %v", err)
+		readCtx, cancel := context.WithTimeout(ctx, botSettingsReadTimeout)
+		defer cancel()
+		if _, err := h.store.Setting(readCtx, connectorSettingsKey, &cs); err != nil {
+			return connectorSettings{}, err
 		}
+	}
+	return cs, nil
+}
+
+func (h *Manager) connectorSettings(ctx context.Context) connectorSettings {
+	cs, err := h.readConnectorSettings(ctx)
+	if err != nil {
+		h.logf("connectors: settings: %v", err)
 	}
 	return cs
 }
@@ -595,6 +657,13 @@ func (s connectorSecrets) Delete(ctx context.Context) error {
 
 // startConnectors registers the connectors, applies the user's switches and runs them.
 func (h *Manager) startConnectors(ctx context.Context) {
+	// Recovery cannot replace the placeholder until options and switches have
+	// been restored, before Registry.Start can launch its watchers.
+	h.larkCLIRefreshMu.Lock()
+	defer func() { h.larkCLIRefreshMu.Unlock(); h.requestLarkCLIRecovery(ctx) }()
+	if h.cfg.Lark.CLI != nil {
+		h.larkCLIRecovery.preferencesUnread.Store(true)
+	}
 	h.registerConnectors()
 	h.attachExtensions(ctx) // the plugins' connectors, after the hub's own: those ids are taken
 	h.migrateIMessage(ctx)  // manager.json's imessage.machine into Settings › Extensions › Messages, once (imessage_extension.go)
@@ -638,6 +707,9 @@ func (h *Manager) registerConnectors() {
 	// is deliberately absent when lark.cli is unset, preserving existing hubs.
 	if h.cfg.Lark.CLI != nil {
 		if err := h.syncLarkCLIProfile(context.Background()); err != nil {
+			if !errors.Is(err, errBotSettingsUnread) {
+				h.deferLarkCLIRecovery()
+			}
 			h.logf("larkcli profile sync: %v", err)
 		}
 		lc := h.newLarkCLIConnector(h.effectiveLarkCLIProfile(context.Background()))

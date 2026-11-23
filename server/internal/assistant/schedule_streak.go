@@ -14,10 +14,11 @@ const streakLimit = 3
 
 // counted: whether r is one of the runs a streak counts (#4658). A failed "Run now" is answered in the app, and an
 // automatic retry that failed is the same failure once more (watchScheduledRun): neither counts. A not-ready skip
-// waits silently for its computer or model, so it neither counts nor ends the streak. Any run that went
+// waits silently for its computer or model, so it neither counts nor ends the streak. An owner skip
+// was intentional and does not count either. Any run that went
 // through, a retry or a "Run now" included, ends the streak: the task works.
 func counted(r ScheduleRun) bool {
-	return r.Status == runOK || !r.Manual && !r.Retried && !r.NotReady && !r.ConditionSkipped
+	return r.Status == runOK || !r.Manual && !r.Retried && !r.NotReady && !r.ConditionSkipped && !r.OwnerSkipped
 }
 
 // runStreak counts ref's runs in a row that did not go through, newest first, and says whether one of them was
@@ -90,10 +91,11 @@ func (s *Service) pushStreak(t Task, count int, last ScheduleRun) bool {
 	}
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if t.Space == SpaceHealth { // the lock screen does not name a health task (health.go)
-		name, _ = healthNotice(l)
-	}
 	why := clip(oneLine(last.Error), 300)
+	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
+	if s.exitPolicy(ctx, name+"\n"+why, last.SessionID, t.Space).Redact {
+		name, _ = s.redactedNotice(ctx, l, t.Space)
+	}
 	if why == "" {
 		why = i18n.T(l, "assistant-schedule.streak_unknown")
 	}

@@ -656,7 +656,7 @@ func (r *reader) brief() {
 		}
 		id := "brief:" + b.ID + ":" + strconv.Itoa(i)
 		switch ev.Kind {
-		case briefEventScope:
+		case briefEventScope, "estimate":
 			it := r.add(id, ev.At, assistantwire.TodoEntryTypeScope, assistantwire.TodoActorKindPersona)
 			it.e.Line = line(lineScope, "change", ev.Change, "why", ev.Why)
 		case briefEventOverdue:

@@ -205,18 +205,198 @@ def build_cli(work: Path, lock: dict) -> Path:
     return cli
 
 
-def run(cli: Path, mode: str, android_out: Path, harmony_out: Path) -> None:
+def run(cli: Path, mode: str, android_out: Path, harmony_out: Path, sources=(SOURCE,)) -> None:
     version = subprocess.run([str(cli), "--version"], cwd=ROOT, capture_output=True, text=True, timeout=30)
     if version.returncode != 0:
         fail("CLI does not expose the required `--version` source identity; rebuild the exact pinned public source")
     expected = f"refract 0.1.0 ({EXPECTED['commit']})"
     if version.stdout.strip() != expected:
         fail(f"CLI identity mismatch: expected `{expected}`, got `{version.stdout.strip()}`; rebuild the pinned source")
-    subprocess.run(
-        [str(cli), mode, "--input", str(SOURCE), "--mapping", str(MAPPING),
-         "--android-out", str(android_out), "--harmony-out", str(harmony_out)],
-        check=True, cwd=ROOT, timeout=90,
-    )
+    arguments = [str(cli), mode]
+    for source in sources:
+        arguments += ["--input", str(source)]
+    arguments += ["--mapping", str(MAPPING), "--android-out", str(android_out), "--harmony-out", str(harmony_out)]
+    subprocess.run(arguments, check=True, cwd=ROOT, capture_output=True, text=True, timeout=90,
+                   errors="replace")
+
+
+def report_process_failure(error: subprocess.CalledProcessError) -> None:
+    """Preserve a failed CLI's own diagnostic instead of printing only its process status."""
+    diagnostics = error.stderr or error.stdout
+    if not diagnostics:
+        return
+    if isinstance(diagnostics, bytes):
+        # Raw source-build diagnostics must not be decoded or replaced with U+FFFD.
+        sys.stderr.flush()
+        sys.stderr.buffer.write(diagnostics)
+        if not diagnostics.endswith(b"\n"):
+            sys.stderr.buffer.write(b"\n")
+        sys.stderr.buffer.flush()
+        return
+    sys.stderr.write(diagnostics)
+    if not diagnostics.endswith("\n"):
+        sys.stderr.write("\n")
+
+
+def restore_reviewed_output(reviewed: bytes, generated: Path | None = None) -> None:
+    destination = GENERATED if generated is None else generated
+    try:
+        destination.write_bytes(reviewed)
+        restored = destination.read_bytes() == reviewed
+    except OSError as error:
+        raise ValueError(f"Could not restore the reviewed Kotlin after a generation failure: {error}") from error
+    if not restored:
+        fail("Could not restore the reviewed Kotlin after a generation failure: restored bytes differ")
+
+
+def remove_new_output(generated: Path) -> None:
+    """Remove a failed run's new output, or preserve an explicit cleanup failure."""
+    generated.unlink(missing_ok=True)
+    if generated.exists():
+        fail("New unreviewed Kotlin still exists after removal")
+
+
+def check_unsupported_input(cli: Path, work: Path) -> None:
+    """A valid sibling must not be published when another input has no native-component mapping."""
+    unsupported = work / "UnsupportedAboutControl.swift"
+    work.mkdir()
+    unsupported.write_text("""import SwiftUI
+
+struct UnsupportedAboutControl: View {
+    var body: some View {
+        UnsupportedAboutControlHost(value: \"fixture\")
+    }
+}
+""", encoding="utf-8")
+    before = GENERATED.read_bytes() if GENERATED.exists() else None
+    for mode in ("check", "generate"):
+        android_out = work / mode / "android"
+        harmony_out = work / mode / "harmony"
+        try:
+            run(cli, mode, android_out, harmony_out, sources=(SOURCE, unsupported))
+        except subprocess.CalledProcessError as error:
+            diagnostics = error.stderr or error.stdout
+        else:
+            fail(f"Unsupported component was accepted in {mode} mode")
+        for fragment in ("UnsupportedAboutControl.swift:5:9", "[missingComponentMapping]",
+                         "UnsupportedAboutControlHost", "Suggestion: Declare its typed target"):
+            if fragment not in diagnostics:
+                fail(f"Unsupported component lacked a source-located diagnostic in {mode} mode: {diagnostics}")
+        if android_out.exists() or harmony_out.exists():
+            fail(f"Unsupported component published partial output in {mode} mode")
+        current = GENERATED.read_bytes() if GENERATED.exists() else None
+        if current != before:
+            fail(f"Rejected {mode} changed the reviewed generated Kotlin")
+
+
+def kotlin_code_only(source: str) -> str:
+    """Blank comments and literal text, retaining interpolation as Kotlin code.
+
+    This is a bounded lexer for the exclusion check, not a Kotlin parser. Nested block comments and
+    nested interpolation braces are tracked so a literal cannot hide a real interpolated reference.
+    """
+    code = []
+    stack = [("code", 0)]
+    index = 0
+    while index < len(source):
+        kind, depth = stack[-1]
+        char = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if kind == "code":
+            if source.startswith("//", index):
+                code.append("  ")
+                stack.append(("line", 0))
+                index += 2
+            elif source.startswith("/*", index):
+                code.append("  ")
+                stack.append(("block", 1))
+                index += 2
+            elif source.startswith('"""', index):
+                code.append("   ")
+                stack.append(("raw", 0))
+                index += 3
+            elif char in ('"', "'"):
+                code.append(" ")
+                stack.append(("string" if char == '"' else "char", 0))
+                index += 1
+            elif char == "}" and depth:
+                code.append(char)
+                stack.pop()
+                index += 1
+            elif char == "{" and depth:
+                stack[-1] = (kind, depth + 1)
+                code.append(char)
+                index += 1
+            else:
+                code.append(char)
+                index += 1
+        elif kind == "line":
+            code.append("\n" if char == "\n" else " ")
+            index += 1
+            if char == "\n":
+                stack.pop()
+        elif kind == "block":
+            if source.startswith("/*", index):
+                stack[-1] = (kind, depth + 1)
+                code.append("  ")
+                index += 2
+            elif source.startswith("*/", index):
+                code.append("  ")
+                index += 2
+                if depth == 1:
+                    stack.pop()
+                else:
+                    stack[-1] = (kind, depth - 1)
+            else:
+                code.append("\n" if char == "\n" else " ")
+                index += 1
+        elif kind == "char":
+            code.append("\n" if char == "\n" else " ")
+            if char == "\\":
+                code.append("\n" if following == "\n" else " ")
+                index += 2
+            else:
+                index += 1
+                if char == "'":
+                    stack.pop()
+        else:
+            if char == "\\" and kind == "string":
+                code.append("  ")
+                index += 2
+            elif (kind == "raw" and source.startswith('"""', index)) or (kind == "string" and char == '"'):
+                terminator = 3 if kind == "raw" else 1
+                code.append(" " * terminator)
+                index += terminator
+                stack.pop()
+            elif char == "$" and following == "{":
+                code.append("${")
+                stack.append(("code", 1))
+                index += 2
+            elif char == "$" and (following == "_" or following.isalpha()):
+                code.append(char)
+                stack[-1] = (kind + "-interpolation", 0)
+                index += 1
+            else:
+                code.append("\n" if char == "\n" else " ")
+                index += 1
+        if stack[-1][0].endswith("-interpolation"):
+            while index < len(source) and (source[index] == "_" or source[index].isalnum()):
+                code.append(source[index])
+                index += 1
+            stack[-1] = (stack[-1][0][:-len("-interpolation")], 0)
+    return "".join(code)
+
+
+def validate_production_exclusion(android: Path, identifiers: tuple[str, ...], message: str) -> None:
+    for production in android.rglob("*.kt"):
+        relative = production.relative_to(android)
+        parts = relative.parts
+        source_sets = {parts[index + 1] for index, part in enumerate(parts[:-1]) if part == "src"}
+        if not source_sets or source_sets <= {"test", "androidTest"}:
+            continue
+        code = kotlin_code_only(production.read_text(encoding="utf-8"))
+        if any(identifier in code for identifier in identifiers):
+            fail(f"{message}: {relative}")
 
 
 def main() -> int:
@@ -249,6 +429,12 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="persona-refract-about-") as temporary:
             work = Path(temporary)
             cli = args.cli.resolve() if args.cli is not None else build_cli(work, lock)
+            before = GENERATED.read_bytes() if GENERATED.exists() else None
+            check_unsupported_input(cli, work / "rejected")
+            current = GENERATED.read_bytes() if GENERATED.exists() else None
+            if current != before:
+                restore_reviewed_output(before)
+                fail("Rejected input changed the reviewed Kotlin; the original reviewed bytes were restored")
             if args.mode == "generate":
                 # The mapping's own output.directory is not used: this command is run only from Persona's root.
                 # Its second backend is schema validation only and never published as a Persona destination.
@@ -274,20 +460,38 @@ def main() -> int:
                 fail("Generated UI must not own framework metadata or clipboard behavior")
             if not (SCHEMA_ONLY_HARMONY / "string.json").is_file():
                 fail("Missing CLI schema-validation resource fixture")
-            for production in (ROOT / "android").glob("**/src/main/**/*.kt"):
-                source = production.read_text(encoding="utf-8")
-                if "AboutVersionModel" in source or "AboutVersionSnapshot" in source or "generated.AboutVersionRow" in source:
-                    fail(f"Ordinary production source must exclude the pilot: {production.relative_to(ROOT)}")
+            validate_production_exclusion(
+                ROOT / "android", ("AboutVersionModel", "AboutVersionSnapshot", "generated.AboutVersionRow"),
+                "Ordinary production source must exclude the pilot")
             if args.mode == "generate":
-                # A second real invocation is the deterministic output gate, not a handwritten golden.
-                before = GENERATED.read_bytes()
+                # Compare two invocations, but never confuse the first unreviewed output with the entry snapshot.
+                first_generation = GENERATED.read_bytes()
                 run(cli, "generate", GENERATED.parent, work / "schema-only")
-                if GENERATED.read_bytes() != before:
+                if GENERATED.read_bytes() != first_generation:
                     fail("Pinned generation is not deterministic")
                 print(f"Generated {GENERATED.relative_to(ROOT)} with pinned source {lock['commit']}")
             print(f"Refract About Version {args.mode}: PASSED ({lock['commit']}); Android-only, no runtime")
     except (ValueError, OSError, subprocess.SubprocessError, json.JSONDecodeError, tarfile.TarError,
             urllib.error.URLError) as error:
+        if args.mode == "generate" and "before" in locals():
+            if isinstance(error, subprocess.CalledProcessError):
+                report_process_failure(error)
+            print(f"Refract About Version: FAILED: {error}", file=sys.stderr)
+            try:
+                if before is not None:
+                    restore_reviewed_output(before)
+                else:
+                    remove_new_output(GENERATED)
+            except (ValueError, OSError) as restore_error:
+                print(f"Refract About Version: secondary restoration failure: {restore_error}", file=sys.stderr)
+                return 1
+            if before is not None:
+                print("Refract About Version: original reviewed Kotlin restored after generation failure", file=sys.stderr)
+            else:
+                print("Refract About Version: new unreviewed Kotlin removed after generation failure", file=sys.stderr)
+            return 1
+        if isinstance(error, subprocess.CalledProcessError):
+            report_process_failure(error)
         print(f"Refract About Version: FAILED: {error}", file=sys.stderr)
         return 1
     return 0

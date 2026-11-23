@@ -18,16 +18,32 @@ import (
 func TestSendRefusesALauncherOfAnotherAgentKind(t *testing.T) {
 	ctx := context.Background()
 	s, f := mainChatFixture(t)
+	// "nope" below is a launcher the list never has: its send waits out the launcher recovery, 30 s by default, for
+	// nothing. One second, polled fast, checks the same thing.
+	fastLauncherRecovery(t)
+	setLauncherRecovery(f, 1, nil)
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.gw"})
 	setSettings(t, s, func(v *Settings) { v.Main = "main" })
 	f.setSessions("server",
 		proto.Session{SessionID: "main", Agent: "codex", Launcher: "cx", Assistant: true},
 		proto.Session{SessionID: "claude-side", Agent: "claude", Launcher: "claude", Assistant: true},
 		proto.Session{SessionID: "codex-side", Agent: "codex", Launcher: "cx", Assistant: true},
-		proto.Session{SessionID: "rt-side", Agent: "agy", Launcher: "agy-rt", Assistant: true})
+		proto.Session{SessionID: "rt-side", Agent: "agy", Launcher: "agy-rt", Assistant: true, SourceKind: proto.SourceRuntime, SourceInstanceID: "agy"})
 	f.launcherList = append(f.launcherList,
 		proto.Launcher{Name: "agy", Source: "agy", Agent: "agy", Assistant: true},
 		proto.Launcher{Name: "unknown-rt", Source: "example-runtime", Agent: "unknown", Assistant: true})
+	f.answerNode("assistant.segment.check", func(_ string, raw json.RawMessage) (any, error) {
+		var p struct {
+			Launcher string `json:"launcher"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, err
+		}
+		if p.Launcher == "unknown-rt" {
+			return segmentTarget{Registered: true, Prepare: true, Engine: "unknown|runtime:example-runtime"}, nil
+		}
+		return segmentTarget{Registered: true, Prepare: true, Engine: "agy|runtime:agy"}, nil
+	})
 	send := func(sid, launcher, lang string) (map[string]any, error) {
 		p := map[string]any{"text": "hi"}
 		if launcher != "" {
@@ -69,7 +85,6 @@ func TestSendRefusesALauncherOfAnotherAgentKind(t *testing.T) {
 		{"codex-side", "cx"},  // same kind
 		{"rt-side", "agy-rt"},
 		{"rt-side", "agy"},
-		{"rt-side", "unknown-rt"},
 		{"not-listed", "cx"},    // a conversation the machine doesn't list (yet)
 		{"main", ""},            // the Main chat setting, nothing picked: the node's swap is the backstop
 		{"claude-side", "nope"}, // a launcher the list doesn't have: not refused on a guess
@@ -82,6 +97,9 @@ func TestSendRefusesALauncherOfAnotherAgentKind(t *testing.T) {
 		if c.sid == "rt-side" && (err != nil || p["launcher"] != c.launcher) {
 			t.Fatalf("%s with %q: %v %v", c.sid, c.launcher, p, err)
 		}
+	}
+	if _, err := send("rt-side", "unknown-rt", "en"); err == nil {
+		t.Fatal("an unidentified runtime was allowed to resume another connection")
 	}
 	f.launcherList = nil // the machine's list can't be read: its Codex alias isn't known to be one
 	if _, err := send("claude-side", "cx", "en"); err != nil && strings.Contains(err.Error(), "wasn't sent") && strings.Contains(err.Error(), "Codex") {

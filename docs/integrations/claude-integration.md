@@ -681,6 +681,15 @@ The session writes the message as a peer's: the transcript reader takes the user
 
 Measured end to end on a throwaway `claude` 2.1.291 in an empty directory (its own `CLAUDE_CONFIG_DIR`, a pseudo console): with the default permission mode the message was taken in 0.15–0.3 s (also while a startup dialog was on screen) and answered in the transcript; a second message while it worked was queued and answered next; in bypass permissions mode the message was held, as above. The desktop app's sessions were not written to.
 
+### Queue controls (#12789)
+
+A message that comes while such a session works waits in Claude Code's own queue, which its transcript reports and the
+apps list. Editing that queue and Claude Code's send-now are keys on the session's screen (`queue.go`). So a session with
+no pane (the desktop app's, a background one) lists `queue_edit` and `queue_send_now` as false, and the apps offer
+neither. A call that comes anyway is refused with 409 `queue_edit_unsupported` or `send_now_unsupported` and nothing
+pressed; the messages go in order at its next step. A session in a tmux pane lists both as true and takes them as a
+Claude in an engine pane does.
+
 ### Owner input in a tmux pane (#5965)
 
 An outside Claude in tmux already has a terminal the node can read and type into (`outsidePane`, `hosttmux.go`). A normal
@@ -738,12 +747,33 @@ installs and updates it.
   a caller put in the params. Messages from the assistant, extensions, channels (the Lark and WeChat bots), relays
   between conversations and the auth relay have no mark and keep the inbox, as do non-owner Stop requests and the
   answers to a question the session asked (both at priority `now`), and slash commands (still refused, `peer_command`).
-- **When**: when the plugin advertises `busy_input` (0.2.0+), owner messages go through the plugin both at rest and
-  while a turn runs (`$.prompt.submit` writes `queue-operation: enqueue` immediately, without blocking the poll loop or
-  being held for computer approval in `bypassPermissions` / `auto` mode, and `session.send` reports `queued: true` while
-  busy); a session waiting on an `AskUserQuestion` still takes the peer inbox at priority `now` so the question ends
-  instead of blocking the queue. Older plugins without `busy_input` receive owner messages only at rest and fall back to
-  the inbox while busy (`relay_reason: "busy"`).
+- **When**: when the plugin advertises `busy_input` (0.2.0+), owner messages go through the plugin at rest, while a
+  turn runs, and while the session waits on a dialog other than a question (a permission prompt, a plan to approve):
+  `$.prompt.submit` writes `queue-operation: enqueue` immediately, without blocking the poll loop or being held for
+  computer approval in `bypassPermissions` / `auto` mode, and the prompt runs as the person's words when the turn ends
+  (`session.send` reports `queued: true`, and `waits_on_computer: true` behind a dialog). A session waiting on an
+  `AskUserQuestion` still takes the peer inbox at priority `now` so the question ends instead of blocking the queue.
+  Older plugins without `busy_input` receive owner messages only at rest; while the session works or waits on a dialog
+  the message falls back to the inbox with `relay_reason: "plugin_outdated"`, and the web app says to reopen the
+  session on the computer once (below). `relay_reason: "busy"` is left for a status the plugin does not deliver in.
+- **Measured** (2026-11-22, Windows 11, Claude Code 2.1.329, throwaway `claude -p --input-format stream-json` sessions
+  with a throwaway plugin from `--plugin-dir`): in `bypassPermissions` mode with a turn running a long command, two
+  `asUser` submits wrote their `queue-operation` enqueues within 2 ms, were not held, waited through every tool
+  boundary of that turn and ran together as one user turn once it ended; the submit promise settled only when that turn
+  started. With `--permission-prompt-tool stdio` and a permission request left unanswered (`status: "waiting"`,
+  `waitingFor: "permission prompt"`), an `asUser` submit was enqueued at once and ran when the turn ended. A
+  `claude plugin update` of an installed plugin answers "Restart to apply changes": a running session kept the old
+  plugin's code on its next turn, and a plugin's own `$.command.run({ command: "reload-plugins" })` is refused in an SDK
+  session such as the desktop app's ("/reload-plugins isn't available over a remote connection"). So a session keeps
+  the plugin version it started with until it is opened again.
+- **Why the inbox is not used for the owner's words where the plugin can take them**: the inbox's outcomes reach only a
+  sender with an inbox of its own (receipts go to its `from`), which the node is not. A message the inbox read can be
+  held (the transcript then has Claude Code's "Held peer message" notice, `peer_held`), or refused or dropped with no
+  trace in the transcript (Claude Code 2.1.330's ingress guard drops for a rate limit, a repeated body, a full queue or
+  a hop loop, and its receive gate refuses when cross-session messaging is switched off). One 2026-11-21 case: a desktop
+  session in bypass mode working through a 20-minute turn took twelve owner messages through the inbox in a row (each
+  `queue-operation` enqueue, absorbed at a tool boundary) and then wrote nothing at all for the next, with no hold
+  notice: `peer_unconfirmed`, and the message never arrived. Its plugin was 0.1.0, so it had no other way in.
 - **Owner Stop**: when the plugin advertises `interrupt` (0.2.0+), an owner-attested `session.interrupt` cancels the
   running main-loop turn via `$.turn.abort({ turnId })` (falling back to the peer inbox when no plugin turn is active or
   for non-owner interrupts), and `capabilities.interrupt` stays true while a turn runs and the plugin is reachable.
@@ -754,16 +784,23 @@ installs and updates it.
   plugin submits nothing later) and counts it in once the transcript shows the plugin's prompt or its queue entry, or
   the plugin says it submitted it (its submit resolves as the turn starts). No poll takes it within 3 s, the plugin says
   it did not submit it, or nothing shows within 10 s: the message goes through the inbox instead, as above.
+  For 3 minutes after the node starts, a session whose claude can have the plugin (it is installed in that claude's
+  config directory) and has not polled yet gets up to 10 s for its first poll before the message is relayed as
+  `no_plugin`: a node that restarted (an update) knows no plugin until each polls again, a few seconds later.
   `session.send` answers `delivered_as: "user_input"` or `"relayed"` with `relay_reason` (`no_plugin`, `busy`,
-  `plugin_unavailable`, `plugin_refused`, `plugin_unconfirmed`), only for messages that carried `owner_input` to such a
-  session. A relayed message meets the inbox's own outcomes too: one a bypass-mode session holds is `peer_held`, as
-  before. Pictures go as paths in `<attached_images>`, as through the inbox.
+  `plugin_outdated`, `plugin_unavailable`, `plugin_refused`, `plugin_unconfirmed`), only for messages that carried
+  `owner_input` to such a session; a relayed message that ends in an error (`peer_unconfirmed`, `peer_held`) carries
+  both fields in the error's data as well. A relayed message meets the inbox's own outcomes too: one a bypass-mode
+  session holds is `peer_held`, as before. Pictures go as paths in `<attached_images>`, as through the inbox.
 - **What the apps show**: a no-pane session's row says `capabilities.plugin_input: true` while its plugin polls. The message
   shows in the chat as the user's own line (the transcript's plain user line); one relayed shows from "Persona" as
   before. The web app says so when an owner's message to a session with the plugin was relayed (`lib-outbox.relayed_busy`,
   `lib-outbox.relayed_plugin`): the Agent may not take it as their approval. Nothing is said when it went in as their
-  input, nor for a session without the plugin (it never had another way). iOS and Android show the chat line as it is
-  and ignore the new fields for now.
+  input, nor for a session without the plugin (it never had another way). A session whose plugin is from before busy
+  delivery gets its own words (`lib-outbox.relayed_old_plugin` when the inbox took it,
+  `lib-outbox.peer_unconfirmed_old_plugin` when it did not): reopen the session on the computer once and its messages
+  go in as the person's input from then on. iOS and Android show the chat line as it is and ignore the new fields for
+  now.
 - **The plugin** submits text, owner turn interrupts and session settings: no command, no file but its own manifest,
   nothing written. It refuses a slash command, an empty or overlong text and a message past its deadline, tells the node
   why (`ack`), and keeps quiet (the debug log only) while no node answers, backing off up to a minute.
@@ -1173,7 +1210,8 @@ Assistant does not enter herdr: node directly launches `zsh -ic 'CLAUDE_CONFIG_D
 - Non-guest assistant starts default to `--permission-mode bypassPermissions` when neither the manager nor the conversation selects a mode. Explicit selections remain authoritative on resumed and scheduled turns. The command gate honors bypass without a second tool approval; irreversible actions still require `ask_user`. See `docs/assistant/assistant.md` ("Assistant permission defaults").
 - One process supports consecutive turns through stdin, one `{"type":"user","message":{…}}` per line, images as base64 image blocks.
 - `stream_event` `content_block_delta/text_delta` supplies word-by-word output → WS delta; result ends the turn. Structured messages still read from transcript.
-- **Bounded transient recovery** (#3204, `node/assistant_recovery.go`): a turn ending on an upstream safeguards refusal, 429 / throttling, or a 5xx stays working while node resumes the unchanged request once on the same model (`prompts/assistant/model_retry`, a `<persona-context>` block, not another user bubble). If that attempt also fails, node resumes on the next concrete entry in the launcher's own ordered `/model` list, going on from the top after its last entry; each model gets one same-model retry. Where the launcher declares its models' context windows (a Codex launcher: its catalog as `codex debug models` renders it, `context_window × effective_context_window_percent`, read only when a chain picks a model and kept 10 minutes; Claude Code's lists declare none), an entry whose window is smaller than 1.25 × the conversation's last request (the transcript's context tokens) is skipped, and entries whose window is at least the asked-for model's come first (#10277): a 194k-token conversation once moved from a 1M model to the next entry, a 131k one, and compacted before every step (`assistant_fallback_window.go`). The `default` placeholder, models already tried, and a locked launcher's entries are not fallbacks. The named Agent presets in ModelProfile.Tiers are not this queue.
+- **Main and supervisor model policy**: `is_main` and `follows_setting` conversations retain their configured model. Node does not retry quota failures on another model; the existing manager reset wait / durable 429 scheduler handles continuation. Continuations resolve the configured model again, and ordinary sends discard old fallback holds and markers without an availability probe. A tool-search refusal may still restart once on the same model. This does not change Claude Code's own refusal-fallback setting or gateway routing; those remain separate policies.
+- **Bounded transient recovery for workers** (#3204, `node/assistant_recovery.go`): a turn ending on an upstream safeguards refusal, 429 / throttling, or a 5xx stays working while node resumes the unchanged request once on the same model (`prompts/assistant/model_retry`, a `<persona-context>` block, not another user bubble). If that attempt also fails, node resumes on the next concrete entry in the launcher's own ordered `/model` list, going on from the top after its last entry; each model gets one same-model retry. Where the launcher declares its models' context windows (a Codex launcher: its catalog as `codex debug models` renders it, `context_window × effective_context_window_percent`, read only when a chain picks a model and kept 10 minutes; Claude Code's lists declare none), an entry whose window is smaller than 1.25 × the conversation's last request (the transcript's context tokens) is skipped, and entries whose window is at least the asked-for model's come first (#10277): a 194k-token conversation once moved from a 1M model to the next entry, a 131k one, and compacted before every step (`assistant_fallback_window.go`). The `default` placeholder, models already tried, and a locked launcher's entries are not fallbacks. The named Agent presets in ModelProfile.Tiers are not this queue.
   The same rule applies to headless Codex's `turn/completed`. A hub/request 400 or any other 4xx but 429, authentication or model-route error, subscription usage limit (including Claude's textual quota errors), over-context refusal, or user interruption is never replayed. The structured kind wins over the words: Claude's failed turn is classified from its transcript (a rejected quota, or Claude Code's notice that it goes on by itself after the reset, is a usage limit; authentication and model routes are the user's), Codex's from `codexErrorInfo`, and only a safeguards refusal is replayed whatever its kind (#3495). Model changes use the ordinary stop-and-resume path, require an explicitly observed empty background-task inventory, and never kill running or not-yet-known background work to make a switch. Claude Code reports that inventory only when it changes, never at start, so before a switch node sends `initialize` (twice: the node sends none of its own, and only a repeated one is answered with the current set, empty included; 2.1.311). The old process stops only after the new start is checked, so a refused switch keeps it; if no eligible model can continue, the original error becomes final. Only then can the manager's scheduled-run watcher record `failed`. The transcript and session retain the model that actually answered, including a fallback.
   The session stays working throughout process replacement, including after the replacement is registered and before its message is delivered. A resident-node handover waits for the active recovery send, then carries the remaining budget and any queued failure to the new owner, a turn's first failure in the gap included; late results follow that owner. The new owner resumes a carried failure only once its session state has loaded; without the state, or when it cannot go on, the failure is final. A user's message cancels a recovery, but gives back the turn's busy only while the recovery still holds it: a delivered recovery turn is answering, and the message waits for it as for any other turn. A refusal sticks to a conversation (the refused turn stays in its transcript), and the main conversation and a scheduled task's ask for the configured model with every message, so a fallback that answered would last one turn (#3788). After a model switch answered, messages asking for the model it moved away from stay on that fallback for 30 minutes, or until the conversation compacts; any other model picked ends the hold, and a resident-node handover carries it. A conversation refused again within two hours of its last fallback skips the same-model retry. A Claude safeguards refusal always skips it: Claude Code has already continued once on the same model ("safeguards stopped the response above · continuing once with that noted"), so a resend would be the third try (#4283). A model the chain switched to that the gateway does not have ("There's an issue with the selected model", `model_not_found`) was the recovery's own pick: it is spent and the chain goes on to the next model; the same failure on the model the user asked for stays theirs to fix. Such a model is also remembered for its launcher for 6 hours, across conversations and resident handovers, so the next chain does not offer it again (#5234). The same failure on a model that answered this conversation within the last hour is the gateway's passing failure, not the user's choice: it is replayed on that model once, then follows the chain (#5234). A usage limit is told by the transcript first: a failed turn written there is a usage limit only by its record (a rejected quota, or Claude Code's notice that it goes on by itself), so a gateway's "upstream account quota usage limit has been reached" 429 is recovered; the words decide only when nothing was written. A current process exiting without a result closes its recovery instead of leaving a permanent working placeholder.
 - **Model-choice provenance** (#10909): a switched chain persists the original launcher, effort, effort-presence and execution fingerprint beside `From`; recovery's own writes to the session's current model cannot replace them. A marker written before this identity existed uses the pre-request session only when its model is still `From`; fallback-mutated metadata is not mistaken for the original choice. Exhaustion preserves the identity within its chain, while a new chain captures its own. Cold and live records classify launcher and full-execution changes alike, and an exact old request expires naturally even after the two-hour sticky window.

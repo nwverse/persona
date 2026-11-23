@@ -235,6 +235,10 @@ type Session struct {
 	// optional effort metadata within the row size budget.
 	PendingEffort      *string `json:"pending_effort,omitempty"`
 	EffortChangeFailed bool    `json:"effort_change_failed,omitempty"`
+	// ContextRestartRecommended: the latest three measured requests each used over 300,000 input
+	// tokens since the last compaction. Omitted when false or the runtime has no request-level evidence.
+	// Kept with EffortChangeFailed so it fits the row's allocation size class.
+	ContextRestartRecommended bool `json:"context_restart_recommended,omitempty"`
 	// OffLauncher: Persona started this Claude Code Agent on Launcher, but the claude that runs it now was not started
 	// by Persona's command (it lacks Persona's --mcp-config): herdr's bare `claude --resume <id>` after a restart on a
 	// herdr older than 0.9.2, or a resume typed by hand (#11792). Launcher's settings, model, MCP and hooks do not
@@ -566,7 +570,9 @@ const (
 	// effort change only there. Its row's capabilities say modes: false.
 	CodeModesOnComputer = "modes_on_computer"
 	// CodeModesNotRunning: no process or pane runs the session; a message resumes it.
-	CodeModesNotRunning     = "modes_not_running"
+	CodeModesNotRunning = "modes_not_running"
+	// CodeModesUnsupported: an agent in a terminal whose mode, effort and model are its start's (cursor, agy).
+	CodeModesUnsupported    = "modes_unsupported"
 	CodeEffortChangePending = "effort_change_pending"
 )
 
@@ -595,6 +601,12 @@ const CodeTurnOverBackground = "turn_over_background"
 // CodeAgentStopped is what session.send refuses with for an Agent that has stopped and is read-only (node/stopped.go,
 // #4754): nothing was typed, and it takes no message until it is resumed (the user's Resume on its terminal page).
 const CodeAgentStopped = "agent_stopped"
+
+// CodeResumeUnknown is what session.start refuses a resume with when the computer has nothing of the conversation to
+// resume (no transcript, start or record of the id), and, for a resume carrying resume_outside_health, also when what
+// it has started or was recorded in a health space or an Agent folder kept out of Persona (#10941): a new
+// conversation would otherwise be listed under the id of another. Nothing was started. 409.
+const CodeResumeUnknown = "resume_unknown"
 
 // PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
 // the launcher's own default model; the effort it runs with now), and when the user picked it. Agent is the engine

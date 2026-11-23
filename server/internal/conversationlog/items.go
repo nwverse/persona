@@ -95,6 +95,24 @@ func Bound(it proto.Item) (Item, error) {
 			Width: it.Image.Width, Height: it.Image.Height}
 	}
 	row.Complete = false
+	// Escaping can expand one preview byte into six JSON bytes. Bound the
+	// serialized skeleton too, so one escaped output cannot block page ingestion.
+	for budget := PreviewBytes; ; budget /= 2 {
+		raw, err := json.Marshal(row.Item)
+		if err != nil {
+			return Item{}, err
+		}
+		if len(raw) <= MaxItemBytes {
+			break
+		}
+		if budget == 0 {
+			return Item{}, errors.New("conversation item reference exceeds limit")
+		}
+		row.Item.Text = prefix(row.Item.Text, budget/2)
+		if row.Item.Injected != nil {
+			row.Item.Injected.Line = prefix(row.Item.Injected.Line, budget/2)
+		}
+	}
 	return row, nil
 }
 

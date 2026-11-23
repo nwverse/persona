@@ -45,8 +45,8 @@ func (ix Interaction) AskedWithoutWaiting() bool { return ix.ToolName == "ask_us
 // OneTapQuestion is the question ix asks when one tap may answer it without opening the app (a notification's
 // options, a to-do's row): a question card with exactly one question, options to choose from and no fields to fill in,
 // not raised in a Just me turn (whose push says nothing of what it asks), and whose asker did not say going ahead
-// cannot be undone (cannotUndo: an answer that cannot be taken back needs a look first). A health conversation's card
-// is never answered so either; only the hub and the manager can tell one (identity.InHealthSpace on its cwd), and each
+// cannot be undone (cannotUndo: an answer that cannot be taken back needs a look first). A space conversation's card
+// is never answered so either; only the hub and the manager can tell one (identity.InSpace on its cwd), and each
 // checks it beside this. False otherwise.
 func (ix Interaction) OneTapQuestion() (Question, bool) {
 	if ix.Kind != IxQuestion || ix.ToolName == "persona_session_review" || len(ix.Questions) != 1 || len(ix.Fields) > 0 || len(ix.Questions[0].Options) == 0 ||
@@ -144,6 +144,15 @@ type Interaction struct {
 	// Resumable: a hook waits on it that reconnects when its node goes away (hub or node restart), so the hub keeps
 	// it pending through the gap instead of cancelling it (docs/protocol/protocol.md "Interactions survive restarts").
 	Resumable bool `json:"resumable,omitempty"`
+	// ApprovalBatchID and ApprovalItemID identify a server-owned exact owner-action proposal. NoExpiry is valid only
+	// beside these fields on a resumable proposal created by the manager; it never comes from a node or an app.
+	ApprovalBatchID string `json:"approval_batch_id,omitempty"`
+	ApprovalItemID  string `json:"approval_item_id,omitempty"`
+	OwnerProposal   bool   `json:"owner_proposal,omitempty"`
+	NoExpiry        bool   `json:"no_expiry,omitempty"`
+	// OwnerApprovalPhrases are display hints for the proposal's reply control.
+	// The manager's current settings, not this snapshot, authorize a reply.
+	OwnerApprovalPhrases []string `json:"owner_approval_phrases,omitempty"`
 	// Agent is who asks when it is not Claude Code: "codex" or "traex" (a card the node read off a Codex TUI,
 	// docs/integrations/codex.md "Questions and approvals").
 	Agent string `json:"agent,omitempty"`
@@ -178,6 +187,9 @@ type Interaction struct {
 	// docs/assistant/assistant.md "Assistant answers questions first"); nothing was pushed yet. The card shows in the apps meanwhile, and an answer
 	// given there wins.
 	Delegating bool `json:"delegating,omitempty"`
+	// PushLevel is the hub push-grading urgency for this card ("P0", "P1", "P2"): empty/absent defaults to "P0",
+	// while "P1" marks a supervisor-escalated card held for the Needs you list and briefing when grading is on.
+	PushLevel string `json:"push_level,omitempty"`
 	// Delegate is what the assistant found when it left the question to the user: the context it filled in.
 	Delegate *Delegate `json:"delegate,omitempty"`
 	// Suggestion: the owner answered this kind of card the same way three times; the card offers a standing rule

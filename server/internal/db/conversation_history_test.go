@@ -188,6 +188,39 @@ func TestConversationHistoryKeepsJSONToolBytesIncludingNUL(t *testing.T) {
 	}
 }
 
+func TestConversationSummaryIsBoundedAndGenerationFenced(t *testing.T) {
+	d, _ := historyDB(t)
+	ctx := t.Context()
+	p := ConversationPage{MachineID: "box", SessionID: "chat", History: "h1", Revision: 10, ThroughSeq: 0, Tail: true}
+	if err := d.PutConversationPage(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutConversationSummary(ctx, "box", "chat", "h1", 10, "source compaction"); err != nil {
+		t.Fatal(err)
+	}
+	h, err := d.ConversationHistory(ctx, "box", "chat")
+	if err != nil || h.Summary != "source compaction" || !h.SummaryKnown {
+		t.Fatalf("summary %+v %v", h, err)
+	}
+	if err := d.PutConversationSummary(ctx, "box", "chat", "h1", 9, "stale"); !errors.Is(err, ErrConversationHistoryChanged) {
+		t.Fatalf("stale summary accepted: %v", err)
+	}
+	if err := d.PutConversationSummary(ctx, "box", "chat", "h1", 10, strings.Repeat("x", conversationlog.MaxItemBytes+1)); err == nil {
+		t.Fatal("unbounded summary")
+	}
+	p.ExpectedHistory, p.History = "h1", "h2"
+	if err := d.PutConversationPage(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	h, err = d.ConversationHistory(ctx, "box", "chat")
+	if err != nil || h.Summary != "" || h.SummaryKnown {
+		t.Fatalf("old summary survived replacement %+v %v", h, err)
+	}
+	if err := d.PutConversationSummary(ctx, "box", "chat", "h1", 10, "late"); !errors.Is(err, ErrConversationHistoryChanged) {
+		t.Fatalf("old generation summary accepted: %v", err)
+	}
+}
+
 func TestConversationDeletionCascadesAndFencesConcurrentHistory(t *testing.T) {
 	d, _ := historyDB(t)
 	ctx := context.Background()

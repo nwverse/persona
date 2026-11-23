@@ -159,6 +159,24 @@ struct DispatchedTasksTests {
     }
 }
 
+@MainActor
+struct DispatchHandoffActivityTimeTests {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test(arguments: [5.0, 0, -10, -44.999])
+    func recentActivityReadsJustNow(offset: TimeInterval) {
+        #expect(DispatchHandoffCardBody.activityTime(now.addingTimeInterval(offset), now: now) == String(localized: "Just now"))
+    }
+
+    @Test(arguments: [45.0, 180, 7200])
+    func olderActivityKeepsTheShortRelativeTime(age: TimeInterval) {
+        let at = now.addingTimeInterval(-age)
+        let relative = RelativeDateTimeFormatter()
+        relative.unitsStyle = .short
+        #expect(DispatchHandoffCardBody.activityTime(at, now: now) == relative.localizedString(for: at, relativeTo: now))
+    }
+}
+
 /// The hand-off card is the task's only card in the chat (#8237): a start that failed or a turn the model service cut off
 /// shows on it, in place, with why.
 @MainActor
@@ -192,6 +210,8 @@ struct DispatchHandoffFailureTests {
         #expect(W.plain("这台电脑上没装 Claude Code，装好后再试") == "这台电脑上没装 Claude Code，装好后再试")
         let english = "Claude Code isn't installed on this computer. Install it, then retry."
         #expect(W.plain(english) == english)
+        let dirty = #"The previous workspace has uncommitted changes. Commit or stash them, then retry. Changed files include "timeout.swift"."#
+        #expect(W.plain(dirty) == dirty)
         #expect(W.plain("exit status 1") == nil)
         #expect(W.plain("  ") == nil)
         #expect(W.rowLine("exit status 1") == W.details)

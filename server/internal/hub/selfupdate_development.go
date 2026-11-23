@@ -10,8 +10,10 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/operations/backup"
@@ -29,12 +31,13 @@ type developmentView struct {
 	// BackupDirectory is the effective snapshot folder, BackupDefaultDirectory
 	// the recommended one under the runtime; BackupRetain how many verified
 	// snapshots are kept. BuiltinQuiesce: the hub pauses its own writers.
-	BackupDirectory        string `json:"backup_directory,omitempty"`
-	BackupDefaultDirectory string `json:"backup_default_directory,omitempty"`
-	BackupRetain           int    `json:"backup_retain,omitempty"`
-	BuiltinQuiesce         bool   `json:"builtin_quiesce,omitempty"`
-	CurrentCommit          string `json:"current_commit,omitempty"`
-	CurrentUpdatedAt       string `json:"current_updated_at,omitempty"`
+	BackupDirectory          string `json:"backup_directory,omitempty"`
+	BackupDefaultDirectory   string `json:"backup_default_directory,omitempty"`
+	BackupDirectoryIsDefault bool   `json:"backup_directory_is_default"`
+	BackupRetain             int    `json:"backup_retain,omitempty"`
+	BuiltinQuiesce           bool   `json:"builtin_quiesce,omitempty"`
+	CurrentCommit            string `json:"current_commit,omitempty"`
+	CurrentUpdatedAt         string `json:"current_updated_at,omitempty"`
 }
 
 // Installation time is recorded by confirmation, never inferred from a build or Git date.
@@ -56,37 +59,102 @@ func (u *updater) developmentConfig() *update.DevelopmentConfig {
 	return u.h.cfg.Update.Development
 }
 
+// hasOtherLocalManagers reports whether the runtime has any local manager
+// besides the built-in assistant (managers/<id>/manager.json), which webdev.py
+// inventories alongside the hub and built-in manager.
+func hasOtherLocalManagers(home string) (bool, error) {
+	if home == "" {
+		return false, nil
+	}
+	managersDir := filepath.Join(home, "managers")
+	entries, err := os.ReadDir(managersDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	for _, entry := range entries {
+		if entry.Name() == assistantwire.AssistantID {
+			continue
+		}
+		// Match webdev.py's managers/*/manager.json inventory: ignore stray
+		// non-directory files (e.g. .DS_Store) while still checking directories
+		// and symlinks that may resolve to a manager directory.
+		if !entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		_, err := os.Lstat(filepath.Join(managersDir, entry.Name(), "manager.json"))
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			return true, err
+		}
+	}
+	return false, nil
+}
+
+func (u *updater) developmentQuiesceError(bc update.DevelopmentBackupConfig) error {
+	if !bc.Coordinated() {
+		if bc.RequiresExternalQuiesce() && len(bc.Quiesce) == 0 && len(bc.Resume) == 0 {
+			return i18n.Err("hub-selfupdate.err_development_external_quiesce")
+		}
+		return i18n.Err("hub-selfupdate.err_development_config")
+	}
+	if !bc.ExternalQuiesce() && u.h.cfg != nil {
+		if other, err := hasOtherLocalManagers(u.h.cfg.dir); err != nil || other {
+			return i18n.Err("hub-selfupdate.err_development_external_quiesce")
+		}
+	}
+	return nil
+}
+
+func (u *updater) developmentUnavailableErr() error {
+	if u.h.cfg == nil {
+		return i18n.Err("hub-selfupdate.err_development_config")
+	}
+	if u.h.build.Channel == update.Docker {
+		return i18n.Err("hub-selfupdate.err_development_docker")
+	}
+	if runtime.GOOS == "windows" {
+		return i18n.Err("hub-selfupdate.err_development_platform")
+	}
+	var bc update.DevelopmentBackupConfig
+	if c := u.developmentConfig(); c != nil {
+		bc = c.Backup
+	}
+	if err := u.developmentQuiesceError(bc); err != nil {
+		return err
+	}
+	if err := u.developmentTopology(); err != nil {
+		return err
+	}
+	return nil
+}
+
 // developmentAvailable: the hub can prepare Web development updates. The hub
-// pauses its own writers for the snapshot by default (quiesceDevelopmentWriters);
-// hub.json's quiesce/resume hooks are an optional advanced override and must be
-// configured as a pair. The topology check is part of availability so the Web UI
-// does not offer a channel that its first check would refuse.
+// pauses its own writers for the snapshot by default (quiesceDevelopmentWriters)
+// when only the hub and built-in manager are snapshotted; hub.json's
+// quiesce/resume hooks are an optional override and are required as a pair
+// whenever extra databases, extra roots or another local manager are present.
+// The topology check is part of availability so the Web UI does not offer a
+// channel that its first check would refuse.
 func (u *updater) developmentAvailable() bool {
-	if u.h.cfg == nil || u.h.build.Channel == update.Docker || runtime.GOOS == "windows" {
-		return false
-	}
-	if c := u.developmentConfig(); c != nil && !c.Backup.Coordinated() {
-		return false
-	}
-	return u.developmentTopology() == nil
+	return u.h.cfg != nil && u.developmentUnavailableErr() == nil
 }
 
 // developmentUnavailableWhy is what the Web UI says when development updates
-// cannot be selected, localized; "" for a Docker hub, which has its own view.
+// cannot be selected, localized; "" when available or without config.
 func (u *updater) developmentUnavailableWhy(l i18n.Lang) string {
 	if u.h.cfg == nil {
 		return ""
 	}
-	if u.h.build.Channel == update.Docker {
-		return i18n.Localize(i18n.Err("hub-selfupdate.err_development_docker"), l)
+	err := u.developmentUnavailableErr()
+	if err == nil {
+		return ""
 	}
-	if runtime.GOOS == "windows" {
-		return i18n.Localize(i18n.Err("hub-selfupdate.err_development_platform"), l)
-	}
-	if c := u.developmentConfig(); c != nil && !c.Backup.Coordinated() {
-		return i18n.Localize(i18n.Err("hub-selfupdate.err_development_config"), l)
-	}
-	return i18n.Localize(i18n.Err("hub-selfupdate.err_development_topology"), l)
+	return i18n.Localize(err, l)
 }
 
 // developmentBackupConfigLocked is the snapshot configuration in effect: the
@@ -184,8 +252,8 @@ func (u *updater) runDevelopment(ctx context.Context, operation string, input ma
 // background writers, then checks both databases with backup.Quiesced rules.
 // The returned resume always runs, including after a partial pause.
 func (u *updater) quiesceDevelopmentWriters(ctx context.Context, cfg update.DevelopmentBackupConfig) (func(), error) {
-	if !cfg.Coordinated() {
-		return nil, i18n.Err("hub-selfupdate.err_development_config")
+	if err := u.developmentQuiesceError(cfg); err != nil {
+		return nil, err
 	}
 	if cfg.ExternalQuiesce() {
 		return func() {}, nil
@@ -250,10 +318,7 @@ func (u *updater) waitDevelopmentQuiesced(ctx context.Context) error {
 }
 
 func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, error) {
-	if !u.developmentAvailable() {
-		return nil, i18n.Err("hub-selfupdate.err_development_config")
-	}
-	if err := u.developmentTopology(); err != nil {
+	if err := u.developmentUnavailableErr(); err != nil {
 		return nil, err
 	}
 	var candidate update.DevelopmentCandidate

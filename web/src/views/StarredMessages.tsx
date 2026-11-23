@@ -3,12 +3,14 @@ import { t } from "../i18n";
 import { conversationPage } from "../lib/conversation-page";
 import { shortTime } from "../lib/format";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
+import { restoredStarKey } from "../lib/starred-backup";
 import { positionalStar, type Star, useStarMark } from "../lib/starred-rows";
 import { checkStarSource, reloadStarred, removeStar, useStarredList } from "../lib/starred";
 import { Button, copyText, IconButton, Loading } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { Markdown } from "../ui/Markdown";
 import { SearchField } from "../ui/SearchField";
+import { StarredBackupDialog } from "./StarredBackupDialog";
 
 const PAGE_SIZE = 24;
 const PREVIEW_CHARS = 420;
@@ -48,6 +50,8 @@ export function StarredMessages({ onToggleSidebar }: { onToggleSidebar?: () => v
   const [filter, setFilter] = useState("");
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [retrying, setRetrying] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const closeBackup = useCallback(() => setBackupOpen(false), []);
   const search = useRef<HTMLDivElement>(null);
   const found = useMemo(() => searchStars(list.stars, filter), [list.stars, filter]);
   const retry = async () => {
@@ -64,7 +68,8 @@ export function StarredMessages({ onToggleSidebar }: { onToggleSidebar?: () => v
     <div className="flex h-full min-h-0 flex-col bg-page">
       <header className="flex shrink-0 items-center gap-3 border-b border-line bg-surface px-4 py-3">
         {onToggleSidebar && <IconButton icon="sidebar" label={t("app.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />}
-        <h1 className="truncate text-base font-semibold text-ink">{t("starred.title")}</h1>
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold text-ink">{t("starred.title")}</h1>
+        {list.status === "ready" && <Button onClick={() => setBackupOpen(true)}>{t("starred.backup")}</Button>}
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-5 sm:px-6">
@@ -92,6 +97,8 @@ export function StarredMessages({ onToggleSidebar }: { onToggleSidebar?: () => v
           )}
         </div>
       </div>
+      {backupOpen && list.status === "ready" && <StarredBackupDialog stars={list.stars} canWrite={list.canWrite}
+        speaker={starSpeaker} onClose={closeBackup} onRestored={() => void reloadStarred()} />}
     </div>
   );
 }
@@ -137,6 +144,7 @@ const StarCard = memo(function StarCard({ star, canWrite, afterRemove }: { star:
     });
   };
   const date = star.written_at || star.starred_at;
+  const restored = !!restoredStarKey(star);
   return (
     <li className="min-w-0 rounded-card border border-line bg-surface">
       <article className="flex min-w-0 flex-col gap-3 px-4 py-3">
@@ -145,6 +153,7 @@ const StarCard = memo(function StarCard({ star, canWrite, afterRemove }: { star:
           <p className="mt-0.5 flex flex-wrap items-baseline gap-x-2 text-xs text-ink-2">
             <span className="break-words">{speaker}</span>
             <time dateTime={date}>{shortTime(date)}</time>
+            {restored && <span>{t("starred.backup_origin")}</span>}
           </p>
         </header>
         <div className="min-w-0 break-words">
@@ -157,14 +166,14 @@ const StarCard = memo(function StarCard({ star, canWrite, afterRemove }: { star:
           )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          {!unavailable && <a href={href(source)} onClick={openOriginal} aria-busy={sourceStatus === "checking" || undefined}
+          {!restored && !unavailable && <a href={href(source)} onClick={openOriginal} aria-busy={sourceStatus === "checking" || undefined}
             className="inline-flex min-h-11 pointer-fine:min-h-8 items-center gap-1.5 whitespace-nowrap rounded-control px-2.5 text-sm font-medium text-accent-ink hover:bg-hover">
             <Icon name="external" />{t(sourceStatus === "checking" ? "common.loading" : "starred.open")}
           </a>}
           <Button icon="copy" className="min-h-11 pointer-fine:min-h-8" onClick={() => void copyText(star.text)}>{t("starred.copy")}</Button>
           {canWrite && <Button icon="star" className="min-h-11 pointer-fine:min-h-8" busy={mark.pending === "remove"} onClick={() => void removeStar(star).then((removed) => { if (removed) afterRemove(); })}>{t("starred.unstar")}</Button>}
         </div>
-        {(unavailable || sourceStatus === "failed") && <p role="status" className="text-xs text-ink-2">
+        {!restored && (unavailable || sourceStatus === "failed") && <p role="status" className="text-xs text-ink-2">
           {t(unavailable ? "starred.source_unavailable" : "starred.source_failed")}
         </p>}
       </article>

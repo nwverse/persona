@@ -26,6 +26,16 @@ func TestBoundPreservesNormalizedContentAndBoundsAllFields(t *testing.T) {
 			it.Source = &proto.MessageSource{Kind: "conversation", Title: strings.Repeat("x", MaxItemBytes)}
 			return it
 		}(), false},
+		{"escaped previews and metadata", func() proto.Item {
+			it := base
+			escaped := strings.Repeat("\x00", 512)
+			it.Text = strings.Repeat("\x00", MaxItemBytes)
+			it.ToolName = strings.Repeat("\x00", 256)
+			it.ToolUseID, it.ClientMsgID, it.From = escaped, escaped, escaped
+			it.Source = &proto.MessageSource{Kind: "conversation", ConversationID: escaped, Title: escaped}
+			it.Injected = &proto.Injected{Kind: "context", Title: escaped, Machine: escaped, TodoID: escaped, Line: it.Text}
+			return it
+		}(), false},
 		{"inline attachment", proto.Item{ID: "image-2", Seq: 6, Kind: proto.KindImage, Image: &proto.Image{Mime: "image/png", Data: strings.Repeat("a", MaxItemBytes)}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

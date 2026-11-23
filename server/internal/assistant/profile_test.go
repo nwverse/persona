@@ -14,6 +14,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -211,7 +212,7 @@ func TestRecordingDaysKeepsLastGoodOnReadFailure(t *testing.T) {
 
 	// Never successfully read, and the read fails: there is no good value to keep.
 	expire()
-	st.failSetting = errors.New("database locked")
+	st.setFailSetting(errors.New("database locked"))
 	if _, ok := s.settingsLastGood(ctx); ok {
 		t.Fatal("never read + failure: want !ok")
 	}
@@ -220,10 +221,10 @@ func TestRecordingDaysKeepsLastGoodOnReadFailure(t *testing.T) {
 	}
 
 	// The user picked 365; a failure past the 5s freshness keeps serving 365 instead of falling back to 14.
-	st.failSetting = nil
+	st.setFailSetting(nil)
 	setSettings(t, s, func(v *Settings) { v.RecordingDays = days(365) })
 	expire()
-	st.failSetting = errors.New("database locked")
+	st.setFailSetting(errors.New("database locked"))
 	if v, ok := s.settingsLastGood(ctx); !ok || v.RecordingDays == nil || *v.RecordingDays != 365 {
 		t.Fatalf("failure with last-good: ok=%v days=%v", ok, v.RecordingDays)
 	}
@@ -237,7 +238,7 @@ func TestRecordingDaysKeepsLastGoodOnReadFailure(t *testing.T) {
 	}
 
 	// A successful refresh still picks up a value another hub wrote (the 5s freshness behaviour is unchanged).
-	st.failSetting = nil
+	st.setFailSetting(nil)
 	if err := st.PutSetting(ctx, settingsKey, Settings{RecordingDays: days(30)}); err != nil {
 		t.Fatal(err)
 	}
@@ -248,11 +249,11 @@ func TestRecordingDaysKeepsLastGoodOnReadFailure(t *testing.T) {
 
 	// Failing again serves the new last-good value (30); once the database recovers the read works again.
 	expire()
-	st.failSetting = errors.New("database busy")
+	st.setFailSetting(errors.New("database busy"))
 	if d := s.recordingDaysNow(); d != 30 {
 		t.Fatalf("failure after refresh: days=%d, want 30", d)
 	}
-	st.failSetting = nil
+	st.setFailSetting(nil)
 	expire()
 	if d := s.recordingDaysNow(); d != 30 {
 		t.Fatalf("recovered: days=%d, want 30", d)
@@ -277,7 +278,8 @@ func TestSendParams(t *testing.T) {
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.conv"})
 	p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "unlisted", Params: map[string]any{"text": "hi"}})
 	_, attested := p["origin_known"]
-	if err != nil || len(p) != 3 || p["is_main"] != false || p["supervision_instructions"] != "" || attested {
+	if err != nil || len(p) != 4 || p["is_main"] != false || p["supervision_instructions"] != "" || attested ||
+		p["model_source"] != (modelhttp.Source{Role: "main", Session: "unlisted"}) {
 		t.Fatalf("unlisted and not yet backfilled must stay unknown: %v %v", p, err)
 	}
 	p, err = s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "side", Params: map[string]any{"text": "hi"}})
@@ -422,7 +424,7 @@ func TestBoolSettingsSet(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		def  bool
-	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"interject_background", false}, {"agent_tasks", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
+	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"interject_background", false}, {"agent_tasks", false}, {"task_lessons", false}, {"close_ended_terminals", false}, {"main_background_folded", true}, {"recent_task_chats", false}, {"inbox_signals", false}, {"main_supervises_own_tasks", false}} {
 		key := "assistant." + c.name
 		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
 		set := func(value string) (string, bool) {

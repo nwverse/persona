@@ -248,6 +248,14 @@ type DispatchTask struct {
 
 func RenderDispatchTask(t DispatchTask) string { return render("agents/dispatch_task", t) }
 
+type A2AMessage struct {
+	ID, Sender, State, Text string
+	Language                string
+	Request                 bool
+}
+
+func RenderA2AMessage(t A2AMessage) string { return render("agents/a2a_message", t) }
+
 // TaskSuccessor is the first message of an agent Persona starts for a task whose agents have all stopped (#4754): who
 // worked on it before and its last reply, then the user's message on the task (agents/task_successor).
 type TaskSuccessor struct {
@@ -340,3 +348,6 @@ type AgentCloseoutBrief struct {
 func RenderAgentCloseoutBrief(c AgentCloseoutBrief) string {
 	return render("agents/closeout_brief", c)
 }
+
+// RenderAgentMacRules is the default build-capacity guard for every new Mac agent.
+func RenderAgentMacRules() string { return render("agents/mac_rules", struct{}{}) }

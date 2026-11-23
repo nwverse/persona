@@ -42,6 +42,8 @@ data class ChatChromeBindings(
     val renamer: SessionRenamer? = null,
     /** Read-only access to the session's machine: the photos sent with messages (`<attached_images>`) load from it. */
     val files: SessionFiles? = null,
+    /** The hub group identity for scoping local machine-file caches across multi-hub sessions. */
+    val hubScope: String = "",
     /** Opens the session's machine's ports on the phone (docs/operations/ports.md); null: port links open as plain pages. */
     val ports: persona.core.contracts.api.PortOpener? = null,
     /**
@@ -72,6 +74,8 @@ data class ChatChromeBindings(
     val leaderConversations: Set<String> = emptySet(),
     /** Parent/child rows resolved for a cold link outside the root page; not list membership. */
     val lookupRows: List<persona.core.contracts.Session> = emptyList(),
+    /** Fork copies into a new session without mutating the source, so a stopped history preview may still provide it. */
+    val forkActions: ChatActions? = actions,
 )
 
 /** Where a branch made by "Branch to new chat" opens: an assistant's branch is an assistant conversation, an agent's an agent chat. */

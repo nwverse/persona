@@ -9,6 +9,8 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("paged_sessions_mock", Path(__file__).with_name("mock_hub.py"))
 hub = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hub)
+import mock_domains  # noqa: E402
+import page_counts_mock  # noqa: E402
 
 
 class PagedSessionsMockTests(unittest.TestCase):
@@ -18,7 +20,23 @@ class PagedSessionsMockTests(unittest.TestCase):
         self.addCleanup(env.stop)
 
     def read(self, **query):
-        body, status = hub.paged_sessions({key: [str(value)] for key, value in query.items()})
+        values = {key: [str(value)] for key, value in query.items()}
+        if query.get("with_counts") == 1 and hasattr(self, "registry"):
+            from types import SimpleNamespace
+            from urllib.parse import urlencode
+
+            handler = SimpleNamespace(path="/api/v1/sessions?" + urlencode(values, doseq=True), response=None)
+
+            def send_json(body, status=200):
+                handler.response = body, status
+
+            handler.send_json = send_json
+            if self.registry.http(handler, "GET", "/api/v1/sessions"):
+                body, status = handler.response
+            else:
+                body, status = hub.paged_sessions(values)
+        else:
+            body, status = hub.paged_sessions(values)
         self.assertEqual(status, 200, body)
         return body
 
@@ -32,6 +50,24 @@ class PagedSessionsMockTests(unittest.TestCase):
             self.assertNotIn("sessions_lookup", hub.features())
             self.assertEqual(self.read(summary=1, limit=2), full)
 
+    def load_domain(self, enabled):
+        with patch.dict(os.environ, {"MOCK_PAGE_COUNTS": "1" if enabled else "0"}):
+            importlib.reload(page_counts_mock)
+            return mock_domains.load(vars(hub), ["page_counts_mock"])
+
+    def test_page_counts_ride_on_the_page_only_when_switched_on(self):
+        # MOCK_PAGE_COUNTS=1: with_counts=1 brings what counts=1 with the same filters answers (sessions_page_counts)
+        self.registry = self.load_domain(True)
+        base_features = hub.features
+        with patch.object(hub, "features", lambda: self.registry.features(base_features())):
+            self.assertIn("sessions_page_counts", hub.features())
+            page = self.read(summary=1, limit=2, state="unread", with_counts=1)
+            self.assertEqual(page["counts"], self.read(counts=1, state="unread"))
+            self.assertEqual({k: v for k, v in page.items() if k != "counts"}, self.read(summary=1, limit=2, state="unread"))
+            self.registry = self.load_domain(False)
+            self.assertNotIn("sessions_page_counts", hub.features())
+            self.assertNotIn("counts", self.read(summary=1, limit=2, with_counts=1))
+
     def test_paged_rows_counts_and_exact_lookup_use_the_same_collection(self):
         full = self.read()["sessions"]
         counts = self.read(counts=1)
@@ -40,6 +76,7 @@ class PagedSessionsMockTests(unittest.TestCase):
             self.assertEqual(sum(counts[dimension].values()), len(full))
         first = self.read(summary=1, limit=2)
         self.assertEqual(len(first["sessions"]), 2)
+        self.assertEqual(first["added"], [])
         self.assertTrue(first["has_more"])
         self.assertIn("waiting", first["sessions"][0])
         second = self.read(summary=1, limit=2, cursor=first["next_cursor"])
@@ -106,6 +143,7 @@ class PagedSessionsMockTests(unittest.TestCase):
         delta = self.read(summary=1, since=first["revision"])
         self.assertEqual(delta["sessions"], [])
         self.assertEqual(delta["remove"], [])
+        self.assertEqual(delta["added"], [])
         self.assertFalse(delta["has_more"])
         for query, code in (({"since": ["expired"]}, "revision_expired"), ({"cursor": ["expired:2"]}, "cursor_expired")):
             body, status = hub.paged_sessions(query)
@@ -142,6 +180,21 @@ class PagedSessionsMockTests(unittest.TestCase):
         rest = self.read(summary=0, limit=200, since=base["revision"], cursor=small["next_cursor"])
         self.assertEqual(rest["revision"], small["revision"])
         self.assertEqual(len(small["sessions"]) + len(small["remove"]) + len(rest["sessions"]) + len(rest["remove"]), 2)
+
+    def test_delta_added_distinguishes_creation_from_filter_entrance(self):
+        sessions = hub.SESSIONS
+        saved = [dict(s) for s in sessions]
+        self.addCleanup(lambda: sessions.__setitem__(slice(None), saved))
+        changed = sessions[0]
+        changed["state"] = "idle"
+        baseline = self.read(summary=0, limit=200, state="working")
+        fresh = {**sessions[1], "session_id": "test-created", "title": "Created tab", "state": "working"}
+        changed["state"] = "working"
+        sessions.append(fresh)
+        delta = self.read(summary=0, limit=200, state="working", since=baseline["revision"])
+        self.assertIn(changed["session_id"], [s["session_id"] for s in delta["sessions"]])
+        self.assertIn(fresh["session_id"], [s["session_id"] for s in delta["sessions"]])
+        self.assertEqual(delta["added"], [hub.LIST_TUPLE(hub.decorated_session(fresh))])
 
     def test_journal_is_bounded_like_the_hub(self):
         sessions = hub.SESSIONS

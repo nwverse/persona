@@ -429,6 +429,10 @@
       "sf": "music.note",
       "phosphor": "music-note"
     },
+    "muted": {
+      "sf": "bell.slash.fill",
+      "phosphor": "prohibit"
+    },
     "newConversation": {
       "sf": "plus.bubble",
       "phosphor": "chat-circle-dots"
@@ -632,6 +636,10 @@
     "skills": {
       "sf": "puzzlepiece.extension",
       "phosphor": "puzzle-piece"
+    },
+    "someday": {
+      "sf": "moon.stars.fill",
+      "phosphor": "couch"
     },
     "space": {
       "sf": "square.stack.3d.up",

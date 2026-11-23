@@ -43,10 +43,11 @@ class AgentMarkTest {
 
     @Test fun traeHasItsMarkAndOthersTheirLetter() {
         assertEquals(AgentMarkKind.Trae, session("trae").agentMark?.kind)
-        assertEquals(AgentMarkKind.Trae, session("trae-cli").agentMark?.kind)
+        assertEquals(AgentMarkSpec(AgentMarkKind.Trae, "TRAE CLI", null), session("trae-cli").agentMark)
         val traex = session("traex").agentMark!!
         assertNull(traex.kind)
-        assertEquals("TRAEX", traex.name)
+        assertEquals("TRAE CLI", traex.name)
+        assertEquals(AgentMarkSpec(AgentMarkKind.Trae, "TRAE CLI", null), session("traecli").agentMark)
         assertEquals(AgentMarkKind.Dsh, session("dsh", label = "DSH").agentMark?.kind)
     }
 
@@ -93,7 +94,7 @@ class AgentMarkTest {
         fun initialWidth(): Float {
             val result = mutableListOf<TextLayoutResult>()
             val node = rule.onNodeWithText("S", useUnmergedTree = true).fetchSemanticsNode()
-            node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(result)
+            val _ = node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(result)
             return result.single().getBoundingBox(0).width
         }
         val normal = initialWidth()

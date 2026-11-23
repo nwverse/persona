@@ -238,7 +238,8 @@ func (s *Service) workTurnSettled(ctx context.Context, machine, sid string) {
 
 // triageTurn works out where c stands after its turn and acts on it. Once per turn.
 func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c proto.Session) {
-	if c.HiddenByDirectory() || c.Assistant && !turnErrorTransient(c) || c.Status == proto.StatusOffline || c.Status == proto.StatusWorking || c.Starting {
+	quotaWait := s.protectedQuotaWait(ctx, machine, c)
+	if c.HiddenByDirectory() || c.Assistant && !turnErrorTransient(c) && !quotaWait || c.Status == proto.StatusOffline || c.Status == proto.StatusWorking || c.Starting {
 		return
 	}
 	if s.isReviewer(machine, c.SessionID) {
@@ -298,7 +299,7 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if skip {
 		return // the agent asks itself (or its terminal does): the list shows that
 	}
-	if !s.workOn(ctx) && (w == nil || w.On != proto.WaitTransient) {
+	if !s.workOn(ctx) && (w == nil || w.On != proto.WaitTransient && !(quotaWait && w.On == proto.WaitExternal)) {
 		// The triage is off and only transient errors are continued (transient_retry): no model call, nothing else
 		// decided. A turn that ended otherwise ends the run of transient errors: the next one counts from 1 again.
 		if had && last.Retries > 0 {
@@ -307,8 +308,8 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		}
 		return
 	}
-	if c.Assistant && (w == nil || w.On != proto.WaitTransient) {
-		return // Assistant participates only in mechanical model recovery.
+	if c.Assistant && (w == nil || w.On != proto.WaitTransient && !(quotaWait && w.On == proto.WaitExternal)) {
+		return // Assistant participates only in mechanical model recovery and quota waits.
 	}
 	if w == nil {
 		mctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -341,6 +342,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if !closed {
 		s.actOn(ctx, v, machine, c, &e)
 	}
+	// Validate the stored conclusion even when no action was possible, e.g.
+	// when the only source for a Codex App thread was read-only history.
+	clearUnsupportedUserWait(&e.Work, s.lang(ctx))
 	// The turn after a status question is its answer (agents_closeout_ask.go): never asked again, whatever it says.
 	answersAsk := had && last.Work.CloseoutAsk == closeoutAskSent && !sameTurn(c, last.TurnAt)
 	switch {
@@ -396,6 +400,17 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		"line": e.Work.Line, "ms": time.Since(start).Milliseconds()})
 	if answersAsk {
 		s.workEvent(machine, c.SessionID, closeoutAskOutcome(e.Work), map[string]any{"phase": e.Work.Phase})
+	}
+}
+
+func unsupportedUserWait(w *proto.WorkState) bool {
+	return w.Phase == proto.WorkBlocked && w.On == proto.WaitUser && w.By == "model" && len(w.Questions) == 0 && w.Link == nil
+}
+
+func clearUnsupportedUserWait(w *proto.WorkState, lang i18n.Lang) {
+	if unsupportedUserWait(w) {
+		*w = proto.WorkState{TurnAt: w.TurnAt, At: w.At, By: w.By, Artifacts: w.Artifacts, Closeout: w.Closeout}
+		unfinished(w, lang)
 	}
 }
 

@@ -71,6 +71,55 @@ type DecisionOption struct {
 	LeadsTo string `json:"leads_to"`
 }
 
+// terminalResumeLabel recognizes the existing terminal instruction in the three
+// supported languages. It can only offer navigation; it never authorizes a start.
+func terminalResumeLabel(label string) bool {
+	label = strings.ToLower(strings.TrimSpace(label))
+	return strings.HasPrefix(label, "resume ") && strings.Contains(label, "terminal") ||
+		strings.Contains(label, "终端") && strings.Contains(label, "恢复") ||
+		strings.Contains(label, "ターミナル") && strings.Contains(label, "再開")
+}
+
+func terminalResumeMention(text string) bool {
+	text = strings.ToLower(text)
+	return strings.Contains(text, "resume") && strings.Contains(text, "terminal") ||
+		strings.Contains(text, "终端") && strings.Contains(text, "恢复") ||
+		strings.Contains(text, "ターミナル") && strings.Contains(text, "再開")
+}
+
+func soleDecisionAgent(t Todo, asked time.Time) *SessionRef {
+	var target *SessionRef
+	for _, a := range t.Agents {
+		if !a.active() || a.LinkedAt.After(asked) || a.MachineID == "" || a.SessionID == "" {
+			continue
+		}
+		if target != nil {
+			return nil
+		}
+		target = &SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}
+	}
+	return target
+}
+
+// decisionTerminal returns a task-owned target. An archived/released binding is
+// never used to redirect an owner's recovery action to another Agent.
+func decisionTerminal(t Todo, label string) *SessionRef {
+	if !terminalResumeLabel(label) {
+		return nil
+	}
+	var match *SessionRef
+	for _, a := range t.Agents {
+		if !a.active() || len(a.SessionID) < 8 || !strings.Contains(strings.ToLower(label), strings.ToLower(a.SessionID[:8])) {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = &SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}
+	}
+	return match
+}
+
 // reviewDecision is what a needs_user review says of its decision, as checked (readDecision).
 type reviewDecision struct {
 	WhyOwner, Reason, Recommend, CostOfWaiting string
@@ -214,6 +263,19 @@ func (s *Service) decisionStands(t Todo) string {
 // backgroundText is a decision's one line of background: where its task came from, when, and where it stands. "" for
 // an ask that has none (not a decision, or one from before #3804).
 func backgroundText(l i18n.Lang, loc *time.Location, a *acceptAsk) string {
+	if a.OutsideID != "" {
+		kind := a.OutsideKind
+		switch kind {
+		case "script", "extension":
+		default:
+			kind = "app"
+		}
+		line := i18n.T(l, "assistant-reports.decision_outside_source_"+kind, i18n.Args{"source": a.OutsideSource})
+		if a.OutsideBackground != "" {
+			line += " · " + a.OutsideBackground
+		}
+		return line
+	}
 	f := a.From
 	if f == nil {
 		return ""
@@ -261,13 +323,21 @@ func decisionLines(l i18n.Lang, loc *time.Location, a *acceptAsk) []string {
 	if a.CostOfWaiting != "" {
 		out = append(out, i18n.T(l, "assistant-reports.decision_cost", i18n.Args{"cost": a.CostOfWaiting}))
 	}
-	if neverDefault(a.WhyOwner) && a.Deadline.IsZero() {
+	if (neverDefault(a.WhyOwner) || a.OutsideID != "" && !a.DefaultAllowed) && a.Deadline.IsZero() {
 		out = append(out, i18n.T(l, "assistant-reports.decision_never_default"))
 	}
 	return out
 }
 
 // ---- answering ----
+
+// decisionTextDelivery distinguishes Agent delivery from a record awaiting supervisor follow-up.
+type decisionTextDelivery string
+
+const (
+	decisionTextAgent    decisionTextDelivery = "agent"
+	decisionTextRecorded decisionTextDelivery = "recorded_for_supervisor"
+)
 
 // errDecisionOption: the option named is none of the decision's.
 var errDecisionOption = errors.New("option is not one of the decision's options")
@@ -309,9 +379,18 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 	}
 	label = strings.TrimSpace(label)
 	i := slices.IndexFunc(a.Options, func(o DecisionOption) bool { return o.Label == label })
+	if a.OutsideID != "" {
+		if i < 0 {
+			return acceptResult{}, errDecisionOption
+		}
+		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: label}, false)
+	}
+	if terminalResumeLabel(label) && i >= 0 {
+		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
+	}
 	switch {
 	case label == a.Recommend && label != "":
-		return s.acceptTryAsDismissalLocked(ctx, id, "", false)
+		return s.acceptTryAsDismissalLocked(ctx, id, "", a.AskedAt, false)
 	case i < 0:
 		return acceptResult{}, errDecisionOption
 	}
@@ -390,6 +469,11 @@ func (s *Service) routeDecisionAnswer(ctx context.Context, conversation, id, ask
 func (s *Service) answerDecisionText(ctx context.Context, id, asked, text string) (acceptResult, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
+	if a, err := s.askRound(id, asked); err != nil {
+		return acceptResult{}, err
+	} else if a != nil && a.OutsideID != "" {
+		return s.answerOutside(ctx, id, asked, outsideAnswer{Text: decisionText(text)}, false)
+	}
 	st := s.todoDB()
 	if st == nil {
 		return acceptResult{}, errAcceptStore
@@ -414,6 +498,10 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 	a, err := s.askRound(id, asked)
 	if err != nil || a == nil {
 		return FeedItem{}, acceptResult{}, err
+	}
+	if a.OutsideID != "" {
+		result, err := s.answerOutside(ctx, id, asked, outsideAnswer{Text: decisionText(text)}, false)
+		return FeedItem{}, result, err
 	}
 	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
 	if err != nil {
@@ -442,12 +530,14 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 	completeDismissal()
 	s.decisionsChanged(ctx, id, at)
 	result := acceptSucceeded()
+	delivery := decisionTextAgent
 	if sendErr != nil {
+		delivery = decisionTextRecorded
 		result = s.decisionNotDelivered(ctx, id, a.AskedAt, text, sendErr)
 	} else {
 		s.userDecided(ctx, id)
 	}
-	s.endAsk(ctx, id, a.AskedAt, "", row.Choice)
+	s.endAskWithTextDelivery(ctx, id, a.AskedAt, "", row.Choice, delivery)
 	return item, result, nil
 }
 
@@ -461,6 +551,11 @@ func (s *Service) askCardNow(id, card string) bool {
 // endAsk marks task id's decision asked at as answered (response: the fixed answer it got, or chosen: the option
 // taken that was not the recommended one), and redraws its cards.
 func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, response, chosen string) {
+	s.endAskWithTextDelivery(ctx, id, asked, response, chosen, "")
+}
+
+// endAskWithTextDelivery persists the observed free-text outcome with the answer before redrawing any cards.
+func (s *Service) endAskWithTextDelivery(ctx context.Context, id string, asked time.Time, response, chosen string, delivery decisionTextDelivery) {
 	b := &s.accept
 	b.mu.Lock()
 	a := b.asks[id]
@@ -468,7 +563,9 @@ func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, respon
 		b.mu.Unlock()
 		return
 	}
-	a.AcceptedAt, a.Response, a.Chosen = time.Now().UTC(), response, chosen
+	a.AcceptedAt, a.Response, a.Chosen, a.TextDelivery = time.Now().UTC(), response, chosen, delivery
+	// Only option/fixed-answer callers use endAsk; explicit text always supplies its delivery outcome.
+	a.OptionTaken = delivery == "" && response == "" && chosen != ""
 	s.saveAcceptLocked(ctx)
 	cp := *a
 	b.mu.Unlock()
@@ -497,6 +594,10 @@ func (s *Service) ownerCannotAnswer(ctx context.Context, id, asked, response str
 	a, err := s.askRound(id, asked)
 	if err != nil || a == nil {
 		return false, err
+	}
+	if a.OutsideID != "" {
+		result, err := s.answerOutside(ctx, id, asked, outsideAnswer{Response: response}, false)
+		return result.taken, err
 	}
 	t, _ := s.todoNow(id)
 	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
@@ -601,7 +702,7 @@ func ownerDecisionReturned(v *Supervision) bool {
 // decisionRecheckDue says a complete decision is old enough that it must not be pushed again before its supervisor
 // confirms the facts. The sweep persists the hand-back; owner projections also honor an already-persisted marker.
 func decisionRecheckDue(a *acceptAsk, now time.Time) bool {
-	return a != nil && decideAsk(a) && a.AgentReply == nil && a.Recommend != "" && now.Sub(a.AskedAt) >= decisionRecheckAfter
+	return a != nil && a.OutsideID == "" && decideAsk(a) && a.AgentReply == nil && a.Recommend != "" && now.Sub(a.AskedAt) >= decisionRecheckAfter
 }
 
 // ---- old and unanswerable decisions ----

@@ -15,6 +15,7 @@ import (
 // rows without a launcher or directory; newer nodes ignore those rows when loading
 // and write no rows for sessions they did not start (#5510).
 type NodeSession struct {
+	ModelSource      json.RawMessage `json:"model_source,omitempty"`
 	CreationID       string          `json:"creation_id,omitempty"`
 	Incarnation      string          `json:"incarnation,omitempty"`
 	Model            string          `json:"model,omitempty"`
@@ -59,6 +60,10 @@ type NodeSession struct {
 	FollowsSetting bool `json:"follows_setting,omitempty"`
 	// An empty assistant start has not delivered its first message or runtime instructions.
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
+	// EngineRuntime: the engine runtime (Paseo, Cindy) whose start wrote the record (node/session_state.go), kept with
+	// the model: after a node restart too, an extension's resume of such an Agent its computer no longer lists is
+	// checked against the record's directory (#10941).
+	EngineRuntime string `json:"engine_runtime,omitempty"`
 }
 
 func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSession) error {
@@ -96,7 +101,7 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 			'model_recovery', $23::jsonb, 'follows_setting', $24::boolean,
 			'stop_cause', $25::text, 'stop_cause_at', $26::bigint,
 			'awaiting_first_message', $27::boolean, 'idle_compaction', $28::jsonb, 'origin', $29::text,
-			'origin_known', $30::boolean), now() FROM saved
+			'origin_known', $30::boolean, 'engine_runtime', $31::text, 'model_source', $32::jsonb), now() FROM saved
 		ON CONFLICT (key) DO UPDATE SET value = CASE
 			WHEN COALESCE((settings.value->>'stop_cause_at')::bigint, 0) > $26
 				OR (COALESCE((settings.value->>'stop_cause_at')::bigint, 0) = $26
@@ -106,7 +111,8 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 			ELSE EXCLUDED.value END, updated_at = now()`,
 		machine, id, s.Pane, s.Launcher, s.Cwd, s.StartedAt, tasks, s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort,
 		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch, engineHistory, pendingHandoff,
-		modelRecovery, s.FollowsSetting, string(s.StopCause), s.StopCauseAt, s.AwaitingFirstMessage, jsonOrNil(s.IdleCompaction), s.Origin, s.OriginKnown)
+		modelRecovery, s.FollowsSetting, string(s.StopCause), s.StopCauseAt, s.AwaitingFirstMessage, jsonOrNil(s.IdleCompaction), s.Origin, s.OriginKnown,
+		s.EngineRuntime, jsonOrNil(s.ModelSource))
 	return err
 }
 
@@ -122,14 +128,15 @@ const nodeSessionsSQL = `SELECT n.session_id, n.pane, n.launcher, n.cwd, n.start
 
 // nodeModel is the node_model.<machine>.<session> settings value PutNodeSession writes.
 type nodeModel struct {
-	Model            string `json:"model"`
-	ModelFingerprint string `json:"model_fingerprint"`
-	ModelEffort      string `json:"model_effort"`
-	Origin           string `json:"origin"`
-	OriginKnown      bool   `json:"origin_known"`
-	AppMode          string `json:"app_mode"`
-	AppEffort        string `json:"app_effort"`
-	ConfigDir        string `json:"config_dir"`
+	ModelSource      json.RawMessage `json:"model_source"`
+	Model            string          `json:"model"`
+	ModelFingerprint string          `json:"model_fingerprint"`
+	ModelEffort      string          `json:"model_effort"`
+	Origin           string          `json:"origin"`
+	OriginKnown      bool            `json:"origin_known"`
+	AppMode          string          `json:"app_mode"`
+	AppEffort        string          `json:"app_effort"`
+	ConfigDir        string          `json:"config_dir"`
 	// UltracodeProcess and StartedAtUnknown: the ultracode observation of the session's process, and a row stored
 	// without a start time (see PutNodeSession).
 	UltracodeProcess json.RawMessage `json:"ultracode_process"`
@@ -147,6 +154,9 @@ type nodeModel struct {
 
 	// Kept until the node confirms its first actual message was delivered.
 	AwaitingFirstMessage bool `json:"awaiting_first_message"`
+	// EngineRuntime: the engine runtime whose start wrote the record ("" for a terminal's, and for a row written before
+	// it was kept).
+	EngineRuntime string `json:"engine_runtime"`
 }
 
 // jsonOrNil is raw, or nil when it holds nothing (empty, or a JSON null).
@@ -175,6 +185,7 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort = m.Model, m.ModelFingerprint, m.ModelEffort, m.AppMode, m.AppEffort
 		s.Origin = m.Origin
 		s.OriginKnown = m.OriginKnown
+		s.ModelSource = jsonOrNil(m.ModelSource)
 		s.Guest, s.GuestKind = m.Guest, m.GuestKind
 		s.ConfigDir = m.ConfigDir
 		s.UltracodeProcess, s.PendingSwitch, s.EngineHistory = jsonOrNil(m.UltracodeProcess), jsonOrNil(m.PendingSwitch), jsonOrNil(m.EngineHistory)
@@ -183,6 +194,7 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		s.IdleCompaction = jsonOrNil(m.IdleCompaction)
 		s.FollowsSetting = m.FollowsSetting
 		s.AwaitingFirstMessage = m.AwaitingFirstMessage
+		s.EngineRuntime = m.EngineRuntime
 		s.StopCause, s.StopCauseAt = m.StopCause, m.StopCauseAt
 		if m.StartedAtUnknown {
 			s.StartedAt = time.Time{}
