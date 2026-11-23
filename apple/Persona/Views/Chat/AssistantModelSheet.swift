@@ -302,6 +302,7 @@ final class AssistantModelPanelModel {
     private(set) var busyLauncher: String?
     private(set) var canSwitch = false
     private(set) var switchPick: ModelPick?
+    private(set) var switchDestination = ""
     private(set) var switchError: String?
     private(set) var switchUncertain = false
     private(set) var switching = false
@@ -325,10 +326,6 @@ final class AssistantModelPanelModel {
     }
     func error(_ launcher: String) -> String? { listErrors[launcher] }
     var unavailable: [UnavailableLauncher] { response?.unavailable ?? [] }
-    var switchDestination: String {
-        guard let name = switchPick?.launcher else { return "" }
-        return response?.launchers.first { $0.name == name }?.title ?? name
-    }
 
     /// Reads the picker once, then each launcher's model list in turn (the node serves a cached list at once, so this
     /// stays quick); each answer lands as it arrives.
@@ -393,6 +390,7 @@ final class AssistantModelPanelModel {
                                                    configuredIsDefault: fallback?.sendsDefault == true) else { return true }
         if let session, canSwitch, let launcherInfo, AssistantModelChoice.switchNeeded(session: session, target: launcherInfo) {
             switchPick = pick
+            switchDestination = launcherInfo.title
             preparedSwitch = nil
             switchError = nil
             switchUncertain = false
@@ -406,6 +404,7 @@ final class AssistantModelPanelModel {
     func cancelSwitch() {
         guard !switching else { return }
         switchPick = nil
+        switchDestination = ""
         preparedSwitch = nil
         switchError = nil
         switchUncertain = false
@@ -438,6 +437,7 @@ final class AssistantModelPanelModel {
             submitted = true
             try await deps.switchConversation(key, request)
             switchPick = nil
+            switchDestination = ""
             preparedSwitch = nil
             switchUncertain = false
             Haptics.success()

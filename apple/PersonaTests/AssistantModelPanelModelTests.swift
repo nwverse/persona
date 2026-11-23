@@ -150,9 +150,10 @@ struct AssistantModelPanelModelTests {
 
         #expect(!changed)
         #expect(panel.switchPick == ModelPick(launcher: "team-api", model: "gpt-standard", effort: "high"))
+        #expect(panel.switchDestination == "team-api")
         #expect(recorder.kept == nil && recorder.segmentReads == 0 && recorder.switchRequests.isEmpty)
         panel.cancelSwitch()
-        #expect(panel.switchPick == nil && !panel.switchUncertain && panel.switchError == nil)
+        #expect(panel.switchPick == nil && panel.switchDestination.isEmpty && !panel.switchUncertain && panel.switchError == nil)
         #expect(recorder.kept == nil && recorder.segmentReads == 0 && recorder.switchRequests.isEmpty)
     }
 
