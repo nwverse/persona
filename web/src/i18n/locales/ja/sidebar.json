@@ -110,7 +110,7 @@
   "unpin": "ピン留めを解除",
   "move_to_group": "「{name}」に移動",
   "remove_from_group": "グループから外す",
-  "personal_agents": "個人エージェント",
+  "personal_agents": "ボット",
   "search_personal": "個人エージェントを検索",
   "filter_sort": "絞り込みと並べ替え",
   "loading": "読み込み中…",
