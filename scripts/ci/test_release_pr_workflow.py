@@ -144,6 +144,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Android test evidence belongs to another commit", release)
         self.assertEqual(self.pr["jobs"]["android"]["needs"], ["plan", "android-tests"])
 
+    def test_apple_archive_stages_exact_source_and_resolved_input(self):
+        text = PR.read_text()
+        for required in ('scripts/ci/apple_release_source.py', '--source "$GITHUB_WORKSPACE"',
+                         '--destination "$RUNNER_TEMP/apple-release-source"', '--meta "$meta"',
+                         'PERSONA_RELEASE_SOURCE'):
+            self.assertIn(required, text)
+        release = (ROOT / 'scripts/release/release.sh').read_text()
+        self.assertIn('cd "$PERSONA_RELEASE_SOURCE"', release)
+        self.assertLess(release.index('cd "$PERSONA_RELEASE_SOURCE"'), release.index('python3 scripts/persona_config.py xcconfig'))
+
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()
         for program in ("persona-link", "personad", "persona-node"):
@@ -229,6 +239,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("missing RELEASE_PR_TOKEN", text)
         self.assertIn("git diff --cached --quiet", text)
         schedule = yaml.load(text, Loader=yaml.BaseLoader)
+        self.assertEqual(schedule["concurrency"]["group"], "release-schedule-${{ inputs.channel || 'automatic' }}")
+        self.assertEqual(schedule["concurrency"]["cancel-in-progress"], "${{ github.event_name == 'schedule' }}")
         self.assertEqual(schedule["jobs"]["plan"]["needs"], "channel")
         for step in schedule["jobs"]["plan"]["steps"]:
             if "env" in step and "CHANNEL" in step["env"]:

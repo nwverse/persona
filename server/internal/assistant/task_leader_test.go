@@ -1084,8 +1084,7 @@ func TestWorkerCardsStayWithTheUser(t *testing.T) {
 	_ = f
 }
 
-// A task leader planned toward a leader conversation is main-supervised like every other new task (#5732). Its workers
-// still report to the task leader Agent: main → task leader → worker, and no deeper.
+// A task leader explicitly planned under a direction keeps that direction; its workers report to the leader Agent.
 func TestTaskLeaderUnderALeaderConversation(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
@@ -1106,7 +1105,7 @@ func TestTaskLeaderUnderALeaderConversation(t *testing.T) {
 	}
 	waitFor(t, "the leader's link", func() bool { return len(onlyTodo(s).Agents) == 1 })
 	todo := onlyTodo(s)
-	if v := todo.Supervision; v == nil || v.Supervisor != "conv1" || todo.Agents[0].Source != sourceLeader {
+	if v := todo.Supervision; v == nil || v.Supervisor != "lead1" || todo.Agents[0].Source != sourceLeader {
 		t.Fatalf("the task leader's task: %+v %+v", todo.Supervision, todo.Agents)
 	}
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle})
@@ -1118,12 +1117,12 @@ func TestTaskLeaderUnderALeaderConversation(t *testing.T) {
 	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", json.RawMessage(`{"kind":"blocked","text":"leader 的阻塞"}`)); res.IsError {
 		t.Fatalf("%+v", res)
 	}
-	waitFor(t, "main's message", func() bool { return len(f.notices()) == 1 })
-	if n := f.notices()[0]; !strings.Contains(n, "leader 的阻塞") || strings.Contains(n, "worker 的进度") {
-		t.Fatalf("main's message:\n%s", n)
+	waitFor(t, "direction's message", func() bool { return len(f.noticesTo("lead1")) == 1 })
+	if n := f.noticesTo("lead1")[0]; !strings.Contains(n, "leader 的阻塞") || strings.Contains(n, "worker 的进度") {
+		t.Fatalf("direction's message:\n%s", n)
 	}
-	if got := f.noticesTo("lead1"); len(got) != 0 {
-		t.Fatalf("the leader conversation got a second supervision stream: %q", got)
+	if got := f.noticesTo("conv1"); len(got) != 0 {
+		t.Fatalf("main got the direction’s ordinary supervision: %q", got)
 	}
 	if m := gotMessage(t, f, "worker 的进度"); strings.Contains(m, "leader 的阻塞") {
 		t.Fatalf("the task leader's message carries its own report:\n%s", m)
@@ -1852,7 +1851,6 @@ func TestNeedsUserFromTaskLeaderIsReviewedByMain(t *testing.T) {
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
 	var in map[string]any
 	_ = json.Unmarshal(leaderPlanArgs("leader"), &in)
-	in["supervisor"] = "lead1"
 	raw, _ := json.Marshal(in)
 	res, err := s.toolTaskPlan(ctx, "conv1", raw)
 	if err != nil {

@@ -190,23 +190,22 @@ func (s *Service) ownSettings() []ownSetting {
 			About: "legacy boolean alias for assistant.delivery_gate: true sets delivery_gate to live (close only once live and " +
 				"checked, and hand the delivery standard to the agent); false sets delivery_gate to off (no delivery gate). " +
 				"Prefer assistant.delivery_gate (off / merged / live). Either way the judge never closes a supervised task: delivery " +
-				"waits for the main conversation's task_review. Applies from the next judgment / task",
+				"waits for its supervisor's task_review. Applies from the next judgment / task",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.doneNeedsDelivery(ctx)), nil },
 			set: s.setDoneNeedsDelivery},
 		{Setting: Setting{Key: "assistant.review_sample_percent", Title: "Share of finished tasks to spot-check", Actions: getSet,
 			About: "100 (the default): the done judge adds no per-criterion check. Below 100 it also checks each done_when criterion " +
 				"and the delivery as evidence for review. Passing, failing, sampled and unsampled work all stay open as delivered, " +
-				"awaiting the main conversation's task_review; the judge never accepts or closes a task. Applies from the next judgment on",
+				"awaiting their supervisor's task_review; the judge never accepts or closes a task. Applies from the next judgment on",
 			Value: "a whole number, 0–100"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.reviewSamplePercent(ctx)), nil },
 			set: s.setReviewSamplePercent},
 		{Setting: Setting{Key: "assistant.leaders", Title: "Leader conversations", Actions: getSet,
-			About: "empty (the default): no manual Agent is assigned to a leader. New task_plan, agent_start and agent_send task work " +
-				"is always supervised by the main conversation, including task_plan(supervisor=leader). The one exception is a manually " +
-				"started Agent the owner explicitly puts under a leader: its ordinary supervision messages and failed starts go there and " +
-				"that leader reviews them with task_review; needs_user still comes to the main conversation, and every other new " +
-				"assistant-dispatched failed start goes there too",
+			About: "empty (the default): ordinary conversations use main for supervision. A direction lead supervises the tasks it " +
+				"plans or starts, and Agents explicitly assigned to it: ordinary signals, question cards, failed starts, retries, " +
+				"task_review and cancellation stay with that lead. Only needs_user escalations go to the main conversation. " +
+				"Main supervises its own tasks; explicit agent_transfer assignments persist across manager restarts",
 			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
 			get: s.getLeaders,
 			set: s.setLeaders},
@@ -251,7 +250,7 @@ func (s *Service) ownSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.loadAllTools(ctx)), nil },
 			set: s.setLoadAllTools},
 		{Setting: Setting{Key: "assistant.agent_tasks", Title: "Every Agent Persona starts is a supervised task", Actions: getSet,
-			About: "off (the default): assistant-dispatched task_plan, agent_start and agent_send task work is still supervised by main. " +
+			About: "off (the default): assistant-dispatched task_plan, agent_start and agent_send task work is still supervised by its planning lead or main. " +
 				"on: manually linked user to-dos and reporting-Agent compatibility are supervised too; an Agent opened by hand on the Agents " +
 				"page is not adopted merely because it did work. Agents started by hand in a terminal are left alone. Costs model calls " +
 				"(the done judge, supervision turns). Applies from the next start, turn end and report",

@@ -1,12 +1,14 @@
 package node
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,10 +17,44 @@ import (
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
+
+type agyPaneBinding struct {
+	conversation string
+	verified     bool
+}
+
+type agyTranscriptKind uint8
+
+const (
+	agyTranscriptMissing agyTranscriptKind = iota
+	agyTranscriptUnreadable
+	agyTranscriptEmpty
+	agyTranscriptNormal
+	agyTranscriptSubagent
+)
+
+type agyCandidateDecision uint8
+
+const (
+	agyCandidateSubagent agyCandidateDecision = iota
+	agyCandidatePending
+	agyCandidateNormal
+	agyCandidateUnverified
+)
+
+type agyParentSubagentInfo struct {
+	file      os.FileInfo
+	path      string
+	hasInvoke bool
+	children  map[string]bool
+}
+
+var agyEmbeddedUUIDRe = lazyre.New(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 
 func reportedAgyConversation(a host.Agent) string {
 	s := a.AgentSession
@@ -29,10 +65,10 @@ func reportedAgyConversation(a host.Agent) string {
 	return ""
 }
 
-// agyConversationLocked checks the latest raw herdr snapshot as well as the pane row.
+// rawAgyConversationLocked checks the latest raw herdr snapshot as well as the pane row.
 // The row ID is pane-derived. Cwd and previously bound session IDs cannot identify
 // a native conversation, and ambiguous reports do not authorize a read or resume.
-func (n *Node) agyConversationLocked(id, pane string) string {
+func (n *Node) rawAgyConversationLocked(id, pane string) string {
 	a := n.agents[id]
 	conversation := reportedAgyConversation(a)
 	if conversation == "" || a.PaneID != pane || id != otherSession(a) || host.ParsePane(pane).Kind != host.Herdr {
@@ -56,10 +92,356 @@ func (n *Node) agyConversationLocked(id, pane string) string {
 	return conversation
 }
 
-func (n *Node) agyConversation(id, pane string) string {
+func (n *Node) agyConversationClaimedElsewhereLocked(pane, conversation string) bool {
+	for _, raw := range n.hostAgents[host.Herdr] {
+		if raw.PaneID != pane && reportedAgyConversation(raw) == conversation {
+			return true
+		}
+	}
+	return false
+}
+
+// isAgySubagentHead reports whether a conversation's opening step indicates a built-in
+// subagent conversation rather than a user-initiated or system-wake session.
+func isAgySubagentHead(stepType, stepSource string) bool {
+	typ := strings.ToUpper(strings.TrimSpace(stepType))
+	src := strings.ToUpper(strings.TrimSpace(stepSource))
+	if typ == "SYSTEM_MESSAGE" || typ == "CORTEX_STEP_TYPE_SYSTEM_MESSAGE" {
+		return true
+	}
+	// Do not classify source=="SYSTEM" alone (e.g. SYSTEM-sourced USER_INPUT wake/background
+	// steps or ERROR_MESSAGE steps) as a subagent: only explicit non-user, non-system
+	// USER_INPUT sources (such as SUBAGENT) qualify without a SYSTEM_MESSAGE header.
+	if typ == "USER_INPUT" && src != "" && src != "USER_EXPLICIT" && src != "SYSTEM" {
+		return true
+	}
+	return false
+}
+
+func probeAgyTranscriptFile(root *os.Root, rel string) agyTranscriptKind {
+	info, err := root.Stat(rel)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return agyTranscriptMissing
+		}
+		return agyTranscriptUnreadable
+	}
+	if !info.Mode().IsRegular() {
+		return agyTranscriptMissing
+	}
+	f, err := root.Open(rel)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return agyTranscriptMissing
+		}
+		return agyTranscriptUnreadable
+	}
+	defer f.Close()
+
+	r := bufio.NewReader(f)
+	for range 64 {
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				// Ignore any trailing line without a newline so in-progress writes wait for completion.
+				return agyTranscriptEmpty
+			}
+			return agyTranscriptUnreadable
+		}
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		var head struct {
+			Type   string `json:"type"`
+			Source string `json:"source"`
+		}
+		if json.Unmarshal(line, &head) != nil {
+			continue
+		}
+		if head.Type == "" && head.Source == "" {
+			continue
+		}
+		if isAgySubagentHead(head.Type, head.Source) {
+			return agyTranscriptSubagent
+		}
+		return agyTranscriptNormal
+	}
+	return agyTranscriptEmpty
+}
+
+func probeAgyConversation(dir, conversation string) agyTranscriptKind {
+	if dir == "" || conversation == "" || !uuidRe.MatchString(conversation) {
+		return agyTranscriptMissing
+	}
+	root, err := agyBrain(dir, conversation)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return agyTranscriptMissing
+		}
+		return agyTranscriptUnreadable
+	}
+	defer root.Close()
+
+	kind := probeAgyTranscriptFile(root, agyTranscriptPath)
+	if kind == agyTranscriptMissing || kind == agyTranscriptEmpty {
+		if full := probeAgyTranscriptFile(root, agyFullTranscriptPath); full == agyTranscriptSubagent || full == agyTranscriptNormal {
+			return full
+		}
+	}
+	return kind
+}
+
+func extractAgyParentSubagents(root *os.Root, raw []byte, parent string) (bool, map[string]bool) {
+	if !bytes.Contains(raw, []byte("invoke_subagent")) &&
+		!bytes.Contains(raw, []byte("send_message")) &&
+		!bytes.Contains(raw, []byte("manage_subagents")) {
+		return false, nil
+	}
+	steps, _ := parseAgySteps(raw, parent)
+	var hasInvoke bool
+	var children map[string]bool
+	addChild := func(id string) {
+		id = strings.ToLower(strings.TrimSpace(id))
+		if !uuidRe.MatchString(id) {
+			return
+		}
+		if children == nil {
+			children = make(map[string]bool)
+		}
+		children[id] = true
+	}
+
+	var pending []string
+	var plannerCalls []string
+	var plannerSeq int
+	var sawSystemBetween bool
+	for _, step := range steps {
+		switch step.Type {
+		case "PLANNER_RESPONSE":
+			pending = pending[:0]
+			plannerCalls = plannerCalls[:0]
+			plannerSeq = step.seq
+			sawSystemBetween = false
+			for _, tc := range step.ToolCalls {
+				if tc == nil {
+					pending = append(pending, "")
+					plannerCalls = append(plannerCalls, "")
+					continue
+				}
+				pending = append(pending, tc.Name)
+				plannerCalls = append(plannerCalls, tc.Name)
+				switch tc.Name {
+				case "invoke_subagent":
+					hasInvoke = true
+				case "send_message":
+					var args struct {
+						Recipient string `json:"Recipient"`
+					}
+					if json.Unmarshal(tc.Args, &args) == nil && args.Recipient != "" {
+						hasInvoke = true
+						addChild(args.Recipient)
+					}
+				case "manage_subagents":
+					var args struct {
+						ConversationIds []string `json:"ConversationIds"`
+					}
+					if json.Unmarshal(tc.Args, &args) == nil && len(args.ConversationIds) > 0 {
+						hasInvoke = true
+						for _, cid := range args.ConversationIds {
+							addChild(cid)
+						}
+					}
+				}
+			}
+		case "SYSTEM_MESSAGE":
+			sawSystemBetween = true
+		case "USER_INPUT", "ERROR_MESSAGE":
+			pending = pending[:0]
+			plannerCalls = plannerCalls[:0]
+		case "GENERIC":
+			callName := ""
+			if !sawSystemBetween && len(plannerCalls) > 0 && step.seq > plannerSeq {
+				if idx := step.seq - plannerSeq - 1; idx >= 0 && idx < len(plannerCalls) {
+					callName = plannerCalls[idx]
+				}
+			}
+			if len(pending) > 0 {
+				popped := pending[0]
+				pending = pending[1:]
+				if callName == "" {
+					callName = popped
+				}
+			}
+			if callName != "invoke_subagent" {
+				continue
+			}
+			for _, match := range agyEmbeddedUUIDRe.FindAllString(step.Content, -1) {
+				addChild(match)
+			}
+			if root != nil && step.Error == "" {
+				for _, field := range step.TruncatedFields {
+					if field == "content" {
+						path := filepath.Join(".system_generated", "steps", fmt.Sprint(step.seq-1), "output.txt")
+						if output, err := agyReadFile(root, path); err == nil {
+							for _, match := range agyEmbeddedUUIDRe.FindAllString(string(output), -1) {
+								addChild(match)
+							}
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+	return hasInvoke, children
+}
+
+func (n *Node) agyParentSubagents(dir, parent string) agyParentSubagentInfo {
+	if dir == "" || parent == "" || !uuidRe.MatchString(parent) {
+		return agyParentSubagentInfo{}
+	}
+	root, err := agyBrain(dir, parent)
+	if err != nil {
+		return agyParentSubagentInfo{}
+	}
+	defer root.Close()
+
+	rel := agyTranscriptPath
+	info, err := root.Stat(rel)
+	if err != nil || !info.Mode().IsRegular() {
+		rel = agyFullTranscriptPath
+		info, err = root.Stat(rel)
+		if err != nil || !info.Mode().IsRegular() {
+			return agyParentSubagentInfo{}
+		}
+	}
+
+	key := filepath.Join(dir, parent)
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.agyConversationLocked(id, pane)
+	if n.agyParentSubs != nil {
+		if cached, ok := n.agyParentSubs.get(key); ok && cached.path == rel && sameAgyFile(info, cached.file) && time.Since(info.ModTime()) > time.Second {
+			n.mu.Unlock()
+			return cached
+		}
+	}
+	n.mu.Unlock()
+
+	raw, err := root.ReadFile(rel)
+	if err != nil {
+		return agyParentSubagentInfo{}
+	}
+	raw = raw[:bytes.LastIndexByte(raw, '\n')+1]
+	hasInvoke, children := extractAgyParentSubagents(root, raw, parent)
+	entry := agyParentSubagentInfo{file: info, path: rel, hasInvoke: hasInvoke, children: children}
+
+	n.mu.Lock()
+	if n.agyParentSubs == nil {
+		n.agyParentSubs = newLRU[string, agyParentSubagentInfo](256)
+	}
+	n.agyParentSubs.put(key, entry)
+	n.mu.Unlock()
+	return entry
+}
+
+func (n *Node) classifyAgyCandidate(dir, parent, candidate string) agyCandidateDecision {
+	kind := probeAgyConversation(dir, candidate)
+	if kind == agyTranscriptSubagent {
+		return agyCandidateSubagent
+	}
+	parentInfo := n.agyParentSubagents(dir, parent)
+	if parentInfo.children[strings.ToLower(candidate)] {
+		return agyCandidateSubagent
+	}
+	switch kind {
+	case agyTranscriptNormal:
+		return agyCandidateNormal
+	case agyTranscriptEmpty, agyTranscriptUnreadable:
+		return agyCandidatePending
+	default: // agyTranscriptMissing
+		if parentInfo.hasInvoke {
+			return agyCandidatePending
+		}
+		return agyCandidateUnverified
+	}
+}
+
+// agyConversation resolves the pane's active parent agy conversation while ignoring
+// built-in subagent conversation IDs reported via inherited HERDR_PANE_ID hooks (#13336).
+func (n *Node) agyConversation(id, pane string) string {
+	for range 3 {
+		n.mu.Lock()
+		raw := n.rawAgyConversationLocked(id, pane)
+		if raw == "" {
+			delete(n.agyBound, pane)
+			n.mu.Unlock()
+			return ""
+		}
+		bound := n.agyBound[pane]
+		if bound.conversation != "" && n.agyConversationClaimedElsewhereLocked(pane, bound.conversation) {
+			bound = agyPaneBinding{}
+			delete(n.agyBound, pane)
+		}
+		if bound.conversation == raw && bound.verified {
+			n.mu.Unlock()
+			return raw
+		}
+		n.mu.Unlock()
+
+		dir := n.agyDataRoot()
+		var next agyPaneBinding
+		var result string
+		var keepBound bool
+
+		if bound.conversation == "" || bound.conversation == raw {
+			switch probeAgyConversation(dir, raw) {
+			case agyTranscriptSubagent:
+				next = agyPaneBinding{}
+				result = ""
+			case agyTranscriptNormal:
+				next = agyPaneBinding{conversation: raw, verified: true}
+				result = raw
+			default:
+				next = agyPaneBinding{conversation: raw, verified: false}
+				result = raw
+			}
+		} else {
+			switch n.classifyAgyCandidate(dir, bound.conversation, raw) {
+			case agyCandidateSubagent, agyCandidatePending:
+				keepBound = true
+				next = bound
+				result = bound.conversation
+			case agyCandidateNormal:
+				next = agyPaneBinding{conversation: raw, verified: true}
+				result = raw
+			case agyCandidateUnverified:
+				next = agyPaneBinding{conversation: raw, verified: false}
+				result = raw
+			}
+		}
+
+		n.mu.Lock()
+		if n.rawAgyConversationLocked(id, pane) != raw {
+			n.mu.Unlock()
+			continue
+		}
+		if keepBound && n.agyConversationClaimedElsewhereLocked(pane, bound.conversation) {
+			delete(n.agyBound, pane)
+			n.mu.Unlock()
+			continue
+		}
+		if next.conversation == "" {
+			delete(n.agyBound, pane)
+		} else {
+			if n.agyBound == nil {
+				n.agyBound = make(map[string]agyPaneBinding)
+			}
+			n.agyBound[pane] = next
+		}
+		n.mu.Unlock()
+		return result
+	}
+	return ""
 }
 
 // agyNotice is a pane's history while its conversation is not known: one notice, in the node's own language like its

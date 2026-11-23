@@ -485,7 +485,11 @@ func triageRules(c proto.Session, loc *time.Location, l i18n.Lang) (w *proto.Wor
 			return limitWork(c, time.Now(), loc, l), "rule", false
 		}
 		if turnErrorTransient(c) {
-			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, Line: workT(l, "transient_retrying"),
+			line := workT(l, "transient_retrying")
+			if c.TurnErrorCode == proto.TurnErrorUpstreamUnavailable {
+				line = clip(oneLine(workT(l, "upstream_unavailable_retrying", i18n.Args{"error": e})), 120)
+			}
+			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, Line: line,
 				Wait: clip(oneLine(e), 200)}, "rule", false
 		}
 		return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, Line: clip(oneLine(workT(l, "model_error", i18n.Args{"error": e})), 60),
@@ -561,7 +565,7 @@ func turnErrorTransient(c proto.Session) bool {
 	if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable {
 		return false
 	}
-	if sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable {
+	if code := sessionTurnErrorCode(c); code == proto.TurnErrorModelFallbackUnavailable || code == proto.TurnErrorImagesTooLarge {
 		return false
 	}
 	switch c.TurnErrorKind {
@@ -605,11 +609,12 @@ var (
 	// a request too large (413).
 	userErrorStatus = lazyre.New(`\b(400|401|403|413)\b`)
 	rateLimitStatus = lazyre.New(`\b429\b`)
-	// userErrorWords: the auth words shared with the node's failed-turn check (assistantwire.AuthErrorWords, #4669),
-	// then a request the service refuses as it is, a context too long, an interrupt.
-	userErrorWords = append(slices.Clone(assistantwire.AuthErrorWords),
+	// userErrorWords: the auth and image-limit words shared with the node's failed-turn check
+	// (assistantwire.AuthErrorWords, #4669; assistantwire.ImageLimitErrorWords, #13045), then a request the service
+	// refuses as it is, a context too long, an interrupt.
+	userErrorWords = append(append(slices.Clone(assistantwire.AuthErrorWords), assistantwire.ImageLimitErrorWords...),
 		"invalid_request_error", "invalid request", "prompt is too long", "context length", "context window", "context_length_exceeded",
-		"maximum context", "too many tokens", "request too large", "request_too_large",
+		"maximum context", "too many tokens",
 		"interrupted by user", "request was aborted", "aborted by user", "user aborted")
 )
 

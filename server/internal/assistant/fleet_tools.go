@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -154,6 +155,7 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		tools := s.mcpTools(ctx, assistant)
 		if assistant {
 			tools = s.guardTools(ctx, machine, session, tools)
+			tools = append(tools, s.spaceTools(ctx, machine, session)...) // space_state_update (track_space_md.go)
 		}
 		if !assistant {
 			tools = append(tools, s.leaderTools(ctx, machine, session)...)
@@ -231,6 +233,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
 	}
 	if s.ext != nil { // the connectors', Cua's, ego's: ctx is the node's call (its caller going away withdraws a card)
+		if s.ext.ConnectorTool(name) { // a connector is told where the call comes from (connector_context.go)
+			ctx = connector.WithCallContext(ctx, s.connectorCallContext(ctx, session))
+		}
 		if res, ok := s.ext.CallTool(ctx, machine, session, name, args, assistant); ok {
 			return res
 		}
@@ -253,6 +258,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	}
 	if !assistant && isDispatchTool(name) {
 		return s.dispatchTool(ctx, machine, session, name, args)
+	}
+	if assistant && name == spaceStateTool { // listed per conversation (spaceTools), so not in Tools: its handler checks
+		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
 	}
 	if assistant && s.isOwnTool(ctx, name) {
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
