@@ -378,22 +378,8 @@ screen there is unchanged; before it, the nearest older behavior or nothing. Too
 (`ToolbarSpacer`, `sharedBackgroundVisibility`) are chosen on the view: `ToolbarContentBuilder` cannot take
 `if #available` (`docs/lessons/ios.md`, "iOS 18.6 floor").
 
-On the retired native Mac, a style could also bring the window's chrome (`StyleSpec.MacChrome`), read through the former Mac-only tokens and `Theme.monogram(_:)`: the sections column, the side column beside a list, how the
-shell's lists showed the selected row and the row under the pointer, and the discs of names without a picture. Every style
-but Lark kept the system's (`.system`), so those Mac windows were unchanged; the iPhone, iPad and watch draw none of it.
-Lark's follows the Feishu desktop window (#5598):
-
-| Part | Light / dark | Token |
-| --- | --- | --- |
-| Sections column | `#E4EAF6` / `#1C1D21` | `Theme.macSidebar` |
-| Selected section | a raised block `#FFFFFF` / `#2C2E34`, its icon in the accent, the title semibold | `Theme.Fill.macSidebarSelected`, `Theme.macSelectedIcon`, `Theme.macSelectedWeight` |
-| Side column (Inbox's filters) | `#EDF1F7` / `#18191C` | `Theme.macSideColumn` |
-| Other selected rows | the accent at 12 %, the icon in the accent | `Theme.Fill.macSelected` |
-| Row under the pointer | `#1F2329` / `#FFFFFF` at 6 % | `Theme.Fill.macHover` |
-| Names without a picture | one of nine hues picked by the name (the same on every launch), white letter ≥ 3.6:1 | `Theme.monogram(_:)` |
-
-`StyleSpecTests.theMacChromeReads` checks it in the style's own colors: the accent icon ≥ 3:1 on every selected shade,
-the row's words ≥ 4.5:1, the white letter ≥ 3:1 on every hue.
+The retired native Mac's window chrome a style could bring (`StyleSpec.MacChrome`; Lark's followed the Feishu desktop
+window, #5598) went with the rest of the Mac-only code (#13399); `docs/design/DECISIONS.md` keeps what it was.
 
 ## 3. Components
 

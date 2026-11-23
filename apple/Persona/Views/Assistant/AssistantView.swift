@@ -317,11 +317,7 @@ struct AssistantView: View {
         .navigationDestination(isPresented: $showProfile) { AssistantProfileView() }
         .navigationDestination(isPresented: $showKnowledge) { KnowledgeView() }
         .navigationDestination(isPresented: $showRecordings) {
-            #if os(iOS) || os(visionOS)
             RecordingsPage()
-            #else
-            KnowledgeView() // the Mac records nothing: its Knowledge lists the hub's recordings
-            #endif
         }
         .navigationDestination(isPresented: $showRoutines) { AssistantRoutinesView() }
         .navigationDestination(isPresented: $showTodos) {
@@ -368,9 +364,7 @@ struct AssistantView: View {
         AnyView(root)
         // No system bar: the top bar floats over the conversation with a fog under it (it scrolls beneath).
         .toolbarVisibility(.hidden, for: .navigationBar)
-        #if os(iOS) || os(visionOS)
         .background { RootBarHidden(atRoot: atRoot, roots: embedded ? unified : nil) }
-        #endif
         .overlay(alignment: .top) {
             AssistantTopBar(key: pending == nil ? current : nil,
                             sidebarIsColumn: widthClass == .regular,
@@ -1594,9 +1588,7 @@ struct StarterComposer: View {
     /// The `@word` before the caret, for the @ list (#2319): the shell's composer only, while it has the keyboard.
     private var mentionToken: MentionToken? {
         guard shell != nil, focused, !disabled else { return nil }
-        #if os(iOS) || os(visionOS)
         if TypedText.composingFocused { return nil } // Pinyin still marked: the list waits for the confirmed words
-        #endif
         return MentionToken.at(text, selection: selection)
     }
 
@@ -1648,9 +1640,7 @@ struct StarterComposer: View {
         VStack(spacing: Theme.Space.s) {
             if !files.items.isEmpty { FileAttachmentsBar(files: files) }
             if !videos.items.isEmpty { VideoAttachmentsBar(videos: videos) }
-            #if os(iOS) || os(visionOS)
             PasteImageChip(focused: focused) { add($0) }
-            #endif
             if !images.isEmpty { ComposerImages.editable(draft.held) } // a tap marks it up, as in a conversation
             if let token = mentionToken {
                 ComposerMentionMenu(token: token, text: textBinding, selection: $selection, source: mentionSource) { ref in
@@ -1669,7 +1659,7 @@ struct StarterComposer: View {
                 ShellComposerBar(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)"), text: textBinding, selection: $selection, focused: $focused,
                                  canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty,
                                  modesTitle: StarterModesMenu.title(modes: shell, launchers: starterModels.launchers, mainDefault: starterModels.mainDefault, model: model),
-                                 quotes: quotesBinding, history: "assistant.new", gate: gate, openAttach: attachOpener,
+                                 quotes: quotesBinding, gate: gate, openAttach: attachOpener,
                                  dictationRequest: uploadDest == nil ? model.dictationRequest : nil,
                                  takeDictation: { request in model.takeDictationRequest(request, uploadDest: uploadDest) }, send: submit) {
                     #if os(iOS)
@@ -1699,7 +1689,7 @@ struct StarterComposer: View {
                 }
             } else {
                 ComposerRow(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)…"), text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
-                            send: submit, history: "assistant.new", gate: gate) {
+                            send: submit, gate: gate) {
                     attachments
                 }
             }
@@ -1825,9 +1815,7 @@ struct BeautifulStarterComposer: View {
             if currentLauncher == nil { StarterLauncherStatus() }
             if !files.items.isEmpty { FileAttachmentsBar(files: files) }
             if !videos.items.isEmpty { VideoAttachmentsBar(videos: videos) }
-            #if os(iOS) || os(visionOS)
             PasteImageChip(focused: focused) { add($0) }
-            #endif
             if !images.isEmpty { ComposerImages.editable(draft.held) } // a tap marks it up, as in a conversation
             PromptComposer(placeholder: placeholder ?? String(localized: "Ask \(model.assistantShownName)…"), text: textBinding, selection: $selection, focused: $focused,
                            hasAttachments: !images.isEmpty || !videos.items.isEmpty || !files.items.isEmpty || !quotes.isEmpty, disabled: disabled,
@@ -2275,7 +2263,6 @@ struct StarterModesMenu: View {
     }
 }
 
-#if os(iOS) || os(visionOS)
 /// Hides the stack's navigation bar again once the page is back at its root. Swiped back from a pushed page with its
 /// search still open (Knowledge), UIKit left the bar showing over the root, with the root's title and ~106 pt tall: the top
 /// bar was pushed down under it, and a tap where the switch belongs hit the empty bar (2026-11-01). SwiftUI still has
@@ -2326,7 +2313,6 @@ private struct RootBarHidden: UIViewRepresentable {
         }
     }
 }
-#endif
 
 /// The classic layout has no ShellDestinations, so nothing registers the todo detail route in this stack: a todo row
 /// pushed from the todo list (TodosView) would open nothing. Nor the agent page Full Screen pushes (`SessionKey`). The
