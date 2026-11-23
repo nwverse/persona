@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -160,7 +160,7 @@ func TestReadGroupAnswerGoesUnderTheMessageOnly(t *testing.T) {
 	eventually(t, 5*time.Second, "taken", func() bool { return len(w.handed()) == 1 })
 	w.api.inChat("om_rsrc", askChat)
 	w.api.inChat("om_other", askChat)
-	card := feishubot.NewCard("t", "green", "a").Markdown("a card").JSON()
+	card := botcard.NewCard("t", "green", "a").Markdown("a card").JSON()
 
 	before := w.api.total()
 	for name, c := range map[string]struct {
@@ -217,7 +217,7 @@ func TestReadGroupAnswerGoesUnderTheMessageOnly(t *testing.T) {
 	w.api.rejectReply = 230011
 	w.api.mu.Unlock()
 	before = w.api.total()
-	if err := w.sendErr(assistantwire.FeishuPost, map[string]any{"card": card, "reply_to": "om_rsrc_gone"}); !feishubot.MessageGone(err) {
+	if err := w.sendErr(assistantwire.FeishuPost, map[string]any{"card": card, "reply_to": "om_rsrc_gone"}); !botcard.MessageGone(err) {
 		t.Fatalf("a card whose original is gone: %v", err)
 	}
 	if sent := w.api.since(before); strings.Contains(sent, "receive_id_type=chat_id") {
@@ -236,7 +236,7 @@ func TestReadGroupLeavesAISourcesAsTheyWere(t *testing.T) {
 		t.Fatalf("an /ai was handed as %q", from)
 	}
 	w.api.inChat("om_ai", askChat)
-	card := feishubot.NewCard("t", "green", "a").Markdown("a card").JSON()
+	card := botcard.NewCard("t", "green", "a").Markdown("a card").JSON()
 	if err := w.sendErr(assistantwire.FeishuPost, map[string]any{"card": card, "reply_to": "om_ai"}); err == nil {
 		t.Fatal("a card under an /ai source went")
 	}

@@ -888,6 +888,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "scripts/test/test_privacy_check.py": {
+      "reason": "Exact regression for privacy_check.py's legacy config variable: the scan reads the configuration it names.",
+      "tokens": [
+        "JARVIS_CONFIG"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "scripts/test/test_script_layout.py": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [
@@ -1457,6 +1465,14 @@
       "reason": "Regression fixture for the historical state directory in a session's working directory.",
       "tokens": [
         ".jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "web/src/views/chat/ChatView.errorBanner.test.tsx": {
+      "reason": "Exact regression fixture: compacting and resending keeps a message's context/file markers, legacy ones included.",
+      "tokens": [
+        "jarvis"
       ],
       "path_tokens": [],
       "external_refs": []

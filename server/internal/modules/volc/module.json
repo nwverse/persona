@@ -1,0 +1,7 @@
+{
+  "$schema": "../../../../schema/module.schema.json",
+  "id": "volc",
+  "api": 1,
+  "origin": "builtin",
+  "title": "Volcengine speech"
+}
