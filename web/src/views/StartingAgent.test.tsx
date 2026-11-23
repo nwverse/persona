@@ -3,11 +3,11 @@
 // tooltip (#5029); an rc alias reads as before. The field to change it on a failed start keeps the startup ID.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../i18n";
 import { setToken } from "../lib/api";
 import { getState } from "../lib/store";
-import type { AgentLaunch } from "../lib/new-agent";
+import { loadDelivery, type AgentLaunch } from "../lib/new-agent";
 
 vi.mock("../lib/store", async (original) => ({
   ...(await original<typeof import("../lib/store")>()),
@@ -27,6 +27,9 @@ let host: HTMLDivElement;
 let root: Root;
 const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); }); };
 const line = () => host.querySelector<HTMLElement>("header p")!;
+
+// Launch delivery loads on first use (lib/new-agent.ts); loaded once here, as after the first start in the app.
+beforeAll(async () => { await loadDelivery(); });
 
 beforeEach(() => {
   forgetProviderNames();

@@ -4,7 +4,8 @@
 // picked (#4384). On a phone the dialog's buttons are its sheet's footer (#11511). The hub is faked; the data made up.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadDelivery } from "../lib/new-agent";
 import { t } from "../i18n";
 import { setToken } from "../lib/api";
 import { getState, upsertSession } from "../lib/store";
@@ -63,6 +64,9 @@ async function open(onClose = () => {}, targets = machines) {
   await act(async () => root.render(<HandoverDialog open todo={todo} machines={targets} onClose={onClose} />));
   await flush();
 }
+
+// Launch delivery loads on first use (lib/new-agent.ts); loaded once here, as after the first start in the app.
+beforeAll(async () => { await loadDelivery(); });
 
 beforeEach(() => {
   extra = {};

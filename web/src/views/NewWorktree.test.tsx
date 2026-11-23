@@ -2,11 +2,11 @@
 import { webcrypto } from "node:crypto";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { beforeEach, afterEach, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, afterEach, expect, it, vi } from "vitest";
 import { credentialOwner, setToken } from "../lib/api";
 import { getState } from "../lib/store";
 import { setRosterDefault } from "../lib/manager-choice";
-import { deliverLaunch, launchAgent, onOpenNewAgent } from "../lib/new-agent";
+import { deliverLaunch, launchAgent, onOpenNewAgent, loadDelivery } from "../lib/new-agent";
 import { NewWorktree } from "./NewWorktree";
 import type { WorktreeRequest } from "../lib/worktree";
 import { t } from "../i18n";
@@ -39,6 +39,9 @@ async function input(label: string, value: string) {
 }
 async function mount() { await act(async () => root.render(<NewWorktree request={request} onClose={closes} />)); await flush(); }
 const creates = () => calls.filter((c) => c.url.endsWith("/worktree/create"));
+
+// Launch delivery loads on first use (lib/new-agent.ts); loaded once here, as after the first start in the app.
+beforeAll(async () => { await loadDelivery(); });
 
 beforeEach(() => {
   vi.stubGlobal("crypto", webcrypto); localStorage.clear(); sessionStorage.clear();
