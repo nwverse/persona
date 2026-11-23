@@ -35,9 +35,12 @@ cleanup() {
   rmdir "$fixture" 2>/dev/null || true
 }
 trap cleanup EXIT
+# A disposable test database needs no durability: with fsync on, every commit waited for a busy CI disk and the
+# database became the slowest part of the shards (docs/operations/testing.md, "Affected checks").
 ci_run 'Postgres 18 fixture' 180 docker run --detach --name "$container" \
   -e POSTGRES_USER=persona -e POSTGRES_PASSWORD=ci-only -e POSTGRES_DB=persona_test \
-  -p 127.0.0.1::5432 postgres:18-alpine
+  -p 127.0.0.1::5432 postgres:18-alpine \
+  -c fsync=off -c synchronous_commit=off -c full_page_writes=off
 ci_run 'Postgres readiness' 90 python3 scripts/ci/postgres.py "$container" "$fixture/database.json"
 if [ "$lane" = all ] || [ "$lane" = node ]; then
   # The real-browser package has its own hosted runner, without build or other-package contention.
