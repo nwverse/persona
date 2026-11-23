@@ -2497,13 +2497,30 @@ hub sends (`GET /api/v1/assistant`, the value in effect). Who it is for: people 
   request that names its manager, so those rows need `manager` in the read). The hub's answer is kept for that field
   and handed to `AppModel.assistantConfig`; a refusal puts the page's value back with a toast. A control waits while its
   own write is out.
-- **Not here**: `inbox_signals` (Tell supervisors about new messages) moves to the Inbox's own settings (#4524), and
-  `default_permission_mode` has no page in the app yet.
+- **Not here**: `inbox_signals` (Tell supervisors about new messages) moves to the Inbox's own settings (#4524).
 - **Mock hub**: the default mock sends every field with the hub's defaults and checks a `PUT` as the hub does;
   `MOCK_LEGACY_HUB=1` has none of them. Debug launch: `-openAssistantPage agentFollowUp`.
 - **Tests**: `AgentFollowUpTests` (reads, each change's request and header, the hub's answer, rollback, the menus'
   words) and `AgentFollowUpUITests` against the mock hub (light / dark shots with `TEST_RUNNER_PERSONA_SHOTS`);
   `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` on this page.
+
+## Permission defaults (#13286)
+
+Settings › Agent includes **Default Permissions**, the manager's existing `default_permission_mode` from
+`GET /api/v1/assistant`. It applies only to new non-guest conversations without an explicit choice; existing
+conversations keep their current mode. A direction leader's title menu also has **Default Permissions**, opening the
+same `DefaultPermissionsSettingsSection` in a sheet rather than a direction-specific override. Both use the existing
+sparse `PUT /api/v1/assistant`, require the answering manager to confirm the selected mode, and put the previous value
+back if the write or confirmation fails.
+
+Settings › Models decodes the existing launcher `permission_mode` in `ModelBinding`. The AI twin's editor shows **Inbox
+Permissions**: an unset or legacy Plan value displays **Default permissions**, never the parent Agents' Full access,
+and Plan is not offered. An explicit supported choice saves through the same purpose PATCH; Follow Agents writes
+`permission_mode: null` and restores the safe default. Other launcher purposes retain their ordinary inheritance and
+provider-specific mode lists.
+
+Tests: `AgentFollowUpTests`, `ModelConfigurationModelTests`, `AgentFollowUpUITests`,
+`LarkAgentModelConfigurationTests` and `DirectionScreensUITests`; the UI cases use only synthetic loopback fixtures.
 
 ## Background supervisor (#5083)
 
@@ -3338,13 +3355,21 @@ Key points:
 
 ## Settings by scope (#5236)
 
-The shared iPhone, iPad and Mac settings page has three groups:
+The shared iPhone and iPad settings page has three groups, then one Advanced row. Settings home shows each group's core rows
+only (#13395, at most ten; `SettingsCatalog.core`); Settings › Advanced shows the rest under the same groups
+(`SettingsCatalog.advanced`), and search finds every entry on either:
 
-| Scope | Entries |
-| --- | --- |
-| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Extensions, Knowledge Selection, Meetings, Agent, Machines (platform and hub capabilities decide availability) |
-| This Device | Appearance & Display, Language & Dictation, Notifications, Translation, Storage, Health, This iPhone, About |
-| Hub | Hub Connection, Hub Version, Assistants, Avatar, Devices & Pairing |
+| Scope | Settings home | Settings › Advanced |
+| --- | --- | --- |
+| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Inbox Sources, Extensions, Machines | Knowledge Selection, Meetings, Agent |
+| This Device | Notifications, About | Appearance & Display, Language & Dictation, Live Screen, Translation, Storage, Health, Alarms and Timers, This iPhone |
+| Hub | Hub Connection | Hub Version, Assistants, Avatar, Devices & Pairing |
+
+Platform and hub capabilities decide availability, as before: Inbox Sources with the hub's `inbox_sources`, Extensions with
+its extension manager, Live Screen while a computer offers it, Alarms and Timers with AlarmKit, and the hub's own rows only with
+a hub paired (not in demo mode). The Advanced row's value is the hub update's state while one is out or under way. A row keeps
+its accessibility identifier wherever its tier puts it (`SettingsEntry.rowID`); `-openAdvancedSettings YES` (DEBUG) opens
+Settings › Advanced for screenshots.
 
 Whenever the hub answers a roster, with one or many installed assistants, the first heading is **<name>'s Settings**,
 with the current assistant's first-letter avatar and state dot plus **Switch**. Switch opens the same assistant

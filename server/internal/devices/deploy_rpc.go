@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -20,11 +21,13 @@ import (
 // The desired deployment survives a hub restart. Only the node's local recovery
 // transaction lives beside its executable; hub state stays in Postgres settings.
 type nodeDeployRecord struct {
-	Target string    `json:"target"`
-	State  string    `json:"state"` // queued | succeeded | failed
-	Phase  string    `json:"phase,omitempty"`
-	Error  string    `json:"error,omitempty"`
-	At     time.Time `json:"at"`
+	Development *devicewire.DevelopmentTarget `json:"development,omitempty"`
+	Source      string                        `json:"source,omitempty"`
+	Target      string                        `json:"target"`
+	State       string                        `json:"state"` // queued | succeeded | failed
+	Phase       string                        `json:"phase,omitempty"`
+	Error       string                        `json:"error,omitempty"`
+	At          time.Time                     `json:"at"`
 	// Fallback: the target is a fallback build (another version than the hub's), which only an explicit Redeploy
 	// sends; a record queued for the hub's own version never resumes as one.
 	Fallback bool `json:"fallback,omitempty"`
@@ -124,7 +127,7 @@ func (m *Machine) startRPCDeploymentRun(pkg nodePackage, saved *nodeDeployRecord
 	}
 	run := m.beginDeployLocked("waiting_idle")
 	m.mu.Unlock()
-	record := nodeDeployRecord{Target: pkg.Version, State: "queued", Phase: "waiting_idle", At: time.Now().UTC(), Fallback: pkg.Fallback}
+	record := nodeDeployRecord{Development: pkg.development, Target: pkg.Version, State: "queued", Phase: "waiting_idle", At: time.Now().UTC(), Fallback: pkg.Fallback}
 	if saved != nil {
 		record = *saved
 	}
@@ -152,7 +155,10 @@ func (m *Machine) runRPCDeployment(ctx context.Context, pkg nodePackage, record 
 			err = m.deploymentPhase(ctx, &record, "transferring")
 		}
 		if err == nil {
-			bin, err = m.d.fetchPackage(ctx, pkg)
+			bin, err = m.fetchDeployment(ctx, pkg)
+			m.mu.Lock()
+			record.Source = m.deploySource
+			m.mu.Unlock()
 		}
 	}
 	if err == nil {
@@ -371,6 +377,9 @@ func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDe
 			return i18n.Err("devices-deploy.wrong_offset")
 		}
 	}
+	if err := m.d.CheckDevelopmentTarget(ctx, record.Development); err != nil {
+		return err
+	}
 	if err := m.deploymentPhase(ctx, record, "restarting"); err != nil {
 		return err
 	}
@@ -416,6 +425,9 @@ func (m *Machine) confirmNodeDeployment(ctx context.Context, record *nodeDeployR
 		peer, online, version := m.peer, m.online, m.info.Version
 		m.mu.Unlock()
 		if online && peer != nil && version == record.Target {
+			if err := m.d.CheckDevelopmentTarget(ctx, record.Development); err != nil {
+				return err
+			}
 			confirm, ccancel := context.WithTimeout(deadline, 10*time.Second)
 			err := peer.Call(confirm, "node.update.confirm", map[string]any{"version": record.Target}, nil)
 			ccancel()
@@ -439,7 +451,9 @@ func (m *Machine) confirmNodeDeployment(ctx context.Context, record *nodeDeployR
 // Confirm a healthy replacement even if the hub restarted during transfer. An
 // unconfirmed target must never remain installed just because a worker vanished.
 func (m *Machine) nodeUpdateConnected(ctx context.Context, peer *rpc.Peer, info proto.NodeInfo) {
-	if info.NodeUpdate && (info.Version == m.d.hubVersion() || info.Version == m.d.nodeTarget(info)) {
+	cfg := m.d.config()
+	if info.NodeUpdate && !cfg.DevelopmentHold && (info.Version == cfg.HubVersion || info.Version == m.d.nodeTarget(info)) &&
+		m.d.CheckDevelopmentTarget(ctx, cfg.DevelopmentTarget) == nil {
 		confirm, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err := peer.Call(confirm, "node.update.confirm", map[string]any{"version": info.Version}, nil)
 		cancel()
@@ -464,6 +478,14 @@ func (m *Machine) nodeUpdateConnected(ctx context.Context, peer *rpc.Peer, info 
 		if err != nil {
 			m.d.logf("[%s] load pending node update: %v", m.cfg.ID, err)
 		}
+		return
+	}
+	if record.Source != "" {
+		m.mu.Lock()
+		m.deploySource, m.deployVersion = record.Source, record.Target
+		m.mu.Unlock()
+	}
+	if record.Development != nil && m.d.CheckDevelopmentTarget(ctx, record.Development) != nil {
 		return
 	}
 	if record.State != "queued" {
@@ -537,6 +559,6 @@ func (m *Machine) queueOfflineNodeUpdate(ctx context.Context) error {
 		m.d.logf("update: [%s] build %s is a fallback (not the hub's version): not queued, sent only on Redeploy", m.cfg.ID, pkg.Version)
 		return nil
 	}
-	record := nodeDeployRecord{Target: pkg.Version, State: "queued", Phase: "waiting_idle", At: time.Now().UTC()}
+	record := nodeDeployRecord{Development: pkg.development, Target: pkg.Version, State: "queued", Phase: "waiting_idle", At: time.Now().UTC()}
 	return m.saveDeployRecord(ctx, record)
 }

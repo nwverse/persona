@@ -195,7 +195,7 @@ func (s *Service) remindOverdue(ctx context.Context, id string, a acceptAsk) {
 	if !a.RecheckAt.IsZero() {
 		return
 	}
-	s.pushDecision(ctx, id)
+	_, _ = s.pushDecisionAbout(ctx, id, assistantwire.TodoPushDecideOverdue)
 	t, ok := s.todoNow(id)
 	if !ok || a.MessageID == "" {
 		return
