@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/connector/github"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/githubwire"
 )
 
 // The route a recall comes in by (docs/protocol.md "Connector API"): POST /api/v1/connectors/sent/{id}/recall.
@@ -780,10 +780,10 @@ func TestRecallRouteTakesBackAGitHubComment(t *testing.T) {
 	st := newSentLedgerStore()
 	h.store = st
 	h.connectors = h.newConnectors([]connector.Rule{{Connector: "github", Action: "github_comment", Decision: connector.Allow}})
-	gh := github.New(github.Config{Auth: github.AuthConfig{FromMachine: "mac"}, APIRoot: srv.URL}, "Mac", func(context.Context, string) (string, error) {
+	gh := newTestGitHub(t, githubwire.Config{Auth: githubwire.AuthConfig{FromMachine: "mac"}, APIRoot: srv.URL}, "Mac", func(context.Context, string) (string, error) {
 		return "gho_example000000000000000000000000000001", nil
 	})
-	if err := h.addConnector(signedInGitHub{gh}); err != nil {
+	if err := h.addConnector(signedInGitHub{gh.(fullGitHub)}); err != nil {
 		t.Fatal(err)
 	}
 	args := json.RawMessage(`{"repo":"example-org/example-repo","number":12,"body":"Looks good."}`)
