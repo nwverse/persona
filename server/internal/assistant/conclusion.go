@@ -366,17 +366,26 @@ func (s *Service) supersedeDecision(ctx context.Context, id, reason string) {
 
 // askCopy is task id's ask as it is now (false: none, or a claim still going out).
 func (s *Service) askCopy(id string) (acceptAsk, bool) {
+	a, _, ok := s.askCopyReadable(id)
+	return a, ok
+}
+
+// askCopyReadable is the three-state form of askCopy. readable is false when the acceptance book could not be read
+// (a transient settings-store failure), which is not evidence that no owner card exists: callers that would spend a
+// once-per-round marker on that conclusion must hold off and retry rather than treat an unreadable ledger as card-less.
+// ok is false both for an unreadable book and for a readable one with no ask; the distinction is readable.
+func (s *Service) askCopyReadable(id string) (ask acceptAsk, readable, ok bool) {
 	b := &s.accept
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.loadAcceptLocked(context.Background()) {
-		return acceptAsk{}, false
+		return acceptAsk{}, false, false
 	}
 	a := b.asks[id]
 	if a == nil || a.AskedAt.IsZero() {
-		return acceptAsk{}, false
+		return acceptAsk{}, true, false
 	}
-	return *a, true
+	return *a, true, true
 }
 
 // takeRecommendation: the owner took decision a's recommended option for task id (or, a.ByDefault, nobody answered by its

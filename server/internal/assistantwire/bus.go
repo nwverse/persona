@@ -373,7 +373,6 @@ var Routes = []string{
 	"DELETE /api/v1/task-trust",
 	// The todos (the assistant's todos.go, docs/assistant/todos.md).
 	"GET /api/v1/todos",
-	"GET /api/v1/todos/revision",            // the pushed read's cheap validator (todo_revision.go, #13804)
 	"GET /api/v1/todos/places",              // the To-dos places and counts (todo_view_routes.go, #10226); the literal wins over {id}
 	"GET /api/v1/todos/{id}",                // one to-do as the list has it, with its view
 	"GET /api/v1/todos/{id}/images/{image}", // one attached picture's exact bytes (todo_images.go, #11084)
