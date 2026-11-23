@@ -253,6 +253,19 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertEqual(ws("error"), {"type": "error", "code": "upstream_failed", "fatal": True})
         self.assertEqual(ws("close")["code"], 1008)
 
+    def test_problem_kinds(self):
+        # #13446: a refused or busy service is its own problem, not upstream_unavailable; no line goes while it stands.
+        rid = self.recording()
+        self.mode(upstream="forbidden")
+        ws = self.socket(rid)
+        self.assertEqual(ws("problem")["code"], "upstream_forbidden")
+        self.pcm(ws, 5)
+        self.assertEqual(self.live(rid)["next"], 0)
+        self.assertEqual(self.live(rid)["transcription"]["problem"], "upstream_forbidden")
+        self.mode(upstream="busy")
+        self.assertEqual(ws("problem")["code"], "upstream_busy")
+        self.assertEqual(self.call("POST", "/mock/meeting_transcription", {"upstream": "made_up"})[0], 400)
+
     def test_upstream_recovery_waits_for_a_hub_sentence(self):
         rid = self.recording()
         ws = self.socket(rid)
