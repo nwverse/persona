@@ -358,7 +358,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if policy.Redact {
 			title, body = s.redactedNotice(ctx, l, space)
 		}
-		s.push(ctx, Notification{Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
+		s.push(withCard(ctx, cardPlanWaiting), Notification{Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
 		if lead != "" || s.isLeader(ctx, sessionID) {
 			s.lreports.plansDue.Store(true)
 			s.directionsSoon() // a leader's plan waiting for Start is a decision for the owner (leader_reports.go)
