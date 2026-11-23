@@ -55,6 +55,7 @@ const imessageChatsPage = `{"chats":[{"id":"imessage-0123456789ab","name":"å¼ ä¸
 // The app reads a Mac's Messages through the hub: status with its steps, conversations, messages; the hub passes
 // the pages along, refuses what is not a conversation id, and turns the node's failures into codes the app acts on.
 func TestIMessageThroughTheHub(t *testing.T) {
+	needsIMessageModule(t)
 	h := newTestManager(t)
 	h.connectors = connector.NewRegistry(nil)
 	var logs bytes.Buffer
@@ -167,6 +168,7 @@ func TestIMessageThroughTheHub(t *testing.T) {
 
 // An old node, and a Mac that is not connected.
 func TestIMessageOldOrOfflineMac(t *testing.T) {
+	needsIMessageModule(t)
 	h := newTestManager(t)
 	h.connectors = connector.NewRegistry(nil)
 	mux := h.routes()
@@ -193,6 +195,7 @@ func TestIMessageOldOrOfflineMac(t *testing.T) {
 
 // "Hand to Persona": on unless the user turned it off; the choice is kept and applied at once.
 func TestIMessageAISwitch(t *testing.T) {
+	needsIMessageModule(t)
 	h := newTestManager(t)
 	h.store = newMemStore() // the choice is kept
 	h.connectors = connector.NewRegistry(nil)
@@ -232,6 +235,7 @@ func TestIMessageAISwitch(t *testing.T) {
 // connectors.archives / connectors.changes) as chat imessage-<the conversation's hash>, senders as the hash of their
 // number: no number in an id; the cursor moves on.
 func TestIMessageArchive(t *testing.T) {
+	needsIMessageModule(t)
 	h := newTestManager(t)
 	h.store = newMemStore()
 	h.connectors = connector.NewRegistry(nil)
@@ -290,6 +294,7 @@ func TestIMessageArchive(t *testing.T) {
 // (kb.forget) and the inbox's iMessage items (inbox.forget), both the assistant's in this process, go; the counts are
 // theirs.
 func TestIMessageDelete(t *testing.T) {
+	needsIMessageModule(t)
 	h := newTestManager(t)
 	h.store = newMemStore()
 	h.connectors = connector.NewRegistry(nil)

@@ -3,6 +3,8 @@ package extmgr
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -45,4 +47,32 @@ type fullIMessage interface {
 func imessagePersonKey(handle string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(handle))))
 	return hex.EncodeToString(sum[:6])
+}
+
+// Without the iMessage module (persona_without_imessage, persona_core_only) the manager has no Messages connector, even
+// with manager.json's imessage.machine set: none is registered, there is no built-in Messages extension, and
+// /api/v1/imessage answers that it is not configured.
+func TestManagerWithoutIMessage(t *testing.T) {
+	if imessageport.Factory() != nil {
+		t.Skip("this build has the iMessage module")
+	}
+	h := newTestManager(t)
+	h.connectors = connector.NewRegistry(nil)
+	h.cfg.IMessage = &imessagewire.Config{Machine: "mac"}
+	if err := h.addIMessage(*h.cfg.IMessage); err == nil {
+		t.Fatal("a Messages connector without the module")
+	}
+	if h.connectors.Get(imessagewire.ID) != nil || h.imessage() != nil {
+		t.Fatal("a Messages connector is registered without the module")
+	}
+	if m := imessageManifest(h); m != nil {
+		t.Fatalf("a built-in Messages extension without the module: %+v", m)
+	}
+	mux := http.NewServeMux()
+	h.imessageRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/imessage", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET /api/v1/imessage: %d, want 404", rec.Code)
+	}
 }
