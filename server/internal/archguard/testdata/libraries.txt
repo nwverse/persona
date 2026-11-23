@@ -20,3 +20,8 @@ internal/textfmt
 internal/tokenuse
 internal/transcript
 github.com/nwverse/persona/sdk/go/ext
+internal/apierr
+internal/deeplink
+internal/screen
+internal/textfmt
+internal/transcribejob

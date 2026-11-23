@@ -13,6 +13,23 @@ import (
 	"time"
 )
 
+const udpPhoneRetryAfter = 40 * time.Millisecond
+
+type udpShardIdentity struct {
+	offset       uint64
+	block, index uint16
+}
+
+type udpShardOutcome struct {
+	parity      bool
+	completedAt time.Time
+}
+
+type udpNACKStat struct {
+	count       int
+	firstNACKAt time.Time
+}
+
 // udpPhone is the phone's end of a UDP flow as the app keeps it (#7873): it proves its address, moves the video channel
 // onto the flow, rebuilds each message from its fragments and parity, hands messages on in order, acknowledges them,
 // asks again for what is missing, and can give a frame up.
@@ -30,12 +47,15 @@ type udpPhone struct {
 	ch            byte
 	expected      uint64
 	msgs          map[uint64]*rxMessage
+	outcomes      map[udpShardIdentity]udpShardOutcome
+	nackStats     map[udpShardIdentity]udpNACKStat
 	got           []byte
 	drop          func(udpFragmentHead) bool // simulated loss of fragments, by what they are
 	dropResets    int
 	dropResetAcks int // resets reach the receiver, but their acknowledgement is lost
 	resetLost     chan struct{}
-	nacks         int
+	nacks         int // raw NACK transmissions, including retries of the same shard
+	askedShards   int // first requests for distinct message/block/shard keys
 	rebuilt       int
 	ctl           chan []byte
 	ratio         int
@@ -148,7 +168,7 @@ func newUDPPhone(t *testing.T, p *phone, dc *tls.Conn, ready UDPReady, to *net.U
 	}
 	_ = conn.SetReadBuffer(4 << 20)
 	u := &udpPhone{t: t, shared: p, conn: conn, keys: keys, flow: flow, out: &udpSealer{aead: keys.toNode, iv: keys.ivNode, flow: flow},
-		msgs: map[uint64]*rxMessage{}, ctl: make(chan []byte, 256), resetLost: make(chan struct{}, 16), autoAsk: true, stop: make(chan struct{})}
+		msgs: map[uint64]*rxMessage{}, outcomes: map[udpShardIdentity]udpShardOutcome{}, nackStats: map[udpShardIdentity]udpNACKStat{}, ctl: make(chan []byte, 256), resetLost: make(chan struct{}, 16), autoAsk: true, stop: make(chan struct{})}
 	t.Cleanup(func() { close(u.stop); conn.Close() })
 	go u.read()
 	go u.tick()
@@ -361,6 +381,11 @@ func (u *udpPhone) fragment(h udpFragmentHead, frag []byte) {
 		u.t.Errorf("block %d of the message at %d didn't rebuild: %v", h.Block, h.Offset, err)
 		return
 	}
+	completedAt := time.Now()
+	for i := 0; i < b.data; i++ {
+		_, present := b.shards[i]
+		u.outcomes[udpShardIdentity{offset: h.Offset, block: h.Block, index: uint16(i)}] = udpShardOutcome{parity: !present, completedAt: completedAt}
+	}
 	u.rebuilt += missing
 	b.done = shards[:b.data]
 	moved, failed := u.deliverLocked()
@@ -431,7 +456,7 @@ func (u *udpPhone) skip() uint64 {
 func (u *udpPhone) tick() {
 	t := time.NewTicker(5 * time.Millisecond)
 	defer t.Stop()
-	const quiet, again = 10 * time.Millisecond, 40 * time.Millisecond
+	const quiet, again = 10 * time.Millisecond, udpPhoneRetryAfter
 	var wantAt time.Time
 	for {
 		select {
@@ -481,6 +506,16 @@ func (u *udpPhone) tick() {
 					}
 					key := [2]uint16{uint16(bi), uint16(j)}
 					if at, ok := m.asked[key]; !ok || now.Sub(at) > again {
+						if !ok {
+							u.askedShards++
+						}
+						id := udpShardIdentity{offset: off, block: uint16(bi), index: uint16(j)}
+						stat := u.nackStats[id]
+						if stat.count == 0 {
+							stat.firstNACKAt = now
+						}
+						stat.count++
+						u.nackStats[id] = stat
 						m.asked[key] = now
 						if nack == nil {
 							nack = []byte{udpNack, u.ch}
@@ -507,7 +542,7 @@ func (u *udpPhone) tick() {
 }
 
 // lossyRelay forwards UDP between a phone and addr, dropping the node's packets that drop picks (by their order).
-func lossyRelay(t *testing.T, addr *net.UDPAddr, drop func(n int) bool) *net.UDPAddr {
+func lossyRelay(t *testing.T, addr *net.UDPAddr, drop func(n int, packet []byte) bool) *net.UDPAddr {
 	t.Helper()
 	front, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -545,7 +580,7 @@ func lossyRelay(t *testing.T, addr *net.UDPAddr, drop func(n int) bool) *net.UDP
 			mu.Lock()
 			to := phone
 			mu.Unlock()
-			if to != nil && !drop(i) {
+			if to != nil && !drop(i, buf[:n]) {
 				_, _ = front.WriteToUDP(buf[:n], to)
 			}
 		}
