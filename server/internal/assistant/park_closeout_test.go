@@ -277,8 +277,15 @@ func TestAutomaticCloseoutSummaryDailyAndDurable(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Generate through the real watch, not by calling the new summary helper.
-	at := time.Date(now.Year(), now.Month(), now.Day(), 10, 0, 0, 0, time.UTC)
+	// Generate through the real watch, not by calling the new summary helper. The summary goes out from 09:00 in the
+	// owner's zone, which here is the machine's own: 10:00 UTC was 02:00 on a machine west of UTC, and the test failed
+	// there. Take the next 10:00 in that zone after the fixture's now.
+	loc := s.location(ctx)
+	local := now.In(loc)
+	at := time.Date(local.Year(), local.Month(), local.Day(), 10, 0, 0, 0, loc)
+	if !at.After(now) {
+		at = at.AddDate(0, 0, 1)
+	}
 	s.superviseWatch(ctx, at)
 	s.supervise.mu.Lock()
 	g, ok := s.supervise.pending[task.ID+"|parked_summary"]

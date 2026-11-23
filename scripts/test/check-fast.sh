@@ -18,6 +18,9 @@
 #   scripts/check-fast.sh --compare-main  # after the run, rerun only what failed at the merge base and say, for each
 #                                         # failure, whether the base fails it too (scripts/ci/check_fast_compare.py)
 #   scripts/check-fast.sh --compare-tip   # --compare-main, and the failures the base has too also at the base ref's tip
+#   scripts/check-fast.sh --no-server-go  # plan as usual, but leave the server module's go test, go build, repo-wide guard
+#                                         # and go vet steps to the caller (scripts/ci/affected.sh tests the affected
+#                                         # packages against Postgres itself); gofmt, sdk/go and the rest still run
 #   scripts/check-fast.sh -h|--help
 #
 # Path mapping (diff mode): the table in scripts/ci/check_fast_map.py maps each changed path to its checks, and a new
@@ -135,6 +138,7 @@ COMPARE=0  # 1: --compare-main, 2: --compare-tip
 DRY_RUN=0
 CHANGED_FROM=""
 EACH=0
+NO_SERVER_GO=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --all) ALL=1 ;;
@@ -153,6 +157,7 @@ while [ $# -gt 0 ]; do
       CHANGED_FROM=${1#*=}
       [ -n "$CHANGED_FROM" ] || { echo "check-fast: --changed-from needs a file (- for stdin)" >&2; exit 2; } ;;
     --each) EACH=1 ;;
+    --no-server-go) NO_SERVER_GO=1 ;;
     --compare-main) [ "$COMPARE" -eq 2 ] || COMPARE=1 ;;
     --compare-tip) COMPARE=2 ;;
     -h|--help) usage; exit 0 ;;
@@ -1321,6 +1326,11 @@ if [ "$ALL" -eq 1 ]; then
   else core_missing "go not found; server and sdk/go checks skipped"; fi
   # gofmt does not depend on go being found: without gofmt (or python3) the job is a SKIP line naming it.
   schedule "gofmt (server, sdk/go)" job_go_fmt ALL
+elif [ "$NO_SERVER_GO" -eq 1 ]; then
+  if [ "${#GO_GROUPS[@]}" -gt 0 ] || [ "$SERVER_BUILD" -eq 1 ] || [ "$GO_GUARDS" -eq 1 ] || [ "${#GO_VET_GROUPS[@]}" -gt 0 ]; then
+    INFO+=("INFO  server go test, build, guards and vet: left to the caller (--no-server-go)")
+  fi
+  if [ "${#GO_FMT_FILES[@]}" -gt 0 ]; then schedule "gofmt (changed files)" job_go_fmt ""; fi
 else
   if [ "${#GO_GROUPS[@]}" -gt 0 ]; then
     if [ "$HAVE_GO" -eq 1 ]; then
