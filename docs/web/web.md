@@ -1520,6 +1520,11 @@ or writes them: the main chat's fixed payload stays as it was.
 
 ### Starred messages (#7524)
 
+Starred is off by default. **Settings › General › Appearance › Starred messages** turns it on for this browser
+(`persona.starredMessages` in local storage, like Reply animation). While it is off, the sidebar has no Starred
+page and the message menu has no Star or Unstar, and no saved marker shows; saved messages stay on the hub and
+reappear when the switch is turned on again.
+
 Use **Star** from a text message's menu in an Assistant or Agent chat. The menu opens with its More
 button, a right click, or a long press. A small star marks the saved message. **Unstar** is available in
 the same menu and on the **Starred** page. Removing a star offers **Undo** in the notification. It saves

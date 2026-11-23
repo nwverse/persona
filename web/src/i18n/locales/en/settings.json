@@ -13,6 +13,8 @@
   "agent_preferences": "Agent preferences",
   "reply_motion": "Reply animation",
   "reply_motion_hint": "New replies fade in word by word. Off when the system's Reduce motion is on.",
+  "starred_messages": "Starred messages",
+  "starred_messages_hint": "Show Starred in the sidebar and Star / Unstar in the message menu. Your saved messages are kept while it's off.",
   "sidebar_terminals": "Show terminals in sidebar",
   "sidebar_terminals_hint": "When agents are grouped by machine, each computer lists the plain shells in its terminal under its agents; click one to open its Terminal page. Off by default; applies to this browser only.",
   "avatar": "Avatar",
