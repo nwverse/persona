@@ -322,7 +322,9 @@ private fun ChatPage(
         rememberUpdatedState(readOnly), statusSheetState,
         deliveryActions, clearingPaneState, pageCloseout.drawnSwitch, switchSession, tasks, timelineFollow, submittedContextState)
     var notice by interactionController.notice
-    val takeoverClient = remember(chrome.takeoverActions) { chrome.takeoverActions?.let(CodexTakeoverClient::of) }
+    val takeoverClient = remember(chrome.takeoverActions, chrome.hubScope) {
+        chrome.takeoverActions?.let { CodexTakeoverClient.of(it, chrome.hubScope) }
+    }
     val takeoverCoordinator = rememberCodexTakeoverCoordinator(
         client = takeoverClient,
         sessions = sessions,

@@ -251,7 +251,7 @@ class HttpChatActions internal constructor(
                 JsonCodec.parseToJsonElement(response.body?.string().orEmpty()).jsonObject
             }
         } catch (failure: HubFailure) {
-            if (failure.status == 404) return AgentStartResult.Unknown
+            CodexContinuationReceipt.operationFailure(failure)?.let { return it }
             throw failure
         }
         return CodexContinuationReceipt.receiptOutcome(receipt, session.machineId)

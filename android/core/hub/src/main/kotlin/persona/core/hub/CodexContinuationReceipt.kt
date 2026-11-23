@@ -24,6 +24,7 @@ import java.util.UUID
  */
 internal object CodexContinuationReceipt {
     private val DefiniteNonStartStatuses = setOf(400, 401, 403, 404, 422)
+    private const val CODE_ASSISTANT_OFFLINE = "assistant_offline"
 
     fun startBody(
         machineId: String,
@@ -64,20 +65,30 @@ internal object CodexContinuationReceipt {
         val state = receipt["state"]?.jsonPrimitive?.contentOrNull
         if (receipt["kind"]?.jsonPrimitive?.contentOrNull?.let { it != "start" } == true) return AgentStartResult.Unknown
         if (state == "pending") return AgentStartResult.Pending
-        if (state == "unknown") return AgentStartResult.Unknown
-        val result = receipt["result"] as? JsonObject ?: return AgentStartResult.Unknown
-        val encoded = result["body"]?.jsonPrimitive?.contentOrNull ?: return AgentStartResult.Unknown
-        val body = runCatching {
-            JsonCodec.parseToJsonElement(String(Base64.getDecoder().decode(encoded), Charsets.UTF_8)).jsonObject
-        }.getOrNull() ?: return AgentStartResult.Unknown
+        val result = receipt["result"] as? JsonObject
+        val encoded = result?.get("body")?.jsonPrimitive?.contentOrNull
+        val body = encoded?.let {
+            runCatching {
+                JsonCodec.parseToJsonElement(String(Base64.getDecoder().decode(it), Charsets.UTF_8)).jsonObject
+            }.getOrNull()
+        }
+        // `assistant_offline` proves nothing reached the manager and no start ran (docs/protocol/protocol.md).
+        if (body?.get("code")?.jsonPrimitive?.contentOrNull == CODE_ASSISTANT_OFFLINE) {
+            return AgentStartResult.Rejected(rejectionText(body["error"]?.jsonPrimitive?.contentOrNull))
+        }
+        if (state == "unknown" || body == null) return AgentStartResult.Unknown
         return when (state) {
             "done" -> outcome(body, fallbackMachineId)
-            "failed" -> AgentStartResult.Rejected(
-                body["error"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank)?.let(CoreText::plain)
-                    ?: CoreText.of(Key.StartRejected),
-            )
+            "failed" -> AgentStartResult.Rejected(rejectionText(body["error"]?.jsonPrimitive?.contentOrNull))
             else -> AgentStartResult.Unknown
         }
+    }
+
+    /** Maps `GET /api/v1/ops/{id}` HTTP failures: 404 stays Unknown, `503 assistant_offline` proves non-start. */
+    fun operationFailure(failure: HubFailure): AgentStartResult? = when {
+        failure.status == 404 -> AgentStartResult.Unknown
+        failure.status == 503 && failure.code == CODE_ASSISTANT_OFFLINE -> AgentStartResult.Rejected(rejectionText(failure.message))
+        else -> null
     }
 
     suspend fun startWithReconciliation(
@@ -108,13 +119,15 @@ internal object CodexContinuationReceipt {
         }
         if (reconciled != AgentStartResult.Unknown) return reconciled
         val refusal = definiteRefusal ?: return AgentStartResult.Unknown
-        val msg = refusal.message.takeIf { it.isNotBlank() && !it.startsWith("HTTP ") }
-            ?.let(CoreText::plain) ?: CoreText.of(Key.StartRejected)
-        return AgentStartResult.Rejected(msg)
+        return AgentStartResult.Rejected(rejectionText(refusal.message))
     }
+
+    private fun rejectionText(raw: String?): CoreText =
+        raw?.takeIf { it.isNotBlank() && !it.startsWith("HTTP ") }?.let(CoreText::plain) ?: CoreText.of(Key.StartRejected)
 
     private fun isDefiniteNonStart(failure: HubFailure): Boolean {
         if (failure.delivered == "none") return true
+        if (failure.status == 503 && failure.code == CODE_ASSISTANT_OFFLINE) return true
         if (failure.status == 409 && failure.code != "op_id_reused") return true
         return failure.status in DefiniteNonStartStatuses && failure.delivered != "unknown"
     }

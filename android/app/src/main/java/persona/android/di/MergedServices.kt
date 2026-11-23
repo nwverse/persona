@@ -422,6 +422,7 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
     fun operationsFor(machineId: String) = stateFor(machineId)?.operations?.operations ?: throw HubFailure(HubError.NoNetwork)
     val operations = object : AgentOperations {
         override val scope = scope
+        override fun scopeFor(key: SessionKey): String = stateFor(key.machineId)?.operations?.operations?.scope ?: scope
         private suspend fun read(pins: Boolean): AgentOperationPreferences = union(list.indices.map { index ->
             try {
                 val value = if (pins) operations(index).pins() else operations(index).mutes()

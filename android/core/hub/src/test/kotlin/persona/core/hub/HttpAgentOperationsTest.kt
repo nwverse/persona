@@ -86,7 +86,7 @@ class HttpAgentOperationsTest {
         }
     }
 
-    @Test fun codexTakeoverEndpointsPreserve409CodeAndStartContinuation() = runBlocking {
+    @Test fun codexTakeoverEndpointsPreserve409CodeAndStartContinuation(): Unit = runBlocking {
         MockWebServer().use { server ->
             val api = HttpAgentOperations("scope", server.url("/").toString(), "test-token", OkHttpClient())
             val key = SessionKey("mac one", "thread/2")
@@ -124,6 +124,15 @@ class HttpAgentOperationsTest {
             val rejected = api.codexContinuationOperation(key, failedOpId) as AgentStartResult.Rejected
             assertEquals("no launcher", rejected.message.shown)
             assertEquals("/api/v1/ops/$failedOpId", server.takeRequest().path)
+
+            // 503 assistant_offline on direct start or /ops/{id} returns Rejected so the receipt clears.
+            val offlineOpId = "77777777-7777-4777-8777-777777777777"
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"assistant offline","code":"assistant_offline"}"""))
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"assistant offline","code":"assistant_offline"}"""))
+            val offlineRejected = api.startCodexContinuation(key, info, offlineOpId) as AgentStartResult.Rejected
+            assertEquals("assistant offline", offlineRejected.message.shown)
+            server.takeRequest(); server.takeRequest()
+            Unit
         }
     }
 }

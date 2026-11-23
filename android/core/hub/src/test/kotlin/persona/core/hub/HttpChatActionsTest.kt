@@ -517,6 +517,25 @@ class HttpChatActionsTest {
             server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"missing"}"""))
             assertEquals(AgentStartResult.Unknown, actions.startCodexContinuation(session, info, unknownOpId))
             server.takeRequest(); server.takeRequest()
+
+            // 503 assistant_offline (direct or via /ops/{id}) proves nothing started -> Rejected so user may retry once back.
+            val offlineOpId = "66666666-6666-4666-8666-666666666666"
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"assistant is offline","code":"assistant_offline"}"""))
+            server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"missing"}"""))
+            val offlineDirect = actions.startCodexContinuation(session, info, offlineOpId) as AgentStartResult.Rejected
+            assertEquals("assistant is offline", offlineDirect.message.shown)
+            server.takeRequest(); server.takeRequest()
+
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"manager offline","code":"assistant_offline"}"""))
+            val offlineOps = actions.codexContinuationOperation(session, offlineOpId) as AgentStartResult.Rejected
+            assertEquals("manager offline", offlineOps.message.shown)
+            server.takeRequest()
+
+            val encodedOffline = java.util.Base64.getEncoder().encodeToString("""{"error":"recorded offline","code":"assistant_offline"}""".toByteArray())
+            server.enqueue(MockResponse().setBody("""{"kind":"start","state":"unknown","result":{"status":503,"body":"$encodedOffline"}}"""))
+            val offlineReceipt = actions.codexContinuationOperation(session, offlineOpId) as AgentStartResult.Rejected
+            assertEquals("recorded offline", offlineReceipt.message.shown)
+            server.takeRequest()
             Unit
         }
     }

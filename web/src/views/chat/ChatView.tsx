@@ -578,6 +578,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const codexReadOnlyLine = Boolean(!assistant && !stoppedLine && !offlineLine && isCodexSession && !canCompose && session?.capabilities?.takeover);
   const codexStoppedTakeover = Boolean(stoppedLine && isCodexSession && session?.capabilities?.takeover);
   const codexFooterTakeover = codexReadOnlyLine || codexStoppedTakeover;
+  // Only hide top-bar takeover controls while the chat footer is actually visible; Terminal view keeps them reachable.
+  const codexFooterVisible = codexFooterTakeover && (!switchable || view === "chat");
   const [takeoverPending, setTakeoverPending] = useState(false);
   const [continueTakeoverRequested, setContinueTakeoverRequested] = useState(false);
   useEffect(() => {
@@ -585,8 +587,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     setContinueTakeoverRequested(false);
   }, [draftKey]);
   useEffect(() => {
-    if (!codexFooterTakeover) setContinueTakeoverRequested(false);
-  }, [codexFooterTakeover]);
+    if (!codexFooterVisible) setContinueTakeoverRequested(false);
+  }, [codexFooterVisible]);
   const triggerContinueTakeover = useCallback(() => setContinueTakeoverRequested(true), []);
   const consumeContinueTakeover = useCallback(() => setContinueTakeoverRequested(false), []);
   // one function while this chat stays put: the header takes it, and must not draw again for every pushed item
@@ -2430,8 +2432,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         team={team}
         sides={sideControl}
         panel={chrome}
-        hideTakeoverButtons={codexFooterTakeover || takeoverPending}
-        onContinueTakeover={codexFooterTakeover ? triggerContinueTakeover : undefined}
+        hideTakeoverButtons={codexFooterVisible || takeoverPending}
+        onContinueTakeover={codexFooterVisible ? triggerContinueTakeover : undefined}
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
       {!embedded && banner}

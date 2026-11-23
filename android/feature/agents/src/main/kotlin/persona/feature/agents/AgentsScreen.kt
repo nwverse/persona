@@ -987,13 +987,15 @@ internal fun AgentsScreen(
             },
             content = listContent,
         )
-        if (sidebar == null) AgentsFeedNote(feed, latestPage, Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
-            .padding(horizontal = Tokens.Space.page).padding(bottom = Tokens.Space.l))
-        if (takeoverClient != null) CodexTakeoverBusyPill(
-            takeoverCoordinator,
-            page.sessions,
-            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(horizontal = Tokens.Space.page, vertical = Tokens.Space.l),
-        )
+        Column(
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+                .padding(horizontal = Tokens.Space.page, vertical = Tokens.Space.l),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+        ) {
+            if (takeoverClient != null) CodexTakeoverBusyPill(takeoverCoordinator, page.sessions)
+            if (sidebar == null) AgentsFeedNote(feed, latestPage)
+        }
         persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
     }
     }

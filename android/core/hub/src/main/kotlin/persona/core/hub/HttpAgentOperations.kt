@@ -147,7 +147,7 @@ class HttpAgentOperations(
             val text = directRequest("GET", listOf("ops", operationId))
             JsonCodec.parseToJsonElement(text).jsonObject
         } catch (failure: HubFailure) {
-            if (failure.status == 404) return AgentStartResult.Unknown
+            CodexContinuationReceipt.operationFailure(failure)?.let { return it }
             throw failure
         }
         return CodexContinuationReceipt.receiptOutcome(receipt, key.machineId)

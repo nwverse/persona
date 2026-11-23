@@ -194,16 +194,16 @@ class CodexTakeoverCoordinatorTest {
         )
 
         coordinator.continueInNewSession(source)
-        assertTrue(coordinator.hasUnconfirmedContinuation(source))
+        assertEquals("00000000-0000-4000-8000-000000000001", kotlinx.coroutines.runBlocking { receiptStore.get("", source.key) })
         assertEquals("Check status", failures.last().second)
 
         // Calling continueInNewSession again reconciles the stored operation_id instead of posting a second start.
         coordinator.continueInNewSession(source)
-        assertTrue(coordinator.hasUnconfirmedContinuation(source))
+        assertEquals("00000000-0000-4000-8000-000000000001", kotlinx.coroutines.runBlocking { receiptStore.get("", source.key) })
 
         // Invoking the toast's "Check status" action reconciles to Created and clears the stored receipt.
         checkAction!!.invoke()
-        assertFalse(coordinator.hasUnconfirmedContinuation(source))
+        assertNull(kotlinx.coroutines.runBlocking { receiptStore.get("", source.key) })
         assertEquals(listOf(created), adopted)
         assertEquals(
             listOf(
@@ -215,6 +215,69 @@ class CodexTakeoverCoordinatorTest {
             calls,
         )
         assertEquals(1, nextOp)
+    }
+
+    @Test fun persistentReceiptStoreSharesAcrossCoordinatorsRestartsAndIsolatesScopes() {
+        val prefsName = "test_codex_receipts_${java.util.UUID.randomUUID()}"
+        val calls = mutableListOf<String>()
+        val adopted = mutableListOf<Session>()
+        val source = codexSession(canResume = false, running = false)
+        val created = Session(machineId = "m1", sessionId = "persisted-1", status = "working", agent = "codex")
+        val clientScopeA = object : CodexTakeoverClient {
+            override fun receiptScope(session: Session) = "hub-a/pair-1"
+            override suspend fun takeoverInfo(session: Session): CodexTakeoverInfo {
+                calls += "GET-A"
+                return plan(running = false, canResume = true)
+            }
+            override suspend fun takeover(session: Session, token: String, confirmStop: Boolean): Session = error("unused")
+            override suspend fun startContinuation(session: Session, info: CodexTakeoverInfo, operationId: String): AgentStartResult {
+                calls += "START-A:$operationId"
+                return AgentStartResult.Unknown
+            }
+            override suspend fun continuationOperation(session: Session, operationId: String): AgentStartResult {
+                calls += "OPS-A:$operationId"
+                return AgentStartResult.Created(created)
+            }
+        }
+        val firstStore = PersistentContinuationReceiptStore(context, prefsName, Dispatchers.Unconfined)
+        val firstCoordinator = CodexTakeoverCoordinator(
+            res = context.resources,
+            client = clientScopeA,
+            scope = scope,
+            onAdopted = { _, next -> adopted += next },
+            onFailure = { _, _, _ -> },
+            onSuccessToast = {},
+            receiptStore = firstStore,
+            newOperationId = { "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+        )
+        firstCoordinator.continueInNewSession(source)
+        assertEquals(listOf("GET-A", "START-A:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), calls)
+
+        // New store instance + new coordinator (simulating preview close, entry-point switch, or process restart)
+        // reconciles the persisted operationId instead of posting a duplicate start, even with a namespaced machine id.
+        val secondStore = PersistentContinuationReceiptStore(context, prefsName, Dispatchers.Unconfined)
+        assertNull(kotlinx.coroutines.runBlocking { secondStore.get("hub-b/pair-2", source.key) })
+        val secondCoordinator = CodexTakeoverCoordinator(
+            res = context.resources,
+            client = clientScopeA,
+            scope = scope,
+            onAdopted = { _, next -> adopted += next },
+            onFailure = { msg, _, _ -> fail("Unexpected failure: $msg") },
+            onSuccessToast = {},
+            receiptStore = secondStore,
+            newOperationId = { "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" },
+        )
+        secondCoordinator.continueInNewSession(source.copy(machineId = GroupKeys.machine("m1", "g12345678")))
+        assertEquals(
+            listOf(
+                "GET-A",
+                "START-A:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "OPS-A:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            ),
+            calls,
+        )
+        assertEquals(listOf(created), adopted)
+        assertNull(kotlinx.coroutines.runBlocking { secondStore.get("hub-a/pair-1", source.key) })
     }
 
     @Test fun rejectedContinuationReceiptClearsStoredOpAndAllowsFreshRetry() {
@@ -236,6 +299,7 @@ class CodexTakeoverCoordinatorTest {
             }
             override suspend fun continuationOperation(session: Session, operationId: String): AgentStartResult = error("unused")
         }
+        val receiptStore = InMemoryContinuationReceiptStore()
         val coordinator = CodexTakeoverCoordinator(
             res = context.resources,
             client = client,
@@ -243,6 +307,7 @@ class CodexTakeoverCoordinatorTest {
             onAdopted = { _, _ -> },
             onFailure = { _, _, action -> retryAction = action },
             onSuccessToast = {},
+            receiptStore = receiptStore,
             newOperationId = {
                 nextOp++
                 "00000000-0000-4000-8000-00000000000$nextOp"
@@ -250,7 +315,7 @@ class CodexTakeoverCoordinatorTest {
         )
 
         coordinator.continueInNewSession(source)
-        assertFalse(coordinator.hasUnconfirmedContinuation(source))
+        assertNull(kotlinx.coroutines.runBlocking { receiptStore.get("", source.key) })
         retryAction!!.invoke()
         assertEquals(
             listOf(

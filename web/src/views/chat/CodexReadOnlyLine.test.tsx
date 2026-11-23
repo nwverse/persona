@@ -88,6 +88,10 @@ describe("CodexReadOnlyLine", () => {
     expect(labels).toContain(t("chat-chatview.terminal"));
     expect(labels).toContain(t("chat-chatview.resume"));
     expect(labels).toContain(t("chat-takeover.takeover"));
-    expect(host.querySelector(`button[aria-label="${t("chat-chatview.more_actions")}"]`)).toBeTruthy();
+    const more = host.querySelector(`button[aria-label="${t("chat-chatview.more_actions")}"]`);
+    expect(more).toBeTruthy();
+    const actionWrap = more!.parentElement!;
+    expect(actionWrap.className).toContain("flex-wrap");
+    expect(actionWrap.className).toContain("justify-end");
   });
 });

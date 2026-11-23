@@ -69,7 +69,7 @@ export function CodexReadOnlyLine({
     >
       {visible && stopped ? <Icon name="stop" size={13} className="shrink-0 text-ink-3" /> : null}
       {visible ? <span className="min-w-0 flex-1 basis-48 break-words">{reason}</span> : null}
-      <span className="flex shrink-0 items-center gap-1.5">
+      <span className="flex flex-wrap items-center justify-end gap-1.5">
         {visible && stopped ? <StoppedTerminalControls {...stopped} /> : null}
         <Suspense fallback={<span aria-hidden className="inline-block h-7 shrink-0" />}>
           <TakeoverAction

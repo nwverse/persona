@@ -13,6 +13,8 @@ data class AgentOperationPreferences(
 
 interface AgentOperations {
     val scope: String
+    /** Pairing scope of the hub that owns [key]; merged multi-hub services resolve the specific hub's scope. */
+    fun scopeFor(key: SessionKey): String = scope
     suspend fun pins(): AgentOperationPreferences
     suspend fun mutes(): AgentOperationPreferences
     suspend fun savePins(value: AgentOperationPreferences)

@@ -1,25 +1,30 @@
 package persona.feature.chat
 
+import android.content.Context
 import android.content.res.Resources
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.listSaver
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import persona.core.contracts.CODEX_TAKEOVER_CONTINUE_ONLY
 import persona.core.contracts.CodexTakeoverInfo
+import persona.core.contracts.GroupKeys
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AgentOperations
@@ -36,13 +41,16 @@ import java.util.UUID
 
 /** Transport adapter for explicit Codex takeover and continuation, shared by Chat and Agents surfaces. */
 interface CodexTakeoverClient {
+    /** Pairing scope of the hub that owns [session], used to isolate persisted continuation receipts per pairing. */
+    fun receiptScope(session: Session): String = ""
     suspend fun takeoverInfo(session: Session): CodexTakeoverInfo
     suspend fun takeover(session: Session, token: String, confirmStop: Boolean): Session
     suspend fun startContinuation(session: Session, info: CodexTakeoverInfo, operationId: String): AgentStartResult
     suspend fun continuationOperation(session: Session, operationId: String): AgentStartResult
 
     companion object {
-        fun of(actions: ChatActions): CodexTakeoverClient = object : CodexTakeoverClient {
+        fun of(actions: ChatActions, hubScope: String = ""): CodexTakeoverClient = object : CodexTakeoverClient {
+            override fun receiptScope(session: Session) = hubScope
             override suspend fun takeoverInfo(session: Session) = actions.codexTakeoverInfo(session)
             override suspend fun takeover(session: Session, token: String, confirmStop: Boolean) =
                 actions.codexTakeover(session, token, confirmStop)
@@ -53,6 +61,7 @@ interface CodexTakeoverClient {
         }
 
         fun of(operations: AgentOperations): CodexTakeoverClient = object : CodexTakeoverClient {
+            override fun receiptScope(session: Session) = operations.scopeFor(session.key)
             override suspend fun takeoverInfo(session: Session) = operations.codexTakeoverInfo(session.key)
             override suspend fun takeover(session: Session, token: String, confirmStop: Boolean) =
                 operations.codexTakeover(session.key, token, confirmStop)
@@ -65,47 +74,86 @@ interface CodexTakeoverClient {
 }
 
 /**
- * Retains unconfirmed continuation `operation_id` receipts keyed by source [SessionKey] so a lost response or
- * configuration change reconciles against `GET /api/v1/ops/{id}` instead of starting a duplicate Codex agent
+ * Persists unconfirmed continuation `operation_id` receipts scoped by hub pairing and canonical session key so closing
+ * a preview, switching entry points (Agents / Space / Chat), or restarting the app always reconciles the same
+ * `operation_id` via `GET /api/v1/ops/{id}` instead of starting a duplicate Codex agent
  * (`docs/protocol/protocol.md`, "Idempotent operations").
  */
 interface ContinuationReceiptStore {
-    operator fun get(key: SessionKey): String?
-    fun put(key: SessionKey, operationId: String)
-    fun remove(key: SessionKey)
+    suspend fun get(scope: String, key: SessionKey): String?
+    suspend fun put(scope: String, key: SessionKey, operationId: String)
+    suspend fun remove(scope: String, key: SessionKey)
 }
+
+internal fun continuationReceiptKey(scope: String, key: SessionKey): String =
+    "$scope|${GroupKeys.raw(key.machineId)}|${key.sessionId}"
 
 class InMemoryContinuationReceiptStore(
-    private val map: MutableMap<SessionKey, String> = mutableMapOf(),
+    private val map: MutableMap<String, String> = mutableMapOf(),
 ) : ContinuationReceiptStore {
-    override fun get(key: SessionKey): String? = map[key]
-    override fun put(key: SessionKey, operationId: String) { map[key] = operationId }
-    override fun remove(key: SessionKey) { map.remove(key) }
-    internal fun snapshot(): List<String> = map.entries.flatMap { listOf(it.key.machineId, it.key.sessionId, it.value) }
+    private val lock = Mutex()
+    override suspend fun get(scope: String, key: SessionKey): String? = lock.withLock { map[continuationReceiptKey(scope, key)] }
+    override suspend fun put(scope: String, key: SessionKey, operationId: String) = lock.withLock {
+        map[continuationReceiptKey(scope, key)] = operationId
+    }
+    override suspend fun remove(scope: String, key: SessionKey) = lock.withLock {
+        val _ = map.remove(continuationReceiptKey(scope, key))
+    }
 }
 
-private val ContinuationReceiptSaver = listSaver<InMemoryContinuationReceiptStore, String>(
-    save = { it.snapshot() },
-    restore = { list ->
-        val restored = mutableMapOf<SessionKey, String>()
-        var i = 0
-        while (i + 2 < list.size) {
-            restored[SessionKey(list[i], list[i + 1])] = list[i + 2]
-            i += 3
+/**
+ * Shared process-wide disk-backed receipt store (`SharedPreferences` with synchronous IO commit before HTTP send).
+ * Every Chat, Agents, Space, and history-preview coordinator reads and writes the same pairing-scoped receipts.
+ */
+class PersistentContinuationReceiptStore(
+    context: Context,
+    private val prefsName: String = PREFS_NAME,
+    private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO,
+) : ContinuationReceiptStore {
+    private val appContext = context.applicationContext
+    private val lock = Mutex()
+    private val prefs by lazy { appContext.getSharedPreferences(prefsName, Context.MODE_PRIVATE) }
+
+    override suspend fun get(scope: String, key: SessionKey): String? = lock.withLock {
+        withContext(ioDispatcher) {
+            prefs.getString(continuationReceiptKey(scope, key), null)?.takeIf(String::isNotBlank)
         }
-        InMemoryContinuationReceiptStore(restored)
-    },
-)
+    }
+
+    override suspend fun put(scope: String, key: SessionKey, operationId: String) = lock.withLock {
+        withContext(ioDispatcher) {
+            check(prefs.edit().putString(continuationReceiptKey(scope, key), operationId).commit()) {
+                "Failed to persist continuation operation receipt"
+            }
+        }
+    }
+
+    override suspend fun remove(scope: String, key: SessionKey) = lock.withLock {
+        withContext(ioDispatcher) {
+            val _ = prefs.edit().remove(continuationReceiptKey(scope, key)).commit()
+        }
+    }
+
+    companion object {
+        private const val PREFS_NAME = "persona_codex_takeover_receipts"
+        @Volatile private var shared: PersistentContinuationReceiptStore? = null
+
+        fun of(context: Context): PersistentContinuationReceiptStore =
+            shared ?: synchronized(this) {
+                shared ?: PersistentContinuationReceiptStore(context.applicationContext).also { shared = it }
+            }
+    }
+}
 
 /**
  * Shared state machine for explicit Codex read-only session takeover and continuation (matching iPhone's
- * `CodexTakeoverCoordinator` plus idempotent continuation receipt reconciliation):
+ * `CodexTakeoverCoordinator` plus pairing-scoped persistent continuation receipt reconciliation):
  * 1. Immediate loading state before network work (Super Rule 5).
  * 2. Take over: GET -> `!canResume` or 409 `codex_takeover_continue_only` -> continuation confirmation dialog;
  *    `running` -> destructive takeover confirmation dialog (plus independent "Continue in a new session instead");
  *    not running -> direct POST without dialog.
- * 3. Continuation: persists a single `operation_id` before POST `/api/v1/sessions` and reconciles lost/pending/unknown
- *    outcomes via `GET /api/v1/ops/{id}` without posting a duplicate start.
+ * 3. Continuation: persists a single `operation_id` to [receiptStore] before POST `/api/v1/sessions` and reconciles
+ *    lost/pending/unknown outcomes via `GET /api/v1/ops/{id}` across all entry points and restarts.
  */
 class CodexTakeoverCoordinator(
     private val res: Resources,
@@ -154,8 +202,6 @@ class CodexTakeoverCoordinator(
 
     fun isBusyFor(session: Session): Boolean = inFlight && activeSessionKey == session.key
 
-    fun hasUnconfirmedContinuation(session: Session): Boolean = receiptStore[session.key] != null
-
     fun takeOver(session: Session) {
         if (inFlight || !session.canContinueCodex) return
         val api = client ?: run {
@@ -187,10 +233,6 @@ class CodexTakeoverCoordinator(
 
     fun continueInNewSession(session: Session) {
         if (inFlight || !session.canContinueCodex) return
-        if (receiptStore[session.key] != null) {
-            checkContinuation(session)
-            return
-        }
         val api = client ?: run {
             reportFailure(UnsupportedOperationException("Codex continuation unavailable")) { continueInNewSession(session) }
             return
@@ -199,7 +241,15 @@ class CodexTakeoverCoordinator(
         activeAction = ActiveAction.Continue
         activeSessionKey = session.key
         scope.launch {
+            val receiptScope = api.receiptScope(session)
             try {
+                val existingOpId = receiptStore.get(receiptScope, session.key)
+                if (existingOpId != null) {
+                    activeAction = ActiveAction.CheckContinuation
+                    val result = api.continuationOperation(session, existingOpId)
+                    handleContinuationResult(receiptScope, session, result)
+                    return@launch
+                }
                 val info = api.takeoverInfo(session)
                 if (!info.canResume) {
                     pending = Pending.Continuation(session, info)
@@ -209,7 +259,7 @@ class CodexTakeoverCoordinator(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                reportFailure(error) { continueInNewSession(session) }
+                reportContinuationFailure(receiptScope, session, error)
             } finally {
                 busy = false
                 activeAction = null
@@ -221,10 +271,6 @@ class CodexTakeoverCoordinator(
     /** Reconcile an unconfirmed continuation start against `GET /api/v1/ops/{id}` without starting a second session. */
     fun checkContinuation(session: Session) {
         if (inFlight) return
-        val opId = receiptStore[session.key] ?: run {
-            continueInNewSession(session)
-            return
-        }
         val api = client ?: run {
             reportFailure(UnsupportedOperationException("Codex continuation unavailable")) { checkContinuation(session) }
             return
@@ -233,9 +279,19 @@ class CodexTakeoverCoordinator(
         activeAction = ActiveAction.CheckContinuation
         activeSessionKey = session.key
         scope.launch {
+            val receiptScope = api.receiptScope(session)
             try {
-                val result = api.continuationOperation(session, opId)
-                handleContinuationResult(session, result)
+                val opId = receiptStore.get(receiptScope, session.key)
+                if (opId == null) {
+                    if (!session.canContinueCodex) return@launch
+                    activeAction = ActiveAction.Continue
+                    val info = api.takeoverInfo(session)
+                    if (!info.canResume) pending = Pending.Continuation(session, info)
+                    else executeContinuation(api, session, info)
+                } else {
+                    val result = api.continuationOperation(session, opId)
+                    handleContinuationResult(receiptScope, session, result)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -265,10 +321,11 @@ class CodexTakeoverCoordinator(
         }
         confirmingAction = when (current) {
             is Pending.Takeover -> ActiveAction.Takeover
-            is Pending.Continuation -> if (receiptStore[current.session.key] != null) ActiveAction.CheckContinuation else ActiveAction.Continue
+            is Pending.Continuation -> ActiveAction.Continue
         }
         activeSessionKey = current.session.key
         scope.launch {
+            val receiptScope = api.receiptScope(current.session)
             try {
                 when (current) {
                     is Pending.Takeover -> executeTakeover(api, current.session, current.info, confirmStop = true)
@@ -281,7 +338,7 @@ class CodexTakeoverCoordinator(
                 activeSessionKey = null
                 when (current) {
                     is Pending.Takeover -> reportFailure(error) { takeOver(current.session) }
-                    is Pending.Continuation -> reportContinuationFailure(current.session, error)
+                    is Pending.Continuation -> reportContinuationFailure(receiptScope, current.session, error)
                 }
             } finally {
                 confirmingAction = null
@@ -300,9 +357,10 @@ class CodexTakeoverCoordinator(
             reportFailure(UnsupportedOperationException("Codex continuation unavailable")) { continueInNewSession(current.session) }
             return
         }
-        confirmingAction = if (receiptStore[current.session.key] != null) ActiveAction.CheckContinuation else ActiveAction.Continue
+        confirmingAction = ActiveAction.Continue
         activeSessionKey = current.session.key
         scope.launch {
+            val receiptScope = api.receiptScope(current.session)
             try {
                 executeContinuation(api, current.session, current.info)
             } catch (cancelled: CancellationException) {
@@ -310,7 +368,7 @@ class CodexTakeoverCoordinator(
             } catch (error: Exception) {
                 pending = null
                 activeSessionKey = null
-                reportContinuationFailure(current.session, error)
+                reportContinuationFailure(receiptScope, current.session, error)
             } finally {
                 confirmingAction = null
                 if (pending == null) activeSessionKey = null
@@ -353,29 +411,31 @@ class CodexTakeoverCoordinator(
         session: Session,
         info: CodexTakeoverInfo,
     ) {
-        val existingOpId = receiptStore[session.key]
+        val receiptScope = api.receiptScope(session)
+        val existingOpId = receiptStore.get(receiptScope, session.key)
         val result = if (existingOpId != null) {
+            if (confirmingAction == ActiveAction.Continue) confirmingAction = ActiveAction.CheckContinuation
             api.continuationOperation(session, existingOpId)
         } else {
             val opId = newOperationId()
-            // Persist before sending so any lost response reconciles against /ops/{opId} rather than duplicating.
-            receiptStore.put(session.key, opId)
+            // Persist durably before sending so any lost response or restart reconciles against /ops/{opId}.
+            receiptStore.put(receiptScope, session.key, opId)
             api.startContinuation(session, info, opId)
         }
-        handleContinuationResult(session, result)
+        handleContinuationResult(receiptScope, session, result)
     }
 
-    private suspend fun handleContinuationResult(session: Session, result: AgentStartResult) {
+    private suspend fun handleContinuationResult(receiptScope: String, session: Session, result: AgentStartResult) {
         when (result) {
             is AgentStartResult.Created -> {
-                receiptStore.remove(session.key)
+                receiptStore.remove(receiptScope, session.key)
                 pending = null
                 activeSessionKey = null
                 onAdopted(session, result.session)
                 onSuccessToast(res.getString(R.string.chat_takeover_continued))
             }
             is AgentStartResult.Rejected -> {
-                receiptStore.remove(session.key)
+                receiptStore.remove(receiptScope, session.key)
                 pending = null
                 activeSessionKey = null
                 val message = result.message.resolve(res)
@@ -401,9 +461,9 @@ class CodexTakeoverCoordinator(
         }
     }
 
-    private fun reportContinuationFailure(session: Session, error: Throwable) {
+    private suspend fun reportContinuationFailure(receiptScope: String, session: Session, error: Throwable) {
         val message = operationFeedback(error).text.resolve(res)
-        if (receiptStore[session.key] != null) {
+        if (receiptStore.get(receiptScope, session.key) != null) {
             onFailure(message, res.getString(R.string.chat_takeover_check_status)) { checkContinuation(session) }
         } else {
             onFailure(message, res.getString(persona.core.designsystem.R.string.designsystem_retry)) { continueInNewSession(session) }
@@ -438,18 +498,20 @@ fun rememberCodexTakeoverCoordinator(
     onCompleted: ((source: Session, adopted: Session) -> Unit)? = null,
     /** Optional feedback target for success toasts (e.g. outer window when a full-screen preview closes on completion). */
     successFeedback: AppFeedback? = null,
+    receiptStore: ContinuationReceiptStore? = null,
 ): CodexTakeoverCoordinator {
+    val context = LocalContext.current
     val res = LocalResources.current
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current
-    val receiptStore = rememberSaveable(saver = ContinuationReceiptSaver) { InMemoryContinuationReceiptStore() }
+    val store = remember(context, receiptStore) { receiptStore ?: PersistentContinuationReceiptStore.of(context) }
     val openSessionState = rememberUpdatedState(onOpenSession)
     val completedState = rememberUpdatedState(onCompleted)
     val feedbackState = rememberUpdatedState(feedback)
     val successFeedbackState = rememberUpdatedState(successFeedback ?: feedback)
     val fallbackToastState = rememberUpdatedState(fallbackToast)
     val fallbackNoticeState = rememberUpdatedState(onFallbackNotice)
-    return remember(res, client, sessions, receiptStore) {
+    return remember(res, client, sessions, store) {
         CodexTakeoverCoordinator(
             res = res,
             client = client,
@@ -489,7 +551,7 @@ fun rememberCodexTakeoverCoordinator(
                     }
                 }
             },
-            receiptStore = receiptStore,
+            receiptStore = store,
         )
     }
 }
