@@ -20,7 +20,7 @@ func TestTaskFollowupOnlyRecordsConfirmedSupervisorSends(t *testing.T) {
 		{"every confirmed instruction counts", "side1", "exit", nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _, todo := newSupervisedService(t)
+			s, _, todo := sideReviewFixture(t)
 			ctx := context.Background()
 			a := todo.Agents[0]
 			n, err := s.noteAgentSend(ctx, tc.from, a.MachineID, a.SessionID, "", tc.text)
@@ -49,14 +49,10 @@ func TestTaskFollowupOnlyRecordsConfirmedSupervisorSends(t *testing.T) {
 }
 
 func TestTaskReviewRecordsFollowupButAutomaticWritesDoNot(t *testing.T) {
-	s, _, todo := newSupervisedService(t)
+	s, f, todo := newSupervisedService(t)
+	holdDigest(s)
+	waitsForReview(t, s, f, todo.ID, "Ready for review.")
 	ctx := context.Background()
-	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
-		v.State = reviewPending
-		return true
-	}); err != nil {
-		t.Fatal(err)
-	}
 	if todoNow(s, todo.ID).Supervision.FollowedUpAt != nil {
 		t.Fatal("automatic ledger write became supervisor follow-up")
 	}
