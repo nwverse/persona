@@ -12,8 +12,8 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/volc"
-	"github.com/nwverse/persona/server/internal/volc/volctest"
+	"github.com/nwverse/persona/server/internal/modules/volc"
+	"github.com/nwverse/persona/server/internal/modules/volc/volctest"
 )
 
 // The manifest is one an installed extension could have: it validates, its form is in the subset, the key is a

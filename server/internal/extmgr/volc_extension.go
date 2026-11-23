@@ -9,7 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/volc"
+	"github.com/nwverse/persona/server/internal/modules/volc"
 )
 
 // The built-in Volcengine speech extension, `personad volc` (docs/extensions/volcengine-speech.md): off until the owner

@@ -16,7 +16,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/volc/volctest"
+	"github.com/nwverse/persona/server/internal/modules/volc/volctest"
 )
 
 func speak(t *testing.T, pl *Plugin, body, role string) *http.Response {

@@ -13,7 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/volc"
+	"github.com/nwverse/persona/server/internal/modules/volc"
 )
 
 // An extension's settings in persona_settings (#2385): extension.<id> for every extension the user can configure that has
