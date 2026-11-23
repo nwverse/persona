@@ -77,6 +77,8 @@ export interface Attachment {
 export interface Outgoing {
   text: string;
   images: { mime: string; data: string }[];
+  /** Ctrl/⌘+Enter hands the message over immediately through the queue's Send now action. */
+  sendNow?: boolean;
   /** A real Quote action, not typed Markdown, a comment or an edit's restored quote (#10346): keep an earlier reader's
    *  place; already at the end, the send follows as usual. UI-only, never part of the hub's wire body. */
   quoteReply?: boolean;
@@ -869,7 +871,7 @@ export const Composer = memo(function Composer({
       // the box went away or shows another conversation: the words wait in this one's stored draft
       if (!mounted.current || keyNow.current !== draftKey) return;
     }
-    // The message shows in the chat at once (a sending bubble), so the box empties at once too: waiting for the hub to
+    // The message shows at once, so the box empties at once too: waiting for the hub to
     // hand it to the agent (seconds when it starts up) left the same words in both places. A send that never went
     // (onSend false) puts them back; one that failed stays in the chat as a failed bubble.
     const sent = atts;
@@ -892,6 +894,7 @@ export const Composer = memo(function Composer({
     const body = withFiles(withQuoteBlock(q, said), sentFiles);
     const quoteReply = !edit && q.some((x) => !x.comment);
     const ok = await onSend({ text: withContexts(refs, body, sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })),
+      ...(now && queues ? { sendNow: true } : {}),
       ...(quoteReply ? { quoteReply: true } : {}), ...(committed ? { edit: committed } : {}) });
     if (!canWriteDraft()) { releaseAttachments(sent); return; }
     if (ok && now && queues) await onSendNow?.();
