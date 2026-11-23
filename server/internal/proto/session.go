@@ -537,6 +537,9 @@ const (
 	// consecutive upstream 5xx turns with no assistant progress in between (#13372). Visibility label: TurnErrorKind stays
 	// transient unless another rule marks it.
 	TurnErrorUpstreamUnavailable = "upstream_unavailable"
+	// TurnErrorImagesTooLarge: accumulated pictures in the conversation exceed the model API's size, count or dimension
+	// limit (#13045). Compacting the conversation clears older pictures so the failed turn can be sent again.
+	TurnErrorImagesTooLarge = "images_too_large"
 )
 
 // Codes a call refuses with when the assistant's conversation cannot start on a machine (docs/assistant/onboarding.md 4.6, 5.2):

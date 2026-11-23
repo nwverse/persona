@@ -22,6 +22,11 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     /// Set once started: the todo the task is, and why its agent did not start.
     var todoID: String?
     var error: String?
+    /// The coded start failure, its startup-question arguments, and the first launcher the hub suggests instead.
+    /// Read-only like `brief`: plan edits never send these back.
+    var errorCode: String?
+    var errorArgs: [String: String]?
+    var retryWith: [String]?
     /// The existing to-do this plan carries on, if any. Read-only.
     var continues: String?
     /// What the task will be held to, shown on the plan card before Start (docs/assistant/unified-entry.md "Briefs").
@@ -36,12 +41,13 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case title, prompt, machine, cwd, launcher, model, permission, ultracode, readonly, why, error, brief, schedule
-        case todoID = "todo_id", scheduleTitle = "schedule_title", tier, continues
+        case todoID = "todo_id", scheduleTitle = "schedule_title", tier, continues, errorCode = "error_code", errorArgs = "error_args", retryWith = "retry_with"
     }
 
     init(title: String, prompt: String, machine: String, cwd: String, launcher: String? = nil, model: String? = nil,
          permission: String? = nil, ultracode: Bool? = nil, readonly: Bool? = nil, why: String? = nil, todoID: String? = nil,
-         error: String? = nil, brief: TaskBrief? = nil, schedule: String? = nil, scheduleTitle: String? = nil, tier: String? = nil) {
+         error: String? = nil, errorCode: String? = nil, errorArgs: [String: String]? = nil, retryWith: [String]? = nil,
+         brief: TaskBrief? = nil, schedule: String? = nil, scheduleTitle: String? = nil, tier: String? = nil) {
         self.title = title
         self.prompt = prompt
         self.machine = machine
@@ -54,6 +60,9 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
         self.why = why
         self.todoID = todoID
         self.error = error
+        self.errorCode = errorCode
+        self.errorArgs = errorArgs
+        self.retryWith = retryWith
         self.brief = brief
         self.schedule = schedule
         self.scheduleTitle = scheduleTitle
@@ -74,6 +83,9 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
         why = try c.decodeIfPresent(String.self, forKey: .why)
         todoID = try c.decodeIfPresent(String.self, forKey: .todoID)
         error = try c.decodeIfPresent(String.self, forKey: .error)
+        errorCode = (try? c.decodeIfPresent(String.self, forKey: .errorCode)) ?? nil
+        errorArgs = (try? c.decodeIfPresent([String: String].self, forKey: .errorArgs)) ?? nil
+        retryWith = (try? c.decodeIfPresent([String].self, forKey: .retryWith)) ?? nil
         continues = try c.decodeIfPresent(String.self, forKey: .continues)
         brief = (try? c.decodeIfPresent(TaskBrief.self, forKey: .brief)) ?? nil
         schedule = (try? c.decodeIfPresent(String.self, forKey: .schedule)).flatMap { $0?.isEmpty == false ? $0 : nil }
@@ -1328,9 +1340,23 @@ nonisolated extension APIClient {
     /// Retry on a task whose agent did not start, Continue on one a model error cut off (`POST /api/v1/todos/{id}/retry`): the
     /// hub starts it again and answers with the todo. 409: it is not a task that can be retried now (or its machine is
     /// offline).
-    func retryTodo(_ id: String) async throws -> TodoItem {
+    func retryTodo(_ id: String, launcher: String? = nil) async throws -> TodoItem {
+        struct Body: Encodable { var launcher: String }
         struct Response: Decodable { var todo: TodoItem }
-        return try await post("/api/v1/todos/\(Self.pathPart(id))/retry", as: Response.self).todo
+        let path = "/api/v1/todos/\(Self.pathPart(id))/retry"
+        if let launcher {
+            return try await post(path, body: Body(launcher: launcher), as: Response.self).todo
+        }
+        // Ordinary Retry stays genuinely bodyless, including on a hub that also takes launcher overrides. `post` would
+        // turn a nil body into `{}`, so this branch goes through `request` directly.
+        return try JSON.decoder.decode(Response.self, from: await request("POST", path)).todo
+    }
+
+    /// Answers a planned task's shell startup question; the hub restarts that task in the kept terminal tab.
+    func answerTaskStart(_ id: String, choice: String) async throws -> TodoItem? {
+        struct Body: Encodable { var choice: String }
+        struct Response: Decodable { var todo: TodoItem? }
+        return try await post("/api/v1/todos/\(Self.pathPart(id))/start/answer", body: Body(choice: choice), as: Response.self).todo
     }
 
     /// The Handled button of a question that can wait (a `brief` item's `later` row). A 409 means it is not in the queue any

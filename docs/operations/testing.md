@@ -776,6 +776,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   answered questions, receipts, direct task messages and a final unstarted plan. `MOCK_TASKS_AT=<minutes>` cuts newer items so earlier portions sit at the bottom without scrolling.
   `MOCK_TASKS_NO_ASKS=1` suppresses task-Agent questions above input. `MOCK_TASKS_DOCK=2` keeps two working tasks (two dock capsules, then two manual Agents); `=pair` one task + one manual Agent waiting for you; `=many` adds four tasks (dock wider than screen, "All" fixed left); `=multi` keeps only "Fix widget landscape crash" with two Agents (task-title ⌄ switch, `TaskSheetHeaderTests` with `TEST_RUNNER_PERSONA_TASK_MULTI=1` and `MOCK_MANAGERS=1`); `=long` keeps two overlong titles (parallel capsules, no overlapping truncation; `simctl ui <udid> content_size extra-extra-extra-large`, #3010). Default: four unfinished tasks + two manual Agents (#1113). `-showTaskDetail <to-do id>` (e.g. `todo_task_widget`) opens details; `-showTaskBoard YES` opens board.
   `TaskSheetHeaderTests` (a task's sheet has one header, the Agent chat's: ✕, the title button `chat.title`, ⋯, no ‹, no space tabs; #3255) runs on `MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_MANAGERS=1`:
+  Start remedies (#10365): add `MOCK_START_REMEDIES=1` to advertise `task_retry_launcher`, `start_continue` and `todo_start_answer`. Three final failed-task fixtures cover terminal `launcher_missing` with `retry_with: [codex]`, `worktree_path_taken` on a to-do without `plan_id`, and a task `shell_waiting` question; Agent `macbook/a1f3c2d4-0000-4000-8000-000000000104` has the session question. Ordinary Retry stays bodyless, the alternative sends only `launcher`, and the two answer routes accept only an offered choice. `GET /mock/start-remedies` records their raw bodies. `MOCK_TOOL_SEARCH=1` independently gives the populated main chat the raw-400 `tool_search_unsupported` turn error for its dedicated Retry card.
   with the default mock's several assistants the MacBook, where the tasks' Agents run, is another assistant's, the app lists only the current one's sessions (#5587),
   and the sheet, with no Agent page to show, draws its own header with the title as text (#10253). The test stops at launch on a hub with several, naming `MOCK_MANAGERS=1`.
   Its newest line is a morning routine's `brief` item (#2320): a waiting card that names its chat and one that doesn't, failed and done rows past what is listed, a deployed to-do and a decision to verify, two questions that can wait and two to-dos in progress. `TEST_RUNNER_PERSONA_MOCK_HUB=<address> xcodebuild test … -only-testing:PersonaUITests/BriefCardUITests` (with `MOCK_TASKS_NO_ASKS=1`) checks the iPhone's folded rows, Accept, Handled and Open; `TEST_RUNNER_PERSONA_SHOTS` / `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE` save the card folded, unfolded and answered.
@@ -1004,6 +1005,15 @@ the state and start-attempt count. With the switch off, existing mock screens do
 the names it took in that test's `MOVED`: a branch from before the move that kept the old block when it resolved its conflict
 then fails there, with the module to edit instead
 (`docs/lessons/testing.md`, "A moved file or block needs a test that fails when the old copy comes back").
+
+`MOCK_OUTSIDE_DIRECTIONS=1` (`scripts/mock/outside_directions_mock.py`, #8236) is a read-only, three-row direction
+fixture: one existing conversation, one outside direction bound to an existing coding Agent, and one targetless outside
+direction with a long name. The two outside ids are not Persona conversations; `/assistant`, `/leaders` and
+`/directions/tree` keep the same order and metadata. The bound Agent's own to-do stays under Secretary and its idle state
+does not drive the direction's running mark. It is off by default and composes with `MOCK_LEGACY_HUB=1` by leaving the
+legacy 404 intact. `python3 -I scripts/mock/test_direction_tree_mock.py` checks the fixture and its reset behavior.
+`OutsideDirectionsUITests` uses it through `PERSONA_OUTSIDE_DIRECTIONS_HUB` for the mixed sidebar's interactions and for
+sidebar / To-dos / Agents captures in light and dark, at default and AX5 text (`PERSONA_SHOTS` saves them).
 
 **No new switch in `mock_hub.py` (#12737).** Most of what `mock_hub.py` gains comes with a new `MOCK_*` switch (89 of the 195
 commits that changed it from 2026-11-14 to 2026-11-22 added one, with 72% of its net added lines), so its switch names are
