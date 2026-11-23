@@ -54,12 +54,16 @@ func (st *captureMemStore) Captures(_ context.Context, f db.CaptureFilter) ([]db
 func (st *captureMemStore) CapturesToSort(_ context.Context, maxAttempts, limit int) ([]db.Capture, error) {
 	st.capMu.Lock()
 	defer st.capMu.Unlock()
+	// New ones first, then the oldest, as the query orders them.
 	var out []db.Capture
-	for _, c := range st.caps {
-		var sorted assistantwire.CaptureSort
-		_ = json.Unmarshal(c.Sort, &sorted)
-		if c.Attempts < maxAttempts && (c.Status == assistantwire.CaptureNew || c.Status == assistantwire.CaptureSorted && sorted.AutoFile) && len(out) < limit {
-			out = append(out, c)
+	for _, wantNew := range []bool{true, false} {
+		for _, c := range st.caps {
+			var sorted assistantwire.CaptureSort
+			_ = json.Unmarshal(c.Sort, &sorted)
+			isNew := c.Status == assistantwire.CaptureNew
+			if isNew == wantNew && c.Attempts < maxAttempts && (isNew || c.Status == assistantwire.CaptureSorted && sorted.AutoFile) && len(out) < limit {
+				out = append(out, c)
+			}
 		}
 	}
 	return out, nil
@@ -347,6 +351,46 @@ func TestCaptureFileWaitsAndFails(t *testing.T) {
 	}
 	if c := st.capture(t, a.ID); c.Status != assistantwire.CaptureFailed || c.Attempts != captureMaxAttempts {
 		t.Fatalf("a model that keeps failing: %+v", c)
+	}
+}
+
+// Captures waiting for a computer that can file them count no try, so they never leave the queue on their own: more of
+// them than a batch must not keep a new capture from being sorted (#13502).
+func TestCaptureWaitingNeverStarvesNew(t *testing.T) {
+	ctx := context.Background()
+	s, f, st, written := captureService(t)
+	s.devs = inboxDevs{fleetDevs: newFleetDevs(), old: true}
+	add := func(client, hint string) string {
+		t.Helper()
+		body, _ := json.Marshal(assistantwire.CaptureCreate{ClientID: client, Source: assistantwire.CaptureSourceShareIOS, Kind: "text", Text: "qa: a placeholder", SpaceHint: hint})
+		w := serve(s, http.MethodPost, "/api/v1/assistant/captures", string(body))
+		var a assistantwire.CaptureAccepted
+		if w.Code != http.StatusAccepted || json.Unmarshal(w.Body.Bytes(), &a) != nil {
+			t.Fatalf("add: %d %s", w.Code, w.Body)
+		}
+		return a.ID
+	}
+	f.captureSort = `{"space":null,"confidence":0.1,"action":"keep","title":"Placeholder","categories":[]}`
+	for i := range captureBatch + 1 {
+		add("qa-share-wait-"+string(rune('a'+i)), "qa-plain")
+	}
+	for s.captureRound(ctx, st) {
+	}
+	waiting, err := st.CapturesToSort(ctx, captureMaxAttempts, captureBatch+10)
+	if err != nil || len(waiting) != captureBatch+1 || len(*written) != 0 {
+		t.Fatalf("waiting to be filed: %d (%v), %d written", len(waiting), err, len(*written))
+	}
+	for _, c := range waiting {
+		if c.Status != assistantwire.CaptureSorted || c.Attempts != 0 {
+			t.Fatalf("a waiting capture: %+v", c)
+		}
+	}
+
+	fresh := add("qa-share-wait-new", "")
+	f.captureSort = `{"space":"qa-plain","confidence":0.4,"action":"discuss","title":"A thought","categories":[]}`
+	s.captureRound(ctx, st)
+	if c := st.capture(t, fresh); c.Status != assistantwire.CaptureSorted {
+		t.Fatalf("the new capture behind %d waiting ones: %+v", captureBatch+1, c)
 	}
 }
 

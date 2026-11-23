@@ -91,13 +91,14 @@ func (d *DB) Captures(ctx context.Context, f CaptureFilter) ([]Capture, error) {
 	return out, rows.Err()
 }
 
-// CapturesToSort are the captures the manager's work loop takes up, the oldest first, at most limit: new ones, and
-// sorted ones meant to be filed on their own (sort.auto_file) that were not yet, each tried fewer than maxAttempts
-// times.
+// CapturesToSort are the captures the manager's work loop takes up, at most limit: new ones, and sorted ones meant to
+// be filed on their own (sort.auto_file) that were not yet, each tried fewer than maxAttempts times. New ones come
+// first, then the oldest: captures waiting for a computer that can file them count no try, so they must never fill a
+// batch ahead of a new one.
 func (d *DB) CapturesToSort(ctx context.Context, maxAttempts, limit int) ([]Capture, error) {
 	rows, err := d.pool.Query(ctx, `SELECT `+captureColumns+` FROM assistant_captures
 		WHERE attempts < $1 AND (status = 'new' OR (status = 'sorted' AND (sort->>'auto_file')::boolean IS TRUE))
-		ORDER BY created_at, id LIMIT $2`, maxAttempts, limit)
+		ORDER BY (status = 'new') DESC, created_at, id LIMIT $2`, maxAttempts, limit)
 	if err != nil {
 		return nil, err
 	}

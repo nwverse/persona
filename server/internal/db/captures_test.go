@@ -48,6 +48,14 @@ func TestCaptures(t *testing.T) {
 	if len(todo) != 1 || todo[0].ID != "cap_qa1" || todo[0].Attempts != 1 || todo[0].Error != "qa: node offline" {
 		t.Fatalf("to sort after one try = %+v", todo)
 	}
+	// A newer new capture comes ahead of an older one waiting to be filed, which counts no try while it waits.
+	_, _, err = d.InsertCapture(ctx, Capture{ID: "cap_qa4", ClientID: "qa-client-4", Source: "web", Kind: "text", Text: "qa: a later note"})
+	must(err)
+	if todo, err = d.CapturesToSort(ctx, 3, 1); err != nil || len(todo) != 1 || todo[0].ID != "cap_qa4" {
+		t.Fatalf("a batch of one = %+v, %v: the new capture first", todo, err)
+	}
+	_, err = d.SetCaptureResult(ctx, "cap_qa4", "sorted", []byte(`{"track":"qa-plain","confidence":0.4}`), nil, "", true)
+	must(err)
 	if todo, err = d.CapturesToSort(ctx, 1, 10); err != nil || len(todo) != 0 {
 		t.Fatalf("past its tries = %+v, %v", todo, err)
 	}
@@ -64,7 +72,7 @@ func TestCaptures(t *testing.T) {
 	}
 	all, err := d.Captures(ctx, CaptureFilter{})
 	must(err)
-	if len(all) != 2 {
+	if len(all) != 3 {
 		t.Fatalf("all = %+v", all)
 	}
 	if later, err := d.Captures(ctx, CaptureFilter{UpdatedSince: time.Now().Add(time.Hour)}); err != nil || len(later) != 0 {
