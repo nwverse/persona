@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"context"
@@ -34,7 +34,7 @@ const (
 	maxMeetingImage     = 3 << 20
 )
 
-func (s *Service) meetingConversationRoutes() {
+func (s *Recordings) meetingConversationRoutes() {
 	s.handle("PUT /api/v1/recordings/{id}/private", func(w http.ResponseWriter, r *http.Request) {
 		if !meetingCaller(w, r) {
 			return

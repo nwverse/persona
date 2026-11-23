@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"cmp"
@@ -34,7 +34,7 @@ import (
 
 // purposeMeetingRoom is the model purpose a room starts on (#7980, the In-meeting conversation): the main chat's
 // launcher, model and effort until it is set apart in Model settings, always on Claude Code's CLI (models_room.go).
-const purposeMeetingRoom = "meeting.room"
+const purposeMeetingRoom = kb.PurposeMeetingRoom
 
 // Origins of a meeting's conversations (proto.Session.Origin): the room, and the follow-up made after the meeting.
 const (
@@ -88,7 +88,7 @@ func meetingEnd(r kb.Recording, l kb.Live, now time.Time) (at time.Time, due boo
 
 // roomLook is attendLook for a room meeting: it moves the room along (starting it, retrying it, ending it) and feeds
 // it what is due; when to look again (zero: when it next changes).
-func (s *Service) roomLook(ctx context.Context, e *kb.Engine, id string, l kb.Live, r kb.Recording, now time.Time) time.Time {
+func (s *Recordings) roomLook(ctx context.Context, e *kb.Engine, id string, l kb.Live, r kb.Recording, now time.Time) time.Time {
 	room := r.Conv.Room
 	endAt, ended := meetingEnd(r, l, now)
 	var next time.Time
@@ -140,7 +140,7 @@ func (s *Service) roomLook(ctx context.Context, e *kb.Engine, id string, l kb.Li
 }
 
 // roomSet changes recording id's room with fn (kb.MeetingUpdate); what it is after, false when it could not be written.
-func (s *Service) roomSet(e *kb.Engine, id string, fn func(rm *kb.MeetingRoom)) (kb.MeetingRoom, bool) {
+func (s *Recordings) roomSet(e *kb.Engine, id string, fn func(rm *kb.MeetingRoom)) (kb.MeetingRoom, bool) {
 	m, err := e.MeetingUpdate(id, func(m *kb.Meeting, _ kb.Recording) error {
 		if m.Room == nil {
 			return errNoRoom
@@ -161,7 +161,7 @@ var errNoRoom = errors.New("not a room meeting")
 
 // roomStart starts recording id's room, or settles a start a restart left pending: under the session id derived
 // from the recording, written as pending first, so the node makes it once ("Made once"). When to look again.
-func (s *Service) roomStart(ctx context.Context, e *kb.Engine, id string, now time.Time) time.Time {
+func (s *Recordings) roomStart(ctx context.Context, e *kb.Engine, id string, now time.Time) time.Time {
 	machine := s.settings(ctx).MachineID
 	sid := meetingSessionID(id, partRoom)
 	room, ok := s.roomSet(e, id, func(rm *kb.MeetingRoom) {
@@ -218,7 +218,7 @@ func (s *Service) roomStart(ctx context.Context, e *kb.Engine, id string, now ti
 // the meeting CLAUDE.md, the book's guest and origin noted before the node is asked (its first tool calls come before
 // the start answers), then the start with the meeting header. The session id it has; a problem (kb.Room*) when the
 // node cannot run a room, an error otherwise.
-func (s *Service) roomCreate(ctx context.Context, machine, sid string, r kb.Recording) (string, string, error) {
+func (s *Recordings) roomCreate(ctx context.Context, machine, sid string, r kb.Recording) (string, string, error) {
 	lang := cmp.Or(strings.TrimSpace(r.Language), string(s.lang(ctx)))
 	lean := r.Conv != nil && r.Conv.Room != nil && r.Conv.Room.Batching >= kb.RoomBatchingLean // an older room keeps its own
 	md := prompts.RenderMeetingRoomClaudeMD(prompts.MeetingRoomClaudeMD{Owner: s.owner(ctx), Language: lang, Lean: lean})
@@ -298,11 +298,6 @@ func roomHeader(r kb.Recording, lang string, loc *time.Location) prompts.Meeting
 	return h
 }
 
-// unknownMethod: a node answered that it does not know the method (an older node).
-func unknownMethod(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "unknown method")
-}
-
 // offlineErr: the call did not reach the machine (its node is not connected).
 func offlineErr(err error) bool {
 	var re *rpc.Error
@@ -329,7 +324,7 @@ func guestAgentRefused(err error) bool {
 // soon. A room started with lean batches gets one at most every two minutes, the lists only at the boundaries, and its
 // scheduled compaction (meeting_room_lean.go), which holds the photos and the batch while it may run. When to look
 // again; with end, zero once the end batch went (or there was none to send) and no photo message is left failing.
-func (s *Service) roomFeed(ctx context.Context, e *kb.Engine, id string, l kb.Live, r kb.Recording, now time.Time, end bool) (next time.Time) {
+func (s *Recordings) roomFeed(ctx context.Context, e *kb.Engine, id string, l kb.Live, r kb.Recording, now time.Time, end bool) (next time.Time) {
 	room := r.Conv.Room
 	lean := room.Batching >= kb.RoomBatchingLean
 	if !r.Attending() {
@@ -478,7 +473,7 @@ func roomAskWaiting(l kb.Live) bool {
 // roomEnding ends a ready room at the meeting's end: with the role on, it gets the end batch and turns ended once
 // that turn ends, feedEndWait after the end at the latest (an end batch not delivered by then is dropped); with the
 // role off at once.
-func (s *Service) roomEnding(ctx context.Context, e *kb.Engine, id string, l kb.Live, r kb.Recording, now time.Time) time.Time {
+func (s *Recordings) roomEnding(ctx context.Context, e *kb.Engine, id string, l kb.Live, r kb.Recording, now time.Time) time.Time {
 	room := r.Conv.Room
 	if room.EndingAt.IsZero() {
 		if rm, ok := s.roomSet(e, id, func(rm *kb.MeetingRoom) { rm.EndingAt = now }); ok {
@@ -521,7 +516,7 @@ func roomCompacting(row proto.Session) bool {
 
 // roomAsksFallBack wakes the asks of recording id waiting for its room: it turned unavailable or ended, so they go to
 // meeting.answer (meeting_room_ask.go).
-func (s *Service) roomAsksFallBack(id string) {
+func (s *Recordings) roomAsksFallBack(id string) {
 	s.room.wake(id)
 }
 
@@ -529,7 +524,7 @@ func (s *Service) roomAsksFallBack(id string) {
 // trimmed recording, and one its origin record names for a recording that is gone, trimmed, or whose meeting.json does
 // not name it (an older manager's trim or delete after a rollback removed the file). A node offline or too old for
 // assistant.guest_delete is asked again at the next pass; the room stays ended meanwhile.
-func (s *Service) meetingRoomsSweep(ctx context.Context, e *kb.Engine) {
+func (s *Recordings) meetingRoomsSweep(ctx context.Context, e *kb.Engine) {
 	if e == nil || e.Store.ReadOnly() {
 		return
 	}
@@ -565,7 +560,7 @@ func (s *Service) meetingRoomsSweep(ctx context.Context, e *kb.Engine) {
 
 // roomDelete deletes recording's room session on machine: the node removes its transcript and files, the hub forgets
 // it, and meeting.json says deleted (while the recording keeps one). False when the node could not be asked.
-func (s *Service) roomDelete(ctx context.Context, e *kb.Engine, recording, machine, session string) bool {
+func (s *Recordings) roomDelete(ctx context.Context, e *kb.Engine, recording, machine, session string) bool {
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	err := s.call(dctx, machine, DeviceAssistantGuestDelete, map[string]any{"dir": path.Join(meetingRoomDir, recording), "session_id": session}, nil)
@@ -593,7 +588,7 @@ func (s *Service) roomDelete(ctx context.Context, e *kb.Engine, recording, machi
 
 // roomRefusesSend refuses a message into a room that ended (POST /api/v1/sessions/{mid}/{sid}/messages): 409
 // meeting_ended, the apps write in the follow-up instead. Nil for any other conversation.
-func (s *Service) roomRefusesSend(ctx context.Context, machine, session, lang string) error {
+func (s *Recordings) roomRefusesSend(ctx context.Context, machine, session, lang string) error {
 	rec, ok, err := s.roomOf(ctx, machine, session)
 	if err != nil || !ok {
 		return nil

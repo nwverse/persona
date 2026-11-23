@@ -21,7 +21,7 @@ import (
 // hubUploaded is told of a stored hub-mode upload of recording id with its segments: the run learns the meeting's role,
 // its timeline and the phone's text; a socket that never started counts as down from the first one; in the fallback
 // the segments join the live log. A complete upload has the final passes looked at.
-func (s *Service) hubUploaded(e *kb.Engine, id string, segs []kb.RecordingSegment, complete bool) {
+func (s *Recordings) hubUploaded(e *kb.Engine, id string, segs []kb.RecordingSegment, complete bool) {
 	defer func() {
 		if complete {
 			s.kickFinal()

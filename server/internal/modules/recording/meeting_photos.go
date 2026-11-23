@@ -53,7 +53,7 @@ const (
 // look under the same id (the hub's once-only guard never sends it twice, and answers a send left in doubt as such).
 const photoSendTries = 3
 
-func (s *Service) meetingPhotoRoutes() {
+func (s *Recordings) meetingPhotoRoutes() {
 	s.handle("POST /api/v1/recordings/{id}/photos", s.photoAddRoute)
 	s.handle("GET /api/v1/recordings/{id}/photos", func(w http.ResponseWriter, r *http.Request) {
 		if !meetingCaller(w, r) {
@@ -114,7 +114,7 @@ func (s *Service) meetingPhotoRoutes() {
 }
 
 // photoAddRoute is POST /api/v1/recordings/{id}/photos.
-func (s *Service) photoAddRoute(w http.ResponseWriter, r *http.Request) {
+func (s *Recordings) photoAddRoute(w http.ResponseWriter, r *http.Request) {
 	if !meetingCaller(w, r) {
 		return
 	}
@@ -263,7 +263,7 @@ func photoQueued(rec kb.Recording, l kb.Live, now time.Time) bool {
 // read now when nil). A message whose sends failed photoSendTries times holds neither the batch nor the messages after
 // it: it is tried again first at every look, then the next one goes. When to look again; false when nothing was sent
 // and the batch may go.
-func (s *Service) roomPhotos(ctx context.Context, e *kb.Engine, id string, r kb.Recording, now time.Time, queued []kb.Photo, withdraw []kb.PhotoRef, rd *roomRead) (time.Time, bool) {
+func (s *Recordings) roomPhotos(ctx context.Context, e *kb.Engine, id string, r kb.Recording, now time.Time, queued []kb.Photo, withdraw []kb.PhotoRef, rd *roomRead) (time.Time, bool) {
 	if len(withdraw) == 0 && len(queued) == 0 {
 		return time.Time{}, false
 	}
@@ -353,7 +353,7 @@ func (s *Service) roomPhotos(ctx context.Context, e *kb.Engine, id string, r kb.
 // hub's guard): message source meeting, kept in the text as the asks' are, and no meeting-turn mark (every turn of the
 // room is a side exchange). sent once it went (the guard answers one that went before so); else how many times msgID
 // failed so far (photoFailed).
-func (s *Service) roomSendPhoto(ctx context.Context, ref kb.SessionRef, msgID, text string, src *proto.MessageSource, images []proto.Image) (sent bool, tries int) {
+func (s *Recordings) roomSendPhoto(ctx context.Context, ref kb.SessionRef, msgID, text string, src *proto.MessageSource, images []proto.Image) (sent bool, tries int) {
 	p := map[string]any{"session_id": ref.SessionID, "text": prompts.MessageSourceText(text, src), "message_source": src,
 		"client_msg_id": msgID, "resume_only": true}
 	if len(images) > 0 {

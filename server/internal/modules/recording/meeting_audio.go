@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/transcribejob"
 )
 
 // Audio from the phone (docs/assistant/meeting-minutes.md "Audio from the phone", "Gaps and the final pass"): the
@@ -52,28 +53,6 @@ const (
 	audioSendQueue  = 1024
 )
 
-// socketRoutes are the assistant's WebSocket routes (assistantwire.SocketRoutes), served by ServeSocket.
-var socketRoutes = []struct {
-	pattern string
-	serve   func(s *Service, w http.ResponseWriter, r *http.Request)
-}{
-	{"GET /api/v1/recordings/{id}/audio", (*Service).audioSocket},
-	{assistantwire.A2ARPC, (*Service).a2aRPC},
-	{assistantwire.A2ACard, (*Service).a2aCard},
-}
-
-// ServeSocket serves the assistant's WebSocket routes (assistantwire.SocketRoutes), which the hub relays to the
-// manager's extensions layer and that hands here (extmgr.Options.AssistantSocket).
-func (s *Service) ServeSocket(w http.ResponseWriter, r *http.Request) {
-	s.sockets.Do(func() {
-		s.socketMux = http.NewServeMux()
-		for _, sr := range socketRoutes {
-			s.socketMux.HandleFunc(sr.pattern, func(w http.ResponseWriter, r *http.Request) { sr.serve(s, w, r) })
-		}
-	})
-	s.socketMux.ServeHTTP(w, r)
-}
-
 // phoneFrame is a text frame from the phone.
 type phoneFrame struct {
 	Type       string          `json:"type"`
@@ -85,7 +64,7 @@ type phoneFrame struct {
 }
 
 // audioSocket is GET /api/v1/recordings/{id}/audio.
-func (s *Service) audioSocket(w http.ResponseWriter, r *http.Request) {
+func (s *Recordings) audioSocket(w http.ResponseWriter, r *http.Request) {
 	if !meetingCaller(w, r) {
 		return
 	}
@@ -270,7 +249,7 @@ func finiteTime(t float64) bool { return !math.IsNaN(t) && !math.IsInf(t, 0) && 
 
 // audioEnd is the phone's end at recording second at on socket p: the recording's end is stored, the audio
 // acknowledged up to it, the job's last sentences sent as lines (within audioEndWait), then the socket closed 1000.
-func (s *Service) audioEnd(e *kb.Engine, run *hubRun, p *phoneSocket, aw *kb.AudioWriter, id string, at float64) {
+func (s *Recordings) audioEnd(e *kb.Engine, run *hubRun, p *phoneSocket, aw *kb.AudioWriter, id string, at float64) {
 	if _, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.End = at
 		return nil
@@ -333,7 +312,7 @@ func (r *hubRun) finishLive(p *phoneSocket, end float64) {
 
 // audioRefusal is the code of the fatal error that refuses the socket for err (AudioOpen's), in the contract's order;
 // "" when it is taken. A knowledge base read-only in the settings takes kb_read_only's place.
-func (s *Service) audioRefusal(ctx context.Context, e *kb.Engine, err error) string {
+func (s *Recordings) audioRefusal(ctx context.Context, e *kb.Engine, err error) string {
 	writable := s.meetingWritable(ctx, e)
 	switch {
 	case errors.Is(err, kb.ErrRecordingDeleted):
@@ -408,7 +387,7 @@ func (p *phoneSocket) writeLoop() {
 			_ = p.c.Close(out.status, "")
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), jobWriteWait)
+		ctx, cancel := context.WithTimeout(context.Background(), transcribejob.WriteWait)
 		err := p.c.Write(ctx, websocket.MessageText, out.frame)
 		cancel()
 		if err != nil {
@@ -471,7 +450,7 @@ func (p *phoneSocket) wait() {
 	p.closeWith(websocket.StatusNormalClosure)
 	select {
 	case <-p.done:
-	case <-time.After(jobWriteWait):
+	case <-time.After(transcribejob.WriteWait):
 		_ = p.c.CloseNow()
 	}
 }
@@ -506,7 +485,7 @@ func (p *phoneSocket) keepAlive(heard *atomic.Int64) {
 // mono, at most maxAudioBody) → the gaps still left. Refusals in the contract's order: 403, 503, 413 too_large, 410,
 // 404, 400 (at missing or not 0 or more, a body that is not whole samples), 403 kb_read_only, 409 not_hub, 409
 // transcript_expired, 409 transcription_final; 413 audio_full past the 12 hours a recording may hold.
-func (s *Service) audioPut(w http.ResponseWriter, r *http.Request) {
+func (s *Recordings) audioPut(w http.ResponseWriter, r *http.Request) {
 	if !meetingCaller(w, r) {
 		return
 	}

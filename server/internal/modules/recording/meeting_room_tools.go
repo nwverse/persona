@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"context"
@@ -49,7 +49,7 @@ func meetingRoomTools() []proto.Tool {
 const meetingLinesRunes = 12000
 
 // roomToolCall runs a room's call of tool name for recording.
-func (s *Service) roomToolCall(ctx context.Context, recording, name string, args json.RawMessage) proto.ToolResult {
+func (s *Recordings) roomToolCall(ctx context.Context, recording, name string, args json.RawMessage) proto.ToolResult {
 	e, err := s.kbGet(ctx)
 	if err != nil {
 		return proto.TextResult("the meeting's material is not available now", true)

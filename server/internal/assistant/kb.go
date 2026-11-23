@@ -225,16 +225,16 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 	// The models are counted per lane run (kb_lanes.go: kbCounted, through the run's context).
 	// Retries: the steps' backoffs carry over to the engine after this one (the hub's settings changed; #4247).
 	e := &kb.Engine{Store: k.store, Retries: &k.retries, Model: kbCounted("inbox.triage", s.kbModel("inbox.triage")), ModelFor: func(id string) kb.Model { return kbCounted(id, s.kbModel(id)) },
-		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingDaysNow, MinutesDaysFunc: s.minutesDaysNow, MinutesWritten: s.minutesWritten, LiveChanged: s.meetingKick, MeetingChanged: s.meetingLiveChanged, TranscriptionReady: s.transcriptionReadyCached, EarlierMeetingsInAnswers: true, Changed: s.kbChanged, MineObserved: s.kbObserveOwner,
+		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingDaysNow, MinutesDaysFunc: s.minutesDaysNow, TranscriptionReady: s.transcriptionReadyCached, EarlierMeetingsInAnswers: true, Changed: s.kbChanged, MineObserved: s.kbObserveOwner,
 		Selection: s.kbSelectionNow, TopicsOn: s.kbTopicsNow,
-		// All-day recordings (kb_day.go): the recap time from the evening routine's, their names; the day's push below
-		// (it counts the day's parts in e).
-		DayRecapClock: s.eveningClock, DayRecordingName: s.dayRecordingName,
+		// All-day recordings: the recap time from the evening routine's (recording_host.go); their names and the day's
+		// push are the recording module's (recordingHook below).
+		DayRecapClock: s.eveningClock,
 		// A recording that says no language has its minutes, summary and recap in the owner's.
 		OwnerLanguage: s.kbOwnerLanguage}
-	e.DayRecapWritten = func(ctx context.Context, r kb.Recording, d kb.DayRecap) ([]string, error) {
-		return s.dayRecapWritten(ctx, e, r, d)
-	}
+	// The recording module's: the minutes' push, the live log's and meeting.json's changes, the day recordings' names
+	// and the day's push (none without it).
+	s.recordingHook(e)
 	e.ObserveChanges()
 	e.ExtraDirs = kbReadDirs(set.ExtraDirs)
 	if !k.passed {

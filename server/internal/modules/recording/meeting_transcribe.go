@@ -73,7 +73,7 @@ type hubRuns struct {
 // hubRun is one recording's live transcription. mu is held while its state changes; the knowledge base is written
 // under it (never the other way round: the knowledge base's callbacks never reach a run).
 type hubRun struct {
-	s    *Service
+	s    *Recordings
 	id   string
 	quit chan struct{}
 	ctx  context.Context
@@ -168,7 +168,7 @@ const (
 )
 
 // hubRunOf is recording id's run, nil without one.
-func (s *Service) hubRunOf(id string) *hubRun {
+func (s *Recordings) hubRunOf(id string) *hubRun {
 	id, ok := kb.RecordingID(id)
 	if !ok {
 		return nil
@@ -180,7 +180,7 @@ func (s *Service) hubRunOf(id string) *hubRun {
 
 // hubRunFor is recording id's run, made when there is none; nil when the recording is not transcribed on the hub or
 // its live pass is over (the final pass started).
-func (s *Service) hubRunFor(e *kb.Engine, id string) *hubRun {
+func (s *Recordings) hubRunFor(e *kb.Engine, id string) *hubRun {
 	id, ok := kb.RecordingID(id)
 	if !ok {
 		return nil
@@ -219,7 +219,7 @@ func (s *Service) hubRunFor(e *kb.Engine, id string) *hubRun {
 
 // newHubRun is recording id's run as the knowledge base has it: its timeline, the hub's live sentences, the lines
 // the phone's text filled, the standing problem. Nil when it has no live pass.
-func newHubRun(s *Service, e *kb.Engine, id string) *hubRun {
+func newHubRun(s *Recordings, e *kb.Engine, id string) *hubRun {
 	l, rec, err := e.LiveRead(id)
 	if err != nil || !rec.HubTranscribed() || rec.Trimmed() {
 		return nil
@@ -752,7 +752,7 @@ func (r *hubRun) stop(code string) {
 
 // hubStop ends recording id's run, when it has one, telling its socket code; a recording deleted or trimmed ends its
 // final pass too.
-func (s *Service) hubStop(id, code string) {
+func (s *Recordings) hubStop(id, code string) {
 	if r := s.hubRunOf(id); r != nil {
 		r.stop(code)
 	}
@@ -763,7 +763,7 @@ func (s *Service) hubStop(id, code string) {
 
 // hubSweep ends the runs of recordings deleted, trimmed or past their live pass, and the final passes of recordings
 // deleted or trimmed (each retention pass, each final round).
-func (s *Service) hubSweep(e *kb.Engine) {
+func (s *Recordings) hubSweep(e *kb.Engine) {
 	s.hubTr.mu.Lock()
 	runs := make([]*hubRun, 0, len(s.hubTr.by))
 	for _, r := range s.hubTr.by {
@@ -801,7 +801,7 @@ func (s *Service) hubSweep(e *kb.Engine) {
 
 // hubInterim is recording id's latest caption for GET …/live: while the socket is up, the role at it is not off and
 // it is at most interimShown old; nil otherwise.
-func (s *Service) hubInterim(id string) *liveInterim {
+func (s *Recordings) hubInterim(id string) *liveInterim {
 	r := s.hubRunOf(id)
 	if r == nil {
 		return nil
@@ -818,7 +818,7 @@ func (s *Service) hubInterim(id string) *liveInterim {
 }
 
 // hubInterimRev is the revision of recording id's caption (its time in milliseconds), 0 without one.
-func (s *Service) hubInterimRev(id string) int64 {
+func (s *Recordings) hubInterimRev(id string) int64 {
 	r := s.hubRunOf(id)
 	if r == nil {
 		return 0
@@ -831,7 +831,7 @@ func (s *Service) hubInterimRev(id string) int64 {
 // hubFlush asks the live job of recording id for its sentences up to recording second at; true once every sentence
 // that ends before at is in the live log (none held back for a speaking span), false when ctx ended first or no job
 // is transcribing it.
-func (s *Service) hubFlush(ctx context.Context, id string, at float64) bool {
+func (s *Recordings) hubFlush(ctx context.Context, id string, at float64) bool {
 	r := s.hubRunOf(id)
 	if r == nil {
 		return false
@@ -869,7 +869,7 @@ func (s *Service) hubFlush(ctx context.Context, id string, at float64) bool {
 // awaitHeard is recording id's live log for heard ask a: in device mode once it holds a.LiveNext positions
 // (awaitLive); in hub mode, whatever live_next says, once the hub's sentences up to a.At are in (hubFlush), or in the
 // fallback once an upload's segments reach it, waiting at most askLiveWait either way.
-func (s *Service) awaitHeard(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) (kb.Live, error) {
+func (s *Recordings) awaitHeard(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) (kb.Live, error) {
 	l, rec, err := e.LiveRead(id)
 	if err != nil {
 		return l, err
@@ -894,7 +894,7 @@ func (s *Service) awaitHeard(ctx context.Context, e *kb.Engine, id string, a kb.
 }
 
 // kickFinal has the final passes looked at now.
-func (s *Service) kickFinal() {
+func (s *Recordings) kickFinal() {
 	s.hubTr.mu.Lock()
 	if s.hubTr.kick == nil {
 		s.hubTr.kick = make(chan struct{}, 1)
@@ -910,13 +910,13 @@ func (s *Service) kickFinal() {
 // transcriptionGlossary is what a job's start carries as its glossary: the meeting's title, its calendar title and
 // attendees, then meeting_glossary; one line each, repeats (case-insensitive) and blanks dropped, terms over
 // glossaryTermMost characters left out, at most glossaryMost. Data: a contribution uses it for spelling only.
-func (s *Service) transcriptionGlossary(ctx context.Context, rec kb.Recording) []string {
+func (s *Recordings) transcriptionGlossary(ctx context.Context, rec kb.Recording) []string {
 	terms := []string{rec.Title}
 	if c := rec.Calendar; c != nil {
 		terms = append(terms, c.Title)
 		terms = append(terms, c.Attendees...)
 	}
-	terms = append(terms, meetingGlossaryOf(s.settings(ctx))...)
+	terms = append(terms, s.h.MeetingGlossary(ctx)...)
 	out := make([]string, 0, len(terms))
 	for _, t := range terms {
 		t = strings.Join(strings.Fields(t), " ")
@@ -941,7 +941,7 @@ const (
 // transcriptionJobsCheck ends the live jobs of a contribution no longer chosen (meeting_transcription_extension
 // changed, or the extension named was uninstalled): no more of the meeting's audio goes to it, and the next audio opens
 // a job of the contribution chosen now, or none when it is not ready (upstream_unavailable, the phone's text fills).
-func (s *Service) transcriptionJobsCheck(ctx context.Context) {
+func (s *Recordings) transcriptionJobsCheck(ctx context.Context) {
 	_, choice, err := s.transcriptionTarget(ctx)
 	s.hubTr.mu.Lock()
 	runs := make([]*hubRun, 0, len(s.hubTr.by))

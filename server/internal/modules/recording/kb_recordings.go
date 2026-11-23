@@ -23,11 +23,11 @@ const codeRecordingDeleted = "recording_deleted"
 // maxTitleBody is the most a rename's body may be (#8877): a title of 200 characters with room for JSON escaping.
 const maxTitleBody = 4 << 10
 
-func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request) *kb.Engine) {
+func (s *Recordings) recordingRoutes(engine func(http.ResponseWriter, *http.Request) *kb.Engine) {
 	s.handle("PUT /api/v1/recordings/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var u kb.RecordingUpload
 		// The transcript is at most 4 MB of text; JSON escaping and the segments' numbers on top.
-		if err := decodeLargeBody(w, r, &u, 16<<20); err != nil {
+		if err := s.decodeLargeBody(w, r, &u, 16<<20); err != nil {
 			if engine(w, r) != nil { // a knowledge base that is off or read-only answers first, as before
 				apierr.Write(w, http.StatusBadRequest, err)
 			}
@@ -109,13 +109,7 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 	})
 	s.handle("DELETE /api/v1/recordings/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if id, ok := kb.RecordingID(r.PathValue("id")); ok {
-			if row, ok := s.spaceRecordingOf(r.Context(), id); ok { // saved into a track (space_recordings.go)
-				deleted, err := s.deleteSpaceRecording(r.Context(), row, time.Now())
-				if err != nil {
-					writeSpaceRecordingError(w, err)
-					return
-				}
-				apierr.WriteJSON(w, map[string]any{"deleted": deleted})
+			if s.h.DeleteSpaceRecording(w, r, id) { // saved into a track (the core's space_recordings.go): answered
 				return
 			}
 		}

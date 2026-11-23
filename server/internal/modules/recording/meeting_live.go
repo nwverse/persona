@@ -45,7 +45,7 @@ const (
 	maxAskBody  = 64 << 10
 )
 
-func (s *Service) meetingRoutes() {
+func (s *Recordings) meetingRoutes() {
 	s.handle("POST /api/v1/recordings/{id}/live", func(w http.ResponseWriter, r *http.Request) {
 		if !meetingCaller(w, r) {
 			return
@@ -148,10 +148,10 @@ func meetingCaller(w http.ResponseWriter, r *http.Request) bool {
 // meetingEngine is the knowledge base for an attending route: 503 kb_disabled or kb_unavailable when it is not there,
 // as the other knowledge-base routes answer. Unlike theirs it lets a read-only one through: the contract refuses
 // changes there only after the body and the recording are checked (meetingWritable).
-func (s *Service) meetingEngine(w http.ResponseWriter, r *http.Request) *kb.Engine {
+func (s *Recordings) meetingEngine(w http.ResponseWriter, r *http.Request) *kb.Engine {
 	e, err := s.kbGet(r.Context())
 	switch {
-	case errors.Is(err, errKBOff):
+	case s.h.KBOff(err):
 		apierr.WriteCode(w, http.StatusServiceUnavailable, assistantwire.CodeKBDisabled, errKBRouteOff)
 	case err != nil:
 		apierr.WriteCode(w, http.StatusServiceUnavailable, assistantwire.CodeKBUnavailable, errKBRouteNotOpen)
@@ -160,7 +160,7 @@ func (s *Service) meetingEngine(w http.ResponseWriter, r *http.Request) *kb.Engi
 }
 
 // meetingWritable: the knowledge base takes changes now (not read-only, in the settings or as opened).
-func (s *Service) meetingWritable(ctx context.Context, e *kb.Engine) bool {
+func (s *Recordings) meetingWritable(ctx context.Context, e *kb.Engine) bool {
 	return !s.kbReadOnly(ctx) && !e.Store.ReadOnly()
 }
 
@@ -431,7 +431,7 @@ type attendeeView struct {
 }
 
 // liveView is recording rec's live state l as …/live answers it; asks (nil: left out) are its questions.
-func (s *Service) liveView(ctx context.Context, l kb.Live, rec kb.Recording, asks []askView) meetingLiveView {
+func (s *Recordings) liveView(ctx context.Context, l kb.Live, rec kb.Recording, asks []askView) meetingLiveView {
 	out := meetingLiveView{Next: len(l.Segments), Attendance: rec.AttendanceRole(), Fed: min(l.Fed, len(l.Segments))}
 	if asks != nil {
 		out.Asks = &asks
@@ -491,7 +491,7 @@ func (s *Service) liveView(ctx context.Context, l kb.Live, rec kb.Recording, ask
 
 // meetingAttendee is the session recording rec's meeting goes to now: the one its upload names, else the main chat
 // as it is now (false when there is none); main says it is the main chat.
-func (s *Service) meetingAttendee(ctx context.Context, rec kb.Recording) (ref kb.SessionRef, main, ok bool) {
+func (s *Recordings) meetingAttendee(ctx context.Context, rec kb.Recording) (ref kb.SessionRef, main, ok bool) {
 	if a := rec.AttendingSession; a != nil {
 		return *a, s.isMainOn(ctx, a.MachineID, a.SessionID), true
 	}

@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"context"
@@ -62,7 +62,7 @@ type attendTimer struct {
 	stop func() bool
 }
 
-func (s *Service) attendNow() time.Time {
+func (s *Recordings) attendNow() time.Time {
 	if f := s.attend.feed.now; f != nil {
 		return f()
 	}
@@ -70,7 +70,7 @@ func (s *Service) attendNow() time.Time {
 }
 
 // meetingKick: recording id changed in the knowledge base (an upload, new live lines): it is looked at soon.
-func (s *Service) meetingKick(id string) {
+func (s *Recordings) meetingKick(id string) {
 	f := &s.attend.feed
 	f.mu.Lock()
 	at := s.attendNow().Add(feedKickDelay)
@@ -91,7 +91,7 @@ func (s *Service) meetingKick(id string) {
 
 // attendResume picks up the meetings attended when the knowledge base opened (after a restart): their live logs say
 // how far each was fed.
-func (s *Service) attendResume(e *kb.Engine) {
+func (s *Recordings) attendResume(e *kb.Engine) {
 	if e == nil || e.Store.ReadOnly() {
 		return
 	}
@@ -107,7 +107,7 @@ func (s *Service) attendResume(e *kb.Engine) {
 }
 
 // attendLookAt has recording id looked at at at, unless a look is due as early already.
-func (s *Service) attendLookAt(id string, at time.Time) {
+func (s *Recordings) attendLookAt(id string, at time.Time) {
 	f := &s.attend.feed
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -128,7 +128,7 @@ func (s *Service) attendLookAt(id string, at time.Time) {
 }
 
 // attendRun is one look at recording id, and the next one it asks for.
-func (s *Service) attendRun(id string) {
+func (s *Recordings) attendRun(id string) {
 	f := &s.attend.feed
 	f.mu.Lock()
 	delete(f.timers, id)
@@ -166,14 +166,14 @@ func (s *Service) attendRun(id string) {
 
 // attendLook looks at recording id once: feeds what is due when it can, notes the problem when it cannot; when to look
 // again (zero: when it next changes).
-func (s *Service) attendLook(ctx context.Context, id string) time.Time {
+func (s *Recordings) attendLook(ctx context.Context, id string) time.Time {
 	now := s.attendNow()
 	if s.hello(ctx).Assistant.Standby { // a mesh member's: the center's knowledge base is the group's
 		return now.Add(feedRetry)
 	}
 	e, err := s.kbGet(ctx)
 	switch {
-	case errors.Is(err, errKBOff):
+	case s.h.KBOff(err):
 		return time.Time{}
 	case err != nil:
 		return now.Add(feedRetry)
@@ -271,7 +271,7 @@ func (s *Service) attendLook(ctx context.Context, id string) time.Time {
 }
 
 // attendNote changes recording id's live log with fn (live.go LiveUpdate: written only when it changed).
-func (s *Service) attendNote(e *kb.Engine, id string, fn func(l *kb.Live)) {
+func (s *Recordings) attendNote(e *kb.Engine, id string, fn func(l *kb.Live)) {
 	if _, err := e.LiveUpdate(id, func(l *kb.Live, _ kb.Recording) error { fn(l); return nil }); err != nil &&
 		!errors.Is(err, kb.ErrNotFound) {
 		s.logf("meeting %s: live log: %v", short(id), err)
@@ -428,7 +428,7 @@ func meetingTopics(topics []kb.LiveTopic) []prompts.MeetingTopic {
 // feedSend gives target batch b of meeting r, its turn marked a meeting turn first; when it was sent. Message source
 // meeting, never with a client_msg_id: it is not the user's, nor matched to a send of theirs, and does not take back a
 // question to the user (UserSpoke is not called).
-func (s *Service) feedSend(ctx context.Context, t attendeeTarget, r kb.Recording, b feedBatch) (time.Time, error) {
+func (s *Recordings) feedSend(ctx context.Context, t attendeeTarget, r kb.Recording, b feedBatch) (time.Time, error) {
 	loc := s.location(ctx)
 	text := feedText(r, b, string(s.lang(ctx)), loc)
 	source := &proto.MessageSource{Kind: proto.SourceMeeting, Title: feedMeetingName(r, loc)}

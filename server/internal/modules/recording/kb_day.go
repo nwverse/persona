@@ -7,18 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // All-day recordings and their daily recap (#4741; kb/recording_day.go, kb/day_recap.go): the phone's appends
@@ -38,7 +35,7 @@ const (
 // maxSegmentsBody is the most an append's body may be (the phone halves its batch on 413 too_large).
 const maxSegmentsBody = 1 << 20
 
-func (s *Service) dayRoutes() {
+func (s *Recordings) dayRoutes() {
 	// Appends to a day recording by position (kb.AppendRecording). Full credentials only, like …/live, and the
 	// refusals in the contract's order: 503, 413 too_large, 410, 404, 403 kb_read_only, 400, then the append's own.
 	s.handle("POST /api/v1/recordings/{id}/segments", func(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +161,7 @@ func dayRecording(e *kb.Engine, rawID string) (*kb.Recording, bool) {
 // (dayPushWait each), with nil only when every one took it or refused it for good (the hub refusing the notification,
 // a channel with nowhere to send it or that answered with a refusal of its own: sending it again would get the same).
 // The counts are the day's, all of its parts' recaps.
-func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Recording, d kb.DayRecap) ([]string, error) {
+func (s *Recordings) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Recording, d kb.DayRecap) ([]string, error) {
 	l := s.lang(ctx)
 	day := cmp.Or(r.Day, d.Day)
 	meetings, actions := dayRecapCounts(e, day, r.ID, d)
@@ -200,8 +197,8 @@ func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Record
 		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(ctx, dayPushWait)
 			defer cancel()
-			_, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}) // kept in the outbox while the hub is away
-			if err != nil && answered(err) {
+			err := s.h.Notify(ctx, n) // kept in the outbox while the hub is away
+			if err != nil && s.h.Answered(err) {
 				s.logf("assistant: day recap push: the hub refused it: %v", err)
 				err = nil
 			}
@@ -224,7 +221,7 @@ func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Record
 			sent("channels", err)
 		}
 		for ch, err := range out {
-			if errors.Is(err, errCannotSend) || errors.Is(err, errNoChannel) || channelRefused(err) { // not again (logged)
+			if s.h.PushRefused(err) { // not again (logged)
 				err = nil
 			}
 			sent(ch, err)
@@ -232,14 +229,6 @@ func (s *Service) dayRecapWritten(ctx context.Context, e *kb.Engine, r kb.Record
 	})
 	wg.Wait()
 	return took, errors.Join(failed...)
-}
-
-// channelRefused: a channel answered a send with a refusal of its own (a coded error, after the hub's tries), which
-// sending it again would get too; not a send that got no answer (no code: a time-out, its program not running), the
-// hub's own (a link that dropped) or one the hub asks to be sent again.
-func channelRefused(err error) bool {
-	var re *rpc.Error
-	return errors.As(err, &re) && re.Code != "" && re.Code != bus.CodeStaleConnection && re.Code != CodeTryAgain
 }
 
 // dayPushWait is how long the day's push waits for the phone's hand-over, and for the Lark bot's (the channels have
@@ -285,44 +274,20 @@ func dayRecapCounts(e *kb.Engine, day, id string, d kb.DayRecap) (meetings, acti
 
 // dayRecordingName is a day recording's name in the owner's language (kb.Engine.DayRecordingName), unless the user
 // titled it.
-func (s *Service) dayRecordingName(day string) string {
+func (s *Recordings) dayRecordingName(day string) string {
 	return i18n.T(s.lang(s.runCtx()), "assistant-day-recap.name", i18n.Args{"date": day})
 }
 
 // kbOwnerLanguage is the owner's language (kb.Engine.OwnerLanguage): what the minutes, summary and recap of a
 // recording that says no language of its own are written in.
-func (s *Service) kbOwnerLanguage() i18n.Lang { return s.lang(s.runCtx()) }
-
-// eveningClock is the evening routine's time of day, whether or not it is on (kb.Engine.DayRecapClock: the recap is
-// due 30 minutes before it); -1 while the schedule can't be read or has no evening routine, which the knowledge base
-// takes as the default routine's 21:30.
-func (s *Service) eveningClock() (int, int) {
-	ctx, cancel := context.WithTimeout(s.runCtx(), 5*time.Second)
-	defer cancel()
-	sc, err := s.lockedSchedule(ctx)
-	if err != nil {
-		return -1, -1
-	}
-	defer sc.mu.Unlock()
-	for _, t := range sc.tasks {
-		if t.ID != "evening" {
-			continue
-		}
-		if m := hhmm.FindStringSubmatch(t.Time); m != nil {
-			hh, _ := strconv.Atoi(m[1])
-			mm, _ := strconv.Atoi(m[2])
-			return hh, mm
-		}
-	}
-	return -1, -1
-}
+func (s *Recordings) kbOwnerLanguage() i18n.Lang { return s.lang(s.runCtx()) }
 
 // dayRecapTodos makes a to-do of each action of version of day recording rec's recap, as minutesTodos does for
 // minutes: an id from the recording, the version and the action (todo_day_…), so a retried request makes none twice,
 // and notes that name the day and the clock time it was said in the recording's own zone. The knowledge base records
 // each with its action as that version has it (who, what and when it was said), so a recap written again meanwhile
 // gets it only on the same task said at the same time (kb.Engine.SetDayRecapTodos).
-func (s *Service) dayRecapTodos(ctx context.Context, e *kb.Engine, rec *kb.Recording, version int, actions []string) ([]Todo, *kb.DayRecap, error) {
+func (s *Recordings) dayRecapTodos(ctx context.Context, e *kb.Engine, rec *kb.Recording, version int, actions []string) ([]any, *kb.DayRecap, error) {
 	s.minutesMu.Lock()
 	defer s.minutesMu.Unlock()
 	rc, err := e.ReadDayRecap(rec.ID)
@@ -333,7 +298,7 @@ func (s *Service) dayRecapTodos(ctx context.Context, e *kb.Engine, rec *kb.Recor
 		return nil, nil, kb.ErrMinutesStale
 	}
 	note := s.dayRecapTodoNotes(ctx, e, rec, rc)
-	out, made, _, err := s.actionTodos(ctx, rc.Actions, actions, func(aid string) string { return dayRecapTodoID(rec.ID, version, aid) }, note)
+	out, made, _, err := s.actionTodos(ctx, rc.Actions, actions, todosOfRecap, rec.ID, version, note)
 	var confirmed []kb.MinutesAction // the actions made to-dos, as this version has them
 	for _, a := range rc.Actions {
 		if t := made[a.ID]; t != "" {
@@ -353,14 +318,9 @@ func (s *Service) dayRecapTodos(ctx context.Context, e *kb.Engine, rec *kb.Recor
 	return out, rc, err
 }
 
-// dayRecapTodoID is the to-do an action of a version of a day recording's recap becomes.
-func dayRecapTodoID(recording string, version int, action string) string {
-	return actionTodoID("todo_day_", recording, version, action)
-}
-
 // dayRecapTodoNotes is what a to-do made of an action of recap rc of day recording rec says: the day, the clock time
 // it was said in the recording's zone, the deadline as said, the recording's page.
-func (s *Service) dayRecapTodoNotes(ctx context.Context, e *kb.Engine, rec *kb.Recording, rc *kb.DayRecap) func(kb.MinutesAction) string {
+func (s *Recordings) dayRecapTodoNotes(ctx context.Context, e *kb.Engine, rec *kb.Recording, rc *kb.DayRecap) func(kb.MinutesAction) string {
 	loc, l, link := e.Store.RecordingZone(rec), s.lang(ctx), recordingLink(s.webBase(ctx), rec.ID)
 	day := cmp.Or(rc.Day, rec.Day)
 	return func(a kb.MinutesAction) string {
@@ -374,11 +334,4 @@ func (s *Service) dayRecapTodoNotes(ctx context.Context, e *kb.Engine, rec *kb.R
 		}
 		return notes
 	}
-}
-
-// recapActionLines is what kb_get adds to recap rc of day recording id: each suggested to-do with what became of it,
-// as minutesActionLines says a meeting's.
-func (s *Service) recapActionLines(ctx context.Context, id string, rc *kb.DayRecap) string {
-	return s.actionLines(ctx, "\nSuggested to-dos as they stand (one becomes a to-do only when the user confirms it):\n", rc.Actions,
-		func(aid string) string { return dayRecapTodoID(id, rc.Version, aid) })
 }

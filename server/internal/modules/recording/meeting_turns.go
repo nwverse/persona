@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"context"
@@ -72,10 +72,8 @@ type meetingTurnBook struct {
 var errMeetingTurnsUnreadable = errors.New("meeting turns unreadable")
 
 // meetingTurnKey is machine's session's key in the book: the machine as the devices name it.
-func (s *Service) meetingTurnKey(machine, session string) string {
-	if s.devs != nil {
-		machine = s.devs.Canonical(machine)
-	}
+func (s *Recordings) meetingTurnKey(machine, session string) string {
+	machine = s.canonical(machine)
 	return machine + "/" + session
 }
 
@@ -87,7 +85,7 @@ func (b *meetingTurnBook) clock() time.Time {
 }
 
 // meetingTurnsLocked reads the book once and drops what has run out; b.mu is held.
-func (s *Service) meetingTurnsLocked(ctx context.Context) error {
+func (s *Recordings) meetingTurnsLocked(ctx context.Context) error {
 	b := &s.attend.turns
 	if !b.loaded {
 		m := map[string]*meetingTurn{}
@@ -113,7 +111,7 @@ func (s *Service) meetingTurnsLocked(ctx context.Context) error {
 }
 
 // saveMeetingTurnsLocked writes the book; b.mu is held. A failed write keeps the marks in memory.
-func (s *Service) saveMeetingTurnsLocked() {
+func (s *Recordings) saveMeetingTurnsLocked() {
 	st := s.store()
 	if st == nil {
 		return
@@ -129,7 +127,7 @@ func (s *Service) saveMeetingTurnsLocked() {
 // fast tool call can come before it returns), persona when the session is an assistant conversation; the time it is
 // marked with. An error while the book cannot be read: the batch waits, since its turn could not be told from the
 // user's.
-func (s *Service) meetingTurnSent(machine, session, recording string, persona bool) (time.Time, error) {
+func (s *Recordings) meetingTurnSent(machine, session, recording string, persona bool) (time.Time, error) {
 	b := &s.attend.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -144,7 +142,7 @@ func (s *Service) meetingTurnSent(machine, session, recording string, persona bo
 }
 
 // meetingTurnUnsent takes back the mark sent at at: the send was refused, no turn comes of it.
-func (s *Service) meetingTurnUnsent(machine, session string, at time.Time) {
+func (s *Recordings) meetingTurnUnsent(machine, session string, at time.Time) {
 	b := &s.attend.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -157,7 +155,7 @@ func (s *Service) meetingTurnUnsent(machine, session string, at time.Time) {
 
 // meetingTurnStarted: machine's session is seen working, a new turn when newTurn (it was seen stopped before);
 // whether this turn is a meeting turn. Called once per start, where starts are observed (setSessions, TurnStarted).
-func (s *Service) meetingTurnStarted(machine, session string, newTurn bool) bool {
+func (s *Recordings) meetingTurnStarted(machine, session string, newTurn bool) bool {
 	if s.isRoom(session) {
 		return true // a meeting's room: every turn of it is a side exchange (meeting_room.go)
 	}
@@ -187,7 +185,7 @@ func (s *Service) meetingTurnStarted(machine, session string, newTurn bool) bool
 
 // meetingTurnEnded: machine's session stopped; whether the turn that ended is a meeting turn. A mark whose turn was
 // not seen starting is left as it is: the end is an earlier turn's. Called again for the same end, it says the same.
-func (s *Service) meetingTurnEnded(machine, session string) bool {
+func (s *Recordings) meetingTurnEnded(machine, session string) bool {
 	if s.isRoom(session) {
 		return true
 	}
@@ -213,7 +211,7 @@ func (s *Service) meetingTurnEnded(machine, session string) bool {
 // answered by stopping). A meeting turn seen starting ends there when the row is from after its batch was sent (or
 // after a restart, whenever it stopped): it is not running any more, and the attendee must not wait on it for the rest
 // of the meeting. Whether it ended a meeting turn.
-func (s *Service) meetingTurnStopped(machine, session string, row proto.Session, restarted bool) bool {
+func (s *Recordings) meetingTurnStopped(machine, session string, row proto.Session, restarted bool) bool {
 	switch row.Status {
 	case proto.StatusDone, proto.StatusIdle, proto.StatusInterrupted, proto.StatusOffline:
 	default:
@@ -240,7 +238,7 @@ func (s *Service) meetingTurnStopped(machine, session string, row proto.Session,
 // and an Agent takes a message sent while it works into the running turn, so no turn start ends the mark. A replayed
 // event from before the batch was sent, a node too old to say, or any other prompt (the batch itself, a relay, a task)
 // leaves the mark.
-func (s *Service) meetingTurnPrompt(machine, session string, p map[string]any) {
+func (s *Recordings) meetingTurnPrompt(machine, session string, p map[string]any) {
 	if event, _ := p["event"].(string); event != "UserPromptSubmit" {
 		return
 	}
@@ -272,7 +270,7 @@ const promptSourceUser = "user"
 
 // meetingTurnUserSpoke: the user sent machine's session a message of their own: a meeting turn under way is theirs
 // from here on. An ended one stays for the hooks of its end, until the user's turn starts.
-func (s *Service) meetingTurnUserSpoke(machine, session string) {
+func (s *Recordings) meetingTurnUserSpoke(machine, session string) {
 	b := &s.attend.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -289,7 +287,7 @@ func (s *Service) meetingTurnUserSpoke(machine, session string) {
 // meetingTurnNow: the turn of machine's session that runs or just ended is a meeting turn, for what looks at a turn
 // (pushes, triage, tasks, mirrors). A batch sent whose turn has not been seen starting is not: the hooks of the turn
 // before it may still be running.
-func (s *Service) meetingTurnNow(machine, session string) bool {
+func (s *Recordings) meetingTurnNow(machine, session string) bool {
 	if s.isRoom(session) {
 		return true
 	}
@@ -305,7 +303,7 @@ func (s *Service) meetingTurnNow(machine, session string) bool {
 
 // meetingTurnRunning: a meeting turn may be running in machine's session now (sent and not seen ending); an error
 // when the book cannot be read.
-func (s *Service) meetingTurnRunning(ctx context.Context, machine, session string) (bool, error) {
+func (s *Recordings) meetingTurnRunning(ctx context.Context, machine, session string) (bool, error) {
 	if session == "" {
 		return false, nil
 	}
@@ -321,7 +319,7 @@ func (s *Service) meetingTurnRunning(ctx context.Context, machine, session strin
 
 // meetingTurnAgentRunning: a meeting turn of an Agent (not an assistant conversation) may be running on machine now;
 // an error when the book cannot be read.
-func (s *Service) meetingTurnAgentRunning(ctx context.Context, machine string) (bool, error) {
+func (s *Recordings) meetingTurnAgentRunning(ctx context.Context, machine string) (bool, error) {
 	b := &s.attend.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -342,7 +340,7 @@ func (s *Service) meetingTurnAgentRunning(ctx context.Context, machine string) (
 // own message may have Persona act. An Agent's MCP server has no session of its own (the node names it only for the
 // tools that need their caller), so a call that names none and is not an assistant conversation's (assistant) is
 // refused while a meeting turn of any Agent on that machine runs: it may be that Agent's.
-func (s *Service) meetingRefuses(ctx context.Context, machine, session, name string, assistant bool) (proto.ToolResult, bool) {
+func (s *Recordings) meetingRefuses(ctx context.Context, machine, session, name string, assistant bool) (proto.ToolResult, bool) {
 	var running bool
 	var err error
 	if session == "" && !assistant {

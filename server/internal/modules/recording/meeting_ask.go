@@ -13,7 +13,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -29,7 +28,7 @@ import (
 // is not answering was being answered by one that is gone: it reads as failed, interrupted (settleAsksLocked), and
 // asking it again tries it again.
 
-const purposeMeetingAnswer = "meeting.answer"
+const purposeMeetingAnswer = kb.PurposeMeetingAnswer
 
 // purposeMeetingMinutes is the model purpose a meeting's minutes are written on (#7980): Information processing's
 // until it is set apart. meeting.answer stays a use of Information processing: it answers when the room cannot.
@@ -210,7 +209,7 @@ func given(raw json.RawMessage) bool {
 	return s != "" && s != "null"
 }
 
-func (s *Service) askRoute() {
+func (s *Recordings) askRoute() {
 	s.handle("POST /api/v1/recordings/{id}/ask", func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		if !meetingCaller(w, r) {
@@ -274,7 +273,7 @@ func (s *Service) askRoute() {
 }
 
 // asksRead is recording id's live log and its stored upload, its questions settled (settleAsksLocked).
-func (s *Service) asksRead(e *kb.Engine, id string) (kb.Live, kb.Recording, error) {
+func (s *Recordings) asksRead(e *kb.Engine, id string) (kb.Live, kb.Recording, error) {
 	b := &s.asks
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -286,7 +285,7 @@ func (s *Service) asksRead(e *kb.Engine, id string) (kb.Live, kb.Recording, erro
 }
 
 // askNow is question askID of recording id as it is now.
-func (s *Service) askNow(e *kb.Engine, id, askID string) (kb.LiveAsk, bool) {
+func (s *Recordings) askNow(e *kb.Engine, id, askID string) (kb.LiveAsk, bool) {
 	l, _, err := s.asksRead(e, id)
 	if err != nil {
 		return kb.LiveAsk{}, false
@@ -302,7 +301,7 @@ func (s *Service) askNow(e *kb.Engine, id, askID string) (kb.LiveAsk, bool) {
 // process is not answering them (it restarted meanwhile), in l and, when it can, in the live log. s.asks.mu is held.
 // In a room meeting such a question is taken up again instead (meeting_room_ask.go): its attempt may be in the room,
 // whose turn settles it, and one never sent goes again under the same id.
-func (s *Service) settleAsksLocked(e *kb.Engine, rec kb.Recording, l *kb.Live) {
+func (s *Recordings) settleAsksLocked(e *kb.Engine, rec kb.Recording, l *kb.Live) {
 	id := rec.ID
 	running := s.asks.running[id]
 	stale := func(a kb.LiveAsk) bool { return a.State == askPending && running[a.ID] == nil }
@@ -344,7 +343,7 @@ func failAsk(a kb.LiveAsk, why string) kb.LiveAsk {
 // one goes on and is tried again), kb.ErrReadOnly, kb.ErrNotAttending, errAsksFull, errAskBusy. done is closed once
 // the answer is stored (nil when nothing is answering it). lang is the request's language, for a recording without
 // its own.
-func (s *Service) askStart(ctx context.Context, e *kb.Engine, id string, req askRequest, lang string) (a kb.LiveAsk, done <-chan struct{}, err error) {
+func (s *Recordings) askStart(ctx context.Context, e *kb.Engine, id string, req askRequest, lang string) (a kb.LiveAsk, done <-chan struct{}, err error) {
 	b := &s.asks
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -433,7 +432,7 @@ func (s *Service) askStart(ctx context.Context, e *kb.Engine, id string, req ask
 
 // askRunLocked starts answering question a of recording id in the background; the channel closed once its answer is
 // stored. s.asks.mu is held.
-func (s *Service) askRunLocked(e *kb.Engine, id string, a kb.LiveAsk) chan struct{} {
+func (s *Recordings) askRunLocked(e *kb.Engine, id string, a kb.LiveAsk) chan struct{} {
 	b := &s.asks
 	ch := make(chan struct{})
 	if b.running == nil {
@@ -460,7 +459,7 @@ func sameAt(a, b *float64) bool {
 // answerAsk answers question a of recording id and stores the answer (or why it failed), then closes done. It runs
 // past the request, at most askTimeout; if the service stops first nothing is stored, and the question reads as
 // interrupted after the restart.
-func (s *Service) answerAsk(e *kb.Engine, id string, a kb.LiveAsk, done chan struct{}) {
+func (s *Recordings) answerAsk(e *kb.Engine, id string, a kb.LiveAsk, done chan struct{}) {
 	defer func() {
 		s.asks.finished(id, a.ID, done)
 		close(done)
@@ -501,11 +500,8 @@ func (s *Service) answerAsk(e *kb.Engine, id string, a kb.LiveAsk, done chan str
 }
 
 // meetingAnswerModel is the model answers are asked of: meeting.answer's (tests give their own).
-func (s *Service) meetingAnswerModel() kb.Model {
-	if s.meetingModel != nil {
-		return s.meetingModel
-	}
-	return s.purposeModel(purposeMeetingAnswer)
+func (s *Recordings) meetingAnswerModel() kb.Model {
+	return s.h.Model(purposeMeetingAnswer)
 }
 
 // meetingReply is what the answering model returns.
@@ -517,7 +513,7 @@ type meetingReply struct {
 
 // answerMeetingAsk is question a of recording id answered from the meeting material, or failed. A heard question first
 // waits for the live sentences up to the tap, and is what was said in the heardSeconds before it.
-func (s *Service) answerMeetingAsk(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) kb.LiveAsk {
+func (s *Recordings) answerMeetingAsk(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) kb.LiveAsk {
 	failed := func(why string) kb.LiveAsk {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			why = askModelTimeout
@@ -552,7 +548,7 @@ func (s *Service) answerMeetingAsk(ctx context.Context, e *kb.Engine, id string,
 	case err == nil:
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return failAsk(a, askModelTimeout)
-	case ai.IsNotConfigured(err) || ai.IsPaused(err):
+	case s.h.ModelUnavailable(err):
 		return failAsk(a, askModelUnavailable)
 	default:
 		s.logf("recording %s: question %s: %v", id, a.ID, err)
@@ -607,7 +603,7 @@ func heardLines(segs []kb.LiveSegment, at float64) []kb.LiveSegment {
 
 // answerInput is material m as the answering model reads it, for question a (heard: the lines before the tap). The
 // to-dos of the earlier meetings' action items say only whether they are open or done.
-func (s *Service) answerInput(ctx context.Context, m kb.MeetingMaterial, a kb.LiveAsk, heard []kb.LiveSegment) prompts.MeetingAnswerInput {
+func (s *Recordings) answerInput(ctx context.Context, m kb.MeetingMaterial, a kb.LiveAsk, heard []kb.LiveSegment) prompts.MeetingAnswerInput {
 	lines := func(segs []kb.LiveSegment) []prompts.MeetingLine {
 		out := make([]prompts.MeetingLine, 0, len(segs))
 		for _, sg := range segs {
@@ -662,22 +658,6 @@ func (s *Service) answerInput(ctx context.Context, m kb.MeetingMaterial, a kb.Li
 		in.Question = oneLine(a.Question)
 	}
 	return in
-}
-
-// actionTodo is whether the to-do made of an action item is open or done: only that of it, never its title, notes or
-// thread. suggestion: the action was never made a to-do; "": its to-do is not known (deleted, or unreadable now).
-func (s *Service) actionTodo(ctx context.Context, todoID string) string {
-	if todoID == "" {
-		return "suggestion"
-	}
-	t, ok, err := s.todo(ctx, todoID)
-	switch {
-	case err != nil || !ok:
-		return ""
-	case t.DoneAt != nil:
-		return "done"
-	}
-	return "open"
 }
 
 // meetingClock is seconds from a recording's start as a clock: m:ss, or h:mm:ss from the first hour on.

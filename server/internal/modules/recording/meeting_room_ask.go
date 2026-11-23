@@ -44,7 +44,7 @@ func askMsgID(id string, k int) string { return fmt.Sprintf("ask-%s-%d", id, k) 
 // answerInRoom answers ask a of recording id, a room meeting: it waits for a starting room, fixes its way (via) at
 // its first attempt and answers in the room, or from meeting material. resumed: a restart left it pending (its
 // attempt, if it has one, may be in the room already).
-func (s *Service) answerInRoom(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) kb.LiveAsk {
+func (s *Recordings) answerInRoom(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) kb.LiveAsk {
 	if a.Via == "" {
 		via, ok := s.roomVia(ctx, e, id)
 		if !ok {
@@ -65,7 +65,7 @@ func (s *Service) answerInRoom(ctx context.Context, e *kb.Engine, id string, a k
 
 // roomVia is the way an ask of recording id goes now: the room once it is ready, meeting.answer once it is
 // unavailable or over; while it is starting (or about to) it waits. False when ctx ended first.
-func (s *Service) roomVia(ctx context.Context, e *kb.Engine, id string) (string, bool) {
+func (s *Recordings) roomVia(ctx context.Context, e *kb.Engine, id string) (string, bool) {
 	for {
 		changed := s.room.wait(id)
 		m, r, err := e.MeetingRead(id)
@@ -96,7 +96,7 @@ func (s *Service) roomVia(ctx context.Context, e *kb.Engine, id string) (string,
 }
 
 // answerMaterial is a's answer from meeting material (meeting.answer, as in #2981), within askTimeout.
-func (s *Service) answerMaterial(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) kb.LiveAsk {
+func (s *Recordings) answerMaterial(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) kb.LiveAsk {
 	ctx, cancel := context.WithTimeout(ctx, askTimeout)
 	defer cancel()
 	out := s.answerMeetingAsk(ctx, e, id, a)
@@ -105,7 +105,7 @@ func (s *Service) answerMaterial(ctx context.Context, e *kb.Engine, id string, a
 }
 
 // askNote changes ask askID of recording id's live log with fn.
-func (s *Service) askNote(e *kb.Engine, id, askID string, fn func(a *kb.LiveAsk)) {
+func (s *Recordings) askNote(e *kb.Engine, id, askID string, fn func(a *kb.LiveAsk)) {
 	if _, err := e.LiveUpdate(id, func(l *kb.Live, _ kb.Recording) error {
 		i := slices.IndexFunc(l.Asks, func(x kb.LiveAsk) bool { return x.ID == askID })
 		if i < 0 || l.Asks[i].State != askPending {
@@ -120,7 +120,7 @@ func (s *Service) askNote(e *kb.Engine, id, askID string, fn func(a *kb.LiveAsk)
 
 // answerRoomTurn answers a in recording id's room: one ask at a time per room, after a batch turn running there;
 // its latest attempt is sent (again, under the same id, when the room does not have it) and its turn read.
-func (s *Service) answerRoomTurn(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) kb.LiveAsk {
+func (s *Recordings) answerRoomTurn(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) kb.LiveAsk {
 	var release func()
 	for {
 		rel, busy, ok := s.room.take(id)
@@ -188,7 +188,7 @@ func (s *Service) answerRoomTurn(ctx context.Context, e *kb.Engine, id string, a
 			// own words for a failed request ("Not logged in · Please run /login") are no answer.
 			if failed := roomTurnError(row, found, attempt.SentAt, reading.Answer); failed != "" {
 				s.logf("recording %s: question %s: its room's turn failed: %s", short(id), a.ID, failed)
-				if te, _ := latestTurnError(row); te != "" && !turnErrorTransient(row) {
+				if te, _ := latestTurnError(row); te != "" && !s.h.TurnErrorTransient(row) {
 					s.roomCannotAnswer(e, id)
 				}
 				return failAsk(a, askModelError)
@@ -238,7 +238,7 @@ func roomTurnError(row proto.Session, found bool, sentAt time.Time, answer strin
 // roomCannotAnswer makes recording id's ready room unavailable after a turn that failed on what the owner must fix
 // (the sign-in, a key, the model, a usage limit): the asks after it are answered from meeting material, and the room
 // is started again after roomRetry.
-func (s *Service) roomCannotAnswer(e *kb.Engine, id string) {
+func (s *Recordings) roomCannotAnswer(e *kb.Engine, id string) {
 	now := time.Now().UTC()
 	s.roomSet(e, id, func(rm *kb.MeetingRoom) {
 		if rm.State == kb.RoomReady {
@@ -252,7 +252,7 @@ func (s *Service) roomCannotAnswer(e *kb.Engine, id string) {
 // with lean batches also while its conversation is being compacted (#8253): its row shows it running, or the manager
 // asked for one that has not ended (roomCompactPending), as long as a compaction may run (roomCompactLost, the node's
 // own limit). An ask goes after it, never into a compaction. False when ctx ended.
-func (s *Service) roomWaitFree(ctx context.Context, e *kb.Engine, id, machine, session string) bool {
+func (s *Recordings) roomWaitFree(ctx context.Context, e *kb.Engine, id, machine, session string) bool {
 	began := time.Now()
 	lean := false
 	for first := true; ; first = false {
@@ -286,7 +286,7 @@ func (s *Service) roomWaitFree(ctx context.Context, e *kb.Engine, id, machine, s
 // roomAskMessage is the message ask a sends recording r's room: a typed or spoken question as it is (the owner's
 // own, no message source), a heard one the lines before the tap (message source meeting); a.Heard is set for it. A
 // failure (nothing_heard, model_error) when there is nothing to send.
-func (s *Service) roomAskMessage(ctx context.Context, e *kb.Engine, id string, r kb.Recording, a *kb.LiveAsk) (string, *proto.MessageSource, string) {
+func (s *Recordings) roomAskMessage(ctx context.Context, e *kb.Engine, id string, r kb.Recording, a *kb.LiveAsk) (string, *proto.MessageSource, string) {
 	if a.QuestionSource != askHeard {
 		return a.Question, nil, ""
 	}
@@ -308,7 +308,7 @@ func (s *Service) roomAskMessage(ctx context.Context, e *kb.Engine, id string, r
 
 // roomSendAsk sends an ask's message into the room under the hub's once-only guard: a message id already delivered is
 // not sent again.
-func (s *Service) roomSendAsk(ctx context.Context, machine, session, msgID, text string, src *proto.MessageSource) error {
+func (s *Recordings) roomSendAsk(ctx context.Context, machine, session, msgID, text string, src *proto.MessageSource) error {
 	p := map[string]any{"session_id": session, "text": text, "client_msg_id": msgID, "resume_only": true}
 	if src != nil {
 		p["message_source"] = src

@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/transcribejob"
 )
 
 // The final pass (docs/assistant/meeting-minutes.md "Gaps and the final pass"): once a hub-mode recording is complete,
@@ -57,7 +58,7 @@ var (
 
 // finalPasses looks at the hub-mode recordings every finalEvery, and when kicked (a complete upload, a socket's end,
 // the last gap uploaded), until ctx ends; restarted, it resumes the passes that were running.
-func (s *Service) finalPasses(ctx context.Context) {
+func (s *Recordings) finalPasses(ctx context.Context) {
 	t := time.NewTicker(finalEvery)
 	defer t.Stop()
 	s.kickFinal() // makes the channel
@@ -77,7 +78,7 @@ func (s *Service) finalPasses(ctx context.Context) {
 
 // finalRound is one look at every hub-mode recording still needing the manager (while the assistant is connected
 // and not on standby: the knowledge base is its, kbLoop).
-func (s *Service) finalRound(ctx context.Context) {
+func (s *Recordings) finalRound(ctx context.Context) {
 	if !s.kbConnected() || s.hello(ctx).Assistant.Standby {
 		return
 	}
@@ -104,7 +105,7 @@ func (s *Service) finalRound(ctx context.Context) {
 }
 
 // finalLook starts recording id's final pass when it is due.
-func (s *Service) finalLook(ctx context.Context, e *kb.Engine, id string, now time.Time) {
+func (s *Recordings) finalLook(ctx context.Context, e *kb.Engine, id string, now time.Time) {
 	_, rec, err := e.MeetingRead(id)
 	if err != nil || !rec.HubTranscribed() || rec.Trimmed() {
 		return
@@ -176,7 +177,7 @@ func (s *Service) finalLook(ctx context.Context, e *kb.Engine, id string, now ti
 
 // finalCancel ends recording id's final pass running in this process, if any (the recording deleted or trimmed): its
 // replay job is closed at once rather than transcribing what is gone; the try is not counted.
-func (s *Service) finalCancel(id string) {
+func (s *Recordings) finalCancel(id string) {
 	id, ok := kb.RecordingID(id)
 	if !ok {
 		return
@@ -193,7 +194,7 @@ func (s *Service) finalCancel(id string) {
 }
 
 // finalPass is one try of recording id's final pass.
-func (s *Service) finalPass(ctx context.Context, e *kb.Engine, id string, st *finalPassState) error {
+func (s *Recordings) finalPass(ctx context.Context, e *kb.Engine, id string, st *finalPassState) error {
 	now := time.Now()
 	s.hubTr.mu.Lock()
 	doneTo := st.doneTo
@@ -251,9 +252,9 @@ func (s *Service) finalPass(ctx context.Context, e *kb.Engine, id string, st *fi
 	s.hubTr.mu.Lock()
 	billed := st.billed
 	s.hubTr.mu.Unlock()
-	var je *jobError
+	var je *transcribejob.Error
 	// A busy service (#13446) that billed nothing was never reached either, as when busy was upstream_unavailable.
-	unreachable := errors.As(err, &je) && (je.code == extwire.TEUpstreamUnavailable || je.code == extwire.TEUpstreamBusy) && !billed
+	unreachable := errors.As(err, &je) && (je.Code == extwire.TEUpstreamUnavailable || je.Code == extwire.TEUpstreamBusy) && !billed
 	if unreachable {
 		u, uerr := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 			t.FinalUnreachable++
@@ -290,7 +291,7 @@ func finalRetryAfter(t kb.MeetingTranscription, unreachable bool) (time.Duration
 // finalEnd stores recording id's final transcript (the windows done, the live sentences elsewhere), Persona's echo in
 // it marked by timeline tl (the live sentences judged before a late timeline repaired a span too), and its state:
 // final, or failed when the hub has no sentence of its own; then the minutes are told.
-func (s *Service) finalEnd(e *kb.Engine, id string, st *finalPassState, live []kb.RecordingSegment, tl kb.Timeline) error {
+func (s *Recordings) finalEnd(e *kb.Engine, id string, st *finalPassState, live []kb.RecordingSegment, tl kb.Timeline) error {
 	merged := mergeFinal(st.windows, live)
 	for i, sg := range merged {
 		if !sg.Echo {
@@ -351,16 +352,13 @@ func mergeFinal(windows []finalWindow, live []kb.RecordingSegment) []kb.Recordin
 // replay runs a replay job over recording id's audio held from the first window not done: the transcript of record
 // as reference frames first, then the audio, at most replayAhead ahead of the job's ack, with seek over holes. The
 // windows it finishes join st (also when it fails later).
-func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2]float64, tl kb.Timeline, st *finalPassState) error {
-	if s.trans == nil {
-		return errNoTranscribers
-	}
+func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [][2]float64, tl kb.Timeline, st *finalPassState) error {
 	ref, _, err := s.transcriptionTarget(ctx)
 	if err != nil {
 		return err
 	}
 	ictx, cancel := context.WithTimeout(ctx, jobReadyWait)
-	info, err := s.trans.TranscriptionInfo(ictx, ref)
+	info, err := s.h.TranscriptionInfo(ictx, ref)
 	cancel()
 	if err != nil {
 		return err
@@ -399,12 +397,12 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 	}
 	start := extwire.TranscriptionFrame{Type: extwire.TFStart, Mode: extwire.TranscriptionReplay, Speed: 4,
 		Language: recordingLanguage(rec), Glossary: s.transcriptionGlossary(ctx, rec), At: extwire.F(float64(pos) / kb.AudioRate)}
-	if err := jc.send(rctx, start); err != nil {
-		jc.close()
+	if err := jc.Send(rctx, start); err != nil {
+		jc.Close()
 		return err
 	}
-	if _, err := jc.awaitReady(rctx); err != nil {
-		jc.close()
+	if _, err := jc.AwaitReady(rctx); err != nil {
+		jc.Close()
 		return err
 	}
 	rcancel()
@@ -412,9 +410,9 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 		if sg.End <= doneTo || sg.Text == "" {
 			continue
 		}
-		if err := jc.send(jctx, extwire.TranscriptionFrame{Type: extwire.TFReference, From: extwire.F(sg.Start), To: extwire.F(sg.End),
+		if err := jc.Send(jctx, extwire.TranscriptionFrame{Type: extwire.TFReference, From: extwire.F(sg.Start), To: extwire.F(sg.End),
 			Text: extwire.F(sg.Text)}); err != nil {
-			jc.close()
+			jc.Close()
 			return err
 		}
 	}
@@ -429,7 +427,7 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 	result := make(chan error, 1)
 	exited := make(chan struct{})
 	defer func() {
-		jc.close()
+		jc.Close()
 		<-exited
 	}()
 	// sendFailed is the try's error once a send to the job failed: the job's own (its fatal error, read before the
@@ -450,7 +448,7 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 		var cur []kb.RecordingSegment
 		var usage float64
 		for {
-			f, err := jc.read(jctx)
+			f, err := jc.Read(jctx)
 			if err != nil {
 				result <- err
 				return
@@ -502,7 +500,7 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 				s.logf("recording %s: transcription warning %s", id, f.Code)
 			case extwire.TFError:
 				if f.Fatal {
-					result <- &jobError{code: f.Code}
+					result <- &transcribejob.Error{Code: f.Code}
 					return
 				}
 				s.logf("recording %s: transcription error %s", id, f.Code)
@@ -564,17 +562,17 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 				break
 			}
 			pos = next
-			if err := jc.send(jctx, extwire.TranscriptionFrame{Type: extwire.TFSeek, At: extwire.F(float64(pos) / kb.AudioRate)}); err != nil {
+			if err := jc.Send(jctx, extwire.TranscriptionFrame{Type: extwire.TFSeek, At: extwire.F(float64(pos) / kb.AudioRate)}); err != nil {
 				return sendFailed(err)
 			}
 			continue
 		}
-		if err := jc.sendAudio(jctx, buf[:n]); err != nil {
+		if err := jc.SendAudio(jctx, buf[:n]); err != nil {
 			return sendFailed(err)
 		}
 		pos += int64(n / 2)
 	}
-	if err := jc.send(jctx, extwire.TranscriptionFrame{Type: extwire.TFEnd}); err != nil {
+	if err := jc.Send(jctx, extwire.TranscriptionFrame{Type: extwire.TFEnd}); err != nil {
 		return sendFailed(err)
 	}
 	done := time.NewTimer(jobDoneWait)
@@ -591,7 +589,7 @@ func (s *Service) replay(ctx context.Context, e *kb.Engine, id string, held [][2
 
 // finalProgress tells the apps how far recording id's final pass is (#13461): the end of the last window it finished,
 // once per window. A failure to write it costs only the progress shown.
-func (s *Service) finalProgress(e *kb.Engine, id string, doneTo float64) {
+func (s *Recordings) finalProgress(e *kb.Engine, id string, doneTo float64) {
 	if _, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		if t.State == kb.TranscriptionFinishing {
 			t.FinalDone = max(t.FinalDone, doneTo)

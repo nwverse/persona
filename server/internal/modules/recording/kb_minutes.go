@@ -1,22 +1,14 @@
 package recording
 
 import (
-	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
-
 	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/deeplink"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -36,7 +28,7 @@ const codeTranscriptExpired = "transcript_expired"
 // recording and version (a stable id, so a restart does not repeat it), carrying the recording (an app that knows it
 // opens the meeting's thread; one that does not, the main conversation, as reminders do), and the same text with the
 // recording's web page to the Lark bot and the channels with pushes on.
-func (s *Service) minutesWritten(ctx context.Context, r kb.Recording, m kb.Minutes) {
+func (s *Recordings) minutesWritten(ctx context.Context, r kb.Recording, m kb.Minutes) {
 	l := s.lang(ctx)
 	title := i18n.T(l, "assistant-minutes.ready_title")
 	body := i18n.T(l, "assistant-minutes.ready_body", i18n.Args{"name": m.Title, "decisions": len(m.Decisions), "actions": len(m.Actions)})
@@ -44,7 +36,7 @@ func (s *Service) minutesWritten(ctx context.Context, r kb.Recording, m kb.Minut
 	n := Notification{ID: "ntf_minutes_" + r.ID + "_" + strconv.Itoa(m.Version), Kind: NotifyPush, Title: title, Body: body,
 		DeviceID: set.MachineID, SessionID: set.Main, RecordingID: r.ID}
 	s.noteCard(ctx, cardMinutesReady, n)
-	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
+	if err := s.h.Notify(ctx, n); err != nil {
 		s.logf("assistant: minutes push: %v", err)
 	}
 	if link := recordingLink(s.webBase(ctx), r.ID); link != "" {
@@ -59,7 +51,7 @@ func recordingLink(web, id string) string {
 	return deeplink.Web(web, deeplink.Recording(id))
 }
 
-func (s *Service) minutesRoutes(engine func(http.ResponseWriter, *http.Request) *kb.Engine) {
+func (s *Recordings) minutesRoutes(engine func(http.ResponseWriter, *http.Request) *kb.Engine) {
 	// Make (or make again) a recording's minutes at the knowledge base's next round, which this wakes; a day
 	// recording's recap (kb_day.go), from what the hub holds now, which never makes it a meeting and never pushes.
 	s.handle("POST /api/v1/recordings/{id}/minutes", func(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +155,7 @@ func (u unknownActionError) Error() string { return "no action item " + string(u
 // minutesTodos makes a to-do of each action of version of recording id's minutes (one that has one already keeps it)
 // and records them in the minutes. A to-do's id comes from the recording, the version and the action, so a request
 // retried after its answer was lost makes none twice.
-func (s *Service) minutesTodos(ctx context.Context, e *kb.Engine, id string, version int, actions []string) ([]Todo, *kb.Minutes, error) {
+func (s *Recordings) minutesTodos(ctx context.Context, e *kb.Engine, id string, version int, actions []string) ([]any, *kb.Minutes, error) {
 	s.minutesMu.Lock()
 	defer s.minutesMu.Unlock()
 	rid, _ := kb.RecordingID(id)
@@ -179,7 +171,7 @@ func (s *Service) minutesTodos(ctx context.Context, e *kb.Engine, id string, ver
 		return nil, nil, kb.ErrNotFound
 	}
 	note := s.minutesTodoNotes(ctx, rec, m)
-	out, made, byTask, err := s.actionTodos(ctx, m.Actions, actions, func(aid string) string { return minutesTodoID(rid, version, aid) }, note)
+	out, made, byTask, err := s.actionTodos(ctx, m.Actions, actions, todosOfMinutes, rid, version, note)
 	if err != nil {
 		if made != nil {
 			// Those made so far are recorded all the same: a retry after the user deleted one must not make it again.
@@ -194,75 +186,9 @@ func (s *Service) minutesTodos(ctx context.Context, e *kb.Engine, id string, ver
 	return out, m, err
 }
 
-// actionTodos makes a to-do of each of the actions named (ids in list; one that has one already keeps it): the to-dos
-// (never nil without an error) and what to record (action id → to-do, MinutesTaskKey → to-do). An error while making
-// them still says what to record of those made before it; an unknown action or to-dos that can't be read make none
-// (made nil). todoID is the to-do an action without one becomes, note its notes.
-func (s *Service) actionTodos(ctx context.Context, list []kb.MinutesAction, actions []string, todoID func(aid string) string,
-	note func(kb.MinutesAction) string) (out []Todo, made, byTask map[string]string, err error) {
-	byID := map[string]kb.MinutesAction{}
-	for _, a := range list {
-		byID[a.ID] = a
-	}
-	for _, a := range actions {
-		if _, ok := byID[a]; !ok {
-			return nil, nil, nil, unknownActionError(a)
-		}
-	}
-	if err := s.ensureTodosLoaded(ctx); err != nil {
-		return nil, nil, nil, err
-	}
-	made, byTask = map[string]string{}, map[string]string{}
-	for _, aid := range dedupe(actions) {
-		a := byID[aid]
-		tid := a.TodoID
-		if tid == "" {
-			tid = todoID(aid)
-		}
-		if t, ok := s.todoNow(tid); ok {
-			out, made[aid], byTask[kb.MinutesTaskKey(a)] = append(out, t), tid, tid
-			continue
-		}
-		if a.TodoID != "" { // made before and deleted since: the user's choice stands
-			continue
-		}
-		t, err := s.insertTodo(ctx, minutesTodoRow(tid, a, note(a)))
-		var pg *pgconn.PgError
-		if errors.As(err, &pg) && pg.Code == "23505" { // made a moment ago by another manager on the same store
-			t, err = Todo{ID: tid, Title: minutesTodoTitle(a)}, nil
-		}
-		if err != nil {
-			return out, made, byTask, err
-		}
-		out, made[aid], byTask[kb.MinutesTaskKey(a)] = append(out, t), tid, tid
-	}
-	if out == nil {
-		out = []Todo{}
-	}
-	return out, made, byTask, nil
-}
-
-// minutesTodoID is the to-do an action of a version of a recording's minutes becomes.
-func minutesTodoID(recording string, version int, action string) string {
-	return actionTodoID("todo_mtg_", recording, version, action)
-}
-
-// actionTodoID is the to-do (prefix, then a hash) an action of a version of a recording's minutes or recap becomes.
-func actionTodoID(prefix, recording string, version int, action string) string {
-	h := sha256.Sum256([]byte(recording + "\x00" + strconv.Itoa(version) + "\x00" + action))
-	return prefix + hex.EncodeToString(h[:8])
-}
-
-func minutesTodoTitle(a kb.MinutesAction) string {
-	if a.Who != "" {
-		return a.Who + ": " + a.What
-	}
-	return a.What
-}
-
 // minutesTodoNotes is what a to-do made of an action of minutes m of recording rec says: which meeting, when it was
 // said, the deadline as said, the recording's page. The zone, language and web address are read once a request.
-func (s *Service) minutesTodoNotes(ctx context.Context, rec *kb.Recording, m *kb.Minutes) func(kb.MinutesAction) string {
+func (s *Recordings) minutesTodoNotes(ctx context.Context, rec *kb.Recording, m *kb.Minutes) func(kb.MinutesAction) string {
 	loc, l, link := s.location(ctx), s.lang(ctx), recordingLink(s.webBase(ctx), rec.ID)
 	return func(a kb.MinutesAction) string {
 		clock := rec.StartedAt.Add(time.Duration(a.At * float64(time.Second))).In(loc).Format("15:04:05")
@@ -275,85 +201,4 @@ func (s *Service) minutesTodoNotes(ctx context.Context, rec *kb.Recording, m *kb
 		}
 		return notes
 	}
-}
-
-// minutesActionLines is what kb_get adds to minutes m of recording id: each action item (who, what, the deadline as
-// said) with what became of it, a suggestion the user has not confirmed or its to-do as it is now (open and when due,
-// done, cancelled, deleted), so "what is still open from that meeting" needs no other tool; "" without action items.
-func (s *Service) minutesActionLines(ctx context.Context, id string, m *kb.Minutes) string {
-	return s.actionLines(ctx, "\nAction items as they stand (one becomes a to-do only when the user confirms it):\n", m.Actions,
-		func(aid string) string { return minutesTodoID(id, m.Version, aid) })
-}
-
-// actionLines is head, then a line per action of list with what became of it (minutesActionLines); todoID is the
-// to-do an action without one would have become. "" without actions.
-func (s *Service) actionLines(ctx context.Context, head string, list []kb.MinutesAction, todoID func(aid string) string) string {
-	if len(list) == 0 {
-		return ""
-	}
-	loaded := s.ensureTodosLoaded(ctx) == nil
-	now, loc := time.Now(), s.location(ctx)
-	var b strings.Builder
-	b.WriteString(head)
-	for _, a := range list {
-		b.WriteString("- " + a.ID + " " + minutesTodoTitle(a))
-		switch {
-		case a.By != "" && a.DueDate != "" && a.By != a.DueDate:
-			b.WriteString(" (by " + a.By + ", " + a.DueDate + ")")
-		case a.By != "" || a.DueDate != "":
-			b.WriteString(" (by " + cmp.Or(a.By, a.DueDate) + ")")
-		}
-		tid := a.TodoID
-		if tid == "" {
-			tid = todoID(a.ID) // made, though writing it into the minutes failed
-		}
-		t, ok := s.todoNow(tid)
-		b.WriteString(" → ")
-		switch {
-		case !loaded:
-			b.WriteString("to-do state unknown (the to-dos can't be read now)")
-		case ok:
-			b.WriteString("to-do " + t.ID)
-			if t.Title != minutesTodoTitle(a) {
-				fmt.Fprintf(&b, " %q", clip(oneLine(t.Title), 120))
-			}
-			switch {
-			case t.Cancelled():
-				b.WriteString(" cancelled")
-			case t.DoneAt != nil:
-				b.WriteString(" done " + t.DoneAt.In(loc).Format("2006-01-02"))
-			default:
-				b.WriteString(" open" + todoDue(t, now, loc))
-			}
-		case a.TodoID != "":
-			b.WriteString("its to-do " + a.TodoID + " was deleted")
-		default:
-			b.WriteString("suggested only, not a to-do")
-		}
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-// minutesTodoRow is the plain to-do (no conversation, no task) action a becomes: due on its date when it has one.
-func minutesTodoRow(id string, a kb.MinutesAction, notes string) db.TodoRow {
-	now := time.Now().UTC()
-	row := db.TodoRow{ID: id, Title: minutesTodoTitle(a), Notes: strings.TrimSpace(notes), CreatedAt: now, UpdatedAt: now}
-	if d, err := time.Parse("2006-01-02", a.DueDate); err == nil {
-		db.TodoEdit{SetDue: true, DueDate: &d}.Apply(&row, now)
-	}
-	return row
-}
-
-// dedupe is list without repeats, in order.
-func dedupe(list []string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, v := range list {
-		if !seen[v] {
-			seen[v] = true
-			out = append(out, v)
-		}
-	}
-	return out
 }

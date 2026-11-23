@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"context"
@@ -61,7 +61,7 @@ func (b *justMeBook) clock() time.Time {
 }
 
 // justMeLocked reads the book once and drops what ran out; b.mu is held. False while it cannot be read.
-func (s *Service) justMeLocked() bool {
+func (s *Recordings) justMeLocked() bool {
 	b := &s.justMe
 	if !b.loaded {
 		m := map[string]*justMeTurn{}
@@ -87,7 +87,7 @@ func (s *Service) justMeLocked() bool {
 	return true
 }
 
-func (s *Service) saveJustMeLocked() {
+func (s *Recordings) saveJustMeLocked() {
 	st := s.store()
 	if st == nil {
 		return
@@ -100,7 +100,7 @@ func (s *Service) saveJustMeLocked() {
 }
 
 // justMeSent marks the turn the Just me message about to go to machine's main chat session starts.
-func (s *Service) justMeSent(machine, session string) {
+func (s *Recordings) justMeSent(machine, session string) {
 	b := &s.justMe
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -115,7 +115,7 @@ func (s *Service) justMeSent(machine, session string) {
 // when woken. A turn after the Just me one drops its mark, unless it goes on with the Just me turn's work: one its
 // background work's report woke, or any after a stop that left that work running (its woken flag can be read later
 // than the start).
-func (s *Service) justMeStarted(machine, session string, newTurn, woken bool) {
+func (s *Recordings) justMeStarted(machine, session string, newTurn, woken bool) {
 	b := &s.justMe
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -141,7 +141,7 @@ func (s *Service) justMeStarted(machine, session string, newTurn, woken bool) {
 
 // justMeEnded: machine's session stopped: a Just me turn seen running ended, with its background work still running
 // when held.
-func (s *Service) justMeEnded(machine, session string, held bool) {
+func (s *Recordings) justMeEnded(machine, session string, held bool) {
 	b := &s.justMe
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -156,7 +156,7 @@ func (s *Service) justMeEnded(machine, session string, held bool) {
 
 // justMeNow: machine's session's turn running or just ended is a Just me turn (or its message is on its way), for
 // what would show it elsewhere. While the book cannot be read it is taken for one: the turn may be private.
-func (s *Service) justMeNow(machine, session string) bool {
+func (s *Recordings) justMeNow(machine, session string) bool {
 	if session == "" {
 		return false
 	}
@@ -171,7 +171,7 @@ func (s *Service) justMeNow(machine, session string) bool {
 }
 
 // justMeRoute is POST /api/v1/recordings/{id}/just-me.
-func (s *Service) justMeRoute(w http.ResponseWriter, r *http.Request) {
+func (s *Recordings) justMeRoute(w http.ResponseWriter, r *http.Request) {
 	if !meetingCaller(w, r) {
 		return
 	}
@@ -221,7 +221,7 @@ func (s *Service) justMeRoute(w http.ResponseWriter, r *http.Request) {
 
 // justMeSend sends text to the main chat as the owner's own message under msgID, its turn marked first; a main chat
 // is started with it when there is none. The main chat it went to.
-func (s *Service) justMeSend(ctx context.Context, text string, images []proto.Image, msgID string) (string, string, error) {
+func (s *Recordings) justMeSend(ctx context.Context, text string, images []proto.Image, msgID string) (string, string, error) {
 	cfg := s.settings(ctx)
 	if cfg.Main == "" || cfg.MachineID == "" {
 		// Marked under the id it is started with, before it starts: its turn may end before the start answers.

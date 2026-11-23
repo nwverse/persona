@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"context"
@@ -70,7 +70,7 @@ func roomListsDue(ln kb.MeetingRoomLean, now time.Time) bool {
 
 // roomBatchNote notes in recording id's room record that batch b, showing the lists, went to the lean room at sent;
 // ln is the record before it. The bookkeeping after it. (What the batch's lines add to the span is the live log's.)
-func (s *Service) roomBatchNote(e *kb.Engine, id string, b feedBatch, sent time.Time, ln kb.MeetingRoomLean) kb.MeetingRoomLean {
+func (s *Recordings) roomBatchNote(e *kb.Engine, id string, b feedBatch, sent time.Time, ln kb.MeetingRoomLean) kb.MeetingRoomLean {
 	if !b.lean || !b.lists {
 		return ln
 	}
@@ -88,11 +88,9 @@ type roomRead struct {
 }
 
 // roomRowRead reads room's row, on its machine as attendeeCheckFor names it.
-func (s *Service) roomRowRead(ctx context.Context, room *kb.MeetingRoom) roomRead {
+func (s *Recordings) roomRowRead(ctx context.Context, room *kb.MeetingRoom) roomRead {
 	machine := room.MachineID
-	if s.devs != nil {
-		machine = s.devs.Canonical(machine)
-	}
+	machine = s.canonical(machine)
 	row, found, err := s.attendeeRow(ctx, machine, room.SessionID)
 	return roomRead{row, found, err}
 }
@@ -120,7 +118,7 @@ func roomCompactedAt(ln *kb.MeetingRoomLean, fed int) {
 // compacting the room on its own, and with start (the role on, the meeting's end not due) starts one that is due at an
 // idle moment (photos: a photo or withdrawal is still to go in). held: nothing goes into the room now, one runs or may;
 // at: when to look again for it (zero: nothing to do before the next batch); the room's bookkeeping after it.
-func (s *Service) roomCompaction(ctx context.Context, e *kb.Engine, id string, l kb.Live, r kb.Recording, now time.Time, start, photos bool, rd roomRead) (at time.Time, held bool, ln kb.MeetingRoomLean) {
+func (s *Recordings) roomCompaction(ctx context.Context, e *kb.Engine, id string, l kb.Live, r kb.Recording, now time.Time, start, photos bool, rd roomRead) (at time.Time, held bool, ln kb.MeetingRoomLean) {
 	room := r.Conv.Room
 	ln = room.Lean
 	set := func(fn func(ln *kb.MeetingRoomLean)) bool {

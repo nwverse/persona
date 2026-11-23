@@ -1,4 +1,4 @@
-package recording
+package assistant
 
 import (
 	"context"
@@ -307,6 +307,9 @@ func (s *Service) spaceRecordingsSweep(ctx context.Context) {
 		s.logf("space recordings: forgot %d tombstone(s) past recording_days", n)
 	}
 }
+
+// codeRecordingDeleted: the recording was deleted here; the phone drops it instead of uploading it again.
+const codeRecordingDeleted = "recording_deleted"
 
 // writeSpaceRecordingError answers an error of putSpaceRecording or deleteSpaceRecording.
 func writeSpaceRecordingError(w http.ResponseWriter, err error) {

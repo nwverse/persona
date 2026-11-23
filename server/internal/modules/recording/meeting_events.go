@@ -24,7 +24,7 @@ type meetingLiveEvents struct {
 }
 
 // meetingLiveChanged: recording id's parts changed. A room that changed wakes the asks waiting for it.
-func (s *Service) meetingLiveChanged(id string, parts []string) {
+func (s *Recordings) meetingLiveChanged(id string, parts []string) {
 	if slices.Contains(parts, kb.PartRoom) {
 		s.room.wake(id)
 	}
@@ -48,7 +48,7 @@ func (s *Service) meetingLiveChanged(id string, parts []string) {
 }
 
 // meetingLiveFlush sends recording id's event: the parts changed and each one's revision now.
-func (s *Service) meetingLiveFlush(id string) {
+func (s *Recordings) meetingLiveFlush(id string) {
 	b := &s.meetLive
 	b.mu.Lock()
 	parts := b.pending[id]

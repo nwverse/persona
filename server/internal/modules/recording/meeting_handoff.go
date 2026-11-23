@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"context"
@@ -71,13 +71,13 @@ func parseHandoff(raw []byte) (handoffRequest, error) {
 	return in, nil
 }
 
-func (s *Service) handoffRoutes() {
+func (s *Recordings) handoffRoutes() {
 	s.handle("POST /api/v1/recordings/{id}/handoff", s.handoffRoute)
 }
 
 // handoffRoute hands recording id's meeting to an Agent: 409 meeting_running while it goes on, 409 no_material when it
 // has neither minutes nor (asked for) a transcript; otherwise the hand-off as kept, sent or failed, with 200.
-func (s *Service) handoffRoute(w http.ResponseWriter, r *http.Request) {
+func (s *Recordings) handoffRoute(w http.ResponseWriter, r *http.Request) {
 	if !meetingCaller(w, r) {
 		return
 	}
@@ -133,7 +133,7 @@ func (s *Service) handoffRoute(w http.ResponseWriter, r *http.Request) {
 
 // handoffSend checks ref as an Agent that may take the meeting and sends it the hand-off's message; "" when it went,
 // else the problem.
-func (s *Service) handoffSend(ctx context.Context, e *kb.Engine, rec kb.Recording, ref kb.SessionRef, text string, transcript bool) string {
+func (s *Recordings) handoffSend(ctx context.Context, e *kb.Engine, rec kb.Recording, ref kb.SessionRef, text string, transcript bool) string {
 	t, verdict := s.attendeeCheck(ctx, ref, time.Now())
 	switch {
 	case verdict == attendeeNotAllowed:
@@ -154,7 +154,7 @@ func (s *Service) handoffSend(ctx context.Context, e *kb.Engine, rec kb.Recordin
 
 // handoffText is the hand-off's message: the meeting's name, calendar title, start and minutes (its transcript too when
 // asked, within handoffTranscriptRunes) in a context block, then the owner's line.
-func (s *Service) handoffText(ctx context.Context, e *kb.Engine, rec kb.Recording, text string, transcript bool) string {
+func (s *Recordings) handoffText(ctx context.Context, e *kb.Engine, rec kb.Recording, text string, transcript bool) string {
 	loc := s.location(ctx)
 	d := prompts.MeetingHandoff{Title: feedMeetingName(rec, loc), Started: rec.StartedAt.In(loc).Format("2006-01-02 15:04 MST"), Text: text}
 	if rec.Calendar != nil {

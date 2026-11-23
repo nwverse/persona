@@ -1,0 +1,35 @@
+// Package recording is the meeting recording module (docs/architecture/core-and-modules.md "Recording", #13407): the
+// manager's side of recordings, meetings, minutes and all-day recordings with their day recaps
+// (docs/assistant/meeting-minutes.md, docs/assistant/day-recap.md). Its routes, the hub transcription of meetings,
+// the meeting asks, photos and live view, the minutes' and day recaps' delivery and the recordings saved into tracks.
+//
+// The core reaches it through internal/recordinghost, filled by internal/modules/all; it reaches the core through its
+// Host (host.go) and the knowledge base (internal/kb, which keeps the recordings' storage: a declared core-service
+// dependency, archguard's testdata/module_services.txt).
+package recording
+
+import (
+	_ "embed"
+	"encoding/json"
+
+	"github.com/nwverse/persona/server/internal/modapi"
+)
+
+//go:embed module.json
+var manifest []byte
+
+// Module is the recording module.
+type Module struct{}
+
+// Info is the embedded manifest (module.json, checked against schema/module.schema.json).
+func (Module) Info() modapi.Info {
+	var info modapi.Info
+	if err := json.Unmarshal(manifest, &info); err != nil {
+		panic("recording: module.json: " + err.Error()) // embedded and tested: never at run time
+	}
+	return info
+}
+
+// Register adds nothing yet: the module's routes, jobs and feature flags reach the core through
+// internal/recordinghost until the kernel serves those slots (#13844).
+func (Module) Register(modapi.Host) error { return nil }

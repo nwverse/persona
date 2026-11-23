@@ -1,4 +1,4 @@
-package assistant
+package recording
 
 import (
 	"context"
@@ -9,12 +9,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
-	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // After the meeting: the follow-up (docs/assistant/meeting-minutes.md "After the meeting: the follow-up"). The
@@ -33,7 +30,7 @@ const followupTranscriptRunes = 100000
 const followupPhotoRunes = 20000
 
 // followupRoute is POST /api/v1/recordings/{id}/followup.
-func (s *Service) followupRoute(w http.ResponseWriter, r *http.Request) {
+func (s *Recordings) followupRoute(w http.ResponseWriter, r *http.Request) {
 	if !meetingCaller(w, r) {
 		return
 	}
@@ -100,7 +97,7 @@ func meetingRunning(rec kb.Recording, m kb.Meeting, now time.Time) bool {
 
 // followupSend sends msg to recording id's follow-up, making it with msg the first time; the follow-up and whether
 // this call made it.
-func (s *Service) followupSend(ctx context.Context, e *kb.Engine, id string, msg meetingMessage) (kb.ConvView, bool, error) {
+func (s *Recordings) followupSend(ctx context.Context, e *kb.Engine, id string, msg meetingMessage) (kb.ConvView, bool, error) {
 	unlock := s.meetLocks.lock(id)
 	defer unlock()
 	m, rec, err := e.MeetingRead(id)
@@ -167,41 +164,8 @@ func (s *Service) followupSend(ctx context.Context, e *kb.Engine, id string, msg
 	return kb.ConvView{MachineID: sess.MachineID, SessionID: sess.SessionID}, true, nil
 }
 
-// meetingProfile is the Claude profile (config_dir) a meeting's conversations, its room and its follow-up, start in, and
-// the conversations the hub starts by itself (startConversation): the one the assistant's conversations had before each
-// new one got a private profile, a config directory with no login in it (docs/assistant/meeting-minutes.md "The room
-// conversation", #6015).
-const meetingProfile = "legacy"
-
-// startSignedIn starts p in meetingProfile, or as it is where there is no profile to start in: on a node too old to be
-// told one, whose conversations all start in that one (the hub refuses the profile before anything starts,
-// devices/machine.go), and on a launcher that runs another agent than Claude Code, which alone has profiles. startOn
-// leaves the profile out for a launcher it knows runs another agent; one it cannot tell (the machine's launcher list
-// did not come, …) the node refuses it for before anything starts (#6884). Either way the second start is the only one.
-func (s *Service) startSignedIn(ctx context.Context, p StartParams) (proto.Session, error) {
-	p.ConfigDir = meetingProfile
-	sess, err := s.start(ctx, p)
-	if nodeOutdated(err) || profileRefused(err) {
-		p.ConfigDir = ""
-		return s.start(ctx, p)
-	}
-	return sess, err
-}
-
-// nodeOutdated: the hub refused a call for something the node is too old for.
-func nodeOutdated(err error) bool {
-	var re *rpc.Error
-	return errors.As(err, &re) && re.Code == proto.CodeNodeOutdated
-}
-
-// profileRefused: the node refused a config_dir because the launcher runs another agent than Claude Code, before
-// starting anything (assistantwire.ConfigDirClaudeOnly; its own words, also from a node older than the constant).
-func profileRefused(err error) bool {
-	return err != nil && strings.Contains(err.Error(), assistantwire.ConfigDirClaudeOnly)
-}
-
 // followupSet writes recording id's follow-up (nil: none); false when it could not be written.
-func (s *Service) followupSet(e *kb.Engine, id string, f *kb.MeetingFollowup) bool {
+func (s *Recordings) followupSet(e *kb.Engine, id string, f *kb.MeetingFollowup) bool {
 	if _, err := e.MeetingUpdate(id, func(m *kb.Meeting, _ kb.Recording) error { m.Followup = f; return nil }); err != nil {
 		s.logf("meeting %s: follow-up: %v", short(id), err)
 		return false
@@ -211,7 +175,7 @@ func (s *Service) followupSet(e *kb.Engine, id string, f *kb.MeetingFollowup) bo
 
 // followupFound is the follow-up a pending creation f made, when there is one: the conversation under its id on its
 // computer, else one whose origin says it is this recording's follow-up (a node that started it under its own id).
-func (s *Service) followupFound(ctx context.Context, id string, f *kb.MeetingFollowup) (kb.MeetingFollowup, bool) {
+func (s *Recordings) followupFound(ctx context.Context, id string, f *kb.MeetingFollowup) (kb.MeetingFollowup, bool) {
 	if _, ok := s.session(ctx, f.MachineID, f.SessionID); ok {
 		return kb.MeetingFollowup{MachineID: f.MachineID, SessionID: f.SessionID}, true
 	}
@@ -225,7 +189,7 @@ func (s *Service) followupFound(ctx context.Context, id string, f *kb.MeetingFol
 
 // followupSeed is the follow-up's first message: the meeting's material in a context block (prompts/meeting/
 // followup_seed.md), then the owner's text.
-func (s *Service) followupSeed(ctx context.Context, e *kb.Engine, rec kb.Recording, m kb.Meeting, text string) string {
+func (s *Recordings) followupSeed(ctx context.Context, e *kb.Engine, rec kb.Recording, m kb.Meeting, text string) string {
 	loc := s.location(ctx)
 	d := prompts.MeetingFollowupSeed{Title: feedMeetingName(rec, loc), Started: rec.StartedAt.In(loc).Format("2006-01-02 15:04 MST"),
 		RecordingID: rec.ID, Trimmed: rec.Trimmed(), Text: text}
