@@ -797,10 +797,10 @@ update is work to follow up, not an external dependency to park (#9754).
   signal. After another 24 hours, the task enters the existing Needs you decision
   flow, with options to prepare an update for approval or keep waiting. Nothing is
   sent externally by either deadline. Fulfillment updates the task's readable
-  record, retires its matching owner decision, and invalidates queued reminders;
-  unrelated decisions are not overwritten.
+  record, retires its matching owner decision, restores the prior supervision
+  state, and invalidates queued reminders. Unrelated decisions stay in place.
 - Automatic completion and supervisor acceptance cannot retire an outstanding
-  sent promise. Explicit owner completion/cancellation remains authoritative;
+  sent promise or a follow-up waiting for source readback. Explicit owner completion/cancellation remains authoritative;
   fulfillment never means that all the original task's work is accepted.
 
 Delivery and recording are separate. Source validation and local duplicate checks
@@ -813,8 +813,9 @@ receipt, task notes, supervision, and task association are durable. After a
 restart, a provider's `Already` readback never fulfills another promise, whether
 its intent was saved earlier or first created by that call. Without a known
 delivery timestamp, intent time is only a conservative recording bound, not
-evidence that a fresh update was sent. An intent with no saved receipt
-is **not** promoted to delivery or fulfillment: after 24 hours it becomes a
+evidence that a fresh update was sent. A definitive refusal clears the intent
+for that attempt. A send that might have landed stays unresolved. Without a
+saved receipt for that send, after 24 hours it becomes a
 source-readback task and supervisor signal. This is not another outbox and never
 blindly retries a potentially delivered message.
 

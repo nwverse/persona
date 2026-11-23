@@ -217,20 +217,28 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	if quiet {
 		out = outboundReply{}
 	}
-	if err := f.s.prepareOutbound(ctx, out, time.Now()); err != nil {
+	prepared, err := f.s.prepareOutbound(ctx, out, time.Now())
+	if err != nil {
 		return err
 	}
-	delivered := false
-	err := f.answerDelivery(ctx, r, answer, note, took, final, quiet, end, &delivered, f.s.outboundTracksTopic(out))
-	if err == nil && delivered {
+	delivery := answerDelivery{allRefused: true}
+	err = f.answerDelivery(ctx, r, answer, note, took, final, quiet, end, &delivery, f.s.outboundTracksTopic(out))
+	if err == nil && delivery.complete {
 		if receiptErr := f.s.finishOutbound(ctx, out, time.Now()); receiptErr != nil {
 			f.s.logf("bot reply delivered; commitment receipt not saved: %v", receiptErr)
 		}
+	} else if delivery.allRefused {
+		f.s.rejectOutbound(ctx, out, prepared)
 	}
 	return err
 }
 
-func (f feishuSink) answerDelivery(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End, delivered *bool, strictTopic bool) (answerErr error) {
+type answerDelivery struct {
+	complete   bool
+	allRefused bool
+}
+
+func (f feishuSink) answerDelivery(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End, delivery *answerDelivery, strictTopic bool) (answerErr error) {
 	ctx = feishuSendAs(ctx, "answer", r.MachineID, r.SessionID)
 	s := f.s
 	l := s.botLang(ctx)
@@ -381,8 +389,10 @@ func (f feishuSink) answerDelivery(ctx context.Context, r *channel.Run, answer, 
 					s.logf("bots: fold the progress card: %v", ferr)
 				}
 			} else if unreachable(err) {
-				return err // nothing went out: the whole answer is tried again later, under the same key
+				delivery.allRefused = false
+				return err // nothing is confirmed: the whole answer is tried again later, under the same key
 			} else {
+				delivery.allRefused = delivery.allRefused && outboundDefinitelyRejected(err)
 				s.logf("bots: answer as a new card: %v; writing it into the progress card", err)
 				mid = ""
 			}
@@ -391,6 +401,7 @@ func (f feishuSink) answerDelivery(ctx context.Context, r *channel.Run, answer, 
 			if err = s.botUpdateAnswerCard(ctx, card, c); err == nil {
 				mid = card
 			} else {
+				delivery.allRefused = delivery.allRefused && outboundDefinitelyRejected(err)
 				s.logf("bots: answer into the progress card: %v; sending it", err)
 			}
 		}
@@ -403,6 +414,7 @@ func (f feishuSink) answerDelivery(ctx context.Context, r *channel.Run, answer, 
 			}
 			mid, err = s.botPostTo(ctx, to, r.ReplyTo, c, piece, key)
 		}
+		delivery.allRefused = delivery.allRefused && outboundDefinitelyRejected(err)
 		if err != nil {
 			if i == 0 && unreachable(err) {
 				return err // nothing went out: the whole answer is tried again later
@@ -418,7 +430,7 @@ func (f feishuSink) answerDelivery(ctx context.Context, r *channel.Run, answer, 
 			s.rememberBotThread(mid, botTargetOf(r), r.Label)
 		}
 	}
-	*delivered = !quiet && len(missing) == 0
+	delivery.complete = !quiet && len(missing) == 0
 	if !final {
 		return nil
 	}

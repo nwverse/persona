@@ -130,14 +130,14 @@ func TestOutboundPromisePreparedAtMustFollowSuccessfulPromise(t *testing.T) {
 			holdDigest(s)
 			promise := outboundReply{ID: "promise", Topic: "example-topic", URL: "https://example.com/topic",
 				Text: "I'll share the results later."}
-			if err := s.prepareOutbound(ctx, promise, at.Add(-time.Minute)); err != nil {
+			if _, err := s.prepareOutbound(ctx, promise, at.Add(-time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 			if err := s.finishOutbound(ctx, promise, at); err != nil {
 				t.Fatal(err)
 			}
 			update := outboundReply{ID: "update", Topic: promise.Topic, URL: promise.URL, Text: "Here are the results."}
-			if err := s.prepareOutbound(ctx, update, tc.prepared); err != nil {
+			if _, err := s.prepareOutbound(ctx, update, tc.prepared); err != nil {
 				t.Fatal(err)
 			}
 			if err := s.finishOutbound(ctx, update, at.Add(time.Minute)); err != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -49,11 +50,13 @@ type outboundCommitment struct {
 	FulfilledAt time.Time     `json:"fulfilled_at,omitzero"`
 	FulfilledBy string        `json:"fulfilled_by,omitempty"`
 	OwnerAt     time.Time     `json:"owner_at,omitzero"`
+	reused      bool
 }
 
 type outboundBook struct {
 	mu        sync.Mutex
 	loaded    bool
+	dirty     bool // Definitive rejections whose deletion still needs a durable write.
 	entries   []outboundCommitment
 	confirmed map[string]outboundConfirmation
 }
@@ -166,39 +169,83 @@ func (s *Service) putOutboundLocked(ctx context.Context, entries []outboundCommi
 			return err
 		}
 	}
-	s.outbound.entries = entries
+	s.outbound.entries, s.outbound.dirty = entries, false
 	return nil
 }
 
 // A durable intent precedes a send that may create or fulfill an obligation.
-// A failed intent write prevents that send; an uncertain send is never retried here.
-func (s *Service) prepareOutbound(ctx context.Context, r outboundReply, now time.Time) error {
+func (s *Service) prepareOutbound(ctx context.Context, r outboundReply, now time.Time) (time.Time, error) {
 	if r.ID == "" || r.Topic == "" || strings.TrimSpace(r.Text) == "" {
-		return nil
+		return time.Time{}, nil
 	}
 	b := &s.outbound
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if err := s.loadOutboundLocked(ctx); err != nil {
-		return err
+		return time.Time{}, err
 	}
 	promise := isOutboundPromise(r.Text)
 	if r.Promise != nil {
 		promise = *r.Promise
 	}
 	follows := false
-	for _, e := range b.entries {
+	for i, e := range b.entries {
 		if e.Reply.ID == r.ID && e.Reply.Topic == r.Topic {
-			return nil
+			// A refusal of one attempt cannot resolve an older or overlapping attempt.
+			b.entries[i].reused = true
+			return time.Time{}, nil
 		}
 		follows = follows || e.Promise && e.Reply.Topic == r.Topic && !e.SentAt.IsZero() && e.FulfilledAt.IsZero()
 	}
 	if !promise && !follows {
-		return nil
+		return time.Time{}, nil
 	}
 	entries := slices.Clone(b.entries)
 	entries = append(entries, outboundCommitment{Reply: r, Promise: promise, PreparedAt: now.UTC()})
-	return s.putOutboundLocked(ctx, entries)
+	return now.UTC(), s.putOutboundLocked(ctx, entries)
+}
+
+// Only the provider's explicit refusal or a known pre-send rejection rules
+// out delivery. An untyped transport failure can still need source readback.
+func outboundDefinitelyRejected(err error) bool {
+	var re *rpc.Error
+	if errors.As(err, &re) {
+		switch re.Code {
+		case assistantwire.CodeInboxCannotReply, assistantwire.CodeInboxSourceUnavailable,
+			assistantwire.CodeInboxSourceSignedOut, assistantwire.CodeInboxSendDenied,
+			assistantwire.CodeInboxSendRateLimited, assistantwire.CodeInboxSendFailed,
+			assistantwire.CodeInboxSendUnrecorded, assistantwire.CodeChatDenied:
+			return true
+		case assistantwire.CodeAssistantInDoubt:
+			return false
+		}
+	}
+	return feishubot.Refused(err) || feishubot.ChatRefused(err) || feishubot.MessageGone(err) || feishubot.RateLimited(err)
+}
+
+// Remove only the fresh intent belonging to this rejected attempt. If the
+// write fails, keep the authoritative refusal in memory and retry only the write.
+func (s *Service) rejectOutbound(ctx context.Context, r outboundReply, prepared time.Time) {
+	if prepared.IsZero() {
+		return
+	}
+	b := &s.outbound
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, confirming := b.confirmed[outboundID(r.Topic, r.ID)]; confirming {
+		return
+	}
+	next := slices.DeleteFunc(slices.Clone(b.entries), func(e outboundCommitment) bool {
+		return e.Reply.ID == r.ID && e.Reply.Topic == r.Topic && e.PreparedAt.Equal(prepared) &&
+			e.SentAt.IsZero() && e.DueAt.IsZero() && !e.reused
+	})
+	if len(next) == len(b.entries) {
+		return
+	}
+	if err := s.putOutboundLocked(ctx, next); err != nil {
+		b.entries, b.dirty = next, true
+		s.logf("outward commitment rejection not saved: %v", err)
+	}
 }
 
 // Delivery success is separate from bookkeeping success. Never turn a sent
@@ -283,11 +330,15 @@ func (s *Service) outboundTracksTopic(r outboundReply) bool {
 }
 
 func (s *Service) deliverOutbound(ctx context.Context, r outboundReply, send func() error) error {
-	if err := s.prepareOutbound(ctx, r, time.Now()); err != nil {
+	prepared, err := s.prepareOutbound(ctx, r, time.Now())
+	if err != nil {
 		return &rpc.Error{Code: assistantwire.CodeInboxSendUnrecorded,
 			Message: i18n.T(i18n.En, "inbox-errors.send_unrecorded")}
 	}
 	if err := send(); err != nil {
+		if outboundDefinitelyRejected(err) {
+			s.rejectOutbound(ctx, r, prepared)
+		}
 		return err
 	}
 	if err := s.finishOutbound(ctx, r, time.Now()); err != nil {
@@ -508,6 +559,11 @@ func (s *Service) watchOutboundCommitments(ctx context.Context, now time.Time) {
 		s.logf("outward commitments: %v", err)
 		return
 	}
+	if b.dirty {
+		if err := s.putOutboundLocked(ctx, b.entries); err != nil {
+			s.logf("outward commitment rejection retry: %v", err)
+		}
+	}
 	for i := range b.entries {
 		e := b.entries[i]
 		if !e.Promise {
@@ -515,6 +571,10 @@ func (s *Service) watchOutboundCommitments(ctx context.Context, now time.Time) {
 		}
 		if e.SentAt.IsZero() {
 			if now.Before(e.PreparedAt.Add(outboundFollowPeriod)) {
+				continue
+			}
+			if current, ok := s.todoNow(e.Reply.TodoID); ok && current.DoneAt != nil &&
+				current.DoneBy != db.DoneByAuto && current.DoneBy != db.DoneByReview {
 				continue
 			}
 			// A restart cannot infer delivery from an intent. Preserve the source
@@ -570,9 +630,11 @@ func (s *Service) watchOutboundCommitments(ctx context.Context, now time.Time) {
 			if v.State == reviewNeedsUser {
 				return false // never replace an unrelated owner decision
 			}
+			previous := v.State
 			v.State = reviewNeedsUser
 			v.Reviews = append(v.Reviews, TaskReview{At: now.UTC(), Verdict: reviewNeedsUser, Round: v.Round,
-				Note: "outward-promise:" + e.Reply.ID, WhyOwner: whyVisible, Reason: detail,
+				OutwardPreviousState: previous,
+				Note:                 "outward-promise:" + e.Reply.ID, WhyOwner: whyVisible, Reason: detail,
 				Recommend:     s.outboundText(ctx, "review_update", nil),
 				CostOfWaiting: s.outboundText(ctx, "cost", nil),
 				Options: []DecisionOption{
@@ -639,7 +701,13 @@ func (s *Service) clearOutboundDecision(ctx context.Context, e outboundCommitmen
 			v.Reviews[len(v.Reviews)-1].Note != "outward-promise:"+e.Reply.ID {
 			return false
 		}
-		v.State = reviewPending
+		last := len(v.Reviews) - 1
+		decision := v.Reviews[last]
+		v.State = decision.OutwardPreviousState
+		v.Reviews = v.Reviews[:last]
+		if parked := v.parking(); parked != nil && parked.ParkEndedAt.Equal(decision.At) {
+			parked.ParkEndedAt = time.Time{}
+		}
 		return true
 	})
 	if err != nil && !errors.Is(err, db.ErrTodoNotFound) {
@@ -671,8 +739,22 @@ func (s *Service) outboundCompletionError(ctx context.Context, todo string) erro
 		return fmt.Errorf("cannot verify outward commitments: %w", err)
 	}
 	for _, e := range b.entries {
-		if e.Promise && e.Reply.TodoID == todo && !e.SentAt.IsZero() && e.FulfilledAt.IsZero() {
-			return fmt.Errorf("task %s still owes the promised update in %s; send that update before accepting the task", todo, e.Reply.URL)
+		if !e.Promise || !e.FulfilledAt.IsZero() {
+			continue
+		}
+		if !e.SentAt.IsZero() {
+			if e.Reply.TodoID == todo {
+				return fmt.Errorf("task %s still owes the promised update in %s; send that update before accepting the task", todo, e.Reply.URL)
+			}
+			continue
+		}
+		if e.Reply.TodoID != todo && todo != "todo_"+outboundID(e.Reply.Topic, e.Reply.ID) {
+			continue
+		}
+		// The task note may have committed before the ledger saved its association.
+		t, _ := s.todoNow(todo)
+		if !e.DueAt.IsZero() || strings.Contains(t.Notes, "<!-- outward-attempt:"+e.Reply.ID+" -->") {
+			return fmt.Errorf("task %s still needs to verify whether the reply was sent in %s", todo, e.Reply.URL)
 		}
 	}
 	return nil

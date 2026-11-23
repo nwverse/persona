@@ -9,8 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Use existing send/watch entry points and JSON, not new production symbols:
@@ -433,6 +436,12 @@ func TestOutboundPromiseUncertainReceiptAfterRestartRequiresSourceReadback(t *te
 	if !strings.Contains(task.Notes, got[0].Reply.URL) || !strings.Contains(task.Notes, got[0].Reply.Text) {
 		t.Fatal("restart silently lost the original source and attempted wording")
 	}
+	if closed, err := restarted.autoDoneTodo(ctx, task.ID, "Work stopped", time.Time{}); closed || err == nil {
+		t.Fatal("automatic completion closed a task that still needs source readback")
+	}
+	if closed, err := restarted.reviewDoneTodo(ctx, task.ID, "Accepted", true); closed || err == nil {
+		t.Fatal("supervisor acceptance closed a task that still needs source readback")
+	}
 }
 
 func TestOutboundPromiseOldInboxReceiptCannotFulfillANewerPromise(t *testing.T) {
@@ -522,5 +531,96 @@ func TestOutboundPromiseDoesNotCreditAReplyThatWouldDetour(t *testing.T) {
 	_ = (feishuSink{s}).answer(ctx, run, "Here are the results.", "", time.Second, true, false, channel.EndDone)
 	if !outwardReceipts(t, st)[0].FulfilledAt.IsZero() {
 		t.Fatal("an update that could not land in the original topic fulfilled the promise")
+	}
+}
+
+func TestOutboundPromiseDefiniteRejectionDoesNotRequireReadback(t *testing.T) {
+	ctx := context.Background()
+	for _, source := range []string{"bot", "inbox"} {
+		t.Run(source, func(t *testing.T) {
+			st := &memStore{}
+			s, f, run, _ := outwardBot(t, st)
+			text := "I'll share the results later."
+			if source == "bot" {
+				f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {
+					return nil, &feishubot.APIError{Op: "reply", Code: 230002, Msg: "bot is not in the chat"}
+				})
+				sendOutwardBot(t, s, run, text)
+			} else {
+				reply := outwardReply{ID: "rejected-inbox", Topic: "example/topic", URL: "https://example.com/topic", Text: text}
+				refused := &rpc.Error{Code: assistantwire.CodeInboxSendDenied}
+				if err := s.deliverOutbound(ctx, reply, func() error { return refused }); !errors.Is(err, refused) {
+					t.Fatalf("send did not preserve its rejection: %v", err)
+				}
+			}
+			restarted, _, _, _ := outwardBot(t, st)
+			restarted.superviseWatch(ctx, time.Now().Add(25*time.Hour))
+			if rows := outwardReceipts(t, st); len(rows) != 0 {
+				t.Fatalf("refused %s send survived as a readback obligation: %+v", source, rows)
+			}
+		})
+	}
+}
+
+func TestOutboundPromiseLaterRefusalKeepsEarlierUncertainSend(t *testing.T) {
+	ctx := context.Background()
+	st := &memStore{}
+	s, _, _, _ := outwardBot(t, st)
+	r := outwardReply{ID: "same-send", Topic: "example/topic", URL: "https://example.com/topic", Text: "I'll share the results later."}
+	doubt := &rpc.Error{Code: assistantwire.CodeAssistantInDoubt}
+	refused := &rpc.Error{Code: assistantwire.CodeInboxSendDenied}
+	for _, result := range []error{doubt, refused} {
+		if err := s.deliverOutbound(ctx, r, func() error { return result }); !errors.Is(err, result) {
+			t.Fatalf("send outcome = %v, want %v", err, result)
+		}
+	}
+	s.superviseWatch(ctx, time.Now().Add(25*time.Hour))
+	if rows := outwardReceipts(t, st); len(rows) != 1 || rows[0].Reply.TodoID == "" || !rows[0].SentAt.IsZero() {
+		t.Fatalf("later refusal resolved an older ambiguous attempt: %+v", rows)
+	}
+}
+
+func TestOutboundPromiseFulfillmentRestoresPriorSupervisionAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	for _, previous := range []struct{ name, state string }{
+		{"ongoing", ""}, {"pending", reviewPending}, {"parked", reviewParked},
+	} {
+		t.Run(previous.name, func(t *testing.T) {
+			st := taskRecoveryDatabase(t)
+			s, _, run, _ := outwardBot(t, st)
+			sendOutwardBot(t, s, run, "I'll share the results later.")
+			promise := outwardReceipts(t, st)[0]
+			id := promise.Reply.TodoID
+			if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+				v.State = previous.state
+				if v.State == reviewParked {
+					v.Reviews = append(v.Reviews, TaskReview{Verdict: reviewParked, At: time.Now(), Note: "Waiting for the source."})
+				}
+				return true
+			}); err != nil {
+				t.Fatal(err)
+			}
+			due := promise.DueAt.Add(24 * time.Hour)
+			s.superviseWatch(ctx, due)
+			if got := todoNow(s, id).Supervision.State; got != reviewNeedsUser {
+				t.Fatalf("escalation state = %q", got)
+			}
+			restarted, _, next, _ := outwardBot(t, st)
+			if err := restarted.ensureTodosLoaded(ctx); err != nil {
+				t.Fatal(err)
+			}
+			next.ID = "fulfillment"
+			sendOutwardBot(t, restarted, next, "Here are the results.")
+			restarted.superviseWatch(ctx, due.Add(time.Second))
+			v := todoNow(restarted, id).Supervision
+			if v.State != previous.state {
+				t.Fatalf("fulfillment changed %q into %q", previous.state, v.State)
+			}
+			if previous.state == reviewParked {
+				if park := v.parking(); park == nil || !park.ParkEndedAt.IsZero() {
+					t.Fatalf("fulfillment lost the open parking record: %+v", v.Reviews)
+				}
+			}
+		})
 	}
 }

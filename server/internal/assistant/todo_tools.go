@@ -464,7 +464,7 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 		}
 	}
 	if a.OutwardReply != nil {
-		if err := s.prepareOutbound(ctx, outward, a.OutwardReply.SentAt); err != nil {
+		if _, err := s.prepareOutbound(ctx, outward, a.OutwardReply.SentAt); err != nil {
 			return "", fmt.Errorf("outward reply receipt not recorded; retry recording it without resending: %w", err)
 		}
 		if err := s.finishOutbound(ctx, outward, a.OutwardReply.SentAt); err != nil {

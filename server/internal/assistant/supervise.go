@@ -189,6 +189,8 @@ type TaskReview struct {
 	// SupersededReason records the supervisor's natural-language reason when this task_review superseded an earlier
 	// pending needs_user decision without fabricating an owner selection (#13112).
 	SupersededReason string `json:"superseded_reason,omitempty"`
+	// OutwardPreviousState is the state before an automated outward-promise decision.
+	OutwardPreviousState string `json:"outward_previous_state,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
