@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -39,8 +39,8 @@ func TestAcceptStoreFailureIsNotAccepted(t *testing.T) {
 		}
 		return textOf(e.texts[len(e.texts)-1])
 	}
-	press := func(asked string) *feishubot.CardResponse {
-		var a feishubot.CardAction
+	press := func(asked string) *botcard.CardResponse {
+		var a botcard.CardAction
 		a.Action.Value = map[string]any{"a": "accept", "id": "todo_v1"}
 		if asked != "" {
 			a.Action.Value["asked_at"] = asked

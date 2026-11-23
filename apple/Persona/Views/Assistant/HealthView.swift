@@ -132,6 +132,9 @@ import SwiftUI
             deps.intakeChanged()
             guard isCurrent(api) else { return }
             intake?.align(result)
+            #if os(iOS)
+            HomeWidgetData.shared.intakeChanged(on: api, confirmed: intake)
+            #endif
             intakeError = nil
             if result.entry?.deletedAt != nil {
                 deps.toast(Toast(String(localized: "Intake undone"), style: .success))
@@ -166,6 +169,9 @@ import SwiftUI
             deps.intakeChanged()
             guard isCurrent(api) else { return }
             intake?.align(result)
+            #if os(iOS)
+            HomeWidgetData.shared.intakeChanged(on: api, confirmed: intake)
+            #endif
             deps.toast(Toast(String(localized: "Intake undone"), style: .success))
         } catch {
             guard isCurrent(api) else { return }

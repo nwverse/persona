@@ -18,10 +18,10 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/builtinext"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/kb"
-	"github.com/nwverse/persona/server/internal/voice"
-	"github.com/nwverse/persona/server/internal/voice/voicetest"
+	"github.com/nwverse/persona/server/internal/modules/voice/voicetest"
 )
 
 // Hub transcription end to end (docs/assistant/meeting-minutes.md "Phase 5: hub transcription"): the phone's audio
@@ -53,11 +53,14 @@ var e2eTimeline = map[string]any{
 
 // adapterTranscribers reaches the voice extension's transcription contribution over HTTP, as the extensions layer
 // does over the extension's socket.
-type adapterTranscribers struct{ srv *httptest.Server }
+type adapterTranscribers struct {
+	srv *httptest.Server
+	cid string // the voice extension's transcription contribution
+}
 
 func (a adapterTranscribers) TranscriptionInfo(ctx context.Context, ref string) (extwire.TranscriptionInfo, error) {
 	var info extwire.TranscriptionInfo
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, a.srv.URL+"/transcription/"+voice.TranscriptionContribution+"/info", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, a.srv.URL+"/transcription/"+a.cid+"/info", nil)
 	res, err := a.srv.Client().Do(req)
 	if err != nil {
 		return info, err
@@ -70,7 +73,7 @@ func (a adapterTranscribers) TranscriptionInfo(ctx context.Context, ref string) 
 }
 
 func (a adapterTranscribers) TranscriptionDial(ctx context.Context, ref string) (*websocket.Conn, func(), error) {
-	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(a.srv.URL, "http")+"/transcription/"+voice.TranscriptionContribution+"/ws", nil)
+	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(a.srv.URL, "http")+"/transcription/"+a.cid+"/ws", nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -128,11 +131,19 @@ func newE2EFixture(t *testing.T, s voicetest.Script) *e2eFixture {
 	t.Helper()
 	shortHubTimes(t)
 	jobReadyWait, audioEndWait, jobDoneWait = 20*time.Second, 25*time.Second, time.Minute
+	voice, ok := builtinext.VoiceExtension()
+	if !ok {
+		t.Skip("the voice module, the built-in transcription these tests run, is not in this build")
+	}
 	live := voicetest.NewLive(t, s)
 	adapterLog := &lockedBuf{}
-	pl := voice.New(voice.Config{Providers: []voice.Provider{{ID: "t", URL: live.URL(), Dialect: voice.DialectLive, Key: "k",
-		DefaultModel: "m1"}}, Default: "t/m1"}, "http://127.0.0.1:1", "hubtoken", log.New(adapterLog, "", 0))
-	ext := httptest.NewServer(pl.Handler())
+	cfg, _ := json.Marshal(map[string]any{"providers": []map[string]any{{"id": "t", "url": live.URL(), "dialect": "live", "key": "k",
+		"default_model": "m1"}}, "default": "t/m1"})
+	handler, err := voice.Handler(cfg, "http://127.0.0.1:1", "hubtoken", log.New(adapterLog, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext := httptest.NewServer(handler)
 	t.Cleanup(ext.Close)
 
 	managerLog := &lockedBuf{}
@@ -149,7 +160,7 @@ func newE2EFixture(t *testing.T, s voicetest.Script) *e2eFixture {
 		srv.Close()
 		feed.stop()
 	})
-	s2.trans = adapterTranscribers{srv: ext}
+	s2.trans = adapterTranscribers{srv: ext, cid: voice.TranscriptionContribution}
 	s2.transcriptionReadinessChanged()
 	sockets := httptest.NewServer(http.HandlerFunc(s2.ServeSocket))
 	h := &hubFixture{meetingFixture: m, sockets: sockets}

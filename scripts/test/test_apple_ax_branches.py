@@ -17,6 +17,10 @@ ALLOWED = {
     "Persona/Views/Chat/BubbleFold.swift": "the user bubble folds by the reading size it is given",
     "Shared/Design/RecordingTokens.swift": "the recording timer's own cap",
     "PersonaWatch/PersonaWatchApp.swift": "the watch's showLargeText launch switch",
+    "Persona/DesignSystem/ActivityRings.swift": "stacks the rings above their values, a reading container (.readingContent), "
+                                                "at the reading size (#13251)",
+    "Persona/Views/Health/HealthTodaySection.swift": "stacks the intake actions at the system's accessibility sizes "
+                                                     "(WindowTextSize.system), beside the Activity rings (#13251)",
 }
 
 USE = re.compile(r"isAccessibilitySize|\.accessibility[1-5]\b")

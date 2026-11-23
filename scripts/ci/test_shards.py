@@ -34,11 +34,11 @@ class ServerShardCommandTests(unittest.TestCase):
 
     def test_the_managers_shard_runs_internal_assistant_hub_and_voice_in_their_partitions(self):
         managers = ["example/server/internal/assistant", "example/server/internal/assistant/fleet",
-                    "example/server/internal/hub", "example/server/internal/voice"]
+                    "example/server/internal/hub", "example/server/internal/modules/voice"]
         self.assertEqual(server.select_packages(managers + self.node, "managers"), managers)
         runs = server.commands(managers, "managers", "/tmp/db.json",
                                {"./internal/assistant": ["^(TestX)$", "^(TestY)$"], "./internal/hub": ["^(TestH)$"],
-                                "./internal/voice": ["^(TestV)$"]})
+                                "./internal/modules/voice": ["^(TestV)$"]})
         self.assertEqual(len(runs), 5)
         for run in runs:
             self.assertEqual(run[run.index("go"):run.index("go") + 7],
@@ -47,7 +47,7 @@ class ServerShardCommandTests(unittest.TestCase):
         self.assertEqual([run[-3:] for run in runs[1:]], [["-run", "^(TestX)$", "./internal/assistant"],
                                                           ["-run", "^(TestY)$", "./internal/assistant"],
                                                           ["-run", "^(TestH)$", "./internal/hub"],
-                                                          ["-run", "^(TestV)$", "./internal/voice"]])
+                                                          ["-run", "^(TestV)$", "./internal/modules/voice"]])
 
     def test_shards_without_a_partitioned_package_stay_one_process(self):
         self.assertEqual(len(server.commands(["example/server/internal/assistant/fleet"], "managers", "/tmp/db.json")), 1)
@@ -190,6 +190,7 @@ class ShardTests(unittest.TestCase):
         self.assertEqual(len(selected), len(set(selected)))
         self.assertEqual(server.select_packages(packages, "node"), [packages[0], packages[-3]])
         self.assertIn("example/server/internal/hubedge", server.select_packages(packages, "other"))
+        self.assertIn("example/server/internal/modules/voice", server.select_packages(packages + ["example/server/internal/modules/voice"], "managers"))
         with self.assertRaises(ValueError):
             server.select_packages(packages, "typo")
 
