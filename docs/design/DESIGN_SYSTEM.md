@@ -39,6 +39,16 @@ Today row uses the existing `NavigationLink` to this same page and disappears wh
 No new visual token, component style, polling loop or background task is introduced. All text ships in English,
 Simplified Chinese and Japanese; use Apple Health / Apple 健康 consistently.
 
+## Module actions and Settings pages (Android, #13847)
+
+Audience: everyone, though no default screen changes: a module's actions and pages appear only when a module adds some.
+A feature module (`docs/architecture/core-and-modules.md`) adds to a surface it does not own in one way only: its
+actions go **after** the surface's own, under a rule, as a group of their own (the composer's ⊕ menu, a message's menu;
+in a conversation's ⋯ menu before Close and Delete, so the destructive actions stay last), and its Settings pages are
+rows at the end of the assistant's group, with the module's own title and icon token. A module that is off adds
+nothing, and nothing is left greyed out (principle 2). No new component or token: rows and actions reuse `JRow` and
+`JAction`.
+
 ## Product design principles
 
 The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.

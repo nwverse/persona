@@ -57,7 +57,7 @@ import { Icon } from "../../ui/icons";
 import { StoppedAgentLine } from "./StoppedAgentLine";
 const TakeoverAction = lazy(() => import("./TakeoverAction"));
 import { scrollBehavior } from "../../ui/stream/motion";
-import { segmentChanges, shiftAbove } from "./offscreen";
+import { segmentChanges, shiftAbove, type SizeChange } from "./offscreen";
 import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands, openPickerCommand } from "../../lib/composer-commands";
@@ -135,11 +135,9 @@ import { useDirectionName } from "../../lib/direction-names";
 import { chatPlaceIn, dropChatPlace, firstLineInView, handoffFrom, leaveChat, type ChatPlace, type HandoffFrom } from "../../lib/handoff";
 import { externalOpening, openerOf } from "../../lib/conversation-origins";
 import { usePersona } from "../assistant/Persona";
-import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
 import { agentLabel } from "../../lib/mentions";
-import { useVoiceEntry, VoiceBar, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
 import { ChatTail, useChatBar, useComposerAction } from "../../core/ChatSlots";
-import type { ChatPageProps, ComposerAction } from "../../core/module-host";
+import type { ChatPageProps } from "../../core/module-host";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, knownAction, refreshReadiness, type CodedFailure } from "../../lib/readiness";
 import { FALLBACK_UNAVAILABLE, recoveryExhausted } from "../../lib/model-fallback";
@@ -191,6 +189,9 @@ const BackgroundActivity = lazyDialog(() => import("./BackgroundActivity").then(
 
 const NO_FEED: FeedItem[] = [];
 const NO_DISPLAY_LINES: DisplayLine[] = [];
+// Below this many exchanges the ordinary immediate mount is cheaper than observing rows. Past it, completed off-screen
+// bodies mount a viewport at a time (SegmentView); their sections, estimates and live / final-two rules stay as they were.
+const CHAT_WINDOW_MIN_SEGMENTS = 40;
 // A worker's card as its own conversation shows it (#5180): without the fold that makes it "From worker" on its lead's page.
 // One copy per card object, so a push that leaves the card alone leaves its copy alone too.
 const ownCopies = new WeakMap<Interaction, Interaction>();
@@ -497,23 +498,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const keptUndelivered = shownUndelivered(session, tr.items, pending.map((p) => p.id));
   const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
-  // Voice chat (docs/web/web.md "Voice"): the call belongs to this page (the same chat may be open twice, a page and a
-  // side panel), and ends as the page leaves the conversation. ChatView learns only whether a call is on here.
-  const voiceId = useId();
-  const voiceOwner = useMemo(() => ({ mid, sid, owner: voiceId }), [mid, sid, voiceId]);
-  useEffect(() => () => voiceCalls.leave(voiceOwner), [voiceOwner]);
-  const voiceState = useVoiceState(voiceOwner);
-  const voiceCall = useVoiceCall(voiceOwner);
-  const voiceLabel = assistant ? persona.name : session ? agentLabel(session) : "Claude";
+  // what the chat slots are told (core/ChatSlots.tsx): this page's own id (the same chat may be open twice, a page and a
+  // side panel), and who answers here
+  const pageId = useId();
+  const answerer = assistant ? persona.name : session ? agentLabel(session) : "Claude";
   const itemsNow = useRef(tr.items);
   itemsNow.current = tr.items;
   const readItems = useCallback(() => itemsNow.current, []);
-  const voiceEntry = useVoiceEntry({ ...voiceOwner, session, items: readItems, label: voiceLabel, off: Boolean(offlineLine) || !sessionCan(session, "send") });
-  const voiceOffer = voiceEntry.offer;
-  const voiceAction = useMemo<ComposerAction | undefined>(
-    () => voiceOffer && { icon: "voice", name: t("voice.voice_chat"), label: voiceOffer.label, primary: voiceOffer.mode === "start", onClick: voiceOffer.onClick, attributes: { "data-testid": "composer-voice", "data-voice-mode": voiceOffer.mode } },
-    [voiceOffer],
-  );
   // the message is in, the hub has not said working yet (#3654): the live row covers that wait too
   const segs = useMemo(() => segments(tr.items), [tr.items]);
   const lastSeg = segs[segs.length - 1];
@@ -1110,39 +1101,49 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the view moves by as much, so what is on screen stays (offscreen.ts).
   const heights = useRef(new WeakMap<Element, number>());
   const resized = useRef<ResizeObserver | null>(null);
+  const compensate = useCallback((changes: SizeChange[]) => {
+    const sc = scroller.current;
+    if (!sc) return;
+    if (gliding.current) return;
+    const viewTop = sc.getBoundingClientRect().top;
+    const l = landing.current;
+    if (l && (l.row instanceof Range ? l.row.startContainer : l.row).isConnected) {
+      const off = l.row.getBoundingClientRect().top - viewTop - l.at;
+      if (Math.abs(off) >= 0.5) {
+        sc.scrollTop += off;
+        holdLanding(1200);
+      }
+      return;
+    }
+    const a = anchor.current;
+    if (a && a.el.isConnected) {
+      const r = a.el.getBoundingClientRect();
+      const next = anchoredScroll(a, {
+        scrollTop: sc.scrollTop, scrollHeight: sc.scrollHeight, clientHeight: sc.clientHeight,
+        viewTop: sc.getBoundingClientRect().top, edgeAt: r.top, elTop: r.top,
+      });
+      if (Math.abs(next.scrollTop - sc.scrollTop) >= 0.5) sc.scrollTop = next.scrollTop;
+      clearTimeout(a.quiet);
+      a.quiet = window.setTimeout(() => (anchor.current = null), 600);
+      return;
+    }
+    if (atEnd.current) sc.scrollTop = sc.scrollHeight;
+    else {
+      const shift = shiftAbove(changes, viewTop);
+      if (shift) sc.scrollTop += shift;
+    }
+  }, [holdLanding]);
   const sizes = useCallback(() => (resized.current ??= new ResizeObserver((entries) => {
-      const sc = scroller.current;
-      if (!sc) return;
-      const changes = segmentChanges(entries, heights.current);
-      if (gliding.current) return;
-      const viewTop = sc.getBoundingClientRect().top;
-      const l = landing.current;
-      if (l && (l.row instanceof Range ? l.row.startContainer : l.row).isConnected) {
-        const off = l.row.getBoundingClientRect().top - viewTop - l.at;
-        if (Math.abs(off) >= 0.5) {
-          sc.scrollTop += off;
-          holdLanding(1200);
-        }
-        return;
-      }
-      const a = anchor.current;
-      if (a && a.el.isConnected) {
-        const r = a.el.getBoundingClientRect();
-        const next = anchoredScroll(a, {
-          scrollTop: sc.scrollTop, scrollHeight: sc.scrollHeight, clientHeight: sc.clientHeight,
-          viewTop: sc.getBoundingClientRect().top, edgeAt: r.top, elTop: r.top,
-        });
-        if (Math.abs(next.scrollTop - sc.scrollTop) >= 0.5) sc.scrollTop = next.scrollTop;
-        clearTimeout(a.quiet);
-        a.quiet = window.setTimeout(() => (anchor.current = null), 600);
-        return;
-      }
-      if (atEnd.current) sc.scrollTop = sc.scrollHeight;
-      else {
-        const shift = shiftAbove(changes, viewTop);
-        if (shift) sc.scrollTop += shift;
-      }
-    })), [holdLanding]);
+      if (!scroller.current) return;
+      compensate(segmentChanges(entries, heights.current));
+    })), [compensate]);
+  // A windowed body mounts from IntersectionObserver, later in the frame than content-visibility's own layout. Give
+  // the same compensation its old and new heights now, and advance the observer's baseline so it cannot apply them twice.
+  const windowDrawn = useCallback((section: HTMLElement, was: number) => {
+    const rect = section.getBoundingClientRect();
+    heights.current.set(section, rect.height);
+    compensate([{ top: rect.top, was, now: rect.height }]);
+  }, [compensate]);
   useEffect(() => {
     const view = scroller.current;
     const el = view?.firstElementChild;
@@ -1532,13 +1533,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // The chat slots modules fill (core/ChatSlots.tsx, core/module-host.ts ChatSlotComponents): what the page hands them.
   const canSendHere = !offlineLine && sessionCan(session, "send");
   const slotPage = useMemo<ChatPageProps>(
-    () => ({ mid, sid, owner: voiceId, session, assistant: Boolean(assistant), label: voiceLabel, persona: persona.name, canSend: canSendHere, items: readItems, cards: interactions, onStopAgent: sessionCan(session, "interrupt") ? interrupt : undefined }),
-    [mid, sid, voiceId, session, assistant, voiceLabel, persona.name, canSendHere, readItems, interactions, interrupt],
+    () => ({ mid, sid, owner: pageId, session, assistant: Boolean(assistant), label: answerer, persona: persona.name, canSend: canSendHere, items: readItems, cards: interactions, onStopAgent: interrupt }),
+    [mid, sid, pageId, session, assistant, answerer, persona.name, canSendHere, readItems, interactions, interrupt],
   );
   const composerAction = useComposerAction(slotPage);
   const chatBar = useChatBar(slotPage);
-  // a call (or a module's bar) in the composer's place: the composer and the Assistant's action rows give it their place
-  const takeover = voiceState === "live" || chatBar.taken;
+  // a module's bar in the composer's place (a live voice call): the composer and the Assistant's action rows give way
+  const takeover = chatBar.taken;
   // Ctrl/⌘+Enter in the box: the queue panel's Send now (QueuePanel.tsx), after the message is queued
   const sendQueueNow = useCallback(async () => {
     try {
@@ -1881,8 +1882,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // elapsed timer (and empty non-expandable live row) so only one Working… timer ticks on screen (#12380).
   const dockTurnClock = Boolean(session && dockBarShown && runningWorking && !backgroundOnly && !wait && !subtasks && !command);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, harness, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin, opened_by: openingBy, manager: openingManager } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded }),
-    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, harness, openingId, openingOrigin, openingBy, openingManager, closeoutSegment, places, embedded],
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, harness, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin, opened_by: openingBy, manager: openingManager } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded, windowHistory: segs.length >= CHAT_WINDOW_MIN_SEGMENTS, windowDrawn }),
+    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, harness, openingId, openingOrigin, openingBy, openingManager, closeoutSegment, places, embedded, segs.length, windowDrawn],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
   // rows that hold it open, search-reveal.ts), lit for HIT_MS, and "Back to where you were" ──
@@ -2555,7 +2556,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                 {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : sendFeedback === "processing" || processing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
               </div>
             )}
-            {voiceState && <VoiceTail owner={voiceOwner} persona={persona.name} />}
             <ChatTail {...slotPage} />
           </div>
           <CommentMarks scroller={scroller} jump={landRow} />
@@ -2638,7 +2638,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             }}
           />
         )}
-        {voiceState === "ended" && <VoiceEnded owner={voiceOwner} />}
         {chatBar.bar("dock")}
         {/* the error the chat stopped on, right over the composer as cindy places it (#5313); keyed by the error, so a new
             one opens with its details folded */}
@@ -2662,13 +2661,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         {/* the goal it works toward, right over the composer as cindy's goal indicator (#5421) */}
         {session?.goal && !assistant && <Suspense fallback={null}><GoalBar goal={session.goal} /></Suspense>}
         </div>
-        {voiceEntry.dialog}
         {composerAction.slot}
-        {voiceState === "live" && voiceCall && (
-          <div className="shrink-0">
-            <VoiceBar call={voiceCall} session={session} cards={interactions} label={voiceLabel} persona={persona.name} onStopAgent={interrupt} />
-          </div>
-        )}
         {chatBar.bar("composer")}
         {/* picking messages to forward (#3838): the bar in the composer's place, which stays with its draft */}
         {picker && pickParts.Bar && <pickParts.Bar pick={picker} chat={forwardFrom} onEnd={endPick} />}
@@ -2705,7 +2698,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           leading={leading}
           trailing={trailing}
           planMode={planMode}
-          action={composerAction.action ?? voiceAction}
+          action={composerAction.action}
           top={short ? undefined : queue}
         />
         )}
@@ -2797,7 +2790,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
 function NotLivePill({ onReload, lower, error }: { onReload: () => void; /** The search's return pill is at the same edge: under it. */ lower?: boolean; error?: string }) {
   return (
     <div role="status" data-testid="chat-not-live" className={lower ? "absolute top-14 left-1/2 z-10 -translate-x-1/2" : "absolute top-3 left-1/2 z-10 -translate-x-1/2"} style={{ animation: "fade-up 150ms ease-out both" }}>
-      <div className="flex h-8 items-center gap-2 rounded-full border border-line bg-surface px-3 text-[12px] leading-none whitespace-nowrap text-ink-2 shadow-raised">
+      <div className="flex h-8 items-center gap-2 rounded-full border border-line bg-surface px-3 text-label leading-none whitespace-nowrap text-ink-2 shadow-raised">
         <span title={error}>{t(error ? "chat-chatview.refresh_failed" : "chat-chatview.not_live")}</span>
         <button type="button" onClick={onReload} className="touch-hit font-medium text-accent-ink hover:underline">
           {t("chat-chatview.not_live_reload")}

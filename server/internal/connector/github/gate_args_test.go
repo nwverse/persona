@@ -11,13 +11,14 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // signedIn is the connector with a login nothing has to check: Registry.Call asks the status before it gates a write.
 type signedIn struct{ *Connector }
 
-func (signedIn) Status(context.Context) connector.Status {
-	return connector.Status{State: connector.StateOK}
+func (signedIn) Status(context.Context) connectorwire.Status {
+	return connectorwire.Status{State: connectorwire.StateOK}
 }
 
 // This connector reads its arguments with encoding/json, which takes one of two names that differ only in capitals, or

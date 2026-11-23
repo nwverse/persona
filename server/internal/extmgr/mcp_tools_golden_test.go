@@ -10,7 +10,6 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/github"
 	"github.com/nwverse/persona/server/internal/connector/imessage"
-	"github.com/nwverse/persona/server/internal/mail"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 )
@@ -62,7 +61,7 @@ func TestGoldenConnectorTools(t *testing.T) {
 		assertNoEmptyToolEnums(t, append(wire.Tools, wire.AssistantTools...))
 		return string(b) + "\n"
 	}
-	h.mail = (*mail.Service)(nil) // Tools() reads nothing from the service
+	h.mail = testMail(t) // Tools() reads nothing from the service
 	// Subscriptions run in every manager: their tools are the assistant's (subscription_tools.go).
 	h.subs = subscriptions.New(subscriptions.Options{Store: subscriptions.NewMemStore(), Connectors: subscriptionConnectors{h}})
 	register := func() { // the connectors as the manager registers them (mail's and Feishu's tools come from them)

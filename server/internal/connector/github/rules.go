@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
@@ -121,7 +121,7 @@ func (c *Connector) SetOptions(raw json.RawMessage) error {
 	st.seen, st.fullAt = map[string]string{}, time.Time{}
 	for thread, t := range st.things {
 		if why := c.over(thread, o); why != "" && t.Done == "" {
-			t.Done, t.Why = connector.DoneRead, why
+			t.Done, t.Why = connectorwire.DoneRead, why
 		}
 	}
 	st.mu.Unlock()
@@ -245,9 +245,9 @@ func (c *Connector) myOpenPR(ctx context.Context, repo, branch, me string) (int,
 
 // describeCI makes a failed CI run into its branch's item, with the tier the options give; ok false: not for the
 // inbox (a branch the user does not want).
-func (c *Connector) describeCI(ctx context.Context, n notification, run ciRun, me string, o InboxOptions) (connector.InboxThing, bool, error) {
+func (c *Connector) describeCI(ctx context.Context, n notification, run ciRun, me string, o InboxOptions) (connectorwire.InboxThing, bool, error) {
 	repo := n.Repository.FullName
-	t := connector.InboxThing{Kind: "ci_failed", Label: "CI 失败", Sender: "GitHub Actions", Preview: n.Subject.Title, At: n.UpdatedAt,
+	t := connectorwire.InboxThing{Kind: "ci_failed", Label: "CI 失败", Sender: "GitHub Actions", Preview: n.Subject.Title, At: n.UpdatedAt,
 		Title: ciItemTitle(repo, run.branch), URL: n.Repository.HTMLURL + "/actions?query=" + url.QueryEscape("branch:"+run.branch)}
 	def, err := c.defaultBranch(ctx, repo)
 	if err != nil {
@@ -256,19 +256,19 @@ func (c *Connector) describeCI(ctx context.Context, n notification, run ciRun, m
 	pr := 0
 	switch {
 	case run.branch == def:
-		t.Tier, t.Why = connector.TierAction, "规则：默认分支的 CI 失败"
+		t.Tier, t.Why = connectorwire.TierAction, "规则：默认分支的 CI 失败"
 	case o.ci() == CIDefaultBranch:
 		return t, false, nil
 	case o.ci() == CIAll:
-		t.Tier, t.Why = connector.TierAction, "规则：CI 失败（设置为全部提醒）"
+		t.Tier, t.Why = connectorwire.TierAction, "规则：CI 失败（设置为全部提醒）"
 	default: // mine
 		if pr, err = c.myOpenPR(ctx, repo, run.branch, me); err != nil {
 			return t, false, err
 		}
 		if pr > 0 {
-			t.Tier, t.Why = connector.TierAction, "规则：你开着的 PR 的 CI 失败"
+			t.Tier, t.Why = connectorwire.TierAction, "规则：你开着的 PR 的 CI 失败"
 		} else {
-			t.Tier, t.Why = connector.TierFYI, "规则：功能分支的 CI 失败"
+			t.Tier, t.Why = connectorwire.TierFYI, "规则：功能分支的 CI 失败"
 		}
 	}
 	t.Context = ciContext(repo, run.branch, pr, n.Subject.Title)
@@ -323,7 +323,7 @@ func (c *Connector) followUpCI(ctx context.Context) bool {
 		if t := st.things[thread]; t != nil && t.Done == "" {
 			switch {
 			case check.over != "":
-				t.Done, t.Why, moved = connector.DoneRead, check.over, true
+				t.Done, t.Why, moved = connectorwire.DoneRead, check.over, true
 			case check.failed.at.After(t.At):
 				// News the user has not seen, even if they read the item's notification: GitHub sent none of this run.
 				t.At, t.Last, t.Read = check.failed.at, markLast(check.failed.at.UTC().Format(time.RFC3339), epoch), false
