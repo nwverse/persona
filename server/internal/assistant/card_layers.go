@@ -53,7 +53,7 @@ const (
 	cardAgentSecretForm    = "agent_secret_form"    // an Agent's card asking for a password, fields or an MCP form (elicitation)
 	cardConfirmOutbound    = "confirm_outbound"     // health.go confirmOutbound: a conversation hands sensitive words to another Agent
 	cardOutboundWrite      = "outbound_write"       // a connector's write the gate left to the owner (mail_send, a chat message, a comment)
-	cardLeaderNeedsUser    = "leader_needs_user"    // supervise_events.go: a task waits on the owner (needs_user)
+	cardLeaderNeedsUser    = "leader_needs_user"    // a task waited on the owner (needs_user); before decision rights it was pushed straight to them, kept for the history it counts
 	cardDecision           = "decision"             // todo_ask.go pushDecision: a to-do's decision with a recommendation
 	cardTodoRemind         = "todo_remind"          // todo_plan.go: a reminder the owner set
 	cardHealthWater        = "health_water"         // health_water.go: the water reminders the owner switched on

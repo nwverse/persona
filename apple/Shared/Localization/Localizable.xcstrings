@@ -1,6 +1,116 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Move the water extension's records and settings into Health and turn off the extension. Its water page on Android will disappear." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move the water extension's records and settings into Health and turn off the extension. Its water page on Android will disappear."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把喝水扩展的记录和设置搬进健康，并停用扩展；安卓上扩展的喝水页会消失。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "水分補給拡張機能の記録と設定をヘルスケアに移し、拡張機能を停止します。Androidの拡張機能の水分補給ページは表示されなくなります。"
+          }
+        }
+      }
+    },
+    "Move into Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Move into Health"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搬进健康"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに移す"
+          }
+        }
+      }
+    },
+    "Moving into Health…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moving into Health…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搬进健康…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ヘルスケアに移動中…"
+          }
+        }
+      }
+    },
+    "Couldn't move the water extension into Health" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't move the water extension into Health"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法把喝水扩展搬进健康"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "水分補給拡張機能をヘルスケアに移せませんでした"
+          }
+        }
+      }
+    },
+    "Moved %lld records; water extension disabled. Replace widgets, watch faces and shortcuts." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moved %lld records; water extension disabled. Replace widgets, watch faces and shortcuts."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已搬进 %lld 条，喝水扩展已停用。请更换小组件、表盘和快捷指令。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld件を移し、水分補給拡張機能を停止しました。ウィジェット、文字盤、ショートカットを置き換えてください。"
+          }
+        }
+      }
+    },
     "Book [Space Icon]" : {
       "extractionState" : "manual",
       "localizations" : {

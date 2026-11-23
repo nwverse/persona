@@ -10,10 +10,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/botport"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -296,7 +297,7 @@ func topicsCmd(text string, mentions []botcard.Mention) (cmd string, ok bool) {
 // botGroupMessage takes a message from a group chat (not the bot's private chat): see the five conditions above, and
 // the owner's "@bot /ai …" from a group that is not on the list (botAIElsewhere). Every one that fails is a plain return:
 // no note, no reaction, nothing in the chat.
-func (h *Manager) botGroupMessage(api *feishubot.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) {
+func (h *Manager) botGroupMessage(api botport.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) {
 	msg := ev.Message
 	if set.Owner == nil || ev.Sender.SenderID.OpenID != set.Owner.OpenID || msg.ChatID == "" {
 		return // not paired, or not the owner: in a group anyone could write to the owner's Persona
@@ -346,7 +347,7 @@ func (h *Manager) botGroupMessage(api *feishubot.Client, set FeishuBotSettings, 
 // rich-text message (a merged forward is nothing to run), that @-mentions the bot, whose words, the leading @ of the bot
 // taken off, start with /ai. It is kept as a source (the bot may reply to it, aiSourceReply), audited, and handed to the
 // assistant marked FeishuFromElsewhere. Anything else is dropped without a word, as every message of such a group was.
-func (h *Manager) botAIElsewhere(api *feishubot.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) {
+func (h *Manager) botAIElsewhere(api botport.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) {
 	msg := ev.Message
 	if msg.MessageType != "text" && msg.MessageType != "post" || msg.MessageID == "" {
 		return
@@ -378,7 +379,7 @@ func (h *Manager) botAIElsewhere(api *feishubot.Client, set FeishuBotSettings, e
 
 // botOpenID is the bot's own open id, which tells its @ from anyone else's: read at start-up, and once more here when
 // that did not work.
-func (h *Manager) botOpenID(api *feishubot.Client) string {
+func (h *Manager) botOpenID(api botport.Client) string {
 	b := &h.bots
 	b.mu.Lock()
 	id := b.info.OpenID
@@ -556,7 +557,7 @@ var errBotReplyChat = &rpc.Error{Code: assistantwire.CodeChatDenied, Message: "f
 // chat the bot may use). A parent that is withdrawn or deleted cannot be replied to at all, so the send falls back to
 // the chat the call names (replyOrSend), which botSendChat checked: the chat returned is "" then. A chat that cannot be
 // told is refused. With no parent there is nothing to check.
-func (h *Manager) checkReplyParent(ctx context.Context, api *feishubot.Client, set FeishuBotSettings, replyTo string) (string, error) {
+func (h *Manager) checkReplyParent(ctx context.Context, api botport.Client, set FeishuBotSettings, replyTo string) (string, error) {
 	if replyTo == "" {
 		return "", nil
 	}
