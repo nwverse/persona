@@ -517,18 +517,23 @@ func (s *Service) agentNamingSay(reason string) bool {
 // the app; the caller logs it, even if a later native-title recheck discards the result.
 func (s *Service) agentNameFromModel(ctx context.Context, machine, id string) (title, reason string) {
 	first, recent, err := s.agentNameDialogue(ctx, machine, id)
-	reason = "dialogue_unavailable"
-	var reply ai.Reply
-	if err == nil && first == "" && recent == "" {
-		err = errors.New("no dialogue")
-		reason = "no_dialogue"
+	if err != nil {
+		return "", agentNamingCtxReason(ctx, "dialogue_unavailable")
 	}
-	if err == nil {
-		reason = "model_call_failed"
-		reply, err = s.purposeModel("inbox.triage").Chat(ctx, ai.Request{System: prompts.RenderAgentSessionName(), Messages: []ai.Message{{Role: ai.RoleUser, Content: prompts.RenderAgentSessionNameInput(prompts.AgentSessionNameInput{First: first, Recent: recent})}}, MaxTokens: 256, BoundOutput: true})
-		if ai.IsNotConfigured(err) {
-			reason = "model_not_configured"
-		}
+	return s.agentNameFromDialogue(ctx, first, recent)
+}
+
+// agentNameFromDialogue asks the naming model for a session's name from its first user message and recent dialogue:
+// agentNameFromModel's call and check once the dialogue is read, and a desktop start's from what the start asked
+// (desktop_start_naming.go). reason is as agentNameFromModel's.
+func (s *Service) agentNameFromDialogue(ctx context.Context, first, recent string) (title, reason string) {
+	if first == "" && recent == "" {
+		return "", agentNamingCtxReason(ctx, "no_dialogue")
+	}
+	reason = "model_call_failed"
+	reply, err := s.purposeModel("inbox.triage").Chat(ctx, ai.Request{System: prompts.RenderAgentSessionName(), Messages: []ai.Message{{Role: ai.RoleUser, Content: prompts.RenderAgentSessionNameInput(prompts.AgentSessionNameInput{First: first, Recent: recent})}}, MaxTokens: 256, BoundOutput: true})
+	if ai.IsNotConfigured(err) {
+		reason = "model_not_configured"
 	}
 	title = strings.TrimSpace(strings.Trim(strings.TrimSpace(reply.Text), "\"“”『』")) // i18n-ignore: punctuation normalization
 	if err == nil && (reply.Truncated || !validAgentName(title)) {
@@ -541,12 +546,17 @@ func (s *Service) agentNameFromModel(ctx context.Context, machine, id string) (t
 	if err == nil {
 		return title, ""
 	}
+	return "", agentNamingCtxReason(ctx, reason)
+}
+
+// agentNamingCtxReason is a naming call's failure reason: a timeout or cancellation of ctx over the reason it failed with.
+func agentNamingCtxReason(ctx context.Context, reason string) string {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		reason = "naming_timeout"
+		return "naming_timeout"
 	} else if errors.Is(ctx.Err(), context.Canceled) {
-		reason = "naming_canceled"
+		return "naming_canceled"
 	}
-	return "", reason
+	return reason
 }
 
 func (s *Service) rawAgentForNaming(ctx context.Context, machine, id string) (proto.Session, bool) {

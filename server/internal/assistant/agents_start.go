@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -50,6 +51,7 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 	if launcher, _ := params["launcher"].(string); proto.IsExternalLauncher(launcher) {
 		return nil, badRequest(i18n.Err("external-adapter.purpose_unsupported"), s.appLang(ctx, p.Lang))
 	}
+	inDesktopApp := false // the launcher starts it in Claude's desktop app, which has no tab to name
 	if resume, _ := params["resume_session_id"].(string); resume != "" {
 		if err := checkStartSpeed(params, startAgent{}, resume); err != nil {
 			return nil, badRequest(err, s.appLang(ctx, p.Lang))
@@ -77,6 +79,7 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 				delete(params, "permission_mode")
 			}
 			leaveLauncherNote(ctx, note) // the app says so (agents_bus.go launcher_note, #4661)
+			inDesktopApp = compat.Source(agent.source) == proto.SourceClaudeDesktop
 			// AGY returns a session only after startup, including for a launcher resolved from Model settings.
 			if declared, _ := params["agent_type"].(string); declared == "" && agent.agent == "agy" {
 				params["agent_type"] = agent.agent
@@ -91,7 +94,9 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 	delete(params, "launcher_default_effort")
 	clearStandardSpeed(params)
 	s.setPlanThen(ctx, p.MachineID, params)
-	if name, _ := params["tab_name"].(string); strings.TrimSpace(name) == "" && p.NameFrom != "" {
+	// A session in Claude's desktop app is named from its first message once the start has ended, off the start's path
+	// (desktop_start_naming.go): the start does not wait for a tab name it would not use.
+	if name, _ := params["tab_name"].(string); strings.TrimSpace(name) == "" && p.NameFrom != "" && !inDesktopApp {
 		if name := s.tabName(ctx, p.NameFrom); name != "" {
 			params["tab_name"] = name
 		}

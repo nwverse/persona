@@ -28,7 +28,10 @@ func TestDesktopStartsRefuseScopedNode(t *testing.T) {
 		t.Fatal("scoped node offered Codex App")
 	}
 	params := runtimeStartParams{Cwd: filepath.Join(t.TempDir(), "must-not-exist"), Prompt: "hello"}
-	for _, start := range []func(context.Context, runtimeStartParams, string) (*proto.Session, error){n.newDesktopSession, n.newCodexAppChat} {
+	desktop := func(ctx context.Context, p runtimeStartParams, _ string) (*proto.Session, error) {
+		return n.newDesktopSession(ctx, p)
+	}
+	for _, start := range []func(context.Context, runtimeStartParams, string) (*proto.Session, error){desktop, n.newCodexAppChat} {
 		_, err := start(context.Background(), params, "")
 		var re *rpc.Error
 		if !errors.As(err, &re) || re.Code != "desktop_scope_unavailable" || deliveredOf(re) != deliveredNone {
