@@ -325,3 +325,33 @@ func TestAgentTransferDeliversIssueSignalsOnlyOnceAcrossRestart(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentTransferInDoubtCardKeepsRelayIdentityAndMovesPendingQuestion(t *testing.T) {
+	e := newRouteEnv(t, nil, true)
+	if _, _, err := e.s.updateSupervision(t.Context(), e.todo.ID, func(v *Supervision) bool { v.Supervisor = "conv1"; return true }); err != nil {
+		t.Fatal(err)
+	}
+	e.supervisorState(proto.StatusWorking, proto.StatusIdle)
+	e.raise(askQuestion("in-doubt", "worker-1"))
+	waitFor(t, "queued question", func() bool { return e.s.queuedFor("conv1") == 1 })
+	e.s.relays.mu.Lock()
+	original := e.s.relays.st.Queue["conv1"][0]
+	original.TriedAt = time.Now()
+	e.s.relays.st.Queue["conv1"][0] = original
+	e.s.relays.mu.Unlock()
+	transferPlannedTask(t, e.s, e.f, todoNow(e.s, e.todo.ID), "lead1")
+	e.noticeWith("lead1", "interaction_id=in-doubt")
+	e.settle()
+	e.s.relays.mu.Lock()
+	queue := slices.Clone(e.s.relays.st.Queue["conv1"])
+	e.s.relays.mu.Unlock()
+	if len(queue) != 1 || queue[0] != original {
+		t.Fatal("transfer changed an uncertain relay's identity")
+	}
+	if _, stale, keep := e.s.recheckQueuedDigest(t.Context(), "conv1", original); !stale || keep {
+		t.Fatal("old uncertain card could be replayed after the current supervisor received it")
+	}
+	if len(e.f.noticesTo("conv1")) != 0 {
+		t.Fatal("old supervisor received another card after transfer")
+	}
+}

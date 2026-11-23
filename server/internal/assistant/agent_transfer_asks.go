@@ -12,7 +12,8 @@ import (
 )
 
 // transferPendingAsks moves supervisor-held cards and untried queued signals to the current assignment.
-// Owner-held cards and in-doubt deliveries keep their state. routingMu is held by the caller.
+// Owner-held cards keep their state; in-doubt relays retain their identity and cannot be replayed to the old recipient.
+// routingMu is held by the caller.
 func (s *Service) transferPendingAsks(ctx context.Context, t Todo) error {
 	b, r := &s.supervise, &s.relays
 	b.dedupMu.Lock()
@@ -39,8 +40,6 @@ func (s *Service) transferPendingAsks(ctx context.Context, t Todo) error {
 		return fmt.Errorf("supervisor saved; pending card queue unavailable: retry the transfer")
 	}
 	var release []superviseSignal
-	uncertain := map[string]bool{}
-	uncertainTask := false
 	for to, queue := range r.st.Queue {
 		for _, msg := range queue {
 			if msg.Tool != superviseTool || msg.Withdrawn {
@@ -52,16 +51,9 @@ func (s *Service) transferPendingAsks(ctx context.Context, t Todo) error {
 					continue
 				}
 				if !msg.TriedAt.IsZero() {
-					if g.Kind == sigAsk {
-						if len(g.Cards) == 0 {
-							uncertainTask = true
-						}
-						for _, card := range g.Cards {
-							uncertain[card.ID] = true
-						}
-					}
 					continue
 				}
+
 				if to != target && (g.Kind == sigAsk || s.digestTo(ctx, cfg, g) == target) {
 					release = append(release, g)
 				}
@@ -78,7 +70,7 @@ func (s *Service) transferPendingAsks(ctx context.Context, t Todo) error {
 	s.fleet.mu.Lock()
 	for id, p := range s.fleet.interactions {
 		route := p.route
-		if p.claimed || p.told || route == nil || route.todo != t.ID || route.at() == "" || route.at() == target || uncertainTask || uncertain[id] {
+		if p.claimed || p.told || route == nil || route.todo != t.ID || route.at() == "" || route.at() == target {
 			continue
 		}
 		previous[id] = *route

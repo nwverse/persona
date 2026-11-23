@@ -1851,7 +1851,6 @@ func TestNeedsUserFromTaskLeaderIsReviewedByMain(t *testing.T) {
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
 	var in map[string]any
 	_ = json.Unmarshal(leaderPlanArgs("leader"), &in)
-	in["supervisor"] = "lead1"
 	raw, _ := json.Marshal(in)
 	res, err := s.toolTaskPlan(ctx, "conv1", raw)
 	if err != nil {

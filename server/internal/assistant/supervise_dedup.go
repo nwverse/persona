@@ -230,9 +230,9 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 	}, nil
 }
 
-// ackSupervisionDedupLocked marks stable per-head and per-source reservations as delivered. An empty Key distinguishes
-// a delivered notification from one whose process stopped after reservation but before delivery or queue admission
-// (#5732). Other fingerprints depend on their rendered entry and are not recomputed here. dedupMu is held by sendDigest.
+// ackSupervisionDedupLocked marks reservations as delivered. An empty Key distinguishes a confirmed delivery or
+// durable queue admission from a crash after reservation. Re-emitting the same event after restart must not turn a
+// delivered fingerprint into a reservation retry. dedupMu is held by sendDigest.
 func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []superviseSignal) {
 	b := &s.supervise
 	history := b.dedup
@@ -248,10 +248,15 @@ func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []super
 	for _, g := range signals {
 		stable := g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo ||
 			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
+		entry := prompts.SuperviseEntry{}
 		if !stable {
-			continue
+			var ok bool
+			entry, ok = s.digestEntry(ctx, g, s.webBase(ctx))
+			if !ok {
+				continue
+			}
 		}
-		key, _ := digestFingerprint(prompts.SuperviseEntry{}, g)
+		key, _ := digestFingerprint(entry, g)
 		if seen, ok := next[key]; ok && seen.Key != "" && seen.Key == g.Key {
 			seen.Key = ""
 			next[key] = seen
