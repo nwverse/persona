@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -192,23 +193,41 @@ func TestQueuedWakeDrainKeepDoesNotRestore(t *testing.T) {
 	}
 }
 
-func TestUndeliveredDecisionIdleIgnoresFutureWake(t *testing.T) {
+// ownerChoiceSends are the digests to conversation that carry the owner's decision no Agent received.
+func ownerChoiceSends(f *fakeHub, conversation, decision string) []string {
+	var out []string
+	for _, text := range f.noticesTo(conversation) {
+		if strings.Contains(text, "signal="+sigOwnerChoice) && strings.Contains(text, decision) {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+// futureWakeAgent lists the task's Agent stopped on a question with a native wakeup an hour ahead: a wake promise that
+// holds back an ordinary idle, never the owner's decision that did not reach the Agent.
+func futureWakeAgent(f *fakeHub, todo Todo, now time.Time) {
+	f.setSessions("box", proto.Session{SessionID: todo.Agents[0].SessionID, MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Status: proto.StatusDone, State: proto.StateNeedsYou, PendingInteractions: 1, LastText: "synthetic question",
+		UpdatedAt: now.Add(-time.Minute), Loop: &proto.LoopInfo{Kind: "wakeup", NextAt: now.Add(time.Hour)}})
+}
+
+// An owner's decision that no Agent received is an owner_choice handoff, which no wake screen holds back (#13075 gave
+// the idle handoff a marker for that; the owner_choice signal replaces that idle), so it reaches the supervisor while
+// the Agent's native wakeup is still ahead: at once, from the queue, and after a restart.
+func TestUndeliveredDecisionHandoffIgnoresFutureWake(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	now := time.Now()
-	sid := todo.Agents[0].SessionID
-	f.setSessions("box", proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
-		State: proto.StateNeedsYou, PendingInteractions: 1, LastText: "synthetic question", UpdatedAt: now.Add(-time.Minute),
-		Loop: &proto.LoopInfo{Kind: "wakeup", NextAt: now.Add(time.Hour)}})
+	futureWakeAgent(f, todo, now)
 	res := s.decisionNotDelivered(context.Background(), todo.ID, now.Add(-time.Minute), "use the safe option", errors.New("synthetic send failure"))
 	if !res.taken || res.undelivered == nil {
 		t.Fatalf("decision failure was not handed off: %+v", res)
 	}
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: 1}
+	s.sendDigest(context.Background())
 	waitFor(t, "the undelivered decision to reach its supervisor despite the future wakeup", func() bool {
-		return len(idleDigestSends(f, "conv1")) == 1
+		return len(ownerChoiceSends(f, "conv1", "use the safe option")) == 1
 	})
-	if got := idleDigestSends(f, "conv1"); !strings.Contains(got[0], "use the safe option") {
-		t.Fatalf("the handoff lost the owner's decision: %q", got)
-	}
 }
 
 func TestUndeliveredDecisionQueuedDrainIgnoresFutureWake(t *testing.T) {
@@ -216,16 +235,13 @@ func TestUndeliveredDecisionQueuedDrainIgnoresFutureWake(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	now := time.Now()
-	sid := todo.Agents[0].SessionID
-	f.setSessions("box", proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
-		State: proto.StateNeedsYou, PendingInteractions: 1, LastText: "synthetic question", UpdatedAt: now.Add(-time.Minute),
-		Loop: &proto.LoopInfo{Kind: "wakeup", NextAt: now.Add(time.Hour)}})
+	futureWakeAgent(f, todo, now)
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusWorking})
 	s.decisionNotDelivered(ctx, todo.ID, now.Add(-time.Minute), "use the safe option", errors.New("synthetic send failure"))
 	s.supervise.mu.Lock()
 	var handoff superviseSignal
 	for _, g := range s.supervise.pending {
-		if g.Todo == todo.ID && g.Kind == sigIdle {
+		if g.Todo == todo.ID && g.Kind == sigOwnerChoice {
 			handoff = g
 		}
 	}
@@ -240,54 +256,28 @@ func TestUndeliveredDecisionQueuedDrainIgnoresFutureWake(t *testing.T) {
 		t.Fatalf("the handoff was not admitted to the real queue: accepted=%v queue=%d", accepted, s.queuedFor("conv1"))
 	}
 	drainQueuedDigest(t, s, f)
-	if got := idleDigestSends(f, "conv1"); len(got) != 1 || !strings.Contains(got[0], "use the safe option") {
+	if got := ownerChoiceSends(f, "conv1", "use the safe option"); len(got) != 1 {
 		t.Fatalf("queued handoff was suppressed by the future wakeup: sends=%q queue=%d", got, s.queuedFor("conv1"))
 	}
 }
 
-func TestUndeliveredDecisionIdleReplayIgnoresFutureWake(t *testing.T) {
-	ctx := context.Background()
-	s, f, todo := newSupervisedService(t)
+func TestUndeliveredDecisionRestartIgnoresFutureWake(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	now := time.Now()
-	sid := todo.Agents[0].SessionID
-	f.setSessions("box", proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
-		State: proto.StateNeedsYou, PendingInteractions: 1, LastText: "synthetic question", UpdatedAt: now.Add(-time.Minute),
-		Loop: &proto.LoopInfo{Kind: "wakeup", NextAt: now.Add(time.Hour)}})
-	turns := &s.tasks.turns
-	turns.mu.Lock()
-	if !s.turnsLocked(ctx) {
-		turns.mu.Unlock()
-		t.Fatal("cannot load the turn ledger")
+	futureWakeAgent(f, todo, now)
+	s.decisionNotDelivered(t.Context(), todo.ID, now.Add(-time.Minute), "use the safe option", errors.New("synthetic send failure"))
+	if got := storedSupervisePending(t, s)[superviseSignal{Todo: todo.ID, Kind: sigOwnerChoice}.id()]; !strings.Contains(got.Detail, "use the safe option") {
+		t.Fatalf("the undelivered decision was not recoverable before the restart: %+v", got)
 	}
-	turns.doc.Turns[todo.ID] = taskTurn{Machine: "box", Session: sid, Key: "decision-turn", State: turnDone, Seen: now}
-	turns.mu.Unlock()
-	askedAt := now.Add(-time.Minute)
-	s.decisionNotDelivered(ctx, todo.ID, askedAt, "use the safe option", errors.New("synthetic send failure"))
-	s.supervise.mu.Lock()
-	if s.supervise.timer != nil {
-		s.supervise.timer.Stop()
-	}
-	s.supervise.timer, s.supervise.timerAt = nil, time.Time{}
-	clear(s.supervise.pending)
-	clear(s.supervise.sent)
-	clear(s.supervise.queued)
-	s.supervise.mu.Unlock()
-	turns.mu.Lock()
-	expected := turns.doc.Turns[todo.ID]
-	turns.mu.Unlock()
-	if expected.Signal == nil || expected.Signal.Told != nil {
-		t.Fatalf("the undelivered decision was not recoverable before replay: %+v", expected.Signal)
-	}
-	s.replayTurnSignal(todo.ID, expected)
-	ageReplayedIdle(t, s, todo.ID, expected.Signal.Key)
-	s.superviseTimes = superviseTimings{}
-	wakeRound(s)
-	if got := idleDigestSends(f, "conv1"); len(got) != 1 || !strings.Contains(got[0], "use the safe option") {
-		t.Fatalf("replayed handoff was suppressed by the future wakeup: %q", got)
-	}
+	simulateSupervisionRestart(t, s)
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: 1}
+	s.sendDigest(t.Context())
+	waitFor(t, "the restored decision to reach its supervisor despite the future wakeup", func() bool {
+		return len(ownerChoiceSends(f, "conv1", "use the safe option")) == 1
+	})
 }
-
 func TestAutomaticReviewUnsentReworkIdleIgnoresFutureWake(t *testing.T) {
 	s, f, todo, n := supervisedReview(t)
 	a := autoReviewOf(s, todo.ID)
