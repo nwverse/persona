@@ -49,6 +49,9 @@ func (s *Service) askAcceptanceRound(t Todo, machine, session, reply string, aga
 	b.asks[t.ID] = &acceptAsk{Earlier: earlier} // claimed: a second turn ending meanwhile does not ask twice
 	b.mu.Unlock()
 	a := s.acceptLines(ctx, t, machine, session, reply)
+	if r := triageLatestReview(t.Supervision); r != nil && again && r.UserCheck && r.DeferredScope != "" {
+		a.How = clip(r.DeferredScope, 120)
+	}
 	a.MachineID, a.SessionID, a.AskedAt, a.Earlier = machine, session, time.Now().UTC(), earlier
 	if !s.ownerVerifies(t) {
 		s.assistantAccepts(ctx, t, a)
