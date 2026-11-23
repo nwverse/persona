@@ -40,6 +40,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "general", group: t("ui-look.font"), hint: words(t("ui-look.font_sans"), t("ui-look.font_mono")), anchor: "font" },
   { tab: "general", group: t("language.label"), anchor: "language" },
   { tab: "general", group: t("settings.reply_motion"), anchor: "reply-motion" },
+  { tab: "general", group: t("settings.starred_messages"), anchor: "starred-messages" },
   { tab: "general", group: t("ui-look.recent_chats"), anchor: "recent-chats" },
   { tab: "general", group: t("ui-look.sidebar_icons"), hint: words(t("ui-look.sidebar_icons_monochrome"), t("ui-look.sidebar_icons_colored")), anchor: "sidebar-icons" },
   { tab: "general", group: t("settings.start_page"), anchor: "start-page" },
