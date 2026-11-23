@@ -182,7 +182,7 @@ private fun PersonaRootContent(
                                     }
                                 }
                                 val title = stringResource(R.string.app_try_demo)
-                                if (welcome) PairingShortcut(title, PhIcons.Play, startDemo)
+                                if (welcome) PairingShortcut(title, PersonaIcons.playMedia, startDemo)
                                 else JTextButton(title, onClick = startDemo)
                             }
                         })

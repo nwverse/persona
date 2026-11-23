@@ -143,9 +143,7 @@ struct InteractionPreviewCard: View {
                     }
                 }
                 Spacer()
-                #if !os(macOS) // a phone's row says it opens; a Mac's list row does not (#2113)
                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
-                #endif
             }
             if !summary.isEmpty {
                 Text(summary)
@@ -175,14 +173,7 @@ struct InteractionPreviewCard: View {
     /// row's lines sit under its title (#2318). iOS: on the card's edge, as it always was.
     private struct UnderTitle: ViewModifier {
         func body(content: Content) -> some View {
-            #if os(macOS)
-            HStack(spacing: Theme.Space.s) { // the header row's icon column and its gap
-                Spacer(minLength: 0).scaledFrame(width: Theme.Size.icon)
-                content
-            }
-            #else
             content
-            #endif
         }
     }
 
@@ -551,9 +542,6 @@ struct InteractionPanel: View {
                     }
                     .labelOnlyMenu() // just the ⋯, next to the fold ⌄
                     .accessibilityIdentifier("interaction-menu")
-                    #if os(macOS)
-                    .help("More")
-                    #endif
                 }
                 // The fold, a button of its own (the whole row folds the card too): in a circle, so it reads as one.
                 Button(action: toggleFold) {
@@ -1306,10 +1294,6 @@ struct PermissionForm: View {
             Button("Always Allow in Session") {
                 Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
             }
-            #if os(macOS)
-            // A text link as on iOS: the Mac's default style made it a third push button under Deny / Allow.
-            .buttonStyle(.link)
-            #endif
             // One line on every platform (button labels never wrap): large text or a narrow card shrinks it.
             .lineLimit(1)
             .minimumScaleFactor(0.8)
@@ -1391,9 +1375,6 @@ struct AgentPermissionForm: View {
                     Text("Always Approve").lineLimit(1).minimumScaleFactor(0.8)
                 }
             }
-            #if os(macOS)
-            .buttonStyle(.link)
-            #endif
             .font(Theme.Font.caption)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("codex-always")
@@ -1434,9 +1415,6 @@ struct AgentPermissionForm: View {
             } label: {
                 Text("Deny and Explain…").lineLimit(1)
             }
-            #if os(macOS)
-            .buttonStyle(.link)
-            #endif
             .font(Theme.Font.caption)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
@@ -2822,21 +2800,14 @@ struct SessionlessCardSheet: View {
             #if os(iOS) || os(visionOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            #if os(macOS)
-            .macSheetDone { dismiss() }
-            #else
             .toolbar {
                 SheetClose { dismiss() }
             }
-            #endif
         }
         .presentationDetents([.medium, .large])
         .onChange(of: model.pendingInteractions.contains { $0.uid == interaction.uid }) { _, pending in
             if !pending { dismiss() }
         }
-        #if os(macOS)
-        .macSheet()
-        #endif
     }
 }
 

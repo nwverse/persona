@@ -94,13 +94,15 @@ func kindOf(err error) string {
 }
 
 // transcriptionCode is the transcription point's code for a failure (extwire): a refused key, a model not turned on
-// or a voice not allowed is upstream_forbidden; a busy service or no network upstream_unavailable; the rest
-// upstream_failed.
+// or a voice not allowed is upstream_forbidden; a busy service (quota or concurrency used up) upstream_busy; no
+// network upstream_unavailable; the rest upstream_failed. The manager passes the kind on to the phone (#13446).
 func transcriptionCode(err error) string {
 	switch kindOf(err) {
 	case failForbidden, failNotEnabled, failVoice:
 		return extwire.TEUpstreamForbidden
-	case failBusy, failNetwork:
+	case failBusy:
+		return extwire.TEUpstreamBusy
+	case failNetwork:
 		return extwire.TEUpstreamUnavailable
 	}
 	return extwire.TEUpstreamFailed

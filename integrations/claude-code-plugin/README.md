@@ -73,6 +73,9 @@ another session, gets `403`.
 
 `submitted: false` with a `reason` (`late`, `invalid`, `command`, `dropped`, `failed`) when the plugin did not submit it.
 The plugin submits a message only before its `deadline_ms`; after that the node may send it through the inbox instead.
+The 250 ms settle window only releases the poll loop. A submission still pending then sends no final ack until its real
+result arrives; the node can independently confirm its queue/prompt line. The timer therefore never turns a later
+rejection or `drop` into an earlier success.
 
 Registration is the poll itself: a session counts as having the plugin while its claude process lives and a poll from
 that process waits, or ended less than 90 s ago. The node lists such a session with `capabilities.plugin_input: true`.

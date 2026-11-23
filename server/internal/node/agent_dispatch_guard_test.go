@@ -70,3 +70,35 @@ func TestMacAgentInstructionsDefaultOn(t *testing.T) {
 		t.Errorf("Linux instructions = %q", got)
 	}
 }
+
+// A track's directory is the assistant's (#13472): an Agent is not dispatched into it under any spelling of its path,
+// a link or (on a disk that ignores case) another case; a project beside it is not refused.
+func TestAgentDirectoryGuardRefusesTrackDirs(t *testing.T) {
+	home := t.TempDir()
+	state := filepath.Join(home, "custom-state")
+	track := filepath.Join(state, "tracks", "qa-plain")
+	if err := os.MkdirAll(track, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(home, "track-alias")
+	if err := os.Symlink(track, alias); err != nil {
+		t.Fatal(err)
+	}
+	n := &Node{home: home, dir: state}
+	cwds := []string{track, alias}
+	if _, err := os.Stat(filepath.Join(state, "TRACKS", "qa-plain")); err == nil {
+		cwds = append(cwds, filepath.Join(state, "TRACKS", "qa-plain")) // a disk that ignores case
+	}
+	for _, cwd := range cwds {
+		if err := n.guardAgentDirectory(context.Background(), cwd); rpcCode(err) != "agent_assistant_workspace" {
+			t.Errorf("%s: expected workspace refusal, got %v", cwd, err)
+		}
+	}
+	project := filepath.Join(home, "code", "qa-plain")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.guardAgentDirectory(context.Background(), project); err != nil {
+		t.Errorf("a project: %v", err)
+	}
+}

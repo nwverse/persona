@@ -7,5 +7,9 @@
   "relay_delivery_failed": "メッセージを届けられませんでした",
   "supervision_delivery_failed": "このチャットではタスクのフォローアップ指示を受け取れません。タスクを開いて最新の状態と報告を確認してください。このコンピュータで対応するランチャー：{launchers}。",
   "supervision_delivery_refused": "このチャットがタスクのフォローアップメッセージを受け取らなかったため、自動では再送しません。タスクを開いて最新の状態と報告を確認してください。",
-  "supervision_reviewer_required": "このタスクを始める前に、Claude Code または Codex の監督チャットを選んでください。"
+  "supervision_reviewer_required": "このタスクを始める前に、Claude Code または Codex の監督チャットを選んでください。",
+  "started_on": "実行構成は {run} です。",
+  "pick_save_failed": "次のターンで使うモデル設定を保存できませんでした：{error}",
+  "pin_requested": "最初のターンが終わると、この会話を固定するかどうかを Persona が確認します。",
+  "pin_save_failed": "この会話の固定リクエストを保存できませんでした。"
 }

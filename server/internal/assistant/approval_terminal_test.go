@@ -129,15 +129,17 @@ func TestPreparedSnapshotWithdrawalDoesNotCancelOriginal(t *testing.T) {
 		synctest.Wait()
 
 		// A snapshot computed before registration can omit the card even when no
-		// newer sequence supersedes it. Withdrawing that auxiliary waiter must not
-		// cancel the original operation or its still-pending owner card.
+		// newer sequence supersedes it. A snapshot that lists the card starts no
+		// waiter of its own (#13308: the original caller owns a prepared card), and
+		// withdrawing it must not cancel the original operation or its still-pending
+		// owner card.
 		ft.s.askOnPhone([]proto.Interaction{ix})
 		synctest.Wait()
 		ft.s.fleet.askMu.Lock()
 		waiter := ft.s.fleet.asked[id]
 		ft.s.fleet.askMu.Unlock()
-		if waiter == nil {
-			t.Fatal("the snapshot did not start its auxiliary waiter")
+		if waiter != nil {
+			t.Fatal("the snapshot started a waiter for a prepared card its original caller owns")
 		}
 		ft.s.askOnPhone(nil)
 		synctest.Wait()

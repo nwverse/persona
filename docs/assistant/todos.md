@@ -444,7 +444,11 @@ Since #10365 (`assistant/start_retry_launcher.go`):
   task's code before its text (`lib/start-failure.ts`): a short line for a launcher the terminal cannot run or a
   workspace left in the way (`worktree_path_taken`), the hub's whole sentence under the details. Their buttons are
   **Use <launcher> instead** (when the hub suggests one and lists the feature), **Retry** and **Remove**; Retry no longer
-  needs the to-do's `plan_id`. Apple and Android still offer Retry and Remove only.
+  needs the to-do's `plan_id`. Web, Apple and Android offer the same coded reasons, alternative launcher and Retry
+  without `plan_id`: they read the code first on the failed row and the detail surfaces, keep the raw failure behind
+  Details, look up the to-do's own plan first, then a non-dismissed plan by `todo_id`, and send only
+  `{"launcher":"…"}` on the launcher action (Android on the failed Needs-you row, shared task detail and standalone
+  to-do action bar). Ordinary Retry sends no body from Apple and `{}` from Android.
 
 ### Answering a failed start's question
 
@@ -476,11 +480,15 @@ of going to the computer:
   When the node typed nothing (the question was answered at the computer, or gone by itself), the step is
   `{action: "answer_not_typed", by: "user", choice}` instead: the task's history and the supervising assistant never
   read the owner's answer as the one that took effect.
-- **The web** shows the question card (`views/ShellQuestionCard.tsx`, loaded only for such a failure) on the failed
-  row, the task panel and the to-do page while the tab is kept and the hub lists the feature, beside Retry, which stays.
-  Apple and Android offer Retry only, so the failure's words (`shell_waiting`, also the assistant's notice and 督办
-  detail) offer the answers only "where Persona lists them" and always the way at the computer: answer there, then
-  start again.
+- **The web, Apple and Android** show the question card (`views/ShellQuestionCard.tsx`, Android design-system
+  `ShellQuestionCard`) on the failed row, the task panel and the to-do page while the tab is kept and the hub lists the
+  feature, beside Retry, which stays. Apple and Android send only the offered choice to the task answer route; the hub
+  restarts the task, so no chat message is resent. Android reads the coded question before raw text, keeps the hub's
+  choice order, shares the Retry busy key across Retry, launcher Retry and answering, and reports a refusal inline
+  without resending. Secret prompts offer only Cancel and an SSH host-key prompt only its negative/cancel answers; raw
+  terminal lines stay behind Details and the pane ID is never shown. Older clients offer Retry only, so the failure's
+  words (`shell_waiting`, also the assistant's notice and 督办 detail) offer the answers only "where Persona lists
+  them" and always the way at the computer: answer there, then start again.
 
 ## To-do titles
 
@@ -827,6 +835,8 @@ An accepted review without `user_check` still completes the task immediately as 
 - Not done here: the push is not withdrawn when the decision is taken elsewhere (an OK on it then answers 409, "already handled"); the watch's answer-only credential can neither read `/api/v1/todos` nor call the accept route.
 
 ## Decisions the owner can answer
+
+When recovery needs the owner’s terminal Resume, give that instruction in the decision reason. Offer choices the supervisor can carry out. The web card opens the linked Agent terminal, where the owner explicitly resumes the session.
 
 (#3804, `assistant/decision.go`.) A supervised task reviewed `needs_user` used to reach the owner as a title and "waiting for your decision", often for a task they had not started themselves. Now only a decision reaches them, it stands on its own, and it never rots.
 

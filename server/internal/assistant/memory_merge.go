@@ -79,7 +79,7 @@ func (s *Service) memoryMergeTell(ctx context.Context) {
 	if !ok || !d.Online && !d.Reachable {
 		return
 	}
-	cwd := s.spaceCwd(d, "")
+	cwd := s.spaceCwd(ctx, d, "")
 	if cwd == "" {
 		return
 	}

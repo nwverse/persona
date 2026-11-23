@@ -1475,13 +1475,9 @@ struct InboxRow: View {
         .contentShape(.rect)
     }
 
-    /// The shared state key wins over the old mark. The frozen Mac list keeps its existing row and mark.
+    /// The shared state key wins over the old mark.
     private var now: String? {
-        #if os(macOS)
-        nil
-        #else
         InboxNow.text(for: item)
-        #endif
     }
 
     /// The same state line as the other clients: waiting has a still clock, only AI work spins, and anything that
@@ -1500,9 +1496,7 @@ struct InboxRow: View {
     /// Who wrote what (under the AI's summary once it has one).
     private var from: String {
         if item.isAssistantRow { return item.linePreview } // the tag says who: no "Assistant:" in front
-        #if !os(macOS)
         if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier, translatedPreview: translated?.preview) { return meta }
-        #endif
         if let doc = item.doc { return doc.typeName + " · " + item.preview } // the preview names who: Li Lei mentioned you
         if item.moment != nil { return String(localized: "\(item.sender ?? ""): \(item.preview)", comment: "Who wrote it: what they wrote") } // who commented, on the post in the title
         if let c = item.connector { // example-org/example-repo#12 · bob: please take a look
