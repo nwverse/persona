@@ -18,7 +18,7 @@ type DB interface {
 	DeleteSubscriptionAt(ctx context.Context, id string, prev int64) (bool, error)
 	LeaseSubscription(ctx context.Context, id string, now, until time.Time) (bool, error)
 	SubscriptionSeen(ctx context.Context, id string, uids []string) (map[string]bool, error)
-	CommitSubscriptionRun(ctx context.Context, id string, merge func(data []byte, revision int64) ([]byte, error),
+	CommitSubscriptionRun(ctx context.Context, id string, merge func(data []byte, revision int64, claimed map[string]bool) ([]byte, error),
 		seen []db.SubscriptionSeenRow, items []db.SubscriptionItemRow, read []string, now time.Time) error
 	SubscriptionItems(ctx context.Context, id string, q db.SubscriptionItemsQuery) ([]db.SubscriptionItemRow, error)
 	SubscriptionItem(ctx context.Context, id, uid string) (*db.SubscriptionItemRow, error)
@@ -154,7 +154,7 @@ func (d *DBStore) SeenKeys(ctx context.Context, id string, uids []string) (map[s
 	return d.db.SubscriptionSeen(ctx, id, uids)
 }
 
-func (d *DBStore) CommitRun(ctx context.Context, c RunCommit) error {
+func (d *DBStore) CommitRun(ctx context.Context, c RunCommit) (RunCommit, error) {
 	seen := make([]db.SubscriptionSeenRow, len(c.Seen))
 	for i, k := range c.Seen {
 		seen[i] = db.SubscriptionSeenRow{UID: k.UID, ContentHash: k.ContentHash}
@@ -163,18 +163,22 @@ func (d *DBStore) CommitRun(ctx context.Context, c RunCommit) error {
 	for _, it := range c.Items {
 		b, err := json.Marshal(it)
 		if err != nil {
-			return err
+			return RunCommit{}, err
 		}
 		items = append(items, db.SubscriptionItemRow{UID: it.UID, Data: b})
 	}
-	return d.db.CommitSubscriptionRun(ctx, c.Sub.ID, func(data []byte, revision int64) ([]byte, error) {
+	// A deleted subscription never calls merge, so it has no claimed outcome either.
+	committed := claimedRun(c, nil)
+	err := d.db.CommitSubscriptionRun(ctx, c.Sub.ID, func(data []byte, revision int64, claimed map[string]bool) ([]byte, error) {
+		committed = claimedRun(c, claimed)
 		cur, err := decode(data)
 		if err != nil {
 			return nil, err
 		}
-		applyRun(&cur, c, revision == c.Revision)
+		applyRun(&cur, committed, revision == committed.Revision)
 		return encode(cur)
 	}, seen, items, c.Read, c.Now)
+	return committed, err
 }
 
 func (d *DBStore) HeldItems(ctx context.Context, id string, q ItemQuery) ([]Held, error) {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -31,6 +32,8 @@ type stateFile struct {
 }
 
 type sessionState struct {
+	ModelSource modelhttp.Source `json:"model_source,omitzero"`
+
 	SegmentRetired          bool            `json:"segment_retired,omitempty"`
 	SegmentOperation        string          `json:"segment_operation,omitempty"`
 	TaskInstructions        string          `json:"task_instructions,omitempty"`
@@ -307,6 +310,7 @@ func (s *stateFile) adoptSwitch(id string, v sessionState) {
 	defer s.persistMu.Unlock()
 	s.mu.Lock()
 	if cur, ok := s.Sessions[id]; ok {
+		cur.ModelSource = v.ModelSource
 		cur.Launcher, cur.Model, cur.ModelFingerprint, cur.ModelEffort = v.Launcher, v.Model, v.ModelFingerprint, v.ModelEffort
 		cur.Cwd, cur.StartedAt, cur.PlanThen, cur.Pane, cur.PendingSwitch = v.Cwd, v.StartedAt, v.PlanThen, v.Pane, v.PendingSwitch
 		cur.EngineHistory, cur.PendingHandoff = v.EngineHistory, v.PendingHandoff // a switch to another engine (engine_switch.go)

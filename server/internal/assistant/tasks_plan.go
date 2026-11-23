@@ -118,7 +118,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", fmt.Errorf("task %d: expect_minutes must be zero or a positive number of minutes", i+1)
 		}
 		t.DoneWhen, t.ExpectMinutes = cleanDoneWhen(t.DoneWhen), min(t.ExpectMinutes, 24*60)
-		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() {
+		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() && !s.canInferContainerWorkspace(ctx, *t) {
 			return "", fmt.Errorf("task %d: title, prompt and cwd are required", i+1)
 		}
 		t.Brief = nil // the hub's (planBriefs below), never the tool call's
@@ -244,8 +244,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	// A round the hub started for a scheduled task (schedule_grant.go, #8045): its plan names the schedule, so the card
-	// can offer to let it start these by itself, and that schedule's grant may start them now. Never in a space that
-	// confirms what leaves it, whose plans always wait for Start.
+	// can offer to let it start these by itself, and that schedule's grant may start them now. Never for a plan whose
+	// words are confirmed before they leave (policy below), which always waits for Start.
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.inScheduledTurn(ctx, machine, sessionID) {
 		// A round the hub started has no message of the owner's: "the user asked for this" is only the model's word.
 		for i := range a.Tasks {
@@ -258,9 +258,25 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.handedOver(sessionID) {
 		s.heldOutsideOwnKinds(ctx, sessionID, a.Tasks)
 	}
+	// A plan from a conversation hands its prompts to agents outside it (scene 3): what it says, titles first (they are
+	// what its push shows), decides once whether it waits for "Start" and what its push says (health.go). A leader's
+	// workers (scope) need no decision.
+	var policy TrackPolicy
+	var space string
+	if scope == nil {
+		var out strings.Builder
+		for _, t := range a.Tasks {
+			out.WriteString(t.Title + "\n")
+		}
+		for _, t := range a.Tasks {
+			out.WriteString(t.Prompt + "\n" + t.Context + "\n\n")
+		}
+		space, _ = s.selfSpace(ctx, sessionID)
+		policy = s.exitPolicy(ctx, out.String(), sessionID, space)
+	}
 	var round Task
 	var inRound bool
-	if scope == nil && !s.selfPolicy(ctx, sessionID).ConfirmOutbound {
+	if scope == nil && !policy.ConfirmOutbound {
 		if round, inRound = s.scheduledRoundOf(ctx, machine, sessionID); inRound && round.grantEligible() && s.claudeConversation(ctx, machine, sessionID) {
 			for i := range a.Tasks { // the card offers to let this schedule start these by itself
 				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle, a.Tasks[i].ScheduleBasis = round.ID, round.labelIn(s.lang(ctx)), round.runGrantBasis
@@ -284,9 +300,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			s.logf("task plan %s: feed: %v", p.ID, err)
 		}
 	}
-	// A plan from a space that confirms what leaves it hands its prompts to agents outside it: it waits for the user's
-	// "Start" on its card, whatever would start it at once; and a space that redacts names no task in its push (health.go).
-	policy := s.selfPolicy(ctx, sessionID)
+	// A plan whose words are confirmed before they leave waits for the user's "Start" on its card, whatever would start
+	// it at once; one whose words are redacted names no task in its push (policy above).
 	if scope != nil { // no card: a leader's workers start at once, as part of the task the user let start
 		started, err := s.startPlan(ctx, p.ID, nil, false)
 		if err != nil {
@@ -332,7 +347,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		body := strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep"))
 		if policy.Redact {
-			title, body = spaceNotice(l)
+			title, body = s.redactedNotice(ctx, l, space)
 		}
 		s.push(ctx, Notification{Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
 		if lead != "" || s.isLeader(ctx, sessionID) {

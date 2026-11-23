@@ -353,6 +353,13 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	}
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(context.Background(), launcher, "assistant", cwd, configPath)
+	if !guest {
+		var sourceErr error
+		settings, sourceErr = n.sourceClaudeSettings(startCtx, launcher, cwd, settings, configPath, sourceSession(assistantModelSource(execution), id))
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+	}
 	compaction := n.assistantCompactionPolicy(launcher, cwd, settings, execution)
 	if hooks == "" && n.launcherOwnSettings(context.Background(), launcher) != "" {
 		compaction.ownSettings = ""
@@ -384,6 +391,10 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	}
 	if guest { // none of the owner's Claude Code setup (assistant_guest.go)
 		if settings, settingsErr = n.guestSettingsFile(id, cwd, configPath, settings, hooks == ""); settingsErr != nil {
+			return nil, settingsErr
+		}
+		settings, settingsErr = n.sourceClaudeSettings(startCtx, launcher, cwd, settings, configPath, sourceSession(assistantModelSource(execution), id))
+		if settingsErr != nil {
 			return nil, settingsErr
 		}
 		args = append(args, guestSettingArgs()...)

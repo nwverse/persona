@@ -3735,6 +3735,14 @@ type ConnectorCallParams struct {
 	Contribution string          `json:"contribution"`
 	Name         string          `json:"name"`
 	Args         json.RawMessage `json:"args,omitempty"`
+	// The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+	Track string `json:"track,omitempty"`
+	// The track's kind; absent when not known (the main track).
+	TrackKind string `json:"track_kind,omitempty"`
+	// The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+	// general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+	// confirms a write stays the hub's decision.
+	Categories []string `json:"categories,omitempty"`
 }
 
 // ConnectorCallResult: tools.call and actions.do.
@@ -3783,6 +3791,14 @@ type ConnectorDoParams struct {
 	Name         string          `json:"name"`
 	Args         json.RawMessage `json:"args,omitempty"`
 	RequestID    string          `json:"request_id"`
+	// The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+	Track string `json:"track,omitempty"`
+	// The track's kind; absent when not known (the main track).
+	TrackKind string `json:"track_kind,omitempty"`
+	// The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+	// general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+	// confirms a write stays the hub's decision.
+	Categories []string `json:"categories,omitempty"`
 }
 
 // ConnectorRecallParams: recall: take back a message the connector's program sent in the user's name, which the
@@ -5593,6 +5609,9 @@ type AssistantMemoryEntry struct {
 	Content string `json:"content,omitempty"`
 	// content was cut or left out for its size.
 	Truncated bool `json:"truncated,omitempty"`
+	// The track whose memory it is; absent for the main track's. Another track's is shown only to an extension that may
+	// read what comes from it: the user's own, or one granted every default category of the track.
+	Track string `json:"track,omitempty"`
 }
 
 // AssistantMemoryResult: an assistant without memory (none written yet, or the feature off) has no entries.

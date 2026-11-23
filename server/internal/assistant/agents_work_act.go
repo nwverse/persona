@@ -108,8 +108,7 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 		return
 	}
 	// Missing evidence is not a user decision. Authorization links have their own relay and manual card path.
-	if w.On == proto.WaitUser && w.By == "model" && len(w.Questions) == 0 && w.Link == nil {
-		*w = proto.WorkState{TurnAt: w.TurnAt, At: w.At, By: w.By, Artifacts: w.Artifacts}
+	if unsupportedUserWait(w) {
 		return
 	}
 	// On the user: a card. Without the triage none: the session shows its error and the apps' Retry as before.

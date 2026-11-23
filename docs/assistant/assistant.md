@@ -906,6 +906,9 @@ adds a read-only, local source-size report to the existing token diagnostic (#10
 setting, background capture, network request or runtime logging is added. Omit the flag to get the existing report.
 The primary Assistant screens and model behavior are unchanged.
 
+The token report continues past malformed transcript records. Invalid Claude usage rows are omitted, and unavailable
+Codex counters still appear as unknown. The report covers the records it can read from the selected files.
+
 ```sh
 python3 scripts/diag/assistant_token_report.py --request-breakdown --json scripts/diag/testdata/request_breakdown.jsonl
 python3 scripts/diag/assistant_token_report.py --request-breakdown --json /path/to/local/transcripts

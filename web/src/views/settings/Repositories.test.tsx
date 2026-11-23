@@ -397,3 +397,48 @@ it("asks a source again after it failed: Try again, or the address typed back", 
   expect(document.querySelector("[data-repository-preview]")!.textContent).toContain(acmeIdentity.canonical_url);
   expect(button("Check existence and save").disabled).toBe(false);
 });
+
+it("folds the optional task follow-up preference by default, saves shared_branch, and reverts cleanly", async () => {
+  await open([binding]);
+  // Default (unset) row shows no workflow line.
+  expect(document.querySelector('[data-repository="repo_sample"] [data-repository-workflow]')).toBeNull();
+  await click("Edit");
+  const toggle = () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button[aria-expanded]')].find((b) =>
+    b.textContent?.includes("Task follow-up (optional)"))!;
+  expect(toggle()).toBeTruthy();
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  // Folded by default: radio choices are not rendered yet.
+  expect(document.querySelector('[role="dialog"] [role="radiogroup"]')).toBeNull();
+  await act(async () => { toggle().click(); });
+  expect(toggle().getAttribute("aria-expanded")).toBe("true");
+  const radios = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] [role="radio"]')];
+  expect(radios).toHaveLength(2);
+  expect(radios[0].getAttribute("aria-checked")).toBe("true");
+  expect(radios[1].getAttribute("aria-checked")).toBe("false");
+  // Plain language only: no engineering jargon.
+  const copy = dialogText().toLowerCase();
+  expect(copy).not.toContain("worktree");
+  expect(copy).not.toContain("continues");
+  expect(copy).not.toContain("part_of");
+  // Pick shared feature branch and save.
+  await act(async () => { radios[1].click(); });
+  expect(radios[1].getAttribute("aria-checked")).toBe("true");
+  await click("Save changes");
+  const save = pending(`${LIST}/repo_sample`, "PUT");
+  expect(JSON.parse(save.init.body as string)).toMatchObject({ url: identity.canonical_url, task_workflow: "shared_branch" });
+  await answer(save, { manager: "assistant", repository: { ...binding, task_workflow: "shared_branch" } });
+  expect(document.querySelector('[data-repository="repo_sample"] [data-repository-workflow]')!.textContent).toBe("Task follow-up: Shared feature branch");
+  // Re-opening starts folded again, showing the current non-default choice on the header badge, and can revert to default.
+  await click("Edit");
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(toggle().textContent).toContain("Shared feature branch");
+  await act(async () => { toggle().click(); });
+  const editRadios = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] [role="radio"]')];
+  expect(editRadios[1].getAttribute("aria-checked")).toBe("true");
+  await act(async () => { editRadios[0].click(); });
+  await click("Save changes");
+  const revert = pending(`${LIST}/repo_sample`, "PUT");
+  expect(JSON.parse(revert.init.body as string)).not.toHaveProperty("task_workflow");
+  await answer(revert, { manager: "assistant", repository: binding });
+  expect(document.querySelector('[data-repository="repo_sample"] [data-repository-workflow]')).toBeNull();
+});

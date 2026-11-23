@@ -1569,6 +1569,7 @@ func weekdayText(ds []int) string {
 func (s *Service) Run(ctx context.Context) {
 	s.running.Store(&ctx)
 	go s.a2aLoop(ctx)
+	go s.resourceLoop(ctx)
 	go s.transcriptionReadyLoop(ctx)
 	recoverCtx, cancel := context.WithTimeout(ctx, taskFailTimeout)
 	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {
@@ -2252,10 +2253,12 @@ func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 	}
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
-		name, _ = spaceNotice(l)
+	body := clip(oneLine(run.Error), 300)
+	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
+	if s.exitPolicy(ctx, name+"\n"+body, run.SessionID, t.Space).Redact {
+		name, _ = s.redactedNotice(ctx, l, t.Space)
 	}
-	s.push(ctx, Notification{Title: i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: clip(oneLine(run.Error), 300)})
+	s.push(ctx, Notification{Title: i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: body})
 }
 
 // oneOffNotStarted handles confirmed pre-delivery failures; Facts/Report runs use the fixed-facts fallback first.
@@ -2329,8 +2332,9 @@ func (s *Service) tellWaitingSkip(ctx context.Context, t Task, m Device) {
 	}
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
-		name, _ = spaceNotice(l)
+	// the lock screen does not name a task whose name says something sensitive (usage.go, scene 4)
+	if s.exitPolicy(ctx, name, t.RunSessionID, t.Space).Redact {
+		name, _ = s.redactedNotice(ctx, l, t.Space)
 	}
 	s.push(ctx, Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: t.RunSessionID,
 		Title: i18n.T(l, "assistant-schedule.waiting_skipped", i18n.Args{"name": name}), Body: i18n.T(l, "assistant-schedule.waiting_skipped_body")})
@@ -2438,13 +2442,14 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	streak := s.updateRun(run, runFailed, text, briefing)
 	run.Status, run.Error = runFailed, text
 	s.finishScheduledTodo(ctx, t, run)
-	name := t.labelIn(s.lang(ctx))
-	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
-		name, _ = spaceNotice(s.lang(ctx))
-	}
 	if briefing {
 		s.briefFallback(ctx, run, t, m)
 	} else if !streak { // the streak notice already said it failed, with this reason
+		name := t.labelIn(s.lang(ctx))
+		// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
+		if s.exitPolicy(ctx, name+"\n"+text, run.SessionID, t.Space).Redact {
+			name, _ = s.redactedNotice(ctx, s.lang(ctx), t.Space)
+		}
 		s.push(ctx, Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: run.SessionID, Title: i18n.T(s.lang(ctx), "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: text})
 	}
 	if run.Retried {

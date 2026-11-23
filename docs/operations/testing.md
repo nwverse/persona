@@ -186,7 +186,15 @@ regular-iPad TypeScaleTests probe it samples only an app executable under that p
 app/test-bundle architecture and ad-hoc signature, and captures scoped launchd/runtime-mount events before Xcode timeout
 cleanup can shut down the device. The iPad has its own `regular-readiness-context.json` and `live-regular-readiness/`
 artifact directory; neither scope nor host samples can be borrowed from the iPhone. NDJSON is filtered while it is read;
-launchd lines need not contain both the UDID and bundle ID. An absent process, missing log, Shutdown during cleanup,
+the observer starts a bounded live stream before xcodebuild and records its `live-launch.json` / `live-launch.status.txt`
+separately from the final `log show`. The first host PID/stack observation precedes the serial product checks; a process
+query's completion, failure and timeout are distinct from a successful empty PID set. Launch-service events may use an
+observed host PID in a structured field or explicit `pid` text; an unrelated number is not an anchor. Unmatched candidates
+are bounded and reconsidered when a later host observation supplies a PID. Runtime events require the owned UDID, and
+secret/environment text is never exported. The stream drains stdout/stderr and owns a separate process group so its stop
+can reap descendants without signalling the watcher or xcodebuild. A separately bounded watchdog holds only the validated
+log PGID and the watcher PID; if the watcher is killed before its `finally`, it closes that registered group. Launchd lines
+need not contain both the UDID and bundle ID. An absent process, missing log, Shutdown during cleanup,
 valid signature, or runtime mount alone is not a launch-cause verdict. The observer does not change signing, test selection,
 runtime or the 900-second deadlines. The iPad observer starts with deterministic unavailable status/host/product records,
 then replaces them atomically as bounded collection completes. Its separate process group gets a short bounded stop drain;

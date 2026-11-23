@@ -3953,6 +3953,18 @@ export interface ConnectorCallParams {
   contribution: string;
   name: string;
   args?: unknown;
+  /**
+   * The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+   */
+  track?: string;
+  /** The track's kind; absent when not known (the main track). */
+  track_kind?: string;
+  /**
+   * The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+   * general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+   * confirms a write stays the hub's decision.
+   */
+  categories?: string[];
 }
 
 /**
@@ -4017,6 +4029,18 @@ export interface ConnectorDoParams {
   name: string;
   args?: unknown;
   request_id: string;
+  /**
+   * The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+   */
+  track?: string;
+  /** The track's kind; absent when not known (the main track). */
+  track_kind?: string;
+  /**
+   * The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+   * general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+   * confirms a write stays the hub's decision.
+   */
+  categories?: string[];
 }
 
 /**
@@ -6051,6 +6075,11 @@ export interface AssistantMemoryEntry {
   content?: string;
   /** content was cut or left out for its size. */
   truncated?: boolean;
+  /**
+   * The track whose memory it is; absent for the main track's. Another track's is shown only to an extension that may
+   * read what comes from it: the user's own, or one granted every default category of the track.
+   */
+  track?: string;
 }
 
 /**
