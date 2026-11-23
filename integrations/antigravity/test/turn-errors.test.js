@@ -277,13 +277,22 @@ test('a second empty completion publishes a retryable turn error', async (t) => 
   const { node, row, calls, items, idle } = await fixture(t, { initialCount: 1, promptPlan: [
     { export: true, thinking: 'Thinking', reply: '\n' },
     { export: true, thinking: 'Still thinking', reply: '  \t' },
+    { export: true, reply: 'Next answer.' },
   ] })
   await node.peer.call('session.send', { session_id: SESSION, text: 'Please answer.' })
   await until('empty-response failure published', () => idle() && row()?.turn_error)
   assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 2)
   assert.match(row().turn_error, /no response returned.*try again/i)
   assert.equal(row().turn_error_after_work, false)
-  assert.equal((await items()).items.filter((item) => item.text === 'Please answer.').length, 1)
+  const page = (await items()).items
+  assert.equal(page.filter((item) => item.text === 'Please answer.').length, 1)
+  const notice = page.find((item) => item.kind === 'notice' && /no response returned.*try again/i.test(item.text))
+  assert.ok(notice)
+
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Next request.' })
+  await until('successor settled', () => idle() && row()?.last_text === 'Next answer.')
+  assert.equal(row().turn_error, undefined)
+  assert.ok((await items()).items.some((item) => item.id === notice.id && item.text === notice.text))
 })
 
 test('a blank cancelled turn is recorded before its queued successor and does not retry', async (t) => {
