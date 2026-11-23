@@ -95,7 +95,7 @@ class ModuleNavigationSafetyTest {
         assertTrue(warnings.all { "unserved" in it })
     }
 
-    /** Replaces every string [from] in a saved state, as an older build's or a fuller build's saved stack would read. */
+    /** Replaces every string [from] in a saved state, as a saved stack from a build with a class this one lacks would read. */
     @Suppress("DEPRECATION")
     private fun Bundle.rename(from: String, to: String) {
         for (key in keySet().toList()) when (val value = get(key)) {
@@ -109,8 +109,8 @@ class ModuleNavigationSafetyTest {
     private fun savedWithMissing(vararg keys: NavKey, missing: NavKey): Bundle {
         val serializer = RestorableBackStackSerializer(listOf(AssistantRoute))
         return encodeToSavedState(serializer, NavBackStack(*keys, missing)).apply {
-            // The class name Navigation 3 saved, turned into one this build lacks (a module left out of it).
-            rename(missing::class.java.name, "persona.module.gone.GoneRoute")
+            // The class name Navigation 3 saved, turned into one this build lacks (a module left out, a route that moved).
+            rename(missing::class.java.name, "persona.example.gone.GoneRoute")
         }
     }
 
@@ -125,7 +125,7 @@ class ModuleNavigationSafetyTest {
         val dropped = mutableListOf<String>()
         val restored = decodeFromSavedState(RestorableBackStackSerializer(listOf(AssistantRoute), dropped::add), saved)
         assertEquals(listOf(AssistantRoute, KeptRoute("a")), restored.toList())
-        assertEquals(listOf("persona.module.gone.GoneRoute"), dropped)
+        assertEquals(listOf("persona.example.gone.GoneRoute"), dropped)
     }
 
     @Test fun aStackOfOnlyMissingRoutesStartsAgainFromItsRoot() {
