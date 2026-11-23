@@ -23,7 +23,6 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/extension/sourcevalidate"
-	"github.com/nwverse/persona/server/internal/voice"
 )
 
 // TestMain doubles as a plugin: re-run with PERSONA_TEST_PLUGIN=1 the test binary serves on PERSONA_PLUGIN_SOCKET.
@@ -49,10 +48,10 @@ func TestMain(m *testing.M) {
 		}
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "voice" { // the built-in voice extension run by the hub (voice_extension_test.go)
+	if run, ok := builtinext.LookupProgram("voice"); ok && len(os.Args) > 1 && os.Args[1] == "voice" { // the built-in voice extension run by the hub (voice_extension_test.go)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := voice.Run(ctx); err != nil {
+		if err := run(ctx, "test"); err != nil {
 			log.Fatal(err)
 		}
 		return

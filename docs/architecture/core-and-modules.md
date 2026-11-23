@@ -125,20 +125,22 @@ missing quietly.
 
 ### Provider seams
 
-Some modules are not code the manager runs but a built-in extension's program: `volc` is `personad volc`, which the
-extension host (`internal/extmgr`) starts and which reaches the hub only through its API. The core needs two things of
+Some modules are not code the manager runs but a built-in extension's program: `volc` is `personad volc` and `voice`
+is `personad voice`, which the extension host (`internal/extmgr`) starts and which reach the hub only through its API. The core needs two things of
 such a module, and it declares them in `server/internal/builtinext` in its own terms, never as the module's types:
 
 - the program a subcommand runs (`builtinext.AddProgram`, `LookupProgram`; `personad`'s usage lists the programs the
   build has);
-- what the extension host shows of the extension: for `volc` its ids and its form's choices (`builtinext.Volc`).
+- what the extension host needs of the extension: for `volc` its ids and its form's choices (`builtinext.Volc`); for
+  `voice` its transcription contribution's id and how its settings merge, which the host reads to say what the
+  extension lacks (`builtinext.Voice`).
 
 The module's file in `server/internal/modules/all` provides them in its `init`, under the module's build constraint.
 With the module left out nothing is provided: the subcommand is unknown and the extension host registers no such
-extension, exactly as before the extension existed (`TestNoVolcWithoutItsModule`). Such a module registers nothing
+extension, exactly as before the extension existed (`TestNoVolcWithoutItsModule`, `TestNoVoiceWithoutItsModule`). Such a module registers nothing
 with the kernel yet; its `module.json` declares no slot. `scripts/ci/server.sh build` builds and tests the binaries,
-`builtinext`, the modules, the guards and the extension host's tests of them with `persona_core_only` and with
-`persona_without_volc`.
+`builtinext`, the modules, the guards, the extension host's tests of them and the manager's end-to-end meeting
+transcription tests with `persona_core_only`, `persona_without_volc` and `persona_without_voice`.
 
 ### Guards
 
@@ -190,6 +192,20 @@ section 2): the program `personad volc` and its stand-in service `volctest` (doc
 extension host keeps the extension's manifest, its meetings switch and its settings text (`internal/extmgr/volc_extension.go`),
 from what the module provides through `builtinext`; its catalog strings (`hub-volc_extension.*`, `volc-*`) stay in the
 hub's locales.
+
+### Voice
+
+`voice` (`server/internal/modules/voice`, #13431) is full-duplex voice: the program `personad voice`, which also serves
+the built-in meeting transcription contribution (`gpt-live`), and its stand-in upstream `voicetest`
+(docs/assistant/voice.md). The core keeps the generic seam: the extension host's `transcription` point, which any
+extension may contribute to, and the meeting transcription the assistant chooses; the built-in default is whatever the
+voice module provides (`builtinext.Voice`), and without the module there is none, so a meeting transcribes with a
+chosen extension or on the phone. The apps' composer dictation is core; the extension's GPT-Live dictation mode
+(docs/assistant/voice.md 4.18) goes with the module, and apps use it only while the extension advertises its
+`dictation` feature. Still in the core and named by string, to move as the host serves their slots: the channel kind
+(`channel.KindVoice`), `assistantwire.PluginsVoice`, the `voice` and `speech` extension points, the extension host's
+glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings; `internal/transcribelive`, a
+measuring tool that also reads the knowledge base, stays where it is.
 
 ### How to add a module
 
