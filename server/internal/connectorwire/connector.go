@@ -1,18 +1,14 @@
-// Package connector is how a source of the user's information (GitHub, iMessage, later Feishu and mail) plugs into
-// the hub: one connector per source, and each pipe the hub has — the assistant's tools, writes behind a gate, the
-// settings page's status, realtime kicks — picks up what the connector implements, so adding a source does not
-// touch those pipes (docs/extensions/connectors.md).
-//
-// A connector implements Connector, whose Manifest declares its capabilities; the hub finds each declared one's
-// interface with As. Runner, Events and Machines are how it runs, found by type assertion.
-package connector
+// The connector SPI: what a connector implements and what the hub hands it (docs/extensions/connectors.md). The
+// framework (internal/connector) aliases every name here and keeps the logic that runs connectors.
+
+package connectorwire
 
 import (
 	"context"
 	"encoding/json"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -156,14 +152,14 @@ type Machines interface {
 }
 
 // Chats is a connector whose conversations the knowledge base reads chat by chat, each with its own cursor
-// (Feishu's chats, Moments posts): one kb.Source per stream, its Name the prefix of its chats' ids (which never
+// (Feishu's chats, Moments posts): one kbwire.Source per stream, its Name the prefix of its chats' ids (which never
 // changes). Reading a conversation further back is History's (CapHistory), for the connectors whose conversations
 // come through Archive.
 type Chats interface {
-	ChatSources() []kb.Source
+	ChatSources() []kbwire.Source
 }
 
 // Items is a connector with documents, meetings, events… for the knowledge base's items.
 type Items interface {
-	ItemSource() kb.ItemSource
+	ItemSource() kbwire.ItemSource
 }

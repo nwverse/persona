@@ -197,19 +197,19 @@ Known limit: a gate proxy address does not know who calls it. A process in a hea
 
 ## Entering Health (#4329)
 
-Entering Health goes straight back to the latest health chat, with its context, as Codex does; **New** starts another. One rule on every client:
+The original rule from #4329 (implemented in #4385) resumed the latest health chat when one existed, falling back to the home when there was no history.
+#13273 changes the entry to open the **Health home** directly. The home is the first screen for the daily overview (#13176), with previous chats one tap away, and opens without waiting for the chat list. Returning to the latest chat takes one extra tap.
 
-- **Has history**: the sidebar's **Health** opens the open (not archived) health chat with the newest last activity (`updated_at`, the order the Health lists already use).
-  The list is `GET /api/v1/assistant?space=health` with the pushed sessions carrying `space: "health"` over it; no endpoint of its own.
-- **No history**: it opens the new health chat page (the Health home: input box, suggested questions, reports, memory, sources, privacy); the first message starts the chat, as **New Chat** does in the main space.
-  A list that cannot be read lands here too, where the list section says why.
-- **New**: a health chat's header has a **New** button that opens the new health chat page, whose **Health Chats** list has every past one; on the web a clock button next to it lists them as a menu as well.
+- **Health**: opens the home whether or not there are previous chats. Its **Health Chats** list keeps open (not archived) chats newest first by last activity (`updated_at`), and tapping a row opens that chat.
+  The list is `GET /api/v1/assistant?space=health` with the pushed sessions carrying `space: "health"` over it; no endpoint of its own. Loading the list does not hold up entry; on the web a failed list says why in its section.
+- **First message**: the home's input box starts a new health chat when sent, as **New Chat** does in the main space; merely opening the home creates no chat.
+- **New**: a health chat's header returns to the home. On the web a clock button next to it also lists past chats as a menu.
 
 | Client | Where |
 | --- | --- |
-| Web | `/health` resumes and replaces itself (Back skips it); `/health/new` is the new chat page; `views/spaces/entry.ts` `spaceEntry`, header buttons `HealthChatActions` in `modules/health/Health.tsx` (the health module, `docs/web/web.md` "Modules"). Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
-| iOS / Mac | the sidebar's **Health** runs `AssistantView.enterHealth` (`HealthModel.entry`); the top bar's **New Chat** in a health chat pushes the Health page (`HealthModel.newOpensHealth`). `-openAssistantPage health` / `-openShellPage health` still show the page itself. Tests: `HealthModelTests` |
-| Android | the assistant sidebar's **Health** (`HealthEntry.resolve`), see "Android entry point" below |
+| Web | `/health` stays on the home; `/health/new` remains an alias for it. `HealthPage` / `Health` and the header buttons `HealthChatActions` are in `modules/health/Health.tsx`. Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
+| iOS (iPhone and iPad) | the sidebar's **Health** opens the home, with all open health conversations listed newest first. `AssistantView.enterHealth()` synchronously returns to the root and presents the home; the embedded Sidebar layout selects Health as its page root. Entry does not wait for the conversation list. **New Chat** in a health conversation still returns to the home (`HealthModel.newOpensHealth`); the first message in its composer starts a new health conversation. `-openAssistantPage health` / `-openShellPage health` still open the home. Tests: `HealthModelTests`, `HealthEntryUITests`, the Health upload case in `TreeSwapFoldTests` |
+| Android | the assistant sidebar's **Health** opens the home immediately (`AssistantScreen.openHealth`); `HealthEntry.history` keeps its chat list ordered. See "Android entry point" below |
 
 ## Water and protein
 
@@ -363,8 +363,8 @@ Details, anchors and platform differences: `docs/apple/phone-tools.md`, "Every h
 
 ## Web entry point
 
-- A separate **Health** item in the sidebar opens `/health`, which resumes the latest health chat ("Entering Health" above).
-- Home (`/health/new`, the new health chat page): a one-line privacy note (chats and memory stay in the Health space, data is on your own hub, not a substitute for a doctor), data sources (Apple Health / Health Connect, via the phone's `phone_health_summary` / `phone_health_write_sample`; Persona must be open on the phone and authorized),
+- A separate **Health** item in the sidebar opens the home at `/health` immediately ("Entering Health" above). `/health/new` remains an alias; a health chat's **New** goes to `/health`.
+- Home (`/health`, also `/health/new`): a one-line privacy note (chats and memory stay in the Health space, data is on your own hub, not a substitute for a doctor), data sources (Apple Health / Health Connect, via the phone's `phone_health_summary` / `phone_health_write_sample`; Persona must be open on the phone and authorized),
   suggested questions (tap one to start a health chat with it), past health chats, health memory (view, delete).
 - Tapping a chat opens `/health/<id>`, the same chat page as other assistant chats; its input box asks health questions as the home's does ("Ask a health question…", `ChatView`'s `placeholder`), not the main chat's line.
 - Health chats no longer appear in the main chat's history list.
@@ -376,18 +376,18 @@ Verification image removed; see the associated PR.
 
 ## iOS and Mac entry points (#2901)
 
-- Entry: a **Health** row below **Knowledge** in the assistant sidebar (in the new shell's drawer it sits between **Knowledge** and **Machines**; in the Mac split-view list it is below **Scheduled Tasks**), opening the latest health chat, or the Health page when there is none ("Entering Health" above; `apple/Persona/Views/Assistant/HealthView.swift`, shared by iOS and Mac).
+- Entry on iPhone and iPad: the sidebar's **Health** opens the Health home immediately, with its open conversations listed newest first ("Entering Health" above). `AssistantView.enterHealth()` synchronously calls `backToRoot(); present(.health)`; the embedded Sidebar layout selects Health as its page root. Opening the home does not wait for the conversation list. **New Chat** in a health conversation still returns to the home, and the first message in its composer starts a new health conversation (`apple/Persona/Views/Assistant/HealthView.swift`).
 - Health page: a one-line note; **Works with Apple Health** (#13118), the Health app's icon and what is read and saved, which on an iPhone or iPad opens Settings › Connectors › This iPhone (App Review 2.5.1 wants HealthKit named Apple Health where it is used; the phone data row is **Apple Health** too); suggested questions (tap one to start a health chat with it), health chats (`GET /api/v1/assistant?space=health`, merged with pushed ones carrying `space: "health"`; swipe / right-click to archive),
   health memory (pushes the memory page `AssistantMemoryView(space: "health")`; view, edit and delete all carry `?space=health`), data sources, privacy. At the bottom is an input box; sending does `POST /api/v1/assistant/conversations` with `"space":"health"`, never set as the main chat.
 - iOS input box (#3825): Persona's new conversation's composer in every style (`StarterComposer` in the shell's composer): + opens the attach panel on the iPhone (touch and hold, or the iPad's tap: the + menu), and the model button picks the launcher and one of its models (#11472; Health's, the default manager's, until one is picked), the effort and, a level down, the permission mode. The effort and mode are the ones Persona's new conversation picks (a health conversation already started with them). Files still go to `reports/`. The Mac keeps its input line (BeautifulUI: the prompt bar with its launcher menu).
 - Health chats that are started or tapped open in the Persona page's chat, the same chat page as other assistant chats; go back to the Health page via **Health** in the sidebar.
 - The sidebar's **Recent**, **Archived** and search do not list health chats (`AssistantLists` splits by `Session.assistantSpace`; health ones are in `AppModel.healthConversations`).
-- Screenshot arguments: `-tab assistant -openAssistantPage health` (new shell: `-openShellPage health`). Unit tests: `PersonaTests/HealthModelTests`.
+- Screenshot arguments: `-tab assistant -openAssistantPage health` (new shell: `-openShellPage health`); both still open the home. Tests: `PersonaTests/HealthModelTests`, `PersonaUITests/HealthEntryUITests`, and the Health upload case in `TreeSwapFoldTests`.
 
 ## Android entry point (#4329)
 
-- Entry: **Health** below **Knowledge** in the assistant drawer (not in demo mode). It opens the latest health chat or, with none, the new health chat page ("Entering Health" above; `feature/assistant/.../HealthEntry.kt`, `AssistantScreen.kt` `openHealth`).
-- New health chat page: the hero line, the input box and the space's past chats (newest first, tap to open). The first message starts the chat with `POST /api/v1/assistant/conversations?space=health` and `"space":"health"`, never `main`. The box takes no files (they would go to the main chat's machine, outside the Health space) and has no launcher picker.
+- Entry: **Health** below **Knowledge** in the assistant drawer (not in demo mode). It opens the Health home immediately, whether or not there are previous chats ("Entering Health" above; `AssistantScreen.kt` `openHealth`). The page loads its history in the background.
+- Health home (the new health chat page): the hero line, the input box and the space's past chats (`HealthEntry.history`, newest first, tap to open). The first message starts the chat with `POST /api/v1/assistant/conversations?space=health` and `"space":"health"`, never `main`. The box takes no files (they would go to the main chat's machine, outside the Health space) and has no launcher picker.
 - In a health chat the top bar's new chat button reads **New health chat** and opens that page. Health chats pushed live (`space: "health"`) stay out of the main chat lists.
 - Requests carry `?space=health` on the URL, so the hub client sends no manager header: the space is the default manager's, as on the web.
 - Tests: `HealthEntryTest`, `HealthEntryScreenTest` (feature/assistant), `InboxAssistantTransportTest.theHealthSpaceListsAndStartsItsChatsByName`, `HubManagerHeaderTest`, `SpaceConversationsTest`.

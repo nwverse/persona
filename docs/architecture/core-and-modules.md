@@ -115,18 +115,52 @@ missing quietly.
   out. `go build -tags persona_core_only ./...` must pass. `scripts/ci/server.sh build` builds both and runs, with each
   tag, the module and kernel tests and a `-run` subset of `internal/assistant` (Brief, Module, Setting, Routine, Facts,
   ScheduledConfiguration, NorthStar, Accept, Later, Golden): the assistant's tests of the briefing itself skip
-  (`needsBriefingModule`), and `TestBuildWithoutBriefingLoadsNone` checks the core without it. The whole package passes
-  with both tags too (about 9 minutes each, too long for the lane).
-  `scripts/ci/core-only-smoke.py` (the lane's 'Core-only hub smoke') starts the core alone: it builds the programs
-  with `persona_core_only`, runs `persona-hub run` and its `persona-manager` against a disposable Postgres from a
-  temporary home, and checks health, the manager's `modules: loaded none`, and that every module's program
-  (`builtinext.AddProgram` in `internal/modules/all`), extension and extension route is absent; `--full` checks the
-  opposite on a default build.
+  (`needsBriefingModule`), and `TestBuildWithoutBriefingLoadsNone` checks the core without it. Every server package
+  passes with `persona_core_only` too: the `core-node`, `core-managers` and `core-other` lanes run the whole suite
+  with it ("How to build and run the core alone" below).
 - **At run time**: the settings row `modules` (the `settings` table, as every other setting; no state file) holds
   `{"disabled": ["<id>", …]}`. The manager reads it once where it starts (`server/internal/assistant/main.go`,
   `ReadModuleSwitch`) and hands it to `assistant.New` as `Options.ModulesOff`, so a change takes effect at the next
   start. A module switched off is absent exactly as one left out of the build. There is no screen or tool for the row
   yet: the settings registry of #13395 is its intended home.
+
+### How to build and run the core alone
+
+Persona Core is a product on its own: a hub built without any module starts, serves and passes the core's tests.
+
+- **Build**: `cd server && go build -tags persona_core_only -o ../bin/ ./cmd/personad ./cmd/persona-hub ./cmd/persona-manager`.
+  One module left out: `-tags persona_without_<id>`.
+- **Run**: the core-only `persona-hub run` (or `personad hub run`) with a `hub.json` as for any hub (docs/operations/config.md);
+  keep `persona-manager` beside `persona-hub` and the hub starts it. The manager's log says `modules: loaded none`
+  (a default build: `modules: loaded briefing, voice, volc`, …).
+- **Smoke test**: `python3 scripts/ci/core-only-smoke.py` builds the three programs with `persona_core_only`, starts a
+  disposable `postgres:18-alpine` container on a private port, writes a `hub.json` in a temporary home and runs
+  `persona-hub run` with a clean environment (no `PERSONA_HOME` of the machine's own hub). It checks health, an
+  authenticated request, the manager's `modules: loaded none`, that every module's program (`builtinext.AddProgram` in
+  `internal/modules/all`) is an unknown subcommand of `personad` and `persona-manager`, that its extension is not in
+  `/api/v1/extensions` and `/api/v1/extensions/<id>/-/assistant-data` answers 404, and a clean SIGTERM shutdown, then
+  prints one PASS / FAIL / TIMEOUT line. `--full` runs the same on a default build and expects the opposite. `DOCKER`
+  names another Docker client.
+- **Tests**: `GOFLAGS="-trimpath -tags=persona_core_only" python3 scripts/ci/server-shards.py <node|managers|other>
+  --database-file <file with database_url>` runs a shard's every package without modules; a test of a module's own
+  behaviour skips without it (`needsBriefingModule`, `needsVoiceModule`, `needsVolcModule`). Locally the `other` shard
+  needs Bun 1.4.2 on `PATH`, as in CI.
+- **CI** (`scripts/ci/server.sh`): the `build` lane runs 'Core-only hub smoke' and 'Builds without each module' (each
+  `server/internal/modules/<id>/module.json`: `go build -tags persona_without_<id> ./...` and the module list and guard
+  tests, so a module that moves is covered with no edit); the `core-node`, `core-managers` and `core-other` lanes (and
+  `all`) run 'Server <shard> tests with Postgres, core only'. Measured on the hub machine (64 cores, shared): node
+  about 5.5 minutes, managers about 6, other about 3.5.
+- **Size**: `python3 scripts/diag/core_size.py [--no-build] [--json] <ref> …` prints the core's non-test Go lines (every
+  `*.go` under `server/` that is not `_test.go`, `server/internal/modules/` left out), each module's lines, and the
+  stripped sizes of `personad`, `persona-hub` and `persona-manager` built by default and with `persona_core_only`
+  (`go build -trimpath -ldflags '-s -w'`, the same for both). Read from `git archive`, so no checkout changes.
+
+| Ref | Core non-test lines | Module lines | personad default / core-only | persona-hub | persona-manager default / core-only |
+| --- | --- | --- | --- | --- | --- |
+| `9fa299334` (before modules moved) | 842,284 | briefing 173 | 118,911,239 / 118,898,951 B | 40,755,463 B | 100,917,511 / 100,909,319 B |
+| `2da914f99` (voice and volc moved) | 825,432 | briefing 173, voice 15,132, volc 3,259 | 119,030,023 / 117,809,415 B | 40,792,327 B | 101,007,623 / 99,791,111 B |
+
+`persona-hub` has no module in it, so both of its builds are the same size.
 
 ### Provider seams
 
