@@ -3,6 +3,7 @@ package persona.feature.assistant
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,8 +32,8 @@ class SpacesModel {
         private set
     private val loading = Mutex()
 
-    /** What the Spaces section lists; null hides the section. */
-    val sidebar: List<Track>? get() = tracks?.takeIf { supported == true }?.let(Tracks::sidebarSpaces)
+    /** What the Spaces section lists; null hides the section. Sorted once per read, not on every recomposition. */
+    val sidebar: List<Track>? by derivedStateOf { tracks?.takeIf { supported == true }?.let(Tracks::sidebarSpaces) }
 
     fun track(slug: String): Track? = tracks?.firstOrNull { it.slug == slug }
 

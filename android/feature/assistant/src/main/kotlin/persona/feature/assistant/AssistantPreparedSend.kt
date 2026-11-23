@@ -69,6 +69,21 @@ internal suspend fun assistantNewChatRefused(
     return coded?.text?.resolve(resources) ?: resources.getString(R.string.assistant_new_conversation_failed)
 }
 
+/**
+ * Why a domain space's first conversation did not start (#13500): what is missing for a coded refusal, as on any new
+ * chat, else "Couldn't start the conversation:" with the reason, as the web says.
+ */
+internal suspend fun assistantSpaceStartRefused(
+    error: Exception,
+    readinessOn: Boolean,
+    readiness: MainReadiness,
+    resources: Resources,
+): String {
+    val feedback = operationFeedback(error)
+    if (feedback.action.readinessAction() != null) return assistantNewChatRefused(error, readinessOn, readiness, resources)
+    return resources.getString(R.string.assistant_spaces_start_failed, feedback.text.resolve(resources))
+}
+
 /** The background part of Assistant's original submit, with the page's existing state objects. */
 internal suspend fun sendAssistantPrepared(
     request: AssistantPreparedSend,

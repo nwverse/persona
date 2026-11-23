@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,8 +54,10 @@ internal class NewSpaceDraft(private val taken: () -> Collection<String>) {
     var kind by mutableStateOf(Tracks.DEFAULT_KIND)
     private var typedSlug by mutableStateOf<String?>(null)
 
-    /** The address: the one the user wrote, else one suggested from the name. */
-    val slug: String get() = typedSlug ?: title.trim().takeIf { it.isNotEmpty() }?.let { Tracks.suggestSlug(it, taken()) }.orEmpty()
+    /** The address: the one the user wrote, else one suggested from the name; worked out once per change, not per read. */
+    val slug: String by derivedStateOf {
+        typedSlug ?: title.trim().takeIf { it.isNotEmpty() }?.let { Tracks.suggestSlug(it, taken()) }.orEmpty()
+    }
     val slugTaken: Boolean get() = slug.isNotEmpty() && slug in taken()
     val slugOk: Boolean get() = Tracks.formSlug(slug) && !slugTaken
     val ready: Boolean get() = title.isNotBlank() && slugOk

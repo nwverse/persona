@@ -335,7 +335,8 @@ fun ExtensionPage(
                 sandbox(detail.extension.sandbox, detail.extension.name.ifBlank { extensionId },
                     onAllow = api.adminNetworkUrl(extensionId)?.let { url -> { uri.openUri(url) } })
                 permissions(detail)
-                if (manager == null && trustAccess != null) extensionInfoAccess(trustAccess, editable = !detail.readOnly)
+                if (manager == null && trustAccess != null) extensionInfoAccess(trustAccess,
+                    editable = !detail.readOnly && detail.extension.source !in listOf("dev", "hub.json"))
             }
         })
     if (auth != null) ExtensionSignInSheet(auth, detail.extension.name.ifBlank { extensionId }, signInState.bind, signIn)

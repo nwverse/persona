@@ -93,8 +93,20 @@ class SpaceMdEditorTest {
         assertEquals(emptyList<Pair<String, String>>(), api.writes)
     }
 
+    @Test fun saveStaysOffUntilSomethingChanges() {
+        val api = Api(null)
+        mount(api)
+        rule.onNodeWithTag("space-md-save").assertIsNotEnabled()
+        rule.onNodeWithTag("space-md-field-0").performTextReplacement("# Money\n\nBudget.\n\n")
+        rule.onNodeWithTag("space-md-save").assertIsNotEnabled()
+        rule.onNodeWithTag("space-md-field-0").performTextReplacement("# Money\n\nBudget and rent.\n\n")
+        rule.onNodeWithTag("space-md-save").assertIsEnabled()
+        assertEquals(emptyList<Pair<String, String>>(), api.writes)
+    }
+
     @Test fun anOfflineComputerSaysSo() {
         mount(Api(503))
+        rule.onNodeWithTag("space-md-field-0").performTextReplacement("# Money\n\nBudget and rent.\n\n")
         rule.onNodeWithTag("space-md-save").performClick()
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("space-md-error").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("The assistant's computer is offline", substring = true).assertExists()

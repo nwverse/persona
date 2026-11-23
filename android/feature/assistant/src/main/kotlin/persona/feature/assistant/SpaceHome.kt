@@ -110,7 +110,11 @@ internal fun SpaceHome(
             chats == null && loadFailed -> item(key = "space-history-failed") {
                 JEmptyState(stringResource(R.string.assistant_spaces_load_failed), "", icon = icon)
             }
-            chats != null && history.isEmpty() -> item(key = "space-history-empty") {
+            chats == null -> item(key = "space-history-loading") {
+                Text(stringResource(R.string.assistant_spaces_loading), Modifier.testTag("space-history-loading"),
+                    style = PersonaTheme.type.callout, color = palette.ink3)
+            }
+            history.isEmpty() -> item(key = "space-history-empty") {
                 JEmptyState(stringResource(R.string.assistant_spaces_empty_title), stringResource(R.string.assistant_spaces_empty_body), icon = icon)
             }
             else -> itemsIndexed(history, key = { _, session -> "space/" + session.key.path }) { index, session ->

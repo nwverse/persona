@@ -47,6 +47,9 @@
     <string name="assistant_spaces_md_missing">このスペースにはまだ編集できる内容がありません。</string>
     <string name="assistant_spaces_md_offline">アシスタントのコンピュータがオフラインか、更新が必要です。後でもう一度お試しください。</string>
     <string name="assistant_spaces_md_failed">保存できませんでした：%1$s</string>
+    <string name="assistant_spaces_md_read_failed">読み込めませんでした：%1$s</string>
+    <string name="assistant_spaces_retry">再試行</string>
+    <string name="assistant_spaces_loading">読み込み中…</string>
     <string name="assistant_spaces_new_title">新しいスペース</string>
     <string name="assistant_spaces_new_intro">スペースは生活の一部分をまとめておく場所です。健康スペースのように、専用の会話、メモ、記憶を持ちます。</string>
     <string name="assistant_spaces_field_title">名前</string>

@@ -47,6 +47,9 @@
     <string name="assistant_spaces_md_missing">这个空间还没有可以编辑的内容。</string>
     <string name="assistant_spaces_md_offline">助理的电脑不在线，或者需要更新。请稍后再试。</string>
     <string name="assistant_spaces_md_failed">没能保存：%1$s</string>
+    <string name="assistant_spaces_md_read_failed">没读到：%1$s</string>
+    <string name="assistant_spaces_retry">重试</string>
+    <string name="assistant_spaces_loading">正在读取…</string>
     <string name="assistant_spaces_new_title">新建空间</string>
     <string name="assistant_spaces_new_intro">空间把你生活里的一块放在一起，就像健康空间那样：有自己的对话、自己的笔记和自己的记忆。</string>
     <string name="assistant_spaces_field_title">名称</string>

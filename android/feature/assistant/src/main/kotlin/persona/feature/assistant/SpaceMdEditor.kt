@@ -67,8 +67,8 @@ internal fun SpaceMdEditor(slug: String, api: AssistantManagement, onDismiss: ()
         try {
             val read = api.spaceMd(slug)
             val shown = SpaceMdText.editable(SpaceMdText.split(read.content))
+            // Only fields the user changes go into [edits]: an untouched field goes back exactly as it was read.
             edits.clear()
-            shown.editable.forEach { edits[it] = shown.parts[it].text }
             base = read
             fields = shown
             error = null
@@ -80,10 +80,13 @@ internal fun SpaceMdEditor(slug: String, api: AssistantManagement, onDismiss: ()
             val kind = Tracks.spaceMdError(hubCodedFailure(failed)?.status)
             if (base == null) loadFailed = true
             error = kind.takeIf { it != SpaceMdError.Other }
-            failure = if (kind == SpaceMdError.Other) operationFeedback(failed).text.resolve(resources) else null
+            failure = if (kind == SpaceMdError.Other)
+                resources.getString(R.string.assistant_spaces_md_read_failed, operationFeedback(failed).text.resolve(resources)) else null
         }
     }
     LaunchedEffect(slug, api) { load() }
+    val reload: () -> Unit = { scope.launch { load() } }
+    val changed = fields?.let { shown -> edits.isNotEmpty() && SpaceMdText.assemble(shown.parts, edits.toMap()) != base?.content } ?: false
 
     fun save() {
         val shown = fields ?: return
@@ -124,14 +127,18 @@ internal fun SpaceMdEditor(slug: String, api: AssistantManagement, onDismiss: ()
             }
             if (message != null) JNotice(message, Modifier.testTag("space-md-error"), status = Status.NeedsYou,
                 actionLabel = stringResource(R.string.assistant_spaces_md_reload).takeIf { error == SpaceMdError.Stale },
-                onAction = { scope.launch { load() } }.takeIf { error == SpaceMdError.Stale })
+                onAction = reload.takeIf { error == SpaceMdError.Stale })
             val shown = fields
             if (shown == null) {
                 if (!loadFailed) Text(stringResource(R.string.assistant_spaces_md_loading), style = PersonaTheme.type.callout, color = palette.ink3)
-                else if (message == null) Text(stringResource(R.string.assistant_spaces_md_unavailable), style = PersonaTheme.type.callout, color = palette.ink3)
+                else {
+                    if (message == null) Text(stringResource(R.string.assistant_spaces_md_unavailable), style = PersonaTheme.type.callout, color = palette.ink3)
+                    JButton(stringResource(R.string.assistant_spaces_retry), reload, Modifier.testTag("space-md-retry"),
+                        kind = JButtonKind.Quiet, size = JButtonSize.Medium, icon = PersonaIcons.retry)
+                }
             } else shown.parts.forEachIndexed { index, part ->
                 when {
-                    index in shown.editable -> JTextField(edits[index].orEmpty(), { edits[index] = it },
+                    index in shown.editable -> JTextField(edits[index] ?: part.text, { edits[index] = it },
                         Modifier.fillMaxWidth().testTag("space-md-field-$index"),
                         placeholder = stringResource(R.string.assistant_spaces_md_placeholder),
                         minLines = if (index == shown.editable.first()) 10 else 5, maxLines = Int.MAX_VALUE,
@@ -142,7 +149,7 @@ internal fun SpaceMdEditor(slug: String, api: AssistantManagement, onDismiss: ()
             Row(Modifier.fillMaxWidth().padding(top = Tokens.Space.s), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s, Alignment.End)) {
                 JButton(stringResource(R.string.assistant_spaces_cancel), onDismiss, kind = JButtonKind.Quiet, size = JButtonSize.Medium, enabled = !saving)
                 JButton(stringResource(R.string.assistant_spaces_save), ::save, Modifier.testTag("space-md-save"),
-                    kind = JButtonKind.Primary, size = JButtonSize.Medium, loading = saving, enabled = fields != null && !saving)
+                    kind = JButtonKind.Primary, size = JButtonSize.Medium, loading = saving, enabled = changed && !saving)
             }
         }
     }

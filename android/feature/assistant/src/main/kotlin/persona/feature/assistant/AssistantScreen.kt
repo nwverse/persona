@@ -601,6 +601,10 @@ fun AssistantScreen(
     suspend fun newChatRefused(error: Exception): String {
         return assistantNewChatRefused(error, readinessOn, mainReadiness, resources)
     }
+    /** The same for a domain space's first conversation: "Couldn't start the conversation:" with the reason. */
+    suspend fun spaceStartRefused(error: Exception): String {
+        return assistantSpaceStartRefused(error, readinessOn, mainReadiness, resources)
+    }
     /** [resend]: the failed first message's Resend, in place of what the composer holds. */
     fun submit(resend: FirstMessage? = null) {
         // Not ready (setup): the step opens instead and the draft stays; nothing is queued (docs/assistant/onboarding.md 4.4).
@@ -655,6 +659,7 @@ fun AssistantScreen(
         }
         val operationId = requireNotNull(pendingClientId)
         val submittedChoice = managerChoice
+        val inDomainSpace = startsOne && fresh?.space.let { it != null && it != persona.core.contracts.api.AssistantSpace.HEALTH }
         scope.launch {
             sendAssistantPrepared(AssistantPreparedSend(submitted, operationId, active, fresh, launcher, startsOne,
                 forwards, sentDraft, sentQuotes, forManager, submittedManager, submittedChoice,
@@ -663,7 +668,7 @@ fun AssistantScreen(
                 composer, draftEditor, starterMentions, failedStarts, resources, feedback, toast,
                 newChatState, viewingMainQueueState, healthKeysState,
                 startConversation, startConversationWith, startConversationPicked,
-                onStartFailure = ::newChatRefused, onOpenConversation = ::openConversation, spaceKeys = spaceKeysState)
+                onStartFailure = if (inDomainSpace) ::spaceStartRefused else ::newChatRefused, onOpenConversation = ::openConversation, spaceKeys = spaceKeysState)
         }
     }
     // Delete on a failed first message: gone, with Undo putting it back (as a chat's Delete, #4645).
@@ -721,13 +726,21 @@ fun AssistantScreen(
         val tracks = model.tracks
         if (model.supported == false || (tracks != null && tracks.none { it.slug == slug && !it.archived })) openMain()
     }
-    // A chat opened from elsewhere (a notification, a link) that is not on the assistant's own list may be a health one:
-    // asked once, so its New opens the health space's page.
-    LaunchedEffect(active) {
+    // A chat opened from elsewhere (a notification, a link) that is not on the assistant's own list may be a health one or
+    // a domain space's: health is asked first, then each space in the sidebar until one holds it, so its top bar shows the
+    // space and its New opens that space's page. Asked again once the spaces are first read.
+    val spacesKnown = spaces?.sidebar != null
+    LaunchedEffect(active, spacesKnown) {
         val shown = active ?: return@LaunchedEffect
         if (demo || conversationsOf == null || shown in healthKeys || shown in spaceKeys || shown == snapshot.mainSession ||
             snapshot.conversations.any { it.key == shown }) return@LaunchedEffect
         assistantAttempt { loadHealth() }
+        if (shown in healthKeys) return@LaunchedEffect
+        for (track in spaces?.sidebar.orEmpty()) {
+            if (active != shown) return@LaunchedEffect
+            assistantAttempt { loadSpace(track.slug) }
+            if (shown in spaceKeys) return@LaunchedEffect
+        }
     }
     LaunchedEffect(requestedSession) {
         requestedSession?.let { openedMain = true; proactiveOpen = false; settingsOpen = false; openConversation(it) }

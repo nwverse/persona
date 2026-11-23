@@ -47,6 +47,9 @@
     <string name="assistant_spaces_md_missing">This space has no page to edit yet.</string>
     <string name="assistant_spaces_md_offline">The assistant\'s computer is offline or needs an update. Try again later.</string>
     <string name="assistant_spaces_md_failed">Couldn\'t save: %1$s</string>
+    <string name="assistant_spaces_md_read_failed">Couldn\'t read it: %1$s</string>
+    <string name="assistant_spaces_retry">Retry</string>
+    <string name="assistant_spaces_loading">Loading…</string>
     <string name="assistant_spaces_new_title">New space</string>
     <string name="assistant_spaces_new_intro">A space keeps one part of your life together, like health keeps yours: its own conversations, its own notes, and its own memory.</string>
     <string name="assistant_spaces_field_title">Name</string>
