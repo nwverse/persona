@@ -12,7 +12,7 @@
   "development_step_archive_programs": "プログラムとコンピュータ用パッケージを保存",
   "development_step_resume_writers": "書き込みを再開",
   "development_step_verify_snapshot": "スナップショットを検証",
-  "development_step_prepare_artifacts": "プログラムとコンピュータ用パッケージを準備",
+  "development_step_prepare_artifacts": "ハブとノードのプログラムを準備",
   "err_no_update": "新しいバージョンはありません",
   "err_beta_channel": "Betaの更新には公式GitHubリリースソースと有効なBetaマニフェストが必要です。現在の更新元は変更されていません",
   "err_not_release": "このハブは自動で更新できません",

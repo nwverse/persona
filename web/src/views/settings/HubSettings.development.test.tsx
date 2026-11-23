@@ -18,14 +18,6 @@ const events = new Map<string, (message: { update?: HubUpdateStatus }) => void>(
 vi.mock("../../lib/hub-update", async (original) => ({
   ...await original<typeof import("../../lib/hub-update")>(),
   hubUpdate: async () => { updateReads++; return readUpdate ? readUpdate() : status; },
-  hubUpdateHistory: async () => [],
-  hubUpdateBackups: async () => { backupReads++; return [{ id: "snapshot-fixture", version: "web-dev-backup", build: 202611120001,
-    commit: "c".repeat(40), updated_at: "2026-11-12T10:00:00Z", created_at: "2026-11-13T10:00:00Z" }]; },
-  applyHubUpdateBackup: async (id: string) => {
-    saved.push({ backup: id });
-    status = { ...status, state: "applying_backup", auto: false };
-    return status;
-  },
   setHubUpdateSettings: async (input: { source?: "release" | "beta" | "web-dev"; development_backup_directory?: string }) => {
     saved.push(input);
     status = { ...status, ...input, auto: false };
@@ -42,6 +34,17 @@ vi.mock("../../lib/hub-update", async (original) => ({
         backup_directory_is_default: isDefault,
         backup_retain: (input as { development_backup_retain?: number }).development_backup_retain ?? status.development!.backup_retain } };
     }
+    return status;
+  },
+}));
+vi.mock("../../lib/hub-update-settings", async (original) => ({
+  ...await original<typeof import("../../lib/hub-update-settings")>(),
+  hubUpdateHistory: async () => [],
+  hubUpdateBackups: async () => { backupReads++; return [{ id: "snapshot-fixture", version: "web-dev-backup", build: 202611120001,
+    commit: "c".repeat(40), updated_at: "2026-11-12T10:00:00Z", created_at: "2026-11-13T10:00:00Z" }]; },
+  applyHubUpdateBackup: async (id: string) => {
+    saved.push({ backup: id });
+    status = { ...status, state: "applying_backup", auto: false };
     return status;
   },
 }));

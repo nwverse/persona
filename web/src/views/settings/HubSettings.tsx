@@ -5,11 +5,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, errorText } from "../../lib/api";
 import { ago, bytes, duration } from "../../lib/format";
 import { formatNumber, t } from "../../i18n";
+import { hubUpdate, setHubUpdateSettings, startHubUpdate, type HubDevelopmentProgress, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus } from "../../lib/hub-update";
 import {
-  applyHubUpdateBackup, checkHubUpdate, hubUpdate, hubUpdateBackups, hubUpdateHistory, setHubUpdateSettings, startHubUpdate,
-  updateFinished, updateStateTitle, updateWorking, type HubDevelopmentProgress, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus,
-} from "../../lib/hub-update";
-import { channelTitle, dockerSteps, latestWarning, recordTitle, recordTone, sourceBehindWarning, updateView } from "../../lib/hub-update-settings";
+  applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdateBackups, hubUpdateHistory, latestWarning,
+  recordTitle, recordTone, sourceBehindWarning, updateFinished, updateStateTitle, updateView, updateWorking,
+} from "../../lib/hub-update-settings";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { managerOf, multiManager, useRoster } from "../../lib/managers";
 import { navigate } from "../../lib/router";
@@ -484,9 +484,9 @@ function DevelopmentProgress({ title, step, p }: { title: string; step: string; 
         {p.percent === undefined && <Spinner />}
         <span>{title}</span>
       </div>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-label text-ink-2 tabular-nums">
-        <span role="status">{stepNumber} · {step}</span>
-        {p.percent !== undefined && <span>{formatNumber(p.percent / 100, { style: "percent" })}</span>}
+      <div className="flex items-baseline gap-2 text-label text-ink-2 tabular-nums">
+        <span role="status" className="min-w-0 flex-1">{stepNumber} · {step}</span>
+        {p.percent !== undefined && <span className="shrink-0">{formatNumber(p.percent / 100, { style: "percent" })}</span>}
       </div>
       {p.percent !== undefined && (
         <div role="progressbar" aria-label={step} aria-valuenow={p.percent} aria-valuemin={0} aria-valuemax={100}
