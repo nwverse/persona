@@ -399,7 +399,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // a side session folded into it with a reply nobody has seen (#13299): named under the title while the row shows
   // Unread, read for the row while the hub's rollup or the held rows say there is one (HoldSides: kept while the hub still
   // counts it, so a side seen here does not drop the rows and bring the hub's count back for a moment)
-  const sideWatch = showState && !s.assistant;
+  const sideWatch = showState && !s.assistant && to !== null;
   const hubUnread = sideWatch ? hubSides(given)?.unread ?? 0 : 0;
   const sidesUnread = useMemo(() => (sides ? unreadSides(sides) : undefined), [sides]);
   const holdSides = sideWatch && (hubUnread > 0 || (sidesUnread?.length ?? 0) > 0);
@@ -408,7 +408,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // only its sides are unread: what it did itself was seen, so its own last words do not stand under the green dot
   const sideOnly = sideLine && stateOf(ownSeen) !== "unread";
   const openSide = useCallback((side: Session, e: React.MouseEvent) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    if (!to || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     rememberSessionRow(row);
     rememberSessionRow(side);
     askSide(row.machine_id, row.session_id, side.session_id);
