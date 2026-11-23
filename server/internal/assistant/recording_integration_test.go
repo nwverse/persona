@@ -45,7 +45,12 @@ func TestDayRecapClockIsTheEveningRoutines(t *testing.T) {
 	if h, m := s.eveningClock(); h != -1 || m != -1 {
 		t.Fatalf("without one %d:%d", h, m)
 	}
-	if got := kbEng(t, s).DayRecordingName("2026-11-11"); got != i18n.T(s.lang(context.Background()), "assistant-day-recap.name", i18n.Args{"date": "2026-11-11"}) {
+	e := &kb.Engine{} // the recording module's name for a day recording (its Hook)
+	s.recordingHook(e)
+	if e.DayRecordingName == nil {
+		return // no recording module in this build
+	}
+	if got := e.DayRecordingName("2026-11-11"); got != i18n.T(s.lang(context.Background()), "assistant-day-recap.name", i18n.Args{"date": "2026-11-11"}) {
 		t.Fatalf("name %q", got)
 	}
 }
@@ -996,5 +1001,45 @@ func TestMeetingRoomRowSaysItsOrigin(t *testing.T) {
 	}
 	if r, ok := ft.s.decoratedSession("mac", sid); !ok || r.Origin != OriginMeeting || r.OriginRef != meetingRec {
 		t.Fatalf("the room's row alone: %v %q %q", ok, r.Origin, r.OriginRef)
+	}
+}
+
+// The recording module present or absent (docs/architecture/core-and-modules.md "Recording"): left out of the build
+// (persona_without_recording, persona_core_only) or switched off (the modules row), the core serves none of its
+// routes (404 as an unknown route), announces none of its capabilities, offers no meeting room tool and has no
+// audio socket; in the build and on, all of them are there.
+func TestRecordingFollowsItsModule(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		off  []string
+		on   bool
+	}{{"build", nil, recordinghost.InBuild()}, {"switched off", []string{recordinghost.ModuleID}, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeHub()
+			s := withSettings(t, f, New(Options{Hub: f, Logf: testLogf(t), ModulesOff: c.off}))
+			if s.recordingOn() != c.on {
+				t.Fatalf("recording layer %v, want %v", s.recordingOn(), c.on)
+			}
+			for _, r := range []struct{ method, path string }{{"GET", "/api/v1/recordings"}, {"PUT", "/api/v1/recordings/" + meetingRec},
+				{"GET", "/api/v1/recordings/" + meetingRec + "/live"}, {"POST", "/api/v1/recordings/" + meetingRec + "/minutes"}} {
+				w := httptest.NewRecorder()
+				s.ServeHTTP(w, httptest.NewRequest(r.method, r.path, strings.NewReader("{}")))
+				if (w.Code == http.StatusNotFound && strings.Contains(w.Body.String(), "404 page not found")) == c.on {
+					t.Errorf("%s %s: %d %s (module on: %v)", r.method, r.path, w.Code, w.Body, c.on)
+				}
+			}
+			w := httptest.NewRecorder()
+			s.ServeSocket(w, httptest.NewRequest("GET", "/api/v1/recordings/"+meetingRec+"/audio", nil))
+			if (w.Code == http.StatusNotFound) == c.on {
+				t.Errorf("the audio socket: %d (module on: %v)", w.Code, c.on)
+			}
+			caps := withRecording(slices.Clone(recordingCapabilities), s)
+			if (len(caps) == len(recordingCapabilities)) != c.on || !c.on && len(caps) != 0 {
+				t.Errorf("capabilities %v (module on: %v)", caps, c.on)
+			}
+			if (len(s.meetingRoomTools()) > 0) != c.on || (len(s.meetingRoomToolNames()) > 0) != c.on {
+				t.Errorf("room tools %v (module on: %v)", s.meetingRoomToolNames(), c.on)
+			}
+		})
 	}
 }
