@@ -44,6 +44,8 @@ func (s *Service) sendDigest(ctx context.Context) {
 		b.mu.Unlock()
 		return
 	}
+	b.routingMu.RLock()
+	defer b.routingMu.RUnlock()
 	s.restoreSupervisePending(ctx)
 	batch := s.supervisionBatchInterval(ctx)
 	cooldown := s.superviseTimings().routineCooldown()

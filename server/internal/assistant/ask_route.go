@@ -212,8 +212,8 @@ func (s *Service) routeAsk(ix proto.Interaction) bool {
 	if !routable(ix) {
 		return false
 	}
-	s.supervise.digestMu.Lock()
-	defer s.supervise.digestMu.Unlock()
+	s.supervise.routingMu.RLock()
+	defer s.supervise.routingMu.RUnlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	ladder, todo, home, ok := s.askLadder(ctx, ix)

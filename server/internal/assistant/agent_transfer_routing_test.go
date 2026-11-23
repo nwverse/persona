@@ -213,3 +213,52 @@ func TestAgentTransferAssignmentRowRoundTrip(t *testing.T) {
 		t.Fatalf("assignment lost: %s %v", raw, err)
 	}
 }
+
+func TestAgentTransferDeliversIssueSignalsOnlyOnceAcrossRestart(t *testing.T) {
+	for _, kind := range []string{sigEstimateDue, sigReport, sigIdle, sigReview, sigUndecidable} {
+		t.Run(kind, func(t *testing.T) {
+			database := todoTestDB(t)
+			s, f, task := newLeaderServiceOn(t, database)
+			settleService(t, s)
+			transferPlannedTask(t, s, f, task, "lead1")
+			g := superviseSignal{Todo: task.ID, Kind: kind, Key: "transferred-" + kind, Detail: "Evidence for the transferred supervisor"}
+			state := reviewNeedsUser
+			switch kind {
+			case sigEstimateDue:
+				state = ""
+				brief, ok := s.briefOfTodo(task.ID)
+				if !ok {
+					t.Fatal("plan has no estimate brief")
+				}
+				g.Key, g.Minutes = estimateDueKey(brief), brief.ExpectNow
+			case sigReport:
+				g.Report = upReportQuestion
+			case sigReview:
+				state = reviewPending
+			}
+			if _, _, err := s.updateSupervision(t.Context(), task.ID, func(v *Supervision) bool { v.State = state; return true }); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			f.sends = nil
+			f.mu.Unlock()
+			s.signal(g)
+			waitFor(t, "transferred "+kind, func() bool { return len(f.noticesTo("lead1")) == 1 })
+			settleService(t, s)
+			if got := f.noticesTo("conv1"); len(got) != 0 {
+				t.Fatalf("main received %s after transfer: %q", kind, got)
+			}
+			again := newRestartedService(t, Options{Hub: f, Store: func() Store { return database }, Logf: t.Logf})
+			shortSupervise(t, again)
+			noDirectionsTimers(again)
+			if err := again.ensureTodosLoaded(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			again.signal(g)
+			settleService(t, again)
+			if len(f.noticesTo("lead1")) != 1 || len(f.noticesTo("conv1")) != 0 {
+				t.Fatalf("%s repeated or changed recipients after restart: main=%q lead=%q", kind, f.noticesTo("conv1"), f.noticesTo("lead1"))
+			}
+		})
+	}
+}

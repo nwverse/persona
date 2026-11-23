@@ -232,6 +232,7 @@ func (g superviseSignal) urgent() bool {
 func (g superviseSignal) immediate() bool { return supervisionBatchImmediate(g) }
 
 type superviseBook struct {
+	routingMu   sync.RWMutex // explicit moves exclude routing/delivery; ordinary deliveries may run concurrently
 	mu          sync.Mutex
 	writeMu     sync.Mutex          // one ledger write at a time (updateSupervision)
 	roundEpochs map[string]uint64   // by todo, protected by writeMu; distinguishes a new round from a scope's state reset

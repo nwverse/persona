@@ -1498,8 +1498,8 @@ func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 	if !routable(ix) {
 		return false
 	}
-	s.supervise.digestMu.Lock()
-	defer s.supervise.digestMu.Unlock()
+	s.supervise.routingMu.RLock()
+	defer s.supervise.routingMu.RUnlock()
 	ladder, todo, home, ok := s.askLadder(ctx, ix)
 	if !ok {
 		return false

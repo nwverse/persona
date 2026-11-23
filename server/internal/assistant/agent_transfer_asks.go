@@ -13,7 +13,7 @@ import (
 
 // transferPendingAsks moves only an undelivered first rung. Delivered cards, timed-out rungs and owner
 // escalations keep their state. The original absolute permission deadline is never extended by a move.
-// The caller holds digestMu so no old digest can race the successful transfer response.
+// The caller holds routingMu so no old digest can race the successful transfer response.
 func (s *Service) transferPendingAsks(ctx context.Context, t Todo) error {
 	// A send whose outcome is unknown is already in delivery, not an undelivered card to replay.
 	s.relays.mu.Lock()
@@ -120,13 +120,17 @@ func (s *Service) currentAskSignal(g superviseSignal) superviseSignal {
 	if g.Kind != sigAsk {
 		return g
 	}
-	id, _, _ := strings.Cut(g.Key, "@")
+	id, step, _ := strings.Cut(g.Key, "@")
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	if p := s.fleet.interactions[id]; p != nil && !p.claimed && !p.told && p.route != nil &&
 		p.route.todo == g.Todo && p.route.step == 0 && !p.route.delivered {
 		g.To = p.route.at()
 		g.batchTo, g.batchUntil = "", time.Time{}
+	} else if s.fleet.interactions[id] == nil && step == "0" {
+		if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.SupervisorSource == "explicit" {
+			g.To = t.Supervision.Supervisor
+		}
 	}
 	return g
 }
@@ -158,7 +162,7 @@ func (s *Service) askAlreadyQueued(todo, to string) bool {
 	}
 	for _, queue := range r.st.Queue {
 		for _, msg := range queue {
-			if msg.Tool != superviseTool {
+			if msg.Tool != superviseTool || !msg.TriedAt.IsZero() || msg.Withdrawn {
 				continue
 			}
 			list, _ := decodeDigestSignals(msg.Signals)

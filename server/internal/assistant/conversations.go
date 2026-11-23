@@ -1107,8 +1107,8 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 	for _, id := range due {
 		go func(id string) {
 			// A transfer must finish before a supervision drain selects its routing state.
-			s.supervise.digestMu.Lock()
-			defer s.supervise.digestMu.Unlock()
+			s.supervise.routingMu.RLock()
+			defer s.supervise.routingMu.RUnlock()
 			b.mu.Lock()
 			q := b.st.Queue[id]
 			if len(q) == 0 {

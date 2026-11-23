@@ -133,8 +133,8 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 		return Todo{}, false, err
 	}
 	// Serialize a move with digest delivery and queued supervision reconciliation.
-	s.supervise.digestMu.Lock()
-	defer s.supervise.digestMu.Unlock()
+	s.supervise.routingMu.Lock()
+	defer s.supervise.routingMu.Unlock()
 	if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
 		if t.Origin == "" {
 			return Todo{}, false, fmt.Errorf("%s is on the owner's own to-do %q: it stays theirs", agentLabel(c), t.Title)
