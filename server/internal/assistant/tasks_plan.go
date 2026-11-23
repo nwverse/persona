@@ -295,7 +295,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if wait > 0 && len(a.Tasks) == 1 && scope == nil {
 		a.Tasks[0].WaitInputID = "wait_" + randomHex(16)
 	}
-	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
+	var reuseSpace *string
+	if scope == nil {
+		callerSpace := s.agentCallerSpace(ctx, machine, sessionID)
+		reuseSpace = &callerSpace
+	}
+	dups := s.planDuplicates(ctx, a.Tasks, reuseSpace) // before the plan's own todos exist
 	now := time.Now().UTC()
 	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen,
 		CreatedAt: now, UpdatedAt: now}
