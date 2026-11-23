@@ -4188,7 +4188,6 @@ Lpersona/core/contracts/api/TranslateLanguage;
 Lpersona/core/contracts/api/TranslationPrefs;
 Lpersona/core/contracts/api/TunnelException;
 Lpersona/core/contracts/api/VerifiedSessionsRepository;
-Lpersona/module/voice/VoiceExtensions;
 Lpersona/core/data/ActivePairing$$serializer;
 Lpersona/core/data/ActivePairing$Companion;
 Lpersona/core/data/ActivePairing;
@@ -4658,7 +4657,6 @@ Lpersona/core/hub/HttpAgentTriage$1;
 Lpersona/core/hub/HttpAgentTriage;
 Lpersona/core/hub/HttpChatActionsKt;
 Lpersona/core/hub/HttpTerminalPanes$special$$inlined$map$1$2;
-Lpersona/module/voice/HttpVoiceExtensions$read$2;
 Lpersona/core/hub/HubChatTransport$5$1$1;
 Lpersona/core/hub/HubChatTransport$5;
 Lpersona/core/hub/HubChatTransport;
@@ -4742,7 +4740,6 @@ Lpersona/core/navigation/TerminalPanesRoute;
 Lpersona/core/navigation/TerminalRoute;
 Lpersona/core/navigation/TodoDetailRoute;
 Lpersona/core/navigation/TodosRoute;
-Lpersona/module/voice/VoiceRoute;
 Lpersona/feature/agents/AgentArchiveSnapshot;
 Lpersona/feature/agents/AgentArchivesState;
 Lpersona/feature/agents/AgentHistoryKt;
@@ -5190,6 +5187,9 @@ Lpersona/feature/settings/SlotBadge;
 Lpersona/feature/terminal/TerminalScreenKt$TerminalKeyBar$2$1$1$2$1$1;
 Lpersona/feature/terminal/TerminalServices;
 Lpersona/module/voice/ComposableSingletons$VoiceScreenKt;
+Lpersona/module/voice/HttpVoiceExtensions$read$2;
+Lpersona/module/voice/VoiceExtensions;
+Lpersona/module/voice/VoiceRoute;
 Lpersona/module/voice/VoiceScreenKt;
 Lpersona/module/voice/VoiceSetup$Failed;
 Lpersona/module/voice/VoiceSetup$Ready;
@@ -21310,10 +21310,6 @@ HSPLpersona/core/hub/HttpInboxAssistantTransport$json$2;->create(Ljava/lang/Obje
 HSPLpersona/core/hub/HttpInboxAssistantTransport$json$2;->invoke(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
 HSPLpersona/core/hub/HttpTerminalPanes$special$$inlined$map$1$2;-><init>(Lkotlinx/coroutines/flow/FlowCollector;B)V
 HSPLpersona/core/hub/HttpTerminalPanes$special$$inlined$map$1$2;->emit(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-HSPLpersona/module/voice/HttpVoiceExtensions$read$2;-><init>(ZLjava/lang/Object;Ljava/lang/Object;Lkotlin/coroutines/Continuation;B)V
-HSPLpersona/module/voice/HttpVoiceExtensions$read$2;->create(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Lkotlin/coroutines/Continuation;
-HSPLpersona/module/voice/HttpVoiceExtensions$read$2;->invoke(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
-HSPLpersona/module/voice/HttpVoiceExtensions$read$2;->invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object;
 HSPLpersona/core/hub/HubChatTransport$5$1$1;-><init>(ILkotlin/coroutines/Continuation;B)V
 HSPLpersona/core/hub/HubChatTransport$5$1$1;->create(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Lkotlin/coroutines/Continuation;
 HSPLpersona/core/hub/HubChatTransport$5$1$1;->invoke(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
@@ -23256,6 +23252,10 @@ HSPLpersona/feature/terminal/TerminalScreenKt$TerminalPage$7$3$1$3$1$1$1$6;->inv
 HSPLpersona/feature/terminal/TerminalViewModel$run$2$lines$1;->create(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Lkotlin/coroutines/Continuation;
 HSPLpersona/feature/terminal/TerminalViewModel$run$2$lines$1;->invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object;
 HSPLpersona/module/voice/ComposableSingletons$VoiceScreenKt;-><clinit>()V
+HSPLpersona/module/voice/HttpVoiceExtensions$read$2;-><init>(ZLjava/lang/Object;Ljava/lang/Object;Lkotlin/coroutines/Continuation;B)V
+HSPLpersona/module/voice/HttpVoiceExtensions$read$2;->create(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Lkotlin/coroutines/Continuation;
+HSPLpersona/module/voice/HttpVoiceExtensions$read$2;->invoke(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+HSPLpersona/module/voice/HttpVoiceExtensions$read$2;->invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object;
 HSPLpersona/module/voice/VoiceEntriesKt$rememberVoiceExtension$1$1;-><init>(Lpersona/module/voice/VoiceExtensions;ZLandroidx/compose/runtime/MutableState;Lkotlin/coroutines/Continuation;)V
 HSPLpersona/module/voice/VoiceEntriesKt$rememberVoiceExtension$1$1;->create(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Lkotlin/coroutines/Continuation;
 HSPLpersona/module/voice/VoiceEntriesKt;->rememberVoiceExtension(Lpersona/module/voice/VoiceExtensions;ZLandroidx/compose/runtime/Composer;I)Lpersona/core/contracts/api/HubExtension;

@@ -767,7 +767,7 @@ Before the change (2026-11-02, integration branch `679b227f`) the App assumed a 
 | `InboxDataOwner` (Inbox, Persona session list), device settings, update check, lock-screen test, sharing, phone data tools, knowledge base | The only hub | The selected group |
 | Machine management in `MachineManagementModule` (reconnect, redeploy, launchers, engine, botmux toggle, Claude Code / Codex settings) | Current pairing | The group named by the machine id's suffix (`mergedMachineManagement` + `MachineManagement.inGroup`, #634): machines from other groups used to be asked about at the selected group's hub, which couldn't find the machine or changed the wrong place; the machine whose engine is picked after pairing also comes from the merged list and routes by suffix the same way |
 | Subscription limits on the machine monitoring overview (`MachineManagement.usageWindows`) | Current pairing | Every open group, each asked on its own hub at once and listed in the groups' order (`GroupUsage`, #1845, as iOS / Mac): the same account in two groups shows once in each; an old hub without the route (404) has none, and a group whose read fails keeps its last answer while the others show theirs |
-| Model configuration (`MachineManagementModule.models`), voice (`VoiceExtensions` in `AppServices`) | Current pairing | The selected group: both are hub-level (one configuration and one voice extension per hub), and like Inbox and Persona they show one group at a time (decided in #634); machines in the model configuration are reported by that hub itself and use its ids as is |
+| Model configuration (`MachineManagementModule.models`), voice (the voice module's `VoiceExtensions`, built per pairing through `ModuleHub` in `AppServices`) | Current pairing | The selected group: both are hub-level (one configuration and one voice extension per hub), and like Inbox and Persona they show one group at a time (decided in #634); machines in the model configuration are reported by that hub itself and use its ids as is |
 | Candidate addresses in connection diagnostics | The only pairing | The selected group's own hub (the first paired hub in the group); candidates of other hubs in the same group also take part in route selection and are listed in diagnostics too |
 | Whether request cards and request details on the Agents page can be answered; whether pin, mute, rename, close, delete, join live and stop loop on sessions and spaces can be sent; whether a computer's herdr is checked and its "herdr isn't running" notice shown and started | The selected group's connection | The connection of the group named by the request's, session's or computer's machine id suffix (`AgentGroups.stateFor`, #4291, #4702, #5726): one group going offline no longer blocks requests, operations and herdr notices in other groups; unchanged with only one group. A request card whose group is offline keeps Allow and Deny greyed out and says why, "Connect to the hub to send your choice", as the request detail does; in the Board style, whose cards are collapsed in the list, the reason (this one, or that the computer must approve it) sits above the quick buttons (`DecisionCard` `note`, #2483) |
 | `Notify.install(connection.events)`, foreground service | Events from one WebSocket | Events from all groups merged into one stream (ids already suffixed, see below); the ongoing notification's state is the selected group's, and Agent counts add up across groups |
@@ -1221,8 +1221,8 @@ this product layer; every Gradle project is listed in "Modules and code" below.
 | `services(hub)` | `hub_routes` (client half) | Built once per pairing from a `ModuleHub` (identity, hello features, token, pinned client, current address, `isCurrent`); never in demo mode; closed when the pairing ends |
 | `navEntries(entries, context)` | `shell_places` | Registers the module's pages in Root's `entryProvider`. In demo mode `services` is null and a page that needs the hub shows `context.unavailable(message)` |
 | `menuActions(slot, context)` | `composer_actions` and the other action slots | Composable, so an action can follow live state and the language. `MenuSlot.AssistantTitle` (the assistant's title menu, after Details) is served; `ComposerActions`, `SessionActions` and `MessageActions` are declared, not yet served |
-| `settingsPages()` | `settings` | Declared, not yet served: Settings does not list module pages yet |
-| `audioUses` and `AudioFocus` | (module-only) | Declared, not yet served: the broker ranks a call over a voice conversation over a meeting recording over playback (`AudioUse`); the voice module still takes Android's audio focus itself |
+| `settingsPages()` | `settings` | Declared, not yet served: Settings does not list module pages yet, and `ModuleRegistry` logs a warning for a module that declares some |
+| `audioUses` and `AudioFocus` | (module-only) | Declared, not yet served: the broker ranks a call over a voice conversation over a meeting recording over playback (`AudioUse`); the voice module still takes Android's audio focus itself, and `ModuleRegistry` logs a warning for a module that declares audio uses |
 | `debugPages()`, `debugArguments(arguments)` | (debug builds) | `debug.openPage <name>` and the module's own `debug.*` arguments, read by `DebugLaunchAdapter` |
 
 The other fields of #13430 section 4 (`api`, `needs`, `wants`, `chat_card_kinds`, `chat_accessories`, `push_categories`,
@@ -1238,7 +1238,10 @@ for a pairing and keeps them in `ShellSession.modules` (by id), with the hub's h
 1. **The build carries it.** Every `:module:*` project by default; `-Ppersona.modules=<id,id…>` carries fewer and
    `-Ppersona.modules=` (empty) builds Persona Core alone. A module left out is only on the app's compile classpath
    (`compileOnly`), so `Modules.kt` still compiles, but none of its code, resources or manifest entries ship and its
-   entry is never called (`BuildConfig.PERSONA_MODULES`). An unknown id fails the build.
+   entry is never called (`BuildConfig.PERSONA_MODULES`). Each entry is typed `() -> PersonaModule`, so loading
+   `Modules` never loads a left-out module's class. R8 needs no rule for it: AGP hands R8 the compile classpath,
+   `compileOnly` jars included, as library classes (`-Ppersona.modules= :app:assembleRelease` builds and its APK defines
+   no `persona.module.*` class). An unknown id fails the build.
 2. **The paired hub offers its `feature`**, when it declares one. The switch follows the hub's hello, so the owner has
    nothing to turn on (principles 1 and 2); there is no per-device module toggle.
 
@@ -1258,7 +1261,8 @@ graph: only `:app` may depend on a `:module:*` project, and in `:app` only `Modu
 (`persona.module.*`); a `:core:*` project depends on no `:feature:*`, `:platform:*` or `:app` project. Today's violations
 are in `android/module-guard-baseline.txt`, which only shrinks: a new violation fails, and so does a line that no longer
 happens. Its one line is the known inversion `:core:data -> :feature:inbox` (#13433 item 2 moves the shared Inbox types
-into core). `scripts/ci/android.sh` runs the guard with the lint lane's tasks and its tests on their own;
+into core). `scripts/ci/android.sh` runs the guard with the lint lane's tasks and its tests on their own, and the lint lane also runs
+the app's unit tests and lint with an empty module list (`-Ppersona.modules=`);
 `scripts/ci/android-shards.py` puts the `:module:*` tests in the lint lane.
 
 **Adding a module:**
@@ -1270,8 +1274,15 @@ into core). `scripts/ci/android.sh` runs the guard with the lint lane's tasks an
    two lists match). Nothing else in the app changes.
 4. Run the module's tests, `:app:moduleGuard`, and the app's tests with and without the module (`-Ppersona.modules=`).
 
-Moving a feature into a module keeps its route's serial name (`VoiceRoute` keeps `persona.core.navigation.VoiceRoute`),
-so saved back stacks still restore.
+**Saved stacks and pages that go away.** Navigation 3 (1.2.0) saves a back stack's routes by JVM class name
+(`Class.getName()`) and restores them with `Class.forName`; a route's `@SerialName` plays no part. A saved stack can
+therefore name a class the build lacks: a module left out, or a route that moved (`VoiceRoute` moved from
+`persona.core.navigation` to `persona.module.voice`). The shell's stacks use `rememberRestorableNavBackStack`
+(`core/navigation`, same saved form), which drops such a route with a log line instead of crashing, and starts from the
+root when nothing is left. A module page that is open when the module turns inactive (the hub's hello no longer offers
+its `feature`) has no entry any more: Root's entry provider falls back to the shell's "This page isn't available right
+now" page with a way back, and logs loudly. Two modules registering one route are rejected when the entries are built.
+`ModuleNavigationSafetyTest` covers all three.
 
 ## Modules and code
 

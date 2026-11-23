@@ -19,7 +19,8 @@ usage() {
     'Toolchain versions are read from android/gradle/libs.versions.toml.' \
     'No arguments runs the original complete verification. lint-build-test-0 owns checker tests,' \
     'translation/token checks, all-module lint, the debug APK, the module guard (:app:moduleGuard),' \
-    'feature test shard 0 and the :module:* tests; test-1' \
+    'feature test shard 0, the :module:* tests and the app with an empty module list' \
+    '(-Ppersona.modules=: app unit tests and lint); test-1' \
     'runs core, feature shard 1, platform and app tests. Together the two lanes run every' \
     'included module once using its all-variant test lifecycle task (release unit tests included).' \
     '--profile writes Gradle timing reports to android/build/reports/profile/.' \
@@ -33,6 +34,8 @@ usage() {
 }
 LANE=full
 PROFILE=()
+# The lane that also runs the app with an empty module list (the one with room, by measured lane times).
+CORE_ALONE_LANE=lint-build-test-0
 while [[ $# -gt 0 ]]; do
   case $1 in
     --help|-h) usage; exit 0 ;;
@@ -186,6 +189,20 @@ if [[ ${#TASKS[@]} -gt 0 ]]; then
     ${PROFILE[@]+"${PROFILE[@]}"} "${TASKS[@]}"
 else
   printf 'Android CI: no modules in lane %s; no Gradle default tasks invoked\n' "$LANE"
+fi
+
+# Persona Core alone (docs/android/android.md "Modules"): the app with an empty module list must still pass its unit
+# tests and lint. Its own Gradle run, since -Ppersona.modules changes the app's dependencies and BuildConfig.
+if [[ $LANE == full || $LANE == "$CORE_ALONE_LANE" ]]; then
+  run_check 'Persona Core alone (empty module list)' bash ./gradlew \
+    --no-daemon --no-watch-fs --console=plain --stacktrace --continue \
+    --max-workers="$WORKERS" \
+    -PpersonaApplicationId=com.example.persona \
+    -PpersonaGoogleOAuthScheme=persona.oauth.unset \
+    -PpersonaRepoRoot="$ROOT" \
+    -PpersonaBuildCommit="$BUILD_COMMIT" \
+    -Ppersona.modules= \
+    ${PROFILE[@]+"${PROFILE[@]}"} :app:testDebugUnitTest :app:lintDebug
 fi
 
 if [[ ${#FAILED[@]} -ne 0 ]]; then

@@ -156,7 +156,7 @@ class ShellLaneTests(unittest.TestCase):
         java.chmod(0o700)
         shutil.copyfile(java, self.root / "jdk/bin/javac")
         (self.root / "jdk/bin/javac").chmod(0o700)
-        (self.root / "android/gradlew").write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$MOCK_GRADLE_LOG"\nexit "${MOCK_GRADLE_STATUS:-0}"\n')
+        (self.root / "android/gradlew").write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" "--end-of-call--" >> "$MOCK_GRADLE_LOG"\nexit "${MOCK_GRADLE_STATUS:-0}"\n')
         self.log = self.root / "gradle-arguments"
         self.env = dict(os.environ, JAVA_HOME=str(self.root / "jdk"),
                         ANDROID_HOME=str(self.root / "sdk"), ANDROID_SDK_ROOT=str(self.root / "sdk"),
@@ -164,7 +164,19 @@ class ShellLaneTests(unittest.TestCase):
                         MOCK_GRADLE_LOG=str(self.log), MOCK_RUSTUP_LOG=str(self.root / "rustup-arguments"),
                         PATH=str(self.root / "bin") + os.pathsep + os.environ.get("PATH", ""))
 
+    def calls(self):
+        """Each Gradle invocation's arguments, in order (the mock appends one record per call)."""
+        out, current = [], []
+        for line in self.log.read_text().splitlines():
+            if line == "--end-of-call--":
+                out.append(current)
+                current = []
+            else:
+                current.append(line)
+        return out
+
     def run_lane(self, *args):
+        self.log.unlink(missing_ok=True)
         return subprocess.run(["bash", str(self.root / "scripts/ci/android.sh"), *args],
                               env=self.env, capture_output=True, text=True, timeout=30)
 
@@ -173,9 +185,18 @@ class ShellLaneTests(unittest.TestCase):
             with self.subTest(lane=lane):
                 result = self.run_lane(*([] if lane == "full" else ["--lane", lane]))
                 self.assertEqual(result.returncode, 0, result.stderr)
-                arguments = self.log.read_text().splitlines()
+                calls = self.calls()
+                arguments = next(call for call in calls if "-Ppersona.releaseUnitTests=true" in call)
                 expected = shards.tasks(SETTINGS, lane)
                 self.assertEqual(arguments[-len(expected):], expected)
+                # Persona Core alone (#13433): the app's unit tests and lint with an empty module list, in the lint lane.
+                alone = [call for call in calls if "-Ppersona.modules=" in call]
+                if lane in ("full", "lint-build-test-0"):
+                    self.assertEqual(len(alone), 1, calls)
+                    self.assertEqual(alone[0][-2:], [":app:testDebugUnitTest", ":app:lintDebug"])
+                    self.assertIn("--max-workers=2", alone[0])
+                else:
+                    self.assertEqual(alone, [])
                 self.assertIn("--max-workers=2", arguments)
                 # Each module's test runs its release unit tests too, which a local build leaves out (#10712).
                 self.assertIn("-Ppersona.releaseUnitTests=true", arguments)

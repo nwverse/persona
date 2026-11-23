@@ -131,6 +131,9 @@ require(carriedModules.all { it in knownModules }) {
 }
 android.defaultConfig.buildConfigField("String[]", "PERSONA_MODULES",
     carriedModules.joinToString(", ", "{", "}") { "\"$it\"" })
+// A left-out module's class is still named by Modules.kt (in an entry that never runs). R8 needs no rule for it: AGP
+// hands R8 the compile classpath, compileOnly jars included, as library classes, so the class is known but not packaged
+// (checked with -Ppersona.modules= :app:assembleRelease, #13433).
 dependencies {
     knownModules.forEach { id ->
         if (id in carriedModules) implementation(project(":module:$id")) else compileOnly(project(":module:$id"))
