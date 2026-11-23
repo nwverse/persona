@@ -1671,7 +1671,10 @@ so selecting a file must not silently change behavior. Success refreshes the lis
 package-only Undo with retained recovery files; `docs/operations/hub-update.md` defines the state and discovery limits.
 
 **Web to-do images** (#11084): the existing New to-do `Dialog` takes JPEG/PNG images through the shared attachment
-picker and `AttachmentTray`; selection shows local thumbnails immediately, with an accessible Remove on each. Create is
+picker and `AttachmentTray`; selection shows local thumbnails immediately, with an accessible Remove on each. A picture
+over the manager's 1 MiB or 4096 px is prepared first (#13797): it waits in the tray as a name tile with its Remove,
+under a `Spinner` status line ("Preparing N images…"), and Create stays disabled until every picture is ready; one
+that cannot be prepared is named on its own line of the inline alert while the draft and the other pictures stay. Create is
 one single-flight busy action, with its failure inline in the dialog. Retry keeps every field, selected file and the
 operation ID; cancel releases the previews. The to-do detail uses the same tray and existing `ImageViewer` for zoom and
 download, not another gallery. Private image bytes are fetched with the to-do's credentials and manager, three at a
