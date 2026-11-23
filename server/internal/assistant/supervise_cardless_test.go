@@ -2,11 +2,13 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -315,4 +317,78 @@ func TestCardlessWaitRenderedForTaskLeader(t *testing.T) {
 			t.Errorf("worker cardless_wait render lacks %q:\n%s", want, got)
 		}
 	}
+}
+
+// A transient acceptance-book read failure is not proof that no owner card exists. The watch must not stamp the round
+// or raise the hand-back while the ledger is unreadable, and a later pass after the book recovers still hands it back
+// in the same review round (#12648 P1).
+func TestReviewCardlessWaitHoldsWhenAcceptBookUnreadable(t *testing.T) {
+	database := taskRecoveryDatabase(t)
+	st := &acceptReadFailStore{Store: repositorystore.New(database)}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	holdDigest(s)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "做完了。")
+	// Force the next acceptance-book read to fail rather than report an empty map.
+	st.fail = true
+	s.superviseWatch(ctx, time.Now().Add(cardlessSettle+time.Hour))
+	if slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+		t.Fatal("the hand-back fired while the acceptance book was unreadable")
+	}
+	if todoNow(s, todo.ID).Supervision.CardlessToldAt != nil {
+		t.Fatal("the round marker was stamped while the acceptance book was unreadable")
+	}
+	// Once the book reads again, the same review round is handed back normally.
+	st.fail = false
+	s.accept.loaded = false
+	s.superviseWatch(ctx, time.Now().Add(cardlessSettle+2*time.Hour))
+	if !slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+		t.Fatalf("the hand-back did not fire after the acceptance book recovered: %v", pendingKinds(s, todo.ID))
+	}
+}
+
+// A card-less entry waiting in a queued digest must be restored for retry, not rendered or dropped, when the
+// acceptance book becomes unreadable at delivery time; once it reads again the entry renders normally (#12648 P1).
+func TestCardlessDigestRetriesWhenAcceptBookUnreadable(t *testing.T) {
+	database := taskRecoveryDatabase(t)
+	st := &acceptReadFailStore{Store: repositorystore.New(database)}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	holdDigest(s)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "做完了。")
+	s.superviseWatch(ctx, time.Now().Add(cardlessSettle+time.Minute))
+	g := pendingCardlessSignal(t, s, todo.ID)
+	if _, ok := s.digestEntry(ctx, g, ""); !ok {
+		t.Fatal("the card-less entry did not render while the book was readable and card-less")
+	}
+	st.fail = true
+	s.accept.loaded = false
+	if !s.cardlessDigestShouldRetry(g) {
+		t.Fatal("an unreadable acceptance book should mark the card-less entry for delivery retry")
+	}
+	if _, ok, deferRetry := s.digestEntryChecked(ctx, g, ""); ok || !deferRetry {
+		t.Fatalf("unreadable book: got ok=%v deferRetry=%v, want ok=false deferRetry=true", ok, deferRetry)
+	}
+	st.fail = false
+	s.accept.loaded = false
+	if s.cardlessDigestShouldRetry(g) {
+		t.Fatal("a readable acceptance book must not mark the entry for retry")
+	}
+	if _, ok := s.digestEntry(ctx, g, ""); !ok {
+		t.Fatal("the card-less entry did not render after the acceptance book recovered")
+	}
+}
+
+// acceptReadFailStore wraps a real store but fails reads of the acceptance book while fail is set, letting a test
+// inject a transient ledger outage without losing the task_plan / supervision tables every other read needs.
+type acceptReadFailStore struct {
+	Store
+	fail bool
+}
+
+func (s *acceptReadFailStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	if s.fail && key == acceptanceKey {
+		return false, errors.New("synthetic acceptance store outage")
+	}
+	return s.Store.Setting(ctx, key, out)
 }

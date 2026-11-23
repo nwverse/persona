@@ -16,6 +16,7 @@ internal/osproc
 internal/procinfo
 internal/prompts
 internal/secretkey
+internal/textfmt
 internal/tokenuse
 internal/transcript
 github.com/nwverse/persona/sdk/go/ext

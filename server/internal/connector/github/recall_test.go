@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // commentsServer is GitHub with comments on example-org/example-repo#12: it notes every request and answers the DELETE
@@ -97,8 +97,8 @@ const (
 	theIssue      = "/repos/example-org/example-repo/issues/12"
 )
 
-func sentComment(ref, target string) connector.SentMessage {
-	return connector.SentMessage{Action: "github_comment", Ref: ref, Target: json.RawMessage(target)}
+func sentComment(ref, target string) connectorwire.SentMessage {
+	return connectorwire.SentMessage{Action: "github_comment", Ref: ref, Target: json.RawMessage(target)}
 }
 
 // shortTimeouts makes a recall give up after d for the whole and for each lookup, as long as the test runs.
@@ -125,7 +125,7 @@ func TestRecallDeletesTheComment(t *testing.T) {
 func TestRecallTakesBackWhatWasWritten(t *testing.T) {
 	c, s := newCommentsServer(t, nil)
 	ctx := context.Background()
-	done, err := connector.Write(ctx, c, "github_comment", json.RawMessage(`{"repo":"example-org/example-repo","number":12,"body":"ok"}`))
+	done, err := connectorwire.Write(ctx, c, "github_comment", json.RawMessage(`{"repo":"example-org/example-repo","number":12,"body":"ok"}`))
 	if err != nil || done.MessageRef != commentID {
 		t.Fatalf("%+v %v", done, err)
 	}
@@ -152,7 +152,7 @@ func TestOnlyAComment(t *testing.T) {
 		}
 		m := sentComment("80123", commentTarget)
 		m.Action = action
-		if err := c.Recall(context.Background(), m); !errors.Is(err, connector.ErrCannotRecall) {
+		if err := c.Recall(context.Background(), m); !errors.Is(err, connectorwire.ErrCannotRecall) {
 			t.Errorf("%q: %v", action, err)
 		}
 	}
@@ -189,7 +189,7 @@ func TestRecallSendsNothingItCannotTrust(t *testing.T) {
 		{"issue past an int", commentID, `{"ref":"example-org/example-repo#99999999999999999999"}`},
 		{"a ref that is a number", commentID, `{"ref":12}`},
 	} {
-		if err := c.Recall(context.Background(), sentComment(tc.ref, tc.target)); !errors.Is(err, connector.ErrCannotRecall) {
+		if err := c.Recall(context.Background(), sentComment(tc.ref, tc.target)); !errors.Is(err, connectorwire.ErrCannotRecall) {
 			t.Errorf("%s: %v", tc.name, err)
 		}
 	}
@@ -251,12 +251,12 @@ func TestRecallReadsGitHubsAnswer(t *testing.T) {
 		switch {
 		case tc.err == "" && err != nil:
 			t.Errorf("%s: %v", tc.name, err)
-		case tc.err == "unknown" && !errors.Is(err, connector.ErrRecallUnknown):
+		case tc.err == "unknown" && !errors.Is(err, connectorwire.ErrRecallUnknown):
 			t.Errorf("%s: want unknown, got %v", tc.name, err)
-		case tc.err == "unavailable" && (!errors.Is(err, connector.ErrRecallUnavailable) || errors.Is(err, connector.ErrRecallUnknown)):
+		case tc.err == "unavailable" && (!errors.Is(err, connectorwire.ErrRecallUnavailable) || errors.Is(err, connectorwire.ErrRecallUnknown)):
 			t.Errorf("%s: want unavailable, got %v", tc.name, err)
 		case tc.err != "" && tc.err != "unknown" && tc.err != "unavailable" && (err == nil || !strings.Contains(err.Error(), tc.err) ||
-			errors.Is(err, connector.ErrRecallUnknown) || errors.Is(err, connector.ErrRecallUnavailable) || errors.Is(err, connector.ErrCannotRecall)):
+			errors.Is(err, connectorwire.ErrRecallUnknown) || errors.Is(err, connectorwire.ErrRecallUnavailable) || errors.Is(err, connectorwire.ErrCannotRecall)):
 			t.Errorf("%s: want a plain error with %q, got %v", tc.name, tc.err, err)
 		}
 		if err != nil && strings.Contains(err.Error(), oldToken) {
@@ -303,7 +303,7 @@ func TestRecallEndsWhenGitHubNeverAnswers(t *testing.T) {
 		switch {
 		case err == nil:
 			t.Errorf("%s: a request nobody answered is a success", tc.name)
-		case errors.Is(err, connector.ErrRecallUnknown) != tc.unknown:
+		case errors.Is(err, connectorwire.ErrRecallUnknown) != tc.unknown:
 			t.Errorf("%s: unknown is %v: %v", tc.name, !tc.unknown, err)
 		}
 	}
@@ -355,7 +355,7 @@ func TestRecallIsNotFooledByARedirect(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := New(Config{Auth: AuthConfig{FromMachine: "mac"}}, "Mac", (&machine{tokens: []string{oldToken}}).fetch)
 	c.api = srv.URL
-	if err := c.Recall(context.Background(), sentComment(commentID, commentTarget)); !errors.Is(err, connector.ErrRecallUnknown) {
+	if err := c.Recall(context.Background(), sentComment(commentID, commentTarget)); !errors.Is(err, connectorwire.ErrRecallUnknown) {
 		t.Fatalf("a 301 followed as a GET is a success: %v", err)
 	}
 	mu.Lock()
@@ -369,7 +369,7 @@ func TestRecallIsNotFooledByARedirect(t *testing.T) {
 func TestRecallWithoutAToken(t *testing.T) {
 	c, s := newCommentsServer(t, &machine{err: ErrOffline})
 	err := c.Recall(context.Background(), sentComment(commentID, commentTarget))
-	if !errors.Is(err, connector.ErrRecallUnavailable) || !errors.Is(err, ErrOffline) || errors.Is(err, connector.ErrRecallUnknown) {
+	if !errors.Is(err, connectorwire.ErrRecallUnavailable) || !errors.Is(err, ErrOffline) || errors.Is(err, connectorwire.ErrRecallUnknown) {
 		t.Fatalf("%v", err)
 	}
 	if got := s.requests(); len(got) != 0 {
