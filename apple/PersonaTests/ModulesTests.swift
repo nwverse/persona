@@ -57,4 +57,94 @@ struct ModulesTests {
         let url = URL(string: "persona://?metaWearablesAction=register")!
         #expect(!registry(glasses: false).handle(url))
     }
+
+    // MARK: The hub's module flags (#13849): `modules` marks a hub that publishes them, `module.<id>` keeps a module on.
+
+    /// A UserDefaults suite of its own, removed afterwards.
+    private func withDefaults(_ body: (UserDefaults) -> Void) {
+        let name = "ModulesTests.\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: name)!
+        defer { d.removePersistentDomain(forName: name) }
+        body(d)
+    }
+
+    private func state(_ group: String, _ d: UserDefaults) -> ModuleState {
+        ModuleState(group: group, defaults: d, isEnabled: { $0.descriptor.id == "glasses" })
+    }
+
+    @Test func glassesAreGatedByTheirHubFlag() {
+        #expect(GlassesModule().descriptor.feature == "module.glasses")
+    }
+
+    @Test func anOlderHubKeepsGlassesOn() {
+        withDefaults { d in
+            let s = state("home", d)
+            s.heard(["file_upload", "terminal_stream"], from: "home", isHub: true, defaults: d)
+            #expect(s.registry.isActive("glasses"))
+            #expect(s.registry.composerActions.map(\.id) == ["glasses"])
+            #expect(d.object(forKey: "hubModules.home") == nil) // nothing to remember for an older hub
+        }
+    }
+
+    @Test func aPublishingHubWithTheFlagKeepsGlassesOn() {
+        withDefaults { d in
+            let s = state("home", d)
+            s.heard(["modules", "module.glasses"], from: "home", isHub: true, defaults: d)
+            #expect(s.registry.isActive("glasses"))
+        }
+    }
+
+    @Test func aPublishingHubWithoutTheFlagTurnsGlassesOff() {
+        withDefaults { d in
+            let s = state("home", d)
+            s.heard(["modules", "module.health"], from: "home", isHub: true, defaults: d)
+            #expect(!s.registry.isActive("glasses"))
+            #expect(s.registry.offByHub == ["glasses"])
+            let sources = PromptItems.attachments(camera: true, modules: s.registry.composerActions).map(\.id)
+            #expect(sources == ["photo", "camera", "file"])
+            #expect(!s.registry.handle(URL(string: "persona://?metaWearablesAction=register")!))
+            // And on again with a later hello.
+            s.heard(["modules", "module.glasses"], from: "home", isHub: true, defaults: d)
+            #expect(s.registry.composerActions.map(\.id) == ["glasses"])
+        }
+    }
+
+    @Test func theRememberedAnswerHoldsBeforeTheHello() {
+        withDefaults { d in
+            state("home", d).heard(["modules"], from: "home", isHub: true, defaults: d)
+            #expect(d.stringArray(forKey: "hubModules.home") == [])
+            // The next launch, before any hello: off, as the hub said last time.
+            let next = state("home", d)
+            #expect(!next.registry.isActive("glasses"))
+            // A hub never heard from: on.
+            #expect(state("other", d).registry.isActive("glasses"))
+            // A hello with no features says nothing: the remembered answer stays.
+            next.heard([], from: "home", isHub: true, defaults: d)
+            #expect(!next.registry.isActive("glasses"))
+            #expect(d.stringArray(forKey: "hubModules.home") == [])
+        }
+    }
+
+    @Test func anotherHubsHelloIsKeptButNotApplied() {
+        withDefaults { d in
+            let s = state("home", d)
+            s.heard(["modules"], from: "work", isHub: false, defaults: d)
+            #expect(s.registry.isActive("glasses"))
+            // Picking that hub applies what it said.
+            s.follow("work", features: [], defaults: d)
+            #expect(!s.registry.isActive("glasses"))
+            s.follow("home", features: [], defaults: d)
+            #expect(s.registry.isActive("glasses"))
+        }
+    }
+
+    @Test func theAnswerIsWrittenOnlyWhenItChanges() {
+        withDefaults { d in
+            #expect(HubModuleMemory.remember(hello: ["modules", "module.glasses"], group: "home", in: d))
+            #expect(!HubModuleMemory.remember(hello: ["module.glasses", "modules", "file_upload"], group: "home", in: d))
+            #expect(HubModuleMemory.remember(hello: ["file_upload"], group: "home", in: d)) // the hub went back to an older one
+            #expect(d.object(forKey: "hubModules.home") == nil)
+            #expect(!HubModuleMemory.remember(hello: ["file_upload"], group: "home", in: d))
+        }
+    }
 }

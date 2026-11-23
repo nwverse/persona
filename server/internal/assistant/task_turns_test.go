@@ -1007,6 +1007,7 @@ func TestCompletionAfterAnUnnamedTurnWithTheNodeClockBehind(t *testing.T) {
 // A meeting's turn in the task's agent is never the task's completion: found by the sweep with no start heard, it is
 // left alone (no receipt, no start taken), kept as seen and not read again.
 func TestCompletionUnheardMeetingTurn(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	s, f, todo := newSupervisedService(t)
 	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
 	sweeps(t, s, todo.ID, 1)

@@ -3,7 +3,7 @@ package imessage
 import (
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -13,7 +13,7 @@ func TestKindsAreDescribed(t *testing.T) {
 	if len(m.Kinds) == 0 {
 		t.Fatal("no kinds declared")
 	}
-	err := connector.CheckKinds(m.Kinds, func(kind string) string {
+	err := connectorwire.CheckKinds(m.Kinds, func(kind string) string {
 		return prompts.RenderInboxItem(prompts.InboxItem{Source: "imessage", Kind: kind})
 	})
 	if err != nil {
