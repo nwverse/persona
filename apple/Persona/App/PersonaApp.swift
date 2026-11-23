@@ -518,6 +518,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let group = AppModel.shared.pushGroup(info)
         AppModel.shared.wakeLinks(group)
         #if os(iOS)
+        Task {
+            await HomeWidgetData.shared.restore()
+            HomeWidgetWriter.shared.tellHub(forceRefresh: true) // a cold wake obtains the installed widget kinds
+        }
         HomeWidgetData.shared.refresh() // the calendar, Health and the usage the widgets show, when due
         let intakeSync = Task { await HealthIntakeSync.shared.refresh(model: .shared) }
         #endif

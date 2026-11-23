@@ -1824,6 +1824,13 @@ every platform are described from #13430; this section is the Apple side.
   and answers / sends messages / interrupts directly through the hub too.
   UI hierarchy: each row's main content (question, session name, Inbox title) uses headline; type and location use footnote; messages and plans strip Markdown markers (`WatchText.shown`),
   bubbles fit text width, own messages align right; before any data arrives show "Loading"; when the hub is unreachable, a top row says "Can't reach the hub" + "Retry" (with old data, say how old it is).
+- Watch intake complications (#13275): Water and Protein each support circular, rectangular and inline, without a
+  new watch app page, a corner family or a four-item face. The timeline reads the watch's own shared answer-only
+  credential and requests the default manager's intake with `space=health`, about every 15 minutes subject to system
+  budgets. Failures keep a separate pairing-scoped cache; an old hub's 403 says Update the hub and leaves extension
+  credentials and content untouched. A watch intake writer calls `WatchIntakeKind.reloadTimelines()` after success to
+  reload `persona.watch.water` and `persona.watch.protein` at once. See `docs/apple/home-widgets.md` for the cache,
+  hub choice, day-boundary and rendering contracts.
 
 ## Demo mode (see every feature without a hub, 2026-10-30)
 
