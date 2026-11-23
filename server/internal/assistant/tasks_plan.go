@@ -264,7 +264,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	// A direction's lead that a hand-over of the owner's quoted words went into (#11699): the words may have reached the
 	// wrong lead, so until the owner writes there, "the user asked for this" is no Start for writable work it plans
-	// outside the kinds the owner already let this lead start (heldOutsideOwnKinds, #12953).
+	// outside the kinds the owner already let this lead start (heldOutsideOwnKinds, #12953). Since decision rights a
+	// lead's own plan starts at once whatever it says (orchestrates below), and a scheduled round has dropped user_requested
+	// above: kept, it no longer holds a plan back.
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.handedOver(sessionID) {
 		s.heldOutsideOwnKinds(ctx, machine, sessionID, a.Tasks)
 	}
@@ -273,10 +275,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	// owner asked for it in so many words (user_requested only records where the work came from). It waits for the
 	// owner's Start only when a task needs them: a request gate, a track that confirms every hand-off (health), or a
 	// task that spends money, speaks outward as the owner or takes an irreversible step they have not agreed to
-	// (owner_step). Not while a lead's hand-over is unconfirmed (#11699) or in a scheduled round, where "the user asked
-	// for this" is only the model's word. An ordinary conversation's plan is not its supervisor's release: as before.
+	// (owner_step). Also in a lead a hand-over of the owner's quoted words went into (#11699): words handed to the wrong
+	// lead start work in the wrong place, which is reversible and its supervisor's to set right, none of the six. Not in a
+	// scheduled round, where "the user asked for this" is only the model's word. An ordinary conversation's plan is not
+	// its supervisor's release: as before.
 	orchestrates := scope == nil && (s.isLeader(ctx, sessionID) || (s.isMainOn(ctx, machine, sessionID) && !s.mainPlansWait)) &&
-		!s.handedOver(sessionID) && !s.inScheduledTurn(ctx, machine, sessionID)
+		!s.inScheduledTurn(ctx, machine, sessionID)
 	// A plan from a conversation hands its prompts to agents outside it (scene 3): what it says, titles first (they are
 	// what its push shows), decides once whether it waits for "Start" and what its push says (health.go). A leader's
 	// workers (scope) need no decision.
