@@ -99,6 +99,12 @@ final class HomeWidgetWriter {
         write()
     }
 
+    /// A background intent waits for its snapshot before handing execution back to the system.
+    func flushAndWait() async {
+        flush()
+        await writing?.value
+    }
+
     private func write(now: Date = .now) {
         #if DEBUG
         let zh = LanguageStore.shared.launched.hasPrefix("zh")

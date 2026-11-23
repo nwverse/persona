@@ -321,3 +321,42 @@ func TestPagedCountsHeldNeeds(t *testing.T) {
 		t.Fatalf("with_counts = %+v, want needs_you=3 held_needs=2", pc.Counts)
 	}
 }
+
+// A session whose pending cards are all held by its task's supervisor (a screen, a permission or a plan marked
+// delegating) is still needs_you, but supervisor_held counts it so no client counts it as the user's. A delegating
+// question (the assistant deciding on it), or any other card beside a held one, leaves the session counted; none of
+// them is counted twice with held_needs.
+func TestPagedCountsSupervisorHeld(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	now := time.Unix(2000, 0)
+	needs := func(id string) proto.Session {
+		return proto.Session{MachineID: "demo", SessionID: id, Title: id, State: proto.StateNeedsYou, UpdatedAt: now}
+	}
+	m.sessions = []proto.Session{needs("screen"), needs("perm"), needs("mixed"), needs("deciding"), needs("plain"), needs("held-p1")}
+	h.reported.mu.Lock()
+	h.reported.interactions = map[string]proto.Interaction{
+		"ix-screen":  {ID: "ix-screen", MachineID: "demo", SessionID: "screen", Kind: proto.IxScreen, Delegating: true},
+		"ix-perm":    {ID: "ix-perm", MachineID: "demo", SessionID: "perm", Kind: proto.IxPermission, Delegating: true},
+		"ix-mixed-1": {ID: "ix-mixed-1", MachineID: "demo", SessionID: "mixed", Kind: proto.IxScreen, Delegating: true},
+		"ix-mixed-2": {ID: "ix-mixed-2", MachineID: "demo", SessionID: "mixed", Kind: proto.IxPermission},
+		"ix-decide":  {ID: "ix-decide", MachineID: "demo", SessionID: "deciding", Kind: proto.IxQuestion, Delegating: true},
+		"ix-plain":   {ID: "ix-plain", MachineID: "demo", SessionID: "plain", Kind: proto.IxScreen},
+		"ix-held-1":  {ID: "ix-held-1", MachineID: "demo", SessionID: "held-p1", Kind: proto.IxScreen, Delegating: true},
+		"ix-held-2":  {ID: "ix-held-2", MachineID: "demo", SessionID: "held-p1", Kind: proto.IxPermission, PushLevel: assistantwire.LevelP1},
+	}
+	h.reported.mu.Unlock()
+	c := hierarchyCounts(t, h, "agents_only=1")
+	if c.State[proto.StateNeedsYou] != 6 || c.SupervisorHeld != 2 || c.HeldNeeds != 1 {
+		t.Fatalf("counts = %+v, want needs_you=6 supervisor_held=2 held_needs=1", c)
+	}
+	held, supervised := h.heldNeedsIDs()
+	slices.Sort(supervised)
+	if want := []string{runtimeListID("demo", "perm"), runtimeListID("demo", "screen")}; !slices.Equal(supervised, want) {
+		t.Fatalf("supervised = %v, want %v", supervised, want)
+	}
+	if want := []string{runtimeListID("demo", "held-p1")}; !slices.Equal(held, want) {
+		t.Fatalf("held = %v, want %v", held, want)
+	}
+}
