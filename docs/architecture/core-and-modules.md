@@ -231,6 +231,15 @@ Its `module.json` declares `feature` = `module.github`, so a hub whose manager l
 run-time `modules` switch drops the flag, but the extension manager still registers the connector until it reads the
 switch too (only a build without the module leaves the connector out today).
 
+The `lark` module (#13404) is of the same kind as mail: code the manager runs in process, which the extension host
+drives. The core declares what it needs of the Feishu / Lark bot's client in `server/internal/botport` (the client's REST calls,
+the long connection, the device-code registration, as interfaces over the pure types of `server/internal/botcard`, a
+leaf library the core's cards are built with), and `server/internal/modules/all/lark.go` provides it from
+`server/internal/modules/lark/feishubot`. Without the module `botport.Available()` is false: the bot cannot be bound,
+registered or started (the setting answers that it is not part of this build), and the extension host's tests of the
+bot skip (`needsLarkModule`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
+`persona_without_lark`.
+
 ### Guards
 
 `server/internal/archguard` keeps the boundary. Both module guards read the import lines of every `.go` file under

@@ -27,6 +27,10 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # out, the binaries build without their subcommands and the extension host registers no such extension. The modules'
   # own tests do not depend on the tags: they run in the shards.
   ci_run 'Builds without the speech modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_volc persona_without_voice; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/builtinext/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=6m -run "Volc|Voice|Transcription" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TranscriptionEndToEnd" ./internal/assistant/ || exit 1; done'
+  # The Feishu / Lark module (#13404, docs/architecture/core-and-modules.md "Provider seams"): left out, the binaries
+  # build, the extension host has no bot client (internal/botport) and the bot's tests skip; the rest of the extension
+  # host and the assistant's Feishu paths still pass.
+  ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_core_only persona_without_lark; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/modules/all/... ./internal/archguard/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
   # Mail (docs/architecture/core-and-modules.md "Provider seams"): the extension manager reaches it through its port, so
   # the core without it builds and the manager's mail, inbox, connector and settings tests pass (those of mail itself
   # skip; TestManagerWithoutMail checks it is absent).

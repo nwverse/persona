@@ -58,6 +58,7 @@ func (w *botWorld) takenFrom(t *testing.T) (id, from string) {
 // owner action, is kept as a source and audited (never the words), and the group does not become a chat the bot may send
 // into or one that is read.
 func TestAIElsewhereOwnerCommandIsHandedMarked(t *testing.T) {
+	needsLarkModule(t)
 	for _, c := range []struct{ name, text string }{
 		{"plain", "@_user_1 /ai 查一下发版说明"},
 		{"upper case", "@_user_1 /AI 查一下发版说明"},
@@ -122,6 +123,7 @@ func (w *botWorld) audited(t *testing.T, action string, check func(detail string
 // 2. Anything short of "the owner, @-ing the bot, starting with /ai" does nothing and says nothing: no reply, no
 // reaction, nothing handed over, nothing kept.
 func TestAIElsewhereEverythingElseIsDroppedSilently(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
@@ -170,6 +172,7 @@ func TestAIElsewhereEverythingElseIsDroppedSilently(t *testing.T) {
 
 // 3. The bot's own id is read when start-up did not get it, so its @ is still told from anyone else's.
 func TestAIElsewhereReadsTheBotIDWhenStartUpDidNot(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.h.bots.mu.Lock()
@@ -186,6 +189,7 @@ func TestAIElsewhereReadsTheBotIDWhenStartUpDidNot(t *testing.T) {
 // goes; a send into the group, a reply under any other message in it, a card, a reply that names another chat, and a
 // long one are all refused, and a reply whose original is gone is not turned into a message of the group.
 func TestAIElsewhereTheGroupStaysClosedExceptForAReplyUnderTheSource(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
@@ -256,6 +260,7 @@ func TestAIElsewhereTheGroupStaysClosedExceptForAReplyUnderTheSource(t *testing.
 // The hint a group gets when nothing is opted in, the reaction and the like are the assistant's replies; here only that
 // a source is bounded and that it goes with the owner.
 func TestAISourcesAreBoundedAndGoWithTheOwner(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	for i := range botAISourcesKeep + 5 {
@@ -294,6 +299,7 @@ func TestAISourcesAreBoundedAndGoWithTheOwner(t *testing.T) {
 // The home topic group: the one marked, else the first opted in; /topics home marks (opting in when need be) and moves
 // it; /topics off takes the mark with the group; the app's list keeps it unless it says otherwise; two homes are refused.
 func TestHomeTopicGroup(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	if got := w.settings().homeChat(); got != "" {
@@ -376,6 +382,7 @@ func TestHomeTopicGroup(t *testing.T) {
 
 // A rich-text "@bot /ai …" (a post message: the @ is a node of its own) is taken like a text one.
 func TestAIElsewhereTakesARichTextCommand(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	post := `{"title":"","content":[[{"tag":"at","user_id":"@_user_1","user_name":"Persona"},{"tag":"text","text":" /ai 查一下发版说明"}]]}`
@@ -396,6 +403,7 @@ func TestAIElsewhereTakesARichTextCommand(t *testing.T) {
 
 // What is not an "/ai" is not asked about the bot at all: a group's ordinary messages cost no call to Feishu.
 func TestAIElsewhereAsksNothingForOrdinaryMessages(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.h.bots.mu.Lock()
@@ -416,6 +424,7 @@ func TestAIElsewhereAsksNothingForOrdinaryMessages(t *testing.T) {
 
 // A new App ID (or any restart of the connection) forgets the bot's own id: the old one must not tell the new bot's @.
 func TestBotRestartForgetsItsOwnID(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.h.bots.mu.Lock()
@@ -444,6 +453,7 @@ func TestBotRestartForgetsItsOwnID(t *testing.T) {
 // A source takes at most botSourceReplies replies, however they end, and no reply once it is older than botAISourcesKeepFor
 // (the usual rules refuse it then); the count is kept with the settings.
 func TestAISourceReplyCapAndExpiry(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.send(t, askEvent("om_cap", "ou_me", "@_user_1 /ai 查一下", atBot, nil))
@@ -496,6 +506,7 @@ func TestAISourceReplyCapAndExpiry(t *testing.T) {
 // An emoji goes only on a message of the owner's private chat, of a group opted in, or one an "/ai" was taken from; on
 // a message of any other chat it is refused (and so is taking one away), and nothing reaches Feishu for it.
 func TestReactionsOnlyWhereTheBotMayWrite(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
@@ -540,6 +551,7 @@ func TestReactionsOnlyWhereTheBotMayWrite(t *testing.T) {
 }
 
 func TestSourceAnswerTargetsOnlyTheOriginalRequest(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.send(t, askEvent("om_answer_source", "ou_me", "@_user_1 /ai Check the release notes", atBot, nil))

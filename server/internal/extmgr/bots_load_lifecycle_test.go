@@ -43,6 +43,7 @@ func (s *botBlockedReadStore) Setting(ctx context.Context, key string, out any) 
 }
 
 func TestBotLoadTransportReadIsBounded(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotLoadWorld(t, true, true)
 	st := &botBlockedReadStore{Store: w.store, entered: make(chan bool, 1), release: make(chan struct{})}
 	w.h.store = st
@@ -104,6 +105,7 @@ func TestBotLoadTransportReadIsBounded(t *testing.T) {
 }
 
 func TestBotLoadReadKeepsEarlierCallerDeadline(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotLoadWorld(t, true, true)
 	st := &botBlockedReadStore{Store: w.store, entered: make(chan bool, 1), release: make(chan struct{})}
 	w.h.store = st
@@ -129,6 +131,7 @@ func TestBotLoadReadKeepsEarlierCallerDeadline(t *testing.T) {
 }
 
 func TestBotLoadLiveCLIProfileRecovery(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotLoadWorld(t, true, false)
 	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
 	if err != nil {
@@ -182,6 +185,7 @@ func TestBotLoadLiveCLIProfileRecovery(t *testing.T) {
 }
 
 func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
+	needsLarkModule(t)
 	for _, tc := range []struct {
 		name, override, chosen, want string
 		off, feedOff, missing        bool
@@ -271,6 +275,7 @@ func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
 }
 
 func TestBotLoadManagedCLIRecoverySynchronizes(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotLoadWorld(t, true, false)
 	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
 	if err != nil {
