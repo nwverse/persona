@@ -137,6 +137,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `auth_relay` (version 1, #5644) | `auth_relay.` | `id`, `name?`, `hosts` (exact lowercase host names, 1–16), `paths` (exact paths, 1–16; a trailing `/` is ignored) | Process speaks the protocol, permission `auth_relay`; **starts off** at install and when an upgrade adds it, whatever `off_by_default` says | Authorization links the user's Agents stop at, on these hosts and paths and printed by the Agent's own command, handed to the program as `auth_relay.complete` to complete with the account it is signed in with; see [auth-relay.md](../operations/auth-relay.md) |
 | `secret_providers` (version 1, #3962) | `secrets.` | `id`, `name` (1–80 characters: the settings say "From <name>"), `schemes` (1–4 of `^[a-z][a-z0-9+.-]{0,15}$`, not `http`, `https`, `file`, `data`, `persona`, `about`, `javascript`) | Process speaks the protocol; a scheme another installed extension claims fails the install | Values for references of its schemes (`op://vault/item/field`), asked by the manager only (`secrets.describe`, `secrets.resolve`, the event `secrets.used`), each resolution recorded on it; see [secret-providers.md](secret-providers.md) |
 | `repository_providers` (version 1, #10330) | `repo.` | `id`, `name` (1–80 characters: what the catalog and a to-do's repositories call the source), `hosts` (1–16 exact lowercase host names, no IP address; not `github.com`, `gitlab.com` or the other hosts the built-in providers read), `link_kinds?` (`[{kind: issue / pull_request, label}]`, each kind once, a label of 1–24 characters; only relabels), `capabilities?` (`["pr_status"]`: it answers `repo.pr_status`, #11584) | Process speaks the protocol; a host another installed extension claims (even one that is off), or one host in two items, fails the install | A code-hosting source for **Settings › Repositories** and a to-do's repositories and links on its hosts, asked by the manager only (`repo.parse`, `repo.check`, `repo.link`, the optional `repo.describe` and `repo.pr_status`; `schema/extension/repository.schema.json`), each answer re-checked; the install page lists its hosts, and they are in the permission digest |
+| `memory_sources` (version 1, #13532; defined, not registered yet) | `memory.` | `id`, `name` (1–80 characters: what settings call the source); one per extension | Process speaks the protocol | Not wired yet: the hub lists the point as unknown and never calls it. Once registered, the manager reads the entries with `memory.entries` (`schema/extension/memory.schema.json`) and grades them by scene itself; see "Memory sources" below |
 
 Extension points the hub doesn't know: the extension still installs (it may be written for a newer hub), that item has no effect, and the preview and list show a warning. When adding extension points later (knowledge base sources, link recognition…), add a row to this table.
 
@@ -788,6 +789,67 @@ The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ex
 ```json
 {"permissions":{"hub":["assistant.memory.read"]}}
 ```
+
+### Memory sources
+
+A memory extension keeps entries about the user in its own state. The hub, not the extension, decides which of them
+reach which scene (a conversation's standing channel, a recall, a dispatched task, the Inbox's helper;
+`docs/assistant/health.md` "Memory by scene"), so the rule lives in one place for every memory extension. For that the
+extension offers one read-only call that answers its entries one by one, with what the hub's assembler needs to grade
+them; the hub filters. Design and decision: #13532.
+
+**Status: protocol defined, not wired.** The contribution is not registered yet: until a later change registers it, a
+manifest that declares it installs with the unknown-extension-point warning, the hub never calls it, and nothing an
+extension delivers changes. The wire types are generated from `schema/extension/memory.schema.json`
+(`wire.MemoryEntriesParams`, `wire.MemoryEntriesResult`, `wire.MemoryEntry`); the manager's mapping to its assembler
+is `memoryExtensionBatchOf` in `server/internal/assistant/memory_extension_wire.go`.
+
+The contribution (extension point `memory_sources`, version 1, namespace `memory.`; the program speaks the protocol):
+
+```json
+"contributes": {"memory_sources": [{"id": "memory", "name": "My memory"}]}
+```
+
+- `id` is the usual contribution id, `name` (1 to 80 characters) what settings call the source. One contribution per extension.
+- Declaring it is how the hub knows the extension offers `memory.entries`; there is no separate capability flag.
+
+| Method | Parameters → answer | Notes |
+| --- | --- | --- |
+| `memory.entries` | `{contribution, limit, after?}` → `{entries, tagged, has_more, after?}` | One page, most important first: standing entries, then by `rank`, then newest. `limit` is 1 to 500 (the manager asks 200) and only caps the page: end it early, with `has_more` and `after`, so the answer stays within 1 MB (200 entries of 4096 CJK characters would not). `after` is the previous page's opaque cursor; `has_more` true needs an `after`, and true with an empty one is read as the end of the entries. Read-only: answering changes nothing in the program's state. |
+
+Each entry (`MemoryEntry`):
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Required, `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, stable across pages and answers. The manager carries it as `memory-extension:<id>`, which a to-do's brief names. |
+| `text` | Required, 1 to 4096 characters: what the entry says, as the extension would render it. |
+| `status` | Required: `active` (the extension would use it today, whatever it calls that state itself: an extension with its own stable and shifting states answers `active` for both), `candidate` (not borne out yet), `dormant` (not seen lately), `retired` (no longer true). Only `active` is carried; any other value drops the entry. |
+| `facet` | The extension's own grouping (`^[a-z][a-z0-9_]{0,31}$`). Informational: the hub neither filters nor orders by it. |
+| `origin_space` | The slug of the space the entry was first said in; left out for the main space. |
+| `categories` | Up to 8 information categories (`health`, `finance`, `relationships`, `emotion`, `legal_id`); left out for a general entry. One the hub does not know makes the entry not known. |
+| `standing` | The extension kept it in every conversation (its own always-in-context entries). Only a standing entry goes to a standing channel (usage still decides); an entry without it comes in only by relevance, its `subjects` or text matched in a recall, a hand-off or the Inbox, as the extension's own "included when named" entries did. Until the source is wired in, the flag only orders entries among the extension's own. |
+| `rank` | 0 to 1000, higher first, among entries alike in `standing`; left out means 0. |
+| `subjects` | Up to 16 names (1 to 80 characters each) whose mention brings the entry in (its own "included when named" entries): a task's or a message's words are matched with them as well as with the text. |
+
+- **`tagged`** is a promise for the whole page: the extension writes `origin_space` and `categories` on every entry and
+  leaves them out only when empty. The manager reads a batch as tagged only when every page says so. Untagged, a missing
+  field means nothing is known: each entry is in no track and taken for sensitive everywhere, so no assembly carries it.
+- **Not filtered by scene**: answer every entry the extension would otherwise put in its text outlets. Grading by scene
+  is the hub's; an extension that pre-filters only hides entries the user's rules would have let through.
+- **Bounds**: 5 seconds per call, at most 1 MB per answer, at most 5 pages and 1000 entries per assembly (past them the
+  rest are left, less important by the extension's own order). An entry that breaks a rule above (an unknown `status`
+  included) is dropped alone, never repaired, and an id seen before is dropped too; the rest of the page is kept.
+- **Errors**: the base error codes, or `not_ready` (the entries are not loaded yet) and `failed` with a one-line
+  message. A timeout, an answer that is too large, a page whose own fields (`entries` as an array, `tagged`, `has_more`,
+  `after`) do not hold to the schema, and every error mean the assembly uses
+  none of the extension's entries this time and logs why. It never falls back to the extension's text.
+- **Who calls**: the manager only, for the owner's personal assemblies; no other extension, device or token can.
+
+**Transition.** Until an extension declares `memory_sources`, its four text outlets reach the assistant exactly as
+today: its `instructions` prompt, its `project_context` for new Agents, its `inbox_context` for the Inbox, and its own
+recall tool. Once the hub registers the point and the extension declares it, a later change makes the hub read the
+entries through `memory.entries` and stops delivering those four outlets of that extension directly, so no entry
+reaches a scene around the filter. Extensions that do not declare it keep the text outlets unchanged.
 
 ### Unified entries ledger
 

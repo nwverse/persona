@@ -140,6 +140,7 @@ agents.read          GET /api/v1/agents/sessions/{id}/messages
 -                    GET /api/v1/app/android/apk
 -                    GET /api/v1/app/android/latest
 assistant.ask        GET /api/v1/assistant
+-                    GET /api/v1/assistant/attention
 -                    GET /api/v1/assistant/availability
 -                    GET /api/v1/assistant/calls
 -                    GET /api/v1/assistant/calls/{id}
@@ -735,6 +736,7 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    PUT /api/v1/agents/prefs
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
+-                    PUT /api/v1/assistant/attention
 -                    PUT /api/v1/assistant/conversations/{id}/categories
 -                    PUT /api/v1/assistant/conversations/{id}/model
 -                    PUT /api/v1/assistant/conversations/{id}/tags

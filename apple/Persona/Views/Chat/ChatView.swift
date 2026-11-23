@@ -242,7 +242,8 @@ struct ChatView: View {
 
     /// `sidePage`: the page is a side session's own (`SideSessionPage`), which shows that side; any other Agents page given
     /// a folded side (a Needs You card, a link, a restored chat) opens its parent with the side shown over it (#7944).
-    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil, sidePage: Bool = false) {
+    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil, sidePage: Bool = false,
+         backgroundActivity: Bool = false) {
         // Built again for the same path (a tree swap): the agent its header switched to, not the one it opened with.
         #if os(iOS)
         var start = style == .dev ? AppModel.shared.chatSwitched[key] ?? key : key
@@ -259,7 +260,12 @@ struct ChatView: View {
         opened = key
         self.style = style
         self.itemManager = itemManager
+        self.backgroundActivity = backgroundActivity
     }
+
+    /// Read-only Background activity of the main conversation. It shares the transcript store and every line renderer,
+    /// but never becomes the visible chat and never acknowledges anything as seen.
+    private let backgroundActivity: Bool
 
     /// The session this page was opened with (the path's), which `switchTo` records its switches under.
     private let opened: SessionKey
@@ -388,13 +394,18 @@ struct ChatView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
         .frame(maxWidth: .infinity)
         .background(Theme.pageBackground)
+        .background {
+            if backgroundActivity {
+                Color.clear.accessibilityElement().accessibilityIdentifier("background-activity-page")
+            }
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         // Agents chats draw their own header (devChrome) so it can follow the scroll; the assistant's floats over the
         // chat (AssistantTopBar, drawn by AssistantView over this page and the new-conversation page). Where the system
         // puts bars down the side (iPhone Duo), an Agents chat hands its actions to it instead: they go in that column.
-        .toolbarVisibility(sideBars ? .visible : .hidden, for: .navigationBar)
-        .navigationBarBackButtonHidden(sideBars && !systemBack)
+        .toolbarVisibility(backgroundActivity || sideBars ? .visible : .hidden, for: .navigationBar)
+        .navigationBarBackButtonHidden(backgroundActivity || (sideBars && !systemBack))
         .pageToolbar { if sideBars { sideBarItems } }
         // The system draws that bar's title over the content, not in the column: a second title right above the
         // header's own. Removed while the header shows its title; while typing the header is only fog, and the
@@ -763,7 +774,7 @@ struct ChatView: View {
         }
         // Going to the background is the last chance before iOS may end the app: a cold relaunch (the dev chat is
         // restored, AppModel.rememberChat) then opens at the same line, not only after leaving the chat.
-        .onChange(of: scenePhase) { _, phase in if phase == .background { rememberReadPosition() } }
+        .onChange(of: scenePhase) { _, phase in if !backgroundActivity, phase == .background { rememberReadPosition() } }
         .onDisappear {
             ChatTrace.shared.note(shownKey, "close")
             #if DEBUG
@@ -777,17 +788,21 @@ struct ChatView: View {
         .onTabVisibility(appear: {
             model.subscribe(key, by: owner)
             if viewing != nil { model.subscribe(shownKey, by: owner) }
-            model.show(key, by: owner)
-            model.markSeen(key)
+            if !backgroundActivity {
+                model.show(key, by: owner)
+                model.markSeen(key)
+            }
             #if os(iOS)
-            fullPage.document = { fullPageDocument() }
-            fullPage.setShown(true)
+            if !backgroundActivity {
+                fullPage.document = { fullPageDocument() }
+                fullPage.setShown(true)
+            }
             #endif
         }, disappear: {
-            rememberReadPosition()
+            if !backgroundActivity { rememberReadPosition() }
             if viewing != nil { model.unsubscribe(shownKey, by: owner) }
             model.unsubscribe(key, by: owner)
-            model.hide(by: owner)
+            if !backgroundActivity { model.hide(by: owner) }
             #if os(iOS)
             fullPage.setShown(false)
             fullPage.document = nil // it holds this view, whose state holds the page
@@ -812,7 +827,7 @@ struct ChatView: View {
         }
         #endif
         .onChange(of: session?.needsSeen()) { _, unseen in
-            if unseen == true && model.visibleSession == key { model.markSeen(key) }
+            if !backgroundActivity, unseen == true && model.visibleSession == key { model.markSeen(key) }
         }
     }
 
@@ -838,14 +853,14 @@ struct ChatView: View {
         let items = store.items
         // Frozen: the items up to the snapshot (they are in transcript order); what comes after waits.
         let cut = frozen.map { f in Self.prefixCount(items) { ($0.seq, $0.part) <= (f.seq, f.part) } } ?? items.count
-        let feed = style == .assistant ? ChatLines.drawnFeed(TasksStore.shared.feed(shownKey.sessionID)) : []
+        let allFeed = style == .assistant ? ChatLines.drawnFeed(TasksStore.shared.feed(shownKey.sessionID)) : []
         let kids = model.childRows(shownKey)
         scratch.childRows = kids
         let modes = shownModes(until: frozen == nil ? nil : items[..<cut].last(where: { $0.ts != nil })?.ts ?? .distantPast)
         let childStamp = kids.map { "\($0.sessionID):\($0.rev ?? 0):\($0.state.rawValue):\($0.updatedAt?.timeIntervalSince1970 ?? 0)" }.joined(separator: "|")
         let key = ChatScratch.LinesKey(store: "\(shownKey.machineID)/\(shownKey.sessionID)", version: frozen == nil ? store.version : cut,
                                        first: items.first?.id, live: frozen == nil ? liveTurnID : frozen?.live, open: openWork,
-                                       runs: openRuns, frozen: frozen, feed: ChatLines.feedKey(feed),
+                                       runs: openRuns, frozen: frozen, feed: ChatLines.feedKey(allFeed),
                                        streaming: drawsLive && (frozen.map { !$0.text.isEmpty } ?? liveShown),
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls,
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
@@ -864,7 +879,11 @@ struct ChatView: View {
         model.childIndex.seen = seen
         builder.childSessions = Dictionary(uniqueKeysWithValues: kids.map { ($0.sessionID, $0) })
         builder.historyComplete = store.loadedOnce && !store.hasMore
-        var lines = builder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
+        let presentation: ChatLines.Presentation = backgroundActivity ? .backgroundActivity : .timeline
+        let projection = builder.projection(Self.debugTrim(blocks), live: key.live, streaming: key.streaming,
+                                            presentation: presentation)
+        let feed = projection.feed(allFeed, for: presentation)
+        var lines = backgroundActivity ? projection.activity : projection.timeline
         lines = ModelChanges.mark(lines)
         #if os(iOS)
         // An Agent's long finished answers as several rows: one row many screens tall stuttered whenever it was on
@@ -877,9 +896,13 @@ struct ChatView: View {
             lines = ChatLines.mergeModeChanges(lines, modes, earliest: store.hasMore ? items.lazy.compactMap(\.ts).first ?? .distantFuture : nil)
         }
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
-            // Dispatch links have no instruction list. Keep Persona's hand-offs as their own folded lines instead
-            // of hiding them as though a full task card still rendered them (#3711).
-            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
+            if backgroundActivity {
+                lines = ChatLines.quickResults(ChatLines.mergeActivityFeed(lines, feed))
+            } else {
+                // Dispatch links have no instruction list. Keep Persona's hand-offs as their own folded lines instead
+                // of hiding them as though a full task card still rendered them (#3711).
+                lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
+            }
         }
         lines = ChatLines.sourceRuns(lines)
         // The card in the header says the closeout (#3612): the reply that carried the raw block shows without it.
@@ -1996,12 +2019,12 @@ struct ChatView: View {
     private var liveShown: Bool { ChatLiveText.shows(store) }
     /// The chat draws live text: the assistant's in the main chat, and an agent's as Claude shows it in any chat of it
     /// (docs/integrations/claude-integration.md "Live replies (MessageDisplay)"), the same way.
-    private var drawsLive: Bool { style == .assistant || store.liveIsAgents }
+    private var drawsLive: Bool { !backgroundActivity && (style == .assistant || store.liveIsAgents) }
 
     /// Local feedback is per conversation, never a speculative change to the runtime's session state.
     private var sendPhase: ChatSendFeedback.Phase? {
         _ = awaitTick
-        guard viewedAgent == nil, let feedback = store.sendFeedback else { return nil }
+        guard !backgroundActivity, viewedAgent == nil, let feedback = store.sendFeedback else { return nil }
         // The queue strip already owns queued messages; do not add another progress home for them.
         if store.pending.contains(where: { $0.id == feedback.id }), !shownPending.contains(where: { $0.id == feedback.id }) { return nil }
         return feedback.visible(now: .now)
@@ -2043,11 +2066,11 @@ struct ChatView: View {
 
     /// Messages sent from here that the transcript does not have yet, minus those Claude holds in its queue (the queue
     /// strip shows them).
-    private var shownPending: [PendingMessage] { pendingPlacement.chat }
+    private var shownPending: [PendingMessage] { backgroundActivity ? [] : pendingPlacement.chat }
 
     /// The row's kept messages (#10194) the transcript does not have yet (the row may lag behind the line).
     private var keptUndelivered: [UndeliveredMessage] {
-        guard let list = session?.undelivered, !list.isEmpty else { return [] }
+        guard !backgroundActivity, let list = session?.undelivered, !list.isEmpty else { return [] }
         return UndeliveredMessage.shown(list, landed: store.items.compactMap(\.clientMsgID),
                                         drawn: (store.pending + store.arriving).map(\.id.uuidString))
     }
@@ -2121,7 +2144,8 @@ struct ChatView: View {
     /// The custom header's full height (Agents; the assistant's floating bar): the other panes sit below it, the chat
     /// list scrolls under it.
     private var headerRoom: CGFloat {
-        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
+        if backgroundActivity { return 0 }
+        return style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
     }
 
     /// Git only for repositories, files only when we know the directory; the assistant has neither.
@@ -2543,7 +2567,9 @@ struct ChatView: View {
     }
 
     @ViewBuilder private var footer: some View {
-        if let a = viewedAgent {
+        if backgroundActivity {
+            EmptyView()
+        } else if let a = viewedAgent {
             SubagentFooter(agent: a) { view(nil) }
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
@@ -3044,14 +3070,18 @@ struct ChatView: View {
                         #endif
                 }
             }
-            switch ChatLines.placeholder(lines: lines, hasTranscript: !rows.isEmpty,
+            switch ChatLines.placeholder(lines: lines, hasTranscript: !backgroundActivity && !rows.isEmpty,
                                          hasPending: !kept.isEmpty || !pending.isEmpty || !store.pending.isEmpty || !store.arriving.isEmpty,
                                          hasLiveText: drawsLive && !(frozen?.text ?? store.liveText).isEmpty,
                                          loadedOnce: store.loadedOnce, historyNotFound: store.historyNotFound) {
             case .loading:
                 ChatSkeleton().flippedBack().accessibilityIdentifier("chat-loading-placeholder")
             case .empty:
-                if model.session(key)?.isStopped == true { // read-only (#4754): nothing to start from here
+                if backgroundActivity {
+                    EmptyStateView(symbol: Theme.Icon.recent, title: String(localized: "No background activity"),
+                                   message: String(localized: "Completed quiet rounds stay here for you to inspect."))
+                        .flippedBack().accessibilityIdentifier("background-activity-empty")
+                } else if model.session(key)?.isStopped == true { // read-only (#4754): nothing to start from here
                     EmptyStateView(symbol: Theme.Icon.conversation, title: String(localized: "No messages"),
                                    message: String(localized: "This Agent stopped before it left any messages."))
                         .flippedBack().accessibilityIdentifier("chat-empty-placeholder")
@@ -4045,7 +4075,7 @@ struct ChatView: View {
     /// (Agents chats, a subagent's transcript, a voice call, which puts the capsules away): there the chat is gone by the
     /// composer's top edge.
     private var underFooter: CGFloat {
-        style == .assistant && viewing == nil && !VoiceCalls.shared.isLive(on: key) ? Self.underDock : 0
+        style == .assistant && !backgroundActivity && viewing == nil && !VoiceCalls.shared.isLive(on: key) ? Self.underDock : 0
     }
 
     /// The fog over the list's end: clear `newestGap` above the footer, where the newest message rests, and solid from
@@ -5147,6 +5177,7 @@ struct ChatView: View {
     }
 
     private var title: String {
+        if backgroundActivity { return String(localized: "Background activity") }
         if style == .dev, let t = host?.title, !t.isEmpty { return t }
         let t = session?.title ?? ""
         if style == .assistant { return t.isEmpty || t == "Claude Code" ? "Persona" : t }
