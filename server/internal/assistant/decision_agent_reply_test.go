@@ -271,7 +271,9 @@ func TestSideConversationHookDoesNotWithdrawDecision(t *testing.T) {
 	if !s.NodeEvent(a.MachineID, "hook.event", params) {
 		t.Fatal("hook event was not accepted")
 	}
-	time.Sleep(4 * shortSuperviseTimings.gather) // the ordered decision work would have run by now
+	// Wait on the ordered queue (not a fixed sleep): the hook enqueues its decision work through
+	// inOrder, so this barrier closes only after that work has actually run.
+	waitFleetOrder(t, s)
 	if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || !got.DueAt.IsZero() ||
 		got.AcceptedAt.IsZero() == false || got.Chosen != "" {
 		t.Fatalf("the side conversation changed the pending decision: %+v", got)
@@ -336,7 +338,7 @@ func TestRelayMessageDoesNotWithdrawDecision(t *testing.T) {
 		if !s.NodeEvent(a.MachineID, "hook.event", params) {
 			t.Fatal("hook event was not accepted")
 		}
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		waitFleetOrder(t, s)
 		if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || got.Chosen != "" {
 			t.Fatalf("the relay hook changed the pending decision: %+v", got)
 		}
@@ -445,7 +447,7 @@ func TestInjectedNoticeHookDoesNotWithdrawDecision(t *testing.T) {
 	if !s.NodeEvent(a.MachineID, "hook.event", params) {
 		t.Fatal("hook event was not accepted")
 	}
-	time.Sleep(4 * shortSuperviseTimings.gather)
+	waitFleetOrder(t, s)
 	if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || !got.DueAt.IsZero() || got.Chosen != "" {
 		t.Fatalf("an injected notice hook changed the pending decision: %+v", got)
 	}
