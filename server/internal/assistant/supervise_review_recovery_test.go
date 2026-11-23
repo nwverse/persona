@@ -104,10 +104,14 @@ func TestAcceptedRecoversActualPRFromCloseout(t *testing.T) {
 		{"full PR URL cannot be confirmed", "https://github.com/o/r/pull/5", true, 403, 403, "4", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, todo := deliveryReviewServiceOn(t, &fakeForge{}, &runningHub{commit: oldHub}, false, repositorystore.New(todoTestDB(t)))
+			st := repositorystore.New(todoTestDB(t))
+			s, f, todo := newSupervisedServiceOn(t, st)
 			ctx := context.Background()
-			s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/4")
-			f := s.hub.(*fakeHub)
+			deliveryOn(t, s)
+			s.deploy.hubBuild = (&runningHub{commit: oldHub}).build
+			s.deploy.listPaths = []string{}
+			// Seed the mistaken issue in the stage record only. A saved delivery link is a separate gate input.
+			s.setTaskStageOn(ctx, todo.ID, "review", "https://github.com/o/r/pull/4", "", false, "")
 			reply := "The issue was recorded as PR #4; the actual delivery is in the closeout.\n" +
 				"<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\nartifact: pr " + tc.ref + "\n</closeout>"
 			artifactReportProof(f, todo, reply, "https://github.com/o/r/pull/5")
@@ -147,6 +151,13 @@ func TestAcceptedRecoversActualPRFromCloseout(t *testing.T) {
 			}
 			if tc.want == "5" && slices.Contains(got.PRs, "https://github.com/o/r/pull/4") {
 				t.Fatal("false issue record survived in PR history")
+			}
+			var wantLinks []string
+			if tc.want == "5" {
+				wantLinks = []string{"https://github.com/o/r/pull/5"}
+			}
+			if _, links := savedArtifactURLs(t, st, todo.ID); !slices.Equal(links, wantLinks) {
+				t.Fatalf("saved repository links = %v, want %v", links, wantLinks)
 			}
 		})
 	}
