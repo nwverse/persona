@@ -248,7 +248,7 @@ function HoldSides({ mid, sid }: { mid: string; sid: string }) {
 function SideUnreadLine({ sides, count, open }: { sides?: readonly Session[]; count: number; open: (side: Session, e: React.MouseEvent) => void }) {
   const first = sides?.[0];
   // in the unread tint, as the dot it explains: told apart from the parent's own words under its title
-  const cls = "flex h-4 min-w-0 items-center gap-1 text-[11px] leading-4 text-green";
+  const cls = "flex h-4 min-w-0 items-center gap-1 text-submeta leading-4 text-green";
   const mark = <Icon name="sideSessions" size={10} stroke={2.2} className="shrink-0" />;
   if (!first) {
     const words = t("sidebar.side_unread_count", { count });
