@@ -118,6 +118,9 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 	if lead != cfg.Main && !s.isLeader(ctx, lead) {
 		return Todo{}, false, fmt.Errorf("%s is not a leader conversation (GET /api/v1/assistant/leaders lists them)", lead)
 	}
+	if lead != cfg.Main && s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, lead) {
+		return Todo{}, false, errors.New("the target lead's runtime cannot receive supervision policy")
+	}
 	am, ok := s.device(ctx, mid)
 	if !ok {
 		return Todo{}, false, fmt.Errorf("%w: no machine %q", errAgentNotFound, mid)
@@ -132,6 +135,9 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, false, err
 	}
+	// Serialize a move with digest delivery and queued supervision reconciliation.
+	s.supervise.routingMu.Lock()
+	defer s.supervise.routingMu.Unlock()
 	if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
 		if t.Origin == "" {
 			return Todo{}, false, fmt.Errorf("%s is on the owner's own to-do %q: it stays theirs", agentLabel(c), t.Title)
@@ -145,10 +151,10 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 					return false
 				}
 			}
-			if v.Supervisor == lead {
+			if v.Supervisor == lead && v.SupervisorSource == "explicit" {
 				return false
 			}
-			v.Supervisor = lead
+			v.Supervisor, v.SupervisorSource = lead, "explicit"
 			return true
 		})
 		if err != nil {
@@ -161,6 +167,9 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 			s.taskCard(ctx, lead, t.ID, wakeActive) // its card follows it (the old conversation keeps its history)
 		}
 		t.Supervision = &v
+		if err := s.transferPendingAsks(ctx, t); err != nil {
+			return Todo{}, false, err
+		}
 		return t, false, nil
 	}
 	if !allowAdoption {
