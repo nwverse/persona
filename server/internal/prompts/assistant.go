@@ -463,7 +463,7 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 type AssistantContext struct {
 	ScheduledWorkPlan bool // Inline instructions for a granted scheduled round when the manager uses persona-work.
 	Main              bool
-	Leader            bool // a leader conversation: explicit manual-Agent tasks only; new task_plan work is main-supervised
+	Leader            bool // a direction lead supervises its planned tasks and explicitly assigned Agents
 	Owner             string
 	Snapshot          string
 	// Directions: for the main conversation, the current leaders used as direction labels;
@@ -979,6 +979,10 @@ type SuperviseEntry struct {
 	LastReview *SuperviseLastReview
 	// TodoReady: an open, unstarted dependent to-do whose after prerequisites are all satisfied (#12606).
 	TodoReady *SuperviseTodoReady
+	// ExternalInfo: new external information received while a needs_user ask is still pending (#13112).
+	ExternalInfo *NeedsUserExternalInfo
+	// ParentCloseout: localized closeout guidance when all part_of children of an open parent to-do are done (#13100).
+	ParentCloseout string
 }
 
 // SuperviseTodoReady describes an open, unstarted to-do ready to advance once all of its after prerequisites are met.

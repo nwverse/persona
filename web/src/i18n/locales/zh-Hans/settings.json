@@ -13,6 +13,8 @@
   "agent_preferences": "Agent 偏好",
   "reply_motion": "回复动效",
   "reply_motion_hint": "新到的回复逐词淡入；系统开了「减弱动态效果」时不播。",
+  "starred_messages": "消息收藏",
+  "starred_messages_hint": "在侧栏显示「消息收藏」，并在消息菜单里提供收藏 / 取消收藏。关闭时已收藏的消息会保留。",
   "sidebar_terminals": "侧边栏显示终端",
   "sidebar_terminals_hint": "在 Agent 按机器分组里，每台电脑的 Agent 下面列出它终端里的普通 shell，点开就是「终端」页。默认关；只对这个浏览器生效。",
   "avatar": "形象",

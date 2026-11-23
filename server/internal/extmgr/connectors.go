@@ -72,7 +72,7 @@ const subscriptionKickWait = 10 * time.Second
 // connector's thread); a write the gate leaves to the user is asked on the phone like mail_send, in that conversation.
 func (h *Manager) callConnector(ctx context.Context, by asker, name string, args json.RawMessage) proto.ToolResult {
 	h.requestLarkCLIRecovery(ctx)
-	if inHealth(h.askerCwd(by)) { // a health conversation's writes: on the phone each time (assistant.go inHealth)
+	if inSpace(h.askerCwd(by)) { // a space conversation's writes: on the phone each time (hubglue.go inSpace)
 		ctx = connector.ConfirmEach(ctx)
 	}
 	// The ledger of what went out (sent_ledger.go) is told of the write with this ctx: who asked, and the card the user answered.

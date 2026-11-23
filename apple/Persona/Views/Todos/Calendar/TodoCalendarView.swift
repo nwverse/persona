@@ -441,9 +441,6 @@ struct TodoQuickAddSheet: View {
                 SheetConfirm(id: "todo.calendar.newAdd", name: String(localized: "Add [Beautiful U I Bridge 7a8a11]"),
                              disabled: trimmed.isEmpty || saving, action: add)
             }
-            #if os(macOS)
-            .macSheet()
-            #endif
         }
         .formSheetDetents([.medium])
         .onAppear { typing = true }

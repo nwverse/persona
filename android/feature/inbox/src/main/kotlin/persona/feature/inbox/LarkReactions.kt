@@ -151,12 +151,14 @@ fun LarkMessageActionMenu(
     val moreLabel = stringResource(R.string.inbox_lark_more_emoji)
     // The menu rows' icons, one size.
     val menuIcon = Modifier.size(Tokens.Space.Standard.l)
+    val densities = currentTextDensities()
 
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
         modifier = Modifier.background(palette.surfaceStrong).border(ContentTokens.hairline, palette.ink.copy(alpha = 0.08f), RoundedCornerShape(Tokens.Radius.card))
     ) {
+        RetainedTextDensity(densities) {
         // Quick reaction bar
         if (onReact != null && onOpenPicker != null) Row(
             Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs),
@@ -227,6 +229,7 @@ fun LarkMessageActionMenu(
                     onOpenProfile()
                 }
             )
+        }
         }
     }
 }

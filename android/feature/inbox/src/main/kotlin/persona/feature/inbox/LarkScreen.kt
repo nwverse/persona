@@ -688,10 +688,10 @@ internal fun LarkPartContent(
                     open?.invoke(part.text, part.source)
                 })
             } else {
-                LarkRichInlineText(part.text, source = part.source, onOpenProfile = onOpenProfile)
+                ReadingContent { LarkRichInlineText(part.text, source = part.source, onOpenProfile = onOpenProfile) }
             }
         }
-        is LarkPart.Code -> LarkCodeBlock(part.code, part.language)
+        is LarkPart.Code -> ReadingContent { LarkCodeBlock(part.code, part.language) }
         is LarkPart.Audio -> LarkVoiceView(part)
         is LarkPart.Video -> LarkVideoView(part, onPlay = { onPlayVideo?.invoke(part.ref) })
         is LarkPart.Sticker -> LarkStickerView(part)

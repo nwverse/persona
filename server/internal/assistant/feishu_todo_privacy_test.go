@@ -52,7 +52,7 @@ func TestFeishuTodoReminderCardPrivacyAtReminderEntry(t *testing.T) {
 					t.Fatalf("phone pushes = %d", len(f.pushed()))
 				}
 				if health {
-					title, body := healthNotice(s.botLang(context.Background()))
+					title, body := spaceNotice(s.botLang(context.Background()))
 					for _, want := range []string{title, body} {
 						if !strings.Contains(card, want) {
 							t.Errorf("generic health notice lacks %q", want)

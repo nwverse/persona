@@ -151,21 +151,6 @@ struct ImageViewer: View {
         #endif
     }
 
-    #if os(macOS)
-    private func page(_ i: Int) -> some View {
-        Group {
-            if let img = decoded[i] {
-                ZoomableImage(image: img, onTap: toggleChrome)
-            } else if failed.contains(i) {
-                notLoaded(i)
-            } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .task(id: i) { await load(i) }
-    }
-    #endif
-
     /// Decodes picture `i` once (a page asking again while it loads waits for nothing).
     private func load(_ i: Int) async {
         guard images.indices.contains(i), decoded[i] == nil, !failed.contains(i), !loading.ids.contains(i) else { return }
@@ -202,11 +187,7 @@ struct ImageViewer: View {
     }
 
     private func toggleChrome() {
-        #if os(macOS)
-        // A click keeps the bars on the Mac (they hold the only close button besides Esc).
-        #else
         chrome.toggle()
-        #endif
     }
 
     // MARK: Bars
