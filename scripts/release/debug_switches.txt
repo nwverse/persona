@@ -189,6 +189,7 @@ openTerminalTips
 openTerminalsPage
 openThreadAt
 openTodoDetail
+openTodoPlace
 openTodoTitled
 openTodosChoice
 openTokenUsage
@@ -288,6 +289,8 @@ showFromSeq
 showFullOutput
 showGitReload
 showHandOffNewAgent
+showHealthActivityExample
+showHealthHomeTrendsExample
 showHealthTrends
 showHerdrStart
 showHomeState
