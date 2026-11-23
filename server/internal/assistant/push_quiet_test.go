@@ -73,58 +73,100 @@ func (e *routeEnv) announced(id string) bool {
 
 // With the switch on, a tool permission card of a supervised task stays off the owner's phone: it climbs leader → main
 // conversation, then goes back to the leader (the owner gets one P1 notice the hub holds for the briefing, never the
-// card's push), then stays with the leader, which is reminded again at each hold.
+// card's push), then stays with the leader, which is reminded again at each hold. Each step is a subtest of its own,
+// so a failure names the step.
 func TestQuietPermissionCardStaysWithItsSupervisor(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
 	oldHold := askHoldFor
 	askHoldFor = 2 * time.Minute
 	t.Cleanup(func() { askHoldFor = oldHold })
 	pushQuietFor(t, e.s, true)
+	step := func(name string, f func(t *testing.T)) bool {
+		return t.Run(name, func(st *testing.T) {
+			parent := e.t
+			e.t = st
+			defer func() { e.t = parent }()
+			f(st)
+		})
+	}
 	e.raise(askPermission("ix1", "worker-1"))
 	e.noticeWith("lead1", "interaction_id=ix1")
 
-	e.s.askTick(time.Now().Add(2 * askHoldFor)) // leader → main conversation, as before
-	m := e.noticeWith("conv1", "interaction_id=ix1")
-	if !strings.Contains(m, "signal=ask") || !strings.Contains(m, "low_distraction=true") {
-		t.Fatalf("the main conversation is not told the card stays with the supervisors:\n%s", m)
+	if !step("up_to_main", func(t *testing.T) {
+		e.s.askTick(time.Now().Add(2 * askHoldFor)) // leader → main conversation, as before
+		m := e.noticeWith("conv1", "interaction_id=ix1")
+		if !strings.Contains(m, "signal=ask") || !strings.Contains(m, "low_distraction=true") {
+			t.Fatalf("the main conversation is not told the card stays with the supervisors:\n%s", m)
+		}
+	}) {
+		return
 	}
-	e.s.askTick(time.Now().Add(4 * askHoldFor)) // past the last rung: back to the leader once, not the owner
-	r := e.noticeWith("lead1", "再交给你处理一次")
-	if !strings.Contains(r, "interaction_id=ix1") {
-		t.Fatalf("the leader's reminder:\n%s", r)
+	if !step("back_to_leader", func(t *testing.T) {
+		e.s.askTick(time.Now().Add(4 * askHoldFor)) // past the last rung: back to the leader, not the owner
+		r := e.noticeWith("lead1", "再交给你处理")
+		if !strings.Contains(r, "interaction_id=ix1") {
+			t.Fatalf("the leader's reminder:\n%s", r)
+		}
+	}) {
+		return
 	}
-	waitFor(t, "the held notice", func() bool { return len(e.heldNotices(e.todo.ID)) == 1 })
-	n := e.heldNotices(e.todo.ID)[0]
-	if n.Level != assistantwire.LevelP1 || n.Kind != assistantwire.NotifyPush || !strings.Contains(n.Title, "修登录崩溃") {
-		t.Fatalf("held notice %+v", n)
+	if !step("held_notice", func(t *testing.T) {
+		waitFor(t, "the held notice", func() bool { return len(e.heldNotices(e.todo.ID)) == 1 })
+		n := e.heldNotices(e.todo.ID)[0]
+		if n.Level != assistantwire.LevelP1 || n.Kind != assistantwire.NotifyPush || !strings.Contains(n.Title, "修登录崩溃") {
+			t.Fatalf("held notice %+v", n)
+		}
+	}) {
+		return
 	}
-	e.s.askTick(time.Now().Add(6 * askHoldFor)) // its hold with the leader runs out again: it stays there
-	e.s.askTick(time.Now().Add(8 * askHoldFor)) // and again, past the old 15-minute deadline
-	e.settle()
-	if got := e.f.noticesTo("conv1"); len(got) != 1 {
-		t.Fatalf("the main conversation was given the card again after the reminder: %d messages", len(got))
+	if !step("reminded_again", func(t *testing.T) {
+		e.s.askTick(time.Now().Add(6 * askHoldFor)) // its hold with the leader runs out again: it stays there
+		e.s.askTick(time.Now().Add(8 * askHoldFor)) // and again, past the old 15-minute deadline
+		e.settle()
+	}) {
+		return
 	}
-	if got := e.cardPushes("ix1"); len(got) != 0 {
-		t.Fatalf("the owner was pushed the card: %v", got)
-	}
-	if len(e.heldNotices(e.todo.ID)) != 1 {
-		t.Fatalf("reminded more than once: %+v", e.heldNotices(e.todo.ID))
-	}
-	if !e.lastShown("ix1").Delegating || e.announced("ix1") {
-		t.Fatal("the card left its supervisors")
-	}
-	if todo, ok := e.s.routedTo("ix1", "lead1", false); !ok || todo != e.todo.ID {
-		t.Fatal("the card is not with the task's leader")
-	}
+	step("main_not_given_it_again", func(t *testing.T) {
+		if got := e.f.noticesTo("conv1"); len(got) != 1 {
+			t.Fatalf("the main conversation was given the card again after the reminder: %d messages:\n%s", len(got), strings.Join(got, "\n---\n"))
+		}
+	})
+	step("no_card_push", func(t *testing.T) {
+		if got := e.cardPushes("ix1"); len(got) != 0 {
+			t.Fatalf("the owner was pushed the card: %v", got)
+		}
+	})
+	step("one_held_notice", func(t *testing.T) {
+		if len(e.heldNotices(e.todo.ID)) != 1 {
+			t.Fatalf("held notice more than once: %+v", e.heldNotices(e.todo.ID))
+		}
+	})
+	step("still_delegating", func(t *testing.T) {
+		if !e.lastShown("ix1").Delegating {
+			t.Fatal("the card is not shown as the supervisors'")
+		}
+	})
+	step("not_announced", func(t *testing.T) {
+		if e.announced("ix1") {
+			t.Fatal("the card went to the channels")
+		}
+	})
+	step("with_the_leader", func(t *testing.T) {
+		if todo, ok := e.s.routedTo("ix1", "lead1", false); !ok || todo != e.todo.ID {
+			t.Fatal("the card is not with the task's leader")
+		}
+	})
 	// The supervisor may still escalate what is the owner's alone.
-	if _, err := runJSON(t, e.s, "lead1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "要推远端",
-		"why_owner": "irreversible"}); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, "the escalated push", func() bool { return len(e.cardPushes("ix1")) == 1 })
-	if got := e.cardPushes("ix1"); got[0] != assistantwire.LevelP0 {
-		t.Fatalf("escalated irreversible card pushed at %v", got)
-	}
+	step("escalated", func(t *testing.T) {
+		if _, err := runJSON(t, e.s, "lead1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "要推远端",
+			"why_owner": "irreversible"}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "the escalated push", func() bool { return len(e.cardPushes("ix1")) == 1 })
+		if got := e.cardPushes("ix1"); got[0] != assistantwire.LevelP0 {
+			t.Fatalf("escalated irreversible card pushed at %v", got)
+		}
+	})
 }
 
 // An owner-only card parked with its leader has no deadline that hands it to the owner: it stays there at 15 minutes
