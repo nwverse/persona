@@ -145,8 +145,8 @@ func (s *Service) backfillPlanSupervisors(ctx context.Context) {
 			continue
 		}
 		lead := s.plannedLead(ctx, t)
-		if lead == "" {
-			continue
+		if lead == "" || t.PlanID == "" && old == lead {
+			continue // a task the lead handed out without a plan and already supervises needs nothing
 		}
 		if s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, lead) {
 			s.logf("task %s: backfill supervision: lead %s cannot receive supervision; left with %s", t.ID, short(lead), short(old))
