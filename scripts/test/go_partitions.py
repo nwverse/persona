@@ -16,7 +16,8 @@ import subprocess
 # its two partitions before the unchanged 600-second lane cut both off while their subtests were still advancing.
 # Three keeps every test exactly once. internal/assistant took 570 s serially on the hub machine (#7644); its tests
 # mostly wait on timers and Postgres, and three took about 150 to 200 s each.
-PACKAGES = {"./internal/node": 3, "./internal/assistant": 3}
+# Four assistant partitions also keep each exact-name argument below MAX_PATTERN as the suite grows.
+PACKAGES = {"./internal/node": 3, "./internal/assistant": 4}
 # The PACKAGES whose plain `go test` (no -run) splits itself: internal/node's TestMain lists its tests and runs them in
 # concurrent processes of its own binary, half the CPUs but at least three and at most six
 # (server/internal/node/partition_test.go, #5734). go_test_partitioned.py leaves them to that split when it expands a
