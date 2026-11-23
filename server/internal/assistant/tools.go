@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -44,7 +45,7 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
-	"direction_name", "leader_progress"}
+	"direction_name", "leader_progress", "decision_record", "decisions_query"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
@@ -137,14 +138,20 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
-	// Health stays in the health space (docs/assistant/health.md "How directories and memory are isolated"): it writes nothing to the knowledge base,
-	// nor changes or starts what is imported into it (kb_history_status only reads).
+	// What is said in a space stays there (docs/assistant/health.md "How directories and memory are isolated"): a space
+	// whose policy says so writes nothing to the knowledge base, nor changes or starts what is imported into it
+	// (kb_history_status only reads).
 	if name == "kb_update" || strings.HasPrefix(name, "kb_history_") && name != "kb_history_status" {
-		if space, _ := s.selfSpace(ctx, self); space == SpaceHealth {
-			return "", errors.New("the health space doesn't write the knowledge base: health information stays in its conversations and memory")
+		if space, _ := s.selfSpace(ctx, self); s.trackPolicy(ctx, space).NoKBWrite {
+			if space == SpaceHealth {
+				return "", errors.New("the health space doesn't write the knowledge base: health information stays in its conversations and memory")
+			}
+			return "", errors.New("this space doesn't write the knowledge base: what is said here stays in its conversations and memory")
 		}
 	}
 	switch name {
+	case "decision_record", "decisions_query":
+		return s.toolEntries(ctx, machine, self, name, args)
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
 	case "repositories_list", "repository_get":
@@ -205,6 +212,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		return s.toolKnowledgeFolder(ctx, name, args)
 	case "kb_search", "kb_list", "kb_get", "kb_update":
+		// What kb_update writes carries its own categories (info_use.go exitPolicy): a sensitive text is not written
+		// either, judged once the update is valid and about to be written.
+		ctx = withKBWriteCheck(ctx, func(text string) error {
+			if space, _ := s.selfSpace(ctx, self); s.exitPolicy(ctx, text, self, space).NoKBWrite {
+				return errors.New("this isn't written to the knowledge base: it carries sensitive information, which stays in " +
+					"its conversation and memory. Nothing was saved")
+			}
+			return nil
+		})
 		return s.toolKB(ctx, name, args)
 	case "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume":
 		return s.historyTools().Call(ctx, name, args) // kbhistory/tools.go
@@ -253,8 +269,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// which the meeting page shows.
 			return justMeNotice(s.lang(ctx)), nil
 		}
-		if s.inHealth(ctx, self) { // the lock screen and the channels hear there is news, not what it is (health.go)
-			a.Title, a.Body = healthNotice(s.lang(ctx))
+		// The lock screen and the channels hear there is news, not what it is (health.go): decided once, for the push and
+		// its copies alike.
+		if space, _ := s.selfSpace(ctx, self); s.exitPolicy(ctx, a.Title+"\n"+a.Body, self, space).Redact {
+			a.Title, a.Body = s.redactedNotice(ctx, s.lang(ctx), space)
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
 		res, err := s.pushResult(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
@@ -428,7 +446,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if resume != "" { // the phone says it resumes the agent, and why
 			summary = s.resumeNote(ctx, c, am, resume) + "\n\n" + a.Text
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, summary, args); err != nil {
+		words := a.Text // the words the agent gets: the text, and a task's title and done_when
+		if a.Task != nil {
+			words = strings.Join(append([]string{a.Task.Title, a.Text}, a.Task.DoneWhen...), "\n\n")
+		}
+		if ok, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
 			return "", err
 		} else if !ok {
 			return "The user declined on the phone: nothing was sent to that agent.", nil
@@ -625,9 +647,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
+		if assistantWorkspace(am, a.Cwd) {
+			return "", i18n.Err("rpc-errors.agent_assistant_workspace")
+		}
 		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort), speed: strings.TrimSpace(a.Speed), permission: a.PermissionMode} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
-		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
+		// the start lays it: what runs is said on the card (a hand-off from a space that confirms what leaves it asks) and in the answer.
 		tier := strings.TrimSpace(a.Tier)
 		if tier != "" {
 			t, err := s.tierModel(ctx, tier)
@@ -718,7 +743,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Ultracode {
 			where += " · ultracode"
 		}
-		if ok, err := s.confirmOutbound(ctx, machine, self, name, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
+		if ok, err := s.confirmOutbound(ctx, machine, self, name, a.Prompt, where+"\n\n"+a.Prompt, withoutSecretEnv(args)); err != nil {
 			return "", err
 		} else if !ok {
 			return "The user declined on the phone: no agent was started.", nil
@@ -1419,6 +1444,9 @@ func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 		return ActionResult{}, errInvalidQuestionCancel
 	}
 	r = honest(q.ix, r)
+	if err := s.ledgerCardDecisions(ctx, q.ix, r, "resolved"); err != nil {
+		return ActionResult{}, err
+	}
 	if !r.Cancel {
 		s.ownerHeard(q.ix.SessionID) // the owner's answer is their word in that conversation (ownerHeard)
 	}
@@ -1466,20 +1494,12 @@ func (s *Service) machineIDs(ctx context.Context) string {
 	return strings.Join(ids, ", ")
 }
 
-// agentSpace includes health subdirectories for the tools' access boundary.
-func agentSpace(c proto.Session) string {
-	if c.Space == SpaceHealth || identity.InHealthSpace(c.Cwd) {
-		return SpaceHealth
-	}
-	return ""
-}
-
 // agentCallerSpace uses the calling conversation on its own machine. Calls without
 // a known session can reach only the ordinary space, as with knownSpace.
 func (s *Service) agentCallerSpace(ctx context.Context, machine, self string) string {
 	if self != "" && machine != "" {
 		if c, ok := s.session(ctx, machine, self); ok {
-			return agentSpace(c)
+			return runSpace(c) // a space's subdirectories count for the tools' access boundary
 		}
 	}
 	return ""
@@ -1506,7 +1526,7 @@ func (s *Service) findAgentInSpace(ctx context.Context, machine, id string, spac
 		}
 		list, _ := s.sessions(ctx, m.ID)
 		for _, c := range list {
-			if c.HiddenByDirectory() || space != nil && (c.IsDeleted() || agentSpace(c) != *space) {
+			if c.HiddenByDirectory() || space != nil && (c.IsDeleted() || runSpace(c) != *space) {
 				continue
 			}
 			if c.SessionID == id || strings.HasPrefix(c.SessionID, id) {
@@ -1544,7 +1564,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 	pending := map[[2]string][]pendingCard{}
 	folded := map[[2]string]bool{}
 	for _, ix := range res.Interactions {
-		if identity.InHealthSpace(ix.Cwd) && space != SpaceHealth {
+		if sp := identity.SpaceAt(ix.Cwd); sp != "" && sp != space {
 			continue
 		}
 		what := ix.Summary
@@ -1594,7 +1614,7 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		list, muted, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
-			if c.HiddenByDirectory() || c.IsDeleted() || agentSpace(c) != space {
+			if c.HiddenByDirectory() || c.IsDeleted() || runSpace(c) != space {
 				continue
 			}
 			if source := [2]string{m.ID, c.SessionID}; c.FoldedUnder() != "" {
@@ -1801,4 +1821,51 @@ func agentsListLabel(c proto.Session) string {
 		return "被停下了，没做完" // i18n-ignore: agents_list output for the model, as the lines around it
 	}
 	return "中断了，没做完" // i18n-ignore: agents_list output for the model, as the lines around it
+}
+
+// kbUpdateText is the words a kb_update writes (names, notes, summaries, log lines, profile items), not its ids, links
+// or settings.
+func kbUpdateText(args json.RawMessage) string {
+	var u kbwire.Update
+	if json.Unmarshal(args, &u) != nil {
+		return ""
+	}
+	parts := []string{u.Name, u.Status, u.Goal, u.MyRole, u.Note, u.Summary, u.Log}
+	if u.Pinned != nil {
+		parts = append(parts, *u.Pinned)
+	}
+	parts = append(parts, u.Aliases...)
+	parts = append(parts, u.Tags...)
+	if p := u.Profile; p != nil {
+		for _, items := range [][]kbwire.ProfileItem{p.Facts, p.Views, p.Inferences} {
+			for _, it := range items {
+				parts = append(parts, it.Text, it.Basis)
+			}
+		}
+		for _, c := range p.Commitments {
+			parts = append(parts, c.Text)
+		}
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			b.WriteString(p)
+			b.WriteByte('\n')
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// kbWriteCheckKey carries what a knowledge-base write from a conversation is checked against (withKBWriteCheck).
+type kbWriteCheckKey struct{}
+
+// withKBWriteCheck gives toolKB the check of the words a kb_update writes, for the conversation that calls it.
+func withKBWriteCheck(ctx context.Context, check func(text string) error) context.Context {
+	return context.WithValue(ctx, kbWriteCheckKey{}, check)
+}
+
+// kbWriteCheckOf is the check withKBWriteCheck gave ctx, nil for none.
+func kbWriteCheckOf(ctx context.Context) func(text string) error {
+	check, _ := ctx.Value(kbWriteCheckKey{}).(func(text string) error)
+	return check
 }

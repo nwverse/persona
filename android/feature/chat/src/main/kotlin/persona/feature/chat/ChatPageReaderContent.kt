@@ -342,6 +342,6 @@ private fun ChatPageReaderNavigation(
         }
         if (showJump) ChatJumpToLatest(
             timeline, timelineVersion.value, items, newestVisibleItem, readThrough,
-            deferCount = deferCount, onClick = chatList::returnToLatest)
+            deferCount = deferCount, agentChat = agentChat, onClick = chatList::returnToLatest)
     }
 }

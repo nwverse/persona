@@ -269,7 +269,7 @@ func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSugge
 		cwd = "~"
 	}
 	args, _ := json.Marshal(map[string]string{"machine": machine, "cwd": cwd, "prompt": text})
-	res, err := s.runTool(ctx, s.settings(ctx).MachineID, self, "agent_start", args)
+	res, err := s.runTool(ownerConfirmed(ctx), s.settings(ctx).MachineID, self, "agent_start", args)
 	enabled := s.inboxConfig(ctx).Agent.Enabled
 	now := time.Now()
 	b.mu.Lock()

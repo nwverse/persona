@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -306,6 +307,8 @@ func TestNeedsUserExternalInfoSilentFinishKeepsCardIntact(t *testing.T) {
 }
 
 func TestTaskReviewSupersedesNeedsUserCleanlyAcrossVerdicts(t *testing.T) {
+	parkedArgs := personReplyParkArgs(time.Now())
+	parkedArgs["reason"] = "Waiting for external QA sign-off per thread reply"
 	verdicts := []struct {
 		name       string
 		args       map[string]any
@@ -339,19 +342,8 @@ func TestTaskReviewSupersedesNeedsUserCleanlyAcrossVerdicts(t *testing.T) {
 			wantReason: "Reviewer requested changes on PR #42; sending back to Agent",
 		},
 		{
-			name: "parked",
-			args: map[string]any{
-				"verdict":    "parked",
-				"reason":     "Waiting for external QA sign-off per thread reply",
-				"waiting_on": "someone_else",
-				"until":      "24h",
-				"evidence": map[string]any{
-					"kind":       "other",
-					"target":     "QA sign-off",
-					"wake":       "QA replies in thread",
-					"next_actor": "external",
-				},
-			},
+			name:       "parked",
+			args:       parkedArgs,
 			wantState:  reviewParked,
 			wantClosed: false,
 			wantInAsk:  false,
@@ -415,14 +407,15 @@ func TestTaskReviewSupersedesNeedsUserCleanlyAcrossVerdicts(t *testing.T) {
 				t.Fatalf("latest review superseded_reason = %+v, want %q", latestReview, tc.wantReason)
 			}
 
-			// Verify feed audit entry recorded SupersededReason.
-			feed, err := s.feedItems(ctx, todo.Origin, todo.CreatedAt.Add(-time.Minute))
+			// Verify feed audit entry recorded SupersededReason. Query by todo rather than the conversation's bounded
+			// page: earlier tests in a shared Postgres shard can fill that page while this test runs.
+			feed, err := database.FeedByRef(ctx, todo.ID, []string{feedReview}, 10)
 			if err != nil {
 				t.Fatal(err)
 			}
 			foundFeedReason := false
 			for _, item := range feed {
-				if item.Kind == feedReview && item.Ref == todo.ID {
+				if item.Conversation == todo.Origin {
 					var body reviewFeedBody
 					if json.Unmarshal(item.Body, &body) == nil && body.SupersededReason == tc.wantReason {
 						foundFeedReason = true
@@ -455,13 +448,17 @@ func TestTaskReviewSupersedesNeedsUserCleanlyAcrossVerdicts(t *testing.T) {
 				t.Fatalf("redrawn Lark card fabricated owner recommendation click:\n%s", cardUpdates[0])
 			}
 
-			// Verify NO fabricated owner decision row (task_decided / DecisionManual) was created!
+			// Let an accepted completion finish its legitimate outcome receipt before inspecting decisions.
+			// Every non-outcome row still fails just as the original empty-list assertion did.
+			s.tasks.outcomeRuns.Wait()
 			decisions, err := database.ListTodoDecisions(ctx, todo.ID, true)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(decisions) != 0 {
-				t.Fatalf("supersession fabricated owner decision rows: %+v", decisions)
+			for _, decision := range decisions {
+				if decision.Source != db.DecisionOutcome {
+					t.Fatalf("supersession fabricated a decision row: %+v", decision)
+				}
 			}
 		})
 	}

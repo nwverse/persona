@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -57,12 +58,13 @@ type a2aTaskView struct {
 	Source       a2aRef     `json:"source"`
 	Target       a2aRef     `json:"target"`
 	State        string     `json:"state"`
+	Queued       bool       `json:"queued,omitempty"`
 	Events       []a2aEvent `json:"events"`
 	Disconnected bool       `json:"target_disconnected,omitempty"`
 }
 
 func (t *a2aTask) view() a2aTaskView {
-	return a2aTaskView{ID: t.ID, Context: t.Context, Source: t.source(), Target: t.target(), State: t.State, Events: t.Events, Disconnected: t.Disconnected}
+	return a2aTaskView{ID: t.ID, Context: t.Context, Source: t.source(), Target: t.target(), State: t.State, Queued: t.State == a2aQueued, Events: t.Events, Disconnected: t.Disconnected}
 }
 
 func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwire.A2AConfig, c a2aCaller, name string, args json.RawMessage) (any, error) {
@@ -97,8 +99,25 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 			} else if err := s.a2aCanSendMessage(ctx, c.Ref, a.a2aRef, a.Text); err != nil {
 				return nil, err
 			}
+			if old, err := decodeA2A(st.A2ARequest(ctx, c.Owner, a.ID)); err == nil && old == nil && a2aValidID(a.ID) && a2aValidText(a.Text) &&
+				a.a2aRef != c.Ref && (launch != nil || s.a2aAllowed(ctx, cfg, a.a2aRef)) {
+				// A new hand-off, not a retry of one already made (a2aStart answers those).
+				if err := s.a2aConfirm(ctx, c.Ref, a.a2aRef, a.CWD, a.Text, args); err != nil {
+					return nil, err
+				}
+			}
 			t, err = s.a2aStart(ctx, st, cfg, c, a.a2aRef, a.ID, a.Context, a.Text, a.Wake == nil || *a.Wake, launch)
 			break
+		}
+		if t, err := s.a2aGet(ctx, st, cfg, c, a.Task); err == nil && t.Owner == c.Owner && t.State == a2aInput &&
+			a2aValidID(a.ID) && a2aValidText(a.Text) && !slices.ContainsFunc(t.Events, func(e a2aEvent) bool { return e.ID == a.ID }) {
+			// An answer that would be sent, not a retry of one already sent (a2aContinue).
+			if err := s.a2aCanSendMessage(ctx, c.Ref, t.target(), a.Text); err != nil {
+				return nil, err
+			}
+			if err := s.a2aConfirm(ctx, c.Ref, t.target(), "", a.Text, args); err != nil {
+				return nil, err
+			}
 		}
 		t, err = s.a2aMutate(ctx, st, cfg, c, a.Task, func(t *a2aTask) (bool, error) {
 			if t.Owner != c.Owner {
@@ -127,6 +146,33 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 		return nil, err
 	}
 	return t.view(), nil
+}
+
+// errA2ADeclined: the user declined a hand-off on the phone.
+var errA2ADeclined = errors.New("the user declined on the phone: nothing was sent")
+
+// a2aConfirm asks the phone before an assistant conversation hands text to another session, or to a new one in
+// folder where, through A2A (health.go confirmOutbound: at once when the text needs no confirming). Other senders are
+// not asked.
+func (s *Service) a2aConfirm(ctx context.Context, from, to a2aRef, where, text string, args json.RawMessage) error {
+	if !s.isAssistantConversation(ctx, from.Machine, from.Session) {
+		return nil
+	}
+	label := to.Machine
+	if m, ok := s.device(ctx, to.Machine); ok && m.Name != "" {
+		label = m.Name
+	}
+	if where != "" {
+		label += " · " + where
+	}
+	ok, err := s.confirmOutbound(ctx, from.Machine, from.Session, "a2a_send", text, label+"\n\n"+text, args)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errA2ADeclined
+	}
+	return nil
 }
 
 func (s *Service) a2aCanSendMessage(ctx context.Context, from, to a2aRef, text string) error {

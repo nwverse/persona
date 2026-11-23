@@ -235,7 +235,7 @@ Scheduled-task and finished-task Agent-closing loops belong to the assistant (`S
 
 **Assistant settings** (settings `assistant`, exclusively read / written by the assistant since 2026-11-04, `assistant/profile.go`): chat machine, launcher, user timezone (phone `PUT /api/v1/assistant`; `timezone_picked` when a client says the user picked it by hand, which devices then leave alone, #1855), About Me, main chat, replaced old main chats, `main_tasks_quiet`, `agent_tasks` (off by default, `docs/assistant/unified-entry.md` "Agent tasks"), `inbox_signals` (off by default: new Inbox messages on a supervised task reach its supervisor, `docs/assistant/unified-entry.md` "Supervision (#3124)"), `main_supervises_own_tasks` (off by default: the background supervisor, whose conversation id is kept here as `background_supervisor`, follows up the tasks no leader supervises instead of the main chat, `docs/assistant/unified-entry.md` "Background supervisor"), `background_supervisor_keeps_context` (off by default: each of the background supervisor's rounds starts from its first turn with only that round's facts and tools; on, it is one long conversation as before #7315; `persona_settings` only for now, `docs/assistant/unified-entry.md` "Each round starts clean").
 `assistant.owner` / `notes` / `machine` / `launcher` in the manager's `manager.json` supply the defaults (laid over the hub's handshake answer); JSON matches the old hub-written form without migration. `assistant.supervision_batch_minutes` is an administrator pin instead: when present, including explicit `0`, it overrides the saved supervision interval; when omitted, the saved setting is unchanged. Reads are cached for 5 seconds (only it writes; `manager.updated` triggers immediate reread).
-`GET/PUT /api/v1/assistant` also reads and saves `default_permission_mode` in this manager’s settings. Reads identify the answering manager with `manager`. New non-guest conversations without an explicit `permission_mode` inherit it, including new main chats, scheduled new conversations and side chats. An explicit session mode, including `default`, wins. Existing conversations retain their own mode; changing the manager default never edits their settings or history. An unset preference preserves earlier behavior.
+`GET/PUT /api/v1/assistant` also reads and saves `default_permission_mode` in this manager’s settings. Reads identify the answering manager with `manager`. New non-guest conversations without an explicit `permission_mode` inherit it, including new main chats, scheduled new conversations and side chats. An explicit session mode, including `default`, wins. Existing conversations retain their own mode; changing the manager default never edits their settings or history. An unset preference preserves earlier behavior. Web Settings › Persona and Android's native Assistant settings expose the control; on the web, Direction notes links to the same control and Settings search finds it by either the permission or direction name.
 
 The same endpoint exposes `readonly_mode` (`sandbox` by default, or the opt-in `prompt`), also available in Web Settings
 and `persona_settings` as `assistant.readonly_mode`. It controls new read-only task starts and retries, not ordinary
@@ -1059,6 +1059,34 @@ before the next message, Claude Code thinks the window is exceeded and auto-comp
 - **Retry**: if the turn was "Prompt is too long", continue after repair with `assistant/usage_retry` (only a `<persona-context>` block, no App bubble); at most once per chat per 10 minutes. Don't retry without impossible usage (genuinely too long, retain error).
 - Measurement (Claude Code 2.1.318, transcript copy + fake API): unchanged resume attempted compaction (`pre_tokens` 1.7M), empty summary returned "Prompt is too long"; zeroed usage skipped compaction and sent directly.
   Previously undelivered user messages remain in transcript; Claude Code combines them with the new message into one user turn (synthetic error replies excluded), so retry needn't include their text again.
+
+### Memory recovery after compaction
+
+For the main and direction conversations, the first input after a compaction carries a recovery context of at most
+6 KiB of UTF-8, including its markup. Task workers use at most 3 KiB. The node persists a checkpoint when the runtime
+reports a compaction and consumes it only when an input carrying the matching recovery block is delivered. Failed
+sends retain it; a restart retains it; an older delivery cannot clear a newer checkpoint. A snapshot prefetched before
+idle-aware compaction is refreshed at delivery only when that input originally requested context. Intentionally
+omitted guest/public context never triggers a recovery fetch. The block accompanies the next real input and does not start a turn.
+
+The manager collects scoped to-do state, direction instructions, project `STATE.md` (falling back to the existing
+project summary), effective user decisions and recent user inputs. Main and direction recovery includes the last seven
+days of decisions; a worker keeps its own standing decisions without that age limit. Agent decisions and reported
+outcomes are never labeled as user decisions. Each quote keeps a durable source reference and is included whole or
+omitted; only state prose can be shortened. XML-sensitive source text is escaped. The deterministic assembler accepts
+source records separately from collection so a unified ledger can replace the legacy sources without changing delivery.
+Guest, work-trust, clean scheduled rounds, unrelated machine/session pairs and unmanaged conversations receive no recovery.
+
+Summary instructions follow the configured user language. Simplified Chinese explicitly forbids drifting to English;
+English and Japanese have their own instructions. All require user decisions verbatim with references, running task and
+session IDs, non-negotiable rules, and items waiting for the user. Claude reads these instructions from the generated
+instructions and receives them on explicit/idle compaction; Codex receives them through its `compact_prompt` setting.
+Claude SessionStart(compact) has a separate recovery handler, including headless Assistant conversations. It waits
+at most 1.5 seconds for the manager, using scoped records prepared asynchronously during regular context reads and
+fresh user quotes. Prepared records expire after two minutes; recovery on a platform input reads the source records
+afresh. A socket reply consumes its matching checkpoint only after a successful write. Hook-first and
+stream-boundary-first ordering share that checkpoint; timeout leaves it pending for the next platform input.
+Report-only hooks, guests, subagents and sessions not owned by the platform cannot use this handler.
 
 ### Manual compaction (2026-11-04, #1727)
 

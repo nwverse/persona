@@ -76,6 +76,8 @@
   "retry": "重试",
   "remove": "移除",
   "continue": "继续",
+  "delivery_ok": "做完了，等你点头上线",
+  "open_task": "打开任务",
   "task_fallback": "任务",
   "say_to": "对「{title}」说",
   "answered": "回答了",

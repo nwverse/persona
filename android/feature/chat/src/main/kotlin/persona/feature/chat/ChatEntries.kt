@@ -259,14 +259,22 @@ fun ChatDestination(
                 onTerminal = onTerminal ?: { navigator.navigate(TerminalRoute(it.machineId, it.sessionId)) },
                 onResumeInTerminal = { navigator.navigate(TerminalRoute(it.machineId, it.sessionId, resume = true)) },
                 chrome = ChatChromeBindings(covered = openedPath != null,
-                    actions = wiring?.actions.takeUnless { historyReadOnly }, connection = wiring?.connection,
+                    actions = wiring?.actions.takeUnless { historyReadOnly },
+                    forkActions = wiring?.actions,
+                    connection = wiring?.connection,
                     childSessionId = home.childSessionId.takeIf { landedSide == null },
                     lookupRows = home.rows,
                     worktrees = wiring?.worktrees.takeUnless { historyReadOnly },
-                    onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
+                    onOpenSession = {
+                        if (historyReadOnly) onHistoryBack?.invoke()
+                        navigator.navigate(ChatRoute(it.machineId, it.sessionId))
+                    },
                     onOpenSide = if (historyReadOnly) null else ({ navigator.navigate(ChatRoute(it.machineId, it.sessionId,
                         persona.core.navigation.ConversationKind.Agent, side = true)) }),
-                    onOpenAssistant = { navigator.navigate(conversationRoute(it, assistant = true)) },
+                    onOpenAssistant = {
+                        if (historyReadOnly) onHistoryBack?.invoke()
+                        navigator.navigate(conversationRoute(it, assistant = true))
+                    },
                     onConnectionDetails = { navigator.navigate(SettingsPageRoute(SettingsPage.Diagnostics)) },
                     files = wiring?.files, hubScope = wiring?.scope?.path.orEmpty(), ports = wiring?.ports,
                     onOpenPath = if (canOpenFilePath) ({ path, line -> open(path, line) }) else null,

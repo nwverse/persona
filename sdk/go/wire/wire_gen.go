@@ -5489,9 +5489,10 @@ type ModelRefusal struct {
 }
 
 // AssistantErrorCode: error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
-// "assistant.memory.read" for assistant.memory): invalid_params; not_found (assistant.messages: no such conversation
-// in the assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
-// computer is not connected or not set up: try again).
+// "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list):
+// invalid_params; not_found (assistant.messages: no such conversation in the assistant's own space);
+// assistant_offline (the manager is away: try again); machine_offline (the assistant's computer is not connected or
+// not set up: try again).
 const (
 	AssistantErrorCodeInvalidParams    = "invalid_params"
 	AssistantErrorCodeNotFound         = "not_found"
@@ -5604,6 +5605,87 @@ type AssistantMemoryResult struct {
 type AssistantMessagesResult struct {
 	Messages []AssistantMessage `json:"messages"`
 	NextSeq  *int               `json:"next_seq,omitempty"`
+}
+
+// An RFC 3339 expiry timestamp, or null when absent.
+type AssistantEntryNullableTime = json.RawMessage
+
+// Whether the choice is reversible; null means unknown.
+type AssistantEntryNullableBool = json.RawMessage
+
+type AssistantEntrySource struct {
+	Machine string `json:"machine"`
+	Session string `json:"session"`
+	MsgUuid string `json:"msg_uuid,omitempty"`
+	CardID  string `json:"card_id,omitempty"`
+	File    string `json:"file,omitempty"`
+	Line    int    `json:"line,omitempty"`
+}
+
+type AssistantEntryScope struct {
+	Executor string   `json:"executor"`
+	Machine  []string `json:"machine"`
+	Project  []string `json:"project"`
+	Personal bool     `json:"personal"`
+}
+
+type AssistantEntryScopeFilter struct {
+	Executor string   `json:"executor,omitempty"`
+	Machine  []string `json:"machine,omitempty"`
+	Project  []string `json:"project,omitempty"`
+	Personal *bool    `json:"personal,omitempty"`
+}
+
+type AssistantEntryDecision struct {
+	Options    []string        `json:"options"`
+	Selected   []string        `json:"selected"`
+	Rejected   []string        `json:"rejected"`
+	Reason     string          `json:"reason"`
+	Reversible json.RawMessage `json:"reversible"`
+}
+
+type AssistantLedgerEntry struct {
+	ID          string                  `json:"id"`
+	Type        string                  `json:"type"`
+	Text        string                  `json:"text"`
+	Quote       string                  `json:"quote"`
+	Source      AssistantEntrySource    `json:"source"`
+	RelayedVia  []string                `json:"relayed_via"`
+	Scope       AssistantEntryScope     `json:"scope"`
+	At          time.Time               `json:"at"`
+	ExpiresAt   json.RawMessage         `json:"expires_at"`
+	Supersedes  string                  `json:"supersedes"`
+	Trust       string                  `json:"trust"`
+	Status      string                  `json:"status"`
+	By          string                  `json:"by"`
+	Tag         []string                `json:"tag"`
+	Decision    *AssistantEntryDecision `json:"decision,omitempty"`
+	ExtID       string                  `json:"ext_id,omitempty"`
+	OriginSpace string                  `json:"origin_space"`
+	Category    []string                `json:"category"`
+}
+
+type AssistantEntriesParams struct {
+	After  string                     `json:"after,omitempty"`
+	Limit  int                        `json:"limit,omitempty"`
+	By     string                     `json:"by,omitempty"`
+	Trust  string                     `json:"trust,omitempty"`
+	Status string                     `json:"status,omitempty"`
+	Scope  *AssistantEntryScopeFilter `json:"scope,omitempty"`
+	Tag    string                     `json:"tag,omitempty"`
+	Type   string                     `json:"type,omitempty"`
+}
+
+type AssistantEntriesResult struct {
+	Entries []AssistantLedgerEntry `json:"entries"`
+	After   string                 `json:"after"`
+	HasMore bool                   `json:"has_more"`
+}
+
+type AssistantEntriesChangedEvent struct {
+	ID       string `json:"id"`
+	RecordID string `json:"record_id"`
+	Status   string `json:"status"`
 }
 
 // AssistantDataStatusParams: assistant.data_status takes no parameters.
@@ -7486,6 +7568,14 @@ var newDef = map[string]func() any{
 	"AssistantMemoryEntry":          func() any { return new(AssistantMemoryEntry) },
 	"AssistantMemoryResult":         func() any { return new(AssistantMemoryResult) },
 	"AssistantMessagesResult":       func() any { return new(AssistantMessagesResult) },
+	"AssistantEntrySource":          func() any { return new(AssistantEntrySource) },
+	"AssistantEntryScope":           func() any { return new(AssistantEntryScope) },
+	"AssistantEntryScopeFilter":     func() any { return new(AssistantEntryScopeFilter) },
+	"AssistantEntryDecision":        func() any { return new(AssistantEntryDecision) },
+	"AssistantLedgerEntry":          func() any { return new(AssistantLedgerEntry) },
+	"AssistantEntriesParams":        func() any { return new(AssistantEntriesParams) },
+	"AssistantEntriesResult":        func() any { return new(AssistantEntriesResult) },
+	"AssistantEntriesChangedEvent":  func() any { return new(AssistantEntriesChangedEvent) },
 	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
 	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
 	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
@@ -7566,99 +7656,101 @@ type Call struct {
 
 // Calls are the calls and events the schemas describe, by name as on the wire.
 var Calls = map[string]Call{
-	"connector.status":               {Name: "connector.status", From: "hub", Params: "ConnectorParams", Result: "ConnectorStatus"},
-	"connector.manifest":             {Name: "connector.manifest", From: "hub", Params: "ConnectorParams", Result: "ConnectorManifest"},
-	"connector.catalog.list":         {Name: "connector.catalog.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorCatalog"},
-	"connector.catalog.call":         {Name: "connector.catalog.call", From: "hub", Params: "ConnectorCatalogCallParams", Result: "ConnectorCallResult"},
-	"connector.tools.list":           {Name: "connector.tools.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorTools"},
-	"connector.tools.call":           {Name: "connector.tools.call", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorCallResult"},
-	"connector.actions.list":         {Name: "connector.actions.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorTools"},
-	"connector.actions.describe":     {Name: "connector.actions.describe", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorDescribeResult"},
-	"connector.actions.do":           {Name: "connector.actions.do", From: "hub", Params: "ConnectorDoParams", Result: "ConnectorCallResult"},
-	"connector.recall":               {Name: "connector.recall", From: "hub", Params: "ConnectorRecallParams", Result: "ConnectorRecallResult"},
-	"connector.recall.can":           {Name: "connector.recall.can", From: "hub", Params: "ConnectorRecallCanParams", Result: "ConnectorRecallCanResult"},
-	"connector.recall.do":            {Name: "connector.recall.do", From: "hub", Params: "ConnectorRecallDoParams", Result: "ConnectorRecallDoResult"},
-	"connector.thread.page":          {Name: "connector.thread.page", From: "hub", Params: "ConnectorThreadParams", Result: "ConnectorThreadPage"},
-	"connector.thread.media":         {Name: "connector.thread.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
-	"connector.inbox.collect":        {Name: "connector.inbox.collect", From: "hub", Params: "ConnectorParams", Result: "ConnectorCollectResult"},
-	"connector.inbox.reply":          {Name: "connector.inbox.reply", From: "hub", Params: "ConnectorInboxReply", Result: "Empty"},
-	"connector.inbox.settle":         {Name: "connector.inbox.settle", From: "hub", Params: "ConnectorSettleParams", Result: "ConnectorSettled"},
-	"connector.archive.changes":      {Name: "connector.archive.changes", From: "hub", Params: "ConnectorChangesParams", Result: "ConnectorChangesResult"},
-	"connector.archive.media":        {Name: "connector.archive.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
-	"connector.history.chats":        {Name: "connector.history.chats", From: "hub", Params: "ConnectorParams", Result: "ConnectorHistoryChats"},
-	"connector.archive.history":      {Name: "connector.archive.history", From: "hub", Params: "ConnectorHistoryParams", Result: "ConnectorHistoryPage"},
-	"connector.history.anchors":      {Name: "connector.history.anchors", From: "hub", Params: "ConnectorHistoryAnchorsParams", Result: "ConnectorHistoryAnchors"},
-	"connector.items.list":           {Name: "connector.items.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorItems"},
-	"connector.items.doc_title":      {Name: "connector.items.doc_title", From: "hub", Params: "ConnectorDocTitleParams", Result: "ConnectorDocTitle"},
-	"connector.snapshot.get":         {Name: "connector.snapshot.get", From: "hub", Params: "ConnectorSnapshotParams", Result: "ConnectorSnapshot"},
-	"connector.group.tool":           {Name: "connector.group.tool", From: "hub", Params: "ConnectorGroupToolParams", Result: ""},
-	"connector.group.append":         {Name: "connector.group.append", From: "hub", Params: "ConnectorGroupAppendParams", Result: "ConnectorInboxThing"},
-	"connector.group.fallback":       {Name: "connector.group.fallback", From: "hub", Params: "ConnectorGroupFallbackParams", Result: "ConnectorGroupFallback"},
-	"connector.login.step":           {Name: "connector.login.step", From: "hub", Params: "ConnectorLoginParams", Result: "ConnectorPrompt"},
-	"connector.logout":               {Name: "connector.logout", From: "hub", Params: "ConnectorParams", Result: "Empty"},
-	"connector.options.get":          {Name: "connector.options.get", From: "hub", Params: "ConnectorParams", Result: "ConnectorOptions"},
-	"connector.options.set":          {Name: "connector.options.set", From: "hub", Params: "ConnectorOptionsParams", Result: "Empty"},
-	"connector.machines.online":      {Name: "connector.machines.online", From: "hub", Params: "ConnectorMachineParams", Result: "Empty"},
-	"connector.auth.get":             {Name: "connector.auth.get", From: "hub", Params: "ConnectorParams", Result: "ConnectorAuth"},
-	"connector.auth.set":             {Name: "connector.auth.set", From: "hub", Params: "ConnectorAuthSource", Result: "ConnectorAuth"},
-	"connector.secrets.load":         {Name: "connector.secrets.load", From: "program", Params: "ConnectorParams", Result: "ConnectorSecret"},
-	"connector.secrets.save":         {Name: "connector.secrets.save", From: "program", Params: "ConnectorSecretSaveParams", Result: "Empty"},
-	"connector.secrets.delete":       {Name: "connector.secrets.delete", From: "program", Params: "ConnectorParams", Result: "Empty"},
-	"connector.posts.put":            {Name: "connector.posts.put", From: "program", Params: "ConnectorPostsPutParams", Result: "ConnectorPostsPut"},
-	"connector.posts.comments":       {Name: "connector.posts.comments", From: "program", Params: "ConnectorPostsCommentsParams", Result: "Empty"},
-	"connector.posts.pending":        {Name: "connector.posts.pending", From: "program", Params: "ConnectorPostsPendingParams", Result: "ConnectorPostsPending"},
-	"connector.archive.chats":        {Name: "connector.archive.chats", From: "program", Params: "ConnectorArchiveChatsParams", Result: "ConnectorArchivedChats"},
-	"connector.credentials.gh_token": {Name: "connector.credentials.gh_token", From: "program", Params: "ConnectorGhTokenParams", Result: "ConnectorGhToken"},
-	"sent.record":                    {Name: "sent.record", From: "program", Params: "ConnectorSentRecordParams", Result: "Empty"},
-	"connector.changed":              {Name: "connector.changed", From: "program", Params: "ConnectorChangedEvent", Result: "", Event: true},
-	"channel.receive":                {Name: "channel.receive", From: "program", Params: "ChannelReceiveParams", Result: "Empty"},
-	"channel.status":                 {Name: "channel.status", From: "program", Params: "ChannelStatusParams", Result: "Empty"},
-	"channel.send":                   {Name: "channel.send", From: "hub", Params: "ChannelSendParams", Result: "ChannelSendResult"},
-	"channel.typing":                 {Name: "channel.typing", From: "hub", Params: "ChannelTypingParams", Result: "Empty"},
-	"channel.edit":                   {Name: "channel.edit", From: "hub", Params: "ChannelEditParams", Result: "Empty"},
-	"kb.list":                        {Name: "kb.list", From: "program", Params: "KBListParams", Result: "KBListResult"},
-	"kb.get":                         {Name: "kb.get", From: "program", Params: "KBGetParams", Result: "KBGetResult"},
-	"kb.day":                         {Name: "kb.day", From: "program", Params: "KBDayParams", Result: "KBDayResult"},
-	"kb.search":                      {Name: "kb.search", From: "program", Params: "KBSearchParams", Result: "KBSearchResult"},
-	"kb.update":                      {Name: "kb.update", From: "program", Params: "KBUpdateParams", Result: "KBUpdateResult"},
-	"kb.owner":                       {Name: "kb.owner", From: "program", Params: "KBOwnerParams", Result: "KBOwner"},
-	"kb.recent":                      {Name: "kb.recent", From: "program", Params: "KBRecentParams", Result: "KBRecentResult"},
-	"event.kb.changed":               {Name: "event.kb.changed", From: "hub", Params: "KBChangedEvent", Result: "", Event: true},
-	"event.kb.forgotten":             {Name: "event.kb.forgotten", From: "hub", Params: "KBForgottenEvent", Result: "", Event: true},
-	"event.todo.changed":             {Name: "event.todo.changed", From: "hub", Params: "TodoChangedEvent", Result: "", Event: true},
-	"event.todo.decision":            {Name: "event.todo.decision", From: "hub", Params: "TodoDecisionEvent", Result: "", Event: true},
-	"event.leader.changed":           {Name: "event.leader.changed", From: "hub", Params: "LeaderChangedEvent", Result: "", Event: true},
-	"event.leader.report":            {Name: "event.leader.report", From: "hub", Params: "LeaderReportEvent", Result: "", Event: true},
-	"model.complete":                 {Name: "model.complete", From: "program", Params: "ModelCompleteParams", Result: "ModelCompleteResult"},
-	"assistant.conversations":        {Name: "assistant.conversations", From: "program", Params: "AssistantConversationsParams", Result: "AssistantConversationsResult"},
-	"assistant.messages":             {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
-	"assistant.memory":               {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
-	"assistant.data_status":          {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
-	"browser.machines":               {Name: "browser.machines", From: "program", Params: "BrowserMachinesParams", Result: "BrowserMachinesResult"},
-	"browser.run":                    {Name: "browser.run", From: "program", Params: "BrowserRunParams", Result: "BrowserRunResult"},
-	"storage.request":                {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},
-	"storage.get":                    {Name: "storage.get", From: "program", Params: "StorageKeyParams", Result: "StorageEntry"},
-	"storage.list":                   {Name: "storage.list", From: "program", Params: "StorageListParams", Result: "StorageListResult"},
-	"storage.transaction":            {Name: "storage.transaction", From: "program", Params: "StorageTransactionParams", Result: "StorageTransactionResult"},
-	"storage.queue.list":             {Name: "storage.queue.list", From: "program", Params: "StorageQueueListParams", Result: "StorageQueueListResult"},
-	"storage.queue.enqueue":          {Name: "storage.queue.enqueue", From: "program", Params: "StorageEnqueueParams", Result: "StorageJobResult"},
-	"storage.queue.claim":            {Name: "storage.queue.claim", From: "program", Params: "StorageClaimParams", Result: "StorageClaimResult"},
-	"storage.queue.renew":            {Name: "storage.queue.renew", From: "program", Params: "StorageRenewParams", Result: "StorageJobResult"},
-	"storage.queue.ack":              {Name: "storage.queue.ack", From: "program", Params: "StorageSettleParams", Result: "StorageJobResult"},
-	"storage.queue.forget":           {Name: "storage.queue.forget", From: "program", Params: "StorageSettleParams", Result: "StorageDeleteResult"},
-	"storage.queue.retry":            {Name: "storage.queue.retry", From: "program", Params: "StorageRetryParams", Result: "StorageJobResult"},
-	"storage.blob.create":            {Name: "storage.blob.create", From: "program", Params: "StorageBlobCreateParams", Result: "StorageBlobCreateResult"},
-	"storage.blob.write":             {Name: "storage.blob.write", From: "program", Params: "StorageBlobWriteParams", Result: "StorageBlobWriteResult"},
-	"storage.blob.finish":            {Name: "storage.blob.finish", From: "program", Params: "StorageBlobMutateParams", Result: "StorageBlobFinishResult"},
-	"storage.blob.delete":            {Name: "storage.blob.delete", From: "program", Params: "StorageBlobMutateParams", Result: "StorageDeleteResult"},
-	"storage.blob.read":              {Name: "storage.blob.read", From: "program", Params: "StorageBlobReadParams", Result: "StorageBlobReadResult"},
-	"transcription.start":            {Name: "transcription.start", From: "program", Params: "TranscriptionStartParams", Result: "TranscriptionStartResult"},
-	"transcription.audio":            {Name: "transcription.audio", From: "program", Params: "TranscriptionAudioParams", Result: "Empty"},
-	"transcription.finish":           {Name: "transcription.finish", From: "program", Params: "TranscriptionJobParams", Result: "TranscriptionFinishResult"},
-	"transcription.cancel":           {Name: "transcription.cancel", From: "program", Params: "TranscriptionJobParams", Result: "Empty"},
-	"repo.parse":                     {Name: "repo.parse", From: "hub", Params: "RepoParseParams", Result: "RepoParseResult"},
-	"repo.check":                     {Name: "repo.check", From: "hub", Params: "RepoCheckParams", Result: "Empty"},
-	"repo.link":                      {Name: "repo.link", From: "hub", Params: "RepoLinkParams", Result: "RepoLinkResult"},
-	"repo.describe":                  {Name: "repo.describe", From: "hub", Params: "RepoDescribeParams", Result: "RepoDescribeResult"},
-	"repo.pr_status":                 {Name: "repo.pr_status", From: "hub", Params: "RepoPRStatusParams", Result: "RepoPRStatusResult"},
+	"connector.status":                {Name: "connector.status", From: "hub", Params: "ConnectorParams", Result: "ConnectorStatus"},
+	"connector.manifest":              {Name: "connector.manifest", From: "hub", Params: "ConnectorParams", Result: "ConnectorManifest"},
+	"connector.catalog.list":          {Name: "connector.catalog.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorCatalog"},
+	"connector.catalog.call":          {Name: "connector.catalog.call", From: "hub", Params: "ConnectorCatalogCallParams", Result: "ConnectorCallResult"},
+	"connector.tools.list":            {Name: "connector.tools.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorTools"},
+	"connector.tools.call":            {Name: "connector.tools.call", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorCallResult"},
+	"connector.actions.list":          {Name: "connector.actions.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorTools"},
+	"connector.actions.describe":      {Name: "connector.actions.describe", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorDescribeResult"},
+	"connector.actions.do":            {Name: "connector.actions.do", From: "hub", Params: "ConnectorDoParams", Result: "ConnectorCallResult"},
+	"connector.recall":                {Name: "connector.recall", From: "hub", Params: "ConnectorRecallParams", Result: "ConnectorRecallResult"},
+	"connector.recall.can":            {Name: "connector.recall.can", From: "hub", Params: "ConnectorRecallCanParams", Result: "ConnectorRecallCanResult"},
+	"connector.recall.do":             {Name: "connector.recall.do", From: "hub", Params: "ConnectorRecallDoParams", Result: "ConnectorRecallDoResult"},
+	"connector.thread.page":           {Name: "connector.thread.page", From: "hub", Params: "ConnectorThreadParams", Result: "ConnectorThreadPage"},
+	"connector.thread.media":          {Name: "connector.thread.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
+	"connector.inbox.collect":         {Name: "connector.inbox.collect", From: "hub", Params: "ConnectorParams", Result: "ConnectorCollectResult"},
+	"connector.inbox.reply":           {Name: "connector.inbox.reply", From: "hub", Params: "ConnectorInboxReply", Result: "Empty"},
+	"connector.inbox.settle":          {Name: "connector.inbox.settle", From: "hub", Params: "ConnectorSettleParams", Result: "ConnectorSettled"},
+	"connector.archive.changes":       {Name: "connector.archive.changes", From: "hub", Params: "ConnectorChangesParams", Result: "ConnectorChangesResult"},
+	"connector.archive.media":         {Name: "connector.archive.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
+	"connector.history.chats":         {Name: "connector.history.chats", From: "hub", Params: "ConnectorParams", Result: "ConnectorHistoryChats"},
+	"connector.archive.history":       {Name: "connector.archive.history", From: "hub", Params: "ConnectorHistoryParams", Result: "ConnectorHistoryPage"},
+	"connector.history.anchors":       {Name: "connector.history.anchors", From: "hub", Params: "ConnectorHistoryAnchorsParams", Result: "ConnectorHistoryAnchors"},
+	"connector.items.list":            {Name: "connector.items.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorItems"},
+	"connector.items.doc_title":       {Name: "connector.items.doc_title", From: "hub", Params: "ConnectorDocTitleParams", Result: "ConnectorDocTitle"},
+	"connector.snapshot.get":          {Name: "connector.snapshot.get", From: "hub", Params: "ConnectorSnapshotParams", Result: "ConnectorSnapshot"},
+	"connector.group.tool":            {Name: "connector.group.tool", From: "hub", Params: "ConnectorGroupToolParams", Result: ""},
+	"connector.group.append":          {Name: "connector.group.append", From: "hub", Params: "ConnectorGroupAppendParams", Result: "ConnectorInboxThing"},
+	"connector.group.fallback":        {Name: "connector.group.fallback", From: "hub", Params: "ConnectorGroupFallbackParams", Result: "ConnectorGroupFallback"},
+	"connector.login.step":            {Name: "connector.login.step", From: "hub", Params: "ConnectorLoginParams", Result: "ConnectorPrompt"},
+	"connector.logout":                {Name: "connector.logout", From: "hub", Params: "ConnectorParams", Result: "Empty"},
+	"connector.options.get":           {Name: "connector.options.get", From: "hub", Params: "ConnectorParams", Result: "ConnectorOptions"},
+	"connector.options.set":           {Name: "connector.options.set", From: "hub", Params: "ConnectorOptionsParams", Result: "Empty"},
+	"connector.machines.online":       {Name: "connector.machines.online", From: "hub", Params: "ConnectorMachineParams", Result: "Empty"},
+	"connector.auth.get":              {Name: "connector.auth.get", From: "hub", Params: "ConnectorParams", Result: "ConnectorAuth"},
+	"connector.auth.set":              {Name: "connector.auth.set", From: "hub", Params: "ConnectorAuthSource", Result: "ConnectorAuth"},
+	"connector.secrets.load":          {Name: "connector.secrets.load", From: "program", Params: "ConnectorParams", Result: "ConnectorSecret"},
+	"connector.secrets.save":          {Name: "connector.secrets.save", From: "program", Params: "ConnectorSecretSaveParams", Result: "Empty"},
+	"connector.secrets.delete":        {Name: "connector.secrets.delete", From: "program", Params: "ConnectorParams", Result: "Empty"},
+	"connector.posts.put":             {Name: "connector.posts.put", From: "program", Params: "ConnectorPostsPutParams", Result: "ConnectorPostsPut"},
+	"connector.posts.comments":        {Name: "connector.posts.comments", From: "program", Params: "ConnectorPostsCommentsParams", Result: "Empty"},
+	"connector.posts.pending":         {Name: "connector.posts.pending", From: "program", Params: "ConnectorPostsPendingParams", Result: "ConnectorPostsPending"},
+	"connector.archive.chats":         {Name: "connector.archive.chats", From: "program", Params: "ConnectorArchiveChatsParams", Result: "ConnectorArchivedChats"},
+	"connector.credentials.gh_token":  {Name: "connector.credentials.gh_token", From: "program", Params: "ConnectorGhTokenParams", Result: "ConnectorGhToken"},
+	"sent.record":                     {Name: "sent.record", From: "program", Params: "ConnectorSentRecordParams", Result: "Empty"},
+	"connector.changed":               {Name: "connector.changed", From: "program", Params: "ConnectorChangedEvent", Result: "", Event: true},
+	"channel.receive":                 {Name: "channel.receive", From: "program", Params: "ChannelReceiveParams", Result: "Empty"},
+	"channel.status":                  {Name: "channel.status", From: "program", Params: "ChannelStatusParams", Result: "Empty"},
+	"channel.send":                    {Name: "channel.send", From: "hub", Params: "ChannelSendParams", Result: "ChannelSendResult"},
+	"channel.typing":                  {Name: "channel.typing", From: "hub", Params: "ChannelTypingParams", Result: "Empty"},
+	"channel.edit":                    {Name: "channel.edit", From: "hub", Params: "ChannelEditParams", Result: "Empty"},
+	"kb.list":                         {Name: "kb.list", From: "program", Params: "KBListParams", Result: "KBListResult"},
+	"kb.get":                          {Name: "kb.get", From: "program", Params: "KBGetParams", Result: "KBGetResult"},
+	"kb.day":                          {Name: "kb.day", From: "program", Params: "KBDayParams", Result: "KBDayResult"},
+	"kb.search":                       {Name: "kb.search", From: "program", Params: "KBSearchParams", Result: "KBSearchResult"},
+	"kb.update":                       {Name: "kb.update", From: "program", Params: "KBUpdateParams", Result: "KBUpdateResult"},
+	"kb.owner":                        {Name: "kb.owner", From: "program", Params: "KBOwnerParams", Result: "KBOwner"},
+	"kb.recent":                       {Name: "kb.recent", From: "program", Params: "KBRecentParams", Result: "KBRecentResult"},
+	"event.kb.changed":                {Name: "event.kb.changed", From: "hub", Params: "KBChangedEvent", Result: "", Event: true},
+	"event.kb.forgotten":              {Name: "event.kb.forgotten", From: "hub", Params: "KBForgottenEvent", Result: "", Event: true},
+	"event.todo.changed":              {Name: "event.todo.changed", From: "hub", Params: "TodoChangedEvent", Result: "", Event: true},
+	"event.todo.decision":             {Name: "event.todo.decision", From: "hub", Params: "TodoDecisionEvent", Result: "", Event: true},
+	"event.leader.changed":            {Name: "event.leader.changed", From: "hub", Params: "LeaderChangedEvent", Result: "", Event: true},
+	"event.leader.report":             {Name: "event.leader.report", From: "hub", Params: "LeaderReportEvent", Result: "", Event: true},
+	"model.complete":                  {Name: "model.complete", From: "program", Params: "ModelCompleteParams", Result: "ModelCompleteResult"},
+	"assistant.conversations":         {Name: "assistant.conversations", From: "program", Params: "AssistantConversationsParams", Result: "AssistantConversationsResult"},
+	"assistant.messages":              {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
+	"assistant.memory":                {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
+	"assistant.entries.list":          {Name: "assistant.entries.list", From: "program", Params: "AssistantEntriesParams", Result: "AssistantEntriesResult"},
+	"event.assistant.entries.changed": {Name: "event.assistant.entries.changed", From: "hub", Params: "AssistantEntriesChangedEvent", Result: "", Event: true},
+	"assistant.data_status":           {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
+	"browser.machines":                {Name: "browser.machines", From: "program", Params: "BrowserMachinesParams", Result: "BrowserMachinesResult"},
+	"browser.run":                     {Name: "browser.run", From: "program", Params: "BrowserRunParams", Result: "BrowserRunResult"},
+	"storage.request":                 {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},
+	"storage.get":                     {Name: "storage.get", From: "program", Params: "StorageKeyParams", Result: "StorageEntry"},
+	"storage.list":                    {Name: "storage.list", From: "program", Params: "StorageListParams", Result: "StorageListResult"},
+	"storage.transaction":             {Name: "storage.transaction", From: "program", Params: "StorageTransactionParams", Result: "StorageTransactionResult"},
+	"storage.queue.list":              {Name: "storage.queue.list", From: "program", Params: "StorageQueueListParams", Result: "StorageQueueListResult"},
+	"storage.queue.enqueue":           {Name: "storage.queue.enqueue", From: "program", Params: "StorageEnqueueParams", Result: "StorageJobResult"},
+	"storage.queue.claim":             {Name: "storage.queue.claim", From: "program", Params: "StorageClaimParams", Result: "StorageClaimResult"},
+	"storage.queue.renew":             {Name: "storage.queue.renew", From: "program", Params: "StorageRenewParams", Result: "StorageJobResult"},
+	"storage.queue.ack":               {Name: "storage.queue.ack", From: "program", Params: "StorageSettleParams", Result: "StorageJobResult"},
+	"storage.queue.forget":            {Name: "storage.queue.forget", From: "program", Params: "StorageSettleParams", Result: "StorageDeleteResult"},
+	"storage.queue.retry":             {Name: "storage.queue.retry", From: "program", Params: "StorageRetryParams", Result: "StorageJobResult"},
+	"storage.blob.create":             {Name: "storage.blob.create", From: "program", Params: "StorageBlobCreateParams", Result: "StorageBlobCreateResult"},
+	"storage.blob.write":              {Name: "storage.blob.write", From: "program", Params: "StorageBlobWriteParams", Result: "StorageBlobWriteResult"},
+	"storage.blob.finish":             {Name: "storage.blob.finish", From: "program", Params: "StorageBlobMutateParams", Result: "StorageBlobFinishResult"},
+	"storage.blob.delete":             {Name: "storage.blob.delete", From: "program", Params: "StorageBlobMutateParams", Result: "StorageDeleteResult"},
+	"storage.blob.read":               {Name: "storage.blob.read", From: "program", Params: "StorageBlobReadParams", Result: "StorageBlobReadResult"},
+	"transcription.start":             {Name: "transcription.start", From: "program", Params: "TranscriptionStartParams", Result: "TranscriptionStartResult"},
+	"transcription.audio":             {Name: "transcription.audio", From: "program", Params: "TranscriptionAudioParams", Result: "Empty"},
+	"transcription.finish":            {Name: "transcription.finish", From: "program", Params: "TranscriptionJobParams", Result: "TranscriptionFinishResult"},
+	"transcription.cancel":            {Name: "transcription.cancel", From: "program", Params: "TranscriptionJobParams", Result: "Empty"},
+	"repo.parse":                      {Name: "repo.parse", From: "hub", Params: "RepoParseParams", Result: "RepoParseResult"},
+	"repo.check":                      {Name: "repo.check", From: "hub", Params: "RepoCheckParams", Result: "Empty"},
+	"repo.link":                       {Name: "repo.link", From: "hub", Params: "RepoLinkParams", Result: "RepoLinkResult"},
+	"repo.describe":                   {Name: "repo.describe", From: "hub", Params: "RepoDescribeParams", Result: "RepoDescribeResult"},
+	"repo.pr_status":                  {Name: "repo.pr_status", From: "hub", Params: "RepoPRStatusParams", Result: "RepoPRStatusResult"},
 }

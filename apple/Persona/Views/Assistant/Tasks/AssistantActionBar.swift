@@ -195,8 +195,10 @@ nonisolated enum AssistantEntries {
     /// The task waits for its supervisor's review, which is not the owner's to do yet (the web's `supervisorReviewing`):
     /// open, in `pending_review` for less than `reviewOverdueAfter`. False past that, and when the hub does not say since
     /// when (an older hub): the review is then the owner's, as it was. An open ask or an asking Agent is the owner's
-    /// whatever this says.
+    /// whatever this says. An owner hold its Agent reported that the supervisor has not read yet (#13191) is the
+    /// supervisor's however old.
     static func supervisorReviewing(_ todo: TodoItem, now: Date) -> Bool {
+        if todo.doneAt == nil, todo.delivery?.heldForSupervisor == true { return true }
         guard todo.doneAt == nil, todo.supervision?.state == "pending_review", let since = todo.supervision?.pendingSince else { return false }
         return now.timeIntervalSince(since) < reviewOverdueAfter
     }

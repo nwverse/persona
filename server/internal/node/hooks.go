@@ -166,11 +166,13 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	}
 
 	var resp any
+	var recoveryDelivered *compactRecoveryHookOutput
 	var waitID string
 	var wait *pendingMCPWait
 	switch req.Kind {
 	case "hook":
 		out, err := n.handleHook(ctx, req)
+		recoveryDelivered, _ = out.(*compactRecoveryHookOutput)
 		if errors.Is(err, errNodeGone) {
 			// This node is going away under a pending question: the hook asks the next one (runHook).
 			resp = map[string]any{"retry": true}
@@ -186,7 +188,14 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "claude-plugin.status": // which sessions' Persona plugin polls this node (ccplugin.go): installers, doctor
 		resp = n.ccPluginStatusNow()
 	case "ping": // personad node doctor, persona-link node switch: a round trip that changes nothing
-		resp = map[string]any{"ok": true, "program": n.Program, "version": n.Version}
+		n.mu.Lock()
+		machine := n.machineID
+		n.mu.Unlock()
+		pong := map[string]any{"ok": true, "program": n.Program, "version": n.Version}
+		if machine != "" {
+			pong["machine_id"] = machine
+		}
+		resp = pong
 	case "update.inventory":
 		var target nodeclient.UpdateInventoryTarget
 		if err := json.Unmarshal(req.Input, &target); err != nil {
@@ -308,7 +317,9 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		return
 	}
 	b, _ := json.Marshal(resp)
-	_, _ = c.Write(append(b, '\n'))
+	if written, err := c.Write(append(b, '\n')); err == nil && written == len(b)+1 && recoveryDelivered != nil {
+		n.compactRecoveryHookDelivered(recoveryDelivered)
+	}
 }
 
 type hookInput struct {
@@ -490,6 +501,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 
 	switch {
 	case in.HookEventName == "SessionStart":
+		if recovery := n.compactRecoveryStart(ctx, req, in); recovery != nil {
+			return recovery, nil
+		}
 		// Reported and bound above; what is left is the closeout's form as its starting context (closeout_start.go).
 		if brief := n.closeoutStart(ctx, req, in); brief != nil {
 			return brief, nil
