@@ -521,7 +521,7 @@ struct AssistantTopBar: View {
                 }
                 .accessibilityIdentifier("background-activity-menu")
             }
-            ScreenMenu() // a Mac's live screen, whether or not the model is operating it (#1343)
+            ModuleViews(place: .chatMenu) // a Mac's live screen, whether or not the model is operating it (#1343)
             if let main = model.assistantMain, key != main {
                 Button {
                     withAnimation(Theme.Motion.standard) { model.assistantCurrent = main }

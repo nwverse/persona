@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
@@ -24,7 +24,7 @@ var passWords = lazyre.New(`(?i)^\s*(验收)?(通过|没问题|可以|好的?|ok
 // conclusionQuestion handles free text on a conclusion before acceptance can take it as an answer. A displayed
 // option or bare confirmation continues through the existing reply path. Other text is a conversation with the
 // supervisor, so the card, its deadline and the task's decisions are untouched.
-func (s *Service) conclusionQuestion(ctx context.Context, ev *feishubot.MessageEvent, content *feishubot.Content, features FeishuFeatures) bool {
+func (s *Service) conclusionQuestion(ctx context.Context, ev *botcard.MessageEvent, content *botcard.Content, features FeishuFeatures) bool {
 	msg := ev.Message
 	id, earlier := s.acceptFor(msg.ParentID, msg.RootID)
 	if id == "" || earlier {

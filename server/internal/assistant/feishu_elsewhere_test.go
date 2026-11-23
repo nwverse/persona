@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -117,18 +117,18 @@ func (e *askEnv) readableText(id, text string) {
 }
 
 // ownerAsk is the owner's message in the group that is not opted in: "@bot <text>".
-func ownerAsk(id, text string) feishubot.MessageEvent {
-	var ev feishubot.MessageEvent
+func ownerAsk(id, text string) botcard.MessageEvent {
+	var ev botcard.MessageEvent
 	ev.Message.MessageID, ev.Message.ChatID, ev.Message.ChatType, ev.Message.MessageType = id, askSrc, "group", "text"
 	c, _ := json.Marshal(map[string]string{"text": "@_user_1 " + text})
 	ev.Message.Content = string(c)
-	ev.Message.Mentions = []feishubot.Mention{{Key: "@_user_1", Name: "Persona", ID: feishubot.UserID{OpenID: "ou_bot"}}}
+	ev.Message.Mentions = []botcard.Mention{{Key: "@_user_1", Name: "Persona", ID: botcard.UserID{OpenID: "ou_bot"}}}
 	ev.Sender.SenderType, ev.Sender.SenderID.OpenID = "user", "ou_owner"
 	return ev
 }
 
 // ask hands ev to the assistant the way the hub does for such a message (FeishuFromElsewhere).
-func (e *askEnv) ask(ev feishubot.MessageEvent) {
+func (e *askEnv) ask(ev botcard.MessageEvent) {
 	e.t.Helper()
 	st, err := e.s.feishuStatus(context.Background())
 	if err != nil {
@@ -302,25 +302,25 @@ func TestElsewhereThroughTheHubsCall(t *testing.T) {
 // a merged forward.
 func TestElsewhereAnythingElseDoesNothing(t *testing.T) {
 	e := newAskEnv(t, nil)
-	other := func(f func(*feishubot.MessageEvent)) feishubot.MessageEvent {
+	other := func(f func(*botcard.MessageEvent)) botcard.MessageEvent {
 		ev := ownerAsk("om_x", "/ai 查一下")
 		f(&ev)
 		return ev
 	}
-	for name, ev := range map[string]feishubot.MessageEvent{
-		"someone else":        other(func(ev *feishubot.MessageEvent) { ev.Sender.SenderID.OpenID = "ou_stranger" }),
-		"an app":              other(func(ev *feishubot.MessageEvent) { ev.Sender.SenderType = "app" }),
-		"the private chat":    other(func(ev *feishubot.MessageEvent) { ev.Message.ChatType, ev.Message.ChatID = "p2p", "oc_private" }),
-		"a group on the list": other(func(ev *feishubot.MessageEvent) { ev.Message.ChatID = askHome }),
+	for name, ev := range map[string]botcard.MessageEvent{
+		"someone else":        other(func(ev *botcard.MessageEvent) { ev.Sender.SenderID.OpenID = "ou_stranger" }),
+		"an app":              other(func(ev *botcard.MessageEvent) { ev.Sender.SenderType = "app" }),
+		"the private chat":    other(func(ev *botcard.MessageEvent) { ev.Message.ChatType, ev.Message.ChatID = "p2p", "oc_private" }),
+		"a group on the list": other(func(ev *botcard.MessageEvent) { ev.Message.ChatID = askHome }),
 		"no /ai":              ownerAsk("om_x", "帮我看看"),
 		"/aim":                ownerAsk("om_x", "/aim 查一下"),
 		"/ai as a word":       ownerAsk("om_x", "请 /ai 查一下"),
-		"a merged forward":    other(func(ev *feishubot.MessageEvent) { ev.Message.MessageType = "merge_forward" }),
-		"a picture": other(func(ev *feishubot.MessageEvent) {
+		"a merged forward":    other(func(ev *botcard.MessageEvent) { ev.Message.MessageType = "merge_forward" }),
+		"a picture": other(func(ev *botcard.MessageEvent) {
 			ev.Message.MessageType, ev.Message.Content = "image", `{"image_key":"k"}`
 		}),
-		"no chat":       other(func(ev *feishubot.MessageEvent) { ev.Message.ChatID = "" }),
-		"no message id": other(func(ev *feishubot.MessageEvent) { ev.Message.MessageID = "" }),
+		"no chat":       other(func(ev *botcard.MessageEvent) { ev.Message.ChatID = "" }),
+		"no message id": other(func(ev *botcard.MessageEvent) { ev.Message.MessageID = "" }),
 	} {
 		e.ask(ev)
 		if todoCount(e.s) != 0 || len(e.f.appParams(AppFeishu, FeishuText)) != 0 || len(reactions(e.f)) != 0 || len(handoffs(e.f)) != 0 {
@@ -966,7 +966,7 @@ func TestSourceNoReply(t *testing.T) {
 			id := onlyTodo(e.s).ID
 			handed := len(handoffs(e.f))
 			ev := topicEventIn("om_nr_cmd", askHome, "omt_home", cmd)
-			ev.Message.Mentions = []feishubot.Mention{{Key: "@_user_1", Name: "Persona", ID: feishubot.UserID{OpenID: "ou_bot"}}}
+			ev.Message.Mentions = []botcard.Mention{{Key: "@_user_1", Name: "Persona", ID: botcard.UserID{OpenID: "ou_bot"}}}
 			e.deliver(ev)
 			if got := lastNote(t, e.f); got != e.said("source_noreply_done") {
 				t.Fatalf("note %q", got)
@@ -1057,7 +1057,7 @@ func TestNoReplyOnATodoWithNoSource(t *testing.T) {
 }
 
 // topicEventIn is a reply in the topic of chat.
-func topicEventIn(id, chat, thread, text string) feishubot.MessageEvent {
+func topicEventIn(id, chat, thread, text string) botcard.MessageEvent {
 	ev := topicEvent(id, text)
 	ev.Message.ChatID, ev.Message.ThreadID = chat, thread
 	return ev
@@ -1242,7 +1242,7 @@ func TestSourceReportRetrySucceeds(t *testing.T) {
 func TestSourceReportThatCanNeverGoIsLetGo(t *testing.T) {
 	for name, err := range map[string]error{
 		"the hub refuses the chat":   &rpc.Error{Code: CodeChatDenied, Message: "chat denied"},
-		"the original was withdrawn": &feishubot.APIError{Code: 230011, Msg: "withdrawn"},
+		"the original was withdrawn": &botcard.APIError{Code: 230011, Msg: "withdrawn"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newAskEnv(t, nil)
@@ -1697,8 +1697,8 @@ func TestNoHomeReportIsShownInThePrivateChatThenTold(t *testing.T) {
 
 // dmReply is the owner's message in the private chat, a reply: root is the message the chain started with, parent the one it
 // answers.
-func dmReply(id, text, root, parent string) feishubot.MessageEvent {
-	var ev feishubot.MessageEvent
+func dmReply(id, text, root, parent string) botcard.MessageEvent {
+	var ev botcard.MessageEvent
 	ev.Message.MessageID, ev.Message.ChatType, ev.Message.MessageType = id, "p2p", "text"
 	ev.Message.RootID, ev.Message.ParentID = root, parent
 	c, _ := json.Marshal(map[string]string{"text": text})
@@ -1711,7 +1711,7 @@ func dmReply(id, text, root, parent string) feishubot.MessageEvent {
 // or to something under them. It turns the report off, is recorded as the user's decision, goes to no Agent, and is
 // answered under the message.
 func TestNoHomeNoReplyInThePrivateChat(t *testing.T) {
-	for name, ev := range map[string]feishubot.MessageEvent{
+	for name, ev := range map[string]botcard.MessageEvent{
 		"a reply to the first message":     dmReply("om_c1", "/noreply", "om_dm1", "om_dm1"),
 		"a reply to the notice":            dmReply("om_c1", "／NoReply", "om_dm1", "om_notice"),
 		"a reply under an answer":          dmReply("om_c1", "  /noreply  ", "om_dm1", "om_answer"),
@@ -1768,7 +1768,7 @@ func TestNoHomeNoReplyNeedsAReplyToTheTodo(t *testing.T) {
 	e.ask(ownerAsk("om_nn2", "/ai 修登录崩溃"))
 	id := onlyTodo(e.s).ID
 	e.closeDone(id)
-	for i, ev := range []feishubot.MessageEvent{
+	for i, ev := range []botcard.MessageEvent{
 		dmReply("om_c2", "/noreply", "", ""),
 		dmReply("om_c3", "/noreply", "om_other", "om_other"),
 	} {
@@ -1798,7 +1798,7 @@ func TestNoHomeNoticeThatCannotBeShownPlansNothing(t *testing.T) {
 		var m map[string]any
 		_ = json.Unmarshal(p, &m)
 		if m["chat_id"] == nil && m["no_detour"] == true { // the first message was withdrawn
-			return nil, &feishubot.APIError{Code: 230011, Msg: "withdrawn"}
+			return nil, &botcard.APIError{Code: 230011, Msg: "withdrawn"}
 		}
 		return map[string]any{}, nil
 	})

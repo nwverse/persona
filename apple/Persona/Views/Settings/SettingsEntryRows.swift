@@ -28,13 +28,14 @@ struct SettingsEntryRow: View {
         #if os(iOS)
         case "meetings":
             SettingsModelRow(entry: entry) { MeetingAttendees.offered($0) ? MeetingAttendees.defaultRole($0).title : "" }
-        case "live-screen": LiveScreenSettingsRow()
         case "phoneData":
             SettingsListLink(value: entry.page) { SettingsRow(title: entry.title, symbol: entry.symbol, tint: Theme.accent) }
                 .settingsListRow(entry.page)
                 .accessibilityIdentifier(entry.rowID)
         #endif
-        default: SettingsEntryLink(entry: entry, value: "")
+        default:
+            // A module's entry draws its own row when it has one (Live Screen's, shown only while a Mac offers it).
+            if let row = Modules.registry.settingsEntry(id: entry.id)?.row() { row } else { SettingsEntryLink(entry: entry, value: "") }
         }
     }
 }

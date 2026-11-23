@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.moduleapi.asMenuActions
 import persona.core.designsystem.dense
 import persona.core.designsystem.text
 import androidx.annotation.StringRes
@@ -239,6 +240,9 @@ internal fun ChatHeader(
                 copy(command, resumeCopied)
             })
         }
+        // The modules' session actions (#13847), after the session's own and before closing it.
+        addAll(persona.core.moduleapi.LocalModuleActions.current.actions(persona.core.moduleapi.MenuSlot.SessionActions,
+            persona.core.moduleapi.ModuleActionTarget(session?.machineId, session?.sessionId)).asMenuActions { menu = false })
         // Persona's conversations are not agents in a pane; a session without a terminal closes where its node says it can
         // (a runtime's, #6294).
         if (session?.assistant != true && session?.canClose != false)
