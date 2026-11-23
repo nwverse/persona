@@ -607,7 +607,7 @@ func TestRehomeKeepsLegacyBackgroundCloseout(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	s.rehomeSupervisedTodos(context.Background())
+	s.backfillPlanSupervisors(context.Background())
 	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "bg1" {
 		t.Fatalf("rehome took the legacy background task to %q", got)
 	}

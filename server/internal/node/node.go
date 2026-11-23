@@ -110,6 +110,8 @@ type Node struct {
 	networkDiagAt func() machineNetworkOptions
 	// fileReadDeps replaces file.read's filesystem operations in tests.
 	fileReadDeps *fileReadDependencies
+	// repoMirrors coordinates opt-in managed bare mirrors under ~/.persona/repos/ (repo_mirror.go).
+	repoMirrors repoMirrorManager
 
 	home         string
 	sessionScope *nodeSessionScope
@@ -164,8 +166,10 @@ type Node struct {
 	listPush      listPush // the list pushes sends ask for, one build at a time (notifySessionsSoon)
 	watches       map[string]*watch
 	agyRevisions  *lru[string, agyRevision]
+	agyFullCache  *lru[string, agyFullExport]
 	agyMetas      *lru[string, agyMetaEntry]
 	agyParentSubs *lru[string, agyParentSubagentInfo]
+	agyReports    map[string]agyHookReport  // pane -> what its agy hook last said (agyhooks.go)
 	agyBound      map[string]agyPaneBinding // herdr pane -> last accepted non-subagent agy conversation (agypane.go)
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
@@ -362,9 +366,10 @@ type Node struct {
 	useTick uint64
 
 	// The Feishu gate for the assistant (larkgate.go): the hub's config, cached, and the writes "Always allow in this session" lets through.
-	larkCfg     proto.AssistantLark
-	larkCfgAt   time.Time
-	larkAllowed map[string]bool
+	larkCfg      proto.AssistantLark
+	larkCfgAt    time.Time
+	larkCfgTryAt time.Time // the last attempt to refresh it, kept even when that failed
+	larkAllowed  map[string]bool
 	// editedAnswers carries an editable card's answer from askOnce to larkGateWithEdit, keyed by interaction id.
 	editedAnswers sync.Map
 	// secrets is a test's own hand-offs; nil: the process's, shared by every connection (secretenv.go handoffs).
@@ -524,6 +529,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	if err := n.writeClaudeConfig(); err != nil {
 		n.logger.Printf("write claude config: %v", err)
 	}
+	n.ensureAgyHooks() // agyhooks.go
 	n.peer = rpc.New("n", w)
 	n.peer.ReadLimit = nodeproto.RPCReadLimit
 	// What the node sends hides the values handed to Agent starts (secretenv.go): every line, as it goes out.
@@ -534,6 +540,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	// A manager that knows lanes asks for them after node.info (docs/protocol/protocol.md "Lanes"): pongs and answers
 	// then pass file chunks and updates on the way.
 	n.peer.EnableLanes(nodeproto.ControlLane, nodeproto.BulkLane)
+	n.peer.CreditReplies(nodeproto.NodeCreditReplies...)
 	if n.resumeWindow > 0 { // a resident node's: the connection outlives a transport that ends (attach_resume.go)
 		n.peer.EnableResume(n.resumeWindow)
 		n.peer.OnLost = func(err error) {
@@ -799,6 +806,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 }
 
 func (n *Node) handleMethod(ctx context.Context, method string, params json.RawMessage) (result any, resultErr error) {
+	if strings.HasPrefix(method, "agentbot.") {
+		return n.handleAgentBot(ctx, method, params)
+	}
 	if strings.HasPrefix(method, "assistant.segment.") {
 		switch method {
 		case "assistant.segment.check", "assistant.segment.prepare", "assistant.segment.receipt", "assistant.segment.input", "assistant.segment.retire", "assistant.segment.restore":
@@ -2406,8 +2416,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if err := n.refreshExport(p.SessionID, f); err != nil {
 				return nil, err
 			}
-		} else if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
-			return nil, err
+		} else if p.UserInputs {
+			if err := n.refresh(p.SessionID, f); err != nil {
+				return nil, err
+			}
+		} else {
+			_ = n.refreshForPage(p.SessionID, f) // not behind a catch-up's pushes (#13677)
 		}
 		if p.UserInputs {
 			return f.UserInputs(ctx)

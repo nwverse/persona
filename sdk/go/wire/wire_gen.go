@@ -294,6 +294,7 @@ type Contributes struct {
 	AuthRelay           []AuthRelayItem          `json:"auth_relay,omitempty"`
 	SecretProviders     []SecretProviderItem     `json:"secret_providers,omitempty"`
 	RepositoryProviders []RepositoryProviderItem `json:"repository_providers,omitempty"`
+	MemorySources       []MemorySourceItem       `json:"memory_sources,omitempty"`
 	Messaging           []MessagingItem          `json:"messaging,omitempty"`
 	// Extra keys stay at this object's level on the wire; they cannot replace declared fields.
 	AdditionalProperties map[string]json.RawMessage `json:"-"`
@@ -305,7 +306,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -337,7 +338,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -593,6 +594,17 @@ type RepositoryProviderItem struct {
 	// What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
 	// (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
 	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// MemorySourceItem: the extension's memory, read by the manager one entry at a time (memory.entries;
+// memory.schema.json) so the hub decides which entries reach which scene (a conversation's standing context, a
+// recall, a dispatched task, the Inbox's helper). Needs the program to speak the protocol; one per extension. Once
+// declared, the hub stops delivering the extension's own text outlets (its assistant instructions, project context,
+// Inbox context and its connectors' read tools in the assistant's conversations) directly.
+type MemorySourceItem struct {
+	ID string `json:"id"`
+	// What settings call the source (My memory). Not only spaces, no control characters.
+	Name string `json:"name"`
 }
 
 // RepositoryCapability: A repository provider's optional answer: pr_status (repo.pr_status).
@@ -3424,8 +3436,8 @@ type ConnectorCatalogCallParams struct {
 }
 
 // ConnectorSubscriptionMode: items: new items, each kept once; snapshot: the answer as one state, kept when it
-// changes; things: the answer lists Inbox rows ready-made (ConnectorInboxThing), kept and handed to the Inbox as they
-// are.
+// changes; things: the answer lists Inbox rows ready-made (ConnectorInboxThing), and the Inbox gets the latest
+// answer's rows as they are, in its order.
 const (
 	ConnectorSubscriptionModeItems    = "items"
 	ConnectorSubscriptionModeSnapshot = "snapshot"
@@ -7334,6 +7346,7 @@ var newDef = map[string]func() any{
 	"AuthRelayItem":                 func() any { return new(AuthRelayItem) },
 	"SecretProviderItem":            func() any { return new(SecretProviderItem) },
 	"RepositoryProviderItem":        func() any { return new(RepositoryProviderItem) },
+	"MemorySourceItem":              func() any { return new(MemorySourceItem) },
 	"RepositoryLinkLabel":           func() any { return new(RepositoryLinkLabel) },
 	"ErrorReportsItem":              func() any { return new(ErrorReportsItem) },
 	"TunnelItem":                    func() any { return new(TunnelItem) },

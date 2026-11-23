@@ -45,7 +45,7 @@ var toolNames = []string{"resource_status", "ask_user", "notify_user", "supervis
 	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
-	"direction_name", "leader_progress", "decision_record", "decisions_query"}
+	"direction_name", "leader_progress", "decision_record", "decisions_query", "health_intake"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
@@ -140,6 +140,9 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
+	if name == "health_intake" && s.agentCallerSpace(ctx, machine, self) != SpaceHealth {
+		return "", errors.New("health_intake is only available in a known Health conversation")
+	}
 	// What is said in a space stays there (docs/assistant/health.md "How directories and memory are isolated"): a space
 	// whose policy says so writes nothing to the knowledge base, nor changes or starts what is imported into it
 	// (kb_history_status only reads).
@@ -156,6 +159,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolEntries(ctx, machine, self, name, args)
 	case spaceStateTool: // a space track's conversations only (track_space_md.go)
 		return s.toolSpaceStateUpdate(ctx, machine, self, args)
+	case "health_intake":
+		return s.toolHealthIntake(ctx, args)
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
 	case "repositories_list", "repository_get":
@@ -281,7 +286,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends. pushResult holds
 		// it to its track's push_cap (track_attention.go), and the track tells immersive mode where it is from.
-		res, err := s.pushResult(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
+		res, err := s.pushResult(withCard(ctx, cardNotifyUser), Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body,
 			Asked: true, Level: a.PushLevel, RelatedKey: clip(strings.TrimSpace(a.RelatedKey), 200), Track: space})
 		if err != nil {
 			return "", err
@@ -872,6 +877,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("the task could not be recorded; no agent was started")
 		}
 		params["creation_id"], params["incarnation"] = task.ID, "start_"+randomHex(8)
+		// The to-do is there before the start, so the Agent's model requests name it from their first one: the headers are
+		// fixed when the Agent starts, and linking it to the to-do afterwards does not reach them.
+		params["model_source"] = planModelSource(PlanTask{TodoID: task.ID})
 		failBeforeStart := func(reason string) {
 			// The card already exists: every definite no-start exit must close it as a failed start, not leave an
 			// open task with no Agent and no explanation (#5732). Unknown start results are handled below instead.
@@ -1312,6 +1320,8 @@ func (s *Service) ask(ctx context.Context, ix proto.Interaction) (proto.Resoluti
 	resume := pushMCPInteraction(ctx, ix)
 	defer resume()
 	ix = s.ownCard(ctx, ix)
+	s.cardAsks.Store(ix.ID, cmp.Or(cardSourceOf(ctx), ownCardSource(ix))) // what its push is counted as (card_layers.go)
+	defer s.cardAsks.Delete(ix.ID)
 	q := &question{ix: ix, answer: make(chan proto.Resolution, 1)}
 	if ix.ToolName == "ask_user" && ix.Kind == proto.IxQuestion {
 		q.release = make(chan struct{})

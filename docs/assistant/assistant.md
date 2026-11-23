@@ -2111,6 +2111,26 @@ purpose id. Out of scope: the reverse. Nothing suggests a stronger tier, whateve
 for each role" says when to raise it. Once the owner has moved the supervisor down, the same rule may name the next
 tier down after its own 20 settled acceptances, but never the smallest.
 
+## Card ledger (decision rights, rule 4)
+
+The owner decides only six kinds of things (decision-rights design of 2026-11-23): 1 goals and direction, 2 what only
+they know, 3 what goes out under their name, 4 money, 5 what cannot be undone and they never said, 6 what only they can
+do in person (a login, a second factor, a password or form, the experience check). Every card or push the manager sends
+to the owner is recorded with its source, the kind of the six it is (0: none of the six) and its owner
+(`assistant/card_layers.go`). The source is a code constant named where the push is made (`withCard` on the ctx of
+`push`/`pushResult`/`ask`, `deliverCard`, or `inputCardSource` for a card: an Agent's by its kind, the manager's own by
+what `ask` was told or by its tool), and its kind comes from one table, `cardCategories`, never from a model: secret and
+form cards are 6; a connector's write left to the owner (mail, a chat message, a comment) is 3; a supervisor's
+`needs_user`, its decision, an explicit `ask_escalate` and what the owner set up themself (their reminders, water
+reminders, minutes, the day recap, the briefing fallback, finished-turn pushes) are 1; everything else, an Agent's
+approvals, plans and questions, `confirmOutbound`, the main conversation's own `persona_settings` cards and an untagged
+push included, is 0, and every push of kind 0 is a bug. A test holds every source constant to having a kind. Counts are
+kept per day of the owner's time zone in the setting `assistant.card_ledger` (eight days; in memory only without a
+database). Once a day, from the morning briefing's time (`acceptLoop`'s tick), the day before's count goes to the main
+conversation as a message kept without waking it (`keepRelayLater`, setting `assistant.card_ledger_told`): in all, each
+of the six kinds, and kind 0 by source. It is never pushed to the owner and the briefing does not carry it. The ledger
+only records; which cards are pushed is decided where they are made.
+
 ## Supervision by model (#5086)
 
 Step K1 of the same proposal (section 9c): what supervision costs per accepted task, by the model the supervisor ran
@@ -2779,7 +2799,9 @@ session, freezes the source, and activates the target through a database epoch c
 work make a switch retryably busy. Permission mode carries over; unknown engines and unsupported supervision policy
 are refused before preparation. The first queued input carries policy and handoff together, with the original client
 message ID. Source compaction summaries take priority; the fallback uses the manager's existing model chain and waits
-through provider pauses. Bounded or incomplete history is marked partial.
+through provider pauses. When knowledge processing has no usable model (`model_unavailable`), retrying cannot help, so
+the switch goes ahead without a new summary: the recent turns and any earlier summary carry over, marked partial.
+Bounded or incomplete history is marked partial.
 
 The source stays recoverable until the target accepts its first turn. A definite refusal restores the source at a
 new epoch, invalidates the abandoned target's history projection and releases the unsent queue there; an ambiguous

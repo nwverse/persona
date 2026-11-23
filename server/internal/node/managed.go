@@ -489,6 +489,9 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		// whose version the node checked. An older node sends neither: no catalog, as before.
 		CodexCatalogURL   string `json:"codex_catalog_url"`
 		CodexCatalogCodex string `json:"codex_catalog_codex"`
+		// the node's PERSONA_MODEL_SOURCE_HOSTS, which a pane's shell need not carry (adoptSourceHosts). An older node
+		// does not send it: the process's own, as before.
+		ModelSourceHosts string `json:"model_source_hosts"`
 	}
 	if err := json.Unmarshal(line, &resp); err != nil {
 		return err
@@ -567,6 +570,9 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		cwd, _ := os.Getwd()
 		if err := guardCodexWritableSymlinks(ctx, argv, env, cwd, home); err != nil {
 			return err
+		}
+		if hosts := adoptSourceHosts(resp.ModelSourceHosts); hosts != "" {
+			env = append(withoutEnv(env, []string{modelhttp.SourceHostsEnv}), hosts)
 		}
 		argv, env = codexModelSource(argv, env, cwd, home)
 	}
@@ -875,6 +881,9 @@ func (n *Node) launcherEnv(name string) map[string]any {
 	}
 	if mergesNoProxy(l) {
 		out["no_proxy_merge"] = n.userNoProxy(l)
+	}
+	if hosts := strings.TrimSpace(os.Getenv(modelhttp.SourceHostsEnv)); hosts != "" && l.AgentType() == "codex" {
+		out["model_source_hosts"] = hosts // a pane's shell need not carry the node's allowlist (adoptSourceHosts)
 	}
 	return out
 }

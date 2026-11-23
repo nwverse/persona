@@ -1,9 +1,7 @@
 import Foundation
 import Observation
 import PersonaWire
-#if canImport(UIKit)
 import UIKit
-#endif
 
 /// Hub-wide todo list management (docs/assistant/todos.md, issue #401):
 /// The hub's todos, cached locally in StateCache, refreshed on {"type":"todos"} WS event and (re)connect.
@@ -252,7 +250,6 @@ final class TodoStore {
                 countsSource.seed(kept.shownCounts, places: kept.shownPlaces)
             }
         }
-        #if canImport(UIKit)
         if followsScene {
             active = UIApplication.shared.applicationState == .active
             let center = NotificationCenter.default
@@ -263,7 +260,6 @@ final class TodoStore {
                 @Sendable [weak self] _ in MainActor.assumeIsolated { self?.sceneActive(false) }
             })
         }
-        #endif
         boundHold()
         // Switching assistants counts again inside the source: the clock follows whatever moved `byRules`.
         countsSource.byRulesChanged = { [weak self] in self?.armRulesClock() }
