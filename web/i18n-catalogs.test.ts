@@ -86,7 +86,8 @@ describe("i18n catalogs under Vitest", () => {
       expect(fallbacks).toEqual(whole.fallbacks);
     });
 
-    it(`${lang}: each module's catalog holds its namespaces only, and together they are all the modules' strings`, async () => {
+    // The core-only lane (web/core-only.ts, #13932) has an empty module list, while the modules' catalogs stay on disk.
+    it.skipIf(process.env.PERSONA_WEB_MODULES === "none")(`${lang}: each module's catalog holds its namespaces only, and together they are all the modules' strings`, async () => {
       const { MODULES } = await import("./src/modules");
       expect(Object.keys(moduleCatalogs).sort()).toEqual(MODULES.map((m) => m.id).sort());
       const all = await modules[key]();

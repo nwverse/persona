@@ -2177,11 +2177,12 @@ Clients report their errors and crashes only while `features` has `error_reports
 | DELETE | `/api/v1/sessions/{mid}/{sid}` | Delete a chat: only removes it from the session lists everywhere (the hub records the time in settings `sessions.deleted`, and neither the `sessions` push nor `GET /api/v1/sessions` includes it anymore); the transcript on the computer is untouched; this holds for finished sessions still open on their computer (`idle`, `done`, a Codex App thread the App keeps listing) too, whatever their status reads next; if the session is used again later (`updated_at` later than the deletion, it runs again, or it waits on a card for the user), it reappears. The note is kept (it does not expire). Sessions that failed to start (`start_error`) can also be deleted and disappear immediately. → `{"ok":true}`; running or still starting 409, an Agent with messages held for it (`undelivered` with `computer`, #10661) 409 until they are deleted, assistant chats 400 (use archive), no such session 404, read-only device 403 |
 | GET | `/api/v1/assistant` | `{"machine_id","launcher","cwd","timezone","timezone_picked"?,"notes"?,"notes_effective","main"?,"main_tasks_quiet","recording_days","minutes_days","kb_topics","main_background_folded","recent_task_chats","meeting_attendance_default","idle_close_hours","archive_closed_days","interject_background","claude_interactive","agent_tasks","task_lessons","close_ended_terminals","inbox_signals","next_suggestions","owner_reply_approval","persistent_owner_action_cards","owner_reply_approval_phrases","main_supervises_own_tasks","background_supervisor"?,"conversations":[Session]}`: `main_supervises_own_tasks` is the legacy background-supervisor setting retained for wire and settings compatibility; new assistant-dispatched tasks are supervised by main regardless of it (#5732, `docs/assistant/unified-entry.md` "Background supervisor"), and `background_supervisor` is that conversation's session id once it has been made (on the assistant's computer; read-only, with `background_supervisor_machine_id` and `background_supervisor_at`); `next_suggestions` is the effective "suggest the next message" switch for chats without a suggestion of their own (`false` if never changed, #4644, `docs/assistant/assistant.md` "Next-message suggestions"); `owner_reply_approval` enables exact one-shot connector replies and `persistent_owner_action_cards` keeps their unanswered proposals until a decision (both `false` if never changed), and `owner_reply_approval_phrases` is their exact phrase list (default `["发","同意"]`; see "Exact owner replies for connector batches"); `agent_tasks` is the legacy switch for supervising manually linked user to-dos and reporting-Agent compatibility (`false` if never changed; it does not adopt app-opened manual Agents, #5732, `docs/assistant/unified-entry.md` "Agent tasks"); `task_lessons` is the effective "learn from finished tasks" switch (`false` if never changed, #12295, `docs/assistant/todos.md` "Lessons from accepted tasks"); `inbox_signals` is the effective "tell a task's supervisor about new Inbox messages on it" switch (`false` if never changed, #4293, `docs/assistant/unified-entry.md` "Supervision (#3124)"); `claude_interactive` is the effective "run Claude chats in interactive Claude Code" switch (`false` if never changed, #10058, `docs/assistant/assistant.md` "Interactive Claude Code (#10058)"); `interject_background` is the effective "move running work to the background when I interject" switch (`false` if never changed, #3278, `docs/assistant/assistant.md` "Interjecting while it answers"); `notes` is present only if saved in the App; `timezone_picked` is present once a client said whether the user picked `timezone` by hand (#1855, below); `main_tasks_quiet` is the effective value of "notify tasks dispatched by the main chat only in the main chat" (`true` if never changed, #1731); `idle_close_hours` is the effective number of hours an idle Agent Persona started stays open before the hub closes it (default 12, 0 is off, #2784, `docs/assistant/todos.md`); `archive_closed_days` is the effective number of days a closed session stays listed before the manager archives it by itself (default 3, 0 is off, #3618, `docs/assistant/todos.md` "Closed sessions archive themselves"); `recording_days` is the effective number of days recordings stay in the knowledge base (default 14, #3235); `kb_topics` is the effective "organize knowledge points by topic" switch (`true` if never changed, #3783, [knowledge.md](../assistant/knowledge.md) "Topics"); `main_background_folded` is the effective "fold background rounds" switch: the apps fold the main chat's rounds that another chat, a scheduled task or a follow-up started into one line (`true` if never changed, #4314, `docs/assistant/assistant.md` "Background rounds"); `minutes_days` is the effective number of days a meeting's minutes stay after its transcript went (forever by default: unset or `0`; otherwise the larger of it and `recording_days`, #3780 / #3862, [meeting-minutes.md](../assistant/meeting-minutes.md) "Privacy"); `meeting_attendance_default` is the role a meeting recording pre-selects (`off` until changed, `listener`, `participant`; present only with the `meeting_attendance` feature, #2981, [meeting-minutes.md](../assistant/meeting-minutes.md) "Attending a meeting"); `main` is the main chat's session id (on the `machine_id` machine); archived chats are not listed by default, `?archived=1` includes them (`archived: true`). `?tag=<tag>` keeps only chats carrying that exact user tag (a row's `tags`, below; an unknown tag lists none). `?space=health` lists chats in the health space, with `cwd` being the health directory; without `space` only the assistant's own are listed, not the health chats; any other `space` returns 400 (`docs/assistant/health.md`). An extension's token is listed no health chat, in either space (#10941, [extensions.md](../extensions/extensions.md) "Never shown to extensions"). A conversation row carries `tags: string[]` only when it has user-defined labels (omitted otherwise): at most 10 trimmed, de-duplicated tags of at most 32 runes each, stored in the assistant setting `assistant.conversation_tags` and pushed with the same snapshots as titles and archives (`docs/assistant/assistant.md` "Conversation tags") |
 | GET | `/api/v1/assistant/search?q=&limit=` | The assistant's chats found by their title, the user's words or the replies (`assistant_search`); see "Assistant chat search (#6282)" |
-| GET | `/api/v1/assistant/health/intake?days=7&space=health` | `{water:{today,goal,entries},protein:{today,goal,entries},days:[{date,water,protein}],zone}`. Full or answer role; no extension scope. See "Health intake" for types, defaults and limits. Omit manager selection to use the default; `space` does not route. |
+| GET | `/api/v1/assistant/health/intake?days=7&space=health` | `{water:{today,goal,entries},protein:{today,goal,entries},days:[{date,water,protein}],zone,water_extension?}`. Full or answer role; no extension scope. See "Health intake" for types, defaults and limits. Omit manager selection to use the default; `space` does not route. |
 | POST | `/api/v1/assistant/health/intake?space=health` | `{id,kind,amount?,at?,note?}` → `{entry,today:{water,protein},zone}`. The caller's UUID makes retries idempotent, including after undo. Full or answer role; see "Health intake". Omit manager selection to use the default; `space` does not route. |
 | DELETE | `/api/v1/assistant/health/intake/{id}?space=health` | Undo from any date → `{today:{water,protein},zone}`. Repeating an undo succeeds; unknown id 404. Full role only; see "Health intake". Omit manager selection to use the default; `space` does not route. |
 | GET | `/api/v1/assistant/health/intake/changes?after=0&limit=100&space=health` | `{changes:[HealthIntakeEntry],next,has_more}`: current row states after the cursor, ordered by `seq`, including undo markers. Full role only; see "Health intake". Omit manager selection to use the default; `space` does not route. |
 | POST | `/api/v1/assistant/health/intake/ui?space=health` | `{context?,state?,action?,values?}` → an extension-page action result `{view,toast?}`. The manager draws water and protein pages under reserved `-health-intake/pages`. Full role only; see "Intake detail pages". Omit manager selection to use the default; `space` does not route. |
+| POST | `/api/v1/assistant/health/intake/import?space=health` | No body → `{imported,extension_disabled,settings}`. Move legacy water records and settings, then keep the extension off. Full role only; see "Water extension import". Omit manager selection to use the default. |
 | POST | `/api/v1/assistant/health/water/reminder?space=health` | `{reminder:string,action:"drink"\|"snooze"\|"log",amount?:string}` → `{toast:string}`. Fixed `HEALTH_WATER` notification buttons; full role only; see "Water reminders". Omit manager selection to use the default; `space` does not route. |
 | GET / PUT | `/api/v1/assistant/history` | Full role only. GET returns `{enabled,stats:{conversations,items,payload_bytes,summary_bytes,incomplete}}`; PUT requires `{enabled:boolean}`. Database-first assistant history defaults to enabled; false rolls reads and collection back to the runtime without deleting data. See `docs/assistant/assistant.md` ("Durable assistant history") |
 | GET | `/api/v1/remote-image?url=&size=` | A picture a reply names by address, fetched, checked and scaled by the manager (`remote_images`); see "Remote images (#9473)" |
@@ -2572,6 +2573,12 @@ the returned identifier. The API never returns Go's `Local` label. Clients parse
 time-zone identifier; `UTC` means UTC calendar days, not an instruction to substitute the
 client's local zone. Midnight boundaries use calendar days, including 23- and 25-hour days.
 
+`water_extension` is the optional string `"pending"`: the water extension is enabled, or
+installed without a migration receipt. It includes manually disabled extensions that have
+never been imported and extensions re-enabled after import. The field is omitted when the
+extension is absent or disabled with a receipt. Reading this flag does not read its data file
+or import anything. Today counts only built-in records until the user imports the extension.
+
 Example GET response for `days=1` with no entries:
 
 ```json
@@ -2642,6 +2649,51 @@ ordinary changes; a held revision is checked again by the existing widget tick. 
 is not woken; when its app leaves, the hub counts its widgets as written only up to the last
 revision it was sent. Needs You retains its immediate wake path. Intake does not change fleet state or
 generate a Live Activity update.
+
+### Water extension import
+
+`POST /api/v1/assistant/health/intake/import?space=health` takes no body and requires a full-access
+device. The watch's `answer` credential, read-only/scoped credentials and extension credentials
+cannot call it. Omit manager selection to use the default manager. Success is HTTP 200:
+
+```json
+{"imported":2,"extension_disabled":true,"settings":{"water":{"goal_ml":2400,"cup_ml":250,"remind":true,"start":"09:00","end":"21:00","interval_minutes":90,"weekends":true,"stop_when_done":true},"protein":{"goal_g":60}}}
+```
+
+`imported` is the number of newly inserted records in this request, including the final read,
+not the file's length or today's count. `settings` is the complete resulting `health.intake`
+setting. The manager performs these steps in order:
+
+1. Read and validate the entire `water.json` and saved configuration, without pruning old
+   records or repairing the source file. A missing file is an untouched empty state. Invalid
+   JSON, timestamps, record fields or configuration return 400 with a reason before any write.
+2. Insert the complete file in one transaction. Each UUIDv5 uses the RFC 4122 URL namespace
+   `6ba7b811-9dad-11d1-80b4-00c04fd430c8` and the name
+   `"water-ext:" + storageKey + ":" + record.ID + ":" + record.At.UTC().Format(RFC3339Nano)`.
+   The timestamp distinguishes IDs reused after an extension reset. Conflicts do nothing,
+   including conflicts with undone records. History has no import date cutoff.
+3. Turn the extension off through its existing switch, including dependent checks and the
+   user's pack-switch bookkeeping. This retains its installation and data directory. A
+   refused switch returns its existing error (including 409 `has_dependents`), leaving Health
+   settings, reminder state and the receipt untouched; the records already inserted remain.
+4. After the old process has stopped, read and validate its file again and import new records
+   in another transaction. A changed extension or a failed read stops before publishing settings.
+5. Apply built-in defaults with saved extension water fields overlaid. Reminders become on
+   only if the extension and its reminder switch were both on when this request began; its
+   untouched reminder switch means on. Carry over last-reminder and snooze times, retaining
+   a later recorded drink or existing Health reminder time so import does not immediately ring.
+6. Store `health.intake.water_import` in the manager's existing `settings` table as
+   `{at:string,records:integer,version:string}`: UTC migration time, this request's newly
+   inserted count and extension version. Settings, reminder timing and receipt commit together.
+
+A retry does not duplicate or revive records. After a completed migration, retrying while the
+extension stays off retains current Health settings and timing. Re-enabling the extension
+makes `water_extension` pending again; another import brings in its new records. A failure
+in the final read or final settings transaction can follow committed records and a disabled
+extension, with no new receipt. Retry to finish; if the extension is already off without a
+receipt, the built-in reminder stays off. An absent extension returns 404. Read/storage
+failures return 503; a changed extension returns 409. Errors use the normal `{error,code}` body.
+Import broadcasts content-free `health_intake` invalidations for committed records and settings.
 
 ### Intake detail pages
 
