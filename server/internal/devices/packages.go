@@ -133,14 +133,15 @@ func (d *Devices) packageKey(goos, arch, program string) packageKey {
 
 // cachedPackage is the lookup remembered for k, if it is still fresh.
 func (d *Devices) cachedPackage(k packageKey) (packageResult, bool) {
-	r, fresh, ok := d.rememberedPackage(k)
+	r, fresh, ok := d.rememberedPackage(k, false)
 	return r, ok && fresh
 }
 
 // rememberedPackage is the lookup remembered for k however old (ok), and whether it is still fresh. A result that
 // stands in for the site (stale) or says the site is away is looked up again after a minute; what the site said,
-// found or not, after ten.
-func (d *Devices) rememberedPackage(k packageKey) (r packageResult, fresh, ok bool) {
+// found or not, after ten. allowRecent is only for a caller that already waited on this lookup generation; later,
+// independent cache decisions keep it false.
+func (d *Devices) rememberedPackage(k packageKey, allowRecent bool) (r packageResult, fresh, ok bool) {
 	p := &d.packages
 	local, localRecent := p.localStamp(k)
 	p.mu.Lock()
@@ -153,7 +154,7 @@ func (d *Devices) rememberedPackage(k packageKey) (r packageResult, fresh, ok bo
 	if r.pkg.stale || (r.err != nil && siteAway(r.err)) {
 		ttl = packageMissTTL
 	}
-	return r, p.clock().Sub(r.at) <= ttl && !localRecent && !r.localRecent && r.local == local, true
+	return r, p.clock().Sub(r.at) <= ttl && (allowRecent || !localRecent && !r.localRecent) && r.local == local, true
 }
 
 func (d *Devices) remember(k packageKey, pkg nodePackage, err error, local string, localRecent bool) {
@@ -204,7 +205,8 @@ func (d *Devices) lookupShared(ctx context.Context, k packageKey) (nodePackage, 
 		case <-ctx.Done():
 			return nodePackage{}, i18n.Err("devices-deploy.package_unreachable", i18n.Args{"os": k.goos, "arch": k.arch, "err": ctx.Err().Error()})
 		}
-		if r, ok := d.cachedPackage(k); ok {
+		if r, fresh, ok := d.rememberedPackage(k, true); ok && fresh {
+			// This caller already waited on that generation. Later independent decisions still revalidate recent files.
 			return r.pkg, r.err
 		}
 		return d.lookupShared(ctx, k) // forgotten already (a test's clock): look it up again
@@ -251,7 +253,7 @@ func (d *Devices) nodeTarget(info proto.NodeInfo) string {
 		return hub
 	}
 	k := d.packageKey(info.OS, info.Arch, info.Program)
-	r, fresh, ok := d.rememberedPackage(k)
+	r, fresh, ok := d.rememberedPackage(k, false)
 	if !fresh {
 		d.lookupSoon(k) // what was remembered stands until the lookup lands, so a node does not flip out of date meanwhile
 	}
@@ -298,7 +300,7 @@ func (d *Devices) packageBlocked(info proto.NodeInfo) error {
 	if info.OS == "" || info.Arch == "" {
 		return nil
 	}
-	if r, _, ok := d.rememberedPackage(d.packageKey(info.OS, info.Arch, info.Program)); ok {
+	if r, _, ok := d.rememberedPackage(d.packageKey(info.OS, info.Arch, info.Program), false); ok {
 		return r.err // the last lookup's, also while a newer one runs (nodeTarget starts it)
 	}
 	return nil
@@ -447,9 +449,14 @@ func localNodeNames(program, plat string) []string {
 }
 
 // localBuildRecent is the window in which equal-sized replacements may still share an mtime on a coarse filesystem
-// clock. Do not reuse a result captured in this window without reading the executable again once; future mtimes count
-// as recent too (#13298).
+// clock. Do not reuse a result captured in this window without reading the executable again once. Only small clock skew
+// counts as recent; a far-future timestamp must not disable reuse for the file's whole lifetime (#13298, #13326 review).
 const localBuildRecent = 2 * time.Second
+
+func localBuildMtimeRecent(now, mod time.Time) bool {
+	age := now.Sub(mod)
+	return age >= -localBuildRecent && age < localBuildRecent
+}
 
 // localStamp is what the local builds k may be taken from look like now: each candidate and its version file, with
 // size and modification time ("" when there are none). recent says at least one file is inside localBuildRecent.
@@ -464,7 +471,7 @@ func (p *nodePackages) localStamp(k packageKey) (stamp string, recent bool) {
 			for _, f := range []string{name, name + ".version"} {
 				if st, err := os.Stat(filepath.Join(dir, f)); err == nil {
 					fmt.Fprintf(&b, "%s|%d|%d\n", filepath.Join(dir, f), st.Size(), st.ModTime().UnixNano())
-					recent = recent || now.Sub(st.ModTime()) < localBuildRecent
+					recent = recent || localBuildMtimeRecent(now, st.ModTime())
 				}
 			}
 		}
@@ -497,7 +504,7 @@ func (p *nodePackages) carriesVersion(path, version string) (bool, error) {
 	p.mu.Lock()
 	scan, ok := p.scans[path]
 	p.mu.Unlock()
-	recent := p.clock().Sub(st.ModTime()) < localBuildRecent
+	recent := localBuildMtimeRecent(p.clock(), st.ModTime())
 	if ok && !recent && !scan.recent && scan.size == st.Size() && scan.mod.Equal(st.ModTime()) && scan.version == version {
 		return scan.carries, nil
 	}

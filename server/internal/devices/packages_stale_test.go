@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,6 +118,9 @@ func TestReplacedLocalNodeBuildWithTheSameStampIsSeen(t *testing.T) {
 			if after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) {
 				t.Fatalf("fixture metadata changed: before %+v, after %+v", before, after)
 			}
+			if r, ok := d.cachedPackage(d.packageKey(goos, arch, nodeproto.ProgramPersonad)); ok {
+				t.Fatalf("stale cached result stayed fresh after the same-stamp replacement: %+v %v", r.pkg, r.err)
+			}
 			pkg, err := d.nodePackageFor(context.Background(), goos, arch, nodeproto.ProgramPersonad)
 			if err != nil || pkg.path != local || pkg.Version != hub {
 				t.Fatalf("the same-stamp replacement was not seen: %+v %v", pkg, err)
@@ -166,6 +170,66 @@ func TestUnchangedLocalBuildReusesAStableVersionScan(t *testing.T) {
 	p.mu.Unlock()
 	if carries, err := p.carriesVersion(path, hub); err != nil || carries {
 		t.Fatalf("an unchanged stable file was scanned again: %v %v", carries, err)
+	}
+}
+
+// A timestamp carried from a machine whose clock is ahead must not disable caching forever (#13326 review).
+func TestFutureLocalBuildStillUsesCachedPackage(t *testing.T) {
+	const goos, arch = "windows", "amd64"
+	const hub = "0.9.2-202611221500"
+	current := updatetest.VersionedProgram(t, nodeproto.ProgramPersonad, goos, arch, hub)
+	d, dir, _ := packageDevices(t, hub, "")
+	local := filepath.Join(dir, "personad-windows-amd64.exe")
+	copyFile(t, current, local)
+	stamp := time.Now().Add(time.Hour)
+	if err := os.Chtimes(local, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if pkg, err := d.nodePackageFor(context.Background(), goos, arch, nodeproto.ProgramPersonad); err != nil || pkg.path != local {
+		t.Fatalf("first future-stamp lookup: %+v %v", pkg, err)
+	}
+	r, ok := d.cachedPackage(d.packageKey(goos, arch, nodeproto.ProgramPersonad))
+	if !ok || r.err != nil || r.pkg.path != local {
+		t.Fatalf("an unchanged future-stamp build missed the result cache: %+v %v, ok=%v", r.pkg, r.err, ok)
+	}
+}
+
+// Callers attached to one in-flight lookup consume that generation together. The recent-file guard applies to later
+// independent decisions; it must not turn every waiter into another sequential lookup and another set of web requests.
+func TestRecentLocalBuildLookupsAreShared(t *testing.T) {
+	const goos, arch = "windows", "amd64"
+	const hub, old = "0.9.2-202611221500", "0.9.1-202611190505"
+	plat := goos + "-" + arch
+	stale := updatetest.VersionedProgram(t, nodeproto.ProgramPersonad, goos, arch, old)
+	current := updatetest.VersionedProgram(t, nodeproto.ProgramPersonad, goos, arch, hub)
+	site := newFakeRelease(t)
+	site.publish(t, hub, overlapping(hub, 202611221500), true, map[string]string{"personad-" + plat + ".exe": current})
+	d, dir, _ := packageDevices(t, hub, site.srv.URL)
+	copyFile(t, stale, filepath.Join(dir, "personad-"+plat+".exe"))
+	site.mu.Lock()
+	site.delay = 200 * time.Millisecond
+	site.mu.Unlock()
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if pkg, err := d.nodePackageFor(context.Background(), goos, arch, nodeproto.ProgramPersonad); err != nil {
+				t.Errorf("shared lookup: %+v %v", pkg, err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	count := map[string]int{}
+	for _, path := range site.requests() {
+		count[path]++
+	}
+	if len(count) != 1 || count["/"+hub+"/manifest.json"] != 1 {
+		t.Fatalf("concurrent callers did not share one lookup: %v", count)
 	}
 }
 
