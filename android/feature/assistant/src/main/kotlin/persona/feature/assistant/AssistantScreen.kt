@@ -320,8 +320,6 @@ fun AssistantScreen(
     var healthChats by healthChatsState
     val healthKeysState = remember(managerChoice.hubId) { mutableStateOf(emptySet<SessionKey>()) }
     var healthKeys by healthKeysState
-    val healthBusyState = remember { mutableStateOf(false) }
-    var healthBusy by healthBusyState
     val healthPage = active == null && newChat?.space == persona.core.contracts.api.AssistantSpace.HEALTH
     // The domain spaces (#13500, docs/android/android.md "Domain spaces"): the tracks as last read (shared with the
     // sidebar), each space's chats as last read, and every chat known to be one's, so New on it opens its home.
@@ -457,25 +455,8 @@ fun AssistantScreen(
         healthKeys = healthKeys + chats.map { it.key }
         return chats
     }
-    // The sidebar's Health: the newest health chat, else the health space's new-chat page.
-    fun openHealth() {
-        if (sending || healthBusy || conversationsOf == null) return
-        healthBusy = true
-        scope.launch {
-            try {
-                when (val target = HealthEntry.resolve(loadHealth())) {
-                    is HealthEntry.Target.Open -> openConversation(target.key)
-                    HealthEntry.Target.New -> startHealthConversation()
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                assistantFailure(error, feedback, toast, resources)
-            } finally {
-                healthBusy = false
-            }
-        }
-    }
+    // The sidebar's Health opens its home immediately; the page loads its past chats in the background (#13273).
+    fun openHealth() = startHealthConversation()
     // A domain space's home (#13500): its first message starts a conversation in the space, never the main one.
     fun startSpaceConversation(slug: String) {
         if (sending) return
@@ -495,17 +476,15 @@ fun AssistantScreen(
         spaceKeys = spaceKeys + chats.associate { it.key to slug }
         return chats
     }
-    // A Spaces row: the space's newest chat, else its home, as Health opens (the same rule, HealthEntry); New space: the form.
+    // A Spaces row opens its newest chat, else its home; New space opens the form. Health opens its home directly.
     fun openSpacePlace(slug: String) {
         if (slug == SpacesModel.NEW) { if (spacesApi != null) newSpaceOpen = true; return }
         if (sending || spaceBusy || conversationsOf == null) return
         spaceBusy = true
         scope.launch {
             try {
-                when (val target = HealthEntry.resolve(loadSpace(slug))) {
-                    is HealthEntry.Target.Open -> openConversation(target.key)
-                    HealthEntry.Target.New -> startSpaceConversation(slug)
-                }
+                val latest = HealthEntry.history(loadSpace(slug)).firstOrNull()
+                if (latest != null) openConversation(latest.key) else startSpaceConversation(slug)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
