@@ -81,6 +81,7 @@ type agyStepMemo struct {
 
 type agyTranscriptUsage struct {
 	model         string
+	modelAt       time.Time
 	contextTokens int
 	contextWindow int
 	outputTokens  int

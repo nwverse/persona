@@ -35,15 +35,24 @@ describe("which sessions can switch model", () => {
     expect(canSwitchModel({ ...agy, status: "offline" })).toBe(false);
     expect(canSwitchModel({ ...agy, assistant: true })).toBe(false);
 
+    const agyPane = session({ agent: "agy", pane_id: "w1:p1", launcher: undefined, capabilities: { send: true, model: true } as Session["capabilities"] });
+    expect(canSwitchModel(agyPane)).toBe(true);
+    expect(sessionLauncher(agyPane)).toBe("agy");
+    // Older nodes without explicit agy pane model capability degrade honestly instead of exposing a dead control.
+    expect(canSwitchModel({ ...agyPane, capabilities: { send: true } as Session["capabilities"] })).toBe(false);
+
     const cx = session({ agent: "codex", source_kind: "codex_app_server", capabilities: { send: true, model: true } as Session["capabilities"] });
     expect(canSwitchModel(cx)).toBe(true);
     expect(canSwitchModel(session({ agent: "codex", space_kind: "codex_app", capabilities: { send: true, model: true } as Session["capabilities"] }))).toBe(true);
   });
 
-  it("is busy while Claude works or waits on you, but Codex and plugin-backed Claude Desktop queue for the next step", () => {
+  it("is busy while a foreground turn works or waits on you, but not when only background tasks run", () => {
     expect(modelBusy(session())).toBe("");
     expect(modelBusy(session({ status: "working" }))).toContain("正在工作");
     expect(modelBusy(session({ state: "needs_you" }))).toContain("正在工作");
+    expect(modelBusy(session({ status: "idle", state: "working", background_working: true }))).toBe("");
+    expect(modelBusy(session({ agent: "agy", status: "done", state: "working", background_working: true, capabilities: { send: true, model: true } as Session["capabilities"] }))).toBe("");
+    expect(modelBusy(session({ agent: "agy", status: "working", state: "working", capabilities: { send: true, model: true } as Session["capabilities"] }))).toContain("正在工作");
     expect(modelBusy(session({ agent: "codex", status: "working" }))).toBe("");
     expect(modelBusy(session({ agent: "codex", state: "needs_you" }))).toBe("");
     expect(
@@ -55,6 +64,12 @@ describe("which sessions can switch model", () => {
         }),
       ),
     ).toBe("");
+  });
+
+  it("asks an Antigravity session without a launcher its own engine's, never Claude Code's (#13754)", () => {
+    expect(sessionLauncher({ agent: "agy" })).toBe("agy");
+    expect(sessionLauncher({ agent: "agy", space_kind: "herdr" })).toBe("agy");
+    expect(sessionLauncher({ agent: "agy", launcher: "my-agy" })).toBe("my-agy");
   });
 
   it("asks the launcher the session runs with, claude-desktop on desktop, plain claude without one", () => {

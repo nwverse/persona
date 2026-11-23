@@ -22,9 +22,10 @@ const id = '11111111-2222-3333-4444-555555555555'
 let model = 'gemini-future-medium'
 let effort = 'medium'
 let mode = 'default'
+const effortSuffix = /-(low|medium|high|xhigh|max)$/
 const configuration = () => [
-  { id: 'model', category: 'model', currentValue: model.replace(/-(low|medium|high)$/, '') },
-  { id: 'thought_level', currentValue: effort },
+  { id: 'model', category: 'model', currentValue: model.replace(effortSuffix, '') },
+  ...(effort ? [{ id: 'thought_level', currentValue: effort }] : []),
   { id: 'mode', currentValue: mode },
 ]
 let pendingPrompt
@@ -132,7 +133,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (method === 'session/set_model') {
     if (!settings().models.some((entry) => entry.modelId === params.modelId)) error = { code: -32602, message: 'Model unavailable' }
-    else { model = params.modelId; effort = model.split('-').at(-1) }
+    else { model = params.modelId; effort = model.match(effortSuffix)?.[1] || '' }
   }
   if (method === 'session/set_mode') {
     if (params.modeId === 'accept-edits' && settings().holdFallback) {

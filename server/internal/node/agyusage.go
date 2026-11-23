@@ -117,6 +117,9 @@ func (u *agyTranscriptUsage) observePlanner(step agyStep) (proto.TokenUsage, boo
 	model := step.normalizedModel()
 	if model != "" {
 		u.model = model
+		if at, err := time.Parse(time.RFC3339Nano, step.CreatedAt); err == nil {
+			u.modelAt = at
+		}
 	}
 	usage, ctxTokens, win, ok := step.tokenUsage()
 	if win > 0 {

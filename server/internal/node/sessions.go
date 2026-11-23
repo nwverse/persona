@@ -245,11 +245,15 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			s.Title = opencodeTitle(a.Title)
 			n.mergeOpencodeRow(&s) // its conversation is the plugin's (opencode.go)
 		case a.Agent == cursorAgent || a.Agent == agyAgent:
-			// Herdr drives the pane (agent.prompt, the keys). Agy can also read its verified conversation (workagent.go).
-			// Its mode, effort and model are its start's, so no chips (session.modes refuses, workAgentCalls); every other
-			// operation stays as for a terminal row that says none. Not on a stopped one, which says none (stoppedAgent).
+			// Herdr drives the pane (agent.prompt, the keys). Agy can also read its verified conversation (workagent.go) and
+			// switch its model and effort through /model and /effort (agymodel_switch.go). Its permission mode stays its start's,
+			// so no mode chips; every other operation stays as for a terminal row. Not on a stopped one, which says none.
 			if s.Capabilities == nil && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
-				s.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Interrupt: true, Approve: true, Terminal: true, Modes: proto.CanModes(false)}
+				var canModel *bool
+				if a.Agent == agyAgent {
+					canModel = proto.Bool(true)
+				}
+				s.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Interrupt: true, Approve: true, Terminal: true, Modes: proto.CanModes(false), Model: canModel}
 			}
 			hasRuntimeRow := false
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
@@ -258,6 +262,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					hasRuntimeRow = true
 					if s.Model == "" {
 						s.Model = runtimeRow.Model
+					}
+					if s.Effort == "" && runtimeRow.Effort != "" {
+						s.Effort = runtimeRow.Effort
 					}
 					if s.ContextTokens == 0 && runtimeRow.ContextTokens > 0 {
 						s.ContextTokens = runtimeRow.ContextTokens
@@ -271,10 +278,22 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 			}
 			if a.Agent == agyAgent {
-				if hasRuntimeRow {
-					n.resolveAgyContextWindow(&s)
-				} else {
+				var transcriptModelAt time.Time
+				if conv := agyConversations[id]; conv != "" {
+					if u, ok := n.agyTranscriptMeta(conv); ok {
+						transcriptModelAt = u.modelAt
+					}
+				}
+				if !hasRuntimeRow {
 					n.mergeAgyTranscript(&s, agyConversations[id])
+				}
+				beforeModel := s.Model
+				n.applyAgyPaneModes(&s, transcriptModelAt)
+				if hasRuntimeRow || s.Model != beforeModel {
+					if s.Model != beforeModel {
+						s.ContextWindow = 0
+					}
+					n.resolveAgyContextWindow(&s)
 				}
 				n.agyPaneTitle(&s, agyConversations[id]) // its conversation's title, not the terminal's (agytitle.go)
 			}

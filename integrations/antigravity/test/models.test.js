@@ -12,11 +12,14 @@ const entries = ['medium', 'high', 'low'].map((level) => ({ modelId: `gemini-fut
 const AUTO_REFUSAL_NOTICE = 'agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求'
 
 test('native catalog preserves new IDs, defaults and only advertised thinking variants', () => {
-  const models = mapModels([...entries, entries[0], { modelId: 'single', name: 'Single' }], entries[1].name)
-  assert.equal(models.length, 4)
+  const extended = [...entries, { modelId: 'gemini-future-xhigh', name: 'Gemini Future (xhigh)' }, { modelId: 'gemini-future-max', name: 'Gemini Future (max)' }]
+  const models = mapModels([...extended, entries[0], { modelId: 'single', name: 'Single' }], entries[1].name)
+  assert.equal(models.length, 6)
   assert.equal(models[1].default, true)
-  assert.deepEqual(models[0].efforts, ['low', 'medium', 'high'])
-  assert.deepEqual(models[3].efforts, [])
+  assert.deepEqual(models[0].efforts, ['low', 'medium', 'high', 'xhigh', 'max'])
+  assert.equal(models[3].default_effort, 'xhigh')
+  assert.equal(models[4].default_effort, 'max')
+  assert.deepEqual(models[5].efforts, [])
   assert.equal(models[0].default_effort, 'medium')
 })
 
@@ -98,6 +101,26 @@ test('session controls confirm native state and preserve acknowledged fields on 
   await until('native configuration', () => row()?.model === entries[1].modelId && row()?.effort === 'high')
   await n.peer.call('session.modes', { session_id: sessionId, permission_mode: 'bypassPermissions' })
   await until('native configuration', () => row()?.permission_mode === 'bypassPermissions')
+})
+
+test('switching to single-variant xhigh or effort-less models avoids redundant thought_level calls and clears stale effort', async (t) => {
+  const { n, catalog, sessionId, row, calls } = await fixture(t)
+  catalog({
+    models: [
+      ...entries,
+      { modelId: 'gemini-neon-xhigh', name: 'Gemini Neon (XHigh)' },
+      { modelId: 'gemini-pro-orchestrator', name: 'Orchestrator' },
+    ],
+  })
+  await n.peer.call('launchers.models', { refresh: true })
+  const beforeConfigCalls = calls().filter((c) => c.method === 'session/set_config_option').length
+  await n.peer.call('session.modes', { session_id: sessionId, model: 'gemini-neon-xhigh' })
+  await n.peer.call('session.modes', { session_id: sessionId, effort: 'xhigh' })
+  await until('xhigh variant applied', () => row()?.model === 'gemini-neon-xhigh' && row()?.effort === 'xhigh')
+  assert.equal(calls().filter((c) => c.method === 'session/set_config_option').length, beforeConfigCalls)
+
+  await n.peer.call('session.modes', { session_id: sessionId, model: 'gemini-pro-orchestrator' })
+  await until('orchestrator clears stale effort', () => row()?.model === 'gemini-pro-orchestrator' && row()?.effort === undefined)
 })
 
 test('a rejected startup configuration closes the newly created native session', async (t) => {

@@ -797,7 +797,8 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 			info["model"] = st.Model
 		}
 	}
-	if conversation := n.agyConversation(id, pane); conversation != "" {
+	conversation := n.agyConversation(id, pane)
+	if conversation != "" {
 		if runtimeRow, _, ok := n.runtimes.rowOf(agyAgent + "-" + conversation); ok {
 			if runtimeRow.Model != "" {
 				info["model"] = runtimeRow.Model
@@ -826,6 +827,7 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 			}
 		}
 	}
+	n.applyAgyPaneInfo(id, conversation, info)
 	return info
 }
 
