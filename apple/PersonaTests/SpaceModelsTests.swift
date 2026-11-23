@@ -82,7 +82,7 @@ struct SpaceModelsTests {
             #expect(req.headers[APIClient.managerHeader] == nil)
             return Data(#"{"machine_id":"m","launcher":"ccc","cwd":"/home/me/.persona/tracks/qa-finance","conversations":[{"session_id":"f1","title":"Taxes","status":"idle","state":"idle","assistant":true}]}"#.utf8)
         }
-        hub.on("GET", "/api/v1/assistant/tracks/qa-finance/space-md", json: #"{"content":"# QA Finance\n\nBudget.","digest":"d1","state":"Filed."}"#)
+        hub.on("GET", "/api/v1/assistant/tracks/qa-finance/space-md", json: ##"{"content":"# QA Finance\n\nBudget.","digest":"d1","state":"Filed."}"##)
         let page = SpaceHomeModel(slug: "qa-finance", deps: deps(hub))
         await page.load()
         #expect(page.loaded && page.fetched.map(\.sessionID) == ["f1"])
