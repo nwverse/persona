@@ -1,0 +1,29 @@
+{
+  "$schema": "../../../../schema/module.schema.json",
+  "id": "mail",
+  "api": 1,
+  "origin": "builtin",
+  "title": "Mail",
+  "hub_routes": [
+    "GET /api/v1/mail/accounts",
+    "POST /api/v1/mail/accounts",
+    "GET /api/v1/mail/oauth/google/config",
+    "POST /api/v1/mail/oauth/google/start",
+    "POST /api/v1/mail/oauth/google/finish",
+    "GET /api/v1/mail/oauth/microsoft/config",
+    "PUT /api/v1/mail/oauth/microsoft/config",
+    "POST /api/v1/mail/oauth/microsoft/start",
+    "POST /api/v1/mail/oauth/microsoft/finish",
+    "DELETE /api/v1/mail/accounts/{aid}",
+    "POST /api/v1/mail/accounts/{aid}/test",
+    "GET /api/v1/mail/accounts/{aid}/mailboxes",
+    "GET /api/v1/mail/messages",
+    "GET /api/v1/mail/messages/{aid}/{uid}",
+    "GET /api/v1/mail/messages/{aid}/{uid}/attachments/{attachment}",
+    "POST /api/v1/mail/messages/{aid}/{uid}/flags",
+    "POST /api/v1/mail/send"
+  ],
+  "mcp_tools": ["mail_accounts", "mail_search", "mail_read", "mail_send", "mail_save_attachment"],
+  "settings": ["mail.accounts"],
+  "i18n_namespaces": ["mail-connect", "mail-errors", "mail-oauth", "mail-preset"]
+}

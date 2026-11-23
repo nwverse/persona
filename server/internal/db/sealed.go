@@ -26,7 +26,7 @@ type sealedTable struct {
 }
 
 var sealedTables = []sealedTable{
-	{"mail_accounts", []string{"id"}, []string{"password_enc", "oauth_enc"}}, // internal/mail
+	{"mail_accounts", []string{"id"}, []string{"password_enc", "oauth_enc"}}, // internal/modules/mail
 	{"connector_secrets", []string{"connector"}, []string{"sealed"}},         // internal/extmgr connectors
 	{"plugin_secrets", []string{"plugin", "name"}, []string{"sealed"}},       // internal/extension registry
 	{"plugin_markets", []string{"id"}, []string{"token_sealed"}},             // internal/extmgr extension markets
@@ -44,7 +44,7 @@ var sealedSettings = []SealedSetting{
 	{Key: "launchers.managed", List: true, Fields: []string{"key_sealed", "headers_sealed", "env_sealed"}},     // internal/assistant storedLauncher
 	{Key: "launchers.machine_keys", List: true, Fields: []string{"key_sealed"}},                                // internal/assistant machineKey
 	{Key: "bots.feishu", Fields: []string{"secret_enc", "registration_device_enc", "registration_secret_enc"}}, // internal/extmgr FeishuBotSettings
-	{Key: "mail.microsoft_client", Fields: []string{"enc"}},                                                    // internal/mail sealedSetting
+	{Key: "mail.microsoft_client", Fields: []string{"enc"}},                                                    // internal/modules/mail sealedSetting
 }
 
 // SealedSettings are the settings values that hold sealed strings (the packages that write them check theirs is here).

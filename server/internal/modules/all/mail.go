@@ -4,7 +4,7 @@ package all
 
 import (
 	"github.com/nwverse/persona/server/internal/extmgr/mailport"
-	"github.com/nwverse/persona/server/internal/mail"
+	"github.com/nwverse/persona/server/internal/modules/mail"
 )
 
 // Mail reaches the extension manager through its port, not the kernel: its routes and tools are the extension
