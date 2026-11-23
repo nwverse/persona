@@ -13,7 +13,7 @@ import { canShowTerminal, composerSlot, otherView, terminalJump, terminalWaits, 
 import { invalidateOverviewPanel } from "../../lib/use-shortcuts";
 import { resumeInTerminal, terminalResume } from "../../lib/agent-resume";
 import { openLink } from "../../lib/links";
-import { getPanel, openPanel, togglePanel, usePanel } from "../../lib/panel";
+import { getPanel, openPanel, togglePanel, usePanel, useSidePanelBack } from "../../lib/panel";
 import { backgroundPanelOf, isWorkflowsCommand, latestWorkflowRun, openBackgroundPanel, provideBackgroundChat, WORKFLOWS_COMMAND } from "../../lib/background-panel";
 import { machineWithHub } from "../../lib/mesh";
 import { sidebarRail, sidebarShown, useLayout } from "../../lib/layout";
@@ -2950,6 +2950,7 @@ export const Header = memo(function Header({
   }, [menu.anchor]);
   const tabs = useMenu();
   const panel = usePanel();
+  const panelBack = useSidePanelBack();
   const mutes = useStore((s) => s.mutes);
   const features = useStore((s) => s.features);
   // archived (the Archived page listed it, or it was archived here): the menu offers Restore instead of archive / delete
@@ -3150,6 +3151,7 @@ export const Header = memo(function Header({
       <header className="@container flex h-14 shrink-0 items-center gap-2 border-b border-line bg-page/85 px-3 backdrop-blur-md sm:px-4">
       <div className={headerSlot(Boolean(topCenter), "start")}>
         {onToggleSidebar && <ChatSidebarButton session={session} counted={!topCenter} onClick={onToggleSidebar} />}
+        {chrome && panelBack && <IconButton icon="arrowLeft" label={t("sidepanel.back")} onClick={panelBack} />}
       </div>
       <div data-chat-title-row className={cx("flex min-w-0 flex-1 items-center gap-0.5", Boolean(topCenter) && "max-lg:hidden")}>
         {pinned && !assistant && <span role="img" aria-label={t("chat-chatview.pinned")} title={t("chat-chatview.pinned")} className="mr-1 flex shrink-0 text-ink-3"><Icon name="pin" size={13} /></span>}

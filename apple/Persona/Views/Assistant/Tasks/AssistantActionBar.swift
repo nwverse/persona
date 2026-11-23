@@ -1160,7 +1160,11 @@ struct AssistantActionBar: View {
                 HStack(spacing: Theme.Space.s) {
                     Text(title).font(Theme.Font.body).lineLimit(1)
                     Spacer(minLength: Theme.Space.s)
-                    Text(detail).font(Theme.Font.caption).lineLimit(1).fixedSize()
+                    // Its words, never wider than a part of the row: a long wait line cut at the tail, not the row (and the
+                    // tray with it) wider than the screen (#13656).
+                    Text(detail).font(Theme.Font.caption).lineLimit(1).truncationMode(.tail)
+                        .scaledFrame(maxWidth: Theme.Size.box160, alignment: .trailing)
+                        .layoutPriority(1)
                         .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
                 }
                 if let subtitle {

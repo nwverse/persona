@@ -172,6 +172,8 @@ type Service struct {
 	rules ruleSuggestState
 	// setupMu serializes the reads and the one write of the weekly setup block's book (setup_suggest.go).
 	setupMu sync.Mutex
+	// intakeMu serializes intake settings, reminder state and local intake mutations.
+	intakeMu sync.Mutex
 
 	// prepared is what this hub last gave a machine's node for a directory (key: machine id NUL directory), the
 	// CLAUDE.md and the plugin skills, by prepareSpaceIf; refreshInstructions gives again what differs.
@@ -262,6 +264,7 @@ type Service struct {
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
+	repoMirrors      repoMirrorSyncState     // repo_mirrors.go: opt-in low-frequency periodic mirror sync
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll         bool
 	later                    laterBook    // later.go: questions that can wait for a briefing
@@ -423,12 +426,14 @@ func New(o Options) *Service {
 	s.startRoutes()
 	s.skillRoutes()
 	s.workoutRoutes()
+	s.intakeRoutes()
 	s.scheduleRoutes()
 	s.scheduleGrantRoutes()
 	s.placeRoutes()
 	saved.Register(saved.Host{Store: func() any { return s.store() }, Event: s.event, Handle: s.handle, Full: fullRole, BodyErr: writeBodyErr})
 	s.resourceRoutes()
 	s.repositoryRoutes()
+	s.repoMirrorRoutes()
 	s.taskRoutes()
 	s.viewActionRoutes()
 	s.todayRoutes()
@@ -1063,7 +1068,7 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
 // triaged; a new conversation is named after its first turn.
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
-	s.a2aSignal()
+	s.a2aRecipientIdle(ctx, a2aRef{r.MachineID, r.SessionID})
 	s.approvalAnswerTurnEnded(r)
 	s.turnEnded(ctx, r, s.meetingTurnEnded(r.MachineID, r.SessionID))
 }
