@@ -839,8 +839,9 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
     per hub group (`healthReportUploads`), as #2626 keeps a chat's attachments. The tree on its way out lives on a moment after the swap (about two seconds on an iPad simulator), and its Agents page
     took the chat the new page asked for again, opening it where no one saw it: each tree `RootView` builds has a `BuiltTree` of its own, `ShownTree` holds the shown one, and a page
     of another tree (on its way out) leaves the chats asked for, and the remembered chat, to the shown tree's page (#2836).
-  - Left-column `NavigationLink(value:)` replaces the right column (the left has its own never-pushed stack, forwarding values to the right); programmatically opened list pages must replace it too:
-    `path = NavigationPath([value])` (in single-column mode the list is at the stack bottom, equivalent to append; Agents `openFromList`). Pages opened from details still append.
+  - A list page replaces the right column: `path = NavigationPath([value])` (in single-column mode the list is at the stack bottom, equivalent to append; Agents `openFromList`,
+    the list column's `splitOpen`). A left-column `NavigationLink(value:)` replaces it by the split's own selection instead, outside `path`, and nothing that page pushes opens (#12035):
+    Settings' rows are buttons in the split (`SettingsListLink`), as the Agents list's, and links only in one stack. Pages opened from details still append.
   - The first right-column page has no back button (the list is beside it): add `.splitDetailPage()` to the destination; Agents' custom chat back button hides for `\.splitDetail` (keeping its space so the title stays centered).
     With the list folded, the chat's leading button brings it back (#963): the sidebar's button (`Theme.Icon.sidebar`, "Show Sidebar", with how many Agents need the user), as on the
     main conversation, not a ‹ (#8603). What the button shows follows how the page was reached, not what it is: a chat picked in the list is a root and has the sidebar's button; the
@@ -2291,6 +2292,14 @@ be expanded separately, including server-folded ranges. Successful Persona `noti
 `task_review`, a successful `supervision_finish` receipt with user visibility, explicit user-level input or retained
 `fold.supervision_user` promotes the whole round. A pending live `ask_user` stays visible before its result arrives.
 Failed calls, arguments without success receipts and silent finishes do not establish or reverse promotion.
+
+In the main conversation, a completed, non-live round with a successful silent finish and no promotion instead leaves
+no timeline row and adds no unread count or badge. The split happens before work or supervision rows unfold, so open
+flags cannot bring its tools back. Its `task`, `routed` and `answered` feed cards inside the same half-open round
+interval move with it; plans, message cards, notices and other decisions remain visible. **Background activity** opens
+from both the conversation menu and Inbox, using the same `ChatStore`, paged `loadOlder` / unfold requests and
+`SupervisionRecordLine` / `lineView` rendering to retain the complete round and those feed cards. It creates no
+InboxItem and calls no `markSeen`. Full-history APIs are unchanged.
 
 The separate streaming answer stays hidden inside a closed quiet record, including text waiting for its transcript
 item after a turn stops. Frozen history uses its captured live turn, not a later turn's activity. Retained promotion survives overlapping

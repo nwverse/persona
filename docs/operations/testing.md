@@ -1118,7 +1118,9 @@ Settings navigation and its assistant switcher (`SettingsNavigationUITests`) use
 `TEST_RUNNER_PERSONA_SETTINGS_HUB=http://127.0.0.1:<dedicated port>` with an ordinary isolated `mock_hub.py`. The single-assistant
 case reads `PERSONA_SETTINGS_SINGLE_HUB` (`TEST_RUNNER_PERSONA_SETTINGS_SINGLE_HUB` in the command) and skips without it; point it to a
 second mock started with `MOCK_MANAGERS=1 PORT=<other dedicated port> python3 scripts/mock/mock_hub.py`. Select the suite with
-`-only-testing:PersonaUITests/SettingsNavigationUITests`.
+`-only-testing:PersonaUITests/SettingsNavigationUITests`. Run the suite on an iPad simulator as well (#12035): there Settings is a sheet split into
+the list and the page, where a page the list opens must open its own pages and a page a launch switch opens must stay (`testLegacySettingsPathsStillOpen`);
+`testAppearancePagesOpenAndComeBack` runs in portrait, then in landscape.
 
 Agents tab navigation (#5641): `AgentsTabNavigationTests/testDispatchBackThenAgentsAlwaysShowsList` opens a dispatched
 Agent from Assistant, goes Back, and selects Agents five times; it checks the list's visible control, navigation root
