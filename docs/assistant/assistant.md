@@ -2799,7 +2799,9 @@ session, freezes the source, and activates the target through a database epoch c
 work make a switch retryably busy. Permission mode carries over; unknown engines and unsupported supervision policy
 are refused before preparation. The first queued input carries policy and handoff together, with the original client
 message ID. Source compaction summaries take priority; the fallback uses the manager's existing model chain and waits
-through provider pauses. Bounded or incomplete history is marked partial.
+through provider pauses. When knowledge processing has no usable model (`model_unavailable`), retrying cannot help, so
+the switch goes ahead without a new summary: the recent turns and any earlier summary carry over, marked partial.
+Bounded or incomplete history is marked partial.
 
 The source stays recoverable until the target accepts its first turn. A definite refusal restores the source at a
 new epoch, invalidates the abandoned target's history projection and releases the unsent queue there; an ambiguous
