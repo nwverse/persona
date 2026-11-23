@@ -102,7 +102,11 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 		return msg, false, true
 	}
 	now := time.Now()
-	signals, deferred := s.partitionFinalWakeSignals(ctx, signals, now, "drain")
+	var deferred []superviseSignal
+	if msg.TriedAt.IsZero() {
+		signals, deferred = s.partitionFinalWakeSignals(ctx, signals, now, "drain")
+	}
+	// A tried message cannot change its text or identity; do not let wake partitioning strand it at the queue head.
 	var retry []superviseSignal
 	ctx, signals, retry = s.allStoppedBatch(ctx, signals)
 	if len(retry) > 0 {
@@ -206,6 +210,19 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 			delete(state.Queue, to)
 		}
 	}
+	// Keep a durable copy of every deferred idle in the queue rewrite itself. If the process stops before the
+	// in-memory restoration below, startup reloads this outbox entry instead of losing the only remaining copy.
+	if len(deferred) > 0 {
+		state.SupervisePending = maps.Clone(state.SupervisePending)
+		if state.SupervisePending == nil {
+			state.SupervisePending = map[string]superviseSignal{}
+		}
+		for _, g := range deferred {
+			if _, newer := state.SupervisePending[g.id()]; !newer {
+				state.SupervisePending[g.id()] = g
+			}
+		}
+	}
 	// Save moves and the corresponding source removal together, before anything can send the new payload.
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, relayKey, state); err != nil {
@@ -219,9 +236,9 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	return next, len(groups[to]) == 0, false
 }
 
-// restoreDrainedWakeSignals runs only after the durable source queue no longer carries deferred idles. Queue
-// admission already reserved their fingerprints and turn receipts; release both before making the signals pending
-// again, or an expired wakeup would be deduplicated and restart replay would skip them as told.
+// restoreDrainedWakeSignals runs only after the durable queue rewrite and outbox restoration have committed together.
+// Queue admission reserved the signals' fingerprints and turn receipts; release those matching reservations before the
+// in-memory retry, while the durable outbox independently covers a restart before this step runs.
 func (s *Service) restoreDrainedWakeSignals(ctx context.Context, deferred []superviseSignal, web string, now time.Time) {
 	if len(deferred) == 0 {
 		return

@@ -179,6 +179,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		} else {
 			resp = map[string]any{"output": out}
 		}
+	case nodeclient.AgyHookKind: // an Antigravity CLI hook's report of the pane's conversation (agyhooks.go)
+		resp = n.agyHookKind(req)
 	case "hook.decided": // another PermissionRequest hook answered a call (hookdecided.go)
 		var in hookInput
 		if json.Unmarshal(req.Input, &in) == nil && in.HookEventName == "PermissionRequest" && validID(in.SessionID) {

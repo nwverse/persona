@@ -1656,7 +1656,7 @@ Screenshots use an isolated test hub (real readiness for zero computers) plus Pl
 
 The conversation's right edge offers quick selection of genuine user inputs, including instructions and attachment-only messages. The centered text column and native body scroll keep their layout.
 
-- **Progressive input index** (#4836): the existing `items?user_inputs=1` endpoint returns a complete lightweight count/position index, filtered by the server for genuine own inputs. Navigation initially exposes only its latest 50 positions (all when fewer than 50), even when the first transcript page contains only two input bodies or restores a larger cache. When backward transcript loading reaches an earlier input, `windowUserInputs` extends the range to that input without discarding already exposed positions. Reaching the top of already cached body content also reveals its earlier inputs, so a complete cache cannot make them permanently unreachable. A page still inside the latest 50 does not add duplicate marks. Ordinal labels and keyboard announcements count from the full conversation, not the exposed range. The complete index remains metadata-only; hover never loads older bodies, and selecting an unloaded mark uses ordinary contiguous backward pages. Conversation/history changes reset the range. Unsupported or incomplete index responses retain a retryable loaded-line fallback, initially bounded to 50; that fallback does not claim a global count. A computer's 404 `not_found` with a `reason` says the conversation's history is gone for good, so the index keeps the fallback without asking again; one with only `detail` may recover when its runtime reconnects and retains the ordinary retry (#11450, #11470). Provenance filtering and attachment-only previews are unchanged.
+- **Progressive input index** (#4836): the existing `items?user_inputs=1` endpoint returns a complete lightweight count/position index, filtered by the server for genuine own inputs. Navigation initially exposes only its latest 50 positions (all when fewer than 50), even when the first transcript page contains only two input bodies or restores a larger cache. When backward transcript loading reaches an earlier input, `windowUserInputs` extends the range to that input without discarding already exposed positions. Reaching the top of already cached body content also reveals its earlier inputs, so a complete cache cannot make them permanently unreachable. A page still inside the latest 50 does not add duplicate marks. Ordinal labels and keyboard announcements count from the full conversation, not the exposed range. The complete index remains metadata-only; hover never loads older bodies, and selecting an unloaded mark uses ordinary contiguous backward pages. Conversation/history changes reset the range. Unsupported or incomplete index responses retain a retryable loaded-line fallback, initially bounded to 50; that fallback does not claim a global count. A computer's 404 `not_found` with a `reason` says the conversation's history is gone for good, so the index keeps the fallback without asking again; one with only `detail` may recover when its runtime reconnects and retains the ordinary retry (#11450, #11470), through the session's read gate (3 s doubling to 5 minutes, one read out at a time, #13677). Provenance filtering and attachment-only previews are unchanged.
 - **Transient right-edge overlay**: `src/views/chat/NavRail.tsx` reveals on scrolling, edge hover or keyboard focus, including narrow desktop panels and short chats. The rail alone fades after two seconds of quiet; its invisible edge remains hoverable and in the Tab order. The hover card is removed immediately when the pointer leaves both its contiguous hit zone and the rail, without waiting for that idle timer. Touch-only browsers do not subscribe to scroll or measure the rail.
 - **Bell-shaped marks** (#2168, #4792): widths and opacity taper smoothly away from the preview input to short, faint tails. While a preview is active, every mark's width follows that same bell, including the viewport-current input; it has no independent minimum width. Current-position color and thickness remain, and hovering the current input retains its existing peak. Without a preview, all marks stay uniformly short and thin, with color identifying the current input. Shared geometry tokens handle short conversations without making their other marks uniformly long.
 - **Viewport ownership**: the last genuine input whose anchor starts above the scroller's top plus the shared active offset owns the high-contrast mark (`aria-current`). Hover/keyboard previews are separate from viewport ownership and never independently lengthen its mark. Missing anchors are unknown, not treated as already read.
@@ -1703,7 +1703,7 @@ The list button at the right of an Agent conversation's toolbar toggles **Sessio
 ### Side panels
 
 Session files, Git, links opened inside the page, a lead's Team (see "Team" above), an Agent's Background tasks (below) and, while Settings › How Agents open says
-Side panel (the default, #5424), a task or an Agent opened from a chat appear in a panel on the right (`src/views/SidePanel.tsx`, selection in `src/lib/panel.ts`): one at a time, a new panel replaces the old.
+Side panel (the default, #5424), a task or an Agent opened from a chat appear in a panel on the right (`src/views/SidePanel.tsx`, selection in `src/lib/panel.ts`): one at a time. Opening a panel from outside replaces the current panel and clears the back stack; drilling in from inside the active side panel (for example, opening a file preview, review/changes or link from a side task/Agent session) pushes the previous panel onto a bounded back stack (up to 8 entries) and shows a compact Back (`←`) button in the panel header (`src/ui/PanelHeader.tsx` and nested session panel headers), while single-level panels stay visually unchanged, `×` closes the panel and clears the stack, and narrow-screen browser Back pops one level before closing (#13174).
 Wide screens (≥ 1024) use a column that pushes the page left; its left edge resizes by dragging (double-click resets, stored in localStorage). The edge is also reachable with Tab: ← / → widen / narrow it by 16px, Home / End go to the narrowest / widest, Enter resets (#5149; the handle is `ui/ResizeHandle.tsx`, shared with the sidebar's right edge). However wide it is dragged or remembered, the page beside it keeps at least 440px (`CHAT_MIN`, #5148: the old cap was only 72% of the window, so at 1180 wide the default width broke the input box and a full drag left the chat a few dozen pixels); it gives way as the window narrows or the sidebar opens, and returns to the remembered width when there is room again. Narrow screens cover the whole page. With focus in the panel, Esc closes it (unless a field, menu or dialog in it handled the key first) and returns focus to the button that opened it, or to the chat input if that is gone. Session panels follow the session: changing to another page closes them, and coming back to that session (the sidebar, the browser's Back) opens the one it was left with again, where it was: Files in the same folder with the same file open, Git, a file (#5150, `src/lib/panel-memory.ts`, kept per tab in sessionStorage for the last 20 sessions). A panel closed before leaving (×, Esc, ⌘B, its button) is not brought back, and ⌘B works as before. Link panels remain until closed.
 On wide screens the sidebar, page and side panel use the card radius, with 6px of window background between adjacent columns (#7522). The existing 8px resize handles sit at the center of those gaps. The width budget reserves the gaps before sizing the columns.
 Two-column pages (Inbox, Knowledge) switch to one column according to their own width, and the session top bar also follows its own width (below 800px it hides the git branch, #5421), so an open panel does not crowd the page. The context meter lives in its own row below the composer at every width (#5056).
@@ -2115,7 +2115,7 @@ A domain space is a track of the assistant's (`docs/assistant/health.md`, "Track
 
 - **Data** (`src/lib/tracks.ts`): a typed client for `GET` / `POST /api/v1/assistant/tracks`, `PUT …/tracks/{slug}`, `GET …/track-kinds`, `GET` / `PUT …/tracks/{slug}/space-md`, a conversation's `…/conversations/{id}/categories` and `…/extension-trust`. Every one is the default manager's, as the health space's `?space=` routes are (`docs/assistant/managers.md`, "Clients"). The tracks are read once per page and again on every hello; a create or archive shows at once (`noteTrack`). An answer without a `tracks` list is an assistant from before tracks: no Spaces section, and a space's address says the space is not there.
 - **Sidebar** (`src/views/SidebarSpaces.tsx`): a **Spaces** section under the pages, listing the tracks that are not archived and whose kind's `sidebar.group` is `spaces`, by the kind's `sidebar.order`, then title; each row is the space's icon and title, and the last row is **New space**. The health space keeps its own entry among the pages and is never listed here, so a hub without other spaces draws the health entry exactly as before. Recency order needs each space's latest activity, which the track list does not carry yet; it is a later change. The rail of icons (the folded sidebar) does not show spaces yet.
-- **Addresses** (`src/lib/router.ts`): `/tracks/<slug>` opens the space's latest conversation (or its home when it has none, as `/health` does: `views/health/entry.ts`), `/tracks/<slug>/new` is its home, `/tracks/<slug>/<id>` one of its conversations, `/tracks/new` the new space form. `/tracks/health…` opens the health pages. `/health` stays the health space's own page and is not an alias of the generic route: the health home has its own sources, suggestions, reports and memory, which a generic space home does not draw, and making it one would change how it looks.
+- **Addresses** (`src/lib/router.ts`): `/tracks/<slug>` opens the space's latest conversation (or its home when it has none, as `/health` does: `views/spaces/entry.ts`), `/tracks/<slug>/new` is its home, `/tracks/<slug>/<id>` one of its conversations, `/tracks/new` the new space form. `/tracks/health…` opens the health pages. `/health` stays the health space's own page and is not an alias of the generic route: the health home has its own sources, suggestions, reports and memory, which a generic space home does not draw, and making it one would change how it looks.
 - **Home** (`src/views/spaces/Space.tsx`): the space's icon, title and one line about it; the box that starts a conversation in the space (`POST /assistant/conversations?space=<slug>` with `space`, as the health page starts one); one line on how its information is used ("Everything here can be used inside this space…"); its conversations (`GET /assistant?space=<slug>`, merged with the live sessions of its computer); **About this space** (its `SPACE.md`, the human part folded to six lines, and the managed state block's text); and the personal information categories it holds. The header's ⋯ has **Edit** and **Archive** (`PUT …/tracks/{slug}` with `archived: true` and the revision read; the space leaves the sidebar and its files stay). A conversation's header has its categories, its past conversations and New.
 - **SPACE.md editor** (`src/views/spaces/SpaceMdEditor.tsx`, `src/lib/space-md.ts`): the parts the user wrote are fields; each `<!-- persona:managed:<name>:begin -->` … `:end -->` block is shown read-only ("Kept up to date by Persona") and goes back byte for byte, so a save never changes one. A save sends `base_digest`, the digest the edit started from. 409 says the file changed elsewhere meanwhile, keeps what was typed and offers **Load latest**; 400 says the part Persona keeps cannot be changed here (also checked before sending, for a marker typed into a field); 503 says the assistant's computer is offline or needs an update; 404 that there is nothing to edit yet.
 - **New space** (`src/views/spaces/NewSpace.tsx`): name, one line about it, an icon from a fixed set of design-system icons (`SPACE_ICONS`, names the server takes as icon tokens), the personal information it holds (none by default); under **More options** the type (the enabled kinds, `space` by default, the main chat's `orchestration` left out) and the address, suggested from the name (`suggestSlug`: its Latin letters and digits; a name with none of them, Chinese or Japanese, gets `space`, then `space-2`…) until the user writes one. `new` is refused as an address here, since `/tracks/new` is the form.
@@ -2138,6 +2138,7 @@ would cost about 70 B of the first screen, `FIRST_SCREEN_BUDGET`). Check: `web/e
 lets it go again), wide and phone width, light and dark;
 when `from_seq` doesn't connect, it fills the gap with `after_seq` after 1.5 seconds (`docs/protocol/protocol.md` ("Continuity of items")), and when `history` changes it refetches the whole page.
 A page also doesn't get stuck when a push is lost (#3139, `lib/stale-page.ts`): when the session's `rev` moved since the page's newest read was sent (the list's row or the hub's `revs` event, #1179), or the session list's `updated_at` (for a subagent, its entry in the parent session's `subagents`; a subagent has no rev) is newer than the latest item the page holds, and no items have arrived for 4 seconds, it quietly fetches once with `after_seq` (at most once every 10 seconds per session, only while the page is in the foreground; what it gets is merged without duplicates). The rev catches the last line of a burst whose push was lost, which `updated_at` cannot; it costs one empty read each time an open chat goes quiet.
+These automatic reads go through one gate per session and read in the tab (#13677, `lib/pull-gate.ts`): the stale-page fetch and a gap fill (`after_seq`) share one, the input index (`user_inputs=1`) another. While one is out no second is sent, from this view or another view of the session (the chat and its background activity dialog); after a failure the next waits 3 s, doubling to 5 minutes, and a success starts over. The 10 s spacing is counted from when a fetch ends, so a slow one (on a slow link to the computer they took 30 s each) no longer lets the next go at once. An archived session (it gets no new lines) is not fetched that way at all; opening it, scrolling up or opening a fold reads it as always. On the slow link of #13677 these reads had kept the computer's connection busy with copies of one read every few seconds.
 After 2 consecutive fetches that return items that should have come by push (or 2 consecutive failed fetches), the top of the chat shows "Not live · Reload", which disappears when pushes recover. Check: `scripts/test/web_chat_stale_e2e.py` (the mock hub's `/mock/say?drop=1` writes a reply and updates `updated_at` without pushing items).
 Pages that read on their own also read again on a hello when that read failed while the hub was away, so none stays on its error once the hub is back: the knowledge base's list, search, map and entry page (only what failed: the map would read every entry again; a map drawn without some entries' details reads again too, keeping what it drew until the new read lands and when that read fails), **All chats** (also on a hello the hub could not resume, as the scheduled tasks, #4954; once its **Retry** works, focus that fell with the button goes to the first chat) and Health's reports and memory cards (on every hello, as Health's conversations).
 Pushes the store doesn't keep itself (`inbox`, `lark`, `terminal`, `terminal_control`, `assistant_schedule`…) are subscribed by type by the pages that use them (`onHubEvent(type, fn)`, `src/lib/store.ts`);
@@ -2234,7 +2235,7 @@ stable and a new implementation of the same thing. It is a sidebar group of its 
 each module says in its own document whose setting it holds. The page explains Labs and says that each item states its
 own scope (the terminal one is this browser only), then draws each module's source with the configuration form. Modules
 inject their source in `Labs.tsx`; the page and the form know nothing else of them. Only real features: never a demo
-entry.
+entry. Features (the optional feature modules' switches, "Modules" below) is one of them.
 
 A registration pairs the source with optional Web `guidance`. Supply the experiment's localized `notes` and any
 `fields[id].notes` as ordered lists of `{ kind: "info" | "warning", text }`. Keep each note in one place and omit empty
@@ -2298,6 +2299,101 @@ leaves the page.
    stored values alone (they are ignored). An entry whose new path is abandoned is removed the same way with the old path kept.
 
 An entry should not stay in Labs indefinitely; each one's issue stays open until it graduates or is removed.
+
+## Modules
+
+Persona Core and feature modules (#13430; the web foundation is #13434). Persona Core is the app without its optional
+features; each optional feature is a **module** under `web/src/modules/<id>/` that reaches the shell only through what
+it registers with the module host. The core never imports a module. `web/src/core/` holds the host and is otherwise a
+classification label: existing core files stay where they are.
+
+**The host** (`web/src/core/module-host.ts`). `registerModule(descriptor)` records a module; the shell reads the
+registry back (`moduleRouteAt`, `enabledNavItems`, `moduleTitle`, `moduleNavKey`, `loadModule`, `useModuleStates`),
+never a module's code. A descriptor is small and static: what the module contributes, plus a dynamic `import()` of its
+code. Its fields use the names of the module contract in #13430 section 4, in camelCase:
+
+| #13430 field | Descriptor field | Served by the web shell |
+| --- | --- | --- |
+| `id` | `id` (lower-case, hyphenated; the directory name) | yes |
+| `api` | `api` (the module API it is written for; `MODULE_API`, 1, when absent) | yes: another version is refused |
+| `feature` | `feature` (a hello feature flag; none for a module every hub has served) | yes |
+| `needs` | `needs` (other modules it may import; ESLint holds it to them) | yes (guard) |
+| `wants` | `wants` (modules it uses when they are there) | declared, not yet served |
+| `shell_places` | `routes` (a page: a base segment, its aliases, its title), `extensionPages` (reserved `/extension/-<id>/…` pages the module draws, such as the health module's water and protein pages, #13176) and `navItems` (a sidebar entry and the page it follows) | yes |
+| `i18n_namespaces` | `i18nNamespaces` and `locales` (its catalog loaders) | yes |
+| `settings` | `settingsTabs` | declared, not yet served |
+| `chat_card_kinds` | `cardRenderers` | declared, not yet served |
+| `composer_actions`, `chat_accessories` | `chatSlots`: `composer.trailingAction`, `chat.tail`, `chat.bar`, `interaction.asked` | declared, not yet served (#13431 wires them) |
+
+`registerModule` refuses a descriptor that fills a field the shell does not serve yet (`wants`, `settingsTabs`,
+`cardRenderers`, `chatSlots`) rather than dropping it silently, and refuses a route that collides: a base that is one of
+the core's first segments (`CORE_PATHS`, kept in step with `lib/router.ts` parse by its test), an alias that is a core
+page or lies under a core address other than `/tracks/<slug>` (a space the module has its own page for), and a base or
+alias that another module's base or alias starts, or that starts one of theirs. The rest of the contract (`hub_routes`,
+`mcp_tools`, `prompt_sections`, `background_jobs`, …) belongs to the server.
+
+**The module list** (`web/src/modules/index.ts`) imports each module's descriptor (`modules/<id>/module.ts`) and
+registers it. A descriptor the host refuses throws in development and tests, so it cannot land; in a production build
+it is logged and that module is left out (absent), so one bad module does not stop the app from starting. It is the only place module ids appear outside their own directories. `App.tsx` imports it first, so the
+modules are registered before any address is routed. Importing the list loads no module's code and none of its strings.
+
+**When a module is there.** A module is *on* when its hub feature flag is in the hello's `features` (or it names none)
+and this browser has not switched it off. Before a flagged module's hub has said hello it is *pending*: its address waits,
+its sidebar entry does not show. Otherwise it is *off*, and an off module is absent:
+
+- no sidebar entry, and no switch it could have left behind (the start page falls back as for a removed page);
+- its addresses route as unknown ones (`not-found`), aliases included;
+- neither its code chunk nor its catalog is requested. `loadModule` refuses an off module, and its page is a
+  `lazyPage(…, { listed: false })`, which `loadPages` never preloads.
+
+An on module's page is warmed as the built-in pages are (`core/ModulePage.tsx`, `lib/lazy-page.ts` `preloadOnIntent`):
+when the pointer, the focus or a finger reaches a link to it (its sidebar entry); not with Data Saver on, and never for
+an off or pending module. Never at idle: that would make every browser fetch every module, outside `IDLE_TIER_BUDGET`. Otherwise it loads on its first render: its strings first (`i18n` `addCatalogs`; its code may call `t()` at module
+scope), then its code. A module's namespaces (`<id>.json`, `<id>-*.json` under `src/i18n/locales/<lang>/`) stay beside the
+others, so every catalog check covers them, but the build leaves them out of `client-startup` and `client-rest` and makes
+them the module's own catalog (`?catalog=module-<id>`, `web/i18n-catalogs.ts`). A module's sidebar label, page title and Labs description
+are read before its strings load, so their keys live in the shell's namespaces (`sidebar.json`, `app.json`).
+
+**The switch.** Settings › Labs › Features lists every registered module with a switch (`web/src/core/module-labs.ts`,
+drawn by the configuration form like any Labs entry). Every module is on by default, so nothing changes for anyone who
+never opens it. Off is kept in this browser only (`localStorage` `persona.modules.off`, a JSON array of ids;
+`web/src/core/module-switch.ts`), takes effect at once in every tab, grants nothing and reaches neither the hub nor
+another device. A module the hub does not offer shows read-only, saying so. Labs is where it lives because it is an
+advanced, per-browser choice: the everyday sidebar and Settings stay as they were (principles 1 and 2).
+
+**The guard.** `npm run lint` runs a second pass over all of `src` with `web/eslint.modules.config.mjs`:
+`no-restricted-imports` and `no-restricted-syntax` (for `import()`) catch the spelled paths, and the config's own
+`persona-modules/boundary` rule resolves every relative import, export and `import()` (a template literal by its static
+start, refused when it could still reach `src/modules`) to where it lands. Together they keep files outside `src/modules` from importing a
+module's files (the list is the way in; tests may reach a module's files to test them), keep `src/core` from importing
+even the list, and keep a module from importing the list (`../`, `../../modules`, …) or another module its `module.ts` does not name in
+`needs`. `web/src/core/module-boundary.lint.test.ts` holds the cases. Disables of
+those rules are counted by `scripts/ci/web_module_boundary_ratchet.py` (`scripts/ci/guards.sh`); the baseline,
+`scripts/ci/web_module_boundary_baseline.json`, started empty and can only shrink. `web/src/modules/module-names.test.ts`
+fails when a module's id, route base or sidebar key appears in the `Route` union, the sidebar's built-in pages, their
+colors or the Settings tabs, and when a module namespace is on the first screen.
+
+**The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
+route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
+extension-page id `-health-intake`, which routes as unknown while the module is off), its sidebar entry (right after Inbox, pink with
+Colored icons) and its `health` namespace come from its descriptor instead of the `Route` union, `App.tsx` and
+`SidebarParts.tsx`. The hub has no flag for it and the page was always there, so it names none and stays on unless a
+browser switches it off. Core code that needs one of its addresses writes the path (`/health/<id>`), which routes as
+unknown while the module is off.
+
+### Adding a module
+
+1. Create `web/src/modules/<id>/` with `module.ts` exporting its `ModuleDescriptor`: the id (from #13430 section 2), its
+   hub `feature` if the hub has one, `title` and `description` for the Labs switch, its `routes` and `navItems`, its
+   `i18nNamespaces` with `locales: byLanguage(import.meta.glob("../../i18n/locales/*/_meta.json", { query: "?catalog=module-<id>" }))`,
+   and `load: () => import("./Page").then((m) => ({ Page: m.Page }))`.
+2. Move the feature's files into the directory and fix their imports; the shared helpers they use stay in core.
+3. Rename or move its namespace files to `<id>.json` / `<id>-*.json` in every language, and take them out of
+   `src/i18n/startup-namespaces.json`.
+4. Add the descriptor to `MODULES` in `web/src/modules/index.ts`, and remove the feature's hand-wired entries (its
+   `Route` variant, its `lazyPage` line, its sidebar entry, its color in `lib/sidebar-icons.ts`).
+5. Tests: the module's own `module.test.tsx` (on and off: entry, route, chunk and catalog requests), and
+   `npm run lint`, which now covers it.
 
 ## Developing Persona (#9617)
 
@@ -2828,6 +2924,14 @@ and Android follow in #5117.
   MOCK_NEW_AGENT_PANEL=1 MOCK_ULTRACODE=1` (codex also lists glm-5.3; the Mac Studio has no codex launcher; the
   ultracode feature for the switch): `node web/e2e/new-agent-model.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`
   (wide / 390 × light / dark in Chinese, and wide light in English).
+
+## Health Today (#13176)
+
+The Health home (`web/src/modules/health/Health.tsx`) opens with **Today** when the hub's hello lists `health_intake`: a water ring and a protein ring with today's amount and the goal under each, **Drank a glass** and **Other amount** under water and **Log grams** under protein (`HealthToday.tsx`, state in `useHealthIntake.ts`, requests in `intake.ts`). Without the feature the block is not drawn and nothing is asked. The requests are `GET` and `POST /api/v1/assistant/health/intake` and `DELETE …/intake/{id}`, always with `space=health` and never the shown manager's header: the health space stays the default manager's whichever assistant the Persona page shows (`lib/manager-choice.ts` `managerHeaderFor`; `intake.manager.test.ts` keeps it).
+
+A press adds its amount to the ring at once and the hub's answer, which carries today's totals, replaces the local sum; a refusal takes the amount back out and says why, with Retry sending the same record number (`crypto.randomUUID()` per record, so a retry is logged once). A logged record's toast has **Undo**, which calls the DELETE route. Writes go one at a time, in the order they were made; a read (the hub's `health_intake` message, a hello, the page coming back to the front) waits for the writes in flight and is run once they are done, so an older read cannot undo a newer answer.
+
+A ring links to its page: the hub's declarative water or protein page, drawn by the extension pages' renderer under the reserved id `-health-intake` (`lib/health-intake-ui.ts`), the way the subscription pages are, over HTTP only. `lib/extension-ui.ts` maps the reserved ids to their paths (`/subscriptions/-/ui`, `/assistant/health/intake/ui?space=health`), and `HealthIntakePage.tsx` is a full page at `/extension/-health-intake/pages?state={"kind":"water"}` (or `"protein"`), the route the renderer already opens pushed pages on ([deep-links.md](../protocol/deep-links.md) "Route table"), so it adds no route. The page draws again on the same `health_intake` message, so a record logged or undone there, or a goal saved, shows on Today at once. The ring colors and their reasons are in `docs/design/DESIGN_SYSTEM.md`.
 
 ## Sources (#9132)
 
