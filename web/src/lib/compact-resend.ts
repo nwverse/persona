@@ -8,9 +8,7 @@
 //   dropping attachments or degrading to a generic prompt.
 // - Sessions that do not support compaction (non-Claude terminals, runtimes, botmux, offline, read-only, or hubs
 //   without `assistant_compact`) are not offered a broken action.
-import { fullItem, imageURL } from "./api";
 import { IMAGE_LIMIT_CODE, isRetryText, parseAPIError } from "./api-errors";
-import { imagePayload, MAX_IMAGE } from "./attachments";
 import { COMPACTED_TEXT, isCompaction } from "./compaction";
 import { CONTEXT_RE } from "./compatibility";
 import { sessionCan, stateOf } from "./format";
@@ -98,7 +96,7 @@ export function compactResendSupport(session: Session | undefined, opts: Compact
  * `message-source`, interject note) while keeping all user-supplied rich content (`<persona-context>` quotes/edits/
  * forwards, `<persona-file>`, `<pasted_content>`, `<attached_images>`, slash commands, and plain text) verbatim.
  */
-function cleanRawUserText(raw: string, stripImagePlaceholders: boolean): string {
+export function cleanRawUserText(raw: string, stripImagePlaceholders: boolean): string {
   let out = withoutViewErrors(raw).replace(CONTEXT_RE, (whole, attrs: string) => {
     if (!attrs.trim()) return ""; // hub's realtime snapshot, re-prepended on send
     const { kind, title } = tagAttrs(attrs);
@@ -109,11 +107,11 @@ function cleanRawUserText(raw: string, stripImagePlaceholders: boolean): string 
   return out.trim();
 }
 
-function userTextItems(user: UserMessage): Item[] {
+export function userTextItems(user: UserMessage): Item[] {
   return (user.rawInput ?? []).filter((it) => it.kind === "text");
 }
 
-function userImageItems(user: UserMessage): Item[] {
+export function userImageItems(user: UserMessage): Item[] {
   const rawImgs = (user.rawInput ?? []).filter((it) => it.kind === "image");
   return rawImgs.length ? rawImgs : user.images;
 }
@@ -175,77 +173,16 @@ export function canResendFailedTurn(candidate: FailedTurnCandidate | null): bool
   return Boolean(user.text.trim());
 }
 
-async function defaultFetchImage(mid: string, sid: string, item: Item, signal?: AbortSignal): Promise<{ mime: string; data: string } | null> {
-  try {
-    const r = await fetch(imageURL(mid, sid, item.id), { signal });
-    const blob = r.ok ? await r.blob() : null;
-    if (!blob || !blob.type.startsWith("image/") || blob.size > MAX_IMAGE) return null;
-    return await imagePayload(blob);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Captures the complete original `OutgoingPayload` (raw text with contexts/files/attachments + full untruncated text +
- * all image bytes) BEFORE compaction starts. Fails cleanly if any image bytes or truncated text cannot be recovered.
- */
+/** Resolves the original text and attachments when the user tries again. */
 export async function resolveFailedTurnPayload(
   candidate: FailedTurnCandidate | null,
   mid: string,
   sid: string,
-  deps: ResolvePayloadDeps = {},
+  deps?: ResolvePayloadDeps,
   signal?: AbortSignal,
 ): Promise<ResolvedPayload> {
-  if (!candidate) return { ok: false, reason: "empty" };
-  if (candidate.captured) {
-    const text = candidate.captured.text;
-    const images = candidate.captured.images.map((img) => ({ mime: img.mime, data: img.data }));
-    if (!text.trim() && !images.length) return { ok: false, reason: "empty" };
-    return { ok: true, payload: { text, images } };
-  }
-  const fetchFull = deps.fetchFullItem ?? fullItem;
-  const fetchImg = deps.fetchImage ?? ((m: string, s: string, item: Item) => defaultFetchImage(m, s, item, signal));
-  const { user } = candidate;
-
-  const imgItems = userImageItems(user);
-  const images: { mime: string; data: string }[] = [];
-  for (const img of imgItems) {
-    if (img.image?.data) {
-      images.push({ mime: img.image.mime || "image/png", data: img.image.data });
-      continue;
-    }
-    if (!img.image?.lazy || !img.id) return { ok: false, reason: "images_unavailable" };
-    const loaded = await fetchImg(mid, sid, img);
-    if (!loaded?.data) return { ok: false, reason: "images_unavailable" };
-    images.push(loaded);
-  }
-
-  const textItems = userTextItems(user);
-  let text = "";
-  if (textItems.length > 0) {
-    const parts: string[] = [];
-    for (const it of textItems) {
-      let raw = it.text ?? "";
-      if (it.full_size) {
-        try {
-          const whole = await fetchFull(mid, sid, it.id);
-          if (typeof whole.text !== "string") return { ok: false, reason: "text_unavailable" };
-          raw = whole.text;
-        } catch {
-          return { ok: false, reason: "text_unavailable" };
-        }
-      }
-      const cleaned = cleanRawUserText(raw, images.length > 0);
-      if (cleaned) parts.push(cleaned);
-    }
-    text = parts.join("\n");
-  } else {
-    text = user.text.trim();
-  }
-
-  if (!text.trim() && !images.length) return { ok: false, reason: "empty" };
-  return { ok: true, payload: { text, images } };
+  const { resolvePayload } = await import("./resend-payload");
+  return resolvePayload(candidate, mid, sid, deps, signal);
 }
 
 function isBoundaryItem(it: Item): boolean {

@@ -15,9 +15,10 @@ import (
 // measured 248,704 B on 2026-11-21. Session-bound A2A tool bridges bring the generated total to about 251.3 kB.
 // Minifying the remaining non-compat Antigravity lib sources (acp.js, file-links.js, models.js; #12781, #13123)
 // brings the generated total from 254,085 B back to 251,311 B under the unchanged 252,000 B ceiling.
+// Antigravity's empty-response retry and interrupted-turn notices (#13957) use the remaining room and add 850 B.
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 252_000
+	const budget = 252_850
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

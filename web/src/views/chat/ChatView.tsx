@@ -1983,6 +1983,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // "Retry" on the error banner and the failure note: sends "continue" alone, not what is in the box. Whether it went:
   // deliver can refuse without leaving a bubble (the setup gate, a row that cannot send, a refused launcher switch)
   const retry = useCallback(() => deliver({ text: t("chat-chatview.continue_text"), images: [] }, uuid()), [deliver]);
+  const retryEmpty = useCallback(async (user: UserMessage, signal: AbortSignal) => {
+    const captured = user.client_msg_id ? deliveredPayloads.current.get(user.client_msg_id) : undefined;
+    const resolved = await resolveFailedTurnPayload({ user, captured }, mid, sid, undefined, signal);
+    if (signal.aborted || chatNow.current !== `${mid}/${sid}`) return true;
+    if (!resolved.ok) return false;
+    await deliver(resolved.payload, uuid());
+    return true;
+  }, [deliver, mid, sid]);
+  const emptyAction = canCompose && !working && !gate.blocked && !stoppedLine ? retryEmpty : undefined;
   // the failure notice "Retry" was pressed on: kept here, not in the note, so it stays gone while the session goes through
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
@@ -2456,6 +2465,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
                         busy={d.line.id === busySegment || undefined}
+                        retryEmpty={d.line.kind === "segment" && d.line.seg.emptyResponse ? emptyAction : undefined}
                         dockTurnClock={("live" in d.line && d.line.live && dockTurnClock) || undefined}
                       />
                     ),
@@ -2481,6 +2491,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   assistant={assistant}
                   offscreen={offscreen(row.line)}
                   busy={row.line.id === busySegment || undefined}
+                  retryEmpty={row.line.kind === "segment" && row.line.seg.emptyResponse ? emptyAction : undefined}
                   dockTurnClock={("live" in row.line && row.line.live && dockTurnClock) || undefined}
                 />
               )])}
