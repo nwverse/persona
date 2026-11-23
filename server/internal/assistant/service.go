@@ -383,6 +383,7 @@ func New(o Options) *Service {
 	s.agentNamingRoutes() // agent_naming_request.go
 	s.alwaysRoutes()
 	s.infoAccessRoutes()
+	s.trackRoutes()
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
@@ -1077,6 +1078,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 		s.afterSettle(context.WithoutCancel(ctx), s.infoTagTurnSettled, r.MachineID, r.SessionID)
 	}
 	if !meeting {
+		s.spawnPinAfterTurn(ctx, r.MachineID, r.SessionID)
 		s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
 	}
 }
