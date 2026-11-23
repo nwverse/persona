@@ -13,8 +13,8 @@ import (
 
 // A supervisor takes back the needs_user it raised (task_review accepted withdraw_needs_user,
 // docs decision rights: only six kinds of things go to the user; the rest is the supervisor's): the task is accepted
-// and closed, nothing new reaches the user, what was pushed about it is taken back, and its decision card ends
-// neutral, never as the user's choice.
+// and closed, nothing new reaches the user, the hub is told the to-do is over (its next push may ring), and its
+// decision card ends neutral, never as the user's choice. The push already on the phone stays: it carries no card id.
 
 // toldResolved reports whether the assistant told the hub that card id is over (EventFleetResolved).
 func toldResolved(f *fakeHub, id string) bool {
@@ -41,13 +41,13 @@ func TestSupervisorWithdrawsItsNeedsUserQuietly(t *testing.T) {
 	s, f, todo, posts, updates := setupNeedsUserTaskWithLark(t, database)
 	card := assistantwire.TodoAskCardID(todo.ID)
 	decided := decidePushes(t, f)
-	if len(decided) != 1 || decided[0]["related_key"] != assistantwire.TodoPushKey(todo.ID, assistantwire.TodoPushDecide) || decided[0]["card_id"] != card {
-		t.Fatalf("the needs_user's decision push = %v, want one keyed by the to-do and reason, carrying its ask card", decided)
+	if len(decided) != 1 || decided[0]["related_key"] != assistantwire.TodoPushKey(todo.ID, assistantwire.TodoPushDecide) || decided[0]["card_id"] != nil {
+		t.Fatalf("the needs_user's decision push = %v, want one keyed by the to-do and reason, without a card id", decided)
 	}
 	pushedBefore := len(f.pushed())
 	conclusionsBefore := len(cardsWith(posts(), "结论："))
 	if toldResolved(f, card) {
-		t.Fatal("the decision push was taken back before the withdrawal")
+		t.Fatal("the hub was told the to-do is over before the withdrawal")
 	}
 
 	res := reviewTask(t, s, todo.ID, withdrawArgs())
@@ -73,7 +73,7 @@ func TestSupervisorWithdrawsItsNeedsUserQuietly(t *testing.T) {
 		t.Fatal("a closed report is still due for the withdrawn task")
 	}
 	if !toldResolved(f, card) {
-		t.Fatalf("the decision push was not taken back (EventFleetResolved %s)", card)
+		t.Fatalf("the hub was not told the to-do is over (EventFleetResolved %s)", card)
 	}
 	// The decision card ends neutral: superseded with the supervisor's reason, never an option taken.
 	a := askOf(s, todo.ID)
@@ -131,7 +131,7 @@ func TestOnlyTheSupervisorWithdrawsANeedsUser(t *testing.T) {
 			t.Fatalf("a refused withdrawal ended the decision: %+v", a)
 		}
 		if toldResolved(f, assistantwire.TodoAskCardID(todo.ID)) {
-			t.Fatal("a refused withdrawal took the push back")
+			t.Fatal("a refused withdrawal told the hub the to-do is over")
 		}
 	})
 	t.Run("the main conversation", func(t *testing.T) {
@@ -189,8 +189,8 @@ func TestWithdrawNeedsUserNeedsANeedsUser(t *testing.T) {
 	}
 }
 
-// The judge's owner wait (needs_user without a decision card) is withdrawn the same way: its needs-user push is taken
-// back and nothing new goes out.
+// The judge's owner wait (needs_user without a decision card) is withdrawn the same way: the hub is told the to-do is
+// over and nothing new goes out.
 func TestSupervisorWithdrawsAnOwnerWait(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	withWebBot(f, testWeb)
@@ -198,7 +198,7 @@ func TestSupervisorWithdrawsAnOwnerWait(t *testing.T) {
 	s.superviseJudged(context.Background(), todo, work, taskDoneCheck{Verdict: verdictNeedsUser, Reason: "需要你本人操作"}, nil)
 	waitFor(t, "the needs-user push", func() bool { return len(f.pushed()) == 1 })
 	card := assistantwire.TodoAskCardID(todo.ID)
-	if p := f.pushed()[0]; p.RelatedKey != assistantwire.TodoPushKey(todo.ID, assistantwire.TodoPushNeedsUser) || p.CardID != card {
+	if p := f.pushed()[0]; p.RelatedKey != assistantwire.TodoPushKey(todo.ID, assistantwire.TodoPushNeedsUser) || p.CardID != "" {
 		t.Fatalf("needs-user push related=%q card=%q", p.RelatedKey, p.CardID)
 	}
 	reviewTask(t, s, todo.ID, withdrawArgs())
@@ -210,6 +210,6 @@ func TestSupervisorWithdrawsAnOwnerWait(t *testing.T) {
 		t.Fatalf("withdrawing the owner wait pushed %d more", n-1)
 	}
 	if !toldResolved(f, card) {
-		t.Fatal("the needs-user push was not taken back")
+		t.Fatal("the hub was not told the owner wait is over")
 	}
 }

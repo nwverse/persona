@@ -147,15 +147,15 @@ func replyKey(sessionID, text, given string) string {
 // extensions hear no agent.finished. One collapse id a to-do: a later round's push takes the place of the earlier one,
 // whose OK could only answer "already handled".
 func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo) {
-	h.notifyDecideKeyed(owner, machineID, machine, sessionID, title, text, todo, "", "")
+	h.notifyDecideKeyed(owner, machineID, machine, sessionID, title, text, todo, "")
 }
 
-// notifyDecideKeyed is notifyDecide with the manager's related key and card id (assistantwire.Notification). A key of
-// the to-do and a reason ("todo:<id>:decide", assistantwire.TodoPushKey) rings once while the to-do still waits on the
-// owner for it (push_todo_dedup.go); without one (an older manager) the key is the round, and each round rings as
-// before. A card id goes in the payload as interaction_id and is remembered per device, so the manager's
-// EventFleetResolved with it takes the push back (push_withdraw.go); without one the payload is as before, byte for byte.
-func (h *Hub) notifyDecideKeyed(owner, machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo, relatedKey, cardID string) {
+// notifyDecideKeyed is notifyDecide with the manager's related key (assistantwire.Notification). A key of the to-do
+// and a reason ("todo:<id>:decide", assistantwire.TodoPushKey) rings once while the to-do still waits on the owner for
+// it (push_todo_dedup.go); without one (an older manager) the key is the round, and each round rings as before. The
+// payload is as before either way. It never carries an interaction_id: the iOS app clears a delivered push whose
+// interaction_id is not in its card list as stale, and a decision is never in that list.
+func (h *Hub) notifyDecideKeyed(owner, machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo, relatedKey string) {
 	key := strings.TrimSpace(relatedKey)
 	if id, _, ok := assistantwire.TodoPushKeyParts(key); !ok || id != todo.ID {
 		// One key a round: the same decision does not ring twice in 12 hours, but a new round of it (asked again) does.
@@ -164,26 +164,13 @@ func (h *Hub) notifyDecideKeyed(owner, machineID, machine, sessionID, title, tex
 	if !h.push.claimTodoPush(key) {
 		return // the same to-do's decision rang and still waits on the owner
 	}
-	cardID = strings.TrimSpace(cardID)
 	build := func(i18n.Lang) map[string]any {
-		p := decidePayloadIn(owner, machineID, machine, sessionID, title, text, todo)
-		if cardID != "" {
-			p["interaction_id"] = cardID
-		}
-		return p
-	}
-	var sent func(Device)
-	if cardID != "" {
-		sent = func(d Device) {
-			if hasFeature(d, featureWithdraw) {
-				h.push.cardPushedTo(cardID, d.DeviceID)
-			}
-		}
+		return decidePayloadIn(owner, machineID, machine, sessionID, title, text, todo)
 	}
 	wants := pushWants{Kind: "input"}
 	sum := sha256.Sum256([]byte("todo_decide\x00" + todo.ID))
 	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: key, title: title, body: text}
-	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, sent); heldReason == "" {
+	if _, _, heldReason := h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, nil); heldReason == "" {
 		h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
 	}
 }

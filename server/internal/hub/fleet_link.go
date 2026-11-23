@@ -844,7 +844,7 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 		if n.Todo == nil || n.Todo.ID == "" || n.Todo.AskedAt.IsZero() || n.Todo.Recommend == "" {
 			return nil, errors.New("a decision's push needs its to-do, when it was asked and the option its OK takes")
 		}
-		h.notifyDecideKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, *n.Todo, n.RelatedKey, n.CardID)
+		h.notifyDecideKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, *n.Todo, n.RelatedKey)
 	case assistantwire.NotifyHealthWater:
 		return h.notifyHealthWater(from, n)
 	default:

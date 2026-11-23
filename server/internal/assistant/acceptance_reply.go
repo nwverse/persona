@@ -236,7 +236,7 @@ func (s *Service) answeredInWords(ctx context.Context, id string, askedAt time.T
 	s.saveAcceptLocked(ctx)
 	b.mu.Unlock()
 	if decision {
-		s.todoPushOver(id) // answered: its push leaves the phones
+		s.todoPushOver(id) // answered: its next push may ring
 	}
 }
 
@@ -423,7 +423,7 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		// Seen: the review already closed the task and told where it came from; "verified" is for deployed work.
 	}
 	if decideAsk(&cp) {
-		s.todoPushOver(id) // taken: its push leaves the phones
+		s.todoPushOver(id) // taken: its next push may ring
 	}
 	completeDismissal()
 	s.updateAskCards(ctx, id, cp)

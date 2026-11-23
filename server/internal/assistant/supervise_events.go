@@ -370,9 +370,8 @@ func (s *Service) notifyTaskNeedsUser(ctx context.Context, t Todo, work time.Tim
 		Subtitle: "Persona", DeviceID: here, SessionID: conversation, Title: title, Body: body,
 		// Only the owner can take this action: it interrupts low-distraction mode (#5732).
 		// The hub rings it once while the to-do waits on the owner for it, whatever the stretch of work (one key a to-do
-		// and reason, push_todo_dedup.go), and takes it back once it is over (todoPushOver).
-		Level: assistantwire.LevelP0, RelatedKey: assistantwire.TodoPushKey(t.ID, assistantwire.TodoPushNeedsUser),
-		CardID: assistantwire.TodoAskCardID(t.ID)}
+		// and reason, push_todo_dedup.go); todoPushOver lets the next one ring. No card id (pushDecisionAbout says why).
+		Level: assistantwire.LevelP0, RelatedKey: assistantwire.TodoPushKey(t.ID, assistantwire.TodoPushNeedsUser)}
 	s.noteCard(ctx, cardLeaderNeedsUser, n)
 	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 		s.logf("task %s: needs-user push: %v", t.ID, err)
@@ -422,7 +421,7 @@ func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	}); err != nil {
 		s.logf("task %s: supervision: %v", t.ID, err)
 	} else if ownerWaitEnded {
-		s.todoPushOver(t.ID) // the owner wait is over: its needs-user push leaves the phones
+		s.todoPushOver(t.ID) // the owner wait is over: the next one may ring
 	}
 }
 

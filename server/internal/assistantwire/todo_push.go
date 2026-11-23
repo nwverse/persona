@@ -5,8 +5,9 @@ import "strings"
 // A to-do's pushes to the owner (its decision, a needs-user action, an overdue decision) are keyed by the to-do and
 // what they are about, not by when they were asked: RelatedKey "todo:<id>:<reason>" (TodoPushKey). The hub pushes one
 // such key once and holds every later push with it while the to-do still waits on the owner for that reason; the
-// manager says the to-do no longer does (answered, withdrawn, closed) with EventFleetResolved naming TodoAskCardID,
-// which also takes the pushes that carried that card id back from the devices.
+// manager says the to-do no longer does (answered, withdrawn, closed) with EventFleetResolved naming TodoAskCardID.
+// The pushes themselves carry no card id: the iOS app clears a delivered push whose interaction_id is not in its card
+// list as stale, and a to-do's ask is never in that list, so they cannot be taken back from the lock screen.
 
 // Reasons a to-do's push to the owner is about (TodoPushKey).
 const (
@@ -21,8 +22,8 @@ const todoAskCardPrefix = "todo-ask:"
 // TodoPushKey is the RelatedKey of to-do id's push to the owner about reason.
 func TodoPushKey(id, reason string) string { return "todo:" + id + ":" + reason }
 
-// TodoAskCardID is the card id the owner pushes about to-do id stand for: EventFleetResolved with it takes them back
-// and ends their TodoPushKey dedup.
+// TodoAskCardID names to-do id's owner ask in EventFleetResolved: it ends its TodoPushKey dedup. It is never a push's
+// card id (see above).
 func TodoAskCardID(id string) string { return todoAskCardPrefix + id }
 
 // TodoOfAskCard is the to-do TodoAskCardID names ("" when id is another card's).

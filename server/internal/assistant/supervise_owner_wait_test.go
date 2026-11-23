@@ -65,7 +65,7 @@ func TestNeedsUserJudgmentWaitsAndPushesOnce(t *testing.T) {
 	}
 	// One key a to-do and reason, not a stretch of work: the hub rings it once while the task waits on the owner.
 	wantRelated := assistantwire.TodoPushKey(todo.ID, assistantwire.TodoPushNeedsUser)
-	if pushes[0].Level != assistantwire.LevelP0 || pushes[0].RelatedKey != wantRelated || pushes[0].CardID != assistantwire.TodoAskCardID(todo.ID) {
+	if pushes[0].Level != assistantwire.LevelP0 || pushes[0].RelatedKey != wantRelated || pushes[0].CardID != "" {
 		t.Fatalf("an owner action must interrupt low-distraction mode, keyed by the to-do and reason: level=%q related=%q card=%q, want P0 %q",
 			pushes[0].Level, pushes[0].RelatedKey, pushes[0].CardID, wantRelated)
 	}

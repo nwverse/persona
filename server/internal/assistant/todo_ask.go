@@ -188,8 +188,10 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 		// to-do's row would not answer in place.
 		Todo: &assistantwire.NotifyTodo{ID: id, AskedAt: a.AskedAt, Recommend: a.Recommend, Responses: ownerResponses,
 			Ask: projection.DecisionAskID(a.AskedAt), Lockscreen: projection.Lockscreen(askRisk(&a))},
-		// One push a to-do and reason while it waits, not one a round, and taken back once it is over (todoPushOver).
-		RelatedKey: assistantwire.TodoPushKey(id, reason), CardID: assistantwire.TodoAskCardID(id)}
+		// One push a to-do and reason while it waits, not one a round (todoPushOver lets the next one ring). It carries
+		// no card id: the iOS app clears a delivered push whose interaction_id is not in its card list as stale, and a
+		// decision is never in that list, so a card id would take an unanswered decision off the lock screen.
+		RelatedKey: assistantwire.TodoPushKey(id, reason)}
 	for _, o := range a.Options {
 		n.Todo.Options = append(n.Todo.Options, o.Label)
 	}
@@ -217,9 +219,9 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 }
 
 // todoPushOver: to-do id no longer waits on the owner (its decision answered, superseded or withdrawn by its
-// supervisor, its owner wait over, the to-do closed). The hub takes back the pushes about it that are still on the
-// phones (they carry assistantwire.TodoAskCardID as their card) and lets the next push about it ring
-// (assistantwire.TodoPushKey). Nothing is pushed: a push it never sent costs a no-op.
+// supervisor, its owner wait over, the to-do closed). The hub lets the next push about it ring
+// (assistantwire.TodoPushKey). Nothing is pushed. Pushes already on the phones stay there: they carry no card id
+// (pushDecisionAbout says why), so there is nothing to take back by.
 func (s *Service) todoPushOver(id string) {
 	if s.hub == nil || id == "" {
 		return

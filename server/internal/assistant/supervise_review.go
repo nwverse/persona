@@ -48,8 +48,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		// accepted: what was done beyond the brief (#3822, task_brief_result.go).
 		AlsoDone []string `json:"also_done"`
 		// accepted: the supervisor takes back the needs_user it raised and accepts the task itself, quietly: no
-		// conclusion card or push, the decision's push taken back from the phones, its card closed as superseded
-		// (never recorded as the owner's choice).
+		// conclusion card or push, its decision card closed as superseded (never recorded as the owner's choice).
 		WithdrawNeedsUser bool `json:"withdraw_needs_user"`
 		// parked (parked.go): until when it waits (a duration or a time; reason says for what), and on what kind of thing.
 		Until     string        `json:"until"`
@@ -498,10 +497,10 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			against += " You accepted it with criteria of its brief not shown met: if one no longer applies, say so with task_scope before accepting next time."
 		}
 		if withdraw {
-			s.todoPushOver(t.ID) // what was pushed about the needs_user leaves the phones, and nothing new goes out
+			s.todoPushOver(t.ID) // the next push about the to-do may ring again; nothing new goes out now
 			return fmt.Sprintf("Task %s: you withdrew its needs_user and accepted it yourself; it is closed. Its decision card "+
-				"is closed as superseded (not recorded as the user's choice), the push about it was taken back from the "+
-				"phones, and no conclusion card or push went out. Don't tell the user unless they asked about it.", t.ID) + against, nil
+				"is closed as superseded (not recorded as the user's choice), it left Needs you, and no conclusion card or "+
+				"push went out. Don't tell the user unless they asked about it.", t.ID) + against, nil
 		}
 		if ledger && verdict == reviewAccepted {
 			// Checked by the supervisor: its "Please verify" is passed, not left for the owner to press (#3240).

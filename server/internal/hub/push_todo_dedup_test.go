@@ -14,15 +14,13 @@ import (
 func todoDecision(id string, asked time.Time, reason string) assistantwire.Notification {
 	return assistantwire.Notification{ID: "ntf_" + randomHex(8), Kind: assistantwire.NotifyDecide, Subtitle: "Persona",
 		Title: "结论：修登录崩溃", Body: "🤔 要你拍板：先灰度还是直接全量", Level: assistantwire.LevelP0,
-		RelatedKey: assistantwire.TodoPushKey(id, reason), CardID: assistantwire.TodoAskCardID(id),
-		Todo: &assistantwire.NotifyTodo{ID: id, AskedAt: asked, Recommend: "先灰度 10%"}}
+		RelatedKey: assistantwire.TodoPushKey(id, reason),
+		Todo:       &assistantwire.NotifyTodo{ID: id, AskedAt: asked, Recommend: "先灰度 10%"}}
 }
 
 // todoNeedsUser is the assistant's needs-user push of to-do id.
 func todoNeedsUser(id string) assistantwire.Notification {
-	n := gradingNotification(assistantwire.LevelP0, assistantwire.TodoPushKey(id, assistantwire.TodoPushNeedsUser), "任务需要你")
-	n.CardID = assistantwire.TodoAskCardID(id)
-	return n
+	return gradingNotification(assistantwire.LevelP0, assistantwire.TodoPushKey(id, assistantwire.TodoPushNeedsUser), "任务需要你")
 }
 
 // Four pushes of one to-do about one reason, each round asked anew, ring once; another reason of the same to-do rings
@@ -81,7 +79,7 @@ func TestLegacyTodoKeysRingEveryRound(t *testing.T) {
 	asked := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
 	for i := range 3 {
 		n := todoDecision("todo_1", asked.Add(time.Duration(i)*time.Minute), assistantwire.TodoPushDecide)
-		n.RelatedKey, n.CardID = "", ""
+		n.RelatedKey = ""
 		if err := h.deliverPush(n); err != nil {
 			t.Fatal(err)
 		}
@@ -92,35 +90,34 @@ func TestLegacyTodoKeysRingEveryRound(t *testing.T) {
 	f.calls(t, 1)
 }
 
-// Once the manager says the to-do no longer waits on the owner (EventFleetResolved naming its ask card), the pushes
-// that carried the card are taken back from the phone and the next push about it rings.
-func TestTodoPushOverWithdrawsAndRingsAgain(t *testing.T) {
+// Once the manager says the to-do no longer waits on the owner (EventFleetResolved naming its ask), the next push
+// about it rings. The decision push carries no interaction_id: the iOS app would clear it as a stale card, unanswered,
+// and nothing is pushed to take it back.
+func TestTodoPushOverRingsAgain(t *testing.T) {
 	h, f, open := withdrawHub(t, featureWithdraw)
 	asked := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
 	if err := h.deliverPush(todoDecision("todo_1", asked, assistantwire.TodoPushDecide)); err != nil {
 		t.Fatal(err)
 	}
 	first := f.wait(t, 1)[0]
-	card := assistantwire.TodoAskCardID("todo_1")
-	if p := open(first); p["interaction_id"] != card {
-		t.Fatalf("decision push payload %v, want interaction_id %s", p, card)
+	if p := open(first); p["interaction_id"] != nil {
+		t.Fatalf("decision push payload %v carries an interaction_id", p)
 	}
 	if err := h.deliverPush(todoDecision("todo_1", asked.Add(time.Minute), assistantwire.TodoPushDecide)); err != nil {
 		t.Fatal(err)
 	}
-	reportResolved(t, h, card, "")
-	got := f.wait(t, 2)
-	if got[1].PushType != "background" {
-		t.Fatalf("after the to-do was over: %+v, want the withdrawal (the repeat was held)", got[1])
-	}
-	if ids, _ := open(got[1])["resolved_interaction_ids"].([]any); len(ids) != 1 || ids[0] != card {
-		t.Fatalf("withdrawal names %v, want %s", ids, card)
-	}
+	reportResolved(t, h, assistantwire.TodoAskCardID("todo_1"), "")
 	if err := h.deliverPush(todoDecision("todo_1", asked.Add(time.Hour), assistantwire.TodoPushDecide)); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.wait(t, 3); got[2].PushType == "background" {
-		t.Fatalf("the to-do's next decision did not ring: %+v", got[2])
+	got := f.wait(t, 2)
+	if got[1].PushType != "alert" {
+		t.Fatalf("after the to-do was over: %+v, want the next decision's alert (the repeat before it was held)", got[1])
+	}
+	for _, r := range got {
+		if r.PushType == "background" {
+			t.Fatalf("a withdrawal went out for a decision push: %+v", r)
+		}
 	}
 }
 
