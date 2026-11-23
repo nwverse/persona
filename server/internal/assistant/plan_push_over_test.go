@@ -42,11 +42,8 @@ func TestPlanPushIsTakenBackOnceDecided(t *testing.T) {
 	}
 	waitFor(t, "the plan's push to be taken back", over)
 
-	w := request(s, http.MethodPost, "/api/v1/task-plans/"+id+"/start", "")
-	var out struct {
-		Plan TaskPlan `json:"plan"`
-	}
-	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &out) != nil || out.Plan.State != planDismissed {
+	// Start on a card decided elsewhere stays a conflict (the phone's copy is gone by now anyway).
+	if w := request(s, http.MethodPost, "/api/v1/task-plans/"+id+"/start", ""); w.Code != http.StatusConflict {
 		t.Fatalf("Start on a dismissed card: %d %s", w.Code, w.Body)
 	}
 }
