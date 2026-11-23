@@ -77,7 +77,10 @@ chat does; any other failure is a toast with the reason ("Couldn't clear the con
 "/" list and "+" sheet offer `/clear` too, which clears the same way (`LocalMainChatClear`); `/clear` sent alone does it,
 anything more is a message, a failure puts `/clear` back in the box, and on the cleared page it does nothing. Tests
 `ClearContextTest`, `MainChatClearTest`.
-The Android sidebar reuses its existing Health conversations and conversation history. Recent, pinned and automatic
+The Android sidebar's **Health** opens the Health home immediately (#13273), with its existing conversations listed
+newest first as they load in the background. Tapping a row opens that chat; **New health chat** returns to the home,
+whose first message starts a new health chat. See `docs/assistant/health.md` ("Entering Health (#4329)") for the rule it replaces.
+Recent, pinned and automatic
 conversations, pinning, archive actions and New chat use their existing data and routes.
 
 There is no old-layout selector or migration. Android previously had a fixed four-destination shell, not an equivalent

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // limitedNotifications is a GitHub whose /notifications answers with code, the headers set by header and message;
@@ -95,7 +95,7 @@ func TestWatchWaitsOutARateLimit(t *testing.T) {
 	c, polls := limitedNotifications(t, http.StatusTooManyRequests, retry, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	if err := c.Watch(ctx, func(connector.Scope) {}); err != nil {
+	if err := c.Watch(ctx, func(connectorwire.Scope) {}); err != nil {
 		t.Fatalf("Watch stopped: %v", err)
 	}
 	if n := polls(); n != 1 {

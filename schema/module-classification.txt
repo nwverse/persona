@@ -217,6 +217,7 @@ go server/internal/textfmt core
 go server/internal/tmux core
 go server/internal/tokenuse core
 go server/internal/toolcli core
+go server/internal/toolschema core
 go server/internal/transcript core
 go server/internal/tunnel core
 go server/internal/tzguard core
@@ -345,7 +346,6 @@ web web/src/i18n/locales core
 web web/src/lib core
 web web/src/lib/configuration core
 web web/src/lib/html-runtime core
-web web/src/lib/voice voice
 web web/src/modules core
 web web/src/screen screen-share
 web web/src/screen/tiers screen-share
