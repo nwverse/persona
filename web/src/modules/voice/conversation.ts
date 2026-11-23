@@ -9,7 +9,7 @@ import {
   DEFAULT_INPUT_RATE, DEFAULT_OUTPUT_RATE, runOpen, SPEECH_GATE_FEATURE,
   type VoiceFailure, type VoiceFrame, type VoiceLine, type VoiceLink, type VoiceReady, type VoiceRun, type VoiceStart, type VoiceTargetInfo,
 } from "./wire";
-import type { Session } from "../types";
+import type { Session } from "../../lib/types";
 import type { VoiceCue } from "./cues";
 
 export type VoiceLiveState = "listening" | "hearing" | "speaking";

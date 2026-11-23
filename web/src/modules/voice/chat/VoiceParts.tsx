@@ -8,12 +8,12 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../../i18n";
 import { BASE } from "../../../lib/base";
 import { lazyPage, type LazyPageComponent } from "../../../lib/lazy-page";
-import { browserVoice, entryMode, evaluate, httpsAddress, type VoiceAvailability } from "../../../lib/voice/availability";
-import { voiceCalls, type VoiceOwner } from "../../../lib/voice/calls";
-import { helloAddresses, useVoiceProbe } from "../../../lib/voice/support";
-import { recentLines } from "../../../lib/voice/wire";
+import { browserVoice, entryMode, evaluate, httpsAddress, type VoiceAvailability } from "../availability";
+import { voiceCalls, type VoiceOwner } from "../calls";
+import { helloAddresses, useVoiceProbe } from "../support";
+import { recentLines } from "../wire";
 import type { Item, Session } from "../../../lib/types";
-import { lazyDialog } from "../../LazyOverlay";
+import { lazyDialog } from "../../../views/LazyOverlay";
 
 /** What the composer offers: start a call, or say why it cannot start here. */
 export interface VoiceOffer {

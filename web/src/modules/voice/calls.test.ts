@@ -6,8 +6,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { VoiceAudio, VoiceDeps, VoiceSocket } from "./conversation";
 
 const reported = vi.hoisted(() => ({ list: [] as { boundary: string; chunk: boolean }[] }));
-vi.mock("../error-reports", async (load) => ({
-  ...(await load<typeof import("../error-reports")>()),
+vi.mock("../../lib/error-reports", async (load) => ({
+  ...(await load<typeof import("../../lib/error-reports")>()),
   reportBoundary: (_e: unknown, boundary: string, chunk: boolean) => void reported.list.push({ boundary, chunk }),
 }));
 
@@ -160,14 +160,15 @@ describe("the page's first voice call", () => {
   });
 });
 
-// The first screen's voice modules that name the call's types take them as types only (an `import type` is erased).
+// The module's entry chunk (what a chat page loads for its slots) names the call's types as types only (an `import
+// type` is erased): the call's code stays a chunk of its own, loaded when a call starts.
 const read = (file: string) => readFileSync(new URL(file, import.meta.url), "utf8");
 const staticImports = (source: string) => [...source.matchAll(/^import(?!\s+type\b)[^;]*from\s+["']([^"']+)["']/gm)].map((m) => m[1]);
 const CALL_ONLY = /(?:^|\/)(?:call-stack|conversation|audio|uplink|resample|capture-pace|cues|frames)$/;
 
-describe("the first screen's voice modules", () => {
+describe("the voice module's entry chunk", () => {
   // (the bar, notes.ts and bar-line.ts are in VoiceCall.tsx's chunk, which a call's start loads with the call's code)
-  it.each(["./calls.ts", "./support.ts", "./wire.ts", "./availability.ts", "../../views/chat/voice/VoiceParts.tsx"])("%s does not bring the call's code in", (file) => {
+  it.each(["./calls.ts", "./support.ts", "./wire.ts", "./availability.ts", "./chat/VoiceParts.tsx", "./chat/slots.tsx"])("%s does not bring the call's code in", (file) => {
     expect(staticImports(read(file)).filter((s) => CALL_ONLY.test(s))).toEqual([]);
   });
 

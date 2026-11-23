@@ -455,8 +455,9 @@ func (s *Service) planSupervisor(ctx context.Context, self, lead string) (string
 		return "", nil
 	case !s.isMain(ctx, self):
 		return "", errors.New("supervisor: only the main conversation may name another leader; omit it to keep this direction lead as supervisor")
-	case !s.isLeader(ctx, lead):
-		return "", fmt.Errorf("supervisor: %s is not a leader conversation (assistant.leaders lists them); omit it to use the default supervisor", lead)
+	}
+	if err := s.validateSupervisorLead(ctx, lead); err != nil {
+		return "", fmt.Errorf("supervisor: %w", err)
 	}
 	return lead, nil
 }

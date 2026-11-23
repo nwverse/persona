@@ -7,7 +7,7 @@
 // conversation, its audio, uplink and resampling: call-stack.ts) is a chunk of its own, imported when the page's first
 // call starts, together with the page's parts for it (`ui`); until then the call's types are all this module takes from it.
 import { useSyncExternalStore } from "react";
-import { reportBoundary } from "../error-reports";
+import { reportBoundary } from "../../lib/error-reports";
 import { closeContexts, openContexts, type VoiceContexts } from "./audio-contexts";
 import type { VoiceConversation, VoiceDeps, VoiceSnapshot } from "./conversation";
 import { DEFAULT_OUTPUT_RATE, type VoiceLine } from "./wire";
@@ -61,7 +61,7 @@ function setCurrent(next: Current | null) {
   emit();
 }
 
-/** `ui`: the page's own code for a call (its bar, views/chat/voice/VoiceCall.tsx), loaded with the call's: the first call
+/** `ui`: the page's own code for a call (its bar, chat/VoiceCall.tsx), loaded with the call's: the first call
  *  is on only once both are in, so the bar draws at once in the composer's place. */
 type Start = VoiceOwner & { extensionID: string; recent: VoiceLine[]; deps?: VoiceDeps; ui?: () => Promise<unknown> };
 

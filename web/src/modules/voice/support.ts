@@ -3,10 +3,10 @@
 // page comes back into view; the last answer stays until the new one comes, so the voice button does not blink.
 // Also the model a call starts with (the use `plugin.<id>`, as iOS's VoiceModelPick and Android's resolveVoiceModel).
 import { useSyncExternalStore } from "react";
-import { api, ApiError, enc } from "../api";
-import { listOf, extRoot } from "../extension-api";
-import type { HubExtension } from "../extensions";
-import { onHubEvent } from "../store";
+import { api, ApiError, enc } from "../../lib/api";
+import { listOf, extRoot } from "../../lib/extension-api";
+import type { HubExtension } from "../../lib/extensions";
+import { onHubEvent } from "../../lib/store";
 import { pickVoice, readInfo, type VoiceInfoState } from "./availability";
 import type { ModelPick } from "./conversation";
 
