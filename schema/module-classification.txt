@@ -151,7 +151,6 @@ go server/internal/mcpserver core
 go server/internal/mcptoolgolden core
 go server/internal/mcpwait core
 go server/internal/mdns core
-go server/internal/mdsplit core
 go server/internal/memtrim core
 go server/internal/modapi core
 go server/internal/modelhttp core
@@ -231,7 +230,6 @@ go server/internal/workspacenaming core
 go server/plugins core
 
 # Module code still in core paths.
-go server/internal/voice/... voice
 go server/internal/transcribelive voice
 go server/internal/lark lark
 go server/internal/larkcli lark

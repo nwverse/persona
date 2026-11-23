@@ -1,4 +1,4 @@
-package mdsplit
+package channel
 
 import (
 	"strings"
