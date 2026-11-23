@@ -534,7 +534,12 @@ with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop 
 
 ### Antigravity CLI
 
-The web Agent session overview requests `session.info` while open for a Herdr pane or Antigravity runtime session.
+Panes (agy in a terminal) are not read by the companion: the node learns a pane's conversation from Persona's own hooks
+in agy's global `hooks.json` (group `persona`, `PreInvocation` and `Stop`, #13729) or from herdr's integration, under any
+engine, and reads its transcript itself; see `docs/integrations/engines.md`. The ACP companion is for sessions without a
+terminal.
+
+The web Agent session overview requests `session.info` while open for a terminal pane or a local Antigravity runtime session.
 The node reads the conversation's `.system_generated/swarm/members.json` and adds the optional `swarm_workers`
 roster to that response. A running worker in `working` or `mentions` wake mode shows as Working or Waiting,
 respectively. Stopped and killed workers show as Stopped. The overview shows the worker count and an expandable

@@ -302,7 +302,7 @@ The first message is never typed into the pane:
 
 Neither keeps token counts the node can read, so their usage is not on the token calendar (`docs/server/machines.md`, "Token usage"). A herdr restart starts Cursor again without a session. Pi's resume names its session (`pi --session`). Pi runs with `--approve` on start and resume, so a directory with project-local files does not stop it at a Trust prompt nobody answers (`docs/integrations/pi.md`, "Project trust"). An agy start answers agy's folder-trust dialog ("Do you trust the contents of this project?") by trusting the folder the start chose, as Claude's and Codex's starts do, before its first message goes in; the watch is bounded, and a start with no dialog types nothing extra (`server/internal/node/agytrust.go`, #11424). Resuming one of these sessions from the phone with `session.start` is refused (`work_agent_resume`): a stopped pi resumes in its own herdr tab when the phone sends it a message (`docs/integrations/pi.md`), and the others are resumed on the computer.
 
-**Antigravity CLI conversation history and restore.** Run `herdr integration install antigravity-cli` on the computer that runs agy. Once Persona verifies the conversation ID herdr reports for the pane, it reads that conversation's local history. On a herdr restart, a Persona-started pane uses `agy --conversation <id>` to reopen the verified conversation and preserves the selected model. Until Persona has a verified ID, the pane restores with `agy` and the original `--model` option if set, starting a fresh conversation. The phone can still send messages, interrupt, and use the terminal while it waits for the conversation.
+**Antigravity CLI conversation history and restore.** Persona's own agy hooks (installed by the node; see `personad node doctor`, line `agy-hooks`) or `herdr integration install antigravity-cli` report the pane's conversation. Once Persona verifies that conversation ID, it reads that conversation's local history. On a herdr restart, a Persona-started pane uses `agy --conversation <id>` to reopen the verified conversation and preserves the selected model. Until Persona has a verified ID, the pane restores with `agy` and the original `--model` option if set, starting a fresh conversation. The phone can still send messages, interrupt, and use the terminal while it waits for the conversation.
 
 **The Cursor CLI on a Mac over SSH.** `cursor-agent` keeps its sign-in in the macOS keychain. A pane opened inside an SSH session (or by a launchd job that is not the GUI user's) finds the keychain locked and asks for it, so the agent never becomes ready and the start fails. Run it in the GUI session: herdr itself started there (the node service of a logged-in user), not `ssh mac cursor-agent`. The same applies to anything else the CLI reads from the keychain.
 
@@ -780,11 +780,12 @@ Persona checks the effective Base URL/provider address, never the launcher name.
 | Header | Value |
 | --- | --- |
 | `X-Persona-Role` | `main` for interactive main/side chats; `leader` for direction conversations; `routine` for scheduled runs and their conversations; `task_agent` for work Agents; `background` for sorting, knowledge helpers, supervision and model health probes |
-| `X-Persona-Todo` | Linked to-do ID, when known |
+| `X-Persona-Todo` | Linked to-do ID, when known at process start (an `agent_start` makes its to-do before the start, so its Agent names it) |
 | `X-Persona-Routine` | Scheduled-task ID, when known |
 | `X-Persona-Session` | Persona session ID, when known at process start/resume |
 
-Only role enums and validated IDs enter these fields. A routine delivered into an interactive conversation has the
+Persona's own gateway reads for extensions (quota and usage through the hub or a node) and provider tests and model
+lists are `background`. Only role enums and validated IDs enter these fields. A routine delivered into an interactive conversation has the
 routine's accounting role for that run; the next interactive message restores the conversation's role. Manager-owned
 records supply the metadata on starts, sends and autonomous resumes. Source changes participate in process reuse,
 and node state preserves attribution through the manager's database boundary.
@@ -799,6 +800,8 @@ Codex uses a final CLI helper after normal shell launcher expansion, or after a 
 per-invocation `-c` overrides for the selected custom provider's `env_http_headers`. Existing literal headers are carried
 in environment bindings too, so credentials never enter the new arguments. Authentication, provider URL and unrelated
 headers stay intact. These local configuration overrides keep attribution on that process rather than a shared daemon.
+A terminal's shell has its engine's environment, not the node's, so the node hands its allowlist to that helper in the
+start file (`codex-start`) or in its answer to `personad launch`; the shell need not export `PERSONA_MODEL_SOURCE_HOSTS`.
 Some Codex traffic cannot carry the fields: the built-in `openai` provider ignores ordinary provider header overrides;
 explicit remote/desktop app-servers and external runtimes own their own HTTP transport; project-level provider choices
 are skipped because only Codex knows whether it trusts that project configuration. Unknown/unreadable provider

@@ -889,6 +889,7 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
 
   Such a section says so on its header (`- <section>（只列有变化和新增的行，没列的行照旧）：`, "only the changed and new rows are listed, the others stand"; the same note is the first row under a header that itself changed), so the listed rows are never read as all of them; rows that are gone are named by id (`（已移除的行：…）`, "rows removed"), and the rows' order is given (`（行现在的顺序：…）`, "the rows' order now") only when it is not the old order with the new rows last. A section that left the snapshot is named in a closing list (`- 这份快照里已经没有的段落（它们之前的内容作废）：`, "sections this snapshot no longer has; what they said before is void"), where it used to be left standing. So the blocks a conversation has read add up to the snapshot each was made from, byte for byte (`TestContextDeltaBlocksAddUpToTheSnapshot`).
   Sent whole, as before: a section without row ids (one line of items joined by `；`, which their free text may hold too; Inbox follow-ups, which show a title and no id; the knowledge digest, whose rows sit under headings of its own), a section where some row has no id or two share one, and a section that is no shorter told by rows. A line before the snapshot's own sections (what the conversation is, a one-time notice) is never reported gone.
+  The open to-do index (`- 开放待办索引…：todo_1「…」；todo_2…`, one line, ids only when the snapshot is short of room) is the exception (#13807): its items each start with a to-do id, so a block of changes lists only the to-dos that came (and, while both snapshots render titles, the items whose text changed) and names the ones that went, with no order list; the count of all open to-dos is its own section (`- 开放待办：共 N 件`). A change of rendering alone (ids only ↔ ids and titles) is not told, so for this section the blocks add up to the same to-dos, not the same bytes. An index whose items cannot be told apart (a title holding `；`) is sent whole. Before, any change to it re-sent all of it, which with 60 open to-dos was every message.
   Measured on two synthetic conversations shaped like the two recorded ones in #9078, rendered by the real templates (`TestContextDeltaBytesBeforeAndAfter`, after #11261 dropped the working-agent row): the 3 blocks after the first went from 3,768 B to 1,605 B, the 12 blocks of the longer one from 41,684 B to 9,701 B; unchanged rows repeated went from 1,752 B and 30,773 B to none.
 - No `--append-system-prompt` remains; Codex `developerInstructions` contains only memory (changes with its index; resumed handling not measured).
 - hub snapshot: reuse data for 45 seconds; refresh stale data in the background, wait at most 1.5 seconds per message, then use the prior snapshot if within 30 minutes. While the last read took longer than those 1.5 seconds, a message does not wait at all: it goes with the prior snapshot, and the read it starts is there for the next message (otherwise every message after a quiet 45 seconds waited the whole 1.5 seconds for nothing, #8948). A read slower than that is logged (`live snapshot: the read took …`) with the connectors' share, the usual slow source. Time is always current; ended items removed.
@@ -2111,6 +2112,26 @@ purpose id. Out of scope: the reverse. Nothing suggests a stronger tier, whateve
 for each role" says when to raise it. Once the owner has moved the supervisor down, the same rule may name the next
 tier down after its own 20 settled acceptances, but never the smallest.
 
+## Card ledger (decision rights, rule 4)
+
+The owner decides only six kinds of things (decision-rights design of 2026-11-23): 1 goals and direction, 2 what only
+they know, 3 what goes out under their name, 4 money, 5 what cannot be undone and they never said, 6 what only they can
+do in person (a login, a second factor, a password or form, the experience check). Every card or push the manager sends
+to the owner is recorded with its source, the kind of the six it is (0: none of the six) and its owner
+(`assistant/card_layers.go`). The source is a code constant named where the push is made (`withCard` on the ctx of
+`push`/`pushResult`/`ask`, `deliverCard`, or `inputCardSource` for a card: an Agent's by its kind, the manager's own by
+what `ask` was told or by its tool), and its kind comes from one table, `cardCategories`, never from a model: secret and
+form cards are 6; a connector's write left to the owner (mail, a chat message, a comment) is 3; a supervisor's
+`needs_user`, its decision, an explicit `ask_escalate` and what the owner set up themself (their reminders, water
+reminders, minutes, the day recap, the briefing fallback, finished-turn pushes) are 1; everything else, an Agent's
+approvals, plans and questions, `confirmOutbound`, the main conversation's own `persona_settings` cards and an untagged
+push included, is 0, and every push of kind 0 is a bug. A test holds every source constant to having a kind. Counts are
+kept per day of the owner's time zone in the setting `assistant.card_ledger` (eight days; in memory only without a
+database). Once a day, from the morning briefing's time (`acceptLoop`'s tick), the day before's count goes to the main
+conversation as a message kept without waking it (`keepRelayLater`, setting `assistant.card_ledger_told`): in all, each
+of the six kinds, and kind 0 by source. It is never pushed to the owner and the briefing does not carry it. The ledger
+only records; which cards are pushed is decided where they are made.
+
 ## Supervision by model (#5086)
 
 Step K1 of the same proposal (section 9c): what supervision costs per accepted task, by the model the supervisor ran
@@ -2779,7 +2800,9 @@ session, freezes the source, and activates the target through a database epoch c
 work make a switch retryably busy. Permission mode carries over; unknown engines and unsupported supervision policy
 are refused before preparation. The first queued input carries policy and handoff together, with the original client
 message ID. Source compaction summaries take priority; the fallback uses the manager's existing model chain and waits
-through provider pauses. Bounded or incomplete history is marked partial.
+through provider pauses. When knowledge processing has no usable model (`model_unavailable`), retrying cannot help, so
+the switch goes ahead without a new summary: the recent turns and any earlier summary carry over, marked partial.
+Bounded or incomplete history is marked partial.
 
 The source stays recoverable until the target accepts its first turn. A definite refusal restores the source at a
 new epoch, invalidates the abandoned target's history projection and releases the unsent queue there; an ambiguous
