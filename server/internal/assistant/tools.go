@@ -378,9 +378,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			DismissNotice bool `json:"dismiss_notice"`
 			// Task: new work handed to this agent becomes a supervised task of the main conversation (agent_control.go),
 			// read from RawTask by givenTask (nil: a reply).
-			Task    *sendTask           `json:"-"`
-			RawTask json.RawMessage     `json:"task"`
-			Handoff *taskHandoffRequest `json:"handoff"`
+			Task         *sendTask                `json:"-"`
+			RawTask      json.RawMessage          `json:"task"`
+			Handoff      *taskHandoffRequest      `json:"handoff"`
+			Continuation *planContinuationRequest `json:"continuation"`
 			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
 			Attachments []string `json:"attachments"`
 			// Resume: resume a stopped agent with its context, as the user's Resume does, with ResumeWhy said to the
@@ -406,6 +407,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		if strings.TrimSpace(a.Text) == "" {
 			return "", fmt.Errorf("text is empty")
+		}
+		if a.Continuation != nil && (a.Task != nil || a.Handoff != nil || exitText(a.Text) || !continuationSession(c)) {
+			return "", fmt.Errorf("continuation needs the original send-capable session and a work message, without task or handoff; stopped sessions require their existing Resume checks")
 		}
 		var handoff *preparedHandoff
 		if a.Handoff != nil {
@@ -523,7 +527,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if err != nil {
 				return "", task.sendFailed(ctx, s, err)
 			}
-			if !note.reopens() && handoff == nil {
+			if !note.reopens() && handoff == nil && a.Continuation == nil {
 				lctx = ctx
 			}
 			// A nearly full Claude Code or Codex agent is compacted with its own /compact before the text goes in, by
@@ -536,7 +540,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				defer ccancel()
 			}
 			var sent agentSendReply
-			if handoff != nil {
+			if a.Continuation != nil {
+				err = s.sendPlanContinuation(lctx, self, am.ID, c.SessionID, *a.Continuation, params, &sent)
+				inputID, _ = params["client_msg_id"].(string)
+			} else if handoff != nil {
 				err = s.sendTaskHandoff(lctx, handoff, params, &sent)
 			} else {
 				err = s.call(lctx, am.ID, DeviceSessionSend, params, &sent)

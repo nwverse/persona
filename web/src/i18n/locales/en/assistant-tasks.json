@@ -185,6 +185,15 @@
   "start_cause_timed_out": "It took too long to start",
   "start_cause_not_allowed": "This computer didn't allow it",
   "start_cause_needs_update": "Persona on this computer needs an update",
+  "continuation_failed_attempt": "This dispatch failed",
+  "continuation_sending": "Sending the continuation request",
+  "continuation_unknown": "Continuation delivery is unconfirmed",
+  "continuation_sent": "Continuation request sent to the original session",
+  "continuation_queued": "The original session accepted the request into its queue",
+  "continuation_historical_session": "Historical delivery; open the task for its current status",
+  "continuation_current_session": "Original session:",
+  "continuation_dispatch_history": "This dispatch failed · view history",
+  "continuation_view_task": "View current task",
   "start_failed_short": "Didn't start.",
   "start_failed_details": "Didn't start. Open it for details."
 }

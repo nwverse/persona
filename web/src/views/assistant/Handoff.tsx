@@ -4,7 +4,7 @@
 // did not start, in plain words (lib/start-failure.ts; the task's Needs you row has Retry and Remove). It is the task's
 // only card in the chat (#8237): a turn the model service cut off shows on it too, in place, with why.
 import { openAgent, openTask } from "../../lib/handoff";
-import { startFailure, type TaskPlan } from "../../lib/feed";
+import { startFailure, type PlanTask, type TaskPlan } from "../../lib/feed";
 import { startFailureCardLine } from "../../lib/start-failure";
 import { interruption, TODO_STATUS_INFO, type Todo, type TodoAgent } from "../../lib/todos";
 import { ago, stateOf } from "../../lib/format";
@@ -87,8 +87,50 @@ export interface Handoff {
   todo?: string;
   /** Why the task did not start (no Agent), as the hub said it; the card says it in plain words. */
   failure?: string;
+  /** Delivery to the original session, separately from its live state and the failed dispatch's history. */
+  recovery?: "sent" | "queued";
+  recoveryCurrent?: boolean;
+  historyFailure?: string;
+  /** An explicit way to inspect the current task without claiming this failed attempt started its Agent. */
+  currentTodo?: string;
+  delivery?: "sending" | "unknown";
+  deliveryError?: string;
   /** The task has no Agent and never will: closed before one started, or removed since (no `todo`). */
   ended?: boolean;
+}
+
+/** A hub-confirmed send is history even after another Agent takes over. Only the exact current link may supply live
+ *  status: an existing working Agent alone is never evidence that this failed dispatch was recovered. */
+export function continuationHandoff(task: PlanTask, todos: Todo[]): Handoff | undefined {
+  const r = task.continuation_recovery;
+  if (!task.error || !r || (r.state !== "sent" && r.state !== "queued") || !r.scope_revision || !r.machine_id || !r.session_id || !r.input_id || !r.sent_at) return undefined;
+  const target = task.continues || task.reuse_todo;
+  if (!target || target !== r.todo_id || (task.reuse_todo && task.reuse_todo !== target) || (task.todo_id && task.todo_id !== target)) return undefined;
+  const todo = todos.find((x) => x.id === target);
+  const linked = todo?.agents?.find((a) => a.machine_id === r.machine_id && a.session_id === r.session_id && !a.start_error);
+  const agent = linked && !linked.released_at && !linked.dismissed_at;
+  return { key: `${r.machine_id}/${r.session_id}`, title: task.title, wake: "continuation", mid: r.machine_id, sid: r.session_id, todo: todo?.id,
+    recovery: r.state, recoveryCurrent: Boolean(agent), historyFailure: task.error, currentTodo: todo?.id };
+}
+
+/** Shared by simplified and full plans. No execution binding is inferred from the target of a failed attempt. */
+export function failedContinuationHandoff(task: PlanTask, todos: Todo[], key = "continuation"): Handoff | undefined {
+  const recovered = continuationHandoff(task, todos);
+  if (recovered) return recovered;
+  const target = task.continues || task.reuse_todo;
+  if (!task.error || !target || task.todo_id) return undefined;
+  const delivery = task.continuation_recovery?.state;
+  return { key, title: task.title, wake: "continuation", failure: task.error, historyFailure: task.error,
+    currentTodo: todos.some((todo) => todo.id === target) ? target : undefined,
+    delivery: delivery === "sending" || delivery === "unknown" ? delivery : undefined, deliveryError: task.continuation_recovery?.send_error };
+}
+
+/** Kept after a supported recovery too: the original dispatch really did fail. Details never trigger navigation. */
+function DispatchFailureHistory({ error }: { error: string }) {
+  return <details data-handoff-history className="text-label text-ink-2">
+    <summary className="cursor-pointer pointer-coarse:min-h-11">{t("assistant-tasks.continuation_dispatch_history")}</summary>
+    <p className="whitespace-pre-wrap break-words select-text">{error.trim() || t("assistant-tasks.unknown_reason")}</p>
+  </details>;
 }
 
 /** A task's cards: one per Agent the hand-off went to (handoffAgents), or one for the task while it has none: starting,
@@ -134,10 +176,10 @@ export function lastActive(session: Pick<Session, "activity_at" | "updated_at"> 
 export function HandoffCard({ handoff }: { handoff: Handoff }) {
   const { mid, sid, todo, failure, wake } = handoff;
   const agent = mid && sid ? { mid, sid } : undefined;
-  const session = useStore((s) => (agent ? sessionIn(s, agent.mid, agent.sid) : undefined));
+  const session = useStore((s) => (agent && (!handoff.recovery || handoff.recoveryCurrent) ? sessionIn(s, agent.mid, agent.sid) : undefined));
   const closed = useStore((s) => Boolean(todo && s.todos.find((x) => x.id === todo)?.done_at));
   useNow(60_000, Boolean(agent)); // "last active" moves on by the minute
-  const title = session?.title?.trim() || handoff.agentTitle?.trim() || handoff.title || t("assistant-tasks.task_fallback");
+  const title = (handoff.recovery ? handoff.title : session?.title?.trim() || handoff.agentTitle?.trim() || handoff.title) || t("assistant-tasks.task_fallback");
   const badge = t(`assistant-tasks.handoff_wake_${wake}`);
   const interactive = Boolean(agent || todo);
   const open = () => {
@@ -149,7 +191,9 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
   const cut = !closed ? interruption(session) : undefined;
   const phone = useMedia(PHONE);
   const active = lastActive(session, Date.now(), phone);
-  const meta = agent ? (
+  const meta = handoff.recovery && !handoff.recoveryCurrent ? (
+    <span data-handoff-historical-session className="text-label text-ink-3">{t("assistant-tasks.continuation_historical_session")}</span>
+  ) : agent ? (
     <>
       {active ? (
         <>
@@ -174,7 +218,7 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
     </>
   ) : failure ? (
     <span data-handoff-failure className="min-w-0 break-words text-[12px] leading-4 text-red">
-      {startFailureCardLine(failure, interactive)}
+      {handoff.historyFailure ? t("assistant-tasks.continuation_failed_attempt") : startFailureCardLine(failure, interactive)}
     </span>
   ) : handoff.ended ? (
     <span className="truncate text-[12px] leading-4 text-ink-3">{todo ? t("assistant-tasks.handoff_closed") : t("assistant-tasks.handoff_gone")}</span>
@@ -200,7 +244,12 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
             {badge}
           </span>
         </span>
-        <span className="flex min-w-0 items-center gap-1.5">{meta}</span>
+        {handoff.recovery && <span data-handoff-recovery={handoff.recovery} className="text-label text-ink-2">{t(`assistant-tasks.continuation_${handoff.recovery}`)}</span>}
+        {handoff.delivery && <span data-handoff-delivery={handoff.delivery} className="text-label text-ink-2">{t(`assistant-tasks.continuation_${handoff.delivery}`)}</span>}
+        <span className={cx("flex min-w-0 items-center gap-1.5", handoff.recovery && "flex-wrap")}>
+          {handoff.recovery && handoff.recoveryCurrent && <span className="text-label text-ink-3">{t("assistant-tasks.continuation_current_session")}</span>}
+          {meta}
+        </span>
       </span>
       {interactive && (
         <span className="flex size-6 shrink-0 items-center justify-center">
@@ -212,8 +261,7 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
   // cindy's 16 px padding and 14 px gap; a phone's narrower card gives them back to the words
   const look = "flex w-full min-w-0 items-center gap-3 rounded-xl border border-line bg-surface p-3 text-left sm:gap-3.5 sm:p-4";
   const data = { "data-handoff-card": agent ? `${agent.mid}/${agent.sid}` : todo ? `todo:${todo}` : handoff.key };
-  if (!interactive) return <div {...data} className={look}>{body}</div>;
-  return (
+  const card = !interactive ? <div {...data} className={look}>{body}</div> : (
     <button
       type="button"
       {...data}
@@ -224,6 +272,13 @@ export function HandoffCard({ handoff }: { handoff: Handoff }) {
       {body}
     </button>
   );
+  if (!handoff.historyFailure) return card;
+  return <div className="flex min-w-0 flex-col gap-1.5">
+    {card}
+    <DispatchFailureHistory error={handoff.historyFailure} />
+    {handoff.deliveryError && <p data-handoff-delivery-error className="text-label text-ink-2 whitespace-pre-wrap break-words">{handoff.deliveryError}</p>}
+    {handoff.currentTodo && <button type="button" data-handoff-current-task className="self-start text-label text-ink-2 hover:text-ink hover:underline pointer-coarse:min-h-11" onClick={() => openTask(handoff.currentTodo!)}>{t("assistant-tasks.continuation_view_task")}</button>}
+  </div>;
 }
 
 /** The cards of one feed line, stacked as cindy stacks them: one per Agent, no heading over them. */

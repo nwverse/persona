@@ -160,6 +160,9 @@ type PlanTask struct {
 	Error     string            `json:"error,omitempty"`
 	ErrorCode string            `json:"error_code,omitempty"`
 	ErrorArgs map[string]string `json:"error_args,omitempty"`
+	// ContinuationRecovery records an explicit send to the original session, separately from this failed start.
+	// It never grants execution permissions or replaces TodoID. Only the hub writes it.
+	ContinuationRecovery *PlanContinuationRecovery `json:"continuation_recovery,omitempty"`
 	// RetryWith: when its start failed because of its launcher on that computer, the other launchers there a retry may
 	// start it with (start_retry_launcher.go, #10365), plain claude first: what a card's "Use <launcher> instead" and
 	// task_retry's launcher offer. The hub's, set with the failure and cleared by the next start; never what a tool call

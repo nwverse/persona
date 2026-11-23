@@ -90,6 +90,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
+		t.ContinuationRecovery = nil
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
 		t.RequestGate, t.Queue = "", nil
@@ -308,10 +309,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", err
 		}
 		var b strings.Builder
+		fmt.Fprintf(&b, "Plan %s\n", started.ID)
 		fmt.Fprintf(&b, "Queued %d worker(s) beneath your task %s for dispatch:\n", len(started.Tasks), scope.task.ID)
-		for _, t := range started.Tasks {
+		for i, t := range started.Tasks {
 			if t.Error != "" {
 				fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
+				b.WriteString(continuationAction(started.ID, i, t))
 			} else if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
 				fmt.Fprintf(&b, "- %s → todo %s on %s (queued: %s)\n", t.Title, t.TodoID, t.Machine, t.Queue.Reason)
 			} else {
@@ -363,11 +366,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	var b strings.Builder
 	supervisor := ""
+	fmt.Fprintf(&b, "Plan %s\n", started.ID)
 	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (read-only, asked for by the user, a kind the user trusts, or one "+
 		"the user lets this scheduled task start):\n", len(started.Tasks))
-	for _, t := range started.Tasks {
+	for i, t := range started.Tasks {
 		if t.Error != "" {
 			fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
+			b.WriteString(continuationAction(started.ID, i, t))
 		} else {
 			if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
 				fmt.Fprintf(&b, "- %s → todo %s on %s (queued: %s)\n", t.Title, t.TodoID, t.Machine, t.Queue.Reason)

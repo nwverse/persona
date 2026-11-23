@@ -155,6 +155,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			todo, err = s.takeTodoForTask(ctx, p.ID, p.Conversation, *t)
 			if err != nil {
 				t.Error = err.Error()
+				t.ContinuationRecovery = s.continuationOffer(ctx, p.Conversation, *t)
 				continue
 			}
 			if t.Project != "" && todo.Project != t.Project {

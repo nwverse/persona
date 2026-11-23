@@ -171,6 +171,15 @@
   "start_cause_timed_out": "起動に時間がかかりすぎました",
   "start_cause_not_allowed": "このコンピューターで許可されませんでした",
   "start_cause_needs_update": "このコンピューターの Persona を更新する必要があります",
+  "continuation_failed_attempt": "この開始要求は失敗しました",
+  "continuation_sending": "続行リクエストを送信中",
+  "continuation_unknown": "続行リクエストの配信は未確認です",
+  "continuation_sent": "元のセッションに続行リクエストを送信しました",
+  "continuation_queued": "続行リクエストは元のセッションのキューに入りました",
+  "continuation_historical_session": "過去の送信記録です。現在の進捗はタスクで確認できます",
+  "continuation_current_session": "元のセッション：",
+  "continuation_dispatch_history": "この開始要求は失敗しました · 履歴を表示",
+  "continuation_view_task": "現在のタスクを表示",
   "start_failed_short": "開始できませんでした。",
   "start_failed_details": "起動できませんでした。開いて詳細を確認してください。"
 }

@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- An idle plan-edit lock is not proof that asynchronous starts finished (#13495). A worker can have received
+  a failed start reply without yet persisting or broadcasting its error. Wait for the registered `taskStarting`
+  lifetime, which includes cleanup, before checking every task's stored and last-broadcast error. Hold replies
+  at the fixture's RPC boundary to cover that gap deterministically; do not hide it with longer waits or sleeps.
+
 - Claude Code's permission modes do not come from a runtime's optional capability list (#13233). `proto.Launcher.PermissionModes` is defined for non-Claude agents; applying a partial list to a Claude-compatible custom launcher drops an inherited bypass choice and silently returns the conversation to the profile's settings. Resolve the backend first: Claude accepts `proto.PermissionModes`, while a non-Claude runtime's declared list stays authoritative. Cover the manager's start params and a non-Claude control. Existing nonempty assistant profiles are not reseeded, so their `permissions.defaultMode` and unrelated settings survive node upgrades; pin that boundary with a real temporary profile rather than rewriting it to make a test pass.
 
 - A command that returns text to the message pipeline must keep its explicit destination (#12700). In the official bot DM, resetting `current` for `/new <first message>` was insufficient: pending-card handlers could consume the text, and parent/root bindings could restore an old target. Carry the fresh Persona target past those handlers while retaining reply metadata for quoted context. Test through `FeishuMessage` with old Persona/Agent bindings, an answerable card and duplicate delivery; keep bare `/new` and ordinary replies as controls.
@@ -975,3 +980,13 @@ conversation shared with other work, two runs due in the same minute both read t
 to-do's no-progress decision quoted another task. Find the run's own prompt by its run key (`runKeyIn`) and take the
 reply after it, up to the next message that opened a turn. Refuse turns that a queued message mixed. Test with real
 transcript pages (`runChat`), not bare item lists.
+
+## A failed continuation and its later delivery are separate evidence (#13495)
+
+External app-server sessions can accept messages without granting Persona ownership of their process. Do not weaken
+retire checks to make a continuation succeed. Offer a same-task send only after verifying the scope, executor and
+single active membership, then preserve the failed attempt beside the exact input receipt. A successful ACK proves
+delivery; even an immediately blocked or completed session does not revoke it. Working status alone proves neither
+delivery nor execution of that input. Keep duplicate/uncertain sends fenced by durable plan state, and guard canonical,
+automatic and delayed membership writes while delivery is in flight. A released or removed membership must not erase
+historical delivery or borrow a later session's live state.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"slices"
@@ -217,6 +218,7 @@ type todoBook struct {
 	todos               map[string]*Todo
 	deletedRequestGates map[string]bool
 	activeBySession     map[[2]string]string  // (machine_id, session_id) -> the open todo it works for
+	continuationSends   map[string][2]string  // delivery reservations; writing then mu, never held across node calls
 	snapshotSyncing     map[[2]string]bool    // (machine_id, session_id) whose title is being written
 	spacesByKey         map[string]string     // "<machine_id>/<space>" -> todo_id
 	botmux              map[string]botmuxSeen // by machine: its botmux sessions' chats and dispatches (todo_sessions.go)
@@ -1851,6 +1853,9 @@ func (s *Service) linkTodoSpaceAgent(ctx context.Context, todoID, mid, key strin
 // writeTodoAgentLink writes and publishes a membership with todoBook.writing held.
 // Callers release it before notifying the hub or contacting nodes.
 func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, title, cwd, agent, startError, source, via string, allowDone bool) error {
+	if s.continuationLinkBlocked(todoID, mid, sid) {
+		return fmt.Errorf("a continuation is being delivered to this task's original Agent; retry linking after delivery settles")
+	}
 	now := time.Now().UTC()
 	// A link keeps a directory in a space (identity.InSpace): a run's directory follows its shell's cd, and where it
 	// worked tells the to-do's history as the space's for good (todosHidden, #10941).

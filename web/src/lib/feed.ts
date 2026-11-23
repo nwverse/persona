@@ -51,6 +51,19 @@ export interface PlanTask {
   /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
   error_code?: string;
   error_args?: Record<string, string>;
+  /** A failed continuation's supported send to its original session. The hub verifies the task, scope and session;
+   *  sent/queued describe delivery, not execution. The failed dispatch's error and execution binding stay intact. */
+  continuation_recovery?: {
+    todo_id: string;
+    machine_id: string;
+    session_id: string;
+    source_instance_id?: string;
+    scope_revision: string;
+    state: "available" | "sending" | "sent" | "queued" | "unknown";
+    input_id?: string;
+    sent_at?: string;
+    send_error?: string;
+  };
   /** Its launcher could not start on that computer: the others there a Retry may start it with, the first suggested
    *  (#10365, "Use … instead"). The hub's; absent from an older hub and for any other failure. */
   retry_with?: string[];

@@ -171,6 +171,15 @@
   "start_cause_timed_out": "启动太久，超时了",
   "start_cause_not_allowed": "这台电脑没有允许",
   "start_cause_needs_update": "这台电脑上的 Persona 需要更新",
+  "continuation_failed_attempt": "此次派发失败",
+  "continuation_sending": "正在发送续接请求",
+  "continuation_unknown": "续接请求是否送达尚未确认",
+  "continuation_sent": "续接请求已发送到原会话",
+  "continuation_queued": "续接请求已送入原会话队列",
+  "continuation_historical_session": "这是历史发送记录，当前进展见任务",
+  "continuation_current_session": "原会话：",
+  "continuation_dispatch_history": "本次派发失败 · 查看历史",
+  "continuation_view_task": "查看当前任务",
   "start_failed_short": "没开起来",
   "start_failed_details": "没开起来，点开看详情"
 }

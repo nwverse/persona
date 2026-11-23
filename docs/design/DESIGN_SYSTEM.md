@@ -2291,6 +2291,14 @@ The task cards follow `docs/design/task-cards.md`, which holds the state tables 
 
 ### 4.8.1 Records of interruptions
 
+For a failed continuation (#13495, web), separate the failed attempt, the confirmed follow-up delivery and the
+original session's current state. A confirmed send uses neutral delivery text; its original error remains in a
+collapsed dispatch-history disclosure. The card opens that original session, with a separate current-task link.
+When membership ends, retain the delivery history without showing later work as this task's state. An uncorrelated
+legacy failure stays an attempt failure, never an inferred running task. Sending and unknown delivery remain visible;
+unknown delivery does not offer a blind retry. This serves everyday Assistant users without exposing executor details
+outside the history disclosure.
+
 A record of something that went wrong (an interrupted task, #3834) says what became of it once that is known: a grey line with the result ("Cancelled", "Dispatched again", "Resumed", "Accepted", "Done"), never a red card that outlives the problem. Several records with one cause in a short time are one card that counts handled and pending and opens to each item. The danger color is only for what is still pending. The hub works out the result and the grouping; the clients only draw them (principle 4; `docs/assistant/unified-entry.md`, "Interrupted receipts after the fact"). In an assistant conversation an interrupted task is not a record in the chat any more (#8237, section 4.8.0): its hand-off card says it, and its row in Needs You offers Continue.
 
 ### 4.8.2 Guided setups (step by step)

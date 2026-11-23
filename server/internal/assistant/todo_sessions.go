@@ -173,6 +173,9 @@ func (s *Service) linkDelayedDoneCreation(machine string, c proto.Session, creat
 // todoBook.writing is held. The database commits first; memory mirrors only an actual insert and its released ids, so a
 // newer manual membership that made the guarded insert a no-op is never overridden locally either.
 func (s *Service) writeDelayedDoneCreation(ctx context.Context, todoID, machine string, c proto.Session, startError string, linkedAt time.Time) (bool, error) {
+	if s.continuationLinkBlocked(todoID, machine, c.SessionID) {
+		return false, nil
+	}
 	st := s.todoDB()
 	if st == nil {
 		if err := s.writeTodoAgentLink(ctx, todoID, machine, c.SessionID, c.Title, c.Cwd, c.Agent, startError, "assistant_start", todoID, true); err != nil {
@@ -245,6 +248,9 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 
 	s.todos.mu.Lock()
 	link := func(c proto.Session, target *Todo, source, via string) {
+		if s.todos.continuationLinkBlocked(target.ID, machine, c.SessionID) {
+			return
+		}
 		for _, a := range target.Agents {
 			if a.MachineID == machine && a.SessionID == c.SessionID {
 				return // it was on this todo before (active, released or dismissed): not again
@@ -336,6 +342,10 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 				undone := false
 				for _, item := range pending {
 					s.todos.writing.Lock()
+					if s.continuationLinkBlocked(item.todoID, item.machineID, item.sessionID) {
+						s.todos.writing.Unlock()
+						continue
+					}
 					if item.source == "space" {
 						s.todos.mu.RLock()
 						current := false

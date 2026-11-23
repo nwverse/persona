@@ -1155,6 +1155,8 @@ type startTogetherHub struct {
 	n, came  int
 	all      chan struct{} // closed when n came
 	lastPlan *TaskPlan
+	// afterStart holds a completed RPC reply before the worker records its outcome.
+	afterStart func(context.Context)
 }
 
 func (h *startTogetherHub) Broadcast(ctx context.Context, b Broadcast) {
@@ -1183,7 +1185,11 @@ func (h *startTogetherHub) DeviceCall(ctx context.Context, p DeviceCall) (json.R
 		case <-time.After(5 * time.Second):
 		}
 	}
-	return h.fakeHub.DeviceCall(ctx, p)
+	reply, err := h.fakeHub.DeviceCall(ctx, p)
+	if p.Method == DeviceSessionStart && h.afterStart != nil {
+		h.afterStart(ctx)
+	}
+	return reply, err
 }
 
 // planTasks is a plan of n read-only tasks on box, task i titled "task i".
@@ -1214,6 +1220,19 @@ func storedPlan(t *testing.T, st *gatedPlanStore) *TaskPlan {
 // Tasks of one plan whose starts fail together each keep their error, with its code for the card's remedy: each failed
 // start wrote back the plan it read before the others wrote theirs, so only the last one's error stayed (#2192).
 func TestPlanTasksFailingTogetherAllKeepTheirError(t *testing.T) {
+	for _, holdReplies := range []bool{false, true} {
+		name := "concurrent"
+		if holdReplies {
+			name = "reply_before_bookkeeping"
+		}
+		t.Run(name, func(t *testing.T) {
+			testPlanTasksFailingTogether(t, holdReplies)
+		})
+	}
+}
+
+func testPlanTasksFailingTogether(t *testing.T, holdReplies bool) {
+	t.Helper()
 	const n = 4
 	st := newGatedPlanStore()
 	f := newFakeHub()
@@ -1223,14 +1242,57 @@ func TestPlanTasksFailingTogetherAllKeepTheirError(t *testing.T) {
 	h := &startTogetherHub{fakeHub: f, n: n, all: make(chan struct{})}
 	s := withSettings(t, f, New(Options{Hub: h, Store: func() Store { return st }, Logf: testLogf(t)}))
 	st.s = s
-	st.hold(n)
+	if !holdReplies {
+		st.hold(n) // The concurrent case overlaps plan reads; the held-reply case isolates the RPC gap.
+	}
+	// An idle plan lock says nothing about workers between their RPC and bookkeeping.
+	// The reservation covers the entire start, including the final failure broadcast.
+	failuresWritten := func() bool {
+		done, _ := st.done()
+		return done && s.taskStarting.Load() == 0 && s.tasks.planEdits.len() == 0
+	}
+	entered, release := make(chan struct{}, n), make(chan struct{})
+	var releaseOnce sync.Once
+	allowReplies := func() { releaseOnce.Do(func() { close(release) }) }
+	if holdReplies {
+		h.afterStart = func(ctx context.Context) {
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
+		t.Cleanup(func() {
+			allowReplies()
+			waitFor(t, "held starts to finish", func() bool { return s.taskStarting.Load() == 0 })
+		})
+	}
 	if _, err := s.toolTaskPlan(context.Background(), "conv1", planTasks(n)); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "every start's failure to be written", func() bool {
+	if holdReplies {
+		for range n {
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("not all failed replies reached the bookkeeping boundary")
+			}
+		}
 		done, _ := st.done()
-		return done && s.tasks.planEdits.len() == 0
-	})
+		if !done || s.tasks.planEdits.len() != 0 || s.taskStarting.Load() != n {
+			t.Fatalf("unexpected reply boundary: reads done=%v, locks=%d, starts=%d", done, s.tasks.planEdits.len(), s.taskStarting.Load())
+		}
+		if failuresWritten() {
+			t.Error("an idle plan lock was mistaken for completed failure bookkeeping")
+		}
+		for _, task := range storedPlan(t, st).Tasks {
+			if task.Error != "" {
+				t.Error("failure recorded before its RPC reply was released")
+			}
+		}
+		allowReplies()
+	}
+	waitFor(t, "every start's failure to be written", failuresWritten)
 	if _, timedOut := st.done(); timedOut {
 		t.Fatal("the plan's writers did not all come")
 	}

@@ -12,7 +12,7 @@ vi.hoisted(() => {
 });
 
 import { t } from "../../i18n";
-import { getFeedState, type FeedItem, type TaskPlan } from "../../lib/feed";
+import { getFeedState, type FeedItem, type PlanTask, type TaskPlan } from "../../lib/feed";
 import { handoffFrom } from "../../lib/handoff";
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
@@ -20,7 +20,7 @@ import { applyCompleteSessions, refreshTodos, reset } from "../../lib/store";
 import type { Todo, TodoAgent } from "../../lib/todos";
 import type { Session } from "../../lib/types";
 import { handoffAgents, lastActive, shortSessionId, TASK_LINE_SLACK_MS } from "./Handoff";
-import { AssistantActionBar, FeedLineView } from "./Tasks";
+import { AssistantActionBar, FeedLineView, PlanCard } from "./Tasks";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const at = "2026-11-10T08:00:00Z";
@@ -153,9 +153,147 @@ describe("hand-off cards", () => {
     const [card] = cards();
     expect(card!.tagName).toBe("DIV");
     expect(card!.querySelector('[data-handoff-wake="continuation"]')).not.toBeNull();
-    expect(card!.querySelector("[data-handoff-failure]")?.textContent).toBe(t("assistant-tasks.start_failed_short"));
+    expect(card!.querySelector("[data-handoff-failure]")?.textContent).toBe(t("assistant-tasks.continuation_failed_attempt"));
     act(() => card!.click());
     expect(getPanel()).toBeNull();
+    const details = host.querySelector<HTMLDetailsElement>("[data-handoff-history]")!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain(plan.tasks[0]!.error);
+    act(() => details.querySelector("summary")!.click());
+    expect(details.open).toBe(true);
+    expect(getPanel()).toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>("[data-handoff-current-task]")!.click());
+    expect(getPanel()).toEqual({ kind: "task", todo: "previous-task" });
+  });
+
+  describe("a failed continuation sent to its original session", () => {
+    const reason = "continues: cannot stop agent example-computer/session on to-do previous-task: this session belongs to another tool";
+    const recovery: NonNullable<PlanTask["continuation_recovery"]> = { todo_id: "previous-task", machine_id: agent.machine_id, session_id: agent.session_id, scope_revision: "scope-1", state: "sent", input_id: "continuation-input", sent_at: at };
+    const makePlan = (r: PlanTask["continuation_recovery"]): TaskPlan => ({ id: "recovery-plan", conversation, state: "started", created_at: at, tasks: [
+      { title: "Carry on the task", prompt: "Finish the missing cases", cwd: "/example", machine: agent.machine_id, continues: "previous-task", reuse_todo: "previous-task", error: reason, continuation_recovery: r },
+    ] });
+    const original = (extra: Partial<TodoAgent> = {}): Todo => {
+      const todo = linked("previous-task", "Original task", [agent]);
+      todo.agents![0] = { ...todo.agents![0]!, linked_at: "2026-11-10T07:00:00Z", ...extra };
+      return todo;
+    };
+    const showPlan = async (plan: TaskPlan, todos = [original()], sessions = [agent]) => {
+      getFeedState().plans[plan.id] = plan;
+      await show({ id: "recovery-event", conversation, at, kind: "plan", ref: plan.id }, todos, sessions);
+    };
+
+    it("keeps delivery, the original session's live state and the failed attempt distinct; duplicate updates create no extra card or send", async () => {
+      await showPlan(makePlan(undefined));
+      expect(cards()[0]!.querySelector("[data-handoff-failure]")).not.toBeNull();
+      const idle: Session = { ...agent, state: "idle", status: "idle" };
+      await showPlan(makePlan(recovery), [original()], [idle]);
+      expect(cards()).toHaveLength(1);
+      const card = cards()[0]!;
+      expect(card.textContent).toContain("Carry on the task");
+      expect(card.textContent).not.toContain("Original task");
+      expect(card.querySelector('[data-handoff-recovery="sent"]')?.textContent).toBe(t("assistant-tasks.continuation_sent"));
+      expect(card.textContent).toContain(t("assistant-tasks.continuation_current_session"));
+      expect(card.querySelector('[data-handoff-state="idle"]')).not.toBeNull();
+      expect(card.querySelector('[data-handoff-state="working"]')).toBeNull();
+      expect(card.querySelector("[data-handoff-failure]")).toBeNull();
+      const details = host.querySelector<HTMLDetailsElement>("[data-handoff-history]")!;
+      expect(details.open).toBe(false);
+      act(() => details.querySelector("summary")!.click());
+      expect(details.open).toBe(true);
+      expect(details.textContent).toContain(reason);
+      expect(getPanel()).toBeNull();
+      act(() => card.click());
+      expect(getPanel()).toEqual({ kind: "agent", mid: agent.machine_id, sid: agent.session_id });
+      act(() => closePanel());
+
+      await act(async () => applyCompleteSessions([{ ...agent, updated_at: "2026-11-10T08:01:00Z" }]));
+      expect(cards()[0]!.querySelector('[data-handoff-state="working"]')).not.toBeNull();
+      await showPlan(makePlan({ ...recovery }));
+      await showPlan(makePlan({ ...recovery }));
+      expect(cards()).toHaveLength(1);
+      expect(host.querySelectorAll("[data-handoff-history]")).toHaveLength(1);
+      expect(getFeedState().plans["recovery-plan"]!.tasks[0]!.error).toBe(reason);
+      expect(vi.mocked(fetch).mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+      setAgentOpenMode("page");
+      act(() => cards()[0]!.click());
+      expect(opened()).toBe(`/s/${agent.machine_id}/${agent.session_id}`);
+    });
+
+    it("says queued without claiming the request is executing or requiring a loaded session row", async () => {
+      await showPlan(makePlan({ ...recovery, state: "queued" }), [original()], []);
+      expect(cards()[0]!.querySelector('[data-handoff-recovery="queued"]')?.textContent).toBe(t("assistant-tasks.continuation_queued"));
+      expect(cards()[0]!.querySelector("[data-handoff-state]")).toBeNull();
+      expect(host.querySelector("[data-handoff-history]")!.textContent).toContain(reason);
+    });
+
+    it("shows the same verified send and folded history on a non-simplified plan", async () => {
+      const plan = makePlan(recovery);
+      await showPlan(plan, [original()], []);
+      act(() => root.render(<PlanCard plan={plan} />));
+      expect(cards()[0]!.querySelector('[data-handoff-recovery="sent"]')?.textContent).toBe(t("assistant-tasks.continuation_sent"));
+      expect(cards()[0]!.getAttribute("data-handoff-card")).toBe(`${agent.machine_id}/${agent.session_id}`);
+      const details = host.querySelector<HTMLDetailsElement>("[data-handoff-history]")!;
+      expect(details.open).toBe(false);
+      expect(details.textContent).toContain(reason);
+      expect(cards()[0]!.querySelector('[data-handoff-state="working"]')).toBeNull();
+    });
+
+    it.each(["available", "sending", "unknown"] as const)("does not turn %s into a successful continuation even when the old session is working", async (state) => {
+      await showPlan(makePlan({ ...recovery, state }));
+      expect(cards()[0]!.tagName).toBe("DIV");
+      expect(cards()[0]!.querySelector("[data-handoff-recovery]")).toBeNull();
+      expect(cards()[0]!.querySelector("[data-handoff-failure]")).not.toBeNull();
+      if (state !== "available") expect(cards()[0]!.querySelector(`[data-handoff-delivery="${state}"]`)?.textContent).toBe(t(`assistant-tasks.continuation_${state}`));
+    });
+
+    it("keeps an unknown send, its error and current-task navigation on the full plan", async () => {
+      const plan = makePlan({ ...recovery, state: "unknown", send_error: "Delivery acknowledgement was lost" });
+      await showPlan(plan);
+      act(() => root.render(<PlanCard plan={plan} />));
+      expect(cards()[0]!.querySelector('[data-handoff-delivery="unknown"]')?.textContent).toBe(t("assistant-tasks.continuation_unknown"));
+      expect(host.querySelector("[data-handoff-delivery-error]")?.textContent).toBe("Delivery acknowledgement was lost");
+      act(() => host.querySelector<HTMLButtonElement>("[data-handoff-current-task]")!.click());
+      expect(getPanel()).toEqual({ kind: "task", todo: "previous-task" });
+    });
+
+    it.each([
+      ["another task", { todo_id: "other-task" }],
+      ["no verified scope", { scope_revision: "" }],
+      ["no input correlation", { input_id: "" }],
+      ["no confirmed receipt", { sent_at: "" }],
+    ])("does not associate %s with the failure", async (_name, patch) => {
+      await showPlan(makePlan({ ...recovery, ...patch as Partial<typeof recovery> }));
+      expect(cards()[0]!.querySelector("[data-handoff-recovery]")).toBeNull();
+      expect(cards()[0]!.querySelector("[data-handoff-failure]")).not.toBeNull();
+    });
+
+    it.each([
+      ["released", { released_at: at }],
+      ["dismissed", { dismissed_at: at }],
+    ])("keeps delivery history after the original Agent is %s, without presenting its later work as this task", async (_name, extra) => {
+      await showPlan(makePlan(recovery), [original(extra as Partial<TodoAgent>)]);
+      expect(cards()[0]!.querySelector('[data-handoff-recovery="sent"]')).not.toBeNull();
+      expect(cards()[0]!.querySelector("[data-handoff-failure]")).toBeNull();
+      expect(cards()[0]!.querySelector("[data-handoff-state]")).toBeNull();
+      expect(cards()[0]!.querySelector("[data-handoff-historical-session]")).not.toBeNull();
+      expect(host.querySelector("[data-handoff-history]")?.textContent).toContain(reason);
+    });
+
+    it("retains confirmed delivery after workspace unlink removes membership", async () => {
+      const todo = original();
+      todo.agents = [];
+      await showPlan(makePlan(recovery), [todo]);
+      expect(cards()[0]!.querySelector('[data-handoff-recovery="sent"]')).not.toBeNull();
+      expect(cards()[0]!.querySelector("[data-handoff-state]")).toBeNull();
+      expect(cards()[0]!.querySelector("[data-handoff-historical-session]")).not.toBeNull();
+      expect(host.querySelector("[data-handoff-current-task]")).not.toBeNull();
+    });
+
+    it("retains confirmed delivery while current tasks have not loaded", async () => {
+      await showPlan(makePlan(recovery), [], []);
+      expect(cards()[0]!.querySelector('[data-handoff-recovery="sent"]')).not.toBeNull();
+      expect(cards()[0]!.querySelector("[data-handoff-state]")).toBeNull();
+    });
   });
 
   it("wraps the recovery instructions and filenames on an interactive failed launch", async () => {

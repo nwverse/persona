@@ -11,8 +11,8 @@ import (
 )
 
 // Recorded from the unlocalized upstream tool inventory, plus #5732's explicit
-// task_plan supervision-contract exception. This covers the description and
-// schema of every tool, not only a representative golden.
+// task_plan supervision-contract exception and #13495's explicit agent_send continuation contract.
+// This covers every tool's description and schema, not only a representative golden.
 func TestMCPLegacyBytes(t *testing.T) {
 	raw, err := os.ReadFile("testdata/mcp_legacy.json")
 	if err != nil {
