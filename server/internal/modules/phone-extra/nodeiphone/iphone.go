@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/iphone"
+	"github.com/nwverse/persona/server/internal/modules/phone-extra/iphone"
 	"github.com/nwverse/persona/server/internal/node/nodekit"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"

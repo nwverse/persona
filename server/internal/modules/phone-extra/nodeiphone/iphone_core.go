@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/iphonectl"
+	"github.com/nwverse/persona/server/internal/modules/phone-extra/iphonectl"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )

@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
-	"github.com/nwverse/persona/server/internal/iphone"
+	"github.com/nwverse/persona/server/internal/modules/phone-extra/iphone"
 	"github.com/nwverse/persona/server/internal/machineops"
 	"github.com/nwverse/persona/server/internal/mcpserver"
 	"github.com/nwverse/persona/server/internal/node"

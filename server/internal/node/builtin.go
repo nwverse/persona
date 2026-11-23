@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/extension"
-	"github.com/nwverse/persona/server/internal/node/iphone"
+	"github.com/nwverse/persona/server/internal/modules/phone-extra/nodeiphone"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
