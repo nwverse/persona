@@ -149,7 +149,7 @@ func outboundID(topic, delivery string) string {
 }
 
 func (s *Service) loadOutboundLocked(ctx context.Context) error {
-	b := &s.outbound
+	b := &s.commitments
 	if b.loaded {
 		return nil
 	}
@@ -169,7 +169,7 @@ func (s *Service) putOutboundLocked(ctx context.Context, entries []outboundCommi
 			return err
 		}
 	}
-	s.outbound.entries, s.outbound.dirty = entries, false
+	s.commitments.entries, s.commitments.dirty = entries, false
 	return nil
 }
 
@@ -178,7 +178,7 @@ func (s *Service) prepareOutbound(ctx context.Context, r outboundReply, now time
 	if r.ID == "" || r.Topic == "" || strings.TrimSpace(r.Text) == "" {
 		return time.Time{}, nil
 	}
-	b := &s.outbound
+	b := &s.commitments
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if err := s.loadOutboundLocked(ctx); err != nil {
@@ -229,7 +229,7 @@ func (s *Service) rejectOutbound(ctx context.Context, r outboundReply, prepared 
 	if prepared.IsZero() {
 		return
 	}
-	b := &s.outbound
+	b := &s.commitments
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if _, confirming := b.confirmed[outboundID(r.Topic, r.ID)]; confirming {
@@ -254,7 +254,7 @@ func (s *Service) finishOutbound(ctx context.Context, r outboundReply, now time.
 	if r.ID == "" || r.Topic == "" {
 		return nil
 	}
-	b := &s.outbound
+	b := &s.commitments
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.confirmed == nil {
@@ -321,7 +321,7 @@ func (s *Service) finishOutbound(ctx context.Context, r outboundReply, now time.
 }
 
 func (s *Service) outboundTracksTopic(r outboundReply) bool {
-	b := &s.outbound
+	b := &s.commitments
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return slices.ContainsFunc(b.entries, func(e outboundCommitment) bool {
@@ -539,7 +539,7 @@ func (a *outwardAnnotation) reply(t Todo, now time.Time) (outboundReply, error) 
 }
 
 func (s *Service) watchOutboundCommitments(ctx context.Context, now time.Time) {
-	b := &s.outbound
+	b := &s.commitments
 	// Retry bookkeeping only. No provider call is repeated, even if its original
 	// success arrived while Postgres was unavailable.
 	b.mu.Lock()
@@ -719,7 +719,7 @@ func (s *Service) clearOutboundDecision(ctx context.Context, e outboundCommitmen
 }
 
 func (s *Service) outboundSignalHolds(ctx context.Context, g superviseSignal) bool {
-	b := &s.outbound
+	b := &s.commitments
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if err := s.loadOutboundLocked(ctx); err != nil {
@@ -732,7 +732,7 @@ func (s *Service) outboundSignalHolds(ctx context.Context, g superviseSignal) bo
 }
 
 func (s *Service) outboundCompletionError(ctx context.Context, todo string) error {
-	b := &s.outbound
+	b := &s.commitments
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if err := s.loadOutboundLocked(ctx); err != nil {
