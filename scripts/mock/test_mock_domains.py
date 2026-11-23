@@ -298,6 +298,7 @@ MOVED = {
                                       "saved_prompts_route")),
     "page_counts_mock": ("#12929", ("PAGE_COUNTS", "_paged_sessions_alone", "_features_without_page_counts")),
     "dock_mock": ("#12831", ("DOCK_INTERACTIONS",)),
+    "side_unread_mock": ("#13496", ("MOCK_SIDE_UNREAD",)),
     "extension_scene_mock": ("#12544", ("SCENE_MODE", "_HOME_DRAWS", "_home_scene_component", "_home_scene_downgrade",
                                         "_home_scene_view", "mock_home_scene")),
 }
