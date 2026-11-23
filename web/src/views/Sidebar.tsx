@@ -86,6 +86,7 @@ import { scoped, useScope, useScoped, useScopedInteractions, useScopedMachines, 
 import { AssistantSwitcher } from "./AssistantSwitcher";
 import { sidebarPending } from "./sidebar-pending";
 import { usePendingWorkSessions } from "./sidebar-pending-sessions";
+import { useMainWaiting } from "./assistant/use-main-waiting";
 // Declared in the files split out of this one; re-exported so the files that import them from here stay as they are.
 export { useNavPages, type NavPage } from "./SidebarParts";
 export { AgentRow, PersonaRow, SessionRow } from "./SidebarRows";
@@ -301,6 +302,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
     [assistant?.conversations, liveChats, manager],
   );
   const { phase, online, total, main: mainConversation, sections, more } = useNavPages();
+  const mainWaiting = useMainWaiting(mainConversation);
   // a phone's drawer has the pages as two rows of icons, so its first screen reaches the Agents (#1996)
   const narrow = useMedia(NARROW);
   const activeKey = useActiveKey(route);
@@ -402,7 +404,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         {/* the main conversation is the column's first row, Main chat with the home symbol, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), with a solid divider above the sticky groups */}
         <div data-sidebar-sticky className="sticky top-0 z-30 flex flex-col gap-px bg-canvas pt-1">
-          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} onMenu={onConvMenu} />
+          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} waiting={mainWaiting.count} onMenu={onConvMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
         </div>
         {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}

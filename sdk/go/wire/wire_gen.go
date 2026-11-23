@@ -5784,6 +5784,59 @@ type AssistantDataStatusResult struct {
 	Items []AssistantDataItem `json:"items"`
 }
 
+// MachinesPairLinkParams: machines.pair_link (machines.pair): request a one-time persona://link?... pairing link for
+// a pending link computer.
+type MachinesPairLinkParams struct {
+	// Optional computer id: re-issues a pairing link when an existing pending link machine matches (with name/os/icon
+	// omitted), or creates a new pending link machine with this id (defaulting name to machine_id when name is omitted).
+	MachineID string `json:"machine_id,omitempty"`
+	// Display name for a newly added computer (defaults to machine_id when machine_id is given; required when machine_id
+	// is omitted).
+	Name string `json:"name,omitempty"`
+	// Target OS hint for install commands.
+	OS string `json:"os,omitempty"`
+	// Optional icon for the computer.
+	Icon string `json:"icon,omitempty"`
+}
+
+type MachinesPairLinkResult struct {
+	// The hub machine id assigned to the computer.
+	MachineID string `json:"machine_id"`
+	// The display name of the computer.
+	Name string `json:"name"`
+	// The one-time persona://link?... pairing URL.
+	Link string `json:"link"`
+	// When the pairing link expires.
+	ExpiresAt time.Time `json:"expires_at"`
+	// Whether the computer is waiting for the owner's confirmation.
+	Pending bool `json:"pending"`
+	// Optional one-line Linux install-and-pair command when the hub knows its publication site.
+	InstallLinux string `json:"install_linux,omitempty"`
+}
+
+// MachinesStatusParams: machines.status (machines.read or machines.pair): read one computer's current connection and
+// confirmation state.
+type MachinesStatusParams struct {
+	// The computer's hub machine id.
+	MachineID string `json:"machine_id"`
+}
+
+type MachinesStatusResult struct {
+	MachineID string `json:"machine_id"`
+	Name      string `json:"name,omitempty"`
+	Exists    bool   `json:"exists"`
+	// Whether the computer's link/connection is currently up.
+	Online bool `json:"online"`
+	// Whether the resident node is connected and responding.
+	NodeOnline bool `json:"node_online"`
+	// Whether the computer is waiting for the owner's confirmation.
+	Pending bool `json:"pending"`
+	// When the computer was last seen online, if ever.
+	LastSeen time.Time `json:"last_seen,omitzero"`
+	// Last connection error, if any.
+	Error string `json:"error,omitempty"`
+}
+
 // BrowserMachinesParams: browser.machines (browser.run): list computers that have a browser backend enabled.
 type BrowserMachinesParams struct {
 	// Optional backend filter (e.g. ego, cdp). Empty returns all backends.
@@ -7599,6 +7652,10 @@ var newDef = map[string]func() any{
 	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
 	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
 	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
+	"MachinesPairLinkParams":        func() any { return new(MachinesPairLinkParams) },
+	"MachinesPairLinkResult":        func() any { return new(MachinesPairLinkResult) },
+	"MachinesStatusParams":          func() any { return new(MachinesStatusParams) },
+	"MachinesStatusResult":          func() any { return new(MachinesStatusResult) },
 	"BrowserMachinesParams":         func() any { return new(BrowserMachinesParams) },
 	"BrowserMachine":                func() any { return new(BrowserMachine) },
 	"BrowserMachinesResult":         func() any { return new(BrowserMachinesResult) },
@@ -7746,6 +7803,8 @@ var Calls = map[string]Call{
 	"assistant.entries.list":          {Name: "assistant.entries.list", From: "program", Params: "AssistantEntriesParams", Result: "AssistantEntriesResult"},
 	"event.assistant.entries.changed": {Name: "event.assistant.entries.changed", From: "hub", Params: "AssistantEntriesChangedEvent", Result: "", Event: true},
 	"assistant.data_status":           {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
+	"machines.pair_link":              {Name: "machines.pair_link", From: "program", Params: "MachinesPairLinkParams", Result: "MachinesPairLinkResult"},
+	"machines.status":                 {Name: "machines.status", From: "program", Params: "MachinesStatusParams", Result: "MachinesStatusResult"},
 	"browser.machines":                {Name: "browser.machines", From: "program", Params: "BrowserMachinesParams", Result: "BrowserMachinesResult"},
 	"browser.run":                     {Name: "browser.run", From: "program", Params: "BrowserRunParams", Result: "BrowserRunResult"},
 	"storage.request":                 {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},

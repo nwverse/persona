@@ -309,12 +309,13 @@ type Service struct {
 	mcpWaitMu     sync.Mutex
 	mcpWaits      map[string]*mcpWaitReporter // live opted-in mcp.call requests, by their validated call id
 	agentArchives agentArchiveBook
-	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
-	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
-	switchQ       switchQueue     // agents_switch's switches waiting for their agents' turns to end (agents_switch.go)
-	fleet         fleetBook       // what comes from the nodes (fleet.go)
-	nextSug       nextSuggestBook // suggest_next.go: the hub-made next-message suggestions
-	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu
+	orphans       orphanBook                // tasks_orphan.go: the open to-dos nobody works on
+	agentNative   agentNativeBook           // the tools' own archives (agent_archive_native.go)
+	switchQ       switchQueue               // agents_switch's switches waiting for their agents' turns to end (agents_switch.go)
+	fleet         fleetBook                 // what comes from the nodes (fleet.go)
+	convAttention conversationAttentionBook // the main conversation's silent-round unread cache
+	nextSug       nextSuggestBook           // suggest_next.go: the hub-made next-message suggestions
+	askUp         escalationBook            // cards that reached the user through an escalation (ask_route.go), under fleet.mu
 	// delegateHook stands in for Delegate in tests (fleet_delegate.go).
 	delegateHook func(context.Context, DelegateParams) (DelegateResult, error)
 	// fleetEnded, when set, sees every card's end the channels are told (tests).
