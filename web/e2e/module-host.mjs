@@ -12,7 +12,7 @@ assert.match(base ?? "", /^http:\/\/127\.0\.0\.1:\d+$/);
 mkdirSync(shots, { recursive: true });
 const browser = await chromium.launch();
 // the module's own files and strings, as the dev server serves them
-const ofModule = (url) => /\/src\/modules\/health\/(Health|HealthReports|reports)\.tsx?/.test(url) || /catalog=module-health/.test(url);
+const ofModule = (url) => /\/src\/modules\/health\/(Health|HealthReports|reports)\.tsx?/.test(url) || /catalog=module-health|i18n-catalog:module-health/.test(url);
 
 try {
   for (const scheme of ["light", "dark"]) {
@@ -45,7 +45,7 @@ try {
         await page.waitForTimeout(3000);
       }
       const warmed = requested.length;
-      if (on) assert.ok(requested.some((u) => /catalog=module-health/.test(u)) && requested.some((u) => /\/Health\.tsx/.test(u)), `${tag}: hover warms the strings and the chunk`);
+      if (on) assert.ok(requested.some((u) => /catalog=module-health|i18n-catalog:module-health/.test(u)) && requested.some((u) => /\/Health\.tsx/.test(u)), `${tag}: hover warms the strings and the chunk: ${requested.join(" ")}`);
       else assert.equal(warmed, 0, `${tag}: an off module is never warmed`);
 
       await page.goto(`${base}/health/new`);
