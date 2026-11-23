@@ -83,11 +83,11 @@ class CapsuleReadingSizeTest {
     }
 
     private fun textHeight(text: String): Int = layout(rule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode().let { node ->
-        mutableListOf<TextLayoutResult>().also { node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(it) }
+        mutableListOf<TextLayoutResult>().also { val _ = node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(it) }
     })
 
     private fun tagHeight(tag: String): Int = layout(rule.onNodeWithTag(tag).fetchSemanticsNode().let { node ->
-        mutableListOf<TextLayoutResult>().also { node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(it) }
+        mutableListOf<TextLayoutResult>().also { val _ = node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(it) }
     })
 
     private fun layout(results: List<TextLayoutResult>): Int = results.single().size.height

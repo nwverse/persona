@@ -70,13 +70,13 @@ class ReadingSizeProductionTest {
 
     private fun layoutHeight(text: String): Int = layout(rule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode().let { node ->
         mutableListOf<TextLayoutResult>().also { layouts ->
-            node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)
+            val _ = node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)
         }
     })
 
     private fun tagLayoutHeight(tag: String): Int = layout(rule.onNodeWithTag(tag).fetchSemanticsNode().let { node ->
         mutableListOf<TextLayoutResult>().also { layouts ->
-            node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)
+            val _ = node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)
         }
     })
 

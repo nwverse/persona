@@ -85,7 +85,7 @@ class LarkReadingSizeTest {
 
     private fun textHeight(text: String): Int = rule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode().let { node ->
         val layouts = mutableListOf<TextLayoutResult>()
-        node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)
+        val _ = node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts)
         layouts.single().size.height
     }
 
