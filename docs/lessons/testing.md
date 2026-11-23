@@ -816,7 +816,7 @@ Retain strict checks for the complete target set, existing modules, artifact pat
 ## Go tests requiring macOS built-in commands (2026-11-02)
 
 - The Messages connector reads `chat.db` with macOS `/usr/bin/sqlite3` (personad has no cgo). The Linux hub lacks `sqlite3`, so these tests skip there.
-  If the development Mac has no Go, cross-compile on hub: `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c -o x.test ./internal/connector/imessage`,
+  If the development Mac has no Go, cross-compile on hub: `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c -o x.test ./internal/modules/imessage`,
   copy to Mac, and run **in the package directory** (`testdata` is relative). Use the same approach for macOS-dependent `node` tests.
 - `sqlite3 -json` prints nothing for no rows, not `[]`; check empty before parsing.
 

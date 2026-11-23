@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connectorwire"
+	"github.com/nwverse/persona/server/internal/imessagewire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -15,23 +16,18 @@ import (
 // that node's connector.* RPCs. The app reads every conversation for the user (extmgr/imessage.go); with Hand to Persona on
 // (persona.go) the real ones also go to the knowledge base, the inbox and the assistant.
 
-// Config is hub.json's "imessage".
-type Config struct {
-	// Machine is the Mac whose Messages are read: one only (Macs with the same Apple ID hold the same messages).
-	Machine string `json:"machine,omitempty"`
-}
-
-// Configured says whether the hub should run the connector at all.
-func (c *Config) Configured() bool { return c != nil && c.Machine != "" }
+// Defined in the contract package imessagewire (docs/architecture/core-and-modules.md "Provider seams"); the old names stay.
+type (
+	Config = imessagewire.Config
+	Caller = imessagewire.Caller
+	Detail = imessagewire.Detail
+)
 
 // Why the Mac could not be asked (Caller's errors, errors.Is); ErrNoPermission and ErrNoChat come through too.
 var (
-	ErrOffline    = errors.New("the Mac is offline")
-	ErrNodeTooOld = errors.New("the Mac's personad is too old")
+	ErrOffline    = imessagewire.ErrOffline
+	ErrNodeTooOld = imessagewire.ErrNodeTooOld
 )
-
-// Caller asks the Mac's node: method with params, the result decoded into out.
-type Caller func(ctx context.Context, method string, params, out any) error
 
 // Remote is the connector on the hub.
 type Remote struct {
@@ -63,6 +59,29 @@ func NewRemote(cfg Config, machine string, call Caller) *Remote {
 	return c
 }
 
+// Provider is the module's factory for the extension manager's port (imessagewire.Factory).
+func Provider(cfg Config, machine string, call Caller) imessagewire.Remote {
+	return NewRemote(cfg, machine, call)
+}
+
+var _ imessagewire.Remote = (*Remote)(nil)
+
+// BuiltinIMessage marks the module's connector (imessagewire.Remote).
+func (c *Remote) BuiltinIMessage() {}
+
+// SetZone sets Zone, the user's time zone.
+func (c *Remote) SetZone(z func() *time.Location) { c.Zone = z }
+
+// ChatsPage is Chats for the manager's route (imessagewire.Remote).
+func (c *Remote) ChatsPage(ctx context.Context, limit int, before string) (any, error) {
+	return c.Chats(ctx, limit, before)
+}
+
+// MessagesPage is Messages for the manager's route (imessagewire.Remote).
+func (c *Remote) MessagesPage(ctx context.Context, chat string, limit int, before string) (any, error) {
+	return c.Messages(ctx, chat, limit, before)
+}
+
 func (c *Remote) ID() string   { return ID }
 func (c *Remote) Name() string { return "信息" }
 
@@ -83,17 +102,6 @@ func (c *Remote) Status(context.Context) connectorwire.Status {
 	st.Account = c.machine
 	st.Via = c.machine + " 上的「信息」"
 	return st
-}
-
-// Detail is the status with what the app needs to fix it: the steps on the Mac, and how its node runs.
-type Detail struct {
-	Machine string   `json:"machine"`
-	Status  string   `json:"status"`
-	Error   string   `json:"error,omitempty"`
-	Guide   []string `json:"guide,omitempty"`
-	Via     string   `json:"via,omitempty"` // ssh | launchd
-	// AI: "Hand to Persona" is on (the knowledge base, the inbox, the assistant's tools).
-	AI bool `json:"ai"`
 }
 
 func (c *Remote) Detail(ctx context.Context) Detail {
