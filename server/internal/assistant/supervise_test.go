@@ -32,6 +32,23 @@ func shortSupervise(t testing.TB, s *Service) {
 	})
 }
 
+// stopSupervisionTimers lets a test drive watch and delivery explicitly. Once
+// the run context is done, neither scheduling path can arm another digest.
+func stopSupervisionTimers(s *Service) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.running.Store(&ctx)
+	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.timer != nil {
+		b.timer.Stop()
+	}
+	b.timer, b.timerAt = nil, time.Time{}
+}
+
 // The first signal waits superviseGather; after a message, a signal waits superviseEvery (an urgent one
 // superviseUrgentEvery) from it.
 func TestDigestWait(t *testing.T) {

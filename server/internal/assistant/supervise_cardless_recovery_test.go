@@ -100,17 +100,7 @@ func stopCardlessManager(s *Service) {
 	if stop, ok := cardlessRuns.LoadAndDelete(s); ok {
 		stop.(context.CancelFunc)() // what a timer that already fired read
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	s.running.Store(&ctx)
-	s.supervise.digestMu.Lock()
-	defer s.supervise.digestMu.Unlock()
-	s.supervise.mu.Lock()
-	defer s.supervise.mu.Unlock()
-	if s.supervise.timer != nil {
-		s.supervise.timer.Stop()
-	}
-	s.supervise.timer, s.supervise.timerAt = nil, time.Time{}
+	stopSupervisionTimers(s)
 }
 
 func flushCardlessClaim(s *Service) {
@@ -494,23 +484,31 @@ func (s *cardlessClaimStore) PutTodoSupervision(ctx context.Context, row db.Todo
 func TestCardlessClaimOutboxFailureRetriesAfterRestart(t *testing.T) {
 	store := &cardlessClaimStore{DB: taskRecoveryDatabase(t)}
 	s, f, todo := newSupervisedServiceOn(t, store)
+	runCardlessManager(t, s)
 	t.Cleanup(func() { stopCardlessManager(s) })
 	holdDigest(s)
 	waitsForReview(t, s, f, todo.ID, "Ready for review.")
-	runCardlessManager(t, s)
+	// Drive admission and recovery explicitly. An immediate cardless signal
+	// can otherwise be taken from pending before either assertion.
+	turnsQuiet(t, s, todo.ID)
+	stopCardlessManager(s)
 	store.mu.Lock()
 	store.failOutbox = true
 	store.mu.Unlock()
 	now := time.Now().Add(cardlessSettle + time.Minute)
 	s.superviseWatch(context.Background(), now)
-	stopCardlessManager(s)
+	if !slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+		t.Fatal("the watch did not attempt to queue the cardless claim")
+	}
+	if _, ok := storedSupervisePending(t, s)[todo.ID+"|"+sigCardlessWait]; ok || todoNow(s, todo.ID).Supervision.CardlessToldAt != nil {
+		t.Fatal("the failed write left a durable claim or acknowledged the review round")
+	}
 	store.mu.Lock()
 	store.failOutbox = false
 	store.mu.Unlock()
 	again, againHub := restartedOn(t, store)
-	t.Cleanup(func() { stopCardlessManager(again) })
+	stopSupervisionTimers(again)
 	againHub.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusIdle, State: "idle"})
-	holdDigest(again)
 	again.superviseWatch(context.Background(), now.Add(time.Minute))
 	if !slices.Contains(pendingKinds(again, todo.ID), sigCardlessWait) {
 		t.Fatalf("the failed outbox write permanently spent the review round across restart: ledger=%+v pending=%+v", todoNow(again, todo.ID).Supervision, storedSupervisePending(t, again))
@@ -520,21 +518,24 @@ func TestCardlessClaimOutboxFailureRetriesAfterRestart(t *testing.T) {
 func TestCardlessClaimMarkerFailureKeepsRecoveryRecord(t *testing.T) {
 	store := &cardlessClaimStore{DB: taskRecoveryDatabase(t)}
 	s, f, todo := newSupervisedServiceOn(t, store)
+	runCardlessManager(t, s)
 	t.Cleanup(func() { stopCardlessManager(s) })
 	holdDigest(s)
 	waitsForReview(t, s, f, todo.ID, "Ready for review.")
-	runCardlessManager(t, s)
+	turnsQuiet(t, s, todo.ID)
+	stopCardlessManager(s)
 	store.mu.Lock()
 	store.failMarker = true
 	store.mu.Unlock()
 	s.superviseWatch(context.Background(), time.Now().Add(cardlessSettle+time.Minute))
-	stopCardlessManager(s)
+	if todoNow(s, todo.ID).Supervision.CardlessToldAt != nil {
+		t.Fatal("the failed marker write acknowledged the review round")
+	}
 	store.mu.Lock()
 	store.failMarker = false
 	store.mu.Unlock()
 	again, _ := restartedOn(t, store)
-	t.Cleanup(func() { stopCardlessManager(again) })
-	holdDigest(again)
+	stopSupervisionTimers(again)
 	if err := again.ensureTodosLoaded(context.Background()); err != nil {
 		t.Fatal(err)
 	}
