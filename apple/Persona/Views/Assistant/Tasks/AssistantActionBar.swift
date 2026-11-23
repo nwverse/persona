@@ -195,8 +195,10 @@ nonisolated enum AssistantEntries {
     /// The task waits for its supervisor's review, which is not the owner's to do yet (the web's `supervisorReviewing`):
     /// open, in `pending_review` for less than `reviewOverdueAfter`. False past that, and when the hub does not say since
     /// when (an older hub): the review is then the owner's, as it was. An open ask or an asking Agent is the owner's
-    /// whatever this says.
+    /// whatever this says. An owner hold its Agent reported that the supervisor has not read yet (#13191) is the
+    /// supervisor's however old.
     static func supervisorReviewing(_ todo: TodoItem, now: Date) -> Bool {
+        if todo.doneAt == nil, todo.delivery?.heldForSupervisor == true { return true }
         guard todo.doneAt == nil, todo.supervision?.state == "pending_review", let since = todo.supervision?.pendingSince else { return false }
         return now.timeIntervalSince(since) < reviewOverdueAfter
     }
@@ -570,9 +572,7 @@ struct AssistantActionBar: View {
                 .padding(.horizontal, Theme.Space.xs)
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            #if !os(macOS)
             .padding(.top, Theme.Space.s)
-            #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
@@ -1016,7 +1016,7 @@ struct AssistantActionBar: View {
             return starting ? String(localized: "Starting the agent") : nil
         case .failed:
             // in plain words; the raw error is the task's details' (#8237)
-            return store.startFailure(todo).map(StartFailureWords.rowLine)
+            return store.startFailureRow(todo)
         case .needsYou:
             return TaskAsk.waitingLine(store.interactions(todo)) ?? (todo.delivery?.waitsForOwner == true ? one(todo.delivery?.gate) : nil)
         case .working, .waiting:
@@ -1038,19 +1038,30 @@ struct AssistantActionBar: View {
         let retry = status == .failed && store.state(todo) == .failed
         let invalid = TurnErrorReason.invalid(lead)
         let resume = !invalid && (status == .interrupted || status == .usageLimit && lead.map { !$0.usageLimitContinues } == true)
-        if retry || resume || status == .failed {
+        if retry {
+            HStack(spacing: Theme.Space.s) {
+                Color.clear.scaledFrame(width: Theme.Size.markM, height: 0).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    if let task = store.planTask(todo) { TaskShellQuestion(todo: todo, task: task) }
+                    TaskRetryButtons(todo: todo, idPrefix: "action-tray", remove: { store.askRemove(todo, pending: $removing) })
+                }
+            }
+            .font(Theme.Font.captionStrong)
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.bottom, Theme.Space.s)
+        } else if resume || status == .failed {
             let busy = store.busyRetries.contains(todo.id)
             HStack(spacing: Theme.Space.s) {
                 // under the words: as wide as the row's mark and the gap after it
                 Color.clear.scaledFrame(width: Theme.Size.markM, height: 0).accessibilityHidden(true)
-                if retry || resume {
+                if resume {
                     Button { Task { await store.retry(todo) } } label: {
-                        Text(retry ? String(localized: "Retry") : String(localized: "Continue")).lineLimit(1)
+                        Text("Continue").lineLimit(1)
                             .opacity(busy ? 0 : 1).overlay { if busy { ProgressView().controlSize(.small) } }
                     }
                     .themedButton(prominent: true)
                     .disabled(busy)
-                    .accessibilityIdentifier(retry ? "action-tray.retry" : "action-tray.continue")
+                    .accessibilityIdentifier("action-tray.continue")
                 }
                 if status == .failed {
                     Button { store.askRemove(todo, pending: $removing) } label: {

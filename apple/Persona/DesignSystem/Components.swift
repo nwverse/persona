@@ -37,18 +37,11 @@ struct StatusDot: View {
             } else if Self.showsBreathingRing(state: state, reduceMotion: reduceMotion) {
                 Circle().fill(state.color)
                     .overlay {
-                        #if os(macOS)
-                        // Core Animation runs it: the clock below relaid the whole window 30 times a second.
-                        MacBreathingRing(color: state.color.opacity(Self.ringOpacity))
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                        #else
                         VisibleWork { eligible in
                             BreathingRing(color: state.color.opacity(Self.ringOpacity), eligible: eligible)
                         }
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
-                        #endif
                     }
             } else {
                 Circle().fill(justFinished ? StatusPalette.unread.dot : state.color)

@@ -56,12 +56,17 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	n.mu.Lock()
 	agents := make(map[string]host.Agent, len(n.agents))
-	agyConversations := map[string]string{}
-	agyRuntimeIDs := map[string]string{}
 	for id, agent := range n.agents {
 		agents[id] = agent
+	}
+	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
+	n.mu.Unlock()
+
+	agyConversations := map[string]string{}
+	agyRuntimeIDs := map[string]string{}
+	for id, agent := range agents {
 		if agent.Agent == agyAgent {
-			if conversation := n.agyConversationLocked(id, agent.PaneID); conversation != "" {
+			if conversation := n.agyConversation(id, agent.PaneID); conversation != "" {
 				agyConversations[id] = conversation
 				if agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
 					agyRuntimeIDs[id] = agyAgent + "-" + conversation
@@ -69,8 +74,6 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			}
 		}
 	}
-	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
-	n.mu.Unlock()
 
 	// One slice for the whole list, sized from the last one, filtered where it is (#2826): grown from nil and copied again
 	// into the rows kept, with the runtimes' rows in a third, a list of 300 rows (1,520 bytes each) took about 4.8 MB.
@@ -164,8 +167,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil {
 				m := n.meta(p, st)
-				if identity.InHealthSpace(m.cwd) {
-					s.Space = identity.SpaceHealth
+				if sp := identity.SpaceAt(m.cwd); sp != "" {
+					s.Space = sp
 				}
 				rolloutPath = p
 				textAt = m.lastTextAt
@@ -504,10 +507,10 @@ func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState,
 			model := st.Model
 			s.RequestedModel = &model
 		}
-		// A row without a pane is listed where its record says it started, when that is an assistant or health
+		// A row without a pane is listed where its record says it started, when that is an assistant or space
 		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
-		if identity.InHealthSpace(st.Cwd) {
-			s.Space = identity.SpaceHealth
+		if sp := identity.SpaceAt(st.Cwd); sp != "" {
+			s.Space = sp
 		}
 		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
 			s.Cwd = st.Cwd

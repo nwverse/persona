@@ -70,4 +70,19 @@ class HttpAgentOperationsTest {
             catch (e: AgentOperationFailure) { assertFalse(e.uncertain) }
         }
     }
+
+    @Test fun forkSessionPostsEmptyAtItemIdAndReturnsTheBranchedSessionId() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAgentOperations("scope", server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"session_id":"branched-42"}"""))
+            assertEquals("branched-42", api.forkSession(SessionKey("server", "source-1")))
+            val fork = server.takeRequest()
+            assertEquals("POST", (fork.method).zhAny())
+            assertEquals("/api/v1/sessions/server/source-1/fork", (fork.path).zhAny())
+            assertEquals(buildJsonObject { put("at_item_id", "") }, JsonCodec.parseToJsonElement(fork.body.readUtf8()))
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"这一轮还没做完，等它停下再分支","code":"fork_turn_running"}"""))
+            try { api.forkSession(SessionKey("server", "source-1")); fail("Fork must fail while turn runs") }
+            catch (e: AgentOperationFailure) { assertFalse(e.uncertain) }
+        }
+    }
 }

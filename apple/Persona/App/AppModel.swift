@@ -748,6 +748,8 @@ final class AppModel {
     }
     /// Per group: the one retry of its waiting messages due in a few seconds (`retryOutboxSoon`).
     @ObservationIgnored var outboxRetry: [String: Task<Void, Never>] = [:]
+    /// One selective shell-question resend per conversation; ordinary outbox flushing remains independent.
+    @ObservationIgnored var resendingShellStarts = Set<SessionKey>()
     #if DEBUG
     @ObservationIgnored var inboxHandOffDoneForTests: ((PendingMessage.InboxHandOff) -> Void)?
     #endif
@@ -1760,7 +1762,7 @@ final class AppModel {
         if let w = warmed, w.launcher == launcher, w.manager == api.shownManager, Date().timeIntervalSince(w.at) < 180 { return }
         warmed = (launcher, api.shownManager, Date())
         if let r = try? await api.warmAssistant(launcher: launcher), hubFeatures.contains(AssistantReadiness.feature), showsPage(of: api) {
-            readiness.land(r)
+            readiness.land(r, modelPick: assistantMain.flatMap { session($0) }?.modelPick)
         }
     }
 
@@ -1771,7 +1773,7 @@ final class AppModel {
     /// ask again now. Nothing on a hub without readiness.
     func readinessChanged() {
         guard hubFeatures.contains(AssistantReadiness.feature) else { return }
-        Task { await readiness.refresh(api: api, force: true) }
+        Task { await readiness.refresh(api: api, force: true, modelPick: assistantMain.flatMap { session($0) }?.modelPick) }
     }
 
     func setAssistantLauncher(_ launcher: String) async {
@@ -2900,11 +2902,7 @@ final class AppModel {
     /// `deviceID` is the phone's id for pushes: while it is connected the hub sends its Live Activity no pushes, the app
     /// draws it from the fleet events (hub/liveactivity.go).
     nonisolated static func registration(deviceName: String, tools: Any, simulator: Bool, deviceID: String = "") -> [String: Any] {
-        #if os(macOS)
-        ["type": "register_desktop", "device_name": deviceName, "device_id": deviceID]
-        #else
         ["type": "register_phone", "device_name": deviceName, "tools": tools, "simulator": simulator, "device_id": deviceID]
-        #endif
     }
 
     /// Streamed replies drawn at most 5 times a second (`DeltaPacer`).
@@ -3446,12 +3444,6 @@ final class AppModel {
 
     private func confirm(_ summary: String) async -> Bool {
         Haptics.attention()
-        #if os(macOS)
-        // The alert hangs off the main window: bring it up (reopen it if it was closed) so the question is seen.
-        // From the background activating may not be granted: the Dock icon bounces until the user comes.
-        MacShellState.shared.showMain()
-        NSApp.requestUserAttention(.criticalRequest)
-        #endif
         // One at a time: a second write waits behind the one on screen instead of taking its place (#4456).
         return await phoneConfirmations.ask(summary)
     }
@@ -4564,22 +4556,14 @@ final class AppModel {
     /// This iPhone's guided setup (`persona://iphone/setup`, #8199).
     func openIPhoneSetup() {
         settingsPath = SettingsPage.iphoneSetupPath
-        #if os(macOS)
-        MacShellState.shared.go(.settings, self)
-        #else
         selectedTab = .settings
         if tabRouter != nil { shellSettings = true }
-        #endif
     }
 
     func openSentRecords() {
         settingsPath = SettingsPage.sentPath
-        #if os(macOS)
-        MacShellState.shared.go(.settings, self)
-        #else
         selectedTab = .settings
         if tabRouter != nil { shellSettings = true }
-        #endif
     }
 
     /// A provider import link opened from outside (#5428): the Model providers page reads it through the hub's parse
@@ -4590,12 +4574,8 @@ final class AppModel {
         let request = ProviderImportRequest(link: link)
         providerImport = request
         settingsPath.append(ModelLaunchersRoute(id: request.id))
-        #if os(macOS)
-        MacShellState.shared.go(.settings, self)
-        #else
         selectedTab = .settings
         if tabRouter != nil { shellSettings = true }
-        #endif
     }
     /// The space's other agent a chat page switched to in its header (`ChatView.switchTo`), by the session it opened
     /// with: the page built again for that path goes to it. Cleared back at the list.
@@ -5111,11 +5091,6 @@ final class AppModel {
 
     /// Images handed to a chat's composer from elsewhere (an image edited in the viewer); the composer takes them.
     var composerInbox: [SessionKey: [UIImage]] = [:]
-    #if os(macOS)
-    /// Files dropped on a chat's page anywhere but its composer: the composer takes them as if dropped on
-    /// it (`MacDrop.take`: pictures attached, other files uploaded).
-    var composerDrops: [SessionKey: [URL]] = [:]
-    #endif
     /// Page excerpts picked as context for a chat's next message (`<persona-context>`).
     /// Kept across launches with the text (#4578): a quote is the larger part of a reply.
     var composerContexts: [SessionKey: [ContextRef]] = AppModel.savedContexts() { didSet { saveContexts(); markDrafts() } }

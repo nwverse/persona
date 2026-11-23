@@ -33,7 +33,6 @@ options:
   deploymentTarget:
     iOS: "18.6"
     watchOS: "10.0"
-    macOS: "26.0"
     visionOS: "26.0"
   # The String Catalogs' source language: the Chinese text is the key (docs/apple/ios.md「Interface language」). The Info.plists say
   # CFBundleDevelopmentRegion en, so a language the app does not have falls back to English (docs/protocol/i18n.md).
@@ -259,6 +258,8 @@ targets:
         NSCalendarsWriteOnlyAccessUsageDescription: "Persona adds events to your calendar when you ask Claude to, for example to save a meeting it scheduled for you."
         NSRemindersFullAccessUsageDescription: "Persona lets Claude read and create reminders when you ask, for example to add “review the PR” to your Today list."
         NSLocationWhenInUseUsageDescription: "Persona shares your current location with Claude only when you ask, for example to find what time it is where you are or which office you are in."
+        # Always, asked only after the owner taps Allow (#13200, docs/apple/phone-tools.md "Location when Persona isn't open").
+        NSLocationAlwaysAndWhenInUseUsageDescription: "Persona reads your location only when the assistant needs it to answer you, for example when you ask “How far am I from home?” while Persona isn't open. When you move a long way, iOS may wake Persona in the background, but it doesn't record where you go."
         NSHealthShareUsageDescription: "Persona lets Claude read health summaries when you ask, for example how many steps you walked this week or how long you slept last night. With rolling recording on, Persona also checks heart rate, HRV, steps, workouts and the moods you log, on your iPhone only, to keep the minutes around them."
         # Asked when Claude saves a health sample (phone_health_write_sample); App Store processing also wants it with the HealthKit entitlement.
         NSHealthUpdateUsageDescription: "Persona saves health data only after you approve it on your iPhone, one entry at a time, for example a weight or last night's sleep you told Claude about."

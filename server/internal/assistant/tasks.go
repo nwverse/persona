@@ -123,8 +123,8 @@ type PlanTask struct {
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
-	// Supervisor: the legacy task_plan supervisor input (#3608), retained in saved plans so pre-#5732 leader-plan
-	// tasks can be told apart from the manual-Agent exception. It no longer chooses the supervisor of new work.
+	// Supervisor: optional initial direction lead chosen by main. Otherwise a planning lead supervises its own
+	// work and ordinary conversations use main. The durable task ledger takes precedence after a transfer.
 	Supervisor string `json:"supervisor,omitempty"`
 	// ReuseTodo: the todo this task runs on instead of a new one (task_plan's todo_id, #5279): one this conversation
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
@@ -883,6 +883,14 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		p, err := s.dismissPlan(r.Context(), r.PathValue("id"))
+		// Don't Start on a card already started, dismissed or withdrawn elsewhere (another device, the conversation's
+		// task_plan_withdraw) while no event reached this client: answer with the plan as it is, so the client's card
+		// shows what happened instead of a 409 the user can only tap again (an iOS app held such a card until restarted).
+		if errors.Is(err, errPlanNotOpen) {
+			if cur, lerr := s.loadPlan(r.Context(), r.PathValue("id")); lerr == nil && cur.State != planOpen {
+				p, err = cur, nil
+			}
+		}
 		if err != nil {
 			planErr(w, err)
 			return

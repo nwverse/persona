@@ -45,8 +45,8 @@ func (ix Interaction) AskedWithoutWaiting() bool { return ix.ToolName == "ask_us
 // OneTapQuestion is the question ix asks when one tap may answer it without opening the app (a notification's
 // options, a to-do's row): a question card with exactly one question, options to choose from and no fields to fill in,
 // not raised in a Just me turn (whose push says nothing of what it asks), and whose asker did not say going ahead
-// cannot be undone (cannotUndo: an answer that cannot be taken back needs a look first). A health conversation's card
-// is never answered so either; only the hub and the manager can tell one (identity.InHealthSpace on its cwd), and each
+// cannot be undone (cannotUndo: an answer that cannot be taken back needs a look first). A space conversation's card
+// is never answered so either; only the hub and the manager can tell one (identity.InSpace on its cwd), and each
 // checks it beside this. False otherwise.
 func (ix Interaction) OneTapQuestion() (Question, bool) {
 	if ix.Kind != IxQuestion || ix.ToolName == "persona_session_review" || len(ix.Questions) != 1 || len(ix.Fields) > 0 || len(ix.Questions[0].Options) == 0 ||

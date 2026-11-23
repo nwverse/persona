@@ -3,6 +3,7 @@ mail_search
 mail_read
 mail_save_attachment
 mail_send
+resource_status
 ask_user
 notify_user
 supervision_finish
@@ -88,6 +89,8 @@ todo_delete
 concern_report
 direction_name
 leader_progress
+decision_record
+decisions_query
 subscription_list
 subscription_get
 subscription_sources

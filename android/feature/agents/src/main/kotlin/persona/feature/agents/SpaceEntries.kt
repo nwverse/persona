@@ -93,6 +93,7 @@ private fun SpaceDestination(route: SpaceRoute, navigator: Navigator, dependenci
 private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navigator, creationModel: NewAgentViewModel?) {
     val page by model.page.collectAsStateWithLifecycle()
     val connection by model.connection.state.collectAsStateWithLifecycle()
+    val groups by model.hubGroups.groups.collectAsStateWithLifecycle()
     val pending by model.interactions.pending.collectAsStateWithLifecycle()
     val operations by model.operationState.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
@@ -146,6 +147,10 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
                     navigator.navigate(ChatRoute(it.machineId, it.sessionId, kind = ConversationKind.Assistant))
                 })
             },
+            onFork = if (row.session.canFork && !row.session.archived && model.hasOperations) ({
+                model.fork(row.session) { forked -> navigator.navigate(ChatRoute(forked.machineId, forked.sessionId)) }
+            }) else null,
+            forkOnline = groups.stateFor(row.session.machineId, connection) == ConnectionState.Online && page.machines.firstOrNull { it.id == row.session.machineId }?.online != false,
             onInterrupt = { model.interrupt(row.session) },
             onClose = { operationDialog = AgentOperationDialog.Close(row.session) },
             onDelete = { operationDialog = AgentOperationDialog.Delete(row.session) })

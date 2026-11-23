@@ -20,7 +20,7 @@ func leadTakeEnv(t *testing.T, box ...proto.Session) (*Service, *fakeHub) {
 }
 
 // A lead resumes, with its own task, an agent whose earlier task (the main conversation's here, any direction's alike)
-// is closed (#12953): the agent is resumed on a new task the lead originates and main supervises (#5732), and the
+// is closed (#12953): the agent is resumed on a new task the lead originates and supervises (#13362), and the
 // closed to-do and its supervisor are left as they were. No main conversation was involved in the hand-off.
 func TestALeadResumesAFinishedAgentOfAnotherDirection(t *testing.T) {
 	s, f := leadTakeEnv(t, stoppedBoxAgent("done0001"))
@@ -36,7 +36,7 @@ func TestALeadResumesAFinishedAgentOfAnotherDirection(t *testing.T) {
 		t.Fatalf("%s %v", res, startCalls(f))
 	}
 	now, ok := s.openTodoOfAgent("box", "done0001")
-	if !ok || now.ID == earlier.ID || now.Origin != "lead0001" || now.Supervision == nil || now.Supervision.Supervisor != "conv1" {
+	if !ok || now.ID == earlier.ID || now.Origin != "lead0001" || now.Supervision == nil || now.Supervision.Supervisor != "lead0001" {
 		t.Fatalf("not the lead's task: %+v", now)
 	}
 	before, _ := s.todoNow(earlier.ID)

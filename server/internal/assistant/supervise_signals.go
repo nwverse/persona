@@ -85,6 +85,9 @@ var (
 // the same signal with the same key is told once.
 type superviseSignal struct {
 	Todo, Kind, Key string
+	// Handoff is an idle-shaped report that an owner's decision or review rework did not reach the agent.
+	// It is not a turn-end stop, so a native wakeup must not defer it.
+	Handoff bool
 	// PendingPredecessors: keys of earlier stretches of this id replaced before their delivery or queue acknowledgment.
 	// An ACK removes exactly its own Key; a still-present predecessor's dedup reservation is not delivery proof.
 	PendingPredecessors []string
@@ -121,7 +124,7 @@ type superviseSignal struct {
 	// OriginOnly records that this signal reached its dispatcher through the no-main fallback. The queue preserves
 	// that delivery provenance so restoring it after main returns cannot turn it into a legacy closeout grant.
 	OriginOnly bool `json:",omitempty"`
-	// Cards: an escalated signal's cards the user was given (ask_escalate).
+	// Cards: the exact rendered cards in an ask delivery, or the cards handed to the owner by ask_escalate.
 	Cards []prompts.SuperviseAsk
 	// Decision: the decision a recheck or an owner_cannot_answer signal is about, as it was asked (decision.go); for
 	// owner_cannot_answer Detail is the owner's answer (decide_yourself, not_what_i_asked, explain_first).
@@ -213,8 +216,8 @@ func (g superviseSignal) id() string {
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
-		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
-		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
+		sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -229,6 +232,7 @@ func (g superviseSignal) urgent() bool {
 func (g superviseSignal) immediate() bool { return supervisionBatchImmediate(g) }
 
 type superviseBook struct {
+	routingMu   sync.RWMutex // moves and card creation exclude routing/delivery; ordinary deliveries may run concurrently
 	mu          sync.Mutex
 	writeMu     sync.Mutex          // one ledger write at a time (updateSupervision)
 	roundEpochs map[string]uint64   // by todo, protected by writeMu; distinguishes a new round from a scope's state reset
@@ -928,6 +932,9 @@ func (s *Service) queueSignal(g superviseSignal) {
 
 // queueSignalReplacing also removes the older stretch it supersedes from the durable outbox.
 func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) {
+	if g.Kind != sigAsk {
+		g = s.currentSupervisorSignal(g)
+	}
 	if g.At.IsZero() {
 		g.At = time.Now()
 	}
@@ -1255,6 +1262,12 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 			if g, ok := s.undecidableSignal(ctx, t, now); ok {
 				s.signal(g)
 			}
+			if g, ok := s.cardlessWaitSignal(ctx, t, agents, lists, now); ok { // a review the owner cannot answer (#12648)
+				s.signal(g)
+			}
+		}
+		if g, ok := s.deliveryHoldSignal(ctx, t, now); ok { // an owner hold with no card goes to its supervisor first
+			s.signal(g)
 		}
 		s.briefClock(ctx, t, now)   // past its brief's clock with no end (task_brief_scope.go)
 		s.watchTurn(ctx, t, agents) // a turn that ended with no working heard, or was left half handled (task_turns.go)

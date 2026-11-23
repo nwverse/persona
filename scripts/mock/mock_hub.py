@@ -6731,6 +6731,12 @@ MEETING_TRANSCRIPTION = os.environ.get("MOCK_NO_MEETING_TRANSCRIPTION") != "1"
 TRANSCRIPTION_MODE = {"ready": os.environ.get("MOCK_MEETING_TRANSCRIPTION_READY") != "0", "upstream": "ok",
                       "fatal": "", "line_seconds": 4, "final_seconds": 2}
 TRANSCRIPTIONS = {}  # Protected by RECORDINGS_LOCK, including socket callbacks and final-pass timers.
+# The final pass's progress (#13461, docs/assistant/meeting-minutes.md "Gaps and the final pass"): while the mock's own
+# pass runs, transcription carries final_done (0: it replays in one step) and end. MOCK_MEETING_FINISHING=<done>,<end>
+# (recording seconds) shows every complete meeting recording with no transcription of its own as a hub-mode meeting whose
+# final pass has done <done> of <end>, for shots of the minutes line; its minutes stay as MOCK_RECORDING_MINUTES says.
+MEETING_FINISHING = tuple(float(x) for x in os.environ["MOCK_MEETING_FINISHING"].split(",")) \
+    if os.environ.get("MOCK_MEETING_FINISHING") else None
 TRANSCRIPTION_SCRIPT = ("我们先把 export cap 保持在 4 MB。", "Let's revisit pricing next week.",  # i18n-ignore: synthetic speech, never translated
                         "Alice 负责检查 export test。", "Bo will share the notes tomorrow.")  # i18n-ignore: synthetic speech
 
@@ -6875,11 +6881,19 @@ def transcription_gaps(t):
 
 def transcription_view(rid):
     t = TRANSCRIPTIONS.get(rid)
-    if not meeting_transcription_on() or not t: return None
+    if not meeting_transcription_on(): return None
+    if not t:
+        rec = RECORDINGS.get(rid)
+        if MEETING_FINISHING and isinstance(rec, dict) and rec.get("kind") == "meeting" and rec.get("complete"):
+            done, end = MEETING_FINISHING
+            return {"mode": "hub", "state": "finishing", "gaps": [], "final_done": min(done, end), "end": end}
+        return None
     if t["mode"] == "device": return {"mode": "device"}
     out = {"mode": "hub", "state": t["state"], "gaps": transcription_gaps(t) if rid not in RECORDINGS_TRIMMED else []}
     if t.get("problem"): out["problem"] = t["problem"]
     if t.get("fallback"): out["fallback"] = True
+    if t["state"] == "finishing" and t.get("final_started") and transcription_number(t.get("end")) and t["end"] > 0:
+        out["final_done"], out["end"] = min(t.get("final_done", 0), t["end"]), t["end"]
     return out
 
 
@@ -7100,11 +7114,13 @@ def transcription_finish_start(rid, force=False):
     if not t or t["mode"] != "hub" or t.get("final_started") or not t.get("complete_at"): return
     if not force and (t.get("socket") or transcription_gaps(t)): return
     t["final_started"] = True
+    t["final_done"] = 0
     t["final_gaps"] = transcription_gaps(t)
     if t.get("socket"): t["socket"]["fail"]("transcription_final")
     if not t["held"]:
         transcription_finish(rid, t)
         return
+    transcription_changed(rid)  # the pass's progress (final_done) from its start
     timer = threading.Timer(TRANSCRIPTION_MODE["final_seconds"], transcription_finish, args=(rid, t))
     timer.daemon = True; timer.start()
 
@@ -7134,7 +7150,9 @@ def transcription_finish(rid, expected):
 def transcription_configured():
     """What the switches make of the upstream now: the problem a job would have."""
     upstream = TRANSCRIPTION_MODE["upstream"]
+    # The kinds the hub passes on (#13446, spec/fixtures/meeting-transcription-problems): refused, busy, out of reach, failed.
     return ("upstream_unavailable" if not transcription_ready() or upstream == "unavailable" else
+            "upstream_forbidden" if upstream == "forbidden" else "upstream_busy" if upstream == "busy" else
             "upstream_failed" if upstream == "failed" else "no_interim" if upstream == "no_interim" else None)
 
 
@@ -7264,7 +7282,7 @@ def transcription_control(h, method):
         except ValueError: body = None
         if not isinstance(body, dict): return h.send_json({"code": "bad_request"}, 400) or True
         if any(k in body and type(body[k]) is not bool for k in ("on", "ready")) or \
-                ("upstream" in body and body["upstream"] not in ("ok", "unavailable", "failed", "no_interim")) or \
+                ("upstream" in body and body["upstream"] not in ("ok", "forbidden", "busy", "unavailable", "failed", "no_interim")) or \
                 ("fatal" in body and not isinstance(body["fatal"], str)) or \
                 any(k in body and (not transcription_number(body[k]) or body[k] < (1 / 16000 if k == "line_seconds" else 0)) for k in ("line_seconds", "final_seconds")):
             return h.send_json({"code": "bad_request"}, 400) or True
@@ -7371,7 +7389,7 @@ def transcription_socket(h, rid):
                     if end <= edge:
                         state["sentence"] = max(state["sentence"], edge)
                         continue
-                    if configured in ("upstream_unavailable", "upstream_failed"):
+                    if configured in ("upstream_forbidden", "upstream_busy", "upstream_unavailable", "upstream_failed"):
                         state["sentence"] = end
                         continue
                     if at < edge: state["sentence"] = max(state["sentence"], edge)
@@ -8594,6 +8612,12 @@ def live_step_page_sent(sid):
 # receipt, an answered card, a message routed straight to a task, a reminder done on the phone, and an open plan at the
 # end. Served at /api/v1/assistant/conversations/{id}/feed and /api/v1/task-plans/…; the tasks are todos with origin.
 MOCK_TASKS = os.environ.get("MOCK_TASKS") == "1"
+# MOCK_START_REMEDIES=1 (with MOCK_TASKS=1, #10365): coded start failures, a launcher alternative and both kinds of
+# startup question. The hello features and routes are wired below with the task area; the fixtures live here with the plans.
+START_REMEDIES = os.environ.get("MOCK_START_REMEDIES") == "1"
+TOOL_SEARCH = os.environ.get("MOCK_TOOL_SEARCH") == "1"
+START_REMEDY_LOG = []
+START_QUESTION_SESSION = "a1f3c2d4-0000-4000-8000-000000000104"
 TASK_PLANS = {}
 TASK_FEED = {}
 if MOCK_TASKS:
@@ -8790,6 +8814,41 @@ if MOCK_TASKS:
             "progress": [{"id": "todo_task_widget", "title": "小组件横屏崩溃", "stage": "develop"}, {"id": "todo_task_tests", "title": "补齐网络层的单元测试"}],
             "progress_total": 2}),
     ]
+    if START_REMEDIES:
+        # Three failed starts: a terminal launcher with another launcher suggested, a kept worktree on a to-do whose
+        # own plan_id is empty (the plan still names its todo_id), and a shell question answered by the task route.
+        _remedy_specs = [
+            ("launcher", "Start the release checks", "plan_remedy_launcher", "plan_remedy_launcher",
+             "launcher_missing", {"launcher": "cc_glm", "where": "terminal"}, ["codex"]),
+            ("worktree", "Open the release workspace", "plan_remedy_worktree", "",
+             "worktree_path_taken", {"path": "/Users/me/code/weather-release"}, []),
+            ("question", "Prepare the demo workspace", "plan_remedy_question", "plan_remedy_question",
+             "shell_waiting", {"line": "Run zsh-newuser-install now?", "choices": "y,n,q", "kind": "zsh_newuser",
+                               "default": "n", "kept_until": later(hours=2), "screen": "zsh-newuser-install: (y/n/q)"}, []),
+        ]
+        for _n, (_slug, _title, _pid, _todo_pid, _code, _args, _retry) in enumerate(_remedy_specs):
+            _tid = "todo_remedy_" + _slug
+            _raw = {"launcher_missing": "zsh:1: command not found: cc_glm",
+                    "worktree_path_taken": "worktree path already exists: /Users/me/code/weather-release",
+                    "shell_waiting": "the terminal is waiting for an answer"}[_code]
+            _todo = dict(_task_todo(_tid, _title, "Synthetic start remedy fixture.", "macbook", "",
+                                    "/Users/me/code/weather", 1 + _n / 10, _todo_pid),
+                         done_at=ago(minutes=1 + _n / 10), start_error=_raw, agents=[])
+            TODOS_INIT.append(_todo)
+            TODOS.append(copy.deepcopy(_todo))
+            _pt = dict(_ptask(_title, False, "Start-remedy visual fixture.", _tid), error=_raw,
+                       error_code=_code, error_args=_args)
+            if _retry:
+                _pt["retry_with"] = _retry
+            TASK_PLANS[_pid] = _plan(_pid, "started", 2 + _n / 10, [_pt])
+            TASK_FEED[ASK1] += [_feed("feed_remedy_plan_" + _slug, 0.31 - _n / 100, "plan", _pid),
+                                _feed("feed_remedy_task_" + _slug, 0.30 - _n / 100, "task", _tid)]
+        SESSIONS.append(sess("macbook", START_QUESTION_SESSION, "Answer the terminal setup question", "/Users/me/code/weather",
+                             "offline", "offline", "weather", 9, "remedy", 9, 1, "",
+                             start_error="the terminal is waiting for an answer", start_error_code="shell_waiting",
+                             start_error_args={"line": "Trust this new host key?", "choices": "yes,no", "kind": "ssh_host_key",
+                                               "kept_until": later(hours=2), "screen": "Host key fingerprint: SHA256:example"}))
+        ITEMS[START_QUESTION_SESSION] = []
     # MOCK_BRIEF_SETUP=1 (#5085, #5804, docs/assistant/assistant.md "Recommended setup"): the briefing is the week's
     # first, so its `brief` item carries the computed setup lines, in the hub's own words
     # (server/internal/i18n/locales/en/assistant-setup_suggest.json): one with a settings page in every app (the triage's
@@ -9454,6 +9513,18 @@ def retry_task(h, tid):
     t = next((x for x in TODOS if x["id"] == tid), None)
     if not t:
         return h.send_json({"error": "todo not found"}, 404)
+    raw_body = (h.last_body or b"").decode("utf-8", errors="replace")
+    try:
+        request_body = json.loads(raw_body) if raw_body else {}
+    except ValueError:
+        return h.send_json({"error": "invalid JSON", "code": "bad_request"}, 400)
+    if not isinstance(request_body, dict):
+        return h.send_json({"error": "a JSON object is required", "code": "bad_request"}, 400)
+    launcher = request_body.get("launcher")
+    if launcher is not None and (not isinstance(launcher, str) or not launcher.strip()):
+        return h.send_json({"error": "launcher must be a non-empty string", "code": "bad_request"}, 400)
+    launcher = launcher.strip() if launcher else ""
+    START_REMEDY_LOG.append({"route": "retry", "id": tid, "raw_body": raw_body, "body": request_body})
     mode = RETRY_MODE["mode"]
     cut = [x for x in SESSIONS if x.get("turn_error") and any(a["session_id"] == x["session_id"] for a in t.get("agents", []))]
     if cut and not t.get("done_at"):
@@ -9471,13 +9542,17 @@ def retry_task(h, tid):
 
         threading.Thread(target=finished, daemon=True).start()
         return h.send_json({"todo": format_todo(t)})
-    if not t.get("start_error"):
-        if t.get("done_at") or not t.get("plan_id"):
+    plan = TASK_PLANS.get(t.get("plan_id")) or next(
+        (p for p in TASK_PLANS.values() if p.get("state") != "dismissed"
+         and any(pt.get("todo_id") == tid for pt in p.get("tasks", []))), None)
+    plan_task = next((pt for pt in (plan or {}).get("tasks", []) if pt.get("todo_id") == tid), None)
+    if not t.get("start_error") and not (plan_task or {}).get("error"):
+        # A failed start is retryable through its plan's todo_id even when the to-do has no plan_id (#10365).
+        if t.get("done_at"):
             return h.send_json({"error": "只有助手派出、没开起来的任务能重试"}, 409)
         return h.send_json({"todo": format_todo(t)})
     if mode == "offline":
         return h.send_json({"error": "「MacBook」现在离线，等它连上再重试"}, 409)
-    plan = TASK_PLANS.get(t.get("plan_id"))
 
     def plan_error(err):
         if not plan:
@@ -9485,6 +9560,10 @@ def retry_task(h, tid):
         for pt in plan["tasks"]:
             if pt.get("todo_id") == tid:
                 pt["error"] = err
+                if not err:
+                    pt.pop("error_code", None)
+                    pt.pop("error_args", None)
+                    pt.pop("retry_with", None)
         for send, _ in list(LIVE):
             try: send(from_default({"type": "task_plan", "plan": plan}))
             except Exception: pass
@@ -9500,17 +9579,75 @@ def retry_task(h, tid):
             t.update(done_at=ago(), start_error=err, updated_at=ago())
             plan_error(err)
         else:
-            if not any(x["session_id"] == RETRY_TASK_STARTED for x in SESSIONS):
-                SESSIONS.append(sess("macbook", RETRY_TASK_STARTED, t["title"], "/Users/me/code/weather", "working", "working",
-                                     "weather", 1, "align", 9, 0, "在看设置页底部两个按钮的布局约束。"))
-            t["agents"] = [{"machine_id": "macbook", "session_id": RETRY_TASK_STARTED, "linked_at": ago(), "released_at": None,
-                            "title": t["title"], "cwd": "/Users/me/code/weather", "agent": "claude", "start_error": "",
-                            "source": "manual", "via": ""}]
+            sid = RETRY_TASK_STARTED if tid == "todo_task_align" else str(uuid.uuid5(uuid.NAMESPACE_URL, "persona mock retry " + tid))
+            if not any(x["session_id"] == sid for x in SESSIONS):
+                SESSIONS.append(sess("macbook", sid, t["title"], "/Users/me/code/weather", "working", "working",
+                                     "weather", 1, "align", 9, 0, "The retry started the agent.",
+                                     agent="codex" if launcher == "codex" else "claude", launcher=launcher or "claude"))
+            t["agents"] = [{"machine_id": "macbook", "session_id": sid, "linked_at": ago(), "released_at": None,
+                            "title": t["title"], "cwd": "/Users/me/code/weather", "agent": "codex" if launcher == "codex" else "claude",
+                            "start_error": "", "source": "manual", "via": ""}]
             push_machine("macbook")
         push_todos()
 
     threading.Thread(target=started, daemon=True).start()
     h.send_json({"todo": format_todo(t)})
+
+
+def answer_task_start(h, tid):
+    """POST /api/v1/todos/{id}/start/answer: accept only an offered choice, then restart the failed planned task."""
+    t = next((x for x in TODOS if x["id"] == tid), None)
+    if not t:
+        return h.send_json({"error": "todo not found"}, 404)
+    raw_body = (h.last_body or b"").decode("utf-8", errors="replace")
+    try:
+        body = json.loads(raw_body)
+    except ValueError:
+        return h.send_json({"error": "invalid JSON", "code": "bad_request"}, 400)
+    choice = body.get("choice") if isinstance(body, dict) else None
+    START_REMEDY_LOG.append({"route": "task_answer", "id": tid, "raw_body": raw_body, "body": body})
+    plan = TASK_PLANS.get(t.get("plan_id")) or next(
+        (p for p in TASK_PLANS.values() if any(pt.get("todo_id") == tid for pt in p.get("tasks", []))), None)
+    pt = next((pt for pt in (plan or {}).get("tasks", []) if pt.get("todo_id") == tid), None)
+    offered = (pt or {}).get("error_args", {}).get("choices", "").split(",")
+    if (pt or {}).get("error_code") != "shell_waiting" or choice not in offered:
+        return h.send_json({"error": "this startup answer is no longer available", "code": "start_answer_closed"}, 409)
+    t.update(done_at=None, start_error="", reopened_at=ago(), updated_at=ago())
+    for key in ("error", "error_code", "error_args", "retry_with"):
+        pt.pop(key, None)
+    sid = str(uuid.uuid5(uuid.NAMESPACE_URL, "persona mock start answer " + tid))
+    if not any(s["session_id"] == sid for s in SESSIONS):
+        SESSIONS.append(sess("macbook", sid, t["title"], "/Users/me/code/weather", "working", "working",
+                             "weather", 9, "answered", 9, 0, "The startup answer started the task."))
+        ITEMS[sid] = []
+    t["agents"] = [{"machine_id": "macbook", "session_id": sid, "linked_at": ago(), "released_at": None,
+                    "title": t["title"], "cwd": "/Users/me/code/weather", "agent": "claude", "start_error": "",
+                    "source": "manual", "via": ""}]
+    push_todos()
+    push_machine("macbook")
+    return h.send_json({"todo": format_todo(t)})
+
+
+def continue_session_start(h, mid, sid):
+    """POST /api/v1/sessions/{mid}/{sid}/start/continue: keep the session and answer its kept terminal question."""
+    s = next((x for x in SESSIONS if x["machine_id"] == mid and x["session_id"] == sid), None)
+    if not s:
+        return h.send_json({"error": "session not found"}, 404)
+    raw_body = (h.last_body or b"").decode("utf-8", errors="replace")
+    try:
+        body = json.loads(raw_body)
+    except ValueError:
+        return h.send_json({"error": "invalid JSON", "code": "bad_request"}, 400)
+    choice = body.get("choice") if isinstance(body, dict) else None
+    START_REMEDY_LOG.append({"route": "session_continue", "machine": mid, "id": sid, "raw_body": raw_body, "body": body})
+    offered = s.get("start_error_args", {}).get("choices", "").split(",")
+    if s.get("start_error_code") != "shell_waiting" or choice not in offered:
+        return h.send_json({"error": "this startup answer is no longer available", "code": "start_answer_closed"}, 409)
+    s.update(status="working", state="working", last_text="The terminal answer started the agent.", updated_at=ago())
+    for key in ("start_error", "start_error_code", "start_error_args"):
+        s.pop(key, None)
+    push_machine(mid)
+    return h.send_json({"session": decorated_session(s)})
 
 
 
@@ -9602,6 +9739,18 @@ def tasks_area(h, method, p, raw):
     """The unified entry's endpoints (MOCK_TASKS=1): the feed, starting / dismissing a plan, routing to a task."""
     if not MOCK_TASKS:
         return False
+    if START_REMEDIES and method == "GET" and p == "/mock/start-remedies":
+        h.send_json({"requests": START_REMEDY_LOG})
+        return True
+    if START_REMEDIES and method == "POST":
+        m = re.fullmatch(r"/api/v1/todos/([^/]+)/start/answer", p)
+        if m:
+            answer_task_start(h, unquote(m.group(1)))
+            return True
+        m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/start/continue", p)
+        if m:
+            continue_session_start(h, unquote(m.group(1)), unquote(m.group(2)))
+            return True
     if method == "GET" and p.startswith("/api/v1/assistant/conversations/") and p.endswith("/feed"):
         conv = p.split("/")[5]
         items = TASK_FEED.get(conv, [])
@@ -10349,29 +10498,6 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
                         {"key": "1", "label": "Yes", "keys": ["1"]},
                         {"key": "2", "label": "Yes, and don't ask again for git push commands in /Users/me/code/weather", "keys": ["2"]},
                         {"key": "3", "label": "No, and tell Claude what to do differently (esc)", "keys": ["3"]}]}})
-
-# MOCK_DOCK=1 (#12831, with MOCK_TASKS): two more of the main conversation's tasks wait for the owner, so its To Decide
-# pager has several kinds: the widget fix asks to run a command (a tool approval) and the blog migration asks a question
-# read off its terminal (a screen card with no tool use id). /mock/reset puts both back unanswered, and the network
-# tests' question.
-DOCK_INTERACTIONS = []
-if os.environ.get("MOCK_DOCK") == "1":
-    DOCK_INTERACTIONS = [
-        {"id": "ix_dock_widget_bash", "machine_id": "macbook", "session_id": WIDGET, "session_title": "修小组件横屏崩溃",
-         "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=20), "expires_at": later(minutes=40),
-         "tool_name": "Bash", "tool_use_id": "toolu_dock_bash",
-         "tool_input": {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17'",
-                        "description": "跑小组件的测试"}},
-        {"id": "scr_studio_blog_6a1d0e9c", "machine_id": "studio", "session_id": BLOG, "session_title": "博客迁移到 Astro",
-         "cwd": "/Users/me/code/blog", "kind": "screen", "created_at": ago(minutes=10), "expires_at": later(hours=24),
-         "screen": " 旧文章的固定链接怎么处理？\n ❯ 1. 保留旧链接\n   2. 换成新格式并加跳转\n",
-         "dialog": {"question": "旧文章的固定链接怎么处理？", "detail": "", "rev": "6a1d0e9c", "options": [
-             {"key": "1", "label": "保留旧链接", "keys": ["1"]},
-             {"key": "2", "label": "换成新格式并加跳转", "keys": ["2"]}]}},
-    ]
-    INTERACTIONS.extend(copy.deepcopy(DOCK_INTERACTIONS))
-    # The network tests' question too: a test answers it in the pager, the next starts with it again.
-    DOCK_INTERACTIONS += [copy.deepcopy(x) for x in INTERACTIONS if x["id"] == "ix_tests"]
 
 # MOCK_SCREEN_DANGER=before|after: Claude Code 2.1.322's safety check on a command (bypass mode, #5265 / #5266) with
 # its countdown, on the review agent. "before": as a hub before #5265 read it at a narrow width (the command missing,
@@ -23957,6 +24083,9 @@ def pins_route(handler, p):
 # switched off, incompatible), with feature plugin_manager; their pages, switches, settings and secrets work in memory.
 # The form of example-notes has every kind of field. A base_url that is not a URL is refused like the hub does.
 PLUGINS_MODE = os.environ.get("MOCK_EXTENSIONS", "")
+# Extension pages and overview cards a domain module adds to GET /api/v1/plugins/-/ui (each a catalog entry with its
+# "placement"); the domain answers the entry's own routes.
+EXTENSION_UI_EXTRA = []
 _NOTES_FORM = [
     {"name": "base_url", "type": "string", "title": "服务地址", "format": "uri", "default": "https://notes.example.com", "required": True},
     {"name": "folders", "type": "array", "title": "同步哪些文件夹", "items": {"name": "items", "type": "string"},
@@ -25090,12 +25219,8 @@ def markets_route(handler, p, body):
         if GRAPH_MODE and placement in ("", "overview_card"):
             ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work-card", "title": "Work",
                     "placement": "overview_card", "size": "compact", "opens": "work"}]
-        if SCENE_MODE and placement in ("", "nav_page"):
-            ui += [{"plugin": "example-home", "plugin_name": "Example Home", "id": "home-scene", "title": "Home",
-                    "placement": "nav_page", "size": "full", "icon": "home"}]
-        if SCENE_MODE and placement in ("", "overview_card"):
-            ui += [{"plugin": "example-home", "plugin_name": "Example Home", "id": "home-scene-card", "title": "Home",
-                    "placement": "overview_card", "size": "compact", "opens": "home-scene"}]
+        # The pages and cards domain modules add (scripts/mock/mock_domains.py), such as extension_scene_mock.py's.
+        ui += [dict(entry) for entry in EXTENSION_UI_EXTRA if placement in ("", entry["placement"])]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -26615,7 +26740,7 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT); DECISION_DISMISSALS.clear()
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS + DOCK_INTERACTIONS  # the cards back, unanswered
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS  # the cards back, unanswered (dock_mock.py puts its own back)
             ids = {x["id"] for x in again}
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
@@ -29860,7 +29985,6 @@ MOCK_HELP.append("MOCK_NAVIGATION=no-overview  A default manager from before Ove
 MOCK_HELP.append("MOCK_OVERVIEW_CARDS=1  (with MOCK_EXTENSIONS=1) Three more made-up Overview cards beside the gateway's 今天的用量: Quota left (example-quota), Needs me and Agenda (example-today), for arranging them (#9745)")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
 MOCK_HELP.append("MOCK_EXTENSION_GRAPH=1  (with MOCK_EXTENSIONS=1) A made-up Work page, UI version 10's graph (#9727): a 200-node tree of work in states with groups, progress, a folded part and a selected step; a node pushes its own page; each draw moves one step to Done; an overview card shows the graph as a still preview")
-MOCK_HELP.append("MOCK_EXTENSION_SCENE=1  (with MOCK_EXTENSIONS=1) A made-up Home page, UI version 11's scene (#12544): a two-room flat with floors, walls, windows, furniture, room labels and device pins in plain words; tapping a pin pushes its device page; each draw flips one lamp so a redraw changes state without moving the camera; an overview card shows the scene as a still preview")
 MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
@@ -30466,9 +30590,6 @@ def plugins_route(handler, p, body):
         return mock_work(handler, body, card=p.endswith("-card"))
     if PLUGINS_MODE and GRAPH_MODE and p == "/api/v1/extensions/example-work/-/ui/control-room":
         return mock_control_room(handler, body)
-    if PLUGINS_MODE and SCENE_MODE and p in ("/api/v1/extensions/example-home/-/ui/home-scene",
-                                             "/api/v1/extensions/example-home/-/ui/home-scene-card"):
-        return mock_home_scene(handler, body, card=p.endswith("-card"))
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -30731,128 +30852,6 @@ def mock_work(handler, body, card=False):
     view = _work_view(_WORK_DRAWS[0], node)
     if card:
         view = {"title": "Work", "sections": [{"key": "work", "items": [_work_graph(_WORK_DRAWS[0])]}]}
-    handler.send_json({"view": view})
-    return True
-
-
-# MOCK_EXTENSION_SCENE=1 (with MOCK_EXTENSIONS=1): UI version 11's scene (#12544), a made-up "Home" page: a two-room
-# flat with wood and tile floors, cutaway walls with a doorway and a glass window, a sofa, a round table, a TV and a
-# bed, room labels and five device pins in plain words. Tapping a pin pushes its device page; each draw toggles the
-# bedroom lamp so a redraw changes pin and light state while keeping the same key and shapes. All names are invented.
-SCENE_MODE = os.environ.get("MOCK_EXTENSION_SCENE") == "1"
-_HOME_DRAWS = [0]
-
-
-def _home_scene_component(draw):
-    bedroom_on = (draw % 2) == 1
-    shapes = [
-        {"kind": "prism", "points": [[-4.0, -2.6], [0.6, -2.6], [0.6, 2.6], [-4.0, 2.6]],
-         "bottom": 0.0, "top": 0.06, "color": "#C9AD8C", "material": "wood"},
-        {"kind": "prism", "points": [[0.6, -2.6], [4.0, -2.6], [4.0, 2.6], [0.6, 2.6]],
-         "bottom": 0.0, "top": 0.06, "color": "#D8D3CA", "material": "tile"},
-        {"kind": "box", "center": [0.0, 2.54], "size": [8.0, 0.12], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-3.94, 0.0], "size": [0.12, 5.2], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [3.94, 0.0], "size": [0.12, 5.2], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-2.7, -2.54], "size": [2.6, 0.12], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-0.3, -2.54], "size": [2.2, 0.12], "bottom": 0.06, "top": 0.55, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-0.3, -2.54], "size": [2.2, 0.06], "bottom": 0.55, "top": 2.2,
-         "color": "#9EC4DC", "material": "glass"},
-        {"kind": "box", "center": [2.4, -2.54], "size": [3.2, 0.12], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        # a wardrobe against the west wall: see-through while that wall is cut away (#13036)
-        {"kind": "box", "center": [-3.56, -0.9], "size": [0.6, 1.4], "bottom": 0.06, "top": 2.1, "color": "#EFEBE4", "material": "wood"},
-        {"kind": "box", "center": [0.6, 1.55], "size": [0.1, 2.1], "bottom": 0.06, "top": 2.5, "color": "#E2DDD4", "wall": True},
-        {"kind": "box", "center": [0.6, -1.55], "size": [0.1, 2.1], "bottom": 0.06, "top": 2.5, "color": "#E2DDD4", "wall": True},
-        {"kind": "box", "center": [-2.2, 1.4], "size": [2.1, 0.9], "round": 0.14, "bottom": 0.06, "top": 0.48, "color": "#788796"},
-        {"kind": "box", "center": [-2.2, 1.76], "size": [2.1, 0.2], "round": 0.08, "bottom": 0.48, "top": 0.84, "color": "#6E7D8C"},
-        {"kind": "cylinder", "center": [-2.1, 0.15], "radius": 0.46, "bottom": 0.06, "top": 0.44,
-         "color": "#B58E65", "material": "wood"},
-        {"kind": "box", "center": [-2.1, -1.75], "size": [1.7, 0.42], "round": 0.06, "bottom": 0.06, "top": 0.46,
-         "color": "#8E7358", "material": "wood"},
-        {"kind": "box", "center": [-2.1, -1.78], "size": [1.35, 0.06], "bottom": 0.5, "top": 1.24,
-         "color": "#20252D", "material": "screen"},
-        {"kind": "cylinder", "center": [-3.45, 1.95], "radius": 0.16, "bottom": 0.06, "top": 1.52,
-         "color": "#9BA2AA", "material": "metal"},
-        {"kind": "box", "center": [2.35, 1.05], "size": [2.0, 2.2], "round": 0.1, "bottom": 0.06, "top": 0.56, "color": "#DFD9CF"},
-        {"kind": "box", "center": [2.35, 1.95], "size": [1.85, 0.35], "round": 0.08, "bottom": 0.56, "top": 0.82, "color": "#C8C1B6"},
-    ]
-    pins = [
-        {"id": "living-lamp", "at": [-1.9, 0.3], "height": 2.35, "label": "Ceiling lamp", "state": "On",
-         "icon": "light", "tone": "positive", "light": {"on": True, "warmth": "warm"},
-         "action": {"id": "open", "values": {"id": "living-lamp"}, "push": {"ui": "home-scene", "state": "living-lamp"}}},
-        {"id": "living-ac", "at": [-3.75, 0.1], "height": 2.05, "label": "Air conditioner", "state": "26 °C",
-         "icon": "fan", "color": "blue",
-         "action": {"id": "open", "values": {"id": "living-ac"}, "push": {"ui": "home-scene", "state": "living-ac"}}},
-        {"id": "living-tv", "at": [-2.1, -1.78], "height": 1.0, "label": "TV", "state": "Not sure if on",
-         "icon": "video", "tone": "caution",
-         "action": {"id": "open", "values": {"id": "living-tv"}, "push": {"ui": "home-scene", "state": "living-tv"}}},
-        {"id": "bedroom-lamp", "at": [2.35, 0.35], "height": 2.35, "label": "Bedroom lamp",
-         "state": "On" if bedroom_on else "Off",
-         "icon": "light", **({"tone": "positive"} if bedroom_on else {}),
-         "light": {"on": bedroom_on, "warmth": "cool"},
-         "action": {"id": "open", "values": {"id": "bedroom-lamp"}, "push": {"ui": "home-scene", "state": "bedroom-lamp"}}},
-    ]
-    return {
-        "type": "scene",
-        "key": "home",
-        "alt": "Two-room flat with a living room on the west and a bedroom on the east.",
-        "caption": "Drag to turn, pinch to zoom, tap a device for its controls.",
-        "shapes": shapes,
-        "labels": [
-            {"text": "Living room", "at": [-0.9, -0.35], "height": 0.08},
-            {"text": "Bedroom", "at": [2.3, -1.2], "height": 0.08},
-        ],
-        "pins": pins,
-    }
-
-
-def _home_scene_downgrade(scene):
-    items = [{"type": "text", "text": scene["caption"]}]
-    for pin in scene["pins"]:
-        row = {"type": "row", "key": f"{scene['key']}:{pin['id']}", "title": pin["label"],
-               "icon": pin.get("icon"), "action": pin.get("action")}
-        if pin.get("tone"):
-            row["badge"] = {"text": pin.get("state", ""), "tone": pin["tone"]}
-        elif pin.get("state"):
-            row["value"] = pin["state"]
-        if pin.get("color"):
-            row["icon_color"] = pin["color"]
-        items.append(row)
-    return items
-
-
-def _home_scene_view(draw, device=None, ui_version=11):
-    if device:
-        return {"title": device, "sections": [{"key": "device", "items": [
-            {"type": "header", "title": device, "subtitle": "A made-up device", "badges": [{"text": "On", "tone": "positive"}]},
-            {"type": "text", "text": "This page stands for a device's own page: its switches, its temperature and its history."}]}]}
-    scene = _home_scene_component(draw)
-    body_items = [scene] if ui_version >= 11 else _home_scene_downgrade(scene)
-    lamp_count = 2 if (draw % 2) == 1 else 1
-    return {"title": "Home", "refresh_after": 30, "sections": [{"key": "home", "items": [
-        {"type": "header", "title": "Two-room flat", "subtitle": f"{lamp_count} of 2 lamps on · 26 °C",
-         "badges": [{"text": "Home", "tone": "positive"}]},
-        *body_items]}]}
-
-
-def mock_home_scene(handler, body, card=False):
-    request = json.loads(body) if body else {}
-    ctx = request.get("context") or {}
-    ui_version = ctx.get("ui_version", 11)
-    if os.environ.get("MOCK_EXTENSION_SCENE_DOWNGRADE") == "1":
-        ui_version = 10
-    state = request.get("state")
-    device = state if isinstance(state, str) and state else None
-    if request.get("action") == "open":
-        device = (request.get("values") or {}).get("id") or "living-lamp"
-        handler.send_json({"view": _home_scene_view(0, device, ui_version=ui_version)})
-        return True
-    if not card and not device:
-        _HOME_DRAWS[0] += 1
-    view = _home_scene_view(_HOME_DRAWS[0], device, ui_version=ui_version)
-    if card:
-        scene = _home_scene_component(_HOME_DRAWS[0])
-        items = [scene] if ui_version >= 11 else _home_scene_downgrade(scene)[:4]
-        view = {"title": "Home", "sections": [{"key": "home", "items": items}]}
     handler.send_json({"view": view})
     return True
 
@@ -31578,6 +31577,17 @@ MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：
                  "add.manager 把电脑加到那个助手名下（回包 manager；助手离线时 /machines 先不列它），MOCK_ADD_COMPUTER_NO_MANAGER=1 模拟不认它的旧 hub（回包没有 manager）")
 
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
+# MOCK_TOOL_SEARCH=1: the current main chat's turn failed because this gateway cannot load deferred tool references.
+# It is separate from the new-user readiness scenarios so the ordinary populated chat can show its dedicated Retry card.
+if TOOL_SEARCH:
+    _tool_search_text = ('API Error: 400 {"type":"error","error":{"type":"invalid_request_error",'
+                         '"message":"tool_reference blocks with defer_loading are not representable for this model"}}')
+    _tool_main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if _tool_main is not None:
+        _tool_main.update(turn_error=_tool_search_text, turn_error_code="tool_search_unsupported", turn_error_kind="user",
+                          last_text=_tool_search_text)
+        ITEMS[ASK1] = ITEMS.get(ASK1, []) + [it("assistant", "text", 0.2, text=_tool_search_text)]
+
 # MOCK_READINESS=<scenario> (docs/operations/testing.md "Readiness scenarios", scripts/mock/readiness_mock.py): a new user's hub in one of
 # the states the setup card shows, in the hub's shapes and words (its own catalogs, by Accept-Language): the features
 # assistant_readiness, machines_add, machine_trust, builtin_presets and launcher_auto_name; GET /api/v1/assistant/readiness[?probe=1],
@@ -32324,6 +32334,21 @@ _features_without_model_pick = features
 
 def features():
     return _features_without_model_pick() + (["assistant_model_pick", "assistant_start_service_tier"] if MODEL_PICK_MODE else [])
+
+
+_features_without_start_remedies = features
+
+
+def features():
+    base = _features_without_start_remedies()
+    extra = ("task_retry_launcher", "start_continue", "todo_start_answer") if START_REMEDIES else ()
+    return base + [f for f in extra if f not in base]
+
+
+MOCK_HELP.append("MOCK_START_REMEDIES=1  配合 MOCK_TASKS=1（#10365）：features 带 task_retry_launcher / start_continue / todo_start_answer；"
+                 "末尾三个失败任务分别是 launcher_missing + retry_with、无 plan_id 的 worktree_path_taken、todo_start_answer 的 shell_waiting；"
+                 "另有一个 start_continue 的 Agent 会话。Retry 记录空 body 或 launcher，回答两个 start 路由；GET /mock/start-remedies 看请求")
+MOCK_HELP.append("MOCK_TOOL_SEARCH=1  普通主对话的 tool_search_unsupported 原始 400 turn error，看专用 Retry 卡（#10365）")
 
 
 MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"

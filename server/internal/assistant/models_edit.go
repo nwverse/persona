@@ -183,15 +183,18 @@ func effortLevelsForPurpose(kind string, provider *ModelProvider, agent string) 
 }
 
 // permissionModesForAgent returns the permission modes supported by an agent launcher.
-// When the launcher explicitly declares its supported modes (e.g. Paseo ACP providers), those govern.
-// Otherwise Claude Code, Codex and Antigravity (agy) support all standard modes, while no-mode/legacy
-// work agents (omp, traex, pi, cursor) take no permission mode.
+// Claude Code always has Persona's five modes; proto.Launcher.PermissionModes describes other agents.
+// For them an explicitly declared list governs. Otherwise Codex and Antigravity (agy) support all standard
+// modes, while no-mode/legacy work agents (omp, traex, pi, cursor) take no permission mode.
 func permissionModesForAgent(agent string, listed proto.PermissionModeSet) []string {
+	if agent == "" || agent == "claude" {
+		return proto.PermissionModes
+	}
 	if listed != 0 {
 		return listed.List()
 	}
 	switch agent {
-	case "", "claude", "codex", "agy":
+	case "codex", "agy":
 		return proto.PermissionModes
 	case "omp", "traex", "pi", "cursor":
 		return nil
@@ -369,6 +372,10 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 	if b.PermissionMode != "" {
 		if p.Kind != "launcher" {
 			return i18n.Err("assistant-models.err_permission_mode_launcher_only")
+		}
+		if p.ID == purposeAgent && b.PermissionMode == proto.ModePlan {
+			// Plan rejects the Persona MCP allowlist before investigation and inbox_suggest can run.
+			return i18n.Err("assistant-models.err_permission_mode_unsupported")
 		}
 		if !slices.Contains(proto.PermissionModes, b.PermissionMode) {
 			return i18n.Err("assistant-models.err_permission_mode_unsupported")

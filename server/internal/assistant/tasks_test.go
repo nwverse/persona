@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -1577,4 +1578,63 @@ func TestSnapshotShowsTheAgentsPlan(t *testing.T) {
 		Unread:  []prompts.SnapshotAgent{{Label: "整理文档", Machine: "mac-a", Session: "a9b8c7d6", Plan: idle}},
 		Working: []prompts.SnapshotAgent{{Label: "修横屏崩溃", Plan: planned.Plan}, {Label: "没有计划"}},
 		Tasks:   []prompts.SnapshotTask{planned, older, newer, none}}))
+}
+
+// Don't Start on a card that is no longer open (withdrawn by its conversation, or started meanwhile) answers 200 with
+// the plan as it is: a client that missed the event shows what happened. It used to answer 409, and an iOS app that
+// held the card from an old read kept it in Needs You, refusing every tap, until it was restarted.
+func TestTaskPlanDismissOfAPlanNoLongerOpen(t *testing.T) {
+	s, _ := newTaskService(t)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
+	plan := func() string {
+		t.Helper()
+		if _, err := s.toolTaskPlan(ctx, "main1", planArgs(false)); err != nil {
+			t.Fatal(err)
+		}
+		items, _, _ := s.feed(ctx, "main1", time.Time{})
+		return items[len(items)-1].Ref
+	}
+	dismiss := func(id string) (int, TaskPlan) {
+		t.Helper()
+		w := request(s, http.MethodPost, "/api/v1/task-plans/"+id+"/dismiss", "")
+		var out struct {
+			Plan TaskPlan `json:"plan"`
+		}
+		if w.Code == http.StatusOK {
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return w.Code, out.Plan
+	}
+
+	withdrawn := plan()
+	if _, err := runJSON(t, s, "main1", "task_plan_withdraw", map[string]any{"plan_id": withdrawn, "reason": "done elsewhere"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ { // tapped again: the same answer
+		if code, p := dismiss(withdrawn); code != http.StatusOK || p.ID != withdrawn || p.State != planDismissed {
+			t.Fatalf("dismissing a withdrawn plan: %d %+v", code, p)
+		}
+	}
+
+	started := plan()
+	if _, err := s.startPlan(ctx, started, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if code, p := dismiss(started); code != http.StatusOK || p.State != planStarted {
+		t.Fatalf("dismissing a started plan: %d %+v", code, p)
+	}
+	if cur, err := s.loadPlan(ctx, started); err != nil || cur.State != planStarted {
+		t.Fatalf("the started plan moved: %+v %v", cur, err)
+	}
+
+	if code, _ := dismiss("plan_nope"); code != http.StatusNotFound {
+		t.Fatalf("an unknown plan: %d", code)
+	}
+	open := plan()
+	if code, p := dismiss(open); code != http.StatusOK || p.State != planDismissed {
+		t.Fatalf("dismissing an open plan: %d %+v", code, p)
+	}
 }

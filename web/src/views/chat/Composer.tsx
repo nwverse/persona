@@ -42,9 +42,8 @@ import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "
 import { OverlayBoundary } from "../LazyOverlay";
 import type { PlanMode } from "./PermissionPicker";
 import { useSendHistory } from "./useSendHistory";
-import { isModelCommand, requestModelPicker } from "../../lib/model-switch";
-import { isPermissionsCommand, permissionsCommand, PERMISSIONS_COMMAND, requestPermissionPicker } from "../../lib/permissions-command";
-import { hasSlashSkillQuery, rankCommands } from "../../lib/composer-commands";
+import { permissionsCommand, PERMISSIONS_COMMAND, requestPermissionPicker } from "../../lib/permissions-command";
+import { hasSlashSkillQuery, openPickerCommand, rankCommands } from "../../lib/composer-commands";
 import { escapeCancelsEdit, escapeCountsForEdit, upStartsEdit, type EditLastBox } from "../../lib/edit-last-key";
 import { t } from "../../i18n";
 import type { VoiceOffer } from "./voice/VoiceParts";
@@ -840,7 +839,7 @@ export const Composer = memo(function Composer({
   // `/model` alone opens the model panel (where the agent switches models), `/permissions` alone the permission menu
   // (#6476), from Enter and the send buttons alike. Where the chat has no such picker, the words are sent as typed.
   const pickerCommand = (text: string) => {
-    const opened = (isModelCommand(text) && requestModelPicker(draftKey)) || (isPermissionsCommand(text) && requestPermissionPicker(draftKey));
+    const opened = openPickerCommand(draftKey, text);
     if (opened) setDraft("");
     return opened;
   };
