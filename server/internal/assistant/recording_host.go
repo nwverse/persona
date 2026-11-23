@@ -129,6 +129,12 @@ func (h recordingHost) Hello(ctx context.Context) Hello            { return h.s.
 func (h recordingHost) Event(ctx context.Context, ev map[string]any) {
 	h.s.event(ctx, ev)
 }
+func (h recordingHost) Timings() (map[string]time.Duration, map[string][]time.Duration) {
+	return h.s.recOpts.timings, h.s.recOpts.lists
+}
+func (h recordingHost) FeedClock() (func() time.Time, func(time.Duration, func()) func() bool) {
+	return h.s.recOpts.now, h.s.recOpts.after
+}
 func (h recordingHost) Lang(ctx context.Context) i18n.Lang { return h.s.lang(ctx) }
 func (h recordingHost) AppLang(ctx context.Context, lang string) i18n.Lang {
 	return h.s.appLang(ctx, lang)

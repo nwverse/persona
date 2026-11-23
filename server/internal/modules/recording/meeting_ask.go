@@ -64,13 +64,6 @@ const (
 
 // The questions' times; tests shorten them.
 var (
-	askHold     = 20 * time.Second // the request waits this long for its answer, then answers 202 pending
-	askLiveWait = 15 * time.Second // a heard question waits this long for the live sentences up to the tap
-	askTimeout  = 3 * time.Minute  // an answer not there by then failed: model_timeout
-	askLivePoll = 250 * time.Millisecond
-)
-
-var (
 	errOpIDReused = errors.New("this id was used for another question")
 	errAsksFull   = errors.New("this meeting has all the questions it can keep")
 	errAskBusy    = errors.New("two questions of this meeting are being answered")
@@ -251,7 +244,7 @@ func (s *Recordings) askRoute() {
 			return
 		}
 		if done != nil {
-			hold := time.NewTimer(askHold - time.Since(start))
+			hold := time.NewTimer(s.tm.askHold - time.Since(start))
 			select {
 			case <-done:
 			case <-hold.C:
@@ -469,7 +462,7 @@ func (s *Recordings) answerAsk(e *kb.Engine, id string, a kb.LiveAsk, done chan 
 	if _, rec, err := e.LiveRead(id); err == nil && rec.RoomMeeting() {
 		out = s.answerInRoom(ctx, e, id, a) // the room answers it (meeting_room_ask.go)
 	} else {
-		tctx, cancel := context.WithTimeout(ctx, askTimeout)
+		tctx, cancel := context.WithTimeout(ctx, s.tm.askTimeout)
 		out = s.answerMeetingAsk(tctx, e, id, a)
 		cancel()
 	}
@@ -570,17 +563,17 @@ func (s *Recordings) answerMeetingAsk(ctx context.Context, e *kb.Engine, id stri
 }
 
 // awaitLive is recording id's live log once it holds next positions, waiting at most askLiveWait; without next at once.
-func awaitLive(ctx context.Context, e *kb.Engine, id string, next *int) (kb.Live, error) {
+func awaitLive(ctx context.Context, tm *timings, e *kb.Engine, id string, next *int) (kb.Live, error) {
 	l, _, err := e.LiveRead(id)
 	if err != nil || next == nil {
 		return l, err
 	}
-	deadline := time.Now().Add(askLiveWait)
+	deadline := time.Now().Add(tm.askLiveWait)
 	for len(l.Segments) < *next && time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return l, ctx.Err()
-		case <-time.After(askLivePoll):
+		case <-time.After(tm.askLivePoll):
 		}
 		if l, _, err = e.LiveRead(id); err != nil {
 			return l, err

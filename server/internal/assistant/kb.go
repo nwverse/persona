@@ -272,6 +272,7 @@ func (s *Service) kbClose() {
 // meeting's live event, an attending look) would otherwise take the data directory's lock back while the process
 // winds down, from the manager taking over, and write into the directory after the hand-over (#5510).
 func (s *Service) kbEnd() {
+	s.recordingWait(5 * time.Second) // the recording module's sockets, runs and answers first (they write into it)
 	k := &s.kb
 	k.open.Lock()
 	defer k.open.Unlock()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -88,3 +89,31 @@ func (s *Recordings) RoomToolCall(ctx context.Context, recording, name string, a
 }
 func (s *Recordings) RoomTools() []proto.Tool { return meetingRoomTools() }
 func (s *Recordings) RoomToolNames() []string { return meetingRoomToolNames() }
+
+// Wait waits until the module's background work has ended (hub transcription's goroutines, the questions being
+// answered), or ctx ends.
+func (s *Recordings) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.hubTr.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	for {
+		s.asks.mu.Lock()
+		n := len(s.asks.running)
+		s.asks.mu.Unlock()
+		if n == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}

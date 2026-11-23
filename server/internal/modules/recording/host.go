@@ -24,6 +24,11 @@ type Host interface {
 	Hello(ctx context.Context) assistantwire.Hello
 	Event(ctx context.Context, ev map[string]any)
 
+	// The module's times over its defaults, and the attending feeder's clock and timer (nil: the real ones): a test and
+	// tuning knob of the core's (assistant.Options.RecordingTimings), never a user setting.
+	Timings() (one map[string]time.Duration, lists map[string][]time.Duration)
+	FeedClock() (now func() time.Time, after func(time.Duration, func()) func() bool)
+
 	// The owner: language, zone, name, the web app, the main conversation, the meetings' glossary.
 	Lang(ctx context.Context) i18n.Lang
 	AppLang(ctx context.Context, lang string) i18n.Lang

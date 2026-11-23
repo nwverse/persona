@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -28,6 +29,26 @@ func (s *Service) loadRecording() {
 	}
 	if rec, ok := recordinghost.New(recordingHost{s}); ok {
 		s.rec = rec
+	}
+}
+
+// recordingOptions are Options' knobs of the recording module (Options.RecordingTimings).
+type recordingOptions struct {
+	timings map[string]time.Duration
+	lists   map[string][]time.Duration
+	now     func() time.Time
+	after   func(time.Duration, func()) func() bool
+}
+
+// recordingWait waits, at most d, for the module's background work to end (the service stops).
+func (s *Service) recordingWait(d time.Duration) {
+	if s.rec == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	if err := s.rec.Wait(ctx); err != nil {
+		s.logf("recording: background work still running at the end: %v", err)
 	}
 }
 

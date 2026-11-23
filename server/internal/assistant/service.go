@@ -66,6 +66,14 @@ type Options struct {
 	Modules []modapi.Module
 	// ModulesOff are the ids of modules switched off (the modules settings row, ReadModuleSwitch).
 	ModulesOff []string
+	// RecordingTimings and RecordingTimingLists override the recording module's times by name (its timings.go), and
+	// RecordingFeedNow and RecordingFeedAfter its attending feeder's clock and timer (nil: the real ones). A test and
+	// tuning knob of the code that builds the Service: never a user setting, not read from settings, hub.json or any
+	// route. Unset, the module runs with its defaults.
+	RecordingTimings     map[string]time.Duration
+	RecordingTimingLists map[string][]time.Duration
+	RecordingFeedNow     func() time.Time
+	RecordingFeedAfter   func(time.Duration, func()) func() bool
 }
 
 // Service is the assistant. It implements Handler.
@@ -366,6 +374,7 @@ type Service struct {
 	// rec is the recording module (recording.go, internal/recordinghost); nil without it. meetingModel stands in for
 	// the meeting.answer model in tests (nil: the configured one).
 	rec          recordingLayer
+	recOpts      recordingOptions // Options' recording knobs, for the module's Host
 	meetingModel kb.Model
 	// sockets makes socketMux, ServeSocket's (sockets.go).
 	sockets   sync.Once
@@ -393,7 +402,8 @@ func New(o Options) *Service {
 		s.logf = func(string, ...any) {}
 	}
 	s.loadModules(o.Modules, o.ModulesOff) // before anything a module adds to is set up
-	s.loadRecording()                      // the recording module, when the kernel loaded it (recording.go)
+	s.recOpts = recordingOptions{o.RecordingTimings, o.RecordingTimingLists, o.RecordingFeedNow, o.RecordingFeedAfter}
+	s.loadRecording() // the recording module, when the kernel loaded it (recording.go)
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()

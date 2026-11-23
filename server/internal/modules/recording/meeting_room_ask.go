@@ -33,11 +33,6 @@ const (
 
 // How often an ask in the room looks at it, and how long it waits for a turn running there before it goes; tests
 // shorten them.
-var (
-	askRoomPoll = time.Second
-	askRoomWait = askTimeout
-)
-
 // askMsgID is the client_msg_id of attempt k of ask id.
 func askMsgID(id string, k int) string { return fmt.Sprintf("ask-%s-%d", id, k) }
 
@@ -83,7 +78,7 @@ func (s *Recordings) roomVia(ctx context.Context, e *kb.Engine, id string) (stri
 			}
 			s.meetingKick(id) // its room is about to start
 		}
-		t := time.NewTimer(askRoomPoll * 5)
+		t := time.NewTimer(s.tm.askRoomPoll * 5)
 		select {
 		case <-ctx.Done():
 			t.Stop()
@@ -97,7 +92,7 @@ func (s *Recordings) roomVia(ctx context.Context, e *kb.Engine, id string) (stri
 
 // answerMaterial is a's answer from meeting material (meeting.answer, as in #2981), within askTimeout.
 func (s *Recordings) answerMaterial(ctx context.Context, e *kb.Engine, id string, a kb.LiveAsk) kb.LiveAsk {
-	ctx, cancel := context.WithTimeout(ctx, askTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.tm.askTimeout)
 	defer cancel()
 	out := s.answerMeetingAsk(ctx, e, id, a)
 	out.Via = kb.AskViaMaterial
@@ -173,7 +168,7 @@ func (s *Recordings) answerRoomTurn(ctx context.Context, e *kb.Engine, id string
 			return failAsk(a, askModelError)
 		}
 	}
-	deadline := attempt.SentAt.Add(askTimeout)
+	deadline := attempt.SentAt.Add(s.tm.askTimeout)
 	run := &channel.Run{MsgIDs: []string{attempt.MsgID}, Base: attempt.Base}
 	resent := false
 	for {
@@ -183,7 +178,7 @@ func (s *Recordings) answerRoomTurn(ctx context.Context, e *kb.Engine, id string
 		switch {
 		case err != nil:
 		case reading.Found && !working && strings.TrimSpace(reading.Answer) != "" &&
-			(!found || !row.UpdatedAt.Before(attempt.SentAt) || time.Since(attempt.SentAt) > 2*askRoomPoll):
+			(!found || !row.UpdatedAt.Before(attempt.SentAt) || time.Since(attempt.SentAt) > 2*s.tm.askRoomPoll):
 			// Its row says how the turn ended once it is from after the message (a moment later at most): Claude Code's
 			// own words for a failed request ("Not logged in · Please run /login") are no answer.
 			if failed := roomTurnError(row, found, attempt.SentAt, reading.Answer); failed != "" {
@@ -196,9 +191,9 @@ func (s *Recordings) answerRoomTurn(ctx context.Context, e *kb.Engine, id string
 			return roomAnswered(a, reading.Answer, s.room.takeSources(id))
 		case reading.Found && !working && reading.Stopped != "":
 			return failAsk(a, askNoAnswer)
-		case reading.Found && !working && found && !row.UpdatedAt.Before(attempt.SentAt) && time.Since(attempt.SentAt) > 2*askRoomPoll:
+		case reading.Found && !working && found && !row.UpdatedAt.Before(attempt.SentAt) && time.Since(attempt.SentAt) > 2*s.tm.askRoomPoll:
 			return failAsk(a, askNoAnswer) // its turn ended with no text
-		case !reading.Found && !working && !resent && time.Since(attempt.SentAt) > 10*askRoomPoll:
+		case !reading.Found && !working && !resent && time.Since(attempt.SentAt) > 10*s.tm.askRoomPoll:
 			// Its message is not in the room (a restart cut its send off): sent again under the same id.
 			resent = true
 			text, src, failed := s.roomAskMessage(ctx, e, id, r, &a)
@@ -212,7 +207,7 @@ func (s *Recordings) answerRoomTurn(ctx context.Context, e *kb.Engine, id string
 		if !time.Now().Before(deadline) {
 			return failAsk(a, askModelTimeout)
 		}
-		t := time.NewTimer(askRoomPoll)
+		t := time.NewTimer(s.tm.askRoomPoll)
 		select {
 		case <-ctx.Done():
 			t.Stop()
@@ -270,10 +265,10 @@ func (s *Recordings) roomWaitFree(ctx context.Context, e *kb.Engine, id, machine
 			}
 		case err == nil && (!found || !roomWorking(row)):
 			return true
-		case time.Since(began) >= askRoomWait:
+		case time.Since(began) >= s.tm.askRoomWait:
 			return true
 		}
-		t := time.NewTimer(askRoomPoll)
+		t := time.NewTimer(s.tm.askRoomPoll)
 		select {
 		case <-ctx.Done():
 			t.Stop()

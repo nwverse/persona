@@ -24,34 +24,6 @@ import (
 // sentences the phone's text fills the live log (meeting_transcribe_fallback.go). After the meeting the final pass
 // transcribes the stored audio again (meeting_transcribe_final.go). Nothing here logs what was said.
 
-// The times of hub transcription; tests shorten them.
-var (
-	audioStartWait   = 10 * time.Second // the phone's start frame comes within this
-	audioAckEvery    = 5 * time.Second  // the hub acknowledges the audio it stored this often
-	audioPingEvery   = 30 * time.Second // the hub pings a socket this often; one that answers nothing is closed
-	audioEndWait     = 15 * time.Second // after the phone's end, its last lines come within this
-	fallbackAfter    = 30 * time.Second // the socket down, or a problem standing, this long: the phone's text fills
-	jobRetry         = time.Minute      // a job that could not be opened, or failed, is opened again after this
-	jobReadyWait     = 30 * time.Second // a job answers ready within this, else it counts as upstream_unavailable
-	jobIdle          = time.Minute      // a job with no audio this long is ended (sessions bill silence)
-	jobAwayIdle      = 10 * time.Second // and this long while no phone socket is up (hubRun.idleLimitLocked)
-	jobStall         = 30 * time.Second // a job behind (audio skipped) that acknowledged nothing this long has failed
-	jobDoneWait      = 5 * time.Minute  // a replay job sends done within this of the manager's end
-	echoHoldMost     = 3 * time.Minute  // a speaking span open longer than this is assumed open from then on (hubRun.releaseHoldLocked)
-	hubSegmentsEvery = 15 * time.Second // the hub's live sentences are written to hub_segments.json this often
-	hubTick          = 250 * time.Millisecond
-	interimShown     = 10 * time.Second // GET …/live shows a caption at most this old
-	finalEvery       = time.Minute      // the final passes are looked at this often (and when kicked)
-	finalGapWait     = 30 * time.Minute // the final pass waits at most this long after the complete upload for gaps
-	// When the final pass is tried again: finalRetries after a try that failed (it may have billed), and
-	// finalUnreachableRetries after one that never reached the upstream (upstream_unavailable, nothing billed), which
-	// costs nothing while the hub's route to the service can be down for longer than finalRetries span (#9535).
-	finalRetries            = []time.Duration{time.Minute, 5 * time.Minute}
-	finalUnreachableRetries = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute, time.Hour}
-	// The most audio sent ahead of a job's last ack: live (more is skipped, the job moved on with seek) and replay.
-	liveAhead, replayAhead = 30 * time.Second, time.Minute
-)
-
 // liveInterim is the latest caption of a meeting the hub transcribes: interim on GET …/live, while it is at most
 // interimShown old (At, the manager's clock).
 type liveInterim struct {
@@ -266,7 +238,7 @@ func newHubRun(s *Recordings, e *kb.Engine, id string) *hubRun {
 
 // loop is the run's clock: spans open too long, the hub's transcript, idle jobs, the fallback.
 func (r *hubRun) loop() {
-	t := time.NewTicker(hubTick)
+	t := time.NewTicker(r.s.tm.hubTick)
 	defer t.Stop()
 	for {
 		select {
@@ -284,17 +256,17 @@ func (r *hubRun) tick(now time.Time) {
 	if r.stopped {
 		return
 	}
-	if r.openFrom != nil && !r.openAssumed && now.Sub(r.openAt) >= echoHoldMost {
+	if r.openFrom != nil && !r.openAssumed && now.Sub(r.openAt) >= r.s.tm.echoHoldMost {
 		r.releaseHoldLocked()
 	}
-	if r.hubDirty && now.Sub(r.hubPutAt) >= hubSegmentsEvery {
+	if r.hubDirty && now.Sub(r.hubPutAt) >= r.s.tm.hubSegmentsEvery {
 		r.putHubLocked()
 	}
 	if j := r.job; j != nil && !j.ending && !r.audioAt.IsZero() && now.Sub(r.audioAt) >= r.idleLimitLocked() {
 		r.s.logf("recording %s: transcription job idle (socket up: %t), ended", r.id, r.phone != nil)
 		r.endJobLocked(j)
 	}
-	if j := r.job; j != nil && j.ready && !j.ending && j.behind && now.Sub(j.behindAt) >= jobStall && now.Sub(j.ackAt) >= jobStall {
+	if j := r.job; j != nil && j.ready && !j.ending && j.behind && now.Sub(j.behindAt) >= r.s.tm.jobStall && now.Sub(j.ackAt) >= r.s.tm.jobStall {
 		r.s.logf("recording %s: transcription job stalled (nothing acknowledged), closed", r.id)
 		r.jobStalledLocked(j)
 	}
@@ -308,9 +280,9 @@ func (r *hubRun) tick(now time.Time) {
 // new job with its next audio, as after a dropped job, resending what the hub lacks from ready.from.
 func (r *hubRun) idleLimitLocked() time.Duration {
 	if r.phone == nil {
-		return jobAwayIdle
+		return r.s.tm.jobAwayIdle
 	}
-	return jobIdle
+	return r.s.tm.jobIdle
 }
 
 // notifyLocked wakes the waiters (hubFlush, awaitHeard).
@@ -809,7 +781,7 @@ func (s *Recordings) hubInterim(id string) *liveInterim {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	in := r.interim
-	if in == nil || !r.phoneReady || r.ended || time.Since(in.At) > interimShown ||
+	if in == nil || !r.phoneReady || r.ended || time.Since(in.At) > s.tm.interimShown ||
 		r.timeline.RoleAt(in.Start, r.role) == kb.AttendanceOff {
 		return nil
 	}
@@ -875,10 +847,10 @@ func (s *Recordings) awaitHeard(ctx context.Context, e *kb.Engine, id string, a 
 		return l, err
 	}
 	if !rec.HubTranscribed() || a.At == nil {
-		return awaitLive(ctx, e, id, a.LiveNext)
+		return awaitLive(ctx, &s.tm, e, id, a.LiveNext)
 	}
 	if r := s.hubRunOf(id); r != nil {
-		wctx, cancel := context.WithTimeout(ctx, askLiveWait)
+		wctx, cancel := context.WithTimeout(ctx, s.tm.askLiveWait)
 		if r.inFallback() {
 			r.awaitDevice(wctx, *a.At)
 		} else {

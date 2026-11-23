@@ -41,6 +41,9 @@ type Layer interface {
 	// RoomsSweep and HubSweep end the rooms, audio sockets and jobs of transcripts cut and recordings gone.
 	RoomsSweep(ctx context.Context, e *kb.Engine)
 	HubSweep(e *kb.Engine)
+	// Wait waits until the module's background work (hub transcription's sockets, runs and passes, the questions being
+	// answered) has ended, or ctx ends: the service stops (kbEnd) and tests drain.
+	Wait(ctx context.Context) error
 	// TranscriptionChanged: the meeting transcription the owner chose, or its readiness, changed (the live jobs of a
 	// choice no longer standing are ended in the background); TranscriptionJobsCheck ends them now.
 	TranscriptionChanged()
@@ -78,6 +81,11 @@ type Host interface {
 	RunCtx() context.Context
 	Hello(ctx context.Context) assistantwire.Hello
 	Event(ctx context.Context, ev map[string]any)
+
+	// The module's times over its defaults, and the attending feeder's clock and timer (nil: the real ones): a test and
+	// tuning knob of the core's (assistant.Options.RecordingTimings), never a user setting.
+	Timings() (one map[string]time.Duration, lists map[string][]time.Duration)
+	FeedClock() (now func() time.Time, after func(time.Duration, func()) func() bool)
 
 	Lang(ctx context.Context) i18n.Lang
 	AppLang(ctx context.Context, lang string) i18n.Lang
