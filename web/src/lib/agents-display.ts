@@ -94,10 +94,22 @@ export function retryAgentsDisplay(): Promise<void> {
 // redraw them.
 const botmuxHidden = () => state.value?.show_botmux !== true;
 const herdrTabName = () => state.value?.use_herdr_tab_name === true;
+const botmuxShown = () => state.value?.show_botmux;
+const displayEditable = () => state.value !== null && !state.saving;
 
 export function useBotmuxHidden(): boolean {
   // An unavailable preference might hide these sessions. Keep the last acknowledged choice.
   return useSyncExternalStore(subscribe, botmuxHidden, botmuxHidden);
+}
+
+/** The acknowledged BotMux choice, undefined until the hub answers. */
+export function useBotmuxShown(): boolean | undefined {
+  return useSyncExternalStore(subscribe, botmuxShown, botmuxShown);
+}
+
+/** Whether the display choice is loaded and not being saved. */
+export function useAgentsDisplayEditable(): boolean {
+  return useSyncExternalStore(subscribe, displayEditable, displayEditable);
 }
 
 export function useHerdrTabName(): boolean {

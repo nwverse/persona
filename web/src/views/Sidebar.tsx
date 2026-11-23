@@ -1,6 +1,6 @@
 import { pendingPlanCounts } from "../lib/pending-plan-counts";
 import { loadFeed, useFeed } from "../lib/feed";
-import { useAgentsDisplay, useBotmuxHidden } from "../lib/agents-display";
+import { useAgentsDisplayEditable, useBotmuxHidden, useBotmuxShown } from "../lib/agents-display";
 import { useBotmuxMode } from "../lib/botmux-mode";
 import { SectionAdd } from "./SectionAdd";
 import { AgentsAdd } from "./agents/AgentsAdd";
@@ -1308,9 +1308,10 @@ const GroupingBar = memo(function GroupingBar({ groupings, selection, onChoose }
 const FilterBar = memo(function FilterBar({ selection, counts, onChoose }: { selection: AgentFilter; counts: FilterCounts; onChoose: (f: AgentFilter) => void }) {
   const keys = shownFilters(selection, counts);
   const format = useBotmuxMode();
-  const { value, saving } = useAgentsDisplay();
-  const botmuxMode = value?.show_botmux !== true ? "hide" : format;
-  const showBotmuxChip = counts.feishu > 0 || value?.show_botmux === false;
+  const shown = useBotmuxShown();
+  const editable = useAgentsDisplayEditable();
+  const botmuxMode = shown !== true ? "hide" : format;
+  const showBotmuxChip = counts.feishu > 0 || shown === false;
   if (keys.length < 2 && !showBotmuxChip) return null;
   return (
     <div className="mt-1.5 flex flex-wrap gap-0.5 px-1">
@@ -1339,7 +1340,7 @@ const FilterBar = memo(function FilterBar({ selection, counts, onChoose }: { sel
         );
       })}
       </div>}
-      {showBotmuxChip && <Suspense fallback={null}><BotmuxModeChip mode={botmuxMode} disabled={!value || saving} /></Suspense>}
+      {showBotmuxChip && <Suspense fallback={null}><BotmuxModeChip mode={botmuxMode} disabled={!editable} /></Suspense>}
     </div>
   );
 });
