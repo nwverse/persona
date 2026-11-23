@@ -403,7 +403,6 @@ func New(o Options) *Service {
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
 	}
-	s.loadModules(o.Modules, o.ModulesOff) // before anything a module adds to is set up
 	// The kept old keys too while a rotation keeps them (keyrotate.go).
 	s.models.secret = secretkey.NewWithFallback(o.SecretKey)
 	s.archiveRoutes()
@@ -480,6 +479,8 @@ func New(o Options) *Service {
 	s.launcherImportRoutes()
 	s.launcherHealthRoutes()
 	s.remoteImageRoutes()
+	// Core routes form the reserved namespace for module routes. Runtime module access starts only after New returns.
+	s.loadModules(o.Modules, o.ModulesOff)
 	return s
 }
 
