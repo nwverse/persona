@@ -1,6 +1,6 @@
-Start a new agent in the terminal engine (herdr or Orca) of one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so. Claude-family launchers and Paseo providers with Auto Accept always start in bypassPermissions. TRAE CLI and omp take no effort setting.
+Start a new agent on one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so. Claude-family launchers and Paseo providers with Auto Accept always start in bypassPermissions. TRAE CLI and omp take no effort setting.
 
-The launcher decides the agent. A Claude Code launcher starts Claude Code. A launcher named pi, cursor or agy (or one the machine lists as that agent) starts that agent in a herdr pane with the model you give: pi, the Cursor CLI (cursor-agent) or the Antigravity CLI (agy). pi's first message goes through its Persona extension; cursor's and agy's go through herdr once it recognises the agent. Those three take no permission mode and no ultracode, and their effort is their own.
+The launcher decides the agent: Claude Code's starts Claude Code; pi or cursor (or one listed as that agent) starts pi or the Cursor CLI in a herdr pane with the model you give; agy starts the Antigravity CLI on the computer's companion when connected, else in a pane. Those three take no permission mode and no ultracode; their effort is their own.
 
 When the work needs a branch and checkout of its own (work in parallel with what is already open in that repository), give `worktree.branch`: Persona makes the worktree through the machine's engine first (herdr's or Orca's own, so it is listed there and in the app, under the workspace `cwd` is in) and starts the agent in it. Do not tell the agent to run `git worktree add` itself: a worktree made that way is invisible to Orca and to the app. An existing local branch is checked out; a new one starts at the HEAD of the workspace `cwd` is in. A branch already checked out elsewhere is refused.
 
@@ -70,6 +70,10 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
     "tier": {
       "type": "string",
       "description": "Agent preset from the snapshot's 模型档位 line; choose by purpose; resolved before approval and shown on the card; explicit launcher/model/effort/speed overrides"
+    },
+    "host": {
+      "type": "string",
+      "description": "agy (Antigravity companion) or an enabled engine"
     },
     "speed": {
       "type": "string",

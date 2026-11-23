@@ -104,6 +104,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.Model = strings.TrimSpace(t.Model)
 		t.Speed = strings.TrimSpace(t.Speed)
 		t.Permission = strings.TrimSpace(t.Permission)
+		if t.Host = strings.TrimSpace(t.Host); checkStartHostName(t.Host) != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, checkStartHostName(t.Host))
+		}
 		if err := t.checkRole(scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}

@@ -74,6 +74,10 @@ type PlanTask struct {
 	Speed              string `json:"speed,omitempty"`
 	Tier               string `json:"tier,omitempty"`
 	Permission         string `json:"permission,omitempty"`
+	// Host: where the task's Agent starts, as task_plan named it: agy (the computer's Antigravity companion, which has
+	// no terminal) or one of the computer's engine hosts. "" lets the hub choose: the companion for an agy launcher it
+	// runs, else the computer's default host (start_host.go, #13447).
+	Host string `json:"host,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`
