@@ -5,6 +5,7 @@ import XCTest
 ///
 /// - OK on Plan the Kyoto trip takes it out of N at once: the Needs you header, the Filter's Needs you, the drawer's
 ///   To-dos row and the folded Pages tally say the same lower number before the answer has gone, and after the hub has it.
+/// - A place draws the same answers (Today, a project), and OK there takes the to-do out of the place's N at once.
 /// - With `PERSONA_TODOS_FRAMES=1` and `PERSONA_SHOTS=<dir>`, the V1 frames the answers draw, saved for review
 ///   (`PERSONA_TODOS_STYLES` and `PERSONA_TODOS_SCHEME`, comma lists; `PERSONA_TODOS_LANGUAGE`, `PERSONA_TODOS_COLOR`,
 ///   `PERSONA_TODOS_SIZE`, `PERSONA_TODOS_FRAMES_ONLY`, where `list` is the list as it opens), each from a fresh launch
@@ -92,6 +93,47 @@ final class TodosV1AnswersTests: XCTestCase {
         XCTAssertEqual(number(row.label), n - 1, "the drawer after the hub's answer: \(row.label)")
     }
 
+    /// The answers are the row's wherever the row is listed: on Today (Plan the Kyoto trip due today), on a project's
+    /// place (Home's failed start offers Retry; Kyoto trip's decision OK), and OK there takes the to-do out of the
+    /// place's N at once, as on All To-dos.
+    @MainActor func testTheAnswersAreOnTheRowsInAPlace() throws {
+        guard let hub = env["PERSONA_TODOS_HUB"] else { throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_TODO_VIEW=1 (PERSONA_TODOS_HUB)") }
+        let base = try XCTUnwrap(URL(string: hub))
+        _ = try mock(base, "GET", "mock/reset")
+        defer { _ = try? mock(base, "GET", "mock/reset") }
+        _ = try mock(base, "PATCH", "api/v1/todos/t01", body: ["due_date": today()])
+        launch(hub, ["-openTodoPlace", "today"])
+        XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
+        waitFor("todos.answer.ok.t01", timeout: 20)
+        waitFor("todos.answer.options.t01", timeout: 2)
+
+        app.terminate()
+        _ = try mock(base, "GET", "mock/reset")
+        launch(hub, ["-openTodoPlace", "project:home"])
+        waitFor("todos.answer.retry.t03", timeout: 60)
+
+        app.terminate()
+        _ = try mock(base, "GET", "mock/reset")
+        launch(hub, ["-openTodoPlace", "project:kyoto"])
+        waitFor("todos.answer.ok.t01", timeout: 60)
+        let n = try XCTUnwrap(headerN(), "no Needs you header:\n\(app.debugDescription)")
+        let before = try XCTUnwrap(try hubN(base))
+        tap("todos.answer.ok.t01")
+        awaitGone("todos.answer.ok.t01", timeout: 3)
+        // The place's heading drops at once; with its only ask answered it may say no number at all.
+        let after = headerN(n - 1, timeout: 3)
+        XCTAssertTrue(after == n - 1 || (n == 1 && after == nil), "the place's Needs you kept \(String(describing: after))")
+        XCTAssertEqual(try hubN(base, before - 1, timeout: 20), before - 1, "the hub has the answer")
+    }
+
+    /// Today's date as the mock's PATCH takes a due date (the device's calendar, as the mock's start reads it).
+    private func today() -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: .now)
+    }
+
     /// The mock hub's own N (`GET /api/v1/todos`), polled until it is `expected` (nil: as it is now) or `timeout` passes.
     @MainActor private func hubN(_ base: URL, _ expected: Int? = nil, timeout: TimeInterval = 0) throws -> Int? {
         let deadline = Date.now.addingTimeInterval(timeout)
@@ -167,20 +209,22 @@ final class TodosV1AnswersTests: XCTestCase {
             let png = XCUIScreen.main.screenshot().pngRepresentation
             try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("iphone-list\(frame)\(suffix)-\(style)-\(scheme).png"))
         }
-        // Each from a fresh launch on the mock as it started, the iPhone's own layout, as the frames draw it.
-        let fresh = {
+        // Each from a fresh launch on the mock as it started, the iPhone's own layout, as the frames draw it; on All
+        // To-dos, or on `place` (Today with Plan the Kyoto trip due today, so its answers are there).
+        let fresh = { (place: String?) in
             _ = try? self.mock(base, "GET", "mock/reset")
+            if place == "today" { _ = try? self.mock(base, "PATCH", "api/v1/todos/t01", body: ["due_date": self.today()]) }
             self.app?.terminate()
-            self.launch(hub, extra, layout: "separate")
+            self.launch(hub, extra + (place.map { ["-openTodoPlace", $0] } ?? []), layout: "separate")
             if !self.element("todos.v1").waitForExistence(timeout: 60) { XCTFail("no V1 list:\n\(self.app.debugDescription)") }
             self.waitFor("todos.answer.ok.t01", timeout: 20)
         }
         if wants("") {
-            fresh()
+            fresh(nil)
             shot("")
         }
         if wants("~kyoto-answered") || wants("~kyoto-booking") {
-            fresh()
+            fresh(nil)
             let before = try XCTUnwrap(try hubN(base))
             tap("todos.answer.ok.t01")
             // The row says the answer in place of its buttons ("✓ You chose … · Undo", inside the row's one element).
@@ -195,7 +239,7 @@ final class TodosV1AnswersTests: XCTestCase {
             }
         }
         if wants("~options") || wants("~options-t03") {
-            fresh()
+            fresh(nil)
             if wants("~options") {
                 tap("todos.answer.options.t01")
                 waitFor("ask.card.t01")
@@ -213,14 +257,14 @@ final class TodosV1AnswersTests: XCTestCase {
             }
         }
         if wants("~later") {
-            fresh()
+            fresh(nil)
             tap("todos.answer.options.t01")
             tap("ask.later.t01", timeout: 5)
             waitFor("todos.answer.later.t01")
             shot("~later")
         }
         if wants("~back") {
-            fresh()
+            fresh(nil)
             tap("todos.answer.retry.t03")
             // Started again once its window ends, and Working on the hub.
             XCTAssertEqual(try hubSection(base, "t03", "working", timeout: 20), "working", "the hub started it again")
@@ -228,10 +272,15 @@ final class TodosV1AnswersTests: XCTestCase {
             shot("~back")
         }
         if wants("~can-wait") {
-            fresh()
+            fresh(nil)
             tap("todos.fold.can_wait")
             usleep(300_000)
             shot("~can-wait")
+        }
+        // The same answers on a place's list: Today, and the Kyoto trip project.
+        for (frame, place) in [("~answers-today", "today"), ("~answers-kyoto", "project:kyoto")] where wants(frame) {
+            fresh(place)
+            shot(frame)
         }
     }
 
@@ -279,11 +328,15 @@ final class TodosV1AnswersTests: XCTestCase {
         try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
     }
 
-    /// A call to the mock hub.
-    private func mock(_ base: URL, _ method: String, _ path: String) throws -> Data {
+    /// A call to the mock hub, with `body` as JSON when given.
+    private func mock(_ base: URL, _ method: String, _ path: String, body: [String: Any]? = nil) throws -> Data {
         var request = URLRequest(url: base.appending(path: path))
         request.httpMethod = method
         request.setValue("Bearer mock", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         var out: Data?
         let done = expectation(description: path)
         URLSession.shared.dataTask(with: request) { data, _, _ in out = data; done.fulfill() }.resume()

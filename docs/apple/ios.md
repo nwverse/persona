@@ -2325,7 +2325,8 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     also after a send that may have landed),
     `TodoCountsSourceTests.anAnswerHeldHereMovesEveryReaderInOneUpdate`, `scripts/mock/test_todo_view_mock.py` and the
     UI suite `TodosV1AnswersTests` (OK drops N on the header, the Filter's Needs you, the drawer's row and the Pages
-    tally at once; `testAnswerFrames` shoots the frames, `testTrayFrames` the tray's decision row).
+    tally at once; the same answers on Today's and a project's list, OK there dropping the place's N;
+    `testAnswerFrames` shoots the frames, `testTrayFrames` the tray's decision row).
 - **Which page.** `TodosPlacePage` draws the V1 list while the gate is on, else today's `TodosView` (frozen), deciding
   once, when the page is made (`TodosPageChoice`): a hello that turns the gate on while To-dos is up (a manager that
   connects late), or while a to-do is pushed over it, never swaps it; the next time To-dos opens it is the V1 list. The
