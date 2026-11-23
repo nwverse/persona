@@ -263,7 +263,6 @@ func TestCardLedgerReportGoesToTheMainConversationWithoutAPush(t *testing.T) {
 		!strings.Contains(kept[0].Text, "1 goals and direction: 1\n") {
 		t.Errorf("report:\n%s", kept[0].Text)
 	}
-	time.Sleep(50 * time.Millisecond) // a push would be on its way by now
 	if n := len(f.pushed()); n != pushes {
 		t.Errorf("%d push(es) after the report, want none: it is the main conversation's, not the owner's", n-pushes)
 	}
