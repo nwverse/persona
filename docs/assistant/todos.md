@@ -1414,8 +1414,10 @@ work** group. The detail is read-only by default: it draws the saved
 repositories as rows with their issues and pull requests as links, so the
 associations the agent maintains are visible without opening an editor. Each
 repository row carries its provider's own mark and its project address on one
-line; a link shows its retained full title as the hyperlink, falling back to the
-localized type and number when no title is known. A provider extension's
+line. A link shows its saved title, then the title from a matching PR observation,
+then its localized type and number. The Web matches the current and earlier PR
+observations by URL and shows Open, Draft, Merged or Closed beside the link.
+An open PR with merge conflicts also shows a Conflict warning. A provider extension's
 repository has the extension mark and its source's name after the address (the
 `provider_name` saved with it, else "Another source", never the `ext:` id); its
 links open at their stored addresses, numbered `#N`, with the extension's own
@@ -1475,7 +1477,9 @@ their `maxLength` is only a character ceiling, not a UTF-8 byte validator.
 A nonempty title updates a retained link and increments
 the association revision. Omitted or empty titles in URL-only reports or older
 editors preserve known titles; removing a link removes its title. Agents obtain
-titles from the related work and maintain them through the same tool. The app
+titles from the related work and maintain them through the same tool. The existing
+GitHub status poll also reads the PR title and refreshes a matching saved link.
+Only a changed, nonempty title advances the association revision. The app
 shows a localized type and number until a title is available; it never guesses
 titles or performs a remote metadata request when opening a to-do.
 It preserves source snapshots, aliases and requested refs. Assistant conversations
@@ -1785,3 +1789,56 @@ The engine's workspace ID still identifies its native container. Use the
 backend cleanup endpoint for the prepared repositories and the engine’s
 close action for its terminal. Adding a repository, issue or pull request
 association leaves the task’s launch choice and delivery progress in place.
+
+### Managed bare repository mirrors
+
+Developers who work repeatedly across large or multi-repository codebases on a
+connected computer can opt into per-`(machine, repo_id)` managed bare mirrors
+stored under the Node's protected `~/.persona/repos/<repo_id>.git` directory.
+Mirrors are strictly isolated from user-managed checkouts (`~/workspace/*`);
+Persona never runs `git pull` on user-created working directories and never
+stores Git credentials in the Hub database, reusing only the target machine's
+local Git/SSH/`gh` authentication.
+
+Defaults remain conservative: `enabled` is `false` and `auto_sync` is `false`
+for every `(machine, repo_id)` pair, producing zero background network or disk
+activity until explicitly enabled.
+
+- **Node RPCs (`server/internal/node/repo_mirror.go`, registered via `nodeRPC`)**:
+  - `repo.mirror.ensure`: initializes `~/.persona/repos/<repo_id>.git` as a bare
+    mirror if missing, or refreshes it with `git fetch --prune --tags` when
+    older than the requested TTL (default 5 minutes, overridable with
+    `ttl_seconds` or `force: true`). Per-repository single-flight locking
+    coalesces concurrent calls cleanly, with bounded timeouts, empty hooks
+    (`core.hooksPath`), and symlink/path guards (`~/.persona/repos` is also
+    protected from remote file-browsing APIs in `server/internal/node/pathguard.go`).
+  - `repo.mirror.status`: reports one mirror or lists all mirrors with
+    `default_ref`, `head_commit`, `last_synced_at` and recursive `disk_bytes`.
+  - `repo.mirror.remove`: waits for any in-flight sync on that repository,
+    safely deletes `<repo_id>.git` and its metadata/lock under
+    `~/.persona/repos/`, and reports `freed_bytes`.
+- **Manager persistence & opt-in periodic sync (`server/internal/assistant/repositorystore/repo_mirrors.go`, `server/internal/assistant/repo_mirrors.go`)**:
+  - Per-`(machine, repo_id)` mirror settings and sync status live in
+    Manager-owned table `repo_mirrors` (migration
+    `20261122172523_repo_mirrors.sql`, keeping Hub thin).
+  - When both `enabled` and `auto_sync` are `true`, the Manager runs a
+    low-frequency periodic sync loop (`sync_interval_minutes` in `[15, 1440]`,
+    default `30`) with jitter and exponential failure backoff.
+  - Full-credential HTTP routes (no extension scopes):
+    `GET /api/v1/assistant/repositories/mirrors`,
+    `GET /api/v1/assistant/repositories/{id}/mirrors/{machine_id}`,
+    `PUT /api/v1/assistant/repositories/{id}/mirrors/{machine_id}`,
+    `POST /api/v1/assistant/repositories/{id}/mirrors/{machine_id}/sync`, and
+    `DELETE /api/v1/assistant/repositories/{id}/mirrors/{machine_id}`.
+- **Backend workspace preparation integration**:
+  - During `PrepareBackendWorkspace` (including `task_plan` `workspace.backend`
+    and `workspace.container`), the Manager refreshes any enabled mirrors for
+    the target machine within TTL and passes `mirror_repos` in
+    `task.workspace.prepare`.
+  - The Node populates each task workspace's private bare repository locally
+    from `~/.persona/repos/<repo_id>.git` (with zero `objects/info/alternates`
+    dependencies and keeping `remote.origin.url` pointing at the real upstream
+    URL), force-refreshing once if a requested ref was pushed within the TTL
+    window, and falling back cleanly to the direct remote path whenever no
+    mirror is enabled, an older Node lacks `repo.mirror.ensure`, or a ref is
+    unavailable in the mirror.
