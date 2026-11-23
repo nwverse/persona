@@ -491,3 +491,36 @@ func TestOrphanedLeaderReceivesAcceptedWorkerGeneration(t *testing.T) {
 		t.Fatal("wake overrode an owner decision")
 	}
 }
+
+// A wake queued for an accepted worker generation is dropped once another worker joins the leader's task before it is
+// told: the queued signal names a worker set that no longer stands, and digestEntry rechecks it (#13084).
+func TestQueuedOrphanWakeYieldsToANewWorker(t *testing.T) {
+	s, f := newQuietService(t)
+	root := startTaskLeader(t, s, f)
+	child := planWorker(t, s, f, nil)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	leader := proto.Session{SessionID: root.Agents[0].SessionID, MachineID: "box", Host: "herdr", Agent: "claude",
+		Status: proto.StatusInterrupted, UpdatedAt: now.Add(-time.Hour),
+		Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true}}
+	f.setSessions("box", leader)
+	if _, _, err := s.updateSupervision(ctx, child.ID, func(v *Supervision) bool { v.State = reviewAccepted; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.reviewDoneTodo(ctx, child.ID, "accepted", true); err != nil {
+		t.Fatal(err)
+	}
+	s.orphanWatch(ctx, now)
+	queued, ok := s.orphanSignal(root)
+	if !ok || queued.WorkerSet == "" {
+		t.Fatalf("the accepted generation queued no wake: %+v", queued)
+	}
+	if _, ok := s.digestEntry(ctx, queued, ""); !ok {
+		t.Fatal("the queued wake cannot reach the supervisor")
+	}
+	planWorker(t, s, f, nil)
+	f.setSessions("box", leader) // the leader is still interrupted: only the worker set changed
+	if _, ok := s.digestEntry(ctx, queued, ""); ok {
+		t.Fatal("a wake queued for the earlier worker set reached the supervisor after a new worker joined")
+	}
+}
