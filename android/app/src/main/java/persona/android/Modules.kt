@@ -14,11 +14,17 @@ import persona.core.moduleapi.PersonaModule
 object Modules {
     /** Every module, by id; the `:module:<id>` project of each is in settings.gradle.kts. */
     internal val known: List<Pair<String, () -> PersonaModule>> = listOf(
-        "voice" to { persona.module.voice.VoiceModule },
+        module("voice") { persona.module.voice.VoiceModule },
     )
 
     /** The modules this build carries (BuildConfig.PERSONA_MODULES, from `-Ppersona.modules`). */
     val carried: ModuleRegistry by lazy { carrying(BuildConfig.PERSONA_MODULES.toSet()) }
+
+    /**
+     * One entry. [create] is typed `() -> PersonaModule` on purpose: a lambda typed with the module's own class would make
+     * loading Modules load that class, which a build without the module does not have.
+     */
+    private fun module(id: String, create: () -> PersonaModule): Pair<String, () -> PersonaModule> = id to create
 
     /** The registry of the modules in [ids]; unknown ids are a build mistake. */
     internal fun carrying(ids: Set<String>): ModuleRegistry {
