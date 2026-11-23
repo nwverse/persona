@@ -306,6 +306,42 @@ func TestMigratedDocumentAccountUpgradeConvergesOpenHistory(t *testing.T) {
 	}
 }
 
+// An explicit reopen may leave an older account-qualified row open beside the current one. An ordinary unchanged
+// collection is not a legacy-account adoption and must not converge that reopened row into the current version.
+func TestMigratedDocumentAccountUpgradePreservesExplicitReopen(t *testing.T) {
+	ctx := context.Background()
+	h := newInboxHub(t)
+	h.inboxReady(ctx)
+	p := &extensionLark{}
+	h.addConnector(p, false)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	doneAt := now.Add(-3 * time.Minute)
+	reopened := &InboxItem{ID: "doc:2:n1:100", Source: "lark", Kind: KindDoc, UpdatedAt: now.Add(-2 * time.Minute), Last: "100",
+		DoneAt: &doneAt, DoneBy: "user", Doc: &InboxDoc{NoticeID: "n1", AccountID: 2}}
+	current := &InboxItem{ID: "doc:2:n1:101", Source: "lark", Kind: KindDoc, UpdatedAt: now.Add(-time.Minute), Last: "101",
+		Doc: &InboxDoc{NoticeID: "n1", AccountID: 2}}
+	h.inbox.mu.Lock()
+	h.inbox.items[reopened.ID], h.inbox.items[current.ID] = reopened, current
+	h.inbox.mu.Unlock()
+	p.things = []connector.InboxThing{{Thread: "doc:2:n1", Kind: KindDoc, At: current.UpdatedAt, Last: current.Last,
+		Extra: &connector.ThingExtra{Source: "lark", LegacyID: current.ID, Count: 1, StartedAt: current.UpdatedAt,
+			Doc: rawJSON(map[string]any{"notice_id": "n1", "account_id": 2})}}}
+
+	code, out := inboxCall(t, h.routes(), "POST", "/api/v1/inbox/"+reopened.ID+"/done", `{"done":false}`)
+	if code != 200 || !reopened.open() {
+		t.Fatalf("explicit reopen: code=%d out=%v row=%+v", code, out, reopened)
+	}
+	h.collectInbox(ctx, roundPoll)
+	h.inbox.mu.Lock()
+	defer h.inbox.mu.Unlock()
+	if !reopened.open() || reopened.MergedInto != "" {
+		t.Fatalf("ordinary collection filed the explicitly reopened row: %+v", reopened)
+	}
+	if !current.open() || len(current.MergedFrom) != 0 || len(h.inbox.items) != 2 {
+		t.Fatalf("ordinary collection changed the current row or its history: current=%+v items=%+v", current, h.inbox.items)
+	}
+}
+
 // A document item written before account-qualified blocks keeps its old id and thread. Replaying its version neither
 // duplicates nor detaches it; later activity still continues beside the handled row.
 func TestMigratedDocumentLegacyIDRemainsAttached(t *testing.T) {

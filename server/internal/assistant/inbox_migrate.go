@@ -128,6 +128,11 @@ func (b *inboxBook) adoptMigratedDocumentAccount(id string, t connector.InboxThi
 		changed = append(changed, it)
 		found = append(found, it)
 	}
+	// Convergence belongs to the collection that actually adopts pre-account rows. Already qualified rows may include
+	// an older item its owner explicitly reopened; an ordinary later collection must leave that open history alone.
+	if len(changed) == 0 {
+		return nil
+	}
 	return b.mergeMigratedDocumentHistory(found, now, changed)
 }
 
