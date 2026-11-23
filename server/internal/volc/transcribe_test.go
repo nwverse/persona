@@ -690,3 +690,23 @@ func TestClassify(t *testing.T) {
 		}
 	}
 }
+
+// Each kind's transcription code (#13446): what the manager passes on to the phone, which says why and what to do.
+// A busy service is told apart from one out of reach.
+func TestTranscriptionCodeKeepsTheKind(t *testing.T) {
+	for kind, want := range map[string]string{
+		failForbidden:  extwire.TEUpstreamForbidden,
+		failNotEnabled: extwire.TEUpstreamForbidden,
+		failVoice:      extwire.TEUpstreamForbidden,
+		failBusy:       extwire.TEUpstreamBusy,
+		failNetwork:    extwire.TEUpstreamUnavailable,
+		failFailed:     extwire.TEUpstreamFailed,
+	} {
+		if got := transcriptionCode(&failure{kind: kind, service: "asr"}); got != want {
+			t.Errorf("transcriptionCode(%s) = %s, want %s", kind, got, want)
+		}
+	}
+	if got := transcriptionCode(io.EOF); got != extwire.TEUpstreamFailed {
+		t.Errorf("an error that is no failure: %s", got)
+	}
+}
