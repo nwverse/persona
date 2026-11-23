@@ -60,6 +60,7 @@ import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
 import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
 import { openStartPage } from "./lib/start-page";
+import { useWorkbench } from "./lib/labs-workbench";
 
 // The pages a first screen doesn't need load when they are opened (#1996), or as a link to their route is reached
 // (lib/lazy-page.ts); "Chat", Persona and "Overview" stay in the main bundle (the extensions' page too: the sidebar already has
@@ -102,6 +103,10 @@ function PhoneToasts(props: ToastLiftProps) {
     </OverlayBoundary>
   );
 }
+// The Workbench layout (Settings › Labs, #13439): its sidebar and thread frame are chunks of their own, loaded only when the
+// switch is on and the window is wide, never preloaded by a route.
+const WorkbenchSidebar = lazyPage(() => import("./views/workbench/WorkbenchSidebar").then((m) => m.WorkbenchSidebar));
+const WorkbenchThread = lazyPage(() => import("./views/workbench/WorkbenchThread").then((m) => m.WorkbenchThread));
 const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent));
 const StartingAgent = lazyPage(() => import("./views/StartingAgent").then((m) => m.StartingAgent));
 const ShortcutHelpDialog = lazyDialog(() => import("./views/ShortcutHelp").then((m) => m.ShortcutHelp));
@@ -399,6 +404,8 @@ function Shell() {
 
   // ── the sidebar: a column on a wide screen, a drawer over the page on a narrow one (#1996) ──
   const narrow = useMedia(NARROW);
+  // Settings › Labs › Workbench: a layout for wide windows only; a narrow one keeps the usual shell (docs/web/web.md)
+  const workbench = useWorkbench() && !narrow;
   // the toasts' placement, in before the first toast in practice
   useEffect(() => {
     if (narrow) void ToastLift.preload().catch(() => {});
@@ -511,14 +518,14 @@ function Shell() {
       break;
     case "session":
     case "tab": {
-      const detail = (terminalAvailable?: boolean) =>
+      const detail = (terminalAvailable?: boolean, keepToggle?: boolean) =>
         route.name === "session" && target?.link === "ambiguous" ? <SessionChoices mid={route.mid} sid={route.sid} onToggleSidebar={toggle} />
           : !pane ? (loaded && route.name === "tab" && lookup.state === "missing" ? <TabGone onToggleSidebar={toggle} /> : <Loading />)
           : launch ? <StartingAgent launch={launch} onToggleSidebar={toggle} />
-          : <ChatView key={`${pane.mid}/${pane.sid}`} mid={pane.mid} sid={pane.sid} starting={starting} onToggleSidebar={terminalAvailable === undefined ? toggle : undefined} inPage terminalAvailable={terminalAvailable} landAt={route.at} />;
+          : <ChatView key={`${pane.mid}/${pane.sid}`} mid={pane.mid} sid={pane.sid} starting={starting} onToggleSidebar={terminalAvailable === undefined || keepToggle ? toggle : undefined} inPage terminalAvailable={terminalAvailable} landAt={route.at} />;
       main = inWorkView(route)
         ? <TerminalPage onToggleSidebar={toggle} onNewAgent={openNewAgent} detail={{ selected: pane, render: detail }} onWorkPane={reportWorkPane} />
-        : detail();
+        : detail(workbench ? false : undefined, workbench);
       break;
     }
     case "persona":
@@ -597,6 +604,11 @@ function Shell() {
       main = <Home onNewAgent={openNewAgent} onToggleSidebar={toggle} />;
   }
 
+  // the Workbench frames a session's conversation with its changes and terminal; every other page is drawn as usual
+  if (workbench && !offline && pane && !launch && (route.name === "session" || route.name === "tab") && !inWorkView(route) && target?.link !== "ambiguous") {
+    main = <WorkbenchThread mid={pane.mid} sid={pane.sid}>{main}</WorkbenchThread>;
+  }
+
   return (
     // #root is 100dvh (index.html); with a soft keyboard up (iOS) the shell is only the part above it (lib/viewport.ts)
     <div ref={shell} data-app-shell className="flex h-full overflow-hidden bg-page">
@@ -618,7 +630,9 @@ function Shell() {
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
+        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} />
+          : workbench ? <Suspense fallback={<Sidebar route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}><WorkbenchSidebar route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} /></Suspense>
+          : <Sidebar route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
         {!narrow && !rail && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}

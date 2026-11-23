@@ -1,0 +1,20 @@
+{
+  "sidebar_label": "プロジェクトとスレッド",
+  "projects": "プロジェクト",
+  "other_project": "フォルダなし",
+  "new_thread": "新しいスレッド",
+  "new_thread_in": "{name}に新しいスレッド",
+  "toggle_diff": "変更の表示を切り替え",
+  "toggle_terminal": "ターミナルの表示を切り替え",
+  "diff_unavailable": "このスレッドの変更はここでは表示できません。",
+  "drawer_label": "ターミナル",
+  "diff_label": "変更",
+  "collapse_project": "{name}を折りたたむ",
+  "expand_project": "{name}を展開",
+  "resize_diff": "変更パネルの幅を調整",
+  "resize_drawer": "ターミナルドロワーの高さを調整",
+  "section": "ワークベンチ",
+  "cmd_diff": "変更の表示を切り替え",
+  "cmd_terminal": "ターミナルドロワーの表示を切り替え",
+  "cmd_new_thread": "このプロジェクトに新しいスレッド"
+}

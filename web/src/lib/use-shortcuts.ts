@@ -15,6 +15,7 @@ import { cycleGrouping, groupingLabel, setAllFolded, stepSidebarRow } from "./si
 import { focusWaitingCard } from "./card-keys";
 import { dispatchKey, registerShortcut } from "./shortcuts";
 import { getSession, getState } from "./store";
+import { workbenchKey } from "./labs-workbench";
 
 export interface ShortcutContext {
   route: Route;
@@ -99,6 +100,9 @@ export function useShortcuts(ctx: ShortcutContext) {
       }),
       registerShortcut("maximize", () => (at.current.narrow ? false : void toggleMaximized())),
       registerShortcut("terminal-chat", () => {
+        // the Workbench layout's drawer, while it is up (Settings › Labs)
+        const workbench = workbenchKey("terminal-chat");
+        if (workbench) return workbench();
         const { route, pane, workPaneAvailable } = at.current;
         const inWork = inWorkView(route);
         const can = !!pane && canShowTerminal(getSession(pane.mid, pane.sid)) && (!inWork || workPaneAvailable?.(pane) === true);
@@ -110,6 +114,10 @@ export function useShortcuts(ctx: ShortcutContext) {
         navigate(to.go, route.name === "session" || route.name === "tab");
       }),
       registerShortcut("right-panel", () => {
+        // the Workbench layout's changes region, while it is up (Settings › Labs)
+        // (a panel the shell has open keeps the usual toggle, so Team, Files and Side panels still close)
+        const workbench = getPanel() ? undefined : workbenchKey("right-panel");
+        if (workbench) return workbench();
         const current = getPanel();
         const pane = at.current.pane;
         const to = panelToggle(current, lastPanel, pane, pane ? getSession(pane.mid, pane.sid)?.cwd : undefined);

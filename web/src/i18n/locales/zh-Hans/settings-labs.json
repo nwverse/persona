@@ -25,5 +25,10 @@
   "work_activation": "开始新对话即可完整应用。已打开的对话可能保留原来的指引和工具信息。",
   "work_rollback": "关闭后开启新对话，即可恢复原来的指引和工具加载方式。",
   "work_saved": "已保存。开始新对话即可完整应用此设置。",
-  "work_unsupported": "请更新当前助手以使用此设置。"
+  "work_unsupported": "请更新当前助手以使用此设置。",
+  "workbench_group": "工作台",
+  "workbench_enabled": "工作台布局",
+  "workbench_enabled_hint": "在电脑上配合编程 Agent 工作的更安静的布局：左侧是项目及其会话，中间是对话，右侧是这个会话的改动，下方是终端抽屉。需要较宽的窗口，窗口较窄时仍使用原来的布局。",
+  "workbench_activation": "立即生效，无需刷新。",
+  "workbench_rollback": "关闭后恢复原来的布局，其他内容不受影响。"
 }

@@ -1,0 +1,20 @@
+{
+  "sidebar_label": "Projects and threads",
+  "projects": "Projects",
+  "other_project": "No folder",
+  "new_thread": "New thread",
+  "new_thread_in": "New thread in {name}",
+  "toggle_diff": "Show or hide changes",
+  "toggle_terminal": "Show or hide the terminal",
+  "diff_unavailable": "This thread's changes aren't available here.",
+  "drawer_label": "Terminal",
+  "diff_label": "Changes",
+  "collapse_project": "Collapse {name}",
+  "expand_project": "Expand {name}",
+  "resize_diff": "Resize the changes panel",
+  "resize_drawer": "Resize the terminal drawer",
+  "section": "Workbench",
+  "cmd_diff": "Show or hide changes",
+  "cmd_terminal": "Show or hide the terminal drawer",
+  "cmd_new_thread": "New thread in this project"
+}

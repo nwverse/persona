@@ -45,6 +45,20 @@ const click = async (el: HTMLElement) => {
   await settle();
 };
 
+describe("Settings › Labs › Workbench", () => {
+  it("offers the Workbench layout as a toggle, off by default, written to this browser and read back without a reload", async () => {
+    await render();
+    const toggle = () => host.querySelector<HTMLElement>('[data-configuration="workbench"] [data-configuration-field="enabled"] [role="switch"]')!;
+    expect(host.querySelector('[data-configuration="workbench"]')?.textContent).toContain(t("settings-labs.workbench_enabled"));
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+    await click(toggle());
+    expect(localStorage.getItem("persona.workbench")).toBe("1");
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
+    await click(toggle());
+    expect(localStorage.getItem("persona.workbench")).toBeNull();
+  });
+});
+
 describe("Settings › Labs", () => {
   it("explains Labs and that each item states its own scope, and shows the terminal renderer under Agents", async () => {
     await render();

@@ -2234,6 +2234,8 @@ only the work tools requested by name to that connection. Switching it off resto
 and the original MCP list, including the existing load-all or deferred-loading preference. After either
 change, the form asks the user to start a new chat. Existing chats may retain earlier guidance and tool information.
 
+**Workbench layout** (`web/src/lib/labs-workbench.ts`): one toggle, see "Workbench (Labs) (#13439)" below.
+
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
 its own chunk, loaded only when chosen). Full view always uses the DOM renderer and is not affected. It is kept by this
@@ -2271,6 +2273,49 @@ leaves the page.
    stored values alone (they are ignored). An entry whose new path is abandoned is removed the same way with the old path kept.
 
 An entry should not stay in Labs indefinitely; each one's issue stays open until it graduates or is removed.
+
+## Workbench (Labs) (#13439)
+
+Audience: Agents users who work with coding Agents on a computer, including in the desktop app, which loads this web
+app. A beta layout, opt-in under Settings › Labs › Workbench layout; Assistant users see nothing unless they turn it on.
+It is not a second app or a second design system: it uses the existing tokens, data, routes and panels, and with the
+switch off every screen is drawn exactly as before (the shell's existing markup is the `else` branch, untouched).
+
+- **Switch.** `web/src/lib/labs-workbench.ts` and `labs-workbench-source.ts` (the words, loaded only by Settings), a Labs module like the terminal renderer's. Key `persona.workbench`: `1` is on,
+  off writes no key, an unrecognized value reads as off and is left in place (the same storage rules as "Labs"). Kept by this
+  browser; it takes effect at once with no reload (`useWorkbench()` re-renders the shell; the open page stays). The file is
+  the shell's whole eager part. The layout is two lazy chunks (`views/workbench/`), never preloaded by a route, so the
+  first screen does not carry it.
+- **Wide windows only.** At 1024px and wider (`NARROW`, `lib/viewport.ts`) with the switch on; a narrower window draws the usual
+  shell.
+- **Sidebar** (`WorkbenchSidebar.tsx`, `project-groups.ts`). Persona's main conversation is one row at the top (with the
+  same count). Below it, the complete agent list (`useFullAgentSessions`, so the same rows as the usual sidebar) by project:
+  one repository on one computer, its worktrees collapsed into it (`repoOf`). A project is labelled by its folder name only,
+  never a path; two projects with one name get the computer's name (or the folder holding them) added. Sessions without a
+  folder go last under "Other". Rows show the session title and a plain state word; a thread that needs you is visible
+  without opening anything: its project goes first, shows its needs-you count, and is never drawn folded. Folding is kept in
+  `persona.workbench.layout`. A project's "New thread" button calls `openNewAgent({ machineId, cwd })`, the usual dialog.
+  Rows are links (open in a new tab, middle click) inside `[data-sidebar-rows]`, so Mod+Alt+Up / Down walk them. The
+  rail (Mod+Alt+B) still folds the column. Settings is a link at the bottom; Mod+K finds every other page.
+- **Thread** (`WorkbenchThread.tsx`). On a session or tab page the existing `ChatView` is drawn as it is (its composer, model
+  and launcher pills, folded tool rows), with its own Terminal / Chat switch off, inside a frame with a thin bar (project
+  name, a changes toggle, a terminal toggle).
+- **Changes.** The right region is the session's Review panel (`ReviewPanel`, hub feature `git_review`, folder known); without
+  them it says the changes are not available. Width is dragged on its left edge and kept; below the room the conversation
+  needs (`CHAT_MIN` plus `PANEL_MIN`) it folds away and keeps its flag.
+- **Terminal drawer.** The session's terminal (`TerminalPanel`, embedded) below the conversation, only for a thread that can
+  show one. Height is dragged on its top edge (arrow keys too) between 160px and 60% of the column, double-click for the
+  default; kept.
+- **Keys.** No new chords. While the layout is up, Mod+B toggles the changes and Mod+J the drawer (`takeWorkbenchKey`, which
+  `lib/use-shortcuts.ts` asks first); Mod+K, Mod+Shift+P, Mod+Alt+P, Mod+I and Mod+Alt+B are the usual ones. The command
+  palette adds "Show or hide changes", "Show or hide the terminal drawer" and "New thread in this project". A chord for
+  next / previous thread is not added: the sheet would list it with the layout off, and Mod+Shift+[ / ] are the browser's tab
+  keys; Mod+Alt+Up / Down already walk the rows.
+- **Layout flags.** `persona.workbench.layout` (JSON): changes open (default on), drawer open (default off), their sizes,
+  folded projects.
+- **Limits of the beta.** No per-turn diff (#12533 comes later), tool folding is the chat's own, one grouping, no drag
+  reordering, pinning, hover cards, split terminals or Git actions. Files, links and other side panels still open in the
+  usual right panel. Roll back by turning the switch off.
 
 ## Developing Persona (#9617)
 

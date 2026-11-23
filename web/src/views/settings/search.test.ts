@@ -89,6 +89,7 @@ for (const lang of ["en", "zh-Hans", "ja"]) languages.push(await inLanguage(lang
 const [english, chinese] = languages;
 const { LOCAL_SHORTCUTS, SHORTCUTS } = await import("../../lib/shortcuts");
 const { TERMINAL_LABS_ID } = await import("../../lib/labs-terminal");
+const { WORKBENCH_LABS_ID } = await import("../../lib/labs-workbench-source");
 
 describe("the settings search's index", () => {
   it("reads the pages' row labels (the scan finds what it should)", () => {
@@ -158,7 +159,7 @@ describe("the settings search's index", () => {
       [/^shortcut-(.+)$/, "anchor={`shortcut-${s.id}`}", (id) => [...SHORTCUTS, ...LOCAL_SHORTCUTS].some((s) => s.id === id)],
       [/^knowledge-(.+)$/, "anchor={`knowledge-${kind}`}", (kind) => kind === "messages" || kind === "docs"],
       [/^settings-(.+)$/, "id={`settings-${id}`}", (id) => ["claude", "codex", "agy", "omp", "grok"].includes(id)],
-      [/^configuration-(.+)$/, "data-settings-row={`configuration-${doc.id}-${field.id}`}", (id) => id === `${TERMINAL_LABS_ID}-renderer` || id === "assistant-work-work_guide"],
+      [/^configuration-(.+)$/, "data-settings-row={`configuration-${doc.id}-${field.id}`}", (id) => id === `${TERMINAL_LABS_ID}-renderer` || id === "assistant-work-work_guide" || id === `${WORKBENCH_LABS_ID}-enabled`],
     ];
     const drawn = (anchor: string) =>
       new RegExp(`\\b(anchor|data-settings-row|data-settings-group|id)="${anchor}"`).test(sources) ||

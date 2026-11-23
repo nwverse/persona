@@ -1,0 +1,20 @@
+{
+  "sidebar_label": "项目和会话",
+  "projects": "项目",
+  "other_project": "无文件夹",
+  "new_thread": "新建会话",
+  "new_thread_in": "在 {name} 中新建会话",
+  "toggle_diff": "显示或隐藏改动",
+  "toggle_terminal": "显示或隐藏终端",
+  "diff_unavailable": "这里无法查看这个会话的改动。",
+  "drawer_label": "终端",
+  "diff_label": "改动",
+  "collapse_project": "折叠 {name}",
+  "expand_project": "展开 {name}",
+  "resize_diff": "调整改动面板宽度",
+  "resize_drawer": "调整终端抽屉高度",
+  "section": "工作台",
+  "cmd_diff": "显示或隐藏改动",
+  "cmd_terminal": "显示或隐藏终端抽屉",
+  "cmd_new_thread": "在此项目中新建会话"
+}

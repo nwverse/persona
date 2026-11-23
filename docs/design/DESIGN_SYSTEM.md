@@ -2429,6 +2429,31 @@ screens. One card contains a title, speaker, timestamp, saved text, and **Open o
 actions. Long saved text folds in the card. The original uses the existing transcript jump. The saved text stays usable
 when the original cannot be opened.
 
+### 4.15 Workbench layout (web, Labs, #13439)
+
+An opt-in layout for people who work with coding Agents on a computer (Settings › Labs, off by default, wide windows only;
+details in `docs/web/web.md`, "Workbench (Labs) (#13439)"). It adds no token: a three-region arrangement
+built from the existing components, plus one small pattern of its own, the drawer's horizontal separator (`DrawerResize`, a
+`role="separator"` with arrow keys, because `ResizeHandle` only resizes side edges). The left column is the usual sidebar width and resize behavior (`--sidebar-w`, the rail), the
+middle is the existing conversation, the right region is the existing Review panel at the side panel's widths
+(`PANEL_MIN`, folding below `CHAT_MIN` of room), and a drawer under the conversation holds the existing terminal (160px to
+60% of the column; a 4px separator on its top edge, `role="separator"`, arrow keys).
+
+Rules it follows: the sidebar shows a session that needs you without opening anything, with the same count as the usual
+sidebar (3.4, 4.8); primary rows show the session title and a plain state word, and a project is its folder name, never a
+path, id or engine name (5.6); a project that needs you is never drawn folded; rows are links. Child sessions fold under their
+parent as in the usual sidebar (never a row or a count of their own), and a row shows the folded state. Stated limit: the
+Workbench sidebar does not repeat the usual sidebar's other homes (pending-agents block, Inbox and To-dos counts, directions);
+they stay one Mod+K away, and the layout is a beta for that reason. It adds no new shortcut chord: next / previous thread is
+the existing Mod+Alt+Up/Down, Mod+B and Mod+J keep their meaning, and while a shell panel (Team, Files, Side) is open it owns
+the right edge and Mod+B closes it as usual. Only Tailwind tokens, `IconButton`,
+`CountBadge`, `StatusMark` and `Empty` are used, and every string is in `en`, `zh-Hans` and `ja`.
+
+UI self-check (PRINCIPLES.md): 1 defaults first, off by default and the usual layout byte-identical; 2 progressive
+disclosure, specialist layout only in Labs; 3 user control, one switch, no reload, rollback by turning it off; 4 consistency,
+the same rows, counts, panels and shortcuts; 5 model and product separate, no model names; 6 checkable rules, tests in
+`web/src/AppWorkbench.test.tsx`; 7 fast and local, the layout is a lazy chunk and shows the usual sidebar while it loads.
+
 ## 5. Content
 
 ### 5.1 Voice and tone
