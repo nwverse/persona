@@ -24,7 +24,7 @@ struct SupervisorHeldCardTests {
         case "question": body = #","questions":[{"question":"Which port?","options":[{"label":"8080"},{"label":"9090"}]}]"#
         case "screen":
             body = #","screen":"Do you want to proceed?\n\n❯ 1. Yes\n  2. No\n","dialog":{"question":"Do you want to proceed?","options":[{"key":"1","label":"Yes","keys":["1"]},{"key":"2","label":"No","keys":["2"]}],"rev":"5f0c2a9d41b7"}"#
-        case "plan": body = #","plan":"# Plan\n\nRemove the build folder."#
+        case "plan": body = ##","plan":"# Plan\n\nRemove the build folder.""##
         default: body = #","tool_name":"Bash","summary":"rmdir build""#
         }
         if let delegating { body += #","delegating":\#(delegating)"# }
