@@ -6,6 +6,8 @@
 package nodecmd
 
 import (
+	_ "github.com/nwverse/persona/server/internal/modules/all/node" // the modules that run on the node (Provider seams)
+
 	"context"
 	"encoding/json"
 	"errors"

@@ -39,11 +39,11 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   # tests of where it meets the module pass (the routes, capabilities and room tools are absent, the module's paths
   # skip); its own tests do not depend on the tags and run in the shards.
   ci_run 'Builds without the recording module' 900 bash -c 'cd server && for t in persona_core_only persona_without_recording; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/recordinghost/... && go test -tags "$t" -count=1 -timeout=8m -run "Recording|Meeting|DayRecap|Evening|Minutes|Transcription|JustMe|Attendee|Bus|StartPath" ./internal/assistant/ || exit 1; done'
-  # The connector modules (docs/architecture/core-and-modules.md "Provider seams"): GitHub reaches the extension manager
-  # through its port, so the core without it builds, the manager registers no built-in GitHub connector (the GitHub,
-  # connector, inbox, sent and golden tests pass; those that need the module skip) and the assistant's CI checks still
-  # run on githubwire.
-  ci_run 'Builds without the connector modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_github; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/githubwire/... ./internal/connector/... && go test -tags "$t" -count=1 -timeout=6m -run "GitHub|Connector|Inbox|Sent|Recall|Golden|Subscription|Market|Audit" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TestCI" ./internal/assistant/ || exit 1; done'
+  # The connector modules (docs/architecture/core-and-modules.md "Provider seams"): GitHub and iMessage reach the
+  # extension manager through their ports (iMessage's node side through the node's), so the core without either builds,
+  # the manager registers no such connector (the connector, inbox, sent and golden tests pass; those that need the
+  # module skip), the assistant's CI checks still run on githubwire and the node answers as one without Messages.
+  ci_run 'Builds without the connector modules' 900 bash -c 'cd server && for t in persona_core_only persona_without_github persona_without_imessage; do go build -tags "$t" ./... && go test -tags "$t" -count=1 -timeout=6m ./internal/modules/all/... ./internal/archguard/... ./internal/githubwire/... ./internal/imessagewire/... ./internal/connector/... ./cmd/persona-node/... && go test -tags "$t" -count=1 -timeout=6m -run "GitHub|IMessage|Connector|Inbox|Sent|Recall|Golden|Subscription|Market|Audit" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "TestCI|TestIMessage|Builtin|LocalConnector" ./internal/assistant/ ./internal/node/ || exit 1; done'
   # The core alone runs (#13978): a persona_core_only hub and manager start against a disposable Postgres, the manager
   # loads no module, every module's program, extension and route is absent, and both stop cleanly.
   ci_run 'Core-only hub smoke' 900 python3 scripts/ci/core-only-smoke.py

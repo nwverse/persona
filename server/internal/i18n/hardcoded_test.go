@@ -42,6 +42,7 @@ var hardcodedDirs = []string{
 	"internal/hub",
 	"internal/githubwire",
 	"internal/modules/github",
+	"internal/modules/imessage",
 	"internal/modules/mail",
 	"internal/mailwire",
 	"internal/quota",

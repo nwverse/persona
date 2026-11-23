@@ -37,7 +37,7 @@ module phone-extra
 module computer-use
 module engines-extra
 module github
-module connectors-extra
+module imessage
 module appearance-styles
 module glasses
 module code-viewer
@@ -47,6 +47,7 @@ module briefing
 # Module roots: each directory below them is the module of that name.
 go server/internal/modules/*/... *
 go server/internal/modules/all core
+go server/internal/modules/all/node core
 web web/src/modules/* *
 gradle :module:* *
 
@@ -127,11 +128,13 @@ go server/internal/extension/sourcevalidate core
 go server/internal/extension/uistream core
 go server/internal/extmgr core
 go server/internal/extmgr/githubport core
+go server/internal/extmgr/imessageport core
 go server/internal/extmgr/mailport core
 go server/internal/extmgr/storage core
 go server/internal/extwire core
 go server/internal/fleetsoak core
 go server/internal/githubwire core
+go server/internal/imessagewire core
 go server/internal/herdr core
 go server/internal/herdrcore core
 go server/internal/host core
@@ -168,6 +171,7 @@ go server/internal/netproxy core
 go server/internal/netshape core
 go server/internal/node core
 go server/internal/node/clipshare core
+go server/internal/node/imessageport core
 go server/internal/node/machdiag core
 go server/internal/node/nodekit core
 go server/internal/node/transcripttail core
@@ -254,7 +258,6 @@ go server/internal/orcart/... engines-extra
 go server/internal/terncli engines-extra
 go server/cmd/vncbench screen-share
 go server/internal/rexcli engines-extra
-go server/internal/connector/imessage connectors-extra
 go server/internal/assistant/kbhistory knowledge-ui
 go server/internal/assistant/kbsent knowledge-ui
 

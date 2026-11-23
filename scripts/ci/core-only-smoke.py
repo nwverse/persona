@@ -13,6 +13,7 @@ PERSONA_HOME) is read. The hub starts the persona-manager beside it, as an insta
   that extension's route (/api/v1/extensions/<id>/-/assistant-data) answers 404;
 - every connector a module registers on every hub (its port provided in server/internal/modules/all, ALWAYS_CONNECTORS)
   is not in /api/v1/connectors?all=1, and its route (/api/v1/connectors/<id>/auth) answers 404;
+- every built-in extension a connector module adds (MODULE_EXTENSIONS) is not in /api/v1/extensions;
 - SIGTERM stops the hub and the manager within the timeout, exit 0.
 
 --full runs the same against a default build and expects the opposite (every module loaded, the programs, extensions
@@ -65,6 +66,8 @@ def module_programs():
 # The connector modules whose connector the manager registers on every hub, unconfigured too: the port the composition
 # root provides (server/internal/modules/all) and the connector's id.
 ALWAYS_CONNECTORS = {"githubport": "github"}
+# The connector modules that add a built-in extension of the extension manager's (its settings form), by port.
+MODULE_EXTENSIONS = {"imessageport": "imessage"}
 
 
 def module_connectors():
@@ -76,6 +79,18 @@ def module_connectors():
         for port in re.findall(r"\b(\w+port)\.Provide\(", path.read_text()):
             if port in ALWAYS_CONNECTORS:
                 found.add(ALWAYS_CONNECTORS[port])
+    return sorted(found)
+
+
+def module_extensions():
+    """The built-in extensions the connector modules add: <port>.Provide(…) in modules/all, MODULE_EXTENSIONS."""
+    found = set()
+    for path in sorted((SERVER / "internal/modules/all").glob("*.go")):
+        if path.name.endswith("_test.go"):
+            continue
+        for port in re.findall(r"\b(\w+port)\.Provide\(", path.read_text()):
+            if port in MODULE_EXTENSIONS:
+                found.add(MODULE_EXTENSIONS[port])
     return sorted(found)
 
 
@@ -178,6 +193,7 @@ def main():
     try:
         programs = module_programs()
         connectors = module_connectors()
+        module_exts = module_extensions()
         build("" if a.full else "persona_core_only", bindir)
         print(f"built {', '.join(PROGRAMS)} ({kind}) in {time.monotonic() - started:.0f}s", flush=True)
         subcommands(bindir, a.full, programs)
@@ -220,6 +236,8 @@ def main():
             check((name in extensions) == a.full, f"extension {name} {'missing' if a.full else 'present'}: {sorted(extensions)}")
             status, _ = http(f"{base}/api/v1/extensions/{name}/-/assistant-data", token)
             check(status == (200 if a.full else 404), f"/api/v1/extensions/{name}/-/assistant-data: {status}")
+        for name in module_exts:
+            check((name in extensions) == a.full, f"extension {name} {'missing' if a.full else 'present'}: {sorted(extensions)}")
         status, body = http(base + "/api/v1/connectors?all=1", token)
         check(status == 200, f"/api/v1/connectors: {status}")
         listed = {c["id"] for c in json.loads(body).get("connectors") or []}

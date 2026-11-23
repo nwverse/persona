@@ -244,6 +244,21 @@ Its `module.json` declares `feature` = `module.github`, so a hub whose manager l
 run-time `modules` switch drops the flag, but the extension manager still registers the connector until it reads the
 switch too (only a build without the module leaves the connector out today).
 
+The iMessage connector (`server/internal/modules/imessage`, #13936) is the same kind of connector, with a second side:
+the reader of a Mac's Messages runs in that Mac's node. The manager reaches the connector through the contract
+`server/internal/imessagewire` (the id, manager.json's `imessage` section, the `Caller` and its errors, the `Remote`
+interface it drives) and the port `server/internal/extmgr/imessageport`, which `server/internal/modules/all` fills.
+The node reaches the module's handler of the hub's `connector.*` RPCs (`imessage.ServeLocal`) through the port
+`server/internal/node/imessageport`, which the node's composition root `server/internal/modules/all/node` fills;
+`server/internal/nodecmd` links that root (it is listed in `testdata/module_roots.txt`, and a root may import either
+list), so `personad node`, persona-node and the manager's local node all have it, and persona-node still links no part
+of the manager. With the module left out (`persona_without_imessage`, `persona_core_only`) the manager has no Messages
+connector or built-in Messages extension, `/api/v1/imessage` answers that it is not configured
+(`TestManagerWithoutIMessage`), and the node answers as a computer without Messages does. Its `module.json` declares
+`feature` = `module.imessage`, with the same caveat on the run-time switch as GitHub's. "Builds without the connector
+modules" in `scripts/ci/server.sh` runs with `persona_without_imessage` too, and `scripts/ci/core-only-smoke.py`
+checks that a core-only hub has no `imessage` extension.
+
 The `lark` module (#13404) is of the same kind as mail: code the manager runs in process, which the extension host
 drives. The core declares what it needs of the Feishu / Lark bot's client in `server/internal/botport` (the client's REST calls,
 the long connection, the device-code registration, as interfaces over the pure types of `server/internal/botcard`, a
@@ -274,8 +289,8 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
   through the kernel, never imported. Each module directory has a `module.json` whose id is the directory's name.
   Known exceptions are debt in `testdata/module_services.txt`, which only shrinks (a stale line fails): `<module id>
   <core package>` for any of the module's files, `<module id> (test) <core package>` for its tests only, no wildcards.
-  The lines are the GitHub connector's tests, which run it through the connector registry and gate, the conformance
-  suite and the subscription service with the module's own fixtures, and `recording internal/kb`: the recordings'
+  The lines are the GitHub and iMessage connectors' tests, which run them through the connector registry and gate, the
+  conformance suite and the subscription service with the modules' own fixtures, and `recording internal/kb`: the recordings'
   storage (the `kb.Recording` model with its `Engine` and `Store`) stays in the knowledge base until it offers a
   recording port. A declared core-service dependency is a known debt, not a precedent: the assistant, the hub and the
   extension host are never listed.
