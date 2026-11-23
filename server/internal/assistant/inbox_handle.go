@@ -69,10 +69,12 @@ func (b *inboxBook) tell(it *InboxItem, n inboxNote, wake bool, now time.Time) {
 	b.wakeInboxConversation(it, now)
 }
 
-// wakeInboxConversation applies tell's wake bookkeeping without adding another note. Under b.mu.
+// wakeInboxConversation applies tell's wake bookkeeping without adding another note. A wake also consumes an
+// off-transition interruption: this turn, rather than another escalation for the same Last, owns the recovery. Under b.mu.
 func (b *inboxBook) wakeInboxConversation(it *InboxItem, now time.Time) {
 	a := it.Agent
 	a.Wake = true
+	a.InterruptedByDisable = false
 	if h := it.Handling; h != nil && h.State != HandlingLooking {
 		a.Back = h.State
 	}
@@ -233,6 +235,7 @@ func (b *inboxBook) setHandling(it *InboxItem, state, errText string, now time.T
 	if a == nil {
 		return
 	}
+	a.InterruptedByDisable = false // a newer handling state supersedes the off-transition interruption
 	if state != HandlingAgent {
 		a.WakeSlot = false
 	}
@@ -262,6 +265,7 @@ func (b *inboxBook) failHandling(it *InboxItem, reason string, now time.Time) {
 	it.Suggestion = nil
 	if it.Agent != nil {
 		it.Agent.Wake = false
+		it.Agent.InterruptedByDisable = false // a later genuine failure supersedes an off-transition interruption
 	}
 	b.dropInboxWakes(it)
 	b.setHandling(it, HandlingFailed, reason, now)
@@ -311,7 +315,8 @@ func (b *inboxBook) escalate(since, now time.Time, only ...inboxMove) []*inboxWr
 		if it.Source == "larkcli" && it.Kind == "bot_handoff" {
 			continue // the owner's request belongs to the main conversation, never a second processing agent
 		}
-		if !it.open() || it.Context == "" || a != nil && (a.Of == it.Last || a.savingRetry) {
+		if !it.open() || it.Context == "" ||
+			a != nil && (a.Of == it.Last && !a.InterruptedByDisable || a.savingRetry) {
 			continue
 		}
 		handled := it.handled()
@@ -409,7 +414,7 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		return
 	}
 	if !enabled {
-		w := b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), time.Now())
+		w := b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), time.Now(), true)
 		b.mu.Unlock()
 		if w != nil {
 			s.saveWrites(ctx, []*inboxWrite{w}, "the disabled AI twin's work")

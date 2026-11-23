@@ -460,7 +460,7 @@ class CheckFastServerInputsTests(unittest.TestCase):
 
     def test_the_assistant_group_runs_in_its_partitions_and_node_runs_as_given(self):
         # Every Go group goes through scripts/test/go_test_partitioned.py (#12765). ./internal/assistant/... covers a
-        # partitioned package: its tests run in go_partitions.py's three partitions beside its subpackages, each with
+        # partitioned package: its tests run in go_partitions.py's partitions beside its subpackages, each with
         # the group's flags and timeout. internal/node splits itself in its TestMain, so its group runs as given.
         (self.go_log.parent / "go").write_text(
             FAKE_GO + 'case "$*" in\n'
@@ -479,13 +479,16 @@ class CheckFastServerInputsTests(unittest.TestCase):
         # The vet job's go list of each group for Windows is its own; only the go test calls are counted here.
         calls = [call for call in self.go_calls() if call not in self.guard_calls() + self.vet_calls()
                  and "|build " not in call and "|GOOS=windows list " not in call]
+        spec = importlib.util.spec_from_file_location("go_partitions", ROOT / "scripts/test/go_partitions.py")
+        go_partitions = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(go_partitions)
+        runs = ["server|test -count=1 -run %s ./internal/assistant" % pattern for pattern in
+                go_partitions.patterns(["TestA", "TestB", "TestC", "TestD"], go_partitions.PACKAGES["./internal/assistant"])]
         self.assertEqual(sorted([
             "server|list ./internal/assistant/...",
             "server|test -list .* ./internal/assistant",
             "server|test -count=1 example.com/server/internal/assistant/inbox",
-            "server|test -count=1 -run ^(TestA|TestD)$ ./internal/assistant",
-            "server|test -count=1 -run ^(TestB)$ ./internal/assistant",
-            "server|test -count=1 -run ^(TestC)$ ./internal/assistant",
+            *runs,
             "server|test -count=1 ./internal/node/...",
         ]), sorted(calls), out)
         timeouts = {re.search(r" -timeout (\S+)", call).group(1)
@@ -664,12 +667,12 @@ def load_paths(root=ROOT):
     return module
 
 
-# A fake node that reports major version 22 (check-fast.sh's gate) and passes anything else, and a fake npm and npx
-# that record each call ("<cwd basename>|<args>", npx's as "npx <args>") instead of installing or testing anything.
-FAKE_NODE = '#!/bin/sh\nif [ "$1" = -e ]; then echo 22; fi\n'
+# A fake node that reports major version 22 (check-fast.sh's gate) and records the supervised Vitest entry, and fake
+# npm/npx commands that record each call ("<cwd basename>|<args>", npx's as "npx <args>") instead of installing/testing.
+FAKE_NODE = '#!/bin/sh\nif [ "$1" = -e ]; then echo 22; elif [ "$1" = scripts/process-group.mjs ]; then printf "%s|node %s\\n" "${PWD##*/}" "$*" >> "$FAKE_NPM_LOG"; fi\n'
 FAKE_NPM = '#!/bin/sh\nprintf "%s|%s\\n" "${PWD##*/}" "$*" >> "$FAKE_NPM_LOG"\n'
 FAKE_NPX = '#!/bin/sh\nprintf "%s|npx %s\\n" "${PWD##*/}" "$*" >> "$FAKE_NPM_LOG"\n'
-VITEST_RELATED = "web|npx --no -- vitest related --run --passWithNoTests "
+VITEST_RELATED = "web|node scripts/process-group.mjs --timeout-ms 300000 -- npx --no -- vitest related --run --passWithNoTests "
 WEB_FULL = ["web|run check:deps", "web|run typecheck", "web|test"]
 
 # A web tree that reads files outside web/ in each form the scan knows (#10619). reads.test.ts reads through fs and a

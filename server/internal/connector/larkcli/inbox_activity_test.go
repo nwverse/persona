@@ -240,9 +240,12 @@ func TestInboxInterleavedIncomingMetadataStaysCurrent(t *testing.T) {
 				history := []adapter.Message{second, other, first, old}
 				switch historyKind {
 				case "missing_metadata":
+					// lark-cli prints wall-clock minutes in the machine's zone (cliLocation): the minute of 00:00 UTC
+					// there, not "2030-01-01 00:00", which west of UTC is hours after the incoming messages.
+					minute := messageTime(first).In(cliLocation()).Format("2006-01-02 15:04")
 					for i := range history {
 						history[i].ChatType, history[i].ChatPartner, history[i].ThreadID = "", nil, ""
-						history[i].MessagePosition, history[i].CreateTime = "", "2030-01-01 00:00"
+						history[i].MessagePosition, history[i].CreateTime = "", minute
 					}
 				case "partial":
 					history = []adapter.Message{first, old}

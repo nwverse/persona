@@ -521,6 +521,14 @@ pushing on that stack. Mac also needs an attached presenter for `detailTask`, no
 full task cards with compact dispatch links, stop filtering hand-offs as though the removed card still drew its
 instruction list, or Persona's messages silently disappear. Keep those messages as folded feed lines.
 
+## A fallback response can arrive after the authoritative one (#8236)
+
+Two endpoints that describe the same object need an arrival-order rule, not last-response-wins for the merged object. The
+flat `/assistant/leaders` answer supplies outside-direction names and targets but no counts; a slower flat answer landing
+after `/assistant/directions/tree` replaced the tree entry and intermittently removed the row's counts and running mark.
+Merge newly announced fallback rows with the held tree rows, and let the tree win per direction. Test the inverted order
+with a gated FakeHub response: a fixed sleep makes this race look random and misses the actual state transition.
+
 ## Example-domain labels must be generic too (#3593)
 
 An `example.com` suffix does not make its hostname label anonymous: the label can still match a configured private machine value and block both app and web prebuild privacy scans. Use neutral fixture labels and change the expected route together, preserving trimming, encoding and forwarding assertions. Do not exempt a private value just because it appears in test data.
@@ -552,6 +560,16 @@ wrapper before doing any work. An `upload_started` checkpoint with no remote bui
 or is not visible yet: retry that same commit and build number. An already visible build is only processed and checked,
 never uploaded a second time. A locked login screen can leave extension `codesign` waiting indefinitely for keychain
 authorization; that is not archive success or a TestFlight upload.
+
+## App Review wants HealthKit named Apple Health where it is used (2026-11-22, #13118)
+
+Guideline 2.5.1 rejected 1.0.0: "The app uses the HealthKit or CareKit APIs but does not clearly identify the HealthKit
+and CareKit functionality in the app's user interface." The app called the source only "Health" in Settings › Connectors
+› This iPhone and said "Apple Health" in Health's Data Sources, below the chats and memory; the reviewer, on an iPad in
+Demo Mode, found neither. Name it **Apple Health** with the Health app's icon (`Theme.Brand.iosHealth`) wherever the
+data is read or saved, near the top of the page that uses it, and tell App Review in the review notes where to look (the
+Health page's Works with Apple Health row, then the switch it opens). The rejection itself is readable only in App Store
+Connect's Resolution Center (the web, or `asc web review show` with a web session), not through the API key.
 
 ## Device names in Siri intent descriptions (#3113)
 
@@ -2174,6 +2192,12 @@ Screenshots miss user-reported instability and probes can report false jumps; fr
 - Sidebar `NavigationLink(value:)` does not populate bound `path` on iOS 26: when `NavigationSplitView` pushes into detail, `NavigationColumnState.ejectAll` clears `path`,
   leaving the opened page absent. `RootView` width-switching between shell and tabs cannot restore from `path`;
   reopen from separately recorded `dev.openChat`. Shared model paths also fail because the incoming split tree clears them too.
+- The page such a link opens cannot push either (#12035): on the iPad's Settings sheet Appearance & Display opened, `settingsPath` stayed empty, and none of its
+  rows opened anything (the iPhone's one stack was fine). A list in a split opens its pages through `path` (`splitOpen`) with buttons, as the Agents list does
+  (`SettingsListLink`). Two ways of keeping the system's highlight on the open row failed: plain rows with a `tag` in a `List(selection:)` were not
+  selectable in the sheet's list column (VoiceOver read them as text); links of `AnyHashable(page)` in a `List(selection: AnyHashable?)` selected natively,
+  but then the split cleared every path a link or a launch switch set, so those pages opened and went at once (`testLegacySettingsPathsStillOpen` on an
+  iPad). Pushed onto the path, a first page inherits the root's title mode: Settings' root asks for large titles.
 
 ## PiP sources must survive their window, be normally sized, and start on user taps (2026-11-05, #1839)
 
@@ -3264,3 +3288,25 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
   its first row to the foot of what is in sight (`anchor: .bottom`): the list cannot go that far up and stops at its top.
 - **Under an inline title, iOS 18's search drawer starts hidden** until a pull (the placement `pageSearchable` picks),
   so a calm list showed no way to search. `.navigationBarDrawer(displayMode: .always)` keeps it shown.
+
+## Deleting a never-compiled branch moves the source-reading tests (2026-11-23, #13399)
+
+- The tests and scripts that read Swift source as text count lines inside every `#if` branch, compiled or not:
+  `TokenRatchetTests` (literal design values), `ContinuousMotionTests` (its loop registry) and the perf and isolation
+  baselines. So deleting dead `os(macOS)` branches lowered a file's `rawSymbol` count and left a registry entry whose
+  only loop was the Mac's: both tests fail until the baseline or registry is lowered in the same PR. `SheetCloseTests`
+  is the one that already skipped Mac-only branches (`iPhoneSource`).
+- A mechanical deletion can still leave a compiler warning behind: a `var` that only the removed branch mutated
+  (`ExtensionPageView.updateVisibility`). Read the build's warnings for the changed files, not only its errors.
+- `scripts/test/test_apple_no_macos_branches.py` keeps new `os(macOS)` and `canImport(AppKit)` branches and
+  `import AppKit` out of the app targets, `Shared/` and the tests. Packages whose `Package.swift` declares a macOS
+  platform are left out: the Persona Link helper builds `PersonaScreenCore` for macOS, so a branch there is live.
+- A condition is decided by the platforms its folder builds for, not by the platforms Apple has: `apple/Persona/` builds
+  for iOS and visionOS only (the Vision app compiles it too), `Shared/` for those and watchOS, the tests for iOS. So
+  `#if os(iOS) || os(visionOS)` in `apple/Persona/` is always true and its `#else` never compiles, and
+  `canImport(UIKit)` is true everywhere; write no such branch. Check a folder's platforms in `apple/project.yml`
+  (every target's `sources`) before assuming: `LiveActivity/`, `PersonaShare/` and `PersonaNotify/` build for visionOS
+  too.
+- Members a deletion leaves constant (a `Bool { false }`, a modifier that returns `self`, a parameter only ever passed
+  its default) go with it, or the next reader keeps working around a Mac that is not there (#13399's last PR removed
+  `MacHover`, `MacSelectingList`, `DeferredDefaults`, `StyleSpec.MacChrome` and `kbOpenEntry`, which nothing set).

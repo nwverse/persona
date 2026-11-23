@@ -67,7 +67,7 @@ Mac's previous / next Agent follows pinned order then recent activity in this mo
 One tree from the hub drives the sidebar, the To-dos page and the Agents page: `GET /api/v1/assistant/directions/tree`
 (`DirectionTree` in `apple/Shared/DirectionTree.swift`, `APIClient.directionsTree`, 404 → nil). It is the app's only copy:
 the sidebar's lead rows (#4331: their "N need you" and, #6626, their spinner from `running`), the directions' names and order come from it too. Each current leader
-conversation (a direction, shown to the owner as Pinned / 常驻 / 常駐) with the open to-dos it supervises, each with its one
+conversation, or outside reporting direction with no Persona conversation (#8236), is a direction (shown to the owner as Pinned / 常驻 / 常駐) with the open to-dos it supervises, each with its one
 state (`needs_you` / `review` / `stuck` / `working`), its Agents and their sub-Agents; the secretary group (书记官, the main
 conversation's id) last. The app neither groups to-dos by supervisor nor works out their state: it draws the tree.
 
@@ -76,8 +76,11 @@ conversation's id) last. The app neither groups to-dos by supervisor nor works o
   nil, another failure keeps what was read. `refreshAssistant` reads it only while none is held, in its own task after
   the settings land (it runs on every page's appear; Couldn't Load Settings does not wait for the tree). Only the default manager's page reads it (the tree is the default
   manager's); cleared when another hub group or manager is picked, and a read already under way is dropped. An answer
-  also updates `directionNames` and the leader order, and a direction the conversations do not list yet reads the
-  assistant again (not when read from `refreshAssistant` itself, `followLeaders: false`).
+  also updates `directionNames`, the outside-direction metadata and the leader order, and a conversation-backed direction the conversations do not list yet reads the
+  assistant again (not when read from `refreshAssistant` itself, `followLeaders: false`). An outside direction's opaque id is not a missing conversation and never
+  causes that reread; when the tree is absent, `/assistant/leaders` supplies its name, outside marker and optional Agent target without counts.
+  A flat answer that arrives after the tree merges only new fallback rows: the tree wins per direction, so a late answer cannot erase its counts or running state.
+  If a later tree read returns 404, the flat metadata immediately replaces those tree entries again, leaving their names and targets but no stale counts or running state.
 - **Words** (`StateName`, `[State Names]` keys): 在做 / 等你 / 卡住 / 待验收 (en Working / Needs you / Stuck / Awaiting
   review, ja 作業中 / 対応待ち / 停滞中 / 検収待ち, the same words as #4331's counts beside them; 待验收 reuses the
   supervision badge's key). What a direction has going reads the same everywhere (#6626): the working spinner
@@ -836,8 +839,9 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
     per hub group (`healthReportUploads`), as #2626 keeps a chat's attachments. The tree on its way out lives on a moment after the swap (about two seconds on an iPad simulator), and its Agents page
     took the chat the new page asked for again, opening it where no one saw it: each tree `RootView` builds has a `BuiltTree` of its own, `ShownTree` holds the shown one, and a page
     of another tree (on its way out) leaves the chats asked for, and the remembered chat, to the shown tree's page (#2836).
-  - Left-column `NavigationLink(value:)` replaces the right column (the left has its own never-pushed stack, forwarding values to the right); programmatically opened list pages must replace it too:
-    `path = NavigationPath([value])` (in single-column mode the list is at the stack bottom, equivalent to append; Agents `openFromList`). Pages opened from details still append.
+  - A list page replaces the right column: `path = NavigationPath([value])` (in single-column mode the list is at the stack bottom, equivalent to append; Agents `openFromList`,
+    the list column's `splitOpen`). A left-column `NavigationLink(value:)` replaces it by the split's own selection instead, outside `path`, and nothing that page pushes opens (#12035):
+    Settings' rows are buttons in the split (`SettingsListLink`), as the Agents list's, and links only in one stack. Pages opened from details still append.
   - The first right-column page has no back button (the list is beside it): add `.splitDetailPage()` to the destination; Agents' custom chat back button hides for `\.splitDetail` (keeping its space so the title stays centered).
     With the list folded, the chat's leading button brings it back (#963): the sidebar's button (`Theme.Icon.sidebar`, "Show Sidebar", with how many Agents need the user), as on the
     main conversation, not a ‹ (#8603). What the button shows follows how the page was reached, not what it is: a chat picked in the list is a root and has the sidebar's button; the
@@ -1740,6 +1744,55 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
 - Brand coral (`Theme.brand`) only Persona marks: chat-home icon, Lock Screen four-point star. Actions use current `Theme.accent`.
   Both AccentColor assets (watch titles/tint, system dialogs) system blue; iPhone/iPad window `tintColor` follows theme (`WindowTint`, UIKit List icons, #1188); Live Activities cannot read style, stroke/buttons fixed system blue, button deep `#0071E3`, white contrast 4.7:1.
 
+## Modules
+
+Persona Core and feature modules (#13430; the Apple part is #13432). The product layer and the module contract shared by
+every platform are described from #13430; this section is the Apple side.
+
+- **`PersonaModuleAPI`** (`apple/Packages/PersonaModuleAPI`): the contract, Foundation and SwiftUI only, tested with
+  `swift test` (and in `scripts/ci/apple.sh`). A module is a `PersonaModule`: a `ModuleDescriptor` (`id` from #13430
+  section 2, `feature` for the wire feature flag it needs, the `slots` it uses), `isAvailable` (built into this binary)
+  and `register(into:)`, which adds entries through a `ModuleRegistrar`. `ModuleRegistry` is built once from the module
+  list; a module is active when it is listed and enabled, and an inactive module registers nothing. Entries for an
+  undeclared slot, duplicate ids and malformed ids are refused and listed in `problems` (asserted empty in DEBUG). The
+  package links into the iOS and Vision apps and PersonaTests; nothing in `Shared/` imports it, so the watch, widgets and
+  extensions never link it. It sets no build settings of its own, so a Release build keeps the project's
+  `SWIFT_REFLECTION_METADATA_LEVEL = all`.
+- **Slots** (`ModuleSlot`, raw values are the contract's field names): served today are `launch_hooks` (after the core's
+  launch work, `application(_:didFinishLaunchingWithOptions:)`), `deep_links` (`onOpenURL`, before the core's routes)
+  and `composer_actions` (the composer's +: the panel's More tab, the + menus and the prompt bar's sources; a row
+  `attach-<id>` opens the action's sheet, whose picture goes into the composer like a camera photo; #13400's
+  `composer_source`). Declared but **not yet served**, with no API until a module needs one: `shell_places`, `settings`,
+  `chat_card_kinds`, `chat_accessories`, `toolbar_items`, `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`,
+  `phone_tools`, `intents`, `push_categories` and `audio_leases` (the core's `AudioSessionBroker` does not exist yet).
+- **The module list** (`apple/Persona/App/Modules.swift`) is the seed of the `PersonaHostApp` layer (#13430 decision 4;
+  `apple/Packages/PersonaCore` stays the Rust binding). `PersonaHostApp` is the `ModuleHost` (a composer action hands
+  back a `UIImage`), `Modules.builtIn` lists the modules in the order their entries appear, and `Modules.registry` is
+  the registry the core reads. It is the only core file that names a module's type.
+- **The switch.** A module is on when it is in the list and its build includes it (`isAvailable`): the build-time
+  overlay or config that compiles its SDK in. There is no everyday setting. DEBUG builds take `-showModules <ids>`
+  (comma-separated, `none` for none) to turn exactly those modules on, for screenshots and tests in any build.
+- **Performance.** The registry is built once, on its first read at launch, by describing entries (no IO; P10). Lookups
+  are reads of arrays built then: no observation, nothing sorted or derived in `body` (P4, P5). A module's titles are
+  `LocalizedStringResource`s resolved where they are drawn, as before.
+- **The ratchet.** `scripts/test/test_apple_module_refs.py` (Linux-runnable, run by `scripts/ci/python-tests.py`) counts,
+  per core file, references to the types declared at the top level of each module's directories, by symbol with comments
+  and strings blanked out; the baseline `scripts/test/apple_module_refs_baseline.json` may only go down (`--update`
+  lowers it, `--list` shows each reference). The core is `apple/` outside module directories, outside the module list
+  and outside tests.
+- **Modules today.** `glasses` (the pilot, `apple/Persona/Glasses/`, `docs/apple/meta-glasses.md`): launch set-up,
+  the Meta AI app's callback URL and Glasses Photo in the composer. Its sources compile into the iOS app and, as a stub
+  without a composer action, into PersonaVision (which compiles all of `Persona/`); the watch and widgets do not include
+  it. It is on only in a build with the Meta Wearables SDK (`apple/meta-wearables.yml`). Before the pilot the core named
+  its types 8 times in 4 files; now 0.
+- **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
+  `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
+  `GUARDED` in the ratchet; write a type
+  conforming to `PersonaModule` there (descriptor, `isAvailable`, `register(into:)`); add it to `Modules.builtIn`; turn
+  each core call site into a registry read. If it needs a slot that is not served yet, add the slot's registrar method,
+  its registry reader and package tests in the same change. Lower the ratchet's baseline as references go. Folders move
+  into `PersonaModule<Name>` packages later (#13432 step 3).
+
 ## Data flow
 
 - Logic-layer choice (2026-10-31): pages with "load → display → edit → save" use MVVM: an `@Observable` `XxxModel` beside the page,
@@ -1806,9 +1859,12 @@ state in `AppModel.readiness`, `AssistantReadinessModel`), using the same presen
   `setup` shows the first missing step; `rate_limited` shows only a card without blocking Send. In `setup`, a nonempty draft replaces Send with `SendGate` ("Connect a model first", "Add a computer first"…); tap opens that step, retaining the draft without queuing it.
 - A main-chat rate-limit card uses the existing Later / close control. `AssistantReadinessModel.homeCardStep` suppresses the dismissed occurrence across ordinary refreshes without changing `current`, the recorded launcher health or the checklist's server-side dismissal; a recovery clears the local suppression, allowing a subsequent failure to appear. Dismissal is observable so the card disappears immediately. The hub's optional `occurrence` uses the main turn's time when available, a health-only subscription reset window otherwise, or the newest evidence time for other failures: a settled health record keeps the turn's identity, repeated health checks stay dismissed, and another turn in the same reset window is still new; older hubs use the step fields as a fallback. Because readiness describes the default launcher while `AssistantTopBar` can pick another launcher/model for this conversation, `ReadinessHomeCard` receives the main conversation's key and explains that the warning concerns the default model connection while this conversation uses another one, without exposing raw launcher IDs. A successful reply through another launcher is not recovery evidence.
 - Actions (`ReadinessRoute`): add / confirm computer first opens Machines (switches to Add Computer after M3 lands); connect model opens provider wizard, replace key opens that provider;
-  install / log in to Claude Code, wake computer and `local` sample questions open local instructions (`ReadinessHelpView`, not sent to a model); Try a message queries `?probe=1`. Unknown `action` shows text only.
+  install / log in to Claude Code, wake computer and `local` sample questions open local instructions (`ReadinessHelpView`, not sent to a model); Try a message queries `?probe=1` with a 202-second request budget (ordinary readiness reads keep 30 seconds). Unknown `action` shows text only.
 - Hub-coded refusals to open a chat or send (`no_machine`, `claude_missing`…, `CodedFailure`) show `CodedFailureCard`, original text and request ID under Details, no toast; `assistant_offline` silently retries three times.
 - A Persona chat's last turn with `turn_error_code` (`not_logged_in` / `auth_failed` / `model_route`) replaces the final "Not logged in" with a "Model not connected correctly" card and Fix it.
+- `model_route` opens that conversation's own `AssistantModelSheet`, never the add-provider wizard. Main chat, leaders and task conversations follow Main chat's default; the background supervisor reads `?purpose=assistant.supervise`; an ordinary side conversation keeps what it started with. A saved pick offers **Follow default** or **Undo pick** accordingly. After a replacement pick, **Try a message** becomes the readiness card's and send gate's primary action. `tool_search_unsupported` has its own Retry card, with the same narrow raw-400 fallback as the web for older hubs; Retry rechecks the latest idle/sendable session.
+- Folded catalog rows carry `proto.AgentModel.aliases`. `AssistantModelChoice`, the starter and top-bar choices, running-model lists and `LauncherModelPicker` resolve a saved alias to that canonical row without adding duplicate rows; New Agent and Model Settings prefer an exact ID before an exact alias.
+- A session failed with `start_error_code: shell_waiting` shows `SessionShellQuestion` only with hello feature `start_continue`. Its offered choices go to `POST …/start/continue`; only failed outbox entries definitely refused with `shell_waiting` then resend, in pending order with fresh operation IDs, stopping at the first renewed wait or failure.
 
 ## Welcome screen and post-pairing checklist (#4195, onboarding M2)
 
@@ -2050,9 +2106,20 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   runs with `-AppleLanguages "(en)"`. `MOCK_TODO_VIEW=old` is a hub from before the view (405 for the item and places
   routes, as an older hub answers them), `late` one whose hello names the view only after a reconnect, and
   `MOCK_TODO_MANAGERS=2` gives the Weather App's to-dos to a second manager. `MOCK_MANAGERS=1` lists one manager, for
-  the path that reads the hub's counts and places as sent; the default roster lists several.
+  the path that reads the hub's counts as sent (each project's part of N counted from the rows); the default roster
+  lists several. Its knowledge base has the projects Kyoto trip, Weather App, Home and Garden, which has no to-dos (an
+  empty project's place).
   `docs/operations/testing.md` has the details, including `GET /mock/churn?todos=1` for measuring a push on the list
   and where the mock is not a hub.
+- **UI suites** (`TodosV1ListTests`, `TodosV1PlacesTests`): they run against that mock, whose address the runner gets as
+  `TEST_RUNNER_PERSONA_TODOS_HUB=http://127.0.0.1:<port>` (skipped without it), with `-showTodosV1 YES` standing for the
+  switch-on; `TEST_RUNNER_PERSONA_UI_STYLE=beautiful` runs them in BeautifulUI. Their `testFrames` save the V1 frames
+  for review instead of checking: `TEST_RUNNER_PERSONA_TODOS_FRAMES=1` and `TEST_RUNNER_PERSONA_SHOTS=<dir>`, with
+  `…_TODOS_SCHEME` (light or dark), `…_TODOS_LANGUAGE`, `…_TODOS_COLOR`, `…_TODOS_SIZE` (a content size category),
+  `…_TODOS_SUFFIX` and `…_TODOS_FRAMES_ONLY` (frame names, as `~drawer,~kyoto`); on an iPad the places' frames are the
+  Sidebar layout's (`ipad11-landscape-closed~today`, `~kyoto-place`). `testTodayFrames` (`…_TODOS_TODAY=1`) shoots
+  today's To-dos with the gate off, for a before and after against a build of `main`. Reset the mock
+  (`/mock/reset`) before each run.
 - **The data** (`TodoStore`, `apple/Persona/Features/Todos/`): `GET /api/v1/todos` is decoded into its rows and, beside
   them, each row's `view` (by to-do id) and the list's `counts` (`TodosPage`); a view that does not decode is none.
   `TodoItem` gains only facts (`part_of`, `after`, `restored_at`, `someday_until`); the store keeps `views`, `counts` and
@@ -2066,8 +2133,9 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     of whose views is for the kept rows is not used at all;
   - the first V1 launch without it: `viewsRead` stays false until the first read ends, so the list does not file its
     rows twice, but no longer than a second (no connection yet, or a hub that does not answer);
-  - the places, read with the list while the hub lists `todo_places`, again only when the list changed; a hub without
-    the route, or whose hello stopped listing it, has none (All only);
+  - the places, read with the list once the hub has listed `todo_places` in this run, again only when the list changed;
+    a hub without the route (404 or 405), or that has not listed it, has none (All only). A later hello without it (a
+    manager reconnecting) takes nothing away, as the gate keeps the view; another hub starts again;
   - one timer, to the earliest `next_change_at` of any row, reads the list again (coalesced) through the app's hub, only
     while the scene is in front. A read that still shows that moment (the hub's clock behind) is tried again after 5 s
     and 30 s, then left to the next push, and the timer never reads sooner than 5 s after its last read. The timer is
@@ -2082,7 +2150,8 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   app's own rules (`TodoTriageLogic`, frozen) mapped onto the V1 sections (Needs you → Needs you, Working → Working,
   PR to merge → Waiting, Other open → To do, Just finished → Just finished, Shelved → To do with the Inactive mark,
   Done → Done); a section's rows go by `rank`, then `manager`, then `id`. Every To-dos number comes from
-  `TodoStore.countsSource` (`TodoCountsSource`): the hub's `counts` and places with one manager; with several, counted
+  `TodoStore.countsSource` (`TodoCountsSource`): the hub's `counts` and places with one manager (each project's part of
+  N counted from its rows, as its place's Filter and Needs you header count it); with several, counted
   from the current assistant's filed rows (`TodoCountsFallback`, the hub's rules, replayed against
   `spec/fixtures/todo-counts`) with only its own project places; less the answers given on the device that the hub's
   view does not show yet. The rows are filed there once (`countsSource.filed`, the current assistant's in the list's
@@ -2138,10 +2207,10 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     (`themedButton(prominent: true)`); on iOS 18 one `ToolbarItemGroup(placement: .bottomBar)` with the glyph, "Filtered
     by:" and +, the search field the system's drawer, passed as `.navigationBarDrawer(displayMode: .always)`, since
     under an inline title the drawer the system picks starts hidden until a pull. The Filter is not drawn in the calm
-    list or a list with no rows (`TodosListModel.filters`), and, once the places come, not in Today or Upcoming; its
-    choice goes back to All with it, so none comes back unseen. The toolbar, the subtitle and ⋯ read the model's flags
-    (`calm`, `searching`, `hasRows`, kept apart from the layout and set only when they change), never the layout, so a
-    landing does not redraw them. ⋯ (`TodosViewOptions`) is `ToolbarOverflowMenu` on iOS 27 built
+    list or a list with no rows (`TodosListModel.filters`), nor in Today or Upcoming (`TodosPlaces.filters`,
+    "Places" below); its choice goes back to All with it, so none comes back unseen. The toolbar, the subtitle and ⋯
+    read the model's flags (`calm`, `searching`, `hasRows`, kept apart from the layout and set only when they change),
+    never the layout, so a landing does not redraw them. ⋯ (`TodosViewOptions`) is `ToolbarOverflowMenu` on iOS 27 built
     with its SDK (`#if compiler(>=6.4)`), else `TodosViewMenu` as the primary action; both hold `TodosViewMenuItems`:
     Sort By, one `Section` of `Toggle`s
     (Suggested, Recently Changed, Due Date, Priority), then Group by Project, a `Toggle` left out while the list is calm
@@ -2247,6 +2316,59 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   what it draws and whether the gate is on (`probe.todos-page`). The store's one-minute clock for rows filed by the
   app's own rules runs while a counted row is filed so (the drawer's N included, whether or not the list was drawn) and
   follows whatever changes that, another assistant made current included (`TodoCountsSource.byRulesChanged`).
+- **Places** (DESIGN_SYSTEM 3.5 "To-dos places"; `docs/design/sidebar-navigation.md` section 7). `TodosPlacesModel` reads
+  the store's places (`countsSource.places`: the hub's with one manager, the current assistant's projects with several,
+  each project's part of N counted from the rows) and the place picked (`TodoWorkspace.place`, kept for the app's run);
+  the entries it lists are worked out again only when the places or the knowledge base's projects change (a memo, P4).
+  `TodoPlaceRows` is the sidebar's To-dos row with its places folded under it (`sidebar.fold.todos`), each drawn by the
+  sidebar's own row, and reads only the places and the place shown, so their numbers redraw those rows alone; it reads
+  the knowledge base's projects (`TodoProjects`) once the places come and for each assistant made current, so All
+  Projects… is there before To-dos is first opened. The list's title is the system's title menu of the same places
+  (`TodoTitleMenu`, a project picked in All Projects… that it does not list listed ticked too), given by
+  `TodoPlaceFollower` only while there are places, so the page's own body reads none of them. A place a hub does not
+  list (no `todo_places` in this run, a 404 or 405, another assistant's project) is All To-dos
+  (`TodosPlaces.effective`); after a 404 or 405 the route is asked again only once a hello lists it anew, or for another
+  hub or assistant (`TodoStore.readPlaces`). The list filters the one list on the device (`TodosPlaces.holds`; the list
+  route has no place): Today, open and due today, overdue or reminding today; Upcoming, open and dated, laid out by day
+  (`TodoUpcomingLayout`, which takes no choice and no sort), each row under its day saying only its time
+  (`TodoRowContentLogic.content(underItsDay:)`); a project, its rows, line 3 leaving its name out (`inProject:`). On
+  Today and Upcoming a step counts with its parent where the place holds the parent, else it is a row there; a project
+  rolls a step up to its open parent wherever the parent is, as its part of N and the hub count it
+  (`TodosPlaces.rows`). Only All To-dos and a project's place draw the Filter (`TodosPlaces.filters`,
+  `TodosListModel.filters`); Today and Upcoming land on All and stay there, a deviation from proposal 3.3's first
+  "inside every place" that the owner decided on 11-21 (DECISIONS "11-21 The To-dos list"). ⋯ is the list's (Sort By,
+  Group by Project) on All To-dos, Today and a project, Group by Project greyed with why in a project
+  (`TodosPlaces.groupsByProject`); Upcoming's holds Show as Calendar alone. A place's Filter counts and Needs you header
+  count its rows (`TodoCountsSource.counts(of:)`, less the answers given on the device, `placeCounts`), never held. The
+  one guard line also counts what needs the owner outside the place (`hiddenNeeds`: `outsideNeeds`, kept and set only
+  when it changes so other numbers moving redraw nothing, plus what the choice hides of the place's own), names the
+  place when that is all (`hiddenElsewhere`), and opens All To-dos from a place; the title's subtitle says the same once
+  it has scrolled away (`TodosListModel.subtitle(place:)`). A change of the store's numbers alone (an answer given
+  here) counts the place again without laying the list out (`Snapshot.sameRows`). A search sets the place aside: while
+  the field has words the layout is every open row that matches (`makeLayout`). The place's rows are worked out once
+  per change for its numbers, its layout, the rows that come to need the owner while the list is held, and Upcoming's
+  calendar (`upcomingItems`). A project with nothing open, closed to-dos only too, has its own empty state
+  (`placeIsEmpty`); All Projects… counts each project's open to-dos from the filed rows (`TodosPlaces.openCounts`, a
+  step with its parent as above), worked out as the sheet opens and when its inputs change, never in its body. New
+  To-Do starts in the place shown (`TodosListModel.capture`): due today on Today, on Upcoming on the day its sheet asks
+  for (tomorrow, a day heading's, or an empty slot's day and hour on its calendar, `TodoCalendarView`'s `add`), in a
+  project in it. The foot toolbar's +, a day heading's + and the calendar's slot open `TodoNewSheet` with that default
+  (an hour starts with All Day off), which goes in the outbox's one create (`TodoOutbox.Write.create`'s due date or
+  moment and project; an entry kept on disk before these reads as none), so the row the list draws while it is saved is
+  in the place and counted there (`TodoCountsSource.applying` files it with its project, `TodosPlaces.holds` sees its
+  due date). One the hub turns down comes back in the sheet due as it was and in its project (`TodoOutbox.refusal`,
+  `Draft`); one whose project a 400 turned down (the hub takes the title and date as sent; `Sent.refused`'s `project`)
+  comes back without it, the toast saying so, and any other refusal says what the hub said. Today's empty state leads
+  to Upcoming with `EmptyStateView`'s link look, so the foot's + stays the one prominent action. A pick in the sidebar
+  opens To-dos on the place at its root (`TodoWorkspace.open`, taken once by `AssistantView.show` as `fresh`). The
+  To-dos row itself (`TodoWorkspace.pickRow`) is All To-dos where To-dos is the place in front and otherwise reopens it
+  as it was left: the host decides, from its own state (`TodoWorkspace.opening(inFront:)`: the shell's
+  `ShellPlaces.current`, the Sidebar layout's root, the classic page), not from whether the list is on screen. A pick
+  in the title menu, Show All and "3 coming up this week" change the list in place. Upcoming's ⋯ › Show as Calendar
+  (`todos.v1.upcomingCalendar`) draws Upcoming's own to-dos on the to-dos calendar, coloured by each row's view
+  (`TodoCalendarView`'s `state`; today's page keeps its session reader and its own slot sheet), with the guard line
+  above it and no Show Done (`TodosModeBar(options:)`); words in the search field show the list instead. DEBUG
+  `-openTodoPlace all|today|upcoming|project:<slug>` opens To-dos on a place.
 - **Send receipts** (`apple/Shared/SendReceipts.swift`; `docs/protocol/protocol.md` "Message feedback (#5258)" and its
   "To-do writes"). The socket decodes `message_send_state` and `todo_send_state` (`ServerEvent.sendReceipt`) and passes
   one on only while its own authenticated hello carries that kind's top-level version, `message_send_state: 1` or
@@ -2273,6 +2395,41 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
   the To-dos entrance, as before.
 
+## Domain spaces
+
+Who it serves: everyday people who keep one part of their life (family, money, a home) apart from the main chat, as the
+health space does. The iOS / iPadOS app follows the web (`docs/web/web.md`, "Domain spaces"); the server side is in
+`docs/assistant/health.md` ("Tracks and kinds").
+
+- **Model**: `apple/Shared/Tracks.swift` decodes tracks, kinds, `SPACE.md`, a conversation's categories and the extension
+  grants; every field is optional and unknown ones are ignored. Every call goes to the default manager (no
+  `X-Persona-Manager`), as spaces are the default manager's. A hub without `GET /api/v1/assistant/tracks` (404 / 405, or an
+  answer without `tracks`) has no spaces: the section stays out and nothing else changes. `SpaceStore.shared` keeps the
+  list, read again when the hub or its hello changes (`RootView`).
+- **Sidebar and drawer**: a Spaces section lists the tracks of the `spaces` sidebar group by their order (built-in health
+  and archived ones left out), then New space; in the Sidebar layout it is a folding section after Pages. A tap opens the
+  space's latest conversation, else its home (`SpaceHomeModel.entry`). Health keeps its own row and pages unchanged.
+- **Space home** (`apple/Persona/Views/Spaces/SpaceHomeView.swift`): the name, a composer whose conversation starts in the
+  space, a plain privacy line, its conversations (swipe to archive), About this space (the user's part of `SPACE.md` as
+  formatted text, a leading heading repeating the name dropped, folded past a height) with Where things stand (the state
+  block), and the kinds of personal information it holds. Edit and Archive are in the page's menu; built-in spaces have no
+  Archive. Archive confirms first and sends the revision it was read at.
+- **SPACE.md editor**: the parts the user wrote are fields; the `persona:managed` blocks show read-only under "Kept up to
+  date by Persona" and go back byte for byte (`SpaceMarkdown`, which works on UTF-8 bytes, since Swift's `String ==`
+  calls an NFC copy equal and a CRLF line end does not end in `\n`). A save sends the `base_digest` it read; a stale one
+  says another change came first and offers Load latest; a changed block, a missing space and an offline computer each
+  have a plain sentence.
+- **New space**: name, one line about it, an icon from 16 tokens (`SpaceIcon`, never a color or a raw symbol name), the
+  personal information it holds and, only when the assistant offers more than one, its kind (reconciled against the kinds
+  read: the default kind, else the first on offer). The slug is made from the name and never shown; a taken one gets the
+  next number, once more on a 409.
+- **A space conversation's categories**: chips under the top bar (`SpaceConversationCategories`, room added to the
+  chat's top inset through `assistantTopExtra`). A chip the user may take away is a menu with Remove; the space's own
+  carry a lock; removed ones come back from +. Changes are optimistic and roll back with a toast.
+- **Extension grants**: the extension detail page of the default manager shows "Personal information it may read": an
+  owner switch ("This is my own extension") or one switch per kind. Read-only when the extension is set outside the app
+  (`readOnly`, or a dev / config-file source); left out on an assistant without grants and on another manager's page.
+
 ## Quiet supervision rounds (#2092)
 
 Persona conversations on iOS, iPadOS and macOS share the web's whole-round visibility contract. A `system` / `supervise`
@@ -2285,6 +2442,14 @@ be expanded separately, including server-folded ranges. Successful Persona `noti
 `task_review`, a successful `supervision_finish` receipt with user visibility, explicit user-level input or retained
 `fold.supervision_user` promotes the whole round. A pending live `ask_user` stays visible before its result arrives.
 Failed calls, arguments without success receipts and silent finishes do not establish or reverse promotion.
+
+In the main conversation, a completed, non-live round with a successful silent finish and no promotion instead leaves
+no timeline row and adds no unread count or badge. The split happens before work or supervision rows unfold, so open
+flags cannot bring its tools back. Its `task`, `routed` and `answered` feed cards inside the same half-open round
+interval move with it; plans, message cards, notices and other decisions remain visible. **Background activity** opens
+from both the conversation menu and Inbox, using the same `ChatStore`, paged `loadOlder` / unfold requests and
+`SupervisionRecordLine` / `lineView` rendering to retain the complete round and those feed cards. It creates no
+InboxItem and calls no `markSeen`. Full-history APIs are unchanged.
 
 The separate streaming answer stays hidden inside a closed quiet record, including text waiting for its transcript
 item after a turn stops. Frozen history uses its captured live turn, not a later turn's activity. Retained promotion survives overlapping
@@ -2330,6 +2495,7 @@ and the count are unchanged (`ActionTrayContent.grouped`); with one group the tr
 - **Decision rows (P1, P4).** `BriefAcceptRow` has no "Actions" menu: when its buttons do not fit one line the secondary ones (Open, Complete Directly, Later, Don't handle) wrap in their own row and the main one has the line below to itself. Later and Don't handle show only on the tray's decision rows (`decision:` arg of `BriefAcceptRow`, an owner decision or a `needs_user` review): Later hides the round for this app session (`TasksStore.laterDecisions`, keyed `decision:<manager>:<id>:<round>` like the web's `decisionLaterKey`); Don't handle is `POST /todos/{id}/decision-dismiss` with the hub's own `decision_review.review_at` string (never a `Date`: sub-second digits matter) and the manager header, a six-second Undo toast (`decision-undo-dismiss` with the receipt), and a 409 reloads the to-dos. `AssistantEntries.split` leaves a hidden decision out (`decisionHidden`) unless a live Agent question gives the task its status. The words are one pair on every surface: "Later" / "Don't handle".
 - **Plan card (§3.1).** Start is full width, Edit and Don't Start under it when the three do not fit one line; a task's brief (`PlanTask.brief`, decode-only, never sent back) shows folded under its "why" (`PlanBriefView`: who asked, a summary line, Show All).
 - **Receipts (§3.3).** Gone since #8237: the chat draws no receipt, review or report (`ChatLines.drawnFeed`); the hand-off card says a failed start or an interrupted turn in place (`DispatchHandoffCard.interruption`), Retry, Remove and Continue are on the Needs You rows (`AssistantActionBar.actions`, `TasksStore.retry`), and finished tasks are the Finished entry's rows (#10922; In Progress's Just Finished group until then; `docs/assistant/unified-entry.md` "Receipts").
+- **Failed-start remedies (#10452).** Plan tasks decode `error_code` / `error_args` and `retry_with` read-only. Coded terminal `launcher_missing` and `worktree_path_taken` wording leads, with the raw failure under Details. With `task_retry_launcher`, failed rows, the task page and the to-do action bar offer **Use <launcher> instead**, then **Retry**, then **Remove**; the override is the first `retry_with` entry and the only request-body field. Ordinary Retry is bodyless and works without `plan_id`, including a non-dismissed plan linked only by `todo_id`. With `todo_start_answer`, a `shell_waiting` plan task shows its live question on those same surfaces; its choice goes to `POST /todos/{id}/start/answer`, the returned to-do lands immediately, and no chat message is resent.
 - **Hand-off cards (D6).** See `docs/assistant/unified-entry.md` ("What a dispatch opens").
 - Removed (P7): the unused `TaskCard`, `TaskNowLine`, `TaskLine`, `TaskSentList`, `TaskProgressLine`, `TaskOpenButton`.
 
@@ -2368,13 +2534,30 @@ hub sends (`GET /api/v1/assistant`, the value in effect). Who it is for: people 
   request that names its manager, so those rows need `manager` in the read). The hub's answer is kept for that field
   and handed to `AppModel.assistantConfig`; a refusal puts the page's value back with a toast. A control waits while its
   own write is out.
-- **Not here**: `inbox_signals` (Tell supervisors about new messages) moves to the Inbox's own settings (#4524), and
-  `default_permission_mode` has no page in the app yet.
+- **Not here**: `inbox_signals` (Tell supervisors about new messages) moves to the Inbox's own settings (#4524).
 - **Mock hub**: the default mock sends every field with the hub's defaults and checks a `PUT` as the hub does;
   `MOCK_LEGACY_HUB=1` has none of them. Debug launch: `-openAssistantPage agentFollowUp`.
 - **Tests**: `AgentFollowUpTests` (reads, each change's request and header, the hub's answer, rollback, the menus'
   words) and `AgentFollowUpUITests` against the mock hub (light / dark shots with `TEST_RUNNER_PERSONA_SHOTS`);
   `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` on this page.
+
+## Permission defaults (#13286)
+
+Settings › Agent includes **Default Permissions**, the manager's existing `default_permission_mode` from
+`GET /api/v1/assistant`. It applies only to new non-guest conversations without an explicit choice; existing
+conversations keep their current mode. A direction leader's title menu also has **Default Permissions**, opening the
+same `DefaultPermissionsSettingsSection` in a sheet rather than a direction-specific override. Both use the existing
+sparse `PUT /api/v1/assistant`, require the answering manager to confirm the selected mode, and put the previous value
+back if the write or confirmation fails.
+
+Settings › Models decodes the existing launcher `permission_mode` in `ModelBinding`. The AI twin's editor shows **Inbox
+Permissions**: an unset or legacy Plan value displays **Default permissions**, never the parent Agents' Full access,
+and Plan is not offered. An explicit supported choice saves through the same purpose PATCH; Follow Agents writes
+`permission_mode: null` and restores the safe default. Other launcher purposes retain their ordinary inheritance and
+provider-specific mode lists.
+
+Tests: `AgentFollowUpTests`, `ModelConfigurationModelTests`, `AgentFollowUpUITests`,
+`LarkAgentModelConfigurationTests` and `DirectionScreensUITests`; the UI cases use only synthetic loopback fixtures.
 
 ## Background supervisor (#5083)
 
@@ -3209,13 +3392,21 @@ Key points:
 
 ## Settings by scope (#5236)
 
-The shared iPhone, iPad and Mac settings page has three groups:
+The shared iPhone and iPad settings page has three groups, then one Advanced row. Settings home shows each group's core rows
+only (#13395, at most ten; `SettingsCatalog.core`); Settings › Advanced shows the rest under the same groups
+(`SettingsCatalog.advanced`), and search finds every entry on either:
 
-| Scope | Entries |
-| --- | --- |
-| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Extensions, Knowledge Selection, Meetings, Agent, Machines (platform and hub capabilities decide availability) |
-| This Device | Appearance & Display, Language & Dictation, Notifications, Translation, Storage, Health, This iPhone, About |
-| Hub | Hub Connection, Hub Version, Assistants, Avatar, Devices & Pairing |
+| Scope | Settings home | Settings › Advanced |
+| --- | --- | --- |
+| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Inbox Sources, Extensions, Machines | Knowledge Selection, Meetings, Agent |
+| This Device | Notifications, About | Appearance & Display, Language & Dictation, Live Screen, Translation, Storage, Health, Alarms and Timers, This iPhone |
+| Hub | Hub Connection | Hub Version, Assistants, Avatar, Devices & Pairing |
+
+Platform and hub capabilities decide availability, as before: Inbox Sources with the hub's `inbox_sources`, Extensions with
+its extension manager, Live Screen while a computer offers it, Alarms and Timers with AlarmKit, and the hub's own rows only with
+a hub paired (not in demo mode). The Advanced row's value is the hub update's state while one is out or under way. A row keeps
+its accessibility identifier wherever its tier puts it (`SettingsEntry.rowID`); `-openAdvancedSettings YES` (DEBUG) opens
+Settings › Advanced for screenshots.
 
 Whenever the hub answers a roster, with one or many installed assistants, the first heading is **<name>'s Settings**,
 with the current assistant's first-letter avatar and state dot plus **Switch**. Switch opens the same assistant

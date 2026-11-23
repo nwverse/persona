@@ -707,6 +707,9 @@ data class Session(
     @SerialName("starting") val starting: Boolean = false,
     /** Why starting it failed; the session is offline and sends get the same error. */
     @SerialName("start_error") val startError: String? = null,
+    /** The coded start remedy, and a terminal question's line/choices when the start waits for an answer. */
+    @SerialName("start_error_code") val startErrorCode: String? = null,
+    @SerialName("start_error_args") val startErrorArgs: Map<String, String>? = null,
     /** Codex is open in its pane and has no thread until its first message. */
     @SerialName("awaiting_first_message") val awaitingFirstMessage: Boolean = false,
     /**
@@ -792,6 +795,8 @@ data class Session(
     val key: SessionKey get() = SessionKey(machineId, sessionId)
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
     val isHealth: Boolean get() = space == persona.core.contracts.api.AssistantSpace.HEALTH
+    /** A chat of any space ([space]: health or a domain space, #13500), which the assistant's own lists leave out. */
+    val isSpace: Boolean get() = !space.isNullOrEmpty()
     val agentState: AgentState get() = AgentState.of(state, status)
     /**
      * The list state of this session and its folded children; its own wire state stays intact. A side session's result

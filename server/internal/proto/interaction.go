@@ -37,6 +37,16 @@ const DismissedInChat = "replied_in_chat"
 // their Reason dropped (assistant/fleet_routes.go).
 const DismissedExpired = "expired"
 
+// DismissedWithdrawn is the Reason of a Dismiss the manager hands the one waiting on a card that ended because the
+// asker went away before anyone answered it: its call ended, its hook disconnected and did not come back. Nobody
+// answered it: it is no decline (Resolution.Outcome). Only the manager sets it.
+const DismissedWithdrawn = "withdrawn"
+
+// DismissedCleared is the Reason of a Dismiss for a card that ended because it was cleared before anyone answered it:
+// a newer card replaced it, or it was no longer the one pending under its id. Nobody answered it: it is no decline
+// (Resolution.Outcome). Only the manager sets it.
+const DismissedCleared = "cleared"
+
 // AskedWithoutWaiting: ix is the assistant's ask_user raised with wait false (#4928, docs/assistant/assistant.md
 // "Asking without holding the turn"): its turn ended when the card went up, so no turn is held behind it. It is the
 // one ask_user card that is Resumable (a waiting one lives in the manager's memory and is not).
@@ -45,8 +55,8 @@ func (ix Interaction) AskedWithoutWaiting() bool { return ix.ToolName == "ask_us
 // OneTapQuestion is the question ix asks when one tap may answer it without opening the app (a notification's
 // options, a to-do's row): a question card with exactly one question, options to choose from and no fields to fill in,
 // not raised in a Just me turn (whose push says nothing of what it asks), and whose asker did not say going ahead
-// cannot be undone (cannotUndo: an answer that cannot be taken back needs a look first). A health conversation's card
-// is never answered so either; only the hub and the manager can tell one (identity.InHealthSpace on its cwd), and each
+// cannot be undone (cannotUndo: an answer that cannot be taken back needs a look first). A space conversation's card
+// is never answered so either; only the hub and the manager can tell one (identity.InSpace on its cwd), and each
 // checks it beside this. False otherwise.
 func (ix Interaction) OneTapQuestion() (Question, bool) {
 	if ix.Kind != IxQuestion || ix.ToolName == "persona_session_review" || len(ix.Questions) != 1 || len(ix.Fields) > 0 || len(ix.Questions[0].Options) == 0 ||

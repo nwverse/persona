@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,7 +22,8 @@ import (
 // "Control Persona itself" row). The assistant's own ("About me", its launcher, "notify tasks the main chat starts only
 // in the main chat") are its to read and change; the hub's (the inbox's rules, the blocked Claude config directories,
 // mail accounts…) are the hub's settings app's, which asks the user itself (app.tool persona_settings). Reads are free;
-// every change is a card on the phone that says what changes (before → after) and is applied only when approved.
+// every change is a card on the phone that says what changes (before → after) and is applied only when approved, except
+// the exact reversible-setting allowlist when the administrator's manager.json switch is on.
 
 // ownSetting is one of the assistant's own settings persona_settings offers.
 type ownSetting struct {
@@ -43,6 +45,35 @@ type ownChange struct {
 	// atomically checks the exact card revision itself. Rebuilding such an
 	// operation would move its revision baseline forward and hide a conflict.
 	applyChecksProposal bool
+	// reversible is present only on the audited, exactly restorable settings. Its raw before-image distinguishes an
+	// unset pointer from an explicitly saved default; applyAutomatic checks it again under the settings write lock.
+	reversible *reversibleSetting
+}
+
+const autoApproveReversibleSettingsKey = "assistant.auto_approve_reversible_settings"
+
+// reversibleSettingAutoApproved is the complete allowlist. Adding a setter descriptor alone cannot bypass a card.
+func reversibleSettingAutoApproved(key string) bool {
+	switch key {
+	case "assistant.main_background_folded", "assistant.recent_task_chats", "assistant.briefing_waits":
+		return true
+	default:
+		return false
+	}
+}
+
+type reversibleSetting struct {
+	before  json.RawMessage
+	after   json.RawMessage
+	current func(Settings) json.RawMessage
+	assign  func(*Settings)
+	applied string
+}
+
+// reversibleSettingJSON cannot fail for the Boolean pointers and raw module values in the allowlist.
+func reversibleSettingJSON(v any) json.RawMessage {
+	raw, _ := json.Marshal(v)
+	return raw
 }
 
 // card is what the approval card says in l.
@@ -54,6 +85,17 @@ func (c *ownChange) card(l i18n.Lang) string {
 }
 
 func (s *Service) ownSettings() []ownSetting {
+	// A module's setting is listed only while its module is loaded (modules.go): its value stays stored, hidden.
+	return slices.DeleteFunc(s.allOwnSettings(), func(o ownSetting) bool {
+		_, loaded := s.modules.Setting(o.Key)
+		return moduleSettingKeys[o.Key] && !loaded
+	})
+}
+
+// moduleSettingKeys are the keys below that a feature module serves (modules.go moduleStored).
+var moduleSettingKeys = map[string]bool{"assistant.briefing_waits": true}
+
+func (s *Service) allOwnSettings() []ownSetting {
 	getSet := []string{"get", "set"}
 	return []ownSetting{
 		s.hiddenDirSetting(),
@@ -190,23 +232,22 @@ func (s *Service) ownSettings() []ownSetting {
 			About: "legacy boolean alias for assistant.delivery_gate: true sets delivery_gate to live (close only once live and " +
 				"checked, and hand the delivery standard to the agent); false sets delivery_gate to off (no delivery gate). " +
 				"Prefer assistant.delivery_gate (off / merged / live). Either way the judge never closes a supervised task: delivery " +
-				"waits for the main conversation's task_review. Applies from the next judgment / task",
+				"waits for its supervisor's task_review. Applies from the next judgment / task",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.doneNeedsDelivery(ctx)), nil },
 			set: s.setDoneNeedsDelivery},
 		{Setting: Setting{Key: "assistant.review_sample_percent", Title: "Share of finished tasks to spot-check", Actions: getSet,
 			About: "100 (the default): the done judge adds no per-criterion check. Below 100 it also checks each done_when criterion " +
 				"and the delivery as evidence for review. Passing, failing, sampled and unsampled work all stay open as delivered, " +
-				"awaiting the main conversation's task_review; the judge never accepts or closes a task. Applies from the next judgment on",
+				"awaiting their supervisor's task_review; the judge never accepts or closes a task. Applies from the next judgment on",
 			Value: "a whole number, 0–100"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.reviewSamplePercent(ctx)), nil },
 			set: s.setReviewSamplePercent},
 		{Setting: Setting{Key: "assistant.leaders", Title: "Leader conversations", Actions: getSet,
-			About: "empty (the default): no manual Agent is assigned to a leader. New task_plan, agent_start and agent_send task work " +
-				"is always supervised by the main conversation, including task_plan(supervisor=leader). The one exception is a manually " +
-				"started Agent the owner explicitly puts under a leader: its ordinary supervision messages and failed starts go there and " +
-				"that leader reviews them with task_review; needs_user still comes to the main conversation, and every other new " +
-				"assistant-dispatched failed start goes there too",
+			About: "empty (the default): ordinary conversations use main for supervision. A direction lead supervises the tasks it " +
+				"plans or starts, and Agents explicitly assigned to it: ordinary signals, question cards, failed starts, retries, " +
+				"task_review and cancellation stay with that lead. Only needs_user escalations go to the main conversation. " +
+				"Main supervises its own tasks; explicit agent_transfer assignments persist across manager restarts",
 			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
 			get: s.getLeaders,
 			set: s.setLeaders},
@@ -216,8 +257,9 @@ func (s *Service) ownSettings() []ownSetting {
 				"orphan_minutes=10 (orphanOfflineAfter), card_minutes=3 (superviseNeedsAfter); max_rows=15 bounds only non-owner " +
 				"rows per direction, and every owner-wait row is kept. These values do not change supervision notifications",
 			Value: "the whole object {stalled_minutes, silent_minutes, orphan_minutes, card_minutes, max_rows}; minutes 1–10080, max_rows 1–100; null restores the defaults"},
-			get: s.getBriefingWaits,
-			set: s.setBriefingWaits},
+			get: s.moduleSettingGet("assistant.briefing_waits"),
+			set: s.moduleSettingSet("assistant.briefing_waits", "change_briefing_waits",
+				"assistant.briefing_waits updated; the next briefing's deterministic wait lists use it.")},
 		{Setting: Setting{Key: "assistant.interject_background", Title: "Move running work to the background when I interject", Actions: getSet,
 			About: "off (the default): a message the user sends while a Claude conversation is still answering waits until the command " +
 				"or subagent running in the foreground ends; on: that work moves to the background (it goes on and reports when done) " +
@@ -251,7 +293,7 @@ func (s *Service) ownSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.loadAllTools(ctx)), nil },
 			set: s.setLoadAllTools},
 		{Setting: Setting{Key: "assistant.agent_tasks", Title: "Every Agent Persona starts is a supervised task", Actions: getSet,
-			About: "off (the default): assistant-dispatched task_plan, agent_start and agent_send task work is still supervised by main. " +
+			About: "off (the default): assistant-dispatched task_plan, agent_start and agent_send task work is still supervised by its planning lead or main. " +
 				"on: manually linked user to-dos and reporting-Agent compatibility are supervised too; an Agent opened by hand on the Agents " +
 				"page is not adopted merely because it did work. Agents started by hand in a terminal are left alone. Costs model calls " +
 				"(the done judge, supervision turns). Applies from the next start, turn end and report",
@@ -272,9 +314,10 @@ func (s *Service) ownSettings() []ownSetting {
 		{Setting: Setting{Key: "assistant.close_ended_terminals", Title: "Close an Agent's terminal when it ends", Actions: getSet,
 			About: "off (the default): an Agent's terminal tab stays open after it stops, with the shell it ran in, until the user " +
 				"closes it. on: when an Agent Persona started ends, Persona closes the tab it opened for it, the way Archive and " +
-				"close does: when its task is done or cancelled (an idle Agent), and when it quits by itself or is told to (/exit). " +
+				"close does: when its task is done or cancelled (an idle Agent), when it is stopped for being idle (idle_close_hours), " +
+				"and when it quits by itself or is told to (/exit). " +
 				"Never closed: a busy Agent (working, waiting for an answer, background work, subagents or workflows running, a " +
-				"/loop, queued messages, a server it runs), one the user stopped with Stop or that was stopped for being idle, and " +
+				"/loop, queued messages, a server it runs), one the user stopped with Stop, and " +
 				"terminals Persona did not open. The conversation is kept and can be resumed in a new tab. Applies from the next " +
 				"Agent that ends",
 			Value: "true or false"},
@@ -468,6 +511,9 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	shown, _ := json.Marshal(map[string]string{"setting": title, "action": action})
 	now := time.Now().UTC()
 	proposal := change.card(l)
+	if action == "set" && s.hello(ctx).Assistant.AutoApproveReversibleSettings && reversibleSettingAutoApproved(o.Key) && change.reversible != nil {
+		return s.applyAutomaticReversibleSetting(ctx, call, o.Key, proposal, change.reversible)
+	}
 	outcome, err := s.waitPreparedCard(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
 		Kind: proto.IxPermission, ToolName: "persona_settings", Summary: proposal, ToolInput: shown, SessionTitle: "Persona",
 		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)}, approvalops.Operation{
@@ -504,6 +550,64 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 		},
 	})
 	return outcome.Text, err
+}
+
+// applyAutomaticReversibleSetting records the assistant's decision before attempting the write, then updates the same
+// row with saved or not_saved. If the history row cannot be written, the setting is left alone. If the outcome update
+// fails, attempted remains as an explicit unknown rather than a false result. The raw before-image is checked again
+// under the same lock as the settings write.
+func (s *Service) applyAutomaticReversibleSetting(ctx context.Context, call ToolCall, key, proposal string, r *reversibleSetting) (string, error) {
+	st := s.fleetStore()
+	writer, ok := st.(resolvedInteractionInserter)
+	if !ok {
+		return "", fmt.Errorf("%w: this store cannot record a reversible-setting decision and outcome", approvalops.ErrNotApplied)
+	}
+	restoreArguments, _ := json.Marshal(map[string]any{"action": "set", "key": key, "value": r.before})
+	restore, _ := json.Marshal(map[string]any{"tool": "persona_settings", "arguments": json.RawMessage(restoreArguments), "while_switch_enabled": autoApproveReversibleSettingsKey})
+	audit, _ := json.Marshal(struct {
+		Actor       string          `json:"actor"`
+		Operation   string          `json:"operation"`
+		Setting     string          `json:"setting"`
+		Before      json.RawMessage `json:"before"`
+		After       json.RawMessage `json:"after"`
+		Proposal    string          `json:"proposal"`
+		Outcome     string          `json:"outcome"`
+		CardSkipped bool            `json:"card_skipped"`
+		Switch      string          `json:"switch"`
+		Restore     json.RawMessage `json:"restore"`
+	}{Actor: proto.AnsweredByAssistant, Operation: "persona_settings.set", Setting: key, Before: r.before, After: r.after,
+		Proposal: proposal, Outcome: "attempted", CardSkipped: true, Switch: autoApproveReversibleSettingsKey, Restore: restore})
+	allow := true
+	now := time.Now().UTC()
+	resolution := &proto.Resolution{Allow: &allow, AnsweredBy: proto.AnsweredByAssistant,
+		Reason: autoApproveReversibleSettingsKey + "; exactly reversible; restore with persona_settings " + string(restoreArguments)}
+	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
+		Kind: proto.IxPermission, ToolName: "persona_settings", SessionTitle: "Persona", CreatedAt: now, ToolInput: audit,
+		Private: s.justMeNow(call.MachineID, call.SessionID), Summary: proposal}
+	if err := writer.InsertResolvedInteraction(ctx, ix, resolution); err != nil {
+		return "", fmt.Errorf("%w: write the reversible-setting history record: %v", approvalops.ErrNotApplied, err)
+	}
+	_, saveErr := s.updateSettingsChecked(ctx, func(v *Settings) error {
+		r.assign(v)
+		return nil
+	}, func(v Settings) error {
+		if !bytes.Equal(r.current(v), r.before) {
+			return fmt.Errorf("%w: %s changed concurrently", approvalops.ErrStale, key)
+		}
+		return nil
+	})
+	outcome := "not_saved"
+	if saveErr == nil {
+		outcome = "saved"
+	}
+	if err := writer.MarkResolvedInteractionOutcome(ctx, ix.ID, ix.CreatedAt, outcome, time.Now().UTC()); err != nil {
+		s.logf("reversible setting %s: record %s outcome for %s: %v", key, outcome, ix.ID, err)
+	}
+	if saveErr != nil {
+		return "", saveErr
+	}
+	s.settingsChanged(ctx)
+	return r.applied, nil
 }
 
 func orNone(s string) string {
@@ -672,6 +776,60 @@ func (s *Service) setBoolSetting(ctx context.Context, v json.RawMessage, current
 		}}, nil
 }
 
+// setReversibleBoolSetting is deliberately separate from setBoolSetting: only the two display-only candidates accept
+// null as raw unset, and only while the administrator switch is on. Switch-on changes compare raw state so an explicit
+// default and unset remain exactly restorable even when their effective values match. Switch-off keeps the legacy
+// decoder (including null as false) and effective-value no-op.
+func (s *Service) setReversibleBoolSetting(ctx context.Context, v json.RawMessage, defaultValue bool,
+	current func(context.Context) bool, unchanged string, card func(l i18n.Lang, before, after string) string,
+	field func(*Settings) **bool, applied string) (*ownChange, error) {
+	auto := s.hello(ctx).Assistant.AutoApproveReversibleSettings
+	var next *bool
+	if err := json.Unmarshal(v, &next); err != nil {
+		return nil, errors.New("value must be true or false")
+	}
+	if next == nil && !auto {
+		next = new(bool) // encoding/json historically decoded null into a non-pointer false for these two settings.
+	}
+	before := current(ctx)
+	after := defaultValue
+	if next != nil {
+		after = *next
+	}
+	saved := s.settings(ctx)
+	beforeRaw := reversibleSettingJSON(*field(&saved))
+	if auto {
+		if bytes.Equal(beforeRaw, reversibleSettingJSON(next)) {
+			return &ownChange{summary: unchanged}, nil
+		}
+	} else if after == before {
+		return &ownChange{summary: unchanged}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	word := map[bool]string{true: "assistant-settings_tool.on", false: "assistant-settings_tool.off"}
+	return &ownChange{
+		cardText: func(l i18n.Lang) string { return card(l, i18n.T(l, word[before]), i18n.T(l, word[after])) },
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { *field(v) = next; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf(applied, after), nil
+		},
+		reversible: &reversibleSetting{
+			before: beforeRaw,
+			after:  reversibleSettingJSON(next),
+			current: func(v Settings) json.RawMessage {
+				return reversibleSettingJSON(*field(&v))
+			},
+			assign:  func(v *Settings) { *field(v) = next },
+			applied: fmt.Sprintf(applied, after),
+		},
+	}, nil
+}
+
 func (s *Service) setMainTasksQuiet(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	return s.setBoolSetting(ctx, v, s.mainTasksQuiet, "「主对话派的任务只在主对话里通知」没有变化", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_main_tasks_quiet", i18n.Args{"before": before, "after": after})
@@ -713,14 +871,14 @@ func (s *Service) setTaskWorkspacePreference(ctx context.Context, raw json.RawMe
 }
 
 func (s *Service) setMainBackgroundFolded(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	return s.setBoolSetting(ctx, v, s.mainBackgroundFolded, "assistant.main_background_folded is unchanged", func(l i18n.Lang, before, after string) string {
+	return s.setReversibleBoolSetting(ctx, v, true, s.mainBackgroundFolded, "assistant.main_background_folded is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_main_background_folded", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.MainBackgroundFolded },
 		"assistant.main_background_folded is %v; the apps redraw the main conversation with it.")
 }
 
 func (s *Service) setRecentTaskChats(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	return s.setBoolSetting(ctx, v, s.recentTaskChats, "assistant.recent_task_chats is unchanged", func(l i18n.Lang, before, after string) string {
+	return s.setReversibleBoolSetting(ctx, v, false, s.recentTaskChats, "assistant.recent_task_chats is unchanged", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_recent_task_chats", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.RecentTaskChats },
 		"assistant.recent_task_chats is %v; the apps' sidebar Recent follows it on every device.")

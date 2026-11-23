@@ -148,6 +148,35 @@ func TestDefaultPermissionNewConversationInheritance(t *testing.T) {
 	}
 }
 
+func TestDefaultPermissionCustomClaudeLauncherKeepsBypass(t *testing.T) {
+	f := newFakeHub().withMachine()
+	f.zshrc = map[string][]proto.Launcher{"server": {
+		{Name: "custom-claude", Agent: "claude", Source: "zshrc", PermissionModes: proto.PermissionModeSetOf(proto.ModeDefault)},
+		{Name: "custom-runtime", Agent: "paseo", Source: "paseo", Assistant: true, PermissionModes: proto.PermissionModeSetOf(proto.ModeDefault)},
+	}}
+	s := newTestService(t, f)
+	setSettings(t, s, func(v *Settings) { v.DefaultPermissionMode = proto.ModeBypass })
+
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.custom-claude"})
+	sess, err := s.Start(context.Background(), StartParams{Text: "start", Untitled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent := f.sends[len(f.sends)-1]; sent["permission_mode"] != proto.ModeBypass || sess.PermissionMode != proto.ModeBypass {
+		t.Fatalf("custom Claude launcher lost inherited bypass: sent=%v session=%+v", sent, sess)
+	}
+
+	// The mode list remains authoritative for a non-Claude runtime.
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.custom-runtime"})
+	sess, err = s.Start(context.Background(), StartParams{Text: "start", Untitled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent := f.sends[len(f.sends)-1]; sent["permission_mode"] != nil || sess.PermissionMode != "" {
+		t.Fatalf("non-Claude runtime received an undeclared mode: sent=%v session=%+v", sent, sess)
+	}
+}
+
 func TestDefaultPermissionGuestDoesNotInherit(t *testing.T) {
 	f, s, _ := guestService(t)
 	setSettings(t, s, func(v *Settings) { v.DefaultPermissionMode = proto.ModeBypass })

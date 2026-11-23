@@ -264,10 +264,14 @@ func (s *Service) dropQueuedNeeds(todoID string) bool {
 }
 
 // prepareAgentTask records an assistant agent_start before the node is called (#5732). The calling conversation stays
-// its origin; main supervises it regardless of agent_tasks, leader membership or main_tasks_quiet. Quiet only controls
-// notification behavior, never whether the work is tracked. The main conversation gets a card too when it differs.
+// its origin; the calling lead supervises its own work, otherwise main does. Quiet controls notification behavior,
+// never whether the work is tracked. The supervisor also gets a card when it differs from the origin.
 func (s *Service) prepareAgentTask(ctx context.Context, conversation string, m Device, cwd, prompt string, tab any) (Todo, string, bool) {
 	supervisor := s.settings(ctx).Main
+	source := ""
+	if s.isLeader(ctx, conversation) {
+		supervisor, source = conversation, "plan"
+	}
 	tabName, _ := tab.(string)
 	title, retitle := s.taskTitle(ctx, "", prompt)
 	if title == "" {
@@ -282,7 +286,7 @@ func (s *Service) prepareAgentTask(ctx context.Context, conversation string, m D
 		s.nameTodoLater(ctx, todo.ID, title, prompt)
 	}
 	if supervisor != "" {
-		if err := s.superviseTodo(ctx, todo.ID, supervisor, nil, 0); err != nil {
+		if err := s.superviseTodo(ctx, todo.ID, supervisor, nil, 0, source); err != nil {
 			s.dropAdoption(ctx, todo.ID, err)
 			return Todo{}, "", false
 		}
@@ -369,7 +373,7 @@ func noticeAsk(ix proto.Interaction) string {
 			}
 			b.WriteByte('\n')
 		}
-	case terminalQuestion(ix):
+	case supervisedScreen(ix):
 		if title := clip(oneLine(ix.SessionTitle), 70); title != "" {
 			b.WriteString(title + " · ")
 		}

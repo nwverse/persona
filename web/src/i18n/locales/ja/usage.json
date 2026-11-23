@@ -36,5 +36,17 @@
   "balance_unreachable": "DeepSeek に接続できません",
   "balance_unreachable_kept": "DeepSeek に接続できません。前回の残高を表示しています",
   "balance_failed": "残高を読み取れませんでした",
-  "balance_failed_kept": "残高を読み取れませんでした。前回の金額を表示しています"
+  "balance_failed_kept": "残高を読み取れませんでした。前回の金額を表示しています",
+  "provider_accounts": "{count} 件のアカウント",
+  "timeline_now": "今",
+  "timeline_title": "リセットのタイムライン",
+  "protect_flag": "保護 {percent}%",
+  "protect_label": "保護ラインは {percent}%",
+  "pin_account": "{name} をサイドバーに固定",
+  "unpin_account": "{name} のサイドバー固定を解除",
+  "pin_title": "サイドバーに固定",
+  "unpin_title": "固定を解除",
+  "pinned_summary": "サイドバーに {count} 件を固定中",
+  "pinned_fallback": "固定アカウントが利用不可のため自動表示中",
+  "reset_pinned": "自動表示に戻す"
 }
