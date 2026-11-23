@@ -1,6 +1,6 @@
 // The voice call's bar (docs/assistant/voice.md 6.2, docs/web/web.md "Voice"): the composer turned into it in place, in the
 // composer's own shape. Its top row: Mute, the orb (a click while the voice speaks interrupts it: never the agent),
-// what the voice does, ⋯ and End. Under it the line about the bound conversation (lib/voice/bar-line.ts) with its buttons,
+// what the voice does, ⋯ and End. Under it the line about the bound conversation (../bar-line.ts) with its buttons,
 // Stop <agent> among them. Every button is one line; the line's buttons wrap under its words when they do not fit.
 import { useEffect, useRef, useState } from "react";
 import { t } from "../../../i18n";

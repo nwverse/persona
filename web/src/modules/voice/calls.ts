@@ -61,7 +61,7 @@ function setCurrent(next: Current | null) {
   emit();
 }
 
-/** `ui`: the page's own code for a call (its bar, views/chat/voice/VoiceCall.tsx), loaded with the call's: the first call
+/** `ui`: the page's own code for a call (its bar, chat/VoiceCall.tsx), loaded with the call's: the first call
  *  is on only once both are in, so the bar draws at once in the composer's place. */
 type Start = VoiceOwner & { extensionID: string; recent: VoiceLine[]; deps?: VoiceDeps; ui?: () => Promise<unknown> };
 
