@@ -28,9 +28,14 @@ type spaceMDNode struct {
 func spaceMDService(t *testing.T) (*Service, *fakeHub, *spaceMDNode) {
 	t.Helper()
 	s, f := spaceTrackService(t)
-	s.devs = spaceDevs{fleetDevs: newFleetDevs()}
 	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "plain-00-0000", Cwd: "/home/me/.persona/tracks/qa-plain",
 		Assistant: true, Space: "qa-plain", Title: "QA plain", LastText: "budget"})
+	// With devices the manager answers session.get from its own nodes' lists, never the fake hub's: the server's node
+	// lists the same conversations, so selfSpace finds plain-00-0000 in qa-plain.
+	fd := newFleetDevs()
+	fd.add("server", "server").home = "/home/me"
+	fd.setSessions("server", append([]proto.Session(nil), f.sessions["server"]...))
+	s.devs = spaceDevs{fleetDevs: fd}
 	n := &spaceMDNode{content: "# QA plain\n\n" + spaceStateBegin + "\n" + spaceStateEnd + "\n"}
 	digest := func(s string) string { return fmt.Sprint(len(s)) }
 	f.answerNode(assistantwire.DeviceAssistantSpaceMD, func(_ string, raw json.RawMessage) (any, error) {
