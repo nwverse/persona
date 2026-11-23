@@ -271,10 +271,15 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 			}
 			if a.Agent == agyAgent {
+				conversation := agyConversations[id]
+				u, readable := n.agyTranscriptMeta(conversation)
+				if readable {
+					n.applyAgyTurnEvidence(&s, conversation, u.turn)
+				}
 				if hasRuntimeRow {
 					n.resolveAgyContextWindow(&s)
 				} else {
-					n.mergeAgyTranscript(&s, agyConversations[id])
+					n.mergeAgyTranscript(&s, u)
 				}
 			}
 		case otherAgent(a):

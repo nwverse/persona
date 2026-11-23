@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -364,7 +365,7 @@ func (n *Node) resolveAgyContextWindow(s *proto.Session) {
 	s.ContextWindow = proto.Tokens32(n.agyContextWindowFor(s, s.Model, 0, int(s.ContextTokens)))
 }
 
-// agyTranscriptMeta reads (with stat-based LRU caching) the token usage summary of an agy conversation on disk.
+// agyTranscriptMeta reads and caches the token usage and latest turn of an agy conversation on disk.
 func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool) {
 	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
 		return agyTranscriptUsage{}, false
@@ -377,12 +378,12 @@ func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool)
 	defer root.Close()
 	rel := agyTranscriptPath
 	info, err := root.Stat(rel)
-	if err != nil || !info.Mode().IsRegular() {
+	if errors.Is(err, os.ErrNotExist) {
 		rel = agyFullTranscriptPath
-		info, err = root.Stat(rel)
-		if err != nil || !info.Mode().IsRegular() {
-			return agyTranscriptUsage{}, false
-		}
+		info, err = root.Lstat(rel)
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return agyTranscriptUsage{}, false
 	}
 	key := filepath.Join(dir, conversation)
 	n.mu.Lock()
@@ -401,6 +402,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool)
 	raw = raw[:bytes.LastIndexByte(raw, '\n')+1]
 	steps, _ := parseAgySteps(raw, conversation)
 	usage := extractAgyUsage(steps)
+	usage.turn = summarizeAgyTurn(steps)
 
 	n.mu.Lock()
 	if n.agyMetas == nil {
@@ -413,31 +415,26 @@ func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool)
 
 // mergeAgyTranscript populates Session.Model, ContextTokens, ContextWindow, and OutputTokens on a standalone
 // herdr-pane agy session row from its local transcript and resolves ContextWindow from launcher/catalog/model metadata.
-func (n *Node) mergeAgyTranscript(s *proto.Session, conversation string) {
-	if s == nil {
-		return
+func (n *Node) mergeAgyTranscript(s *proto.Session, u agyTranscriptUsage) {
+	if s.Model == "" && u.model != "" {
+		s.Model = u.model
 	}
-	if u, ok := n.agyTranscriptMeta(conversation); ok {
-		if s.Model == "" && u.model != "" {
-			s.Model = u.model
+	if u.outputTokens > 0 {
+		s.OutputTokens = u.outputTokens
+	}
+	switch {
+	case u.contextTokens > 0:
+		s.ContextTokens = proto.Tokens32(u.contextTokens)
+		recorded := u.contextWindow
+		if recorded <= 0 {
+			recorded = int(s.ContextWindow)
 		}
-		if u.outputTokens > 0 {
-			s.OutputTokens = u.outputTokens
-		}
-		switch {
-		case u.contextTokens > 0:
-			s.ContextTokens = proto.Tokens32(u.contextTokens)
-			recorded := u.contextWindow
-			if recorded <= 0 {
-				recorded = int(s.ContextWindow)
-			}
-			model := firstNonEmpty(u.model, s.Model)
-			s.ContextWindow = proto.Tokens32(n.agyContextWindowFor(s, model, recorded, u.contextTokens))
-			return
-		case u.compacted:
-			s.ContextTokens, s.ContextWindow = 0, 0
-			return
-		}
+		model := firstNonEmpty(u.model, s.Model)
+		s.ContextWindow = proto.Tokens32(n.agyContextWindowFor(s, model, recorded, u.contextTokens))
+		return
+	case u.compacted:
+		s.ContextTokens, s.ContextWindow = 0, 0
+		return
 	}
 	n.resolveAgyContextWindow(s)
 }

@@ -108,7 +108,7 @@ func (n *Node) rawAgyConversationLocked(id, pane string) string {
 					return ""
 				}
 				matches++
-			} else if reported == conversation {
+			} else if n.agyPaneClaimsLocked(raw, conversation) {
 				return ""
 			}
 		}
@@ -122,12 +122,19 @@ func (n *Node) rawAgyConversationLocked(id, pane string) string {
 func (n *Node) agyConversationClaimedElsewhereLocked(pane, conversation string) bool {
 	for _, agents := range n.hostAgents {
 		for _, raw := range agents {
-			if raw.PaneID != pane && n.agyReportedLocked(raw) == conversation {
+			if raw.PaneID != pane && n.agyPaneClaimsLocked(raw, conversation) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// A disagreement invalidates the reporting pane's own identity. Both reports still count against other panes so
+// neither conversation is exposed while ownership is contested.
+func (n *Node) agyPaneClaimsLocked(a host.Agent, conversation string) bool {
+	return a.Agent == agyAgent && (reportedAgyConversation(a) == conversation ||
+		n.agyReports[a.PaneID].conversation == conversation)
 }
 
 // isAgySubagentHead reports whether a conversation's opening step indicates a built-in

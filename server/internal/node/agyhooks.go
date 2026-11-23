@@ -16,7 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeclient"
 )
 
-// Persona's own Antigravity CLI hooks (docs/integrations/engines.md "Antigravity CLI panes", #13729), the way Moshi's
+// Persona's own Antigravity CLI hooks (docs/integrations/engines.md, #13729), the way Moshi's
 // hook does it: two report-only entries in agy's global hooks file (PreInvocation names the conversation a pane is in,
 // Stop ends a turn) that tell the node which conversation runs in which terminal. The pane comes from the
 // environment the engine gave the process (nodeclient.HookPane), so this works under any engine and without herdr's
@@ -214,10 +214,13 @@ func AgyHooksCommand(args []string, out interface{ Write([]byte) (int, error) })
 
 // agyHookReport is what a pane's last agy hook said.
 type agyHookReport struct {
-	conversation string
-	path         string
-	event        string
-	at           time.Time
+	conversation    string
+	path            string
+	event           string
+	at              time.Time
+	promptDigest    string
+	invocationSteps int
+	settled         bool
 }
 
 // agyReportBytes bounds one report's input; the fields are a few hundred bytes.
@@ -244,8 +247,8 @@ func (n *Node) agyHookKind(req sockRequest) map[string]any {
 	if len(req.Input) > agyReportBytes || json.Unmarshal(req.Input, &rep) != nil || req.Pane == "" {
 		return map[string]any{"ok": false}
 	}
-	rep, ok := nodeclient.ParseAgyReport(rep.Event, agyReportInput(rep))
-	if !ok || rep.TranscriptPath != "" && !pathUnder(n.agyDataRoot(), rep.TranscriptPath) {
+	identity, ok := nodeclient.ParseAgyReport(rep.Event, agyReportInput(rep))
+	if !ok || identity.TranscriptPath != "" && !pathUnder(n.agyDataRoot(), identity.TranscriptPath) {
 		return map[string]any{"ok": false}
 	}
 	n.mu.Lock()
@@ -253,9 +256,19 @@ func (n *Node) agyHookKind(req sockRequest) map[string]any {
 		n.agyReports = map[string]agyHookReport{}
 	}
 	prev := n.agyReports[req.Pane]
-	n.agyReports[req.Pane] = agyHookReport{conversation: rep.Conversation, path: rep.TranscriptPath, event: rep.Event, at: time.Now()}
+	next := agyHookReport{conversation: identity.Conversation, path: identity.TranscriptPath, event: identity.Event, at: time.Now(),
+		promptDigest: rep.PromptDigest}
+	if next.event == "PreInvocation" {
+		next.invocationSteps = rep.InvocationSteps
+	} else if next.conversation == prev.conversation && next.promptDigest != "" && next.promptDigest == prev.promptDigest {
+		// Stop carries no step count. Keep the current invocation's position so a later repetition of the same
+		// prompt cannot inherit this completion.
+		next.invocationSteps, next.settled = prev.invocationSteps, rep.Settled
+	}
+	n.agyReports[req.Pane] = next
 	n.mu.Unlock()
-	if prev.conversation != rep.Conversation { // the row's conversation changed: the next list says it
+	if prev.conversation != next.conversation || prev.event != next.event || prev.promptDigest != next.promptDigest ||
+		prev.invocationSteps != next.invocationSteps || prev.settled != next.settled {
 		if sig, ok := n.watcherSignal(host.ParsePane(req.Pane).Kind); ok {
 			sig.poke(false)
 		}

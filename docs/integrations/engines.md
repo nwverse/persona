@@ -143,6 +143,11 @@ dropped when its pane no longer runs agy. A pane is only readable under an engin
 `personad node agy-hooks [status|install|uninstall]` manages the entries; `uninstall` also tells the node not to put
 them back.
 
+Assistant's `agent_read` and `agents_list` show an AGY pane's working or finished turn only when a native hook matches
+the current input in its verified transcript. A successful idle `Stop` must also have a completed reply. The list
+gets its preview from the bound transcript. Terminal controls still use the engine's status, including the window
+between typing a prompt and AGY taking it.
+
 Orca's native Claude chats (structured, no terminal) connect through node's bridge: list, state, send text / images, interrupt, close,
 answer approvals / questions, change permission / thinking (no plan mode); no screen reads, keys, or live terminal. Chats appear only after their first message;
 Codex chats not listed in this version. See `docs/plans/plan-orca-support.md` ("Structured sessions").

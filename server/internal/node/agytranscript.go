@@ -86,6 +86,7 @@ type agyTranscriptUsage struct {
 	turns         int
 	compacted     bool
 	hasUsage      bool
+	turn          agyTurnEvidence
 }
 
 type agyHistory struct {
