@@ -11,6 +11,8 @@ PERSONA_HOME) is read. The hub starts the persona-manager beside it, as an insta
 - every extension program a module provides (builtinext.AddProgram in server/internal/modules/all) is an unknown
   subcommand of personad and persona-manager (usage, exit 2), its built-in extension is not in /api/v1/extensions, and
   that extension's route (/api/v1/extensions/<id>/-/assistant-data) answers 404;
+- every connector a module registers on every hub (its port provided in server/internal/modules/all, ALWAYS_CONNECTORS)
+  is not in /api/v1/connectors?all=1, and its route (/api/v1/connectors/<id>/auth) answers 404;
 - SIGTERM stops the hub and the manager within the timeout, exit 0.
 
 --full runs the same against a default build and expects the opposite (every module loaded, the programs, extensions
@@ -58,6 +60,23 @@ def module_programs():
             continue
         names += re.findall(r'builtinext\.AddProgram\(\s*"([^"]+)"', path.read_text())
     return names
+
+
+# The connector modules whose connector the manager registers on every hub, unconfigured too: the port the composition
+# root provides (server/internal/modules/all) and the connector's id.
+ALWAYS_CONNECTORS = {"githubport": "github"}
+
+
+def module_connectors():
+    """The always-registered connectors the built-in modules provide: <port>.Provide(…) in modules/all."""
+    found = set()
+    for path in sorted((SERVER / "internal/modules/all").glob("*.go")):
+        if path.name.endswith("_test.go"):
+            continue
+        for port in re.findall(r"\b(\w+port)\.Provide\(", path.read_text()):
+            if port in ALWAYS_CONNECTORS:
+                found.add(ALWAYS_CONNECTORS[port])
+    return sorted(found)
 
 
 def free_port():
@@ -158,6 +177,7 @@ def main():
     started = time.monotonic()
     try:
         programs = module_programs()
+        connectors = module_connectors()
         build("" if a.full else "persona_core_only", bindir)
         print(f"built {', '.join(PROGRAMS)} ({kind}) in {time.monotonic() - started:.0f}s", flush=True)
         subcommands(bindir, a.full, programs)
@@ -200,6 +220,13 @@ def main():
             check((name in extensions) == a.full, f"extension {name} {'missing' if a.full else 'present'}: {sorted(extensions)}")
             status, _ = http(f"{base}/api/v1/extensions/{name}/-/assistant-data", token)
             check(status == (200 if a.full else 404), f"/api/v1/extensions/{name}/-/assistant-data: {status}")
+        status, body = http(base + "/api/v1/connectors?all=1", token)
+        check(status == 200, f"/api/v1/connectors: {status}")
+        listed = {c["id"] for c in json.loads(body).get("connectors") or []}
+        for name in connectors:
+            check((name in listed) == a.full, f"connector {name} {'missing' if a.full else 'present'}: {sorted(listed)}")
+            status, _ = http(f"{base}/api/v1/connectors/{name}/auth", token)
+            check(status == (200 if a.full else 404), f"/api/v1/connectors/{name}/auth: {status}")
         os.killpg(hub.pid, signal.SIGTERM)
         try:
             code = hub.wait(60)
@@ -210,7 +237,8 @@ def main():
         check(not left, f"processes left after shutdown: {left}")
         hub = None
         print(f"PASS {kind} smoke: built, hub healthy, modules loaded: {loaded}, module programs "
-              f"{'present' if a.full else 'absent'} ({', '.join(programs) or 'none'}), clean shutdown "
+              f"{'present' if a.full else 'absent'} ({', '.join(programs) or 'none'}), module connectors "
+              f"{'present' if a.full else 'absent'} ({', '.join(connectors) or 'none'}), clean shutdown "
               f"({time.monotonic() - started:.0f}s)")
         return 0
     except (Failed, TimedOut) as e:

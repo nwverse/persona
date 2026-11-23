@@ -16,6 +16,7 @@ import (
 )
 
 func TestLarkReplyAppCallUsesBoundReadOnlyProvider(t *testing.T) {
+	needsLarkModule(t)
 	now := time.Now().UTC()
 	request := map[string]any{
 		"message_id": "om_request", "msg_type": "text", "create_time": now.Add(-time.Hour).Format(time.RFC3339),

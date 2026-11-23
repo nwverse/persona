@@ -11,6 +11,7 @@ import (
 
 // The event content follows the documented received post shape, not the language-keyed send shape.
 func TestPostAdjacentMentionCommandHandoff(t *testing.T) {
+	needsLarkModule(t)
 	for _, command := range []string{"/read", "/ai"} {
 		t.Run(command, func(t *testing.T) {
 			w := newBotWorld(t)
@@ -44,6 +45,7 @@ func containsFrom(raw json.RawMessage, want string) bool {
 }
 
 func TestPostCommandAdmissionPolicies(t *testing.T) {
+	needsLarkModule(t)
 	otherAt := []map[string]any{{"key": "@_user_10", "name": "Persona", "id": map[string]any{"open_id": "ou_other"}}}
 	bothAt := append(append([]map[string]any{}, otherAt...), atBot...)
 	for _, command := range []string{"/read", "/ai"} {
@@ -159,6 +161,7 @@ func TestPostCommandAdmissionPolicies(t *testing.T) {
 func textJSON(s string) string { raw, _ := json.Marshal(s); return string(raw) }
 
 func TestPostCommandUnknownBotIdentityIsDenied(t *testing.T) {
+	needsLarkModule(t)
 	for _, command := range []string{"/read", "/ai"} {
 		t.Run(command, func(t *testing.T) {
 			w := newBotWorld(t)
