@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -52,7 +52,7 @@ func TestPauseOutlastsGoodAnswers(t *testing.T) {
 	if !c.ratesLow() {
 		t.Fatal("a good answer lifted the pause")
 	}
-	if st := c.Status(context.Background()); st.State != connector.StateRateLimited || !strings.Contains(st.Error, "约 10 分钟") {
+	if st := c.Status(context.Background()); st.State != connectorwire.StateRateLimited || !strings.Contains(st.Error, "约 10 分钟") {
 		t.Fatalf("%+v", st)
 	}
 	if reset := c.PRChecksRateReset(); reset.Before(time.Now().Add(9 * time.Minute)) {
@@ -72,7 +72,7 @@ func TestPauseOutlastsGoodAnswers(t *testing.T) {
 	if c.ratesLow() || !c.PRChecksRateReset().IsZero() {
 		t.Fatal("still paused after the pause ended")
 	}
-	if st := c.Status(context.Background()); st.State != connector.StateOK {
+	if st := c.Status(context.Background()); st.State != connectorwire.StateOK {
 		t.Fatalf("%+v", st)
 	}
 }
@@ -113,7 +113,7 @@ func TestPrimaryQuotaBesidePause(t *testing.T) {
 	if got := c.PRChecksRateReset(); got.Unix() != reset.Unix() {
 		t.Fatalf("resume at %v, not at the quota's reset %v", got, reset)
 	}
-	if st := c.Status(context.Background()); st.State != connector.StateRateLimited || !strings.Contains(st.Error, "约 1 分钟内不读取任何内容") {
+	if st := c.Status(context.Background()); st.State != connectorwire.StateRateLimited || !strings.Contains(st.Error, "约 1 分钟内不读取任何内容") {
 		t.Fatalf("%+v", st)
 	}
 	quota("4900", reset)
@@ -281,13 +281,13 @@ func TestRateStatusLocalization(t *testing.T) {
 				}
 				st := c.Status(i18n.With(context.Background(), lang))
 				if tc.key == "" {
-					if st.State != connector.StateOK || st.Error != "" {
+					if st.State != connectorwire.StateOK || st.Error != "" {
 						t.Fatalf("%+v", st)
 					}
 					return
 				}
 				want := i18n.T(lang, "hub-connectors."+tc.key, i18n.Args{"minutes": tc.minutes})
-				if st.State != connector.StateRateLimited || st.Error != want {
+				if st.State != connectorwire.StateRateLimited || st.Error != want {
 					t.Fatalf("got %+v, want %q", st, want)
 				}
 			})

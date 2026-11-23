@@ -43,34 +43,44 @@ public struct ModuleRegistrar<Host: ModuleHost> {
     }
 }
 
-/// The active modules and their entries, built once from the app's module list. A module is active when it is in the
-/// list and `isEnabled` says so; an inactive module registers nothing, so it leaves no row, no handler and no hook.
+/// The active modules and their entries, built from the app's module list. A module is active when it is in the list,
+/// `isEnabled` says so and the hub allows it (`HubModules`); an inactive module registers nothing, so it leaves no row,
+/// no handler and no hook. When the hub's answer changes the app builds the registry again (`rebuilt(hub:)`).
 ///
-/// Lookups are plain array reads over what was built at launch: cheap and stable enough to call from `body`
+/// Lookups are plain array reads over what was built: cheap and stable enough to call from `body`
 /// (docs/apple/performance.md, P4 / P5). The registry is a value with no observable state.
 @MainActor
 public struct ModuleRegistry<Host: ModuleHost> {
     /// The active modules' descriptors, in list order.
     public let active: [ModuleDescriptor]
+    /// Modules listed and enabled that the hub turned off (`HubModules.allows`), in list order.
+    public let offByHub: [ModuleID]
+    /// The hub answer this registry was built with.
+    public let hub: HubModules
     /// Every composer action of the active modules, in list order, then registration order.
     public let composerActions: [ComposerAction<Host>]
     /// Registrations that were refused: an undeclared slot, a duplicate module id or composer action id, a composer
     /// action id the core uses itself, a malformed id. Empty in a correct build; the app asserts it in DEBUG and the tests check it.
     public let problems: [String]
-    private let launchHooks: [() -> Void]
+    private let launchHooks: [(ModuleID, () -> Void)]
     private let urlHandlers: [(URL) -> Bool]
+    private let modules: [any PersonaModule<Host>]
+    private let isEnabled: @MainActor (any PersonaModule<Host>) -> Bool
+
+    /// The composer's own attach source ids (photos, the camera, files, voice): a module's composer action may not take one.
+    public static var coreComposerIDs: Set<String> { ["photo", "camera", "file", "voice"] }
 
     /// - Parameters:
     ///   - modules: the module list, in the order entries should appear.
     ///   - isEnabled: whether a listed module is switched on. The default takes every module built into this binary.
-    /// The composer's own attach source ids (photos, the camera, files, voice): a module's composer action may not take one.
-    public static var coreComposerIDs: Set<String> { ["photo", "camera", "file", "voice"] }
-
-    public init(modules: [any PersonaModule<Host>], isEnabled: @MainActor (any PersonaModule<Host>) -> Bool = { $0.isAvailable }) {
+    ///   - hub: what the hub says about its modules; the default (an older hub, or none heard) allows every module.
+    public init(modules: [any PersonaModule<Host>], isEnabled: @escaping @MainActor (any PersonaModule<Host>) -> Bool = { $0.isAvailable },
+                hub: HubModules = .everyOn) {
         var active: [ModuleDescriptor] = []
+        var offByHub: [ModuleID] = []
         var actions: [ComposerAction<Host>] = []
         var problems: [String] = []
-        var hooks: [() -> Void] = []
+        var hooks: [(ModuleID, () -> Void)] = []
         var handlers: [(URL) -> Bool] = []
         var seen = Set<ModuleID>()
         var actionIDs = Set<String>()
@@ -84,7 +94,14 @@ public struct ModuleRegistry<Host: ModuleHost> {
                 problems.append("\(descriptor.id): listed twice")
                 continue
             }
+            if let feature = descriptor.feature, feature != ModuleDescriptor.hubFeature(for: descriptor.id) {
+                problems.append("\(descriptor.id): feature \(feature) is not \(ModuleDescriptor.hubFeature(for: descriptor.id))")
+            }
             guard isEnabled(module) else { continue }
+            guard hub.allows(descriptor) else {
+                offByHub.append(descriptor.id)
+                continue
+            }
             var registrar = ModuleRegistrar<Host>(module: descriptor)
             module.register(into: &registrar)
             problems += registrar.problems
@@ -97,23 +114,36 @@ public struct ModuleRegistry<Host: ModuleHost> {
                     problems.append("\(descriptor.id): composer action \(action.id) is already taken")
                 }
             }
-            hooks += registrar.launchHooks
+            hooks += registrar.launchHooks.map { (descriptor.id, $0) }
             handlers += registrar.urlHandlers
             active.append(descriptor)
         }
         self.active = active
+        self.offByHub = offByHub
+        self.hub = hub
         self.composerActions = actions
         self.problems = problems
         self.launchHooks = hooks
         self.urlHandlers = handlers
+        self.modules = modules
+        self.isEnabled = isEnabled
+    }
+
+    /// The same list and switch with another hub answer: what the app builds when a hello changes it.
+    public func rebuilt(hub: HubModules) -> ModuleRegistry {
+        ModuleRegistry(modules: modules, isEnabled: isEnabled, hub: hub)
     }
 
     /// The module is in the list and switched on.
     public func isActive(_ id: ModuleID) -> Bool { active.contains { $0.id == id } }
 
-    /// Runs the active modules' launch hooks, in list order. Call once, at launch.
-    public func launch() {
-        for hook in launchHooks { hook() }
+    /// Runs the launch hooks of the active modules not in `done`, in list order, and returns the modules whose hooks
+    /// have now run (`done` included). Call it at launch with nothing done, and again after a rebuild so a module the
+    /// hub turned on later is set up once; a module turned off keeps what its hook set up and registers nothing.
+    @discardableResult
+    public func launch(after done: Set<ModuleID> = []) -> Set<ModuleID> {
+        for (id, hook) in launchHooks where !done.contains(id) { hook() }
+        return done.union(active.map(\.id))
     }
 
     /// Offers a URL to the active modules in list order; true when one took it.

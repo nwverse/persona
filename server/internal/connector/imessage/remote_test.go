@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // node answers the connector's calls the way a Mac's node would, from list (connector.list) or with err.
@@ -36,17 +36,17 @@ func TestRemoteStatus(t *testing.T) {
 	ctx := context.Background()
 	n := &node{list: `{"connectors":[{"id":"imessage","status":"ok","via":"ssh"}]}`}
 	c := NewRemote(Config{Machine: "m1"}, "示例 Mac", n.call)
-	if st := c.Status(ctx); st.State == connector.StateOK {
+	if st := c.Status(ctx); st.State == connectorwire.StateOK {
 		t.Fatal("ok before asking")
 	}
 	c.Check(ctx)
-	if st := c.Status(ctx); st.State != connector.StateOK || st.Account != "示例 Mac" || st.Via != "示例 Mac 上的「信息」" || st.LastSync.IsZero() {
+	if st := c.Status(ctx); st.State != connectorwire.StateOK || st.Account != "示例 Mac" || st.Via != "示例 Mac 上的「信息」" || st.LastSync.IsZero() {
 		t.Errorf("ok: %+v", st)
 	}
 
 	n.list = `{"connectors":[{"id":"imessage","status":"no_permission","error":"macOS 不让 Persona 读","guide":["一","二","三"],"via":"launchd"}]}`
 	c.Check(ctx)
-	if d := c.Detail(ctx); d.Status != connector.StateNoPermission || len(d.Guide) != 3 || d.Via != "launchd" || d.Machine != "示例 Mac" {
+	if d := c.Detail(ctx); d.Status != connectorwire.StateNoPermission || len(d.Guide) != 3 || d.Via != "launchd" || d.Machine != "示例 Mac" {
 		t.Errorf("no permission: %+v", d)
 	}
 
@@ -57,7 +57,7 @@ func TestRemoteStatus(t *testing.T) {
 	} {
 		n.err = err
 		c.Check(ctx)
-		if st := c.Status(ctx); st.State != connector.StateError || st.Error != want {
+		if st := c.Status(ctx); st.State != connectorwire.StateError || st.Error != want {
 			t.Errorf("%v: %+v", err, st)
 		}
 		if d := c.Detail(ctx); len(d.Guide) != 0 {
@@ -66,7 +66,7 @@ func TestRemoteStatus(t *testing.T) {
 	}
 	n.err, n.list = nil, `{"connectors":[]}`
 	c.Check(ctx)
-	if st := c.Status(ctx); st.State != connector.StateNotConfigured {
+	if st := c.Status(ctx); st.State != connectorwire.StateNotConfigured {
 		t.Errorf("not a Mac: %+v", st)
 	}
 	// The assistant reads the messages only while they are handed to Persona.

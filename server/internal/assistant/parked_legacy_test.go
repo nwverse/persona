@@ -250,6 +250,9 @@ func TestLegacyOwnerPriorityPreservesOwnerDecisions(t *testing.T) {
 		t.Run(when, func(t *testing.T) {
 			database := &ledgerDown{DB: taskRecoveryDatabase(t)}
 			s, _, task := newSupervisedServiceOn(t, database)
+			// Nothing is told before the restart: the settle loop below counts only the restarted manager's messages.
+			// park_decided is immediate, so holdDigest alone does not keep it in (#13987).
+			quietDigest(s)
 			holdDigest(s)
 			ctx := context.Background()
 			legacyOwnerPark(t, s, task.ID)

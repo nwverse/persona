@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -72,10 +72,10 @@ func parseWrite(name string, args json.RawMessage) (writeArgs, error) {
 
 // Describe is the phone's card: the action, the PR / issue (with its title when GitHub answers quickly), the full
 // text. Arguments it cannot read are listed as they are.
-func (c *Connector) Describe(ctx context.Context, name string, args json.RawMessage) (connector.Action, string, error) {
+func (c *Connector) Describe(ctx context.Context, name string, args json.RawMessage) (connectorwire.Action, string, error) {
 	a, err := parseWrite(name, args)
 	if err != nil {
-		return connector.Action{Name: name}, name + " " + string(args), nil
+		return connectorwire.Action{Name: name}, name + " " + string(args), nil
 	}
 	where := a.ref()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -86,7 +86,7 @@ func (c *Connector) Describe(ctx context.Context, name string, args json.RawMess
 	if _, err := c.Get(ctx, fmt.Sprintf("/repos/%s/issues/%d", a.Repo, a.Number), &it); err == nil && it.Title != "" {
 		where += "「" + it.Title + "」"
 	}
-	act := connector.Action{Name: name, Visible: a.Repo + " 仓库能看到的所有人（公开仓库是所有人）"}
+	act := connectorwire.Action{Name: name, Visible: a.Repo + " 仓库能看到的所有人（公开仓库是所有人）"}
 	var head string
 	switch {
 	case name == "github_comment":
@@ -110,15 +110,15 @@ func (c *Connector) Do(ctx context.Context, name string, args json.RawMessage) (
 	return done.Text, err
 }
 
-var _ connector.RefActions = (*Connector)(nil)
+var _ connectorwire.RefActions = (*Connector)(nil)
 
-// DoRef is Do with the id GitHub gave what it posted (connector.RefActions): the comment's id for github_comment, the
+// DoRef is Do with the id GitHub gave what it posted (connectorwire.RefActions): the comment's id for github_comment, the
 // review's for github_review, as GitHub's answer has it, in decimal. A comment and a review are different resources
 // with numberings of their own, so the id alone does not say which: the action does.
-func (c *Connector) DoRef(ctx context.Context, name string, args json.RawMessage) (connector.DoResult, error) {
+func (c *Connector) DoRef(ctx context.Context, name string, args json.RawMessage) (connectorwire.DoResult, error) {
 	a, err := parseWrite(name, args)
 	if err != nil {
-		return connector.DoResult{}, err
+		return connectorwire.DoResult{}, err
 	}
 	// The id is read after the post went out and must never turn it into a failure (the model would post it again), so
 	// it is taken as it comes and read below, whatever it is.
@@ -131,7 +131,7 @@ func (c *Connector) DoRef(ctx context.Context, name string, args json.RawMessage
 	case "github_comment":
 		body, _ := json.Marshal(map[string]string{"body": a.Body})
 		if _, _, err := c.request(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/issues/%d/comments", a.Repo, a.Number), nil, body, &out); err != nil {
-			return connector.DoResult{}, err
+			return connectorwire.DoResult{}, err
 		}
 		c.forget(a.Repo, a.Number)
 		text = "Commented on " + a.ref() + ": " + out.HTMLURL
@@ -142,14 +142,14 @@ func (c *Connector) DoRef(ctx context.Context, name string, args json.RawMessage
 		}
 		body, _ := json.Marshal(req)
 		if _, _, err := c.request(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/pulls/%d/reviews", a.Repo, a.Number), nil, body, &out); err != nil {
-			return connector.DoResult{}, err
+			return connectorwire.DoResult{}, err
 		}
 		c.forget(a.Repo, a.Number)
 		text = "Review (" + a.Event + ") submitted on " + a.ref() + ": " + out.HTMLURL
 	default:
-		return connector.DoResult{}, fmt.Errorf("unknown tool %s", name)
+		return connectorwire.DoResult{}, fmt.Errorf("unknown tool %s", name)
 	}
-	return connector.DoResult{Text: text, MessageRef: wholeID(out.ID)}, nil
+	return connectorwire.DoResult{Text: text, MessageRef: wholeID(out.ID)}, nil
 }
 
 // wholeID is an id GitHub answered as a positive whole number, in decimal; "" for anything else (none, a string, a
