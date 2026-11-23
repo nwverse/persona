@@ -2,6 +2,7 @@ package node
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -126,5 +127,28 @@ func TestClaudeStreamUsageHonoursTheOffSwitch(t *testing.T) {
 	n.claudeStreamUsage("claude", "", claudeRateLimitLine(now, 0.12, 0.03), now)
 	if snap := n.usageSnapshot(); !snap.Enabled || len(snap.Accounts) != 1 || snap.Accounts[0].Windows[0].UsedPercent != 12 {
 		t.Fatalf("collection on: %+v", snap)
+	}
+}
+
+// The conversation reader hands a rate_limit_event among the stream's other lines to the usage collector: a reply in a
+// Claude assistant conversation updates the windows of its launcher and config directory choice (#12855).
+func TestReadAssistantFeedsClaudeStreamUsage(t *testing.T) {
+	n := assistantNode(t)
+	n.dir = t.TempDir()
+	now := time.Now().Truncate(time.Second)
+	p := &assistantProc{id: "11111111-2222-3333-4444-555555555555", launcher: "claude-work", model: modelExecution{ConfigDir: "private"}}
+	n.readAssistant(p, strings.NewReader(strings.Join([]string{
+		`{"type":"stream_event","event":{"type":"message_start"}}`,
+		string(claudeRateLimitLine(now, 0.42, 0.07)),
+		`{"type":"result","subtype":"success"}`,
+	}, "\n")+"\n"))
+	n.usageWin.mu.Lock()
+	a, ok := n.usageWin.accounts[claudeStreamUsageKey("claude-work", "private")]
+	n.usageWin.mu.Unlock()
+	if !ok || len(a.Windows) != 2 || a.Windows[0].UsedPercent != 42 || a.Windows[1].UsedPercent != 7 {
+		t.Fatalf("the stream's rate_limit_event did not reach the usage windows: %+v %v", a, ok)
+	}
+	if snap := n.usageSnapshot(); !snap.Enabled || len(snap.Accounts) != 1 {
+		t.Fatalf("snapshot: %+v", snap)
 	}
 }
