@@ -547,7 +547,7 @@ func TestOutboundPromiseDefiniteRejectionDoesNotRequireReadback(t *testing.T) {
 				})
 				sendOutwardBot(t, s, run, text)
 			} else {
-				reply := outwardReply{ID: "rejected-inbox", Topic: "example/topic", URL: "https://example.com/topic", Text: text}
+				reply := outboundReply{ID: "rejected-inbox", Topic: "example/topic", URL: "https://example.com/topic", Text: text}
 				refused := &rpc.Error{Code: assistantwire.CodeInboxSendDenied}
 				if err := s.deliverOutbound(ctx, reply, func() error { return refused }); !errors.Is(err, refused) {
 					t.Fatalf("send did not preserve its rejection: %v", err)
@@ -566,7 +566,7 @@ func TestOutboundPromiseLaterRefusalKeepsEarlierUncertainSend(t *testing.T) {
 	ctx := context.Background()
 	st := &memStore{}
 	s, _, _, _ := outwardBot(t, st)
-	r := outwardReply{ID: "same-send", Topic: "example/topic", URL: "https://example.com/topic", Text: "I'll share the results later."}
+	r := outboundReply{ID: "same-send", Topic: "example/topic", URL: "https://example.com/topic", Text: "I'll share the results later."}
 	doubt := &rpc.Error{Code: assistantwire.CodeAssistantInDoubt}
 	refused := &rpc.Error{Code: assistantwire.CodeInboxSendDenied}
 	for _, result := range []error{doubt, refused} {
