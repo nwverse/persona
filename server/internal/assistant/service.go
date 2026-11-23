@@ -218,6 +218,7 @@ type Service struct {
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	convSpaces           convSpaceBook          // conversation_space.go
 	trackReg             trackRegistry          // track_registry.go
+	spaceRecs            spaceRecordingBook     // space_recordings.go
 	infoTags             infoTagCache           // info_tag.go
 	infoTagWaiting       infoTagPending         // info_use.go
 	spaceFill            spaceBackfill          // conversation_space_backfill.go

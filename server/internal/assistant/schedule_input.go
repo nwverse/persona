@@ -82,6 +82,9 @@ func (s *Service) taskInputContext(ctx context.Context, raw map[string]json.RawM
 			}
 		}
 	}
+	if err := readTopicPolicy(raw, &t); err != nil {
+		return taskInputTarget{}, err
+	}
 	_, hasCron := raw["cron"]
 	keepLegacyCronRule(previous, &t, hasCron)
 	isolateScheduledConversation(&t, s.mayBeMainNow(ctx))
