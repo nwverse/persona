@@ -73,7 +73,6 @@ import java.time.OffsetDateTime
 import androidx.annotation.StringRes
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.clearAndSetSemantics
 
 /** Timeline lines shown before "Show all", related entries of one kind before "All" (as iOS and the old app). */
 private const val LOG_SHOWN = 6

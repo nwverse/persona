@@ -865,6 +865,8 @@ func (msg relayMsg) source() *proto.MessageSource {
 		return &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: msg.From, Title: msg.FromTitle}
 	case superviseTool:
 		return &proto.MessageSource{Kind: proto.SourceSupervision}
+	case prFollowupTool, taskEndTool, relayRefusedTool, spawnNoticeTool, chatReplyTool:
+		return &proto.MessageSource{Kind: proto.SourceNotice, Title: "Persona"}
 	default:
 		return nil
 	}
@@ -900,7 +902,7 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
 	}
-	s.availInput(machine, to, relayKind(msg), time.Now()) // a notice has no message source of its own
+	s.availInput(machine, to, relayKind(msg), time.Now())
 	if msg.Tool == superviseTool {
 		// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
 		s.holdPushes(ctx, to)
