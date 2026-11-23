@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -325,5 +328,55 @@ func TestAgyBridgeJSRuntimeRequiresSQLite(t *testing.T) {
 	js, err := findAgyJSRuntime(context.Background())
 	if err != nil || js.Path != withSQLite {
 		t.Fatalf("findAgyJSRuntime = %+v, %v; want %s", js, err, withSQLite)
+	}
+}
+
+func TestAgyProviderEnvFromManagedLauncher(t *testing.T) {
+	n := &Node{}
+	n.setCatalog([]proto.ManagedLauncher{
+		{Name: "claude-gw", APIKey: "claude-key"},
+		{Name: "b-agy", Agent: "agy", BaseURL: "https://gateway.example.com", APIKey: "key-b"},
+		{Name: "a-agy", Agent: "agy", BaseURL: "https://gateway.example.com", APIKey: "key-a"},
+		{Name: "agy-signin", Agent: "agy"},
+	})
+	env := n.agyProviderEnv()
+	want := []string{"GOOGLE_GEMINI_BASE_URL=https://gateway.example.com", "GEMINI_API_KEY=key-a", "PERSONA_AGY_MODEL_PROVIDER=gemini"}
+	if !slices.Equal(env, want) {
+		t.Fatalf("provider env = %v, want %v", env, want)
+	}
+	n.setCatalog([]proto.ManagedLauncher{{Name: "agy-signin", Agent: "agy"}, {Name: "claude-gw", APIKey: "claude-key"}})
+	if env := n.agyProviderEnv(); env != nil {
+		t.Fatalf("a launcher without a key gives no provider, got %v", env)
+	}
+}
+
+func TestAgyBridgeRestartsWhenTheProviderChanges(t *testing.T) {
+	oldFind, oldCmd := findAgyExecutable, agyBridgeCommand
+	t.Cleanup(func() { findAgyExecutable, agyBridgeCommand = oldFind, oldCmd })
+	findAgyExecutable = func() string { return "agy" }
+	envs := make(chan []string, 4)
+	agyBridgeCommand = func(_ context.Context, rh *RuntimeHost, _, _ string) (*exec.Cmd, error) {
+		envs <- rh.agyProviderEnv()
+		return exec.Command("sleep", "30"), nil
+	}
+	host := NewRuntimeHost("test", filepath.Join(t.TempDir(), "runtime.sock"))
+	host.logger = log.New(io.Discard, "", 0)
+	host.setAgyBridge(true)
+	defer host.setAgyBridge(false)
+	next := func() []string {
+		select {
+		case env := <-envs:
+			return env
+		case <-time.After(10 * time.Second):
+			t.Fatal("the companion was not (re)started")
+			return nil
+		}
+	}
+	if got := next(); got != nil {
+		t.Fatalf("first start had provider env %v", got)
+	}
+	host.setAgyProviderEnv([]string{"GEMINI_API_KEY=k", "PERSONA_AGY_MODEL_PROVIDER=gemini"})
+	if got := next(); len(got) != 2 {
+		t.Fatalf("restart did not carry the provider env: %v", got)
 	}
 }
