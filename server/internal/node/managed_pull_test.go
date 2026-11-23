@@ -188,19 +188,16 @@ func TestOnDemandAgyProviderIsPulledForTheCompanion(t *testing.T) {
 	withPullHub(t, n, h)
 	entry := proto.ManagedLauncher{Name: "agy-gw", Agent: "agy", BaseURL: "https://gw.example.com", Model: "m1", Delivery: proto.DeliveryOnDemand, Rev: "r1"}
 	n.setCatalog([]proto.ManagedLauncher{entry.Public()})
-	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(strings.Join(n.agyProviderEnv(), "\n"), "GEMINI_API_KEY=agy-pulled-key") {
-		if time.Now().After(deadline) {
-			t.Fatalf("an on-demand agy provider never reached the companion's env: %v (pulled %d times)", n.agyProviderEnv(), h.count())
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitFor(t, "an on-demand agy provider to reach the companion's env", func() bool {
+		return strings.Contains(strings.Join(n.agyProviderEnv(), "\n"), "GEMINI_API_KEY=agy-pulled-key")
+	})
 	// A Claude provider on demand still waits for a start.
 	other := &Node{bin: "/usr/local/bin/personad"}
 	h2 := &pullHub{answer: func(name string) (any, error) { return nil, errors.New("not expected") }}
 	withPullHub(t, other, h2)
+	// setCatalog starts a pull only for what it prefetches, on a goroutine it starts before returning: none started
+	// means none can come later, so the count is read at once.
 	other.setCatalog([]proto.ManagedLauncher{{Name: "box", Model: "m1", Delivery: proto.DeliveryOnDemand, Withheld: true, Rev: "1"}})
-	time.Sleep(100 * time.Millisecond)
 	if h2.count() != 0 {
 		t.Fatalf("an on-demand Claude provider was pulled ahead (%d)", h2.count())
 	}
