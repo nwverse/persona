@@ -224,6 +224,28 @@ func TestBriefingListsADecisionThatWaited(t *testing.T) {
 	}
 }
 
+// A held decision whose briefing is switched off stays held and is not pushed (11-23): Needs you is where the owner
+// answers it then, as with no briefing from the start.
+func TestHeldDecisionStaysHeldWhenItsBriefingIsSwitchedOff(t *testing.T) {
+	s, f, todo, posts, _ := conclusionService(t, false)
+	briefingOn(s, true)
+	waitsForReview(t, s, f, todo.ID, "两种走法。")
+	reviewTask(t, s, todo.ID, waitingDecision())
+	s.accept.mu.Lock()
+	s.accept.asks[todo.ID].Deadline = time.Time{}
+	s.accept.mu.Unlock()
+	briefingOn(s, false)
+	for _, later := range []time.Duration{time.Minute, 25 * time.Hour} {
+		s.sweepWaitingDecisions(time.Now().Add(later))
+	}
+	if a := askOf(s, todo.ID); a == nil || !a.ForBriefing || deadlinePushes(f, todo.ID) != 0 {
+		t.Fatalf("pushed or no longer held: %+v", a)
+	}
+	if cards := cardsWith(posts(), rolloutReason); len(cards) != 0 {
+		t.Fatalf("a card went out: %q", cards)
+	}
+}
+
 // A held decision no briefing will list is pushed after all, once, with its card: the routine was switched off, or
 // none ran within 24 hours.
 func TestHeldDecisionIsPushedWhenNoBriefingListsIt(t *testing.T) {
@@ -232,7 +254,6 @@ func TestHeldDecisionIsPushedWhenNoBriefingListsIt(t *testing.T) {
 		off   bool
 		after time.Duration
 	}{
-		{"the routine was switched off", true, time.Minute},
 		{"no briefing ran within 24 hours", false, 24 * time.Hour},
 	} {
 		s, f, todo, posts, _ := conclusionService(t, false)
