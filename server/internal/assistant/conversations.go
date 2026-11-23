@@ -1657,6 +1657,10 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 	if err := s.dispatchSendGuard(ctx, self, c.MachineID, c.SessionID, a.Text); err != nil {
 		return "", err
 	}
+	fanned := ""
+	if !later && strings.TrimSpace(a.Quote) == "" && !s.sendFanout.admit(self, c.SessionID, time.Now()) {
+		later, fanned = true, fmt.Sprintf(fanoutNote, fanoutWide, int(fanoutWindow/time.Minute)) // conversation_fanout.go
+	}
 	if later {
 		// Kept for the receiver, not delivered: no turn, no hop, no place in the rate (relay_later.go, #11614).
 		from, err := s.relayFrom(ctx, self)
@@ -1669,8 +1673,8 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 		}
 		s.spawnReported(self, c.SessionID) // a quiet report still answers the conversation that opened this one
 		s.publish(ctx)                     // the receiver shows it waiting above its composer
-		return fmt.Sprintf("Kept for %q without waking it (%d kept there): it goes in with the next message that conversation gets for anything else. No reply will come from it; no need to send it again.",
-			conversationName(c, s.settings(ctx).Main), n), nil
+		return fmt.Sprintf("Kept for %q without waking it (%d kept there): it goes in with the next message that conversation gets for anything else. No reply will come from it; no need to send it again.%s",
+			conversationName(c, s.settings(ctx).Main), n, fanned), nil
 	}
 	from, err := s.relayFrom(ctx, self)
 	if err != nil {
