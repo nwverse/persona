@@ -182,7 +182,8 @@ func TestRemedyToolsAnswerAndRetryInTheSameTab(t *testing.T) {
 }
 
 // The supervision turn that heard of the failure ends with no retry going: the start fails for good, with its
-// receipt. A turn that never told the user gets the hub's notice and push; one that did, none.
+// receipt. A turn that never told the user gets the hub's notice in the conversation; one that did, none. Neither is
+// pushed to the owner: the supervisor gave up on its own task, and only its needs_user brings that to the owner.
 func TestRemedyEndsWithTheTurnThatSawIt(t *testing.T) {
 	for _, told := range []bool{false, true} {
 		s, f := newQuietService(t)
@@ -211,7 +212,7 @@ func TestRemedyEndsWithTheTurnThatSawIt(t *testing.T) {
 		if notice := slices.Contains(kinds, feedNotice); notice == told {
 			t.Errorf("told=%v: the hub's notice %v", told, kinds)
 		}
-		if pushed := len(f.pushed()) > pushes; pushed == told {
+		if len(f.pushed()) > pushes {
 			t.Errorf("told=%v: pushed %v", told, f.pushed())
 		}
 	}

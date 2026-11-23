@@ -188,14 +188,20 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     // what the task waits on the user for is its own Agents' (an Agent another task holds asks there)
     const status = own.length < active.length ? withNeeds(entryStatus(todo, lookup, plans), todoStatus({ ...todo, agents: own }, lookup)) : entryStatus(todo, lookup, plans);
     const linked = linkedParkInteraction(todo, interactions);
-    const ownAsks = own.flatMap((a) => asksOf.get(sessionKey(a.machine_id, a.session_id)) ?? []);
+    // a card the task's supervising conversation holds (delegating) is that conversation's until it passes it up
+    const routed = own.flatMap((a) => asksOf.get(sessionKey(a.machine_id, a.session_id)) ?? []);
+    const ownAsks = routed.filter((ix) => !ix.delegating);
     const asks = linked && !ownAsks.some((ix) => ix.id === linked.id) ?
       [...ownAsks, linked].sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id)) : ownAsks;
     const key = `task:${todo.id}`;
     const bucket = cardBucket(card, todo, plans, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
     const countsOpen = bucket === "open";
-    // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
-    const waits = status === "failed" ? bucket === "open" : !todo.done_at && WAITS_ON_YOU.has(status);
+    // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open; a
+    // supervised task's failed start is its supervisor's to retry or remedy, and an Agent whose every card its
+    // supervisor holds waits on that conversation, not on the user
+    const supervised = !!todo.supervision?.supervisor;
+    const held = supervised && routed.length > 0 && ownAsks.length === 0;
+    const waits = status === "failed" ? bucket === "open" && !supervised : !todo.done_at && WAITS_ON_YOU.has(status) && !held;
     const decision = taskAwaitsDecision(todo);
     const deliveryApproval = heldDelivery(todo)?.unblock === "user";
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks, countsOpen });

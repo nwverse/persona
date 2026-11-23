@@ -153,10 +153,24 @@ describe("the badge's rules", () => {
     expect(counted([personal("goal"), approval])).toEqual(["held"]);
   });
 
-  it("counts a cut-off Agent's task, and keeps counting tasks no Agent is on", () => {
+  it("counts a cut-off Agent's task, and the owner's own to-dos no Agent is on, not a conversation's idle task", () => {
     expect(counted([task("cut", { agents: [agent("cut")] })])).toEqual(["cut"]);
-    // its Agents stopped; a piece waiting for its turn with no Agent yet
-    expect(counted([task("stopped", { agents: [agent("idle")] }), task("queued", { part_of: "x", after: ["y"] })])).toEqual(["queued", "stopped"]);
+    // a conversation's task whose Agents stopped, or a piece waiting for its turn: its supervising conversation's to pick up
+    expect(counted([task("stopped", { agents: [agent("idle")] }), task("queued", { part_of: "x", after: ["y"] })])).toEqual([]);
+    // the owner's own to-do whose Agent stopped is still theirs
+    expect(counted([personal("mine", { agents: [agent("idle")] })])).toEqual(["mine"]);
+  });
+
+  it("reads the hub's view when it has one: what a supervisor holds is not the owner's", () => {
+    const failed = task("failed", { start_error: "Desk Mac is offline", done_at: hoursAgo(1), supervision: { supervisor: "lead", done_when: [], state: "", round: 0, reviews: [] } as unknown as Todo["supervision"] });
+    expect(counted([failed])).toEqual(["failed"]); // no view: the web's own triage
+    expect(counted([{ ...failed, view: { phase: "working", section: "working", reason: "persona_working", rank: 0 } }])).toEqual([]);
+    const asking = task("asking", { agents: [agent("ask")] });
+    expect(counted([{ ...asking, view: { phase: "working", section: "working", reason: "persona_working", rank: 0 } }])).toEqual([]);
+    expect(Object.fromEntries(ownerNeeds([{ ...asking, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0 } }], lookup, NOW))).toEqual({ asking: "agent_asks" });
+    expect(Object.fromEntries(ownerNeeds([{ ...asking, view: { phase: "needs_you", section: "needs_you", reason: "verify", rank: 0 } }], lookup, NOW))).toEqual({ asking: "owner_decides" });
+    // a view this web does not know falls back to its own triage
+    expect(counted([{ ...asking, view: { phase: "working", section: "a_newer_section", reason: "persona_working", rank: 0 } }])).toEqual(["asking"]);
   });
 
   it("leaves quiet tasks out, while a quiet piece's Agent still carries its goal", () => {
@@ -197,19 +211,18 @@ describe("why the badge counts a to-do (#11838, ownerNeeds)", () => {
     task("quiet", { quiet: true }),
   ];
 
-  it("says what each counted to-do waits on the owner for, or that no Agent is on it", () => {
+  it("says what each counted to-do waits on the owner for, or that no Agent is on the owner's own one", () => {
     expect(Object.fromEntries(ownerNeeds(list, lookup, NOW))).toEqual({
       failed: "failed_start",
       asking: "agent_asks",
       decide: "owner_decides",
       held: "delivery_ok",
       errand: "unattended",
-      stopped: "unattended",
     });
   });
 
   it("is the badge: the same to-dos, so its size is the badge's number", () => {
     expect([...ownerBadge(list, lookup, NOW)].sort()).toEqual([...ownerNeeds(list, lookup, NOW).keys()].sort());
-    expect(ownerBadge(list, lookup, NOW).size).toBe(6);
+    expect(ownerBadge(list, lookup, NOW).size).toBe(5);
   });
 });
