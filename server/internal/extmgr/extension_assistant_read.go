@@ -19,6 +19,8 @@ func (ps *extensions) extensionAssistantCall(ctx context.Context, id, method str
 	switch method {
 	case assistantwire.MethodAssistantConversations, assistantwire.MethodAssistantMessages:
 		scope = extension.ScopeAssistantRead
+	case assistantwire.MethodAssistantEntriesList:
+		scope = extension.ScopeAssistantEntriesRead
 	case assistantwire.MethodAssistantMemory:
 		scope = extension.ScopeAssistantMemoryRead
 	default:
@@ -31,9 +33,16 @@ func (ps *extensions) extensionAssistantCall(ctx context.Context, id, method str
 	if ps.h == nil {
 		return nil, &rpc.Error{Code: assistantwire.CodeAssistantOffline, Message: errAssistantOffline.Error()}
 	}
+	var out json.RawMessage
+	if method == assistantwire.MethodAssistantEntriesList {
+		// The entries ledger names its reader itself (#13106).
+		if err := ps.h.kbAsk(assistantwire.WithEntriesReader(ctx, id), method, params, &out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
 	// Say which extension reads (#13246): what it is shown follows its trust and grants. An assistant from before that
 	// answers the plain method, as a third party's read with no grant.
-	var out json.RawMessage
 	err := ps.h.kbAsk(ctx, assistantwire.MethodAssistantExtensionRead,
 		assistantwire.AssistantExtensionRead{Extension: id, Method: method, Params: params}, &out)
 	var re *rpc.Error

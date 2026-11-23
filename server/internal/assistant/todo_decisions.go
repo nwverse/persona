@@ -254,6 +254,9 @@ func decisionText(s string) string { return clip(strings.TrimSpace(s), decisionT
 // answered question is a decision of that todo. Only Claude Code's option questions (AskUserQuestion) count: approvals
 // and permissions are not decisions about the work, and a dismissed or failed card answered nothing.
 func (s *Service) cardDecisions(ctx context.Context, ix proto.Interaction, r proto.Resolution, status string) {
+	if err := s.ledgerCardDecisions(ctx, ix, r, status); err != nil {
+		s.logf("entries: card answer could not be recorded: %v", err)
+	}
 	st := s.todoDB()
 	if st == nil || status != "resolved" || r.Dismiss || ix.Kind != proto.IxQuestion || len(r.Answers) == 0 {
 		return
