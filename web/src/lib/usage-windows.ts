@@ -435,13 +435,17 @@ export interface UnconnectedProvider {
 }
 
 const emptyAccounts: UsageAccount[] = [];
+const noProviders: readonly string[] = [];
 let usageAccounts = emptyAccounts;
+/** Providers the owner hid from the bars (`usage.hidden_providers`, #13179), as the hub last said; none from an old hub. */
+let usageHidden = noProviders;
 let usageReady = false;
 let stopPolling: (() => void) | undefined;
 const listeners = new Set<() => void>();
 
-function publishUsage(accounts: UsageAccount[], ready = usageReady) {
+function publishUsage(accounts: UsageAccount[], ready = usageReady, hidden = usageHidden) {
   usageAccounts = accounts;
+  usageHidden = hidden;
   usageReady = ready;
   for (const listener of listeners) listener();
 }
@@ -454,12 +458,12 @@ function pollUsage() {
     if (document.visibilityState !== "visible") return;
     const mine = ++seq;
     const current = () => !dead && mine === seq;
-    api<{ accounts?: UsageAccount[] }>("/usage/windows")
-      .then((r) => current() && publishUsage(r.accounts ?? emptyAccounts, true))
+    api<{ accounts?: UsageAccount[]; hidden_providers?: string[] }>("/usage/windows")
+      .then((r) => current() && publishUsage(r.accounts ?? emptyAccounts, true, r.hidden_providers?.length ? r.hidden_providers.map((p) => p.toLowerCase()) : noProviders))
       .catch((e: unknown) => {
         if (!current()) return;
         const missing = e instanceof ApiError && e.status === 404;
-        publishUsage(missing ? emptyAccounts : usageAccounts.slice(), missing ? false : usageReady);
+        publishUsage(missing ? emptyAccounts : usageAccounts.slice(), missing ? false : usageReady, missing ? noProviders : usageHidden);
       });
   };
   load();
@@ -481,6 +485,7 @@ function subscribeUsage(listener: () => void) {
       stopPolling?.();
       stopPolling = undefined;
       usageAccounts = emptyAccounts;
+      usageHidden = noProviders;
       usageReady = false;
     }
   };
@@ -489,6 +494,11 @@ function subscribeUsage(listener: () => void) {
 /** The sidebar and Agent status lines share one poll, including while switching chats. */
 export function useUsageWindows(): UsageAccount[] {
   return useSyncExternalStore(subscribeUsage, () => usageAccounts, () => emptyAccounts);
+}
+
+/** The providers the owner hid from the usage bars (lowercase), so nothing else in the strip lists them either (#13179). */
+export function useHiddenUsageProviders(): readonly string[] {
+  return useSyncExternalStore(subscribeUsage, () => usageHidden, () => noProviders);
 }
 
 /** True once GET /api/v1/usage/windows has completed a supported (non-404) response. */
